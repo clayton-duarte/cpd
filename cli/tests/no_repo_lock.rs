@@ -60,6 +60,8 @@ struct Submitted {
 
 fn fx() -> Fx {
     let env = TestEnv::new();
+    // Every test here is about the Gate, which runs only under `pr.gate = "local"` (contract §8.3).
+    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = env.git_repo("pay").canonicalize().unwrap();
     // git runs in this process too (the worktrees), whose environment is not the TestEnv's.
     for (key, value) in [("user.name", "cpd test"), ("user.email", "test@cpd.invalid"), ("commit.gpgsign", "false")] {
@@ -96,7 +98,7 @@ fn fx() -> Fx {
             format!("INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0.0', '{letter}', '{model}', '{efforts}', 't');")
         })
         .collect();
-    fx.fixture(&format!("{catalog} INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');"));
+    fx.fixture(&format!("{catalog} INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');"));
     fx
 }
 

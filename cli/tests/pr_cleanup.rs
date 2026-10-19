@@ -470,6 +470,8 @@ fn a_pr_merged_during_its_gate_loses_its_lead_worktree_but_not_the_gate_worktree
     // hs-n124: the clean-up once removed the Lead worktree under a running Gate. The Gate now runs
     // in a gate worktree of its own, which the clean-up leaves alone while its pid lives.
     let fx = fx(&["api"]);
+    // The Gate runs only under `pr.gate = "local"` (contract §8.3).
+    fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let api = fx.pr("api");
     fx.hooks("api", &paused_gate(fx.env.root()));
     let before = fx.remote_sha(&api.lead_branch);
