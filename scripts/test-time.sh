@@ -19,8 +19,8 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-# nextest keeps its reports under <workspace>/target/nextest/<profile>/ whatever
-# CARGO_TARGET_DIR says (nextest 0.9.148, observed: its `store.dir` default).
+# nextest 0.9.148 writes its reports under <workspace>/target/nextest/<profile>/,
+# also with CARGO_TARGET_DIR set (observed).
 junit="$root/target/nextest/timing/junit.xml"
 
 scripts/cargo.sh nextest run --workspace --profile timing --no-run "$@" >&2
