@@ -1,7 +1,7 @@
 //! Jobs, Specs and Dependencies (contract §2.2, §2.3, §3.2; commands.md §5).
 //!
 //! - [`spec`]: the Spec file of `job add` and `job edit`;
-//! - `add`, `edit`, `cancel`, `retry`: the commands that write;
+//! - `add`, `edit`, `cancel`, `retry`, `urgent`: the commands that write;
 //! - `show`: `job list` and `job show`.
 //!
 //! `job dispatch` belongs to the driver (`crate::driver`).
@@ -17,6 +17,7 @@ mod edit;
 mod retry;
 mod show;
 mod spec;
+mod urgent;
 
 pub(crate) use retry::retried_since_last_start;
 
@@ -46,6 +47,8 @@ pub enum Command {
     Cancel(CancelArgs),
     /// Queue a failed Job again at a Tier (§5.4)
     Retry(RetryArgs),
+    /// Mark a Job urgent, only when the User asks (§5.8)
+    Urgent(UrgentArgs),
     /// Start one Ready Job now (§5.5)
     Dispatch(driver::DispatchArgs),
     /// List the Jobs (§5.6)
@@ -80,6 +83,10 @@ pub struct AddArgs {
     /// --spec: a stub draft, completed later with job edit
     #[arg(long)]
     draft: bool,
+    /// Add it urgent (§2.2): E3 starts it first and may run it beyond the
+    /// concurrency. Only when the User explicitly asks
+    #[arg(long)]
+    urgent: bool,
     #[command(flatten)]
     pr: PrArg,
     #[command(flatten)]
@@ -138,6 +145,15 @@ pub struct RetryArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct UrgentArgs {
+    /// The Job key
+    #[arg(value_name = "key")]
+    key: JobKey,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct ListArgs {
     /// Only Jobs in this status (repeatable)
     #[arg(long = "status", value_name = "status", value_parser = PossibleValuesParser::new(STATUSES))]
@@ -161,6 +177,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Edit(args) => edit::edit(args),
         Command::Cancel(args) => cancel::cancel(args),
         Command::Retry(args) => retry::retry(args),
+        Command::Urgent(args) => urgent::urgent(args),
         Command::Dispatch(args) => driver::dispatch(args),
         Command::List(args) => show::list(args),
         Command::Show(args) => show::show(args),

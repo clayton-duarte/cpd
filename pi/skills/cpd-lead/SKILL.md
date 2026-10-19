@@ -165,6 +165,8 @@ cpd pr edit <key> --needs <k1,k2>
 
 After the lock the engine starts Ready Jobs and merges them, and starts each `waiting` PR once every PR it needs is merged (event `pr-started`, no action). There is no Gate per Job and no per-Job review: a Worker's submit runs only the repo's quick check (the `pre-commit` hook, none if the repo defines none), and a submitted Job goes straight to the merge. The full Gate runs once per PR, on its Lead Branch, when you open it ([Mechanical checks](#mechanical-checks)), and the review is the PR's own, on GitHub ([Reviewing and Monitoring](#reviewing-and-monitoring)). You react to Events. Each message's text ends with the commands it suggests; run them only as the row below allows. When the User asks for status, run `cpd plan show`.
 
+**Urgent Jobs.** Mark a Job urgent **only when the User explicitly asks**, usually for something that blocks all work or an incident; never on your own judgement. Add it urgent with `cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key> --urgent`, or mark a Job that is already `queued` (Locked too: it changes no Spec) with `cpd job urgent <k>`. The engine then starts it before every non-urgent Ready Job and may run it as one Attempt beyond `concurrency` (at most `concurrency + 1` running). Do not run `cpd job dispatch` for it.
+
 The engine polls every open pull request of the User every 5 s. You may run `cpd pr poll` right after `cpd pr open` or whenever you need the current status, and `cpd pr view --pr <key>` to read a PR's failing checks (with links), reviews, comments and inline comments.
 
 | Event | Meaning | Action |
