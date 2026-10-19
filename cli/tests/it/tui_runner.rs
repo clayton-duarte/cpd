@@ -5,7 +5,7 @@
 //! parent runs it by name); the pane's `#{mouse_any_flag}` and `#{alternate_on}` are tmux's own record of what the
 //! program asked of the terminal.
 
-mod common;
+use crate::common;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -52,7 +52,7 @@ fn view_ending(ends: &str, until: &str) -> (String, String) {
     let go = env.root().join("go");
     let exe = std::env::current_exe().unwrap();
     let command = format!(
-        "CPD_TEST_VIEW_GO='{}' CPD_TEST_VIEW_ENDS={ends} '{}' --exact a_view --ignored --nocapture; sleep {SLEEP_SECONDS}",
+        "CPD_TEST_VIEW_GO='{}' CPD_TEST_VIEW_ENDS={ends} '{}' --exact tui_runner::a_view --ignored --nocapture; sleep {SLEEP_SECONDS}",
         go.display(),
         exe.display()
     );

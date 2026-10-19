@@ -11,7 +11,7 @@
 //! The store is written all the time, as a live one is (a Worker's pane, a Session's label): a write that no view follows,
 //! which also empties the page cache of the views' connections, so that a snapshot reads the file again.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
