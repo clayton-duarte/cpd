@@ -8,7 +8,9 @@
   },
   "scripts": {
     "test": "node --test pi/test/*.test.ts pi/skills/skill.test.ts",
+    "pretypecheck": "scripts/npm-fresh.sh",
     "typecheck": "tsc --noEmit -p .",
+    "preverify": "scripts/npm-fresh.sh",
     "verify": "npm run typecheck && npm test && scripts/cargo.sh build --workspace && scripts/cargo.sh nextest run --workspace"
   },
   "devDependencies": {
