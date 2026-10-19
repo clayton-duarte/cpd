@@ -398,7 +398,7 @@ impl View {
         let inner = f.area().inner(Margin::new(1, 0));
         let footer = self.footer();
         let width = inner.width.max(1) as usize;
-        let wrapped = footer.chars().count().div_ceil(width);
+        let wrapped = rows::width(&footer).div_ceil(width);
         let footer_height =
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
         let [_, list, footer_area] =
@@ -622,6 +622,17 @@ mod tests {
         view.done(Err("closed".into()));
         let rows = drawn(&mut view, 44, 14);
         assert_eq!(rows[13], " closed", "a note is one row at the bottom");
+    }
+
+    /// tui-W8: the footer's height is counted in display columns, as it wraps.
+    #[test]
+    fn a_wide_footer_takes_the_rows_its_display_width_needs() {
+        let mut view = on(&["alpha", "sketch"]);
+        view.done(Err("失敗失敗失敗失敗失敗失敗失敗失".into())); // 15 characters, 30 columns
+        let rows = drawn(&mut view, 24, 14); // 22 columns inside the margin: two rows
+        // (the buffer cell after a wide character is blank)
+        assert_eq!(rows[11].replace(' ', ""), "失敗失敗失敗失敗失敗失");
+        assert_eq!(rows[12].replace(' ', ""), "敗失敗失");
     }
 
     fn click(view: &mut View, column: u16, row: u16) -> Effect {
