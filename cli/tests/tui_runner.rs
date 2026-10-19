@@ -10,7 +10,7 @@ mod common;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{SLEEP_SECONDS, TestEnv};
+use common::{SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_tui::{Capture, ViewError, run_view};
 
 /// The child: a view that waits for the file named by `CPD_TEST_VIEW_GO`, then ends the way `CPD_TEST_VIEW_ENDS` says.
@@ -43,14 +43,6 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     let out = env.tmux(args);
     assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
-}
-
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// Starts the child view in a pane, waits until it owns the terminal, lets it end as `ends` says, and returns the

@@ -383,7 +383,7 @@ One thing that needs the User: the **single source of "needs you"** (hs-d165), s
 | `context`, `plan`, `job`, `session`, `record` | text? | what it is about, when it has one |
 | `event` | int? | the Event that caused it (the `session-state`, `job-failed` or `error` Event), for "jump to the cause" |
 | `label` | text | the short text of the table below |
-| `url` | text? | a page that shows it (plannotator's for a Plan review; the pull request's page for the `pr-*` and `review-requested` kinds) |
+| `url` | text? | a page that shows it (plannotator's for a Plan review, `http://<review host>:<port>/` with the review host of §6.5 (`PLANNOTATOR_URL_HOST`, else the primary IPv4, else `localhost`; hs-d264), not a fixed `localhost`; the pull request's page for the `pr-*` and `review-requested` kinds) |
 | `opened_at` | time | |
 | `closed_at` | time? | null while open |
 | `snoozed_until` | time? | hidden until then; the item returns at its rank, `opened_at` kept |
@@ -758,14 +758,14 @@ Each step is idempotent: a rerun after a crash between the local rename and the 
 | Plan | Dispatching | `dispatch` | the engine runs the Jobs; Workers merge them into the Lead Branches | `watch` (engine), `job list` |
 | Deploy | Mechanical checks | end of `dispatch` | all Jobs of a PR are merged; the Gate runs | `pr open` (the Gate, §7.6) |
 | Deploy | PR | `dispatch` → `deploy` | the pull request is opened | `pr open` |
-| Deploy | Reviewing and Monitoring | `deploy` | people, the User's review bot and CI review the open pull request; the engine polls it | `pr poll` (engine E5), `pr view`, Event `pr-feedback` |
+| Deploy | Reviewing and Monitoring | `deploy` | people, the User's review bot review the open pull request; the engine polls it | `pr poll` (engine E5), `pr view`, Event `pr-feedback` |
 | Deploy | Addressing | `deploy` → `dispatch` → `deploy` | feedback Jobs are appended and run (back to Dispatching), then pushed | `job add --pr`, `pr rebase` |
 
 The Deploy stage runs from the end of `dispatch` (all Jobs merged, `pr open`) and through phase `deploy` until `done`.
 
 **Who does the Context steps.** At the Epic level the Manager does Grounding, Clarifying and Specifying for the Context (§3.1, "The Context's Manager"); each Lead does them for its Plan, in phase `grounding`.
 
-**No local review before the Gate** (hs-d171, supersedes hs-d77). A PR is reviewed after it opens, while CI runs, by people and the User's review bot (Reviewing and Monitoring). Nothing requires a review before the Gate. A final review Job (`job add --review`, §2.2) stays optional (hs-d70, B3).
+**No local review before the Gate** (hs-d171, supersedes hs-d77). A PR is reviewed after it opens by people and the User's review bot (Reviewing and Monitoring). Nothing requires a review before the Gate. A final review Job (`job add --review`, §2.2) stays optional (hs-d70, B3).
 
 ## 4. Storage
 
@@ -813,11 +813,11 @@ The **schema check** (hs-d178 D2): at open, after the migrations of §4.5 have r
 
 The check never reads a hash from the store: `schema_migrations` records names, compat and checksums only (§4.5).
 
-The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check; every Locked Job whose recomputed fingerprint differs from the stored one; any `history` row whose `txn` has no `txns` row. The threat is an agent writing the Ledger outside cpd, as in cpd 1; a local user who drops the triggers, edits and recreates them exactly is out of scope (in cpd 1 the beads database could be edited the same way).
+The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check; every Locked Job whose recomputed fingerprint differs from the stored one; any `history` row whose `txn` has no `txns` row. The check reads only the `txn` column of `history` (through `history_txn`), never `before` or `after`, so the shape of an `update` row (§4.4, "History row shape") does not change it: a full row or a changed-column row is judged the same. The threat is an agent writing the Ledger outside cpd, as in cpd 1; a local user who drops the triggers, edits and recreates them exactly is out of scope (in cpd 1 the beads database could be edited the same way).
 
 ### 4.4 DDL
 
-The schema after migration `kind-tables`, the first named migration (§4.5), and so after every migration that exists today. Migration `0001-initial` created these tables as they were at its version (`core/src/store/migrations/0001-initial.sql`); `0002-cockpit-parity` to `0004-cross-repo` (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); `0005-plan-reopen` changed the triggers `plans_phase` and `prs_locked` (hs-d118); `0006-pr-poller` created `pull_requests` and rebuilt `prs` (hs-d96); `0007-context-records` dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.6); `0008-phase-deploy` renamed the Plan phase `pr` to `deploy`; `0009-session-message` added the Event kind `session-message`; `0010-manager` added the role `manager` and the record kind `brief` and dropped `contexts.lead_session` and `grounded_seq`; `0011-pr-mergeable` added `pull_requests.mergeable` and `merge_state` (hs-n152); `0012-inbox` created `inbox_items` (the Inbox, hs-d168) and added the four `inbox-*` Event kinds; `0013-pr-inbox` added `pull_requests.authored` and `review_requested` and the four pull request kinds to `inbox_items` (hs-d165); `kind-tables` created `schema_migrations`, `event_kinds`, `record_kinds` and `history_tables` and replaced the two kind checks by foreign keys (below, §4.5). Every later change is a named migration (§4.5) and amends this section in the same PR. Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
+The schema after migration `read-indexes`, the second named migration (§4.5), and so after every migration that exists today. Migration `0001-initial` created these tables as they were at its version (`core/src/store/migrations/0001-initial.sql`); `0002-cockpit-parity` to `0004-cross-repo` (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); `0005-plan-reopen` changed the triggers `plans_phase` and `prs_locked` (hs-d118); `0006-pr-poller` created `pull_requests` and rebuilt `prs` (hs-d96); `0007-context-records` dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.6); `0008-phase-deploy` renamed the Plan phase `pr` to `deploy`; `0009-session-message` added the Event kind `session-message`; `0010-manager` added the role `manager` and the record kind `brief` and dropped `contexts.lead_session` and `grounded_seq`; `0011-pr-mergeable` added `pull_requests.mergeable` and `merge_state` (hs-n152); `0012-inbox` created `inbox_items` (the Inbox, hs-d168) and added the four `inbox-*` Event kinds; `0013-pr-inbox` added `pull_requests.authored` and `review_requested` and the four pull request kinds to `inbox_items` (hs-d165); `kind-tables` created `schema_migrations`, `event_kinds`, `record_kinds` and `history_tables` and replaced the two kind checks by foreign keys (below, §4.5); `read-indexes` added the indexes `jobs_plan_status` and `sessions_live` (§4.5). Every later change is a named migration (§4.5) and amends this section in the same PR. Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
 
 ```sql
 -- ---------- audit ----------
@@ -1007,6 +1007,7 @@ CREATE TABLE jobs (
   CHECK ((cancel_reason IS NULL) = (cancel_requested_at IS NULL)),
   CHECK (status <> 'cancelled' OR cancel_reason IS NOT NULL)
 ) STRICT;
+CREATE INDEX jobs_plan_status ON jobs(plan, status);   -- migration read-indexes (sql-F4)
 
 CREATE TABLE dependencies (
   plan  TEXT NOT NULL,
@@ -1110,6 +1111,7 @@ CREATE TABLE sessions (
 ) STRICT;
 CREATE INDEX sessions_plan ON sessions(plan);
 CREATE UNIQUE INDEX sessions_one_manager ON sessions(context) WHERE role = 'manager' AND archived_at IS NULL;   -- migration 0010
+CREATE INDEX sessions_live ON sessions(id) WHERE state <> 'stopped' OR tmux_pane IS NOT NULL;   -- migration read-indexes (engine-F2)
 
 -- ---------- Events ----------
 CREATE TABLE events (
@@ -1210,6 +1212,8 @@ INSERT INTO history_tables (name, no_delete) VALUES
 
 Only lists that an older binary can ignore are lookup tables (hs-d178 D1): the Event kinds and the record kinds. State-machine columns (`plans.phase`, `jobs.status`, `prs.status`, `attempts.status`, `attempts.cause`, `sessions.role` and `state`, …) stay `CHECK`s, with their transition triggers: a new state changes what old code must handle, so changing one is a breaking migration. No other column becomes a lookup table without an amendment of this paragraph. The other `CHECK`s of `context_records` stay, since they name specific kinds. The three lookup tables are themselves in `history_tables` with `no_delete` 1: a row cannot be deleted, every change is recorded in `history`, and an insert from the `sqlite3` shell fails on `cpd_txn()` like any other table (§4.3).
 
+**History row shape** (hs-d234, sql-F2). An `insert` row holds the whole new row in `after`; a `delete` row holds the whole old row in `before` (`json_object` of every column, as the `_hist_ins` trigger above). An `update` row holds **the key and only the columns that changed**: `before` and `after` are JSON objects with the same keys, the primary-key columns of the table (always) and each other column whose value differs (`OLD.c IS NOT NEW.c`, so a change to or from `NULL` counts), `before` with the old values and `after` with the new ones. A column that did not change is absent from both. An `UPDATE` that changes no column still writes one row, with the key columns only. Why: a row of `jobs` carries long text (7 KB on average) and a status flip used to store it twice. The history stays replayable: apply an `update`'s `after` to the row as the earlier rows left it. `pk` is unchanged.
+
 **Triggers.** For each table `T` listed in `history_tables` (`contexts`, `context_records`, `plans`, `pull_requests`, `prs`, `pr_needs`, `plan_reviews`, `jobs`, `dependencies`, `attempts`, `escalations`, `sessions`, `inbox_items`, `tier_catalog` and the three lookup tables), the runner generates three triggers from `T`'s current column list (shown for `escalations`; the others differ only in table name, primary key and columns); `no_delete` 0 means no `_no_delete` (`dependencies`, `pr_needs` and `pull_requests` write their own rule, below). **A migration never creates a generated trigger** (it may drop them, which SQLite needs before `DROP COLUMN`); it inserts a row into `history_tables` for a table it creates, and after the last migration of a migrating transaction the runner **reconciles** (§4.5), so the triggers always list every column of the final table and do not depend on the order in which additive migrations added columns. The legacy migrations (§4.5) still create theirs, with the same generator. The generated names `T_hist_ins`, `T_hist_upd` and `T_no_delete` are reserved; the schema check verifies them against the generator (§4.3 item 5):
 
 ```sql
@@ -1224,21 +1228,28 @@ END;
 CREATE TRIGGER escalations_hist_upd AFTER UPDATE ON escalations BEGIN
   INSERT INTO history(txn, tbl, pk, op, before, after) VALUES (cpd_txn(), 'escalations',
     json_array(NEW.plan, NEW.id), 'update',
-    json_object('plan', OLD.plan, 'id', OLD.id, 'attempt', OLD.attempt, 'number', OLD.number,
-                'question', OLD.question, 'status', OLD.status, 'answer', OLD.answer,
-                'asker_pid', OLD.asker_pid, 'asked_at', OLD.asked_at,
-                'answered_at', OLD.answered_at, 'expired_at', OLD.expired_at),
-    json_object('plan', NEW.plan, 'id', NEW.id, 'attempt', NEW.attempt, 'number', NEW.number,
-                'question', NEW.question, 'status', NEW.status, 'answer', NEW.answer,
-                'asker_pid', NEW.asker_pid, 'asked_at', NEW.asked_at,
-                'answered_at', NEW.answered_at, 'expired_at', NEW.expired_at));
+    (SELECT json_group_object(k, v) FROM (
+       SELECT 'plan' AS k, OLD.plan AS v UNION ALL SELECT 'id', OLD.id
+       UNION ALL SELECT 'attempt', OLD.attempt WHERE OLD.attempt IS NOT NEW.attempt
+       UNION ALL SELECT 'number', OLD.number WHERE OLD.number IS NOT NEW.number
+       UNION ALL SELECT 'question', OLD.question WHERE OLD.question IS NOT NEW.question
+       -- … one line for each of the other columns: status, answer, asker_pid,
+       --   asked_at, answered_at, expired_at
+    )),
+    (SELECT json_group_object(k, v) FROM (
+       SELECT 'plan' AS k, NEW.plan AS v UNION ALL SELECT 'id', NEW.id
+       UNION ALL SELECT 'attempt', NEW.attempt WHERE OLD.attempt IS NOT NEW.attempt
+       UNION ALL SELECT 'number', NEW.number WHERE OLD.number IS NOT NEW.number
+       UNION ALL SELECT 'question', NEW.question WHERE OLD.question IS NOT NEW.question
+       -- … the same other columns
+    )));
 END;
 CREATE TRIGGER escalations_no_delete BEFORE DELETE ON escalations BEGIN
   SELECT RAISE(ABORT, 'append_only: escalations');
 END;
 ```
 
-`Store::open` generates these triggers from the table definitions above (primary key: `id` for `contexts`, `plans` and `sessions`; `seq` for `context_records` and `jobs`; `id` for `pull_requests` and `inbox_items` too, the declared `PRIMARY KEY` for the others, `prs` and `pr_needs` included), and a test asserts that every column of every table appears in its `json_object` calls.
+`Store::open` generates these triggers from the table definitions above (primary key: `id` for `contexts`, `plans` and `sessions`; `seq` for `context_records` and `jobs`; `id` for `pull_requests` and `inbox_items` too, the declared `PRIMARY KEY` for the others, `prs` and `pr_needs` included), and a test asserts that every column of every table appears in its `_hist_ins` and `_hist_del` `json_object` calls and in the changed-column lines of its `_hist_upd` (the `escalations_hist_upd` above abbreviates the repeated lines).
 
 The exceptions to "never delete": a pull request row that no PR points to may be deleted (the poller deletes it when its pull request leaves the open search; hs-d96, D5), a Dependency of a `draft` Job may be deleted (that is how `job edit --needs` changes a draft), and a PR's need may be deleted while its Plan is in `grounding` or `plan` (that is how `pr edit --needs` changes it; R34). `pr_needs` gets `pr_needs_no_delete` and `pr_needs_hist_del`, written as below for `dependencies` with the condition `(SELECT phase FROM plans WHERE id = OLD.plan) NOT IN ('grounding', 'plan')` and the error `pr_locked`:
 
@@ -1401,6 +1412,8 @@ The store's schema changes by **named migrations** (hs-d178; design `docs/resear
 
   Any failure rolls the whole transaction back and leaves the store at its old `user_version`, readable by the old binary; a rerun starts from step 1 and, once committed, step 1 never matches again, so converting is idempotent. Nothing is deleted. A **fresh** store applies the same legacy functions and `kind-tables` and records the legacy rows with `converted` 0. **An old binary meets a converted store** (`user_version 1000 > VERSION`): `Store::open` and `events follow` refuse with `store_too_new`: correct, because `kind-tables` is breaking. **A new binary meets an unconverted store:** it converts, and its `--version` says `store.opens` is true. A store at a numbered version that is not in the legacy set (above 13) is refused with `store_too_new`. **The tests:** version-1 to version-13 databases with rows in every table convert, keep every row and id, pass `foreign_key_check`, have thirteen `converted = 1` rows and end with the same canonical hash as a fresh store (the legacy tests of each version's hash stay, on the legacy hash); a legacy database with a changed trigger is refused and unchanged; converting twice is a no-op.
 
+- **History `update` rows hold only the changed columns** (hs-d234, sql-F2; §4.4, "History row shape"). The change to the `_hist_upd` triggers of every table is a **named migration**, made with `scripts/new-migration.sh` (never a numbered `NNNN.sql`): it drops and recreates the `_hist_upd` trigger of each table in the list under §4.4's **Triggers**, and its schema hash entry is added with it. It rewrites no row: existing `update` rows in `history` keep their full `before` and `after` (the table is append-only), so a reader treats an `update` row as holding at least the key and the changed columns.
+
 **The legacy record.** `0001-initial` created the tables as they were at version 1 (§4.4). The twelve bullets below are the record of `0002-cockpit-parity` (migration 2), `0003-archive` (3), `0004-cross-repo` (4), `0005-plan-reopen` (5), `0006-pr-poller` (6), `0007-context-records` (7), `0008-phase-deploy` (8), `0009-session-message` (9), `0010-manager` (10), `0011-pr-mergeable` (11), `0012-inbox` (12) and `0013-pr-inbox` (13); the legacy set is frozen (N2). Under the named scheme, what their texts say about `user_version`, the pragma pair around the transaction, the history triggers they drop and recreate, and `PRAGMA foreign_key_check` is done once for the whole migrating transaction by the runner (the conversion's steps 3 and 5, a fresh store's O1); "its schema hash equals that of a fresh database" in their tests means the legacy schema hash (N2).
 
 - **Migration 2** (cockpit parity; a real `cpd.db` exists since migration 1 shipped, so the change is a migration and not an edit of §4.4): adds three nullable columns to `plans`, each with its own check, then drops and recreates `plans`' history triggers (the rule above):
@@ -1509,6 +1522,9 @@ The store's schema changes by **named migrations** (hs-d178; design `docs/resear
   Every existing row came from the `author:@me` search, so it gets `authored` 1 and `review_requested` 0, which the defaults give. `pull_requests_owned` is unchanged and `pull_requests` still gets no `_no_delete`. Set `user_version = 13`.
 - **Migration 0014** (file `0014-register`; stub drafts, hs-d241, R1; applied after migration 0013; the next free number on its base, renumbered at rebase when another migration lands first, hs-d68, hs-d211): makes `jobs.tier`, `goal`, `context`, `touches`, `acceptance` and `out_of_scope` nullable **only while `status` is `draft` or `cancelled`** (a stub is cancellable). SQLite cannot drop a `NOT NULL` or alter a check, so `jobs` is rebuilt as migration 4 rebuilt it (foreign-key handling of its steps 1 and 5; `jobs_new` with the §4.4 definition; copy with every primary key and column kept, `jobs.seq` included; `DROP`, `RENAME`; indexes, triggers (`jobs_locked`, `jobs_status`, `jobs_pr_dependencies`, and the others of §4.4) and history triggers generated again), in one transaction. The new definition adds the checks `status IN ('draft', 'cancelled') OR (tier IS NOT NULL AND goal IS NOT NULL AND context IS NOT NULL AND touches IS NOT NULL AND acceptance IS NOT NULL AND out_of_scope IS NOT NULL)`, so a Job that is queued, running, merged or failed has every field, and `(goal IS NULL) = (context IS NULL) = (touches IS NULL) = (acceptance IS NULL) = (out_of_scope IS NULL)`, so the Spec is all or nothing; each field's own check accepts null. Every existing row has every field, so no row changes; `user_version = 14`. The tests: a database at 0013 with Jobs of every status migrates keeping every row and `seq`, passes `PRAGMA foreign_key_check`, accepts a `draft` with only a title and refuses a `queued` Job with a null `tier` or `goal`, and its schema hash equals that of a fresh database migrated to 0014.
 - **`kind-tables`**, the first named migration (`<timestamp>-kind-tables`, `-- cpd-migration: breaking after 14`: the fourteen legacy names sort before it; the timestamp is its author's, and a test asserts that no named migration sorts before it). It creates the lookup tables and `history_tables` of §4.4 and fills them with the inserts shown there, then rebuilds `events` and `context_records` **once more, and the last time either is rebuilt for a kind**: `CREATE TABLE <t>_new` with the §4.4 definition (`kind` a foreign key instead of the `CHECK`; every other column and check of `context_records` unchanged), `INSERT INTO <t>_new SELECT …` every row with its primary key (`events.id` and the `AUTOINCREMENT` sequence kept, as `0003`), `DROP`, `RENAME`, recreate the indexes (`events_plan`, `events_context`, `events_session`) and the hand-written triggers (`events_own` after the copy, `events_no_update`, `events_no_delete`, `context_records_immutable`). It creates no history trigger: the reconcile (K4) generates them for every table of `history_tables`, the three lookup tables included. The copies write no `history` rows. Tests: after the conversion `events` and `context_records` have every row and id; an `events` insert with a kind that is not in `event_kinds` fails on the foreign key; an additive migration that inserts a kind makes it insertable.
+- **`read-indexes`**, the second named migration (`20261019T0504-read-indexes`, `-- cpd-migration: additive`: two `CREATE INDEX` on existing tables, A1; Plan quality findings sql-F4, tui-F3, engine-F2). It creates `jobs_plan_status ON jobs(plan, status)`, for the job counts of every cockpit refresh (`plan_heads` in `tui/src/read/shared.rs` read `jobs` whole, its long text columns first), and the **partial** index `sessions_live ON sessions(id) WHERE state <> 'stopped' OR tmux_pane IS NOT NULL`, for E2's Session read (§3.6), which names the Sessions that are not `stopped` or still have a pane and used to scan every Session ever made. SQLite reads a partial index only for a query whose `WHERE` it can prove implies the index's, which it does for the same expression: **E2's `WHERE` is the index's, written the same** (`core/src/watch/liveness.rs`, `LIVE_SESSIONS`), and a test pins the plan. The index has `<> 'stopped'` and not a list of the other states, so a state added later is in it. No row is rewritten; §4.4 lists the two.
+
+  **Indexes asked for and not created** (Escalations `sm-index-a2-q1` and `-q2`; numbers on a `sqlite3 .backup` copy of the live store with 15 119 Events, 529 Sessions and 591 Jobs, migrated with the build; N = 15 medians, `EXPLAIN QUERY PLAN` in the commit message). `events(kind, id)` (sql-F6): SQLite has no statistics, so with it next to `events_session` and `events_plan` every statement that tests a `kind` and a Session or a Plan reads every Event of that kind instead (`events_kind (kind=?)`): the Session SELECT of `session list` and the tree went from 6.7 to 797 ms, the inbox rules from 0.37 to 3.3 ms, E2's active time of an Attempt from 0.40 to 1.65 ms, while the reads it was meant for gain nothing (the widgets engine read 0.011 to 0.014 ms, `watch --ensure` 0.015 to 0.012 ms). `plans(lead_session)` and `contexts(lead_session)` (sql-F5): `contexts.lead_session` was dropped by `0010-manager`, and the Session SELECT reads `plans` once (`SELECT DISTINCT lead_session FROM plans`), 0.011–0.05 ms. A later Job that wants either index starts from these numbers, and a test (`cli/tests/store.rs`, `the_lookups_of_events_by_kind_and_session_or_plan_keep_their_selective_index`) pins that the statements above keep their selective indexes. Tests of this migration: the plans of the job counts and of E2's read name the indexes (`cli/tests/store.rs`, `liveness.rs`), and the schema tests (§4.4 as written, the pinned `SCHEMA_HASH`) hold.
 - No migration from cpd 1's beads Ledgers (R7): running Workflows finish on cpd 1.
 
 ### 4.6 The Context store
@@ -1788,7 +1804,7 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 
 **The Plan's plannotator port** (hs-d35, hs-d40, hs-d50). Config key `plannotator_ports` (§8.2) is an inclusive range. A Plan's port lives in `run/<plan>/plannotator-port` (one line, the port; no schema change). `session run` assigns it when it starts pi, under `flock` on `locks/plannotator-ports.lock`:
 
-1. When the Plan's file holds a port inside the range, the Plan keeps it.
+1. When the Plan's file holds a port inside the range and no other holder (rule 2) holds the same port, the Plan keeps it. A recorded port is kept only while no other live Plan holds it: a Plan that comes back after `done` or archive is re-checked at its next Lead start, and the asking Plan moves (its Lead's pi is starting), with one stderr line naming the Plan that held the port; the Plan whose pi already runs keeps its port.
 2. Else the Plan gets the lowest port of the range that no other Plan holds, and the file is written. A Plan **holds** its port unless its phase is `done` or it is archived (`archived_at` set; E1, hs-d203). An archived Plan's `plannotator-port` file stays, but its port is free: rule 1 keeps a Plan's port only while no other holder has it, else the Plan is assigned afresh by this rule. `plan archive` and `plan cancel` (commands.md §4.10, §4.12) therefore free the port, and `plan unarchive` takes none (the next `session run` assigns one).
 3. Else none is free: `no_port` (exit 3; `details`: the range and the holders `[{plan, port}]`), the Lead does not start, and the pane names the Plans that hold the range and offers Enter to retry (§10.8 of `commands.md`).
 

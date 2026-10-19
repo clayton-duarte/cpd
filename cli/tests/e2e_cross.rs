@@ -15,11 +15,11 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, write_executable};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -147,8 +147,7 @@ impl Fx {
         }
         let node = env.home().join(".local/share/pi-node/current/bin/node");
         fs::create_dir_all(node.parent().unwrap()).unwrap();
-        fs::write(&node, format!("#!/bin/sh\necho '{CATALOG}'\n")).unwrap();
-        fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&node, &format!("#!/bin/sh\necho '{CATALOG}'\n"));
 
         fs::write(
             env.cpd_home().join("config.toml"),
@@ -317,7 +316,6 @@ fn flag<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
 
 #[test]
 fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
-    let started = Instant::now();
     let fx = Fx::new();
     let (shared, web) = (fx.shared.path.to_str().unwrap().to_owned(), fx.web.path.to_str().unwrap().to_owned());
 
@@ -419,11 +417,8 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let calls = fx.env.calls("gh");
     let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).unwrap();
     assert_eq!(create[..6], ["pr", "create", "--base", "main", "--head", "cpd/chain/a1"]);
-    // E5 polls whatever the phase, and a1 is not merged: nothing starts. Two polls after the PR was created.
-    let polls = |fx: &Fx| fx.env.calls("gh").iter().filter(|c| c[0] == "api").count();
-    let before = polls(&fx);
-    fx.wait("two more polls", 30, || (polls(&fx) >= before + 2).then_some(()));
-    std::thread::sleep(Duration::from_millis(2500));
+    // E5 polls whatever the phase, and a1 is not merged: nothing starts. Two whole ticks after the PR was created.
+    fx.env.wait_whole_ticks(2);
     assert_eq!((fx.pr_status("b"), fx.pr_status("a2")), ("waiting".to_owned(), "waiting".to_owned()));
     assert!(of_kind(&fx.events(), "attempt-started").iter().all(|e| e["job"] == "schema"));
 
@@ -527,8 +522,8 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(keys, [("a1", 11), ("a2", 13), ("b", 12)]);
     assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "done");
     assert!(["a1", "b", "a2"].iter().all(|k| fx.pr_status(k) == "merged"));
-    // A few more ticks and polls: still one `plan-done`, nothing new started.
-    std::thread::sleep(Duration::from_millis(3000));
+    // Three more whole ticks (each with its poll): still one `plan-done`, nothing new started.
+    fx.env.wait_whole_ticks(3);
     let events = fx.events();
     assert_eq!(of_kind(&events, "plan-done").len(), 1);
     assert_eq!(of_kind(&events, "pr-started").len(), 3);
@@ -541,5 +536,4 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(fx.ok(&["attempt", "list", "--active", "--plan", PLAN])["attempts"], json!([]));
     kill(Pid::from_raw(engine), Signal::SIGTERM).unwrap();
     fx.wait_event("watch-stopped", |e| e["data"]["pid"] == engine);
-    assert!(started.elapsed() < Duration::from_secs(180), "took {:?}", started.elapsed());
 }

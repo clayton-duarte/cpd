@@ -17,7 +17,7 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
@@ -50,16 +50,6 @@ fn env() -> TestEnv {
     )
     .unwrap();
     env
-}
-
-fn sql(env: &TestEnv, text: &str) {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000)
-        .unwrap()
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 /// A Plan: its PR row, its Lead (idle) and `jobs` queued Jobs of `FAT_JOBS` rows if `fat`.
@@ -130,14 +120,6 @@ fn start(env: &TestEnv, name: &str, view: &[&str]) -> (String, u32) {
     (pane.to_owned(), pid.parse().unwrap())
 }
 
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 /// What `/proc/<pid>/io` and `/proc/<pid>/stat` say the process has done so far.
 #[derive(Clone, Copy, Debug)]
 struct Usage {
@@ -204,10 +186,12 @@ fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Usage)> {
                         Ok::<(), CpdError>(())
                     })
                     .unwrap();
+                // time-claim: one write of noise every 300 ms, so the idle views have changes to ignore
                 std::thread::sleep(Duration::from_millis(300));
             }
         });
-        std::thread::sleep(Duration::from_secs(3)); // the first reads, and what follows them
+        // time-claim: the first reads, and what follows them, are over within 3 s; the window measured starts after
+        std::thread::sleep(Duration::from_secs(3));
         let before: Vec<Usage> = started.iter().map(|(.., pid)| usage(*pid)).collect();
         std::thread::sleep(window);
         let after: Vec<Usage> = started.iter().map(|(.., pid)| usage(*pid)).collect();
@@ -229,7 +213,7 @@ fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Usage)> {
 #[test]
 fn idle_dispatch_views_read_next_to_nothing() {
     let env = env();
-    sql(&env, &fixture());
+    env.sql(&fixture());
     for (name, used) in idle(&env, &["widgets", "statusbar"]) {
         assert!(used.rchar < READ_LIMIT, "{name} read {} B while nothing changed", used.rchar);
     }
@@ -239,7 +223,7 @@ fn idle_dispatch_views_read_next_to_nothing() {
 #[test]
 fn idle_tree_and_plan_read_next_to_nothing() {
     let env = env();
-    sql(&env, &fixture());
+    env.sql(&fixture());
     for (name, used) in idle(&env, &["tree", "plan"]) {
         assert!(used.rchar < READ_LIMIT, "{name} read {} B while nothing changed", used.rchar);
     }
@@ -250,7 +234,7 @@ fn idle_tree_and_plan_read_next_to_nothing() {
 #[test]
 fn idle_views_write_nothing_to_the_terminal() {
     let env = env();
-    sql(&env, &fixture());
+    env.sql(&fixture());
     for (name, used) in idle(&env, &["tree", "plan", "widgets", "statusbar", "logs", "worker"]) {
         let allowed = if name == "widgets" { 2 + window().as_secs() / 5 } else { 0 };
         assert!(used.syscw <= allowed, "{name} wrote {} times while nothing changed", used.syscw);
@@ -261,8 +245,8 @@ fn idle_views_write_nothing_to_the_terminal() {
 #[test]
 fn a_spinner_on_screen_keeps_turning() {
     let env = env();
-    sql(&env, &fixture());
-    sql(&env, "UPDATE sessions SET state = 'working' WHERE id = 'lead-ship'; UPDATE jobs SET status = 'running' WHERE plan = 'ship' AND key = 'k1';");
+    env.sql(&fixture());
+    env.sql("UPDATE sessions SET state = 'working' WHERE id = 'lead-ship'; UPDATE jobs SET status = 'running' WHERE plan = 'ship' AND key = 'k1';");
     for (name, used) in idle(&env, &["tree", "plan"]) {
         assert!(used.syscw >= 10, "{name} wrote {} times in the window: the spinner stopped", used.syscw);
     }

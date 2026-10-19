@@ -3,9 +3,9 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
-use super::{CancelArgs, Env, bad_row, find, plan_phase};
+use super::{CancelArgs, Env, find, plan_phase};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{AttemptId, JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::jobs::{self, Job};
@@ -41,7 +41,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                     [plan.as_str(), job.key.as_str(), reason.as_str()],
                 )?;
                 let text = format!("Job {key} of Plan {plan} was cancelled: {reason} Next: cpd plan show --plan {plan}");
-                append(tx, NewEvent::new(Kind::JobCancelled, text, json!({"reason": reason})).plan(plan.clone()).job(key.clone()))?;
+                append(tx, NewEvent::job_cancelled(text, &reason).plan(plan.clone()).job(key.clone()))?;
                 Ok(("cancelled".to_owned(), false, false))
             }
             Decision::Request(job, attempt) => {
@@ -55,7 +55,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                 );
                 append(
                     tx,
-                    NewEvent::new(Kind::JobCancelRequested, text, json!({"reason": reason}))
+                    NewEvent::job_cancel_requested(text, &reason)
                         .plan(plan.clone())
                         .job(key.clone())
                         .attempt(attempt),
@@ -87,7 +87,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, Cp
                 .optional()?;
             let attempt = active
                 .and_then(|id| AttemptId::parse(&id).ok())
-                .ok_or_else(|| bad_row(format!("Job {plan}/{key} is running with no active Attempt")))?;
+                .ok_or_else(|| CpdError::bad_row(format!("Job {plan}/{key} is running with no active Attempt")))?;
             Ok(Decision::Request(job, attempt))
         }
         _ => Ok(Decision::Cancel(job)),

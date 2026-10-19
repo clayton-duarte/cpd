@@ -9,7 +9,6 @@ mod common;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
@@ -30,22 +29,11 @@ fn env() -> TestEnv {
     env
 }
 
-fn sql(env: &TestEnv, text: &str) {
-    let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
-}
-
 /// Plan `ship` with Job `api` and its first Attempt `api-a1`, running. Its Worker Session `w1`, `working`, has
 /// the session file `file`, or none registered yet.
 fn populate(env: &TestEnv, file: Option<&Path>) {
     let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO contexts (id, title, jira, created_at, created_on)
              VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
@@ -158,15 +146,7 @@ impl<'a> Pane<'a> {
     }
 
     fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        let start = Instant::now();
-        loop {
-            let screen = self.screen();
-            if done(&screen) {
-                return screen;
-            }
-            assert!(start.elapsed() < Duration::from_secs(10), "waiting for {what}; the screen is:\n{}", screen.join("\n"));
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        common::wait_screen(what, || self.screen(), done)
     }
 
     fn keys(&self, keys: &[&str]) {
@@ -260,11 +240,7 @@ fn scrolling_leaves_the_end_and_q_closes_the_pane() {
     pane.wait("the end again", |s| s.iter().any(|r| r.contains("test result")));
     // The pane carries `@cpd_view` and the server respawns a dead one: `q` must close the pane, not end the program.
     pane.keys(&["q"]);
-    let start = Instant::now();
-    while !pane.closed() {
-        assert!(start.elapsed() < Duration::from_secs(10), "q did not close the pane");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    common::wait_until("q to close the pane", || pane.closed());
 }
 
 /// A view that fails at start (here: no such Attempt) is started again by the hook; it waits before it exits and
@@ -276,7 +252,8 @@ fn a_view_that_fails_to_start_backs_off_instead_of_looping() {
     let log = env.root().join("starts");
     let pane = Pane::start_command(&env, 80, 6, &format!("echo start >> {}; {CPD} tui view worker nosuch-a9 --plan ship", log.display()));
     pane.wait("the failure on screen", |s| s.iter().any(|r| r.contains("nosuch-a9")));
-    std::thread::sleep(Duration::from_secs(6));
+    // time-claim: over 6 s, a view that fails at start is started at most 4 times (it backs off, no tight loop)
+    std::thread::sleep(std::time::Duration::from_secs(6));
     let starts = std::fs::read_to_string(&log).unwrap().lines().count();
     assert!((1..=4).contains(&starts), "{starts} starts in 6 s: a tight loop");
 }
@@ -312,7 +289,7 @@ fn the_status_follows_the_events_of_the_store() {
     populate(&env, None);
     let pane = Pane::start(&env, 70, 3);
     pane.wait("the status", |s| s.iter().any(|r| r == STATUS));
-    sql(&env, &format!("UPDATE sessions SET state = 'idle' WHERE id = 'w1'; {EVENT}"));
+    env.sql(&format!("UPDATE sessions SET state = 'idle' WHERE id = 'w1'; {EVENT}"));
     pane.wait("the new state", |s| s.iter().any(|r| r == " api-a1 running · idle"));
 }
 
@@ -322,7 +299,7 @@ fn the_status_follows_the_events_of_the_store() {
 fn a_follow_that_fails_is_shown_and_the_status_stays() {
     let env = env();
     populate(&env, None);
-    sql(&env, EVENT);
+    env.sql(EVENT);
     let pane = Pane::start(&env, 100, 3);
     pane.wait("the status", |s| s.iter().any(|r| r == STATUS));
     // not through `Store`, which keeps the Events append-only

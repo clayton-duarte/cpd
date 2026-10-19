@@ -68,5 +68,5 @@ fn not_found(reference: &SessionRef) -> CpdError {
 }
 
 fn parse(id: &str) -> Result<SessionId, CpdError> {
-    SessionId::parse(id).map_err(|_| super::bad_row(format!("id {id:?}")))
+    SessionId::parse(id).map_err(|_| CpdError::bad_row(format!("id {id:?}")))
 }
