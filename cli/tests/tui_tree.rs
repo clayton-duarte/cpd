@@ -595,7 +595,7 @@ fn no_key_but_the_references_does_anything() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 18);
+    let pane = Pane::start(&env, 46, 22);
     pane.ready();
     let before = pane.wait("the whole view, the Inbox section's last row included", |s| s.last().is_some_and(|r| r == " └ expand"));
     pane.down(2); // on sketch
@@ -868,12 +868,12 @@ fn archive(env: &TestEnv) {
 }
 
 #[test]
-fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_collapses_them() {
+fn archived_contexts_and_plans_collapse_into_groups_and_a_click_on_their_toggle_row_expands_and_collapses_them() {
     let env = env();
     populate(&env);
     archive(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 20);
+    let pane = Pane::start(&env, 46, 26);
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let mut expected = vec![
         String::new(),
@@ -882,33 +882,55 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
         row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!("   ├ {IDLE} ship·f-id"),
         format!("   ├ {NEEDS_YOU} ship·f-bl"),
+        "   └ collapse".to_owned(),
         format!(" {NEEDS_YOU} beta"),
         row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
-        format!("   └ {MORE}"),
+        format!("   {MORE}"),
+        "   └ expand".to_owned(),
+        "   └ collapse".to_owned(),
         format!(" {MORE}"),
+        " └ expand".to_owned(),
     ];
-    expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
+    expected.extend(["", "", "", "", "", "", ""].map(String::from)); // the rest of the tree's rows
     expected.extend(inbox_section(46));
     let screen = pane.screen_is(&expected);
     assert_eq!(
         screen,
         expected,
-        "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
+        "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last; each group is a fold, folded: its title row, then `└ expand`"
     );
-    // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
-    pane.click(4, 8);
-    let shown = [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), format!("   ├ {MORE}"), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), format!(" {MORE}")];
-    assert_eq!(pane.rows_are(7, &shown)[7..11], shown);
-    // a click on the archived Plan shows its history (below); then the other `…` shows the archived Context
-    pane.click(10, 9);
+    // a click on beta's `…` title row does nothing; one on its `└ expand` row shows the archived Plan at the depth it
+    // would have if live, with the normal guide, then the group's `└ collapse` row
+    pane.click(4, 9);
+    pane.settled();
+    assert_eq!(pane.screen_is(&expected), expected, "the `…` title row toggles nothing");
+    pane.click(5, 10);
+    let shown = [
+        row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
+        format!("   {MORE}"),
+        row(&format!("  ├ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
+        "   └ collapse".to_owned(),
+        "   └ collapse".to_owned(),
+        format!(" {MORE}"),
+        " └ expand".to_owned(),
+    ];
+    assert_eq!(pane.rows_are(8, &shown)[8..15], shown);
+    // a click on the archived Plan shows its history (below); then the other group's `└ expand` shows the archived Context
+    pane.click(10, 10);
     wait_for_calls(&env, 1);
-    pane.click(1, 10);
-    let shown = [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), format!(" {MORE}"), format!(" {STOPPED} gamma")];
-    assert_eq!(pane.rows_are(9, &shown)[9..12], shown);
-    // a click on beta's `…` collapses its group again
-    pane.click(4, 8);
-    let shown = [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), format!("   └ {MORE}")];
-    assert_eq!(pane.rows_are(7, &shown)[7..9], shown);
+    pane.click(1, 14);
+    let shown = [
+        "   └ collapse".to_owned(),
+        format!(" {MORE}"),
+        format!(" {STOPPED} gamma"),
+        "   └ collapse".to_owned(),
+        " └ collapse".to_owned(),
+    ];
+    assert_eq!(pane.rows_are(12, &shown)[12..17], shown);
+    // a click on beta's group's `└ collapse` row collapses it again
+    pane.click(5, 11);
+    let shown = [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), format!("   {MORE}"), "   └ expand".to_owned(), "   └ collapse".to_owned()];
+    assert_eq!(pane.rows_are(8, &shown)[8..12], shown);
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
@@ -919,10 +941,10 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     archive(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
     fake_dialogs(&env);
-    let pane = Pane::start(&env, 46, 16);
+    let pane = Pane::start(&env, 46, 22);
     pane.ready();
-    pane.click(4, 8); // beta's `…`: its archived Plan is drawn
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
+    pane.click(5, 10); // the `└ expand` row of beta's `…`: its archived Plan is drawn
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("├ {STOPPED} old"))));
     pane.down(5); // ship, sketch, f-idle, f-blocked, rel
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-rel"])]);
@@ -937,7 +959,7 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
 fn the_tree_follows_the_archive_events() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 16);
+    let pane = Pane::start(&env, 46, 20);
     pane.ready();
     // the kinds of migration 3, written as the commands will: the row, then its Event
     sql(
@@ -946,7 +968,7 @@ fn the_tree_follows_the_archive_events() {
          INSERT INTO events (txn, at, kind, context, plan, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:00.000Z', 'plan-archived', 'beta', 'old', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == &format!("   └ {MORE}")) && s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
+    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == &format!("   {MORE}")) && s.iter().all(|r| !r.contains(&format!("├ {STOPPED} old"))));
     sql(
         &mut open(&env),
         "UPDATE contexts SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'gamma';
@@ -960,7 +982,7 @@ fn the_tree_follows_the_archive_events() {
          INSERT INTO events (txn, at, kind, context, plan, session, text, data)
          VALUES (cpd_txn(), '2026-02-03T00:00:00.000Z', 'session-archived', 'alpha', 'ship', 'f-idle', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship·f-id")) && s.iter().filter(|r| r.as_str() == format!("   └ {MORE}")).count() == 2);
+    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship·f-id")) && s.iter().filter(|r| r.as_str() == format!("   {MORE}")).count() == 2);
 }
 
 // ---------- the right-click menu ----------
@@ -988,7 +1010,7 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 18);
+    let pane = Pane::start(&env, 46, 22);
     pane.ready();
     pane.right_click(8, 4); // the fork `ship fork`
     let screen = pane.wait("the fork's menu", |s| menu_open(s, "Open"));
@@ -1006,9 +1028,12 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     pane.wait("the Plan's menu", |s| menu_open(s, "New session…"));
     pane.right_click(45, 13); // a right click outside closes it too
     pane.wait("the menu closed", the_menu_is_closed);
-    pane.right_click(5, 12); // the empty area
+    pane.right_click(5, 15); // the empty area
     pane.wait("the empty area's menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Escape"]);
+    pane.right_click(5, 6); // the `└ collapse` row of the Context `alpha`: no menu
+    pane.settled();
+    assert!(the_menu_is_closed(&pane.screen()), "a toggle row has no menu");
     pane.wait("the menu closed", the_menu_is_closed);
     assert!(calls(&env).is_empty(), "{:?}", calls(&env));
     assert!(!pane.footer_has("Archive"), "no prompt");
