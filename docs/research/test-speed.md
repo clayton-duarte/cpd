@@ -25,7 +25,7 @@ Every number here was measured on hs unless it says "computed" (arithmetic on me
 
 It exits with nextest's status after printing. Extra arguments go to nextest, e.g. `-E 'binary_id(cpd::plan)'` for a subset or `--config-file` for an experiment. nextest 0.9.148 writes the report under `<workspace>/target/nextest/timing/` even with `CARGO_TARGET_DIR` set (observed), which is where the script reads it.
 
-## 2. Before: the full run, six times
+## 2. Before: the full run, seven times
 
 `scripts/test-time.sh` on `8df1af8`, back to back, 2026-10-19. "Beside it" comes from `ps` every 5 s during runs 5-6 (a monitor script), and from `ps` before and after for runs 1-4.
 
@@ -37,8 +37,9 @@ It exits with nextest's status after printing. Extra arguments go to nextest, e.
 | **4** | 09:41 | 10.23 / 14.12 / 11.01 | **120.5** | **1,420.3** | 1,728 | 5.76 | nothing seen before or after |
 | **5** | 09:43 | 5.28 / 11.53 / 10.52 | **120.6** | **1,408.1** | 1,728 | 5.74 | nothing (monitor: only this run; load 5.3-10.2) |
 | **6** | 09:45 | 4.98 / 10.07 / 10.16 | **123.6** | **1,487.3** | 1,728 | 5.82 | nothing until 09:47:35, then another Gate's nextest and a release build for the last 30 s (the tail) |
+| 7 | 10:42 | 26.45 / 30.30 / 31.19 | 174.5 | 2,496.4 | 1,728 | n/a | another Worktree's `nextest run --workspace` the whole run, load 26-40 (the check run of the committed script) |
 
-**The before numbers are runs 4-6: wall 120.5 / 120.6 / 123.6 s, sum 1,420 / 1,408 / 1,487 s, 1,728 tests.** All 1,728 pass in every run. A second test run beside it adds 10-30 % to the sum and the clock (runs 1-3); the Gate log numbers in the brief (124 s / 1,471 s; 160 s / 2,295 s) are in the same range. The sum depends on the load, so a before/after comparison must be paired (same conditions, interleaved: §7 does).
+**The before numbers are runs 4-6: wall 120.5 / 120.6 / 123.6 s, sum 1,420 / 1,408 / 1,487 s, 1,728 tests.** All 1,728 pass in every run. A second test run beside it adds 10-30 % to the sum and the clock (runs 1-3), and up to 75 % at load 26-40 (run 7); the Gate log numbers in the brief (124 s / 1,471 s; 160 s / 2,295 s) are in the same range. The sum depends on the load, so a before/after comparison must be paired (same conditions, interleaved: §7 does).
 
 Distribution (run 5): 621 tests under 0.1 s (5.2 s together; nearly all unit tests), 82 at 0.1-0.3 s (18.1 s), 148 at 0.3-0.5 s (61.6 s), 513 at 0.5-1 s (374.5 s), 261 at 1-2 s (341.3 s), 73 at 2-5 s (225.8 s), 21 at 5-10 s (141.8 s), 9 over 10 s (239.7 s).
 
