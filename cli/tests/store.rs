@@ -1455,7 +1455,8 @@ fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
     let env = TestEnv::new();
     drop(open(&env));
     let started = env.root().join("a.started");
-    let mut a = Writer::spawn(&env, "a", 5000, 2500, Some(&started));
+    let release = env.root().join("a.release");
+    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
     a.wait_started(&started);
     let a_pid = a.child.id();
 
@@ -1464,9 +1465,17 @@ fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
 
     let lines = Lines::default();
     let mut store = Store::open_persistent(&home(&env), 100, persisting(&lines, || false)).unwrap();
-    let t = Instant::now();
-    let txn = store.write("persisted", |tx| Ok(tx.id())).unwrap();
-    assert!(t.elapsed() >= Duration::from_millis(500), "it did not wait: {:?}", t.elapsed());
+    // A holds the lock until the persisting store has met it and said so: the store waits past `store_busy_ms` for
+    // as long as A holds it.
+    let (txn, waited) = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            common::wait_until("the persisting store to report the held lock", || !lines.lock().unwrap().is_empty());
+            fs::write(&release, "").unwrap();
+        });
+        let t = Instant::now();
+        (store.write("persisted", |tx| Ok(tx.id())).unwrap(), t.elapsed())
+    });
+    assert!(waited >= Duration::from_millis(100), "it did not wait past store_busy_ms: {waited:?}");
     assert_eq!(a.wait()["ok"], true);
     let lines = lines.lock().unwrap().clone();
     assert_eq!(lines.len(), 2, "{lines:?}");

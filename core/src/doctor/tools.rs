@@ -4,7 +4,6 @@
 use std::ffi::OsStr;
 use std::process::{Command, Stdio};
 
-use super::DEADLINE;
 use super::check::{Check, Severity};
 use crate::config::catalog::node;
 use crate::host::deadline::{self, Failed};
@@ -49,13 +48,13 @@ fn parse_version(text: &str, parts: usize) -> Option<(String, [u64; 3])> {
 }
 
 /// stdout then stderr of `program args`, or why it did not run and succeed. A probe
-/// past [`DEADLINE`] is killed with its group and fails `tool_timeout` (commands.md §14.1).
+/// past doctor's deadline ([`super::DEADLINE`]) is killed with its group and fails `tool_timeout` (commands.md §14.1).
 fn run_tool(program: &OsStr, args: &[&str]) -> Result<String, String> {
     let name = program.to_string_lossy();
     let tool = std::path::Path::new(program).file_name().map_or(name.clone(), |n| n.to_string_lossy());
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null());
-    let out = deadline::output(&mut cmd, &tool, DEADLINE).map_err(|e| match e {
+    let out = deadline::output(&mut cmd, &tool, super::deadline()).map_err(|e| match e {
         Failed::Io(e) if e.kind() == std::io::ErrorKind::NotFound => format!("`{name}` was not found."),
         Failed::Io(e) => format!("cannot run `{name}`: {e}."),
         Failed::Timeout(e) => format!("{}: {}", e.code().as_str(), e.message()),

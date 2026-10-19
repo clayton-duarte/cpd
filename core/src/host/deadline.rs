@@ -5,8 +5,9 @@
 //! call fails with `tool_timeout`. Each deadline is a constant at its caller.
 //!
 //! Tests shorten a deadline with `CPD_TEST_DEADLINE_<TOOL>=<seconds>` (`<TOOL>`
-//! upper-cased, e.g. `CPD_TEST_DEADLINE_GIT=1`). Only a debug build reads it: a
-//! release build (the installed `cpd`) has no way to change a deadline.
+//! upper-cased, a decimal, e.g. `CPD_TEST_DEADLINE_GIT=0.5`; [`super::limit`]).
+//! Only a debug build reads it: a release build (the installed `cpd`) has no way
+//! to change a deadline.
 
 use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
@@ -20,6 +21,7 @@ use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use serde_json::json;
 
+use super::limit::limit;
 use crate::error::{CpdError, ErrorCode};
 
 /// How long the group has between `SIGTERM` and `SIGKILL` (contract §1.2).
@@ -42,7 +44,12 @@ pub enum Failed {
 /// process group for at most `deadline`, like [`Command::output`]. `tool` names it
 /// in `details.tool` and selects the test override.
 pub fn output(cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Output, Failed> {
-    let deadline = test_override(tool).unwrap_or(deadline);
+    output_with_grace(cmd, tool, deadline, GRACE)
+}
+
+/// [`output`] with `grace` between `SIGTERM` and `SIGKILL` instead of [`GRACE`]: for this module's tests.
+fn output_with_grace(cmd: &mut Command, tool: &str, deadline: Duration, grace: Duration) -> Result<Output, Failed> {
+    let deadline = limit(&format!("DEADLINE_{}", tool.to_ascii_uppercase()), deadline);
     let argv: Vec<String> = std::iter::once(cmd.get_program())
         .chain(cmd.get_args())
         .map(|a| a.to_string_lossy().into_owned())
@@ -55,14 +62,14 @@ pub fn output(cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Outpu
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= until => {
-                kill_group(&mut child);
+                kill_group(&mut child, grace);
                 let _ = stdout.recv_timeout(DRAIN);
                 let _ = stderr.recv_timeout(DRAIN);
                 return Err(Failed::Timeout(timeout(tool, argv, deadline)));
             }
             Ok(None) => thread::sleep(POLL),
             Err(e) => {
-                kill_group(&mut child);
+                kill_group(&mut child, grace);
                 return Err(Failed::Io(e));
             }
         }
@@ -74,16 +81,15 @@ pub fn output(cmd: &mut Command, tool: &str, deadline: Duration) -> Result<Outpu
     Ok(Output { status, stdout: read(stdout), stderr: read(stderr) })
 }
 
-/// The `tool_timeout` error (contract §1.2): `tool`, `argv`, `deadline_seconds`.
+/// The `tool_timeout` error (contract §1.2): `tool`, `argv`, `deadline_seconds`
+/// (an integer; a decimal only for a test's sub-second override).
 fn timeout(tool: &str, argv: Vec<String>, deadline: Duration) -> CpdError {
     let what = argv.get(1..).map(|rest| rest.join(" ")).unwrap_or_default();
-    CpdError::new(
-        ErrorCode::ToolTimeout,
-        format!("{tool} ran past its deadline of {}s and was killed: {tool} {what}", deadline.as_secs()),
-    )
-    .with("tool", tool)
-    .with("argv", json!(argv))
-    .with("deadline_seconds", deadline.as_secs())
+    let seconds = if deadline.subsec_nanos() == 0 { json!(deadline.as_secs()) } else { json!(deadline.as_secs_f64()) };
+    CpdError::new(ErrorCode::ToolTimeout, format!("{tool} ran past its deadline of {seconds}s and was killed: {tool} {what}"))
+        .with("tool", tool)
+        .with("argv", json!(argv))
+        .with("deadline_seconds", seconds)
 }
 
 /// Reads a pipe to its end on a thread; the bytes arrive on the channel.
@@ -102,12 +108,12 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> Receiver<Vec<u8>> {
 }
 
 /// `SIGTERM` to the child's group; `SIGKILL` to what is left of it after
-/// [`GRACE`]; reaps the child. The group id is the child's pid, which stays
+/// `grace`; reaps the child. The group id is the child's pid, which stays
 /// reserved while any member of the group lives.
-fn kill_group(child: &mut Child) {
+fn kill_group(child: &mut Child, grace: Duration) {
     let group = Pid::from_raw(child.id() as i32);
     let _ = killpg(group, Signal::SIGTERM);
-    let until = Instant::now() + GRACE;
+    let until = Instant::now() + grace;
     let mut status: Option<ExitStatus> = None;
     while Instant::now() < until {
         if status.is_none() {
@@ -121,16 +127,6 @@ fn kill_group(child: &mut Child) {
     }
     let _ = killpg(group, Signal::SIGKILL);
     let _ = child.wait();
-}
-
-/// The deadline a test set for `tool`, in a debug build only.
-fn test_override(tool: &str) -> Option<Duration> {
-    if !cfg!(debug_assertions) {
-        return None;
-    }
-    let name = format!("CPD_TEST_DEADLINE_{}", tool.to_ascii_uppercase());
-    let seconds: u64 = std::env::var(&name).ok()?.parse().ok()?;
-    Some(Duration::from_secs(seconds))
 }
 
 #[cfg(test)]
@@ -197,10 +193,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("pid");
         let mut cmd = sh(r#"trap '' TERM; sleep 30 & echo $! > "$1"; while :; do wait; done"#, &pidfile);
+        // The grace is the claim, not its 5 s: half a second here.
+        let grace = Duration::from_millis(500);
+        let deadline = Duration::from_millis(200);
         let started = Instant::now();
-        let Err(Failed::Timeout(_)) = output(&mut cmd, "tmux", Duration::from_secs(1)) else { panic!("no timeout") };
+        let Err(Failed::Timeout(_)) = output_with_grace(&mut cmd, "tmux", deadline, grace) else { panic!("no timeout") };
         let took = started.elapsed();
-        assert!(took >= GRACE && took < GRACE + Duration::from_secs(4), "took {took:?}");
+        // time-claim: SIGKILL comes the grace after the deadline, not before and not much later; no per-poll signal
+        // from the runner.
+        assert!(took >= deadline + grace && took < deadline + grace + Duration::from_secs(4), "took {took:?}");
         let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
         assert!(wait_gone(pid), "the grandchild {pid} outlived SIGKILL");
     }
