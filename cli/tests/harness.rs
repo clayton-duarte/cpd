@@ -47,12 +47,21 @@ fn cpd_runs_and_prints_one_json_value() {
 
 #[test]
 fn git_repo_has_one_commit_on_main() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    assert!(repo.starts_with(env.root()));
-    assert_eq!(env.git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
-    assert_eq!(env.git(&repo, &["rev-list", "--count", "HEAD"]), "1");
-    assert_eq!(env.git(&repo, &["log", "-1", "--format=%ae"]), "test@cpd.invalid");
+    // Twice: the second repo is a copy of the template (the first makes it if there is none).
+    for _ in 0..2 {
+        let env = TestEnv::new();
+        let repo = env.git_repo("pay");
+        assert!(repo.starts_with(env.root()));
+        assert_eq!(env.git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+        assert_eq!(env.git(&repo, &["rev-list", "--count", "HEAD"]), "1");
+        assert_eq!(env.git(&repo, &["log", "-1", "--format=%ae"]), "test@cpd.invalid");
+        assert_eq!(std::fs::read_to_string(repo.join("README.md")).unwrap(), "# pay\n");
+        // Clean to plumbing, which trusts the index's stat data (first: `status` refreshes the
+        // index), and to porcelain.
+        env.git(&repo, &["diff-files", "--quiet"]);
+        env.git(&repo, &["diff-index", "--quiet", "HEAD", "--"]);
+        assert_eq!(env.git(&repo, &["status", "--porcelain"]), "");
+    }
 }
 
 #[test]

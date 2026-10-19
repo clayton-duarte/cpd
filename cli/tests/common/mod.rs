@@ -578,14 +578,29 @@ impl TestEnv {
         self.run_ok(dir, "git", args).trim_end().to_owned()
     }
 
-    /// A new git repo `repos/<name>` on branch `main` with one commit (`README.md`).
+    /// A new git repo `repos/<name>` on branch `main` with one commit (`README.md`): a copy of
+    /// [`git_repo_template`] (one git process instead of three), made here when there is none.
     pub fn git_repo(&self, name: &str) -> PathBuf {
         let repo = self.root().join("repos").join(name);
+        let template = git_repo_template(name);
+        if template.exists() {
+            copy_tree(&template, &repo);
+            // The index holds the template's inodes and times: refresh it, so that plumbing
+            // (`diff-index`, `diff-files`) sees the clean tree it is.
+            self.git(&repo, &["update-index", "-q", "--refresh"]);
+            return repo;
+        }
         fs::create_dir_all(&repo).expect("create repo dir");
         self.git(&repo, &["init", "-q", "-b", "main"]);
         fs::write(repo.join("README.md"), format!("# {name}\n")).expect("write README");
         self.git(&repo, &["add", "-A"]);
         self.git(&repo, &["commit", "-q", "-m", "initial"]);
+        // Put it in place for the next env (atomic: a concurrent maker's whole copy wins).
+        let partial = template.with_extension(format!("partial-{}-{}", std::process::id(), NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)));
+        copy_tree(&repo, &partial);
+        if fs::rename(&partial, &template).is_err() {
+            fs::remove_dir_all(&partial).expect("remove the partial git repo template");
+        }
         repo
     }
 
@@ -734,6 +749,33 @@ fn store_template() -> &'static Path {
         fs::rename(&partial, &path).expect("put the store template in place");
         path
     })
+}
+
+/// Where [`TestEnv::git_repo`] keeps its template of repo `name`: under Cargo's
+/// `CARGO_TARGET_TMPDIR`, named after this test binary's size and modification time (the recipe
+/// is in the binary), shared by its test processes.
+fn git_repo_template(name: &str) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    static KEY: OnceLock<String> = OnceLock::new();
+    let key = KEY.get_or_init(|| {
+        let binary = fs::metadata(std::env::current_exe().expect("this test binary")).expect("stat this test binary");
+        format!("{}-{}.{}", binary.len(), binary.mtime(), binary.mtime_nsec())
+    });
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("git-repo-{key}-{name}"))
+}
+
+/// Copies the directory tree `from` (directories and regular files) to the new directory `to`.
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap_or_else(|e| panic!("create {}: {e}", to.display()));
+    for entry in fs::read_dir(from).unwrap_or_else(|e| panic!("read {}: {e}", from.display())) {
+        let entry = entry.expect("read a directory entry");
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        if entry.file_type().expect("the entry's type").is_dir() {
+            copy_tree(&src, &dst);
+        } else {
+            fs::copy(&src, &dst).unwrap_or_else(|e| panic!("copy {}: {e}", src.display()));
+        }
+    }
 }
 
 /// This process's user id: the owner of `/proc/self`.
