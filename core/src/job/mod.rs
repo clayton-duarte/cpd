@@ -26,15 +26,15 @@ use clap::builder::PossibleValuesParser;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::args::{PlanArg, PrArg, Text};
-use crate::config::{self, Config, Tier};
+use crate::config::{self, Tier};
 use crate::driver;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::fingerprint::PrSpec;
 use crate::plan::jobs::{Job, STATUSES};
-use crate::store::Store;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -166,20 +166,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`'s config and the store.
-struct Env {
-    config: Config,
-    store: Store,
-}
-
 impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { config, store })
-    }
-
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
     /// one pi supports for its model (§9).
     fn check_tier(&self, tier: Tier) -> Result<(), CpdError> {

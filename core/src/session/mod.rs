@@ -24,13 +24,11 @@ mod state;
 use std::path::PathBuf;
 
 use crate::args::{Name, SessionArg, SessionRef, Text};
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::host::Tmux;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
-use crate::store::Store;
 
 pub use archive::{Blocker, archive_blocked, blockers};
 pub use moves::{Closed, close_lead};
@@ -219,21 +217,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
 impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
-    }
-
     /// The Session `reference` names (commands.md §1.3), resolved once at the boundary.
     fn resolve(&mut self, reference: &SessionRef) -> Result<SessionId, CpdError> {
         self.store.read(|conn| resolve::resolve(conn, reference))

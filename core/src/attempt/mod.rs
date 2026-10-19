@@ -13,13 +13,11 @@ mod show;
 mod submit;
 
 use crate::args::PlanArg;
-use crate::config::Config;
 use crate::driver;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
-use crate::store::Store;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -85,22 +83,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Show(args) => show::show(args),
         Command::List(args) => show::list(args),
         Command::Run(args) => driver::run(args),
-    }
-}
-
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
-impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
     }
 }
 

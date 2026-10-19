@@ -27,13 +27,11 @@ mod show;
 use std::path::{Path, PathBuf};
 
 use crate::args::{Name, PlanArg, Text, Title};
-use crate::config::Config;
 use crate::context::Jira;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::ids::{ContextId, PlanId, ReviewId};
 use crate::output::Output;
-use crate::store::Store;
 
 pub use fingerprint::plan_fingerprint;
 pub use jobs::locked_fingerprint;
@@ -196,22 +194,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Archive(args) => archive::plan_archive(args),
         Command::Unarchive(args) => archive::plan_unarchive(args),
         Command::Cancel(args) => cancel::plan_cancel(args),
-    }
-}
-
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
-impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
     }
 }
 

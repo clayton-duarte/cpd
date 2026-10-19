@@ -31,7 +31,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::args::{PlanArg, PrArg};
-use crate::config::{self, Config};
+use crate::config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, HookOutcome, Operation, run_hook};
 use crate::home::{CpdHome, Hook};
@@ -40,7 +41,6 @@ use crate::merge::{self, RepoLock};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::fingerprint::PrSpec;
-use crate::store::Store;
 use row::{PlanRow, PrRow};
 
 pub use gh::close_pr;
@@ -152,21 +152,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
 impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
-    }
-
     fn plan(&mut self, id: &PlanId) -> Result<PlanRow, CpdError> {
         self.store.read(|conn| row::load(conn, id))
     }
