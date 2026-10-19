@@ -14,6 +14,31 @@
 [profile.default]
 fail-fast = false
 
+# Start the tests that stay over 10 s first. Without it nextest starts tests in
+# binary order and the two session_watchdog tests (67-69 s, they wait for the
+# adapter's real 60 s stall limit) start 52 s into a run, alone at the end: the
+# clock was the sum / 16 plus about 30 s; started first the tail is gone
+# (docs/research/test-speed.md §3: wall - sum / 16 from 22.5-32.6 s to 1.8 s).
+# The list is the tests over 10 s on a calm hs: they wait for a real limit
+# of the product (the 60 s stall limit, the 10 s pi stop and doctor deadline, the
+# spawn back-off, the quiet period) or run a whole plan. `=name` is an exact
+# name: a renamed test drops out of the list silently, so sp-guard trims it.
+[[profile.default.overrides]]
+filter = '''
+  test(=a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_error_event)
+  | test(=a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone)
+  | test(=config_refuses_each_bad_file_with_its_key_path)
+  | test(=a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job)
+  | test(=the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once)
+  | test(=each_tool_must_be_at_or_above_its_minimum)
+  | test(=a_hung_catalog_probe_is_killed_at_10_seconds)
+  | test(=a_pi_that_ignores_sigterm_is_killed_after_pi_stop_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi)
+  | test(=e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off)
+  | test(=a_failed_job_is_stuck_only_after_stuck_job_minutes)
+  | test(=fork_waits_until_the_source_is_idle_then_forks_and_resumes)
+'''
+priority = 20
+
 # scripts/test-time.sh: the default profile plus a JUnit report
 # (target/nextest/timing/junit.xml), from which the script sums the test times.
 # A custom profile inherits every setting and override of `default`.
