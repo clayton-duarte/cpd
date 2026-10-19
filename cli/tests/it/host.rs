@@ -78,8 +78,8 @@ fn a_right_click_is_tmuxs_default_binding_that_passes_it_to_a_pane_that_captures
     assert!(binding.starts_with(default_start), "{binding}");
     assert!(binding.contains("{ select-pane -t = ; send-keys -M } { display-menu "), "{binding}");
     // and cpd's own binding is on the same server, so the list is of this server's keys
-    let own = s.env.tmux(&["list-keys", "-T", "root", "MouseDown1Pane"]);
-    assert!(String::from_utf8_lossy(&own.stdout).contains("@cpd_view"));
+    let own = s.env.tmux(&["list-keys", "-T", "root", "MouseDown1Status"]);
+    assert!(String::from_utf8_lossy(&own.stdout).contains("cpd tui action"));
 }
 
 /// Every option, binding and hook of contract §6.1: the reference's
@@ -96,9 +96,9 @@ fn assert_server_options(s: &Server) {
         ("pane-border-lines", "heavy"),
         (
             "pane-border-format",
-            "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,#{?#{==:#{@cpd_view},statusbar},,\
+            "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
              #[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}}",
+             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}",
         ),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
@@ -112,11 +112,15 @@ fn assert_server_options(s: &Server) {
     }
     let hook = s.env.tmux(&["show-hooks", "-g", "pane-died"]);
     assert_eq!(String::from_utf8_lossy(&hook.stdout), "pane-died[0] if-shell -F \"#{@cpd_view}\" respawn-pane\n", "{hook:?}");
-    let binding = s.env.tmux(&["list-keys", "-T", "root", "MouseDown1Pane"]);
+    let binding = |key| {
+        let out = s.env.tmux(&["list-keys", "-T", "root", key]);
+        String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    // tmux's own default: a click selects the pane, then passes the click on
+    assert_eq!(binding("MouseDown1Pane"), "bind-key -T root MouseDown1Pane select-pane -t = \\; send-keys -M");
     assert_eq!(
-        String::from_utf8_lossy(&binding.stdout).split_whitespace().collect::<Vec<_>>().join(" "),
-        "bind-key -T root MouseDown1Pane if-shell -F \"#{==:#{@cpd_view},statusbar}\" \"send-keys -M\" \"select-pane -t = ; send-keys -M\"",
-        "{binding:?}"
+        binding("MouseDown1Status"),
+        "bind-key -T root MouseDown1Status run-shell -b \"cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null\""
     );
 }
 
@@ -394,15 +398,15 @@ fn a_leads_border_shows_its_title_reversed_and_a_titleless_lead_shows_nothing() 
 }
 
 #[test]
-fn the_statusbar_is_a_view_and_a_pane_marked_so_parses() {
-    assert_eq!(View::parse("statusbar"), Some(View::Statusbar));
-    assert_eq!(View::Statusbar.as_str(), "statusbar");
-    assert!(View::ALL.contains(&View::Statusbar));
+fn the_statusbar_is_no_view() {
+    assert_eq!(View::parse("statusbar"), None);
+    assert!(View::ALL.iter().all(|v| v.as_str() != "statusbar"));
     assert_eq!(View::parse("nope"), None);
 }
 
 /// Finding 4: a pane made by a newer cpd (a view this binary does not know)
-/// is skipped, and the rest of the listing is intact.
+/// is skipped, and the rest of the listing is intact; so is an older cpd's
+/// StatusBar pane, which `cpd tui` removes.
 #[test]
 fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
     let s = server();
@@ -410,6 +414,7 @@ fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
     t.ensure_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap();
     let first = t.list_panes().unwrap().remove(0).pane;
     let (_, other) = t.new_window("cpd", "x", &sleeper(s.env.root())).unwrap();
+    let (_, kept) = t.new_window("cpd", "y", &sleeper(s.env.root())).unwrap();
     let set = |pane: &PaneId, view: &str| {
         let out = s.env.tmux(&["set", "-p", "-t", pane.as_str(), "@cpd_view", view]);
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -418,8 +423,8 @@ fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
     set(&other, "hologram");
 
     let panes = t.list_panes().unwrap();
-    assert_eq!(pane(&panes, &first).cpd_view, Some(View::Statusbar));
-    assert!(panes.iter().all(|p| p.pane != other), "{panes:?}");
+    assert!(panes.iter().all(|p| p.pane != first && p.pane != other), "{panes:?}");
+    assert_eq!(pane(&panes, &kept).cpd_view, None);
 }
 
 /// Runs the test `name` of this binary again in a child process born with `env`'s `bin/` first on `PATH` and `vars`,

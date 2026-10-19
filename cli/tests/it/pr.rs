@@ -1,6 +1,7 @@
 //! `pr open`, `pr poll` and `pr rebase` (commands.md §9, contract §7.6): the
 //! built binary against temporary repos with a bare `origin`, a fake `gh`, and
-//! a Plan written straight into the database.
+//! a Plan written straight into the database. `pr open` and `pr rebase` take no
+//! lock (hs-d243): their Gate runs in a gate worktree of its own.
 
 use crate::common;
 
@@ -13,7 +14,6 @@ use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
-use cpd_core::merge::RepoLock;
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use cpd_tui::read::{self, Checks, PrState, ReviewDecision};
@@ -96,7 +96,7 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(
         home.config(),
-        format!("version = 1\nmachine = \"t\"\n[timeouts]\nlock_wait_seconds = 1\n{config_extra}\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
+        format!("version = 1\nmachine = \"t\"\n[timeouts]\n{config_extra}\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
     )
     .unwrap();
     let gh = env.root().join("gh");
@@ -253,7 +253,24 @@ impl Fx {
     }
 
     fn gate_log(&self) -> String {
-        fs::read_to_string(self.home.plan_dir(&plan()).join("logs/pr-repo.pre-merge.log")).unwrap_or_default()
+        self.pr_log("pre-merge")
+    }
+
+    /// `run/pay/logs/pr-repo.<hook>.log`.
+    fn pr_log(&self, hook: &str) -> String {
+        fs::read_to_string(self.home.plan_dir(&plan()).join(format!("logs/pr-repo.{hook}.log"))).unwrap_or_default()
+    }
+
+    /// No gate worktree is left: none on disk next to the repo, none known to git.
+    fn assert_no_gate_worktree(&self) {
+        let left: Vec<String> = fs::read_dir(self.repo.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".gate-"))
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        let listed = self.git(&self.repo, &["worktree", "list", "--porcelain"]);
+        assert!(!listed.contains(".gate-"), "{listed}");
     }
 
     /// Moves `main` on `origin` (through the main checkout) with a commit writing `path`.
@@ -362,25 +379,68 @@ fn code(run: &Run) -> (String, i32) {
     (run.error()["code"].as_str().unwrap().to_owned(), run.exit)
 }
 
+/// A `pre-merge` paused mid-run: it prints the gated commit and its files, creates
+/// `<root>/gate-started`, waits for `<root>/gate-go` (at most 60 s), then prints
+/// them again.
+fn paused_gate(root: &Path) -> String {
+    let (started, go) = (root.join("gate-started"), root.join("gate-go"));
+    format!(
+        "pre-merge = \"git rev-parse HEAD; ls; touch {}; i=0; while [ ! -e {} ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done; git rev-parse HEAD; ls\"\n",
+        started.display(),
+        go.display()
+    )
+}
+
+/// Waits until the [`paused_gate`] has started.
+fn await_gate(root: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !root.join("gate-started").exists() {
+        assert!(Instant::now() < deadline, "the Gate never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Lets the [`paused_gate`] finish.
+fn release_gate(root: &Path) {
+    fs::write(root.join("gate-go"), "").unwrap();
+}
+
+impl Fx {
+    /// `cpd pr <command> --plan pay`, started in the background.
+    fn spawn_pr(&self, command: &str) -> Child {
+        Child(Some(self.env.command(CPD).args(["pr", command, "--plan", "pay"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()))
+    }
+}
+
 // ------------------------------------------------------------------ pr open
 
 #[test]
 fn open_gates_pushes_creates_the_pr_and_records_it() {
     let fx = fx("dispatch");
-    fx.hooks("pre-merge = \"echo gate ran on $(git rev-parse --abbrev-ref HEAD)\"\n");
+    fx.hooks(
+        "pre-start = \"echo set up in $(basename $PWD)\"\npre-merge = \"echo gate ran on {{ branch }} in $(basename $PWD) at $(git rev-parse HEAD)\"\n",
+    );
+    let tip = fx.lead_sha();
 
     let out = fx.pr("open").ok();
 
     let opened_at = out["pr"]["pr"]["opened_at"].as_str().unwrap().to_owned();
     assert_eq!(
         out,
-        json!({"ok": true, "plan": "pay", "phase": "deploy", "pr": {"key": "repo", "status": "open", "pr": {"number": 812, "url": URL, "opened_at": opened_at}}})
+        json!({"ok": true, "plan": "pay", "phase": "deploy", "pr": {"key": "repo", "status": "open", "pr": {"number": 812, "url": URL, "opened_at": opened_at}},
+               "sha": tip, "pushed": true, "remote": tip})
     );
-    // The Gate ran in the Lead worktree on the Lead Branch, and wrote its log.
-    assert!(fx.gate_log().contains("gate ran on cpd/pay"), "{}", fx.gate_log());
-    // Pushed.
-    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
-    assert_eq!(fx.git(&fx.lead, &["rev-parse", "--abbrev-ref", "cpd/pay@{upstream}"]), "origin/cpd/pay");
+    // The Gate ran in a gate worktree detached at the tip, `pre-start` first, with `branch` the
+    // Lead Branch, and wrote its logs; the gate worktree is gone.
+    let gate = "pay.pay.repo.gate-";
+    assert!(fx.pr_log("pre-start").starts_with(&format!("set up in {gate}")), "{}", fx.pr_log("pre-start"));
+    let log = fx.gate_log();
+    assert!(log.starts_with(&format!("gate ran on cpd/pay in {gate}")) && log.trim_end().ends_with(&format!(" at {tip}")), "{log}");
+    fx.assert_no_gate_worktree();
+    // Pushed, by rule P: no upstream written to `.git/config` (G1).
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(tip));
+    let config = fs::read_to_string(fx.repo.join(".git/config")).unwrap();
+    assert!(!config.contains("[branch "), "{config}");
     // gh: look for an existing PR, then create it with the Jobs table as its body.
     let calls = fx.gh_calls();
     assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"]);
@@ -691,27 +751,124 @@ fn open_refuses_when_no_job_is_merged() {
 }
 
 #[test]
-fn open_times_out_waiting_for_the_per_repo_lock() {
+fn open_gates_the_commit_and_leaves_the_lead_worktrees_local_changes_alone() {
     let fx = fx("dispatch");
-    let _held = RepoLock::wait(&fx.home, &fx.repo).unwrap();
+    fx.hooks("pre-merge = \"ls; cat api.txt\"\n");
+    fs::write(fx.lead.join("scratch.txt"), "x").unwrap();
+    fs::write(fx.lead.join("api.txt"), "edited\n").unwrap();
+    let tip = fx.lead_sha();
+
+    let out = fx.pr("open").ok();
+
+    // Gated and pushed: the commit, not the Lead worktree's files (no `dirty_target`, hs-d243).
+    assert_eq!((out["sha"].as_str(), out["pushed"].as_bool()), (Some(tip.as_str()), Some(true)));
+    let log = fx.gate_log();
+    assert!(!log.contains("scratch.txt") && log.contains("api\n") && !log.contains("edited"), "{log}");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(tip));
+    // The local changes are untouched.
+    assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), " M api.txt\n?? scratch.txt");
+}
+
+#[test]
+fn open_after_another_open_opened_the_pr_during_its_gate_is_already_and_pushes_nothing() {
+    let fx = fx("dispatch");
+    fx.hooks(&paused_gate(fx.env.root()));
+
+    let child = fx.spawn_pr("open");
+    await_gate(fx.env.root());
+    // Another `pr open` commits meanwhile.
+    fx.store()
+        .write("pr open", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                   VALUES ('acme/pay', 812, '{URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
+                 UPDATE prs SET status = 'open', pr_number = 812, pr_url = '{URL}', pr_opened_at = 'opened',
+                        pull_request = (SELECT id FROM pull_requests) WHERE plan = 'pay';"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    release_gate(fx.env.root());
+    let out = child.finish();
+
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((out["ok"].as_bool(), out["already"].as_bool()), (Some(true), Some(true)), "{out}");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
+    // Only step 0's lookup (#91) ran, before the Gate: no `gh pr create`.
+    let calls: Vec<String> = fx.gh_calls().iter().map(|c| c[1].clone()).collect();
+    assert_eq!(calls, ["list"]);
+    fx.assert_no_gate_worktree();
+}
+
+#[test]
+fn open_adopts_the_pull_request_a_concurrent_open_created_when_its_create_fails() {
+    let fx = fx("dispatch");
+    // `gh pr create` fails because another `pr open` of the PR created it: the lookup now finds it.
+    let raced = format!(r#"[{{"number": 812, "url": "{URL}", "state": "OPEN"}}]"#);
+    fs::write(fx.env.root().join("gh/raced.json"), raced).unwrap();
+    fx.env.fake_gh(&GH.replace(
+        r#""pr create") cat "$(file create.out)" ;;"#,
+        r#""pr create") cp "$dir/raced.json" "$dir/list.json"; echo "a pull request for branch cpd/pay already exists" >&2; exit 1 ;;"#,
+    ));
+
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["pr"]["pr"]["number"], 812);
+    let calls: Vec<String> = fx.gh_calls().iter().map(|c| c[1].clone()).collect();
+    assert_eq!(calls, ["list", "create", "list", "graphql"]);
+    assert_eq!(fx.plan_row().0, "deploy");
+}
+
+#[test]
+fn open_reports_a_create_that_fails_with_no_pull_request_to_adopt() {
+    let fx = fx("dispatch");
+    fx.env.fake_gh(&GH.replace(r#""pr create") cat "$(file create.out)" ;;"#, r#""pr create") echo "HTTP 422" >&2; exit 1 ;;"#));
 
     let run = fx.pr("open");
 
-    assert_eq!(code(&run), ("lock_timeout".into(), 5));
-    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
+    assert_eq!(code(&run), ("gh_failed".into(), 1));
+    assert!(run.error()["details"]["stderr"].as_str().unwrap().contains("HTTP 422"));
     assert_eq!(fx.plan_row().0, "dispatch");
 }
 
 #[test]
-fn open_refuses_a_dirty_lead_worktree() {
+fn open_with_a_failing_pre_start_is_gate_error_and_runs_no_gate() {
     let fx = fx("dispatch");
-    fs::write(fx.lead.join("scratch.txt"), "x").unwrap();
+    fx.hooks("pre-start = \"echo no deps; exit 2\"\npre-merge = \"echo gate ran\"\n");
 
     let run = fx.pr("open");
 
-    assert_eq!(code(&run), ("dirty_target".into(), 3));
-    assert_eq!(run.error()["details"]["files"], json!(["?? scratch.txt"]));
+    assert_eq!(code(&run), ("gate_error".into(), 1));
+    let details = &run.error()["details"];
+    assert_eq!((details["hook"].as_str(), details["exit"].as_i64()), (Some("pre-start"), Some(2)), "{details}");
+    assert!(details["tail"].as_str().unwrap().contains("no deps"), "{details}");
+    assert!(details["log"].as_str().unwrap().ends_with("logs/pr-repo.pre-start.log"), "{details}");
+    assert_eq!(fx.gate_log(), "", "pre-merge did not run");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
+    assert_eq!(fx.plan_row().0, "dispatch");
+    fx.assert_no_gate_worktree();
+}
+
+#[test]
+fn a_gate_worktree_left_by_a_killed_run_is_swept_and_a_live_ones_is_kept() {
+    let fx = fx("dispatch");
+    let tip = fx.lead_sha();
+    // A dead pid (a child that has exited) and a live one (this test's).
+    let mut dead = std::process::Command::new("true").spawn().unwrap();
+    let dead_pid = dead.id();
+    dead.wait().unwrap();
+    let path = |pid: u32| fx.repo.parent().unwrap().join(format!("pay.pay.repo.gate-{pid}"));
+    for pid in [dead_pid, std::process::id()] {
+        let reason = format!("cpd gate {pid}");
+        fx.git(&fx.repo, &["worktree", "add", "-q", "--detach", "--lock", "--reason", &reason, path(pid).to_str().unwrap(), &tip]);
+    }
+
+    fx.pr("open").ok();
+
+    assert!(!path(dead_pid).exists());
+    assert!(path(std::process::id()).exists());
+    let listed = fx.git(&fx.repo, &["worktree", "list", "--porcelain"]);
+    assert!(!listed.contains(&format!(".gate-{dead_pid}")) && listed.contains(&format!(".gate-{}", std::process::id())), "{listed}");
 }
 
 #[test]
@@ -899,56 +1056,129 @@ fn orphaned_merge(fx: &Fx) -> (PathBuf, PathBuf) {
 }
 
 #[test]
-fn open_and_rebase_run_r_for_the_repos_orphaned_merges_first() {
-    for command in ["open", "rebase"] {
+fn open_push_and_rebase_run_no_r_for_another_prs_orphaned_merge() {
+    // Nobody but E2 and guard U runs R (hs-d243), and guard U only for its own PR's
+    // Attempts: this pi has no install, so asking it for a catalog would fail.
+    for command in ["open", "push", "rebase"] {
         let fx = fx(if command == "open" { "dispatch" } else { "deploy" });
-        install_pi(&fx.env);
-        let (oth_lead, attempt_worktree) = orphaned_merge(&fx);
+        fx.env.fake_pi("exit 1");
+        orphaned_merge(&fx);
 
         fx.pr(command).ok();
 
-        let (status, outcome, merged): (String, Option<String>, Option<String>) = fx
-            .store()
-            .read(|c| {
-                Ok(c.query_row("SELECT status, outcome, merged_sha FROM attempts WHERE id = 'x-a1'", [], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?)
-            })
-            .unwrap();
-        assert_eq!((status.as_str(), outcome.as_deref()), ("ended", Some("merged")), "{command}");
-        assert_eq!(merged.unwrap(), fx.git(&fx.repo, &["rev-parse", "cpd/oth"]));
-        let job: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM jobs WHERE plan = 'oth'", [], |r| r.get(0))?)).unwrap();
-        assert_eq!(job, "merged");
-        // R's rest: the Attempt's worktree is gone, the stale Lead worktree synced.
-        assert!(!attempt_worktree.exists());
-        assert_eq!(fs::read_to_string(oth_lead.join("x.txt")).unwrap(), "x\n");
-        let source: String = fx
-            .store()
-            .read(|c| Ok(c.query_row("SELECT t.command FROM events e JOIN txns t ON t.id = e.txn WHERE e.kind = 'job-merged'", [], |r| r.get(0))?))
-            .unwrap();
-        assert_eq!(source, format!("pr {command}"));
+        let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM attempts WHERE id = 'x-a1'", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(status, "merging", "{command}");
     }
 }
 
-#[test]
-fn open_does_not_need_pi_when_no_driver_is_dead() {
-    // An Attempt in `merging` whose driver is alive is its driver's to finish: R skips it
-    // without asking pi for a catalog (this pi has no install, so asking would fail).
-    let fx = fx("dispatch");
-    fx.env.fake_pi("exit 1");
-    let (_, _) = orphaned_merge(&fx);
+/// Job `x` of PR `repo` with Attempt `x-a1` in `merging` whose merge's compare-and-swap
+/// happened (§7.4 step 8) but not its step 10: its commit (`x.txt`) is on `cpd/pay`, the
+/// Lead worktree is stale, and the Ledger knows nothing of it. Returns its worktree and tip.
+fn unrecorded_merge(fx: &Fx) -> (PathBuf, String) {
     let attempt = AttemptId::parse("x-a1").unwrap();
-    let _driver = hold_driver_lock(&fx, &attempt);
-
-    fx.pr("open").ok();
-
-    let status: String = fx.store().read(|c| Ok(c.query_row("SELECT status FROM attempts WHERE id = 'x-a1'", [], |r| r.get(0))?)).unwrap();
-    assert_eq!(status, "merging");
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("x.log") };
+    let made = create_attempt_worktree(&fx.repo, &fx.lead, &plan(), &attempt, &setup).unwrap();
+    fs::write(made.path.join("x.txt"), "x\n").unwrap();
+    fx.git(&made.path, &["add", "-A"]);
+    fx.git(&made.path, &["commit", "-q", "-m", "x"]);
+    let tip = fx.git(&made.path, &["rev-parse", "HEAD"]);
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, created_txn, created_at)
+                 VALUES ('pay', 'repo', 'x', 'X', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?1, ?2, 't')",
+                params!["f".repeat(64), tx.id()],
+            )?;
+            tx.execute(
+                "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha,
+                                       submitted_sha, submitted_at, started_at)
+                 VALUES ('pay', 'x-a1', 'x', 1, 'S2', 'ladder', 'merging', ?1, ?2, ?3, ?4, 't', 't')",
+                params![made.branch, made.path.to_str().unwrap(), made.base_sha, tip],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    fx.git(&fx.repo, &["update-ref", "refs/heads/cpd/pay", &tip, &made.base_sha]);
+    (made.path, tip)
 }
 
-fn hold_driver_lock(fx: &Fx, attempt: &AttemptId) -> cpd_core::merge::DriverLock {
-    let oth = PlanId::parse("oth").unwrap();
-    cpd_core::merge::take_free_driver_lock(&fx.home, &oth, attempt).unwrap().expect("the driver lock is free")
+/// `(status, outcome, merged_sha)` of Attempt `x-a1` of Plan `pay`, and its Job's status.
+fn attempt_x(fx: &Fx) -> ((String, Option<String>, Option<String>), String) {
+    fx.store()
+        .read(|c| {
+            let attempt = c.query_row("SELECT status, outcome, merged_sha FROM attempts WHERE plan = 'pay' AND id = 'x-a1'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?;
+            let job = c.query_row("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'x'", [], |r| r.get(0))?;
+            Ok((attempt, job))
+        })
+        .unwrap()
+}
+
+#[test]
+fn rebase_runs_r_first_for_a_merge_of_its_pr_whose_driver_died() {
+    let fx = fx("deploy");
+    install_pi(&fx.env);
+    let (worktree, tip) = unrecorded_merge(&fx);
+    let base = fx.advance_base("base.txt", "base\n");
+
+    let out = fx.pr("rebase").ok();
+
+    // Guard U: R ended the Attempt `merged` before the rewrite, not `crashed`.
+    assert_eq!(attempt_x(&fx), (("ended".to_owned(), Some("merged".to_owned()), Some(tip.clone())), "merged".to_owned()));
+    let source: String = fx
+        .store()
+        .read(|c| Ok(c.query_row("SELECT t.command FROM events e JOIN txns t ON t.id = e.txn WHERE e.kind = 'job-merged'", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(source, "pr rebase");
+    assert!(!worktree.exists(), "R's rest of A9 removed the Attempt's worktree");
+    // Then the rebase of S, which holds the merge, onto the base; pushed despite R's own push.
+    let new = fx.lead_sha();
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "rebased": true, "old": tip, "new": new, "pushed": true}));
+    assert!(fx.git(&fx.repo, &["merge-base", "--is-ancestor", &base, &new]).is_empty());
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(new));
+    // Rule S: the Lead worktree holds both, clean.
+    assert_eq!(fs::read_to_string(fx.lead.join("x.txt")).unwrap(), "x\n");
+    assert_eq!(fs::read_to_string(fx.lead.join("base.txt")).unwrap(), "base\n");
+    assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
+    assert!(fx.events("error").is_empty(), "{:?}", fx.events("error"));
+}
+
+#[test]
+fn rebase_waits_for_a_live_driver_to_record_its_merge() {
+    let fx = fx("deploy");
+    fx.env.fake_pi("exit 1");
+    let (_, tip) = unrecorded_merge(&fx);
+    fx.advance_base("base.txt", "base\n");
+    let attempt = AttemptId::parse("x-a1").unwrap();
+    let driver = cpd_core::merge::take_free_driver_lock(&fx.home, &plan(), &attempt).unwrap().expect("the driver lock is free");
+
+    let child = fx.spawn_pr("rebase");
+    // Guard U waits: the Lead Branch is not rewritten while the merge is unrecorded.
+    // time-claim: the rebase is still waiting 1.5 s on, the Lead Branch unrewritten; no per-poll signal from the waiting rebase.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(fx.lead_sha(), tip);
+    assert_eq!(attempt_x(&fx).0.0, "merging");
+    // The driver's step 10.
+    fx.store()
+        .write("attempt run", |tx| {
+            tx.execute_batch(&format!(
+                "UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = '{tip}', ended_at = 't'
+                  WHERE plan = 'pay' AND id = 'x-a1';
+                 UPDATE jobs SET status = 'merged', merged_sha = '{tip}' WHERE plan = 'pay' AND key = 'x';"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    let out = child.finish();
+    drop(driver);
+
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    let new = fx.lead_sha();
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "rebased": true, "old": tip, "new": new, "pushed": true}));
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(new));
+    assert!(fx.events("job-merged").is_empty(), "R did not run: the live driver recorded it");
 }
 
 // ------------------------------------------------------------------ pr poll
@@ -1844,6 +2074,7 @@ fn rebase_refuses_a_conflict_and_changes_nothing() {
     let rebasing = fx.git(&fx.lead, &["rev-parse", "--git-path", "rebase-merge"]);
     assert!(!fx.lead.join(&rebasing).exists() && !Path::new(&rebasing).exists());
     assert!(fx.gh_calls().is_empty());
+    fx.assert_no_gate_worktree();
 }
 
 #[test]
@@ -1866,19 +2097,98 @@ fn rebase_refuses_a_plan_that_is_not_locked() {
 }
 
 #[test]
-fn rebase_times_out_waiting_for_the_per_repo_lock() {
+fn rebase_keeps_the_lead_worktrees_local_changes_and_reports_it_stale() {
     let fx = fx("deploy");
-    let _held = RepoLock::wait(&fx.home, &fx.repo).unwrap();
-    assert_eq!(code(&fx.pr("rebase")), ("lock_timeout".into(), 5));
+    fs::write(fx.lead.join("api.txt"), "edited\n").unwrap();
+    let base = fx.advance_base("base.txt", "base\n");
+
+    let out = fx.pr("rebase").ok();
+
+    // Rebased and pushed: the local changes refuse nothing (no `dirty_target`, hs-d243).
+    let new = fx.lead_sha();
+    assert_eq!((out["rebased"].as_bool(), out["new"].as_str()), (Some(true), Some(new.as_str())));
+    assert!(fx.git(&fx.repo, &["merge-base", "--is-ancestor", &base, &new]).is_empty());
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(new));
+    // Rule S stopped rather than overwrite them: the edit is kept, reported once.
+    assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "edited\n");
+    assert!(!fx.lead.join("base.txt").exists());
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let data = &errors[0].1;
+    assert_eq!((data["source"].as_str(), data["code"].as_str(), data["details"]["pr"].as_str()), (Some("pr rebase"), Some("lead_worktree_stale"), Some("repo")));
+    assert_eq!(data["details"]["worktree"], fx.lead.to_str().unwrap());
 }
 
 #[test]
-fn rebase_refuses_a_dirty_lead_worktree() {
+fn rebase_of_a_pr_merged_during_its_gate_pushes_nothing() {
     let fx = fx("deploy");
-    fs::write(fx.lead.join("api.txt"), "edited\n").unwrap();
-    let run = fx.pr("rebase");
-    assert_eq!(code(&run), ("dirty_target".into(), 3));
-    assert_eq!(run.error()["details"]["files"], json!(["M api.txt"]));
+    fx.hooks(&paused_gate(fx.env.root()));
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    let pushed = fx.remote_branch("cpd/pay");
+    fx.advance_base("base.txt", "base\n");
+
+    let child = fx.spawn_pr("rebase");
+    await_gate(fx.env.root());
+    fx.store()
+        .write("pr poll", |tx| {
+            tx.execute_batch("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay'")?;
+            Ok(())
+        })
+        .unwrap();
+    release_gate(fx.env.root());
+    let out = child.finish();
+
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((out["error"]["code"].as_str(), out["error"]["details"]["from"].as_str()), (Some("illegal_transition"), Some("merged")), "{out}");
+    assert_eq!(fx.remote_branch("cpd/pay"), pushed, "nothing pushed");
+    fx.assert_no_gate_worktree();
+}
+
+#[test]
+fn rebase_succeeds_when_the_remote_already_contains_the_rebased_commit() {
+    // What a second `pr rebase` of the PR at once can meet: the other run pushed the same R'
+    // (and a merge onto it followed) after this run read its lease (Escalation nl-pr-a1-q2).
+    let fx = fx("deploy");
+    fx.hooks(&paused_gate(fx.env.root()));
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    fx.advance_base("base.txt", "base\n");
+
+    let child = fx.spawn_pr("rebase");
+    await_gate(fx.env.root());
+    let rebased = fx.lead_sha();
+    fs::write(fx.lead.join("m.txt"), "m\n").unwrap();
+    fx.git(&fx.lead, &["add", "-A"]);
+    fx.git(&fx.lead, &["commit", "-q", "-m", "m"]);
+    let merged = fx.lead_sha();
+    fx.git(&fx.lead, &["push", "-q", "--force", "origin", "cpd/pay"]);
+    release_gate(fx.env.root());
+    let out = child.finish();
+
+    let out: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!((out["ok"].as_bool(), out["new"].as_str()), (Some(true), Some(rebased.as_str())), "{out}");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(merged), "nothing rewound");
+}
+
+#[test]
+fn two_rebases_of_one_pr_at_once_both_succeed_and_the_remote_is_the_local_tip() {
+    let fx = fx("deploy");
+    fx.hooks("pre-merge = \"sleep 1\"\n");
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    let base = fx.advance_base("base.txt", "base\n");
+
+    let (first, second) = (fx.spawn_pr("rebase"), fx.spawn_pr("rebase"));
+    let outs = [first.finish(), second.finish()];
+
+    // The compare-and-swap picks one; the other finds the rebase done (or loses every round).
+    for out in &outs {
+        let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(json["ok"] == true || json["error"]["code"] == "cas_lost", "{json}");
+    }
+    let tip = fx.lead_sha();
+    assert!(fx.git(&fx.repo, &["merge-base", "--is-ancestor", &base, &tip]).is_empty());
+    assert_eq!(fx.git(&fx.repo, &["rev-list", "--count", &format!("{base}..{tip}")]), "2", "rebased once: api and hooks on the base");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(tip));
+    fx.assert_no_gate_worktree();
 }
 
 #[test]
@@ -1958,8 +2268,8 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     assert_eq!((fx.phase().as_str(), fx.pr_status("repo").as_str(), fx.pr_status("web").as_str()), ("dispatch", "open", "dispatch"));
     assert!(fx.events("plan-phase").is_empty());
     assert_eq!(fx.events("pr-opened")[0].1, json!({"pr": "repo", "number": 812, "url": URL}));
-    // Its own Gate log, its own title: two PRs, so `<plan title> (<key>)`.
-    assert_eq!(fx.gate_log().trim(), format!("gate ran in {}", fx.lead.file_name().unwrap().to_str().unwrap()));
+    // Its own Gate log, in its own gate worktree; its own title: two PRs, so `<plan title> (<key>)`.
+    assert!(fx.gate_log().trim().starts_with("gate ran in pay.pay.repo.gate-"), "{}", fx.gate_log());
     let calls = fx.gh_calls();
     assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", "Pay the bills (repo)"].map(String::from));
 
@@ -1969,7 +2279,7 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     assert_eq!(out["pr"]["pr"]["url"], WEB_URL);
     assert_eq!(fx.phase(), "deploy");
     let log = fs::read_to_string(fx.home.plan_dir(&plan()).join("logs/pr-web.pre-merge.log")).unwrap();
-    assert_eq!(log.trim(), "gate ran in web.pay.web");
+    assert!(log.trim().starts_with("gate ran in web.pay.web.gate-"), "{log}");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
     assert_eq!(fx.git(&web.parent().unwrap().join("web"), &["rev-parse", "refs/heads/cpd/pay/web"]), fx.git(&web, &["rev-parse", "HEAD"]));
     let calls = fx.gh_calls();

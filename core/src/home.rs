@@ -6,10 +6,7 @@
 //! (`config.json`, `leads/`, `slots/`, `workflows/`, `locks/merge-*.lock`).
 
 use std::ffi::OsString;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-
-use sha1::{Digest, Sha1};
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{AttemptId, ContextId, PlanId, ReviewId, SessionId};
@@ -114,14 +111,6 @@ impl CpdHome {
     /// `locks/tmux-restart.lock`: held by the one run of the tmux server's restart (contract §6.1).
     pub fn tmux_restart_lock(&self) -> PathBuf {
         self.locks_dir().join("tmux-restart.lock")
-    }
-
-    /// `locks/repo-<sha1>.lock`: the per-repo merge lock (contract §7.4).
-    /// `git_common_dir` must be the realpath of the repo's
-    /// `git rev-parse --git-common-dir`; its bytes are hashed as they are.
-    pub fn repo_lock(&self, git_common_dir: &Path) -> PathBuf {
-        let digest = Sha1::digest(git_common_dir.as_os_str().as_bytes());
-        self.locks_dir().join(format!("repo-{digest:x}.lock"))
     }
 
     /// `locks/attempt-<plan>--<attempt>.lock`: the driver lock (contract §3.4).
@@ -380,22 +369,11 @@ mod tests {
     }
 
     #[test]
-    fn repo_lock_is_sha1_of_the_common_dir() {
-        // printf %s /home/clayton/projects/pay/.git | sha1sum
-        assert_eq!(
-            home().repo_lock(Path::new("/home/clayton/projects/pay/.git")),
-            p("/h/.cpd/locks/repo-bee53703285f3bbdf3470e5ee86fafecc344a392.lock")
-        );
-    }
-
-    #[test]
     fn no_name_collides_with_cpd_1() {
         let h = home();
         let ours = [h.config(), h.db(), h.old_contexts_dir(), h.archived_contexts_dir(), h.locks_dir(), h.run_dir()];
         for theirs in ["config.json", "leads", "slots", "workflows"] {
             assert!(!ours.contains(&h.root().join(theirs)), "{theirs}");
         }
-        let lock = h.repo_lock(Path::new("/r/.git"));
-        assert!(!lock.file_name().unwrap().to_str().unwrap().starts_with("merge-"));
     }
 }

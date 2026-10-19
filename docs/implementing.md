@@ -80,7 +80,7 @@ Parsing:
 - **`ids`** (contract §2.1): `ContextId`, `PlanId`, `JobKey`, `AttemptId` (`job()`, `number()`), `EscalationId` (`attempt()`, `number()`), `ReviewId`, `SessionId` (`SessionId::new_v4()` for sessions cpd starts), `MachineName` (`config_invalid` when wrong), `RecordId` and `RecordKind` (`letter()`, `as_str()`). Each has `parse`, `FromStr`, `Display` and serde as a string; holding one proves it is valid.
 - **`args`** (commands.md §1.3, §1.5): `PlanArg` (`--plan`, else `CPD_PLAN`; `.require()` gives `plan_required`), `SessionArg` (`--session`, else `CPD_SESSION`; `session_required`; it and every positional Session argument are resolved to a `SessionId` by `session::resolve`, below), `Text` (1–20 000 characters, no NUL; else `usage`) and `Name` (1–80, no control characters; else `invalid_name`). Flatten them into your clap structs. `--context` falls back to the selected Plan's Context, which needs the store: the context Job writes that resolution.
 - **Short Session ids** (commands.md §1.3, hs-a3): the resolution (full id, Plan id, `<plan>·<prefix>` / `<plan>.<prefix>`, bare prefix of at least 4 characters; `session_not_found`, `session_ambiguous`) lives in one place, `core/src/session/resolve.rs` (the `session` area, which reads the store), called at the boundary by every command that takes a Session, so no command compares raw strings and downstream code only holds a `SessionId`. `args::SessionArg` and the positional `<id>` of the session commands stay strings until then; the cockpit and the pi adapter keep passing full ids.
-- **`home::CpdHome`** (contract §1.4, commands.md §1.4): `CpdHome::from_env()` is `$CPD_HOME`, else `~/.cpd`; an empty or relative `CPD_HOME`, or no home directory, is `usage` (exit 2). Every path under it has a method: `config()`, `db()`, `context_dir()`, `watch_lock()`, `repo_lock(git_common_dir_realpath)`, `attempt_lock()`, `context_lock()`, `watch_log()`, `plan_md()`, `plan_review_md()`, `lead_message()`, `session_message()`, `worker_spec()`, `review_brief()`, `review_diff()`, `review_check()`, `review_gate()`, `driver_log()`, `hook_log(…, Hook)`. Never build these paths by hand.
+- **`home::CpdHome`** (contract §1.4, commands.md §1.4): `CpdHome::from_env()` is `$CPD_HOME`, else `~/.cpd`; an empty or relative `CPD_HOME`, or no home directory, is `usage` (exit 2). Every path under it has a method: `config()`, `db()`, `context_dir()`, `watch_lock()`, `attempt_lock()`, `context_lock()`, `watch_log()`, `plan_md()`, `plan_review_md()`, `lead_message()`, `session_message()`, `worker_spec()`, `review_brief()`, `review_diff()`, `review_check()`, `review_gate()`, `driver_log()`, `hook_log(…, Hook)`. Never build these paths by hand.
 
 ## Migrations
 
@@ -122,10 +122,11 @@ Every dependency is declared once, in the root `Cargo.toml` `[workspace.dependen
 | `uuid` 1 | `v4` | Session ids cpd chooses (§2.1); use `ids::SessionId::new_v4()` |
 | `time` 0.3 | `formatting`, `parsing`, `macros` | RFC 3339 UTC times with milliseconds (§1.3) |
 | `sha2` 0.10 | | the Locked-Job and plan fingerprints (§2.3) and the schema hash (§4.3); `format!("{:x}", Sha256::digest(…))` gives hex (0.10, not 0.11, for that) |
-| `sha1` 0.10 | | the per-repo lock's name `repo-<sha1>.lock` (§1.4, §7.4); use `CpdHome::repo_lock` |
 | `ratatui` 0.30 | default (its `crossterm` backend) | the cockpit's views (`tui view`, commands.md §13.2), as on the spike's branch `cpd/cpd-ui` (history); crossterm is used through its re-export `ratatui::crossterm`, so it is not a dependency of its own |
 | `tui-tree-widget` 0.24 | | the `tree` view's collapsible Context → Plan → Session tree, as on `cpd/cpd-ui` |
 | `tempfile` 3 | dev only | temporary `$CPD_HOME`, repos and files in tests |
+
+Removed: `sha1` 0.10, which named the per-repo lock `repo-<sha1>.lock`; hs-d243 removed the lock (contract §1.4, §7), and with it `CpdHome::repo_lock` and the dependency (the one exception to the rule above, decided with the lock's removal).
 
 Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand in `ids`), an error-derive crate (`CpdError` is one struct), a hex crate (see `sha2`), `libc` (`nix` covers it), crossterm as a direct dependency (see `ratatui`).
 

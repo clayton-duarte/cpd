@@ -1,11 +1,12 @@
 //! The `tree` view (commands.md §13.2, §17; contract §6.2): the cockpit's left
 //! column, ported from the spike's Context view (branch `cpd/cpd-ui`:
 //! `context.rs`, `sessions.rs`, `cursor.rs`, `actions.rs`, `prompt.rs`,
-//! `separator.rs`) onto the read model.
+//! `separator.rs`; the prompt is gone, its questions are dialog popups now) onto the read model.
 //!
 //! - [`rows`]: Contexts, their Plans (each Plan's row is its Lead's) and the forked Sessions after them (B1), labelled by title and
 //!   name, and the archived ones behind `…` rows;
-//! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`menu`]: its parts (the right-click menu);
+//! - [`view`]: the state, keys and drawing; [`cursor`], [`menu`]: its parts (the right-click menu); [`ask`]: the dialog popups (the dialog kit's) it opens
+//!   before a command, with no inline prompt row;
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
 //! - [`inbox`]: the Inbox section at the column's bottom (header, up to 3 items, `+N more`) and what a click on an item does:
@@ -19,11 +20,11 @@
 //! (muted, dotted guides) and on their dotted line collapses them; a right click opens the menu.
 
 mod actions;
+mod ask;
 mod cursor;
 mod follow;
 mod inbox;
 mod menu;
-mod prompt;
 mod rows;
 mod slug;
 mod view;
@@ -135,6 +136,21 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
         };
         match effect {
             Effect::None => {}
+            Effect::Ask(question) => {
+                // `display-popup` returns when the popup closes; a cancel runs nothing. The tree is drawn first, so it
+                // shows the item picked, not the menu, behind the popup.
+                terminal.draw(|f| view.draw(f, frame))?;
+                match runner.ask(question) {
+                    Ok(None) => {}
+                    Ok(Some(action)) => {
+                        view.done(runner.run(&action));
+                        // the tree shows the result on this loop's snapshot
+                        dirty = true;
+                        last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+                    }
+                    Err(why) => view.done(Err(why)),
+                }
+            }
             Effect::Legend => {
                 // `display-popup` returns when the popup closes; only a failure is said
                 if let Err(why) = runner.legend() {

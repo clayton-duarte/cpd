@@ -1,0 +1,125 @@
+import { CpdError, isObject } from "./cpd.ts";
+import { eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } from "./delivery.ts";
+import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
+import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
+import type { Host } from "./host.ts";
+import { checkProtocol } from "./protocol.ts";
+import { decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
+import type { Run } from "./run.ts";
+
+// The follower's lines (§15.2, §15.3).
+
+/** The hooks of `r`'s follower: the cursor, the protocol check before each process, every line, every failure. */
+export const followerHooks =
+  (host: Host) =>
+  (r: Run): FollowerHooks => ({
+    before: () => checkProtocol(host),
+    cursor: () => r.cursor,
+    onRunStart: () => {
+      r.failureLineThisRun = false;
+    },
+    onLine: (line) => handleLine(host, r, line),
+    onFailure: (e) => {
+      if (e.code === "follower_exit" && r.failureLineThisRun) return; // the failure line already said why
+      followerError(host, r, e);
+    },
+  });
+
+function followerError(host: Host, r: Run, e: CpdError): void {
+  if (r.followerReported.has(e.code)) return;
+  r.followerReported.add(e.code);
+  host.deliver("events follow", e);
+}
+
+/** Returns true when the line was a valid Event. The cursor moves past every line that has an id, delivered or not. */
+function handleLine(host: Host, r: Run, line: string): boolean {
+  const parsed = parseLine(line);
+  if (parsed.type === "failure") {
+    r.failureLineThisRun = true;
+    followerError(host, r, parsed.error);
+    if (PERMANENT_CODES.has(parsed.error.code)) r.follower.stop(); // a refusal: restarting would fail the same way (§15.2)
+    return false;
+  }
+  if (parsed.type === "unknown-kind") {
+    r.cursor = Math.max(r.cursor, parsed.id); // skipped silently: a kind this adapter does not know is one it cannot need
+    return false;
+  }
+  if (parsed.type === "invalid") {
+    host.deliver("events follow", new CpdError("invalid_event", `skipped a line that is not a valid Event: ${parsed.reason}`));
+    if (parsed.id !== undefined) r.cursor = Math.max(r.cursor, parsed.id);
+    return false;
+  }
+  r.followerReported.clear();
+  const event = parsed.event;
+  r.tail = r.tail.then(async () => {
+    if (host.run !== r) return;
+    try {
+      await handleEvent(host, r, event);
+    } catch (e) {
+      host.deliver(`event ${event.id} (${event.kind})`, e);
+    }
+  });
+  r.cursor = Math.max(r.cursor, event.id);
+  return true;
+}
+
+async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
+  const { pi } = host;
+  const own = ev.session === r.id;
+  if (ev.kind === "session-message") {
+    if (own && (r.info.role === "lead" || r.info.role === "manager")) await deliverSessionMessage(host, r, ev);
+    return;
+  }
+  if (ev.kind === "session-renamed") {
+    if (!own) return;
+    const name = ev.data.name;
+    r.knownName = name;
+    pi.setSessionName(name);
+    host.ctx?.ui.notify(`cpd: session renamed to "${name}"`);
+    return;
+  }
+  if (!r.info.planLead) {
+    if (ev.kind === "attempt-nudge" && own) pi.sendMessage(eventMessage(ev, r.id, ev.data.prompt), FOLLOW_UP(true));
+    return;
+  }
+  const rule = LEAD_MESSAGES[ev.kind];
+  if (rule) {
+    pi.sendMessage(eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
+    if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation}`, QUESTION_LABEL)) host.refresh(r);
+    return;
+  }
+  if (ev.kind === "escalation-answered" || ev.kind === "escalation-expired") {
+    if (r.facts.close(`escalation:${ev.data.escalation}`)) host.refresh(r);
+    return;
+  }
+  if (ev.kind === "plan-review") {
+    const review = ev.data.review;
+    if (ev.data.status === "pending") {
+      supersede(r, review);
+      void openReview(host, r, review, "event")
+        .catch((e) => host.deliver(`plan review ${review}`, e))
+        .finally(() => host.refresh(r));
+    }
+    if (ev.data.status === "approved" || ev.data.status === "rejected") {
+      const entry = r.reviews.get(review);
+      if (entry?.status === "pending") void decidedElsewhere(host, r, entry, ev).catch((e) => host.deliver(`plan review ${entry.review}`, e));
+    }
+  }
+}
+
+/** §15.3 `session-message`: for every Lead and a Manager; a turn only when `data.wake` is true. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
+async function deliverSessionMessage(host: Host, r: Run, ev: EventOf<"session-message">): Promise<void> {
+  const from = ev.data.from;
+  let sender: { id: string; name: string | null } | null = null;
+  if (from !== null) {
+    sender = { id: from, name: null };
+    try {
+      const shown = (await host.call(["session", "show", from])).session;
+      if (isObject(shown) && typeof shown.name === "string") sender.name = shown.name;
+    } catch {
+      // an unreadable sender is still named by its id
+    }
+  }
+  if (host.run !== r) return;
+  host.pi.sendMessage(sessionMessage(ev, r.id, sender), FOLLOW_UP(ev.data.wake === true));
+}
