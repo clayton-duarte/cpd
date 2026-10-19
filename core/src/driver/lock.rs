@@ -10,7 +10,7 @@
 //! all (docs: flock(2)). So nothing here ever unlocks: `std::fs::File`'s
 //! `try_lock` takes it and dropping a `File` only closes.
 
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs::{self, File, OpenOptions};
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
@@ -23,6 +23,7 @@ use nix::fcntl::{FcntlArg, FdFlag, fcntl};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId};
+use crate::lock;
 
 /// The descriptor the driver inherits the lock on (§3.4 step 2).
 pub const DRIVER_FD: RawFd = 3;
@@ -55,16 +56,16 @@ impl Starter {
             .truncate(false)
             .open(&path)
             .map_err(|e| lock_failed(&path, e))?;
-        match file.try_lock() {
-            Ok(()) => Ok(Starter { file }),
-            Err(TryLockError::WouldBlock) => Err(CpdError::new(
+        if lock::try_lock(&file).map_err(|e| lock_failed(&path, e))? {
+            Ok(Starter { file })
+        } else {
+            Err(CpdError::new(
                 ErrorCode::CasLost,
                 format!("The driver lock of Attempt {attempt} is held: another starter is creating it."),
             )
             .with("plan", plan.as_str())
             .with("attempt", attempt.to_string())
-            .with("lock", path.display().to_string())),
-            Err(TryLockError::Error(e)) => Err(lock_failed(&path, e)),
+            .with("lock", path.display().to_string()))
         }
     }
 
@@ -122,11 +123,8 @@ fn try_take(path: &Path, create: bool) -> Result<Option<Free>, CpdError> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Free { _file: None })),
         Err(e) => return Err(lock_failed(path, e)),
     };
-    match file.try_lock() {
-        Ok(()) => Ok(Some(Free { _file: Some(file) })),
-        Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(e)) => Err(lock_failed(path, e)),
-    }
+    let taken = lock::try_lock(&file).map_err(|e| lock_failed(path, e))?;
+    Ok(taken.then_some(Free { _file: Some(file) }))
 }
 
 /// A9: removes the lock file of an Attempt that has ended; a missing file is
