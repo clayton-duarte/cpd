@@ -170,6 +170,8 @@ Consequences:
 
 What stays the same: on `gate_failed` the rebased branch stays local and is not pushed, and fix Jobs build on it (contract §7.6 step 4), because the CAS of step 6 comes before the Gate. Merges during the Gate CAS onto `R'` (their snapshot is `R'`, or their CAS fails and they retry onto it).
 
+**Amended by `nl-pr`** (Escalations nl-pr-a1-q1, nl-pr-a1-q2; contract §7.6 steps 2 and 9 hold the result): the lease `X0` is the tracking ref `refs/remotes/origin/<lead>`, read after guard U, not `ls-remote`'s tip, so a push cpd has not seen refuses instead of being overwritten, and the pushes of the merges guard U waited for are seen; and a rejected lease push whose remote tip already contains R' is a success, because two `pr rebase` of one PR push the same R' and the second can lose the race inside the remote (seen under nextest: `cannot lock ref … is at R' but expected X0`).
+
 **Rejected:** R decides by the reflog entry `cpd: merge <plan>/<attempt>` instead of ancestry, which would make guard U unnecessary. It ties R's verdict to the reflog's existence and expiry and changes R1, which the contract and `cli/tests/merge.rs:771-863` pin; guard U is a seconds-long wait inside one PR.
 
 ### 2.7 The clean-up after a PR's merge
@@ -246,6 +248,15 @@ One PR, in the cpd repo. Each Job ≤ 90 minutes, one owner per shared file at a
 **Risks**
 
 1. **Gate time in a fresh worktree.** `pre-start` plus a cold `target/` on every Gate; for this repo, `npm ci` and a workspace build with `sccache` (when installed). Unmeasured. `nl-pr`'s Worker records the wall time of one real `pre-start` + `pre-merge` in a fresh worktree of this repo against one in a warm Lead worktree and reports it, as information, not as a benchmark. If it is much slower, the fallback in §2.5 needs a User decision.
+
+   **Measured** (Job `nl-pr`, 2026-10-19; one run each, as information, not a benchmark). Commit `490a3b8` of this branch, this repo's own hooks run as cpd runs them (`sh -c`, cwd the worktree, without `TMUX`, `PI_*`, `CPD_*`). Machine: 16 cores, load average 32–63 during the runs (other Workers' builds), `sccache` 0.7.7 with a warm cache, git 2.43.0, node 22.23.2, npm 10.9.8.
+
+   | Where | `pre-start` (`npm ci`) | `pre-merge` (`npm run verify`) | Total |
+   |---|---|---|---|
+   | Fresh gate worktree (`worktree add --detach --lock`: no `node_modules`, no `target/`) | 0.9 s | 333.8 s: `cargo build` 34.9 s, test build 35.8 s, nextest 226.6 s | 334.7 s |
+   | Warm worktree at the same commit (`node_modules` and `target/` from an earlier `cargo test --workspace`; the Gate before hs-d243 ran only `pre-merge`) | not run | 309.4 s: `cargo build` 7.3 s, test build 26.3 s, nextest 230.4 s | 309.4 s |
+
+   The fresh Gate cost 25 s more (8 %): the suite's own run dominates both, `npm ci` installs 7 packages from npm's cache, and `sccache` turns the cold `target/` into about 37 s of extra builds. A fresh `target/` takes 3.0 GB of disk while the Gate runs. The warm run was in the Worker's own Attempt worktree, not the Lead's (a Worker does not run commands there). Risk 1 did not materialise at this load; the fallback of §2.5 is not needed.
 2. **Ungated commits on the PR.** Unchanged in kind: merges already push after every fast-forward (R35), so an open PR's head is often past its last Gate. What changes: a merge during `pr open`'s Gate no longer waits, so the PR can open with a head past G. The output's `remote` (rule P) makes that visible.
 3. **Spurious `push_failed` while a `pr rebase` is between its CAS and its push:** a merge's plain push of `R'+M` against the pre-rebase remote is rejected (run 9). The rebase's own push then pushes the local tip by rule P, so M reaches origin; the Event is noise. Accepted; tested.
 4. **More `cas_lost`.** Merges of one PR now race on the CAS; each loss means another merge or a rebase landed. With the default `concurrency = 3`, ≤ 3 losses in a row needs a rebase plus two merges in one rebase window (seconds). `cas_lost` is not a ladder cause, so a Job fails. If it shows up, raise `CAS_RETRIES` rather than add a lock.
