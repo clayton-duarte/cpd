@@ -116,6 +116,9 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
 | `item_not_found` | 4 | `inbox show`, `snooze` or `dismiss` named an Inbox item that does not exist |
 | `item_closed` | 3 | `inbox snooze` or `dismiss` named an Inbox item that is closed (§21) |
+| `slack_auth` | 3 | `inbox team-poll`'s helper found no usable Slack sign-in in pi's MCP credentials (§21.6); the message says to run `pi mcp login slack` |
+| `slack_not_configured` | 3 | there is no `slack` server in `~/.pi/agent/mcp.json` (§21.6); the message says to run `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` |
+| `slack_failed`, `slack_unparseable`, `slack_helper_failed` | 1 | the helper could not read the channel, read a payload with no messages in it, or could not load pi's MCP modules (§21.6). Also the code of the engine's E10 `error` Event (contract §3.7) |
 | `archive_blocked` | 3 | `context archive`, `plan archive` or `session archive` found a live object (contract §2.2 "Archived"); `details.blockers` lists each, `details.next` says what to do |
 | `archived` | 3 | the object (or its Context or Plan) is archived and the command does not work on archived objects; `details.next` is the unarchive command |
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
@@ -2727,7 +2730,7 @@ Job `contract-gate-pr` applied the User's decisions R19 (no Job-level Gate or Re
 
 ## 21. `inbox`
 
-Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them. Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `unread`, `job-stuck`, `engine-error`, `question`, and `engine-down`, which is not stored) and the PR poll's (`pr-failing`: checks failed or a merge conflict, `pr-changes`, `pr-ready` and `review-requested`; contract §2.2 gives their conditions, urgency and labels, and their `url` is the pull request's page).
+Contract §2.2 "Inbox item", §3.7 E8, §4.4, §5.2. The Inbox is the single source of "needs you": one stored item per thing that needs the User, opened and closed by the engine (E8) from its cause, never by a command. The commands read the items and hide them. Area `core/src/inbox/`. This section describes the core kinds (`dialog`, `plan-review`, `unread`, `job-stuck`, `engine-error`, `question`, and `engine-down`, which is not stored) and the PR poll's (`pr-failing`: checks failed or a merge conflict, `pr-changes` and `pr-ready`) and the team review poll's (`review-requested`, §21.5; contract §2.2 gives their conditions, urgency and labels, and their `url` is the pull request's page).
 
 An item as printed:
 
@@ -2814,6 +2817,89 @@ Effects, one transaction: **rows** `inbox_items.dismissed_at`; **Event** `inbox-
 ```
 
 Idempotent: yes. An item already dismissed returns `"already": true` and writes nothing, with no Event.
+
+### 21.5 `inbox team-poll`
+
+```
+cpd inbox team-poll
+```
+
+The team review poll (Context decision "Team review Inbox", User, 2026-10-19; contract §2.2 "Inbox item", §3.7 E10): reads the team Slack channel through the helper (§21.6), classifies the pull requests posted in it with hermes' rule, and writes the result to `run/team-review.json`, which engine E8 reads to open and close the Inbox kind `review-requested`. Run by engine E10 every `watch.team_review_seconds` (contract §8.2, default 300) when `inbox.team_channel` is set; also by hand to see what the engine sees. **It writes no row and appends no Event**: the file is a derived cache (contract §1.4), like a Context digest.
+
+No flags.
+
+| Precondition or failure | Code | Exit |
+|---|---|---|
+| `inbox.team_channel` and `inbox.slack_user_id` are both set (contract §8.2) | `config_missing` | 1 |
+| pi is found as contract §9 says | `pi_not_found` | 1 |
+| the lock `locks/team-review.lock` within 60 s | `lock_timeout` | 5 |
+| the helper (§21.6) answers `ok`; its refusal is returned **as it is**, same code and exit, its `details` kept: `slack_not_configured`, `slack_auth` (exit 3), `slack_failed`, `slack_unparseable`, `slack_helper_failed` (exit 1) | as the helper | 3 / 1 |
+| the helper finishes within its deadline of 120 s (§1.2 `tool_timeout`, `details.tool` `node`) | `tool_timeout` | 5 |
+| the GitHub call (below) succeeds, and returns state for at least one of the PRs when there are any; `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
+
+Every failure leaves `run/team-review.json` **as it was**: the last good copy stays (hermes `fetch_slack`, `refresh.py:59-93`; `main`, `refresh.py:670-683`, which refuses to replace a queue when every PR was unreadable).
+
+Effects:
+- **Lock:** `flock` on `locks/team-review.lock`, for the whole run, so two runs never overlap.
+- **Slack:** the helper, once: `node <adapter>/lib/slack-channel.ts --coding-agent <pi-coding-agent dist/index.js> --channel <inbox.team_channel> --me <inbox.slack_user_id>`, with `PI_CODING_AGENT_DIR=<agentDir>` (both from contract §9's `locate_pi`) and cwd `$CPD_HOME`, under pi's Node (contract §9). Its output is §21.6's.
+- **GitHub:** one `gh api graphql` call (15 s timeout, as contract §7.6 step 4) with one alias per distinct PR of the helper's `posts` **and** of the previous file's carried items (below): `p<i>: repository(owner: "<o>", name: "<n>") { pullRequest(number: <n>) { state isDraft title updatedAt author { login } reviewDecision latestReviews(first: 100) { nodes { state author { login } } } } }`, and `viewer { login }`. This is `gh pr view … --json state,isDraft,author,title,reviewDecision,latestReviews,reviewRequests,url,updatedAt` (hermes `fetch_pr`, `classify.py:197-243`) for all the PRs at once (`reviewRequests` and `url` are not read: the rule does not use them, and the URL is built from the repo and number). As contract §7.6 step 3: `gh` exits 1 when an alias is `NOT_FOUND` though `data` holds the others, so stdout is parsed whatever the exit code. A PR whose alias has no data is **unreadable** (hermes `build`, `refresh.py:409-418`): this run does not classify it and keeps its previous item, if the file has one. The User's login `ME` is `viewer.login` (hermes: the constant `ME`, `classify.py:50`).
+- **Classification** per PR, hermes' rules in this order, each cited (`classify.py` is `classify`, 264-341; `refresh.py` is `build`, 402-478); `BOT_REVIEWERS` is `inbox.bot_reviewers`:
+  1. `isDraft` → `DRAFT` (`classify.py:275`); 2. `author.login` = `ME` → hidden, not an item (`classify.py:283`); 3. `state` `MERGED` or `CLOSED` → `DONE` (286-289); 4. `reviewDecision` `APPROVED` → `DONE` (295); 5. `reviewDecision` `CHANGES_REQUESTED` → `CHANGES_REQUESTED` (308-325, whoever asked for the changes); 6. a login in `latestReviews` that is neither a bot reviewer nor `ME` → `IN_REVIEW` (327-336); 7. a bot reviewer in `latestReviews` → `NEEDS_REVIEW`, reason `AI review only` (337-340); 8. otherwise `NEEDS_REVIEW`, reason `no review yet` (341).
+  Then the Slack overrides, from the post's fields (§21.6): 9. status `NEEDS_REVIEW` and `claim.kind` `claimed`: `eyes_me` true → stays `NEEDS_REVIEW`, reason `you claimed this — approve or request changes`; else → `IN_REVIEW`, reason `claim.reason` (`refresh.py:439-455`); 10. status `IN_REVIEW` or `NEEDS_REVIEW` and `thread_tags_me` → `NEEDS_REVIEW`, reason `you were tagged in the thread` (457-466).
+- **Retention** (hermes `retain`, `refresh.py:547-583`, `RETAIN_DAYS` 7, `refresh.py:496`): the file's items are this run's PRs (newest posting of each, as the helper returns them) plus the previous file's items whose `ts` is under 7 days old and that the helper did not return (the channel read is capped at 200 messages, so a busy week scrolls PRs out of it); a carried item that is not `DONE` is classified again from this run's GitHub answer (`_refresh_retained`, `refresh.py:499-545`: `DONE` is terminal and is not asked again); one that is now `DRAFT` or hidden is dropped; one that is unreadable stays as it was. A newer post of a PR (a bump) restarts its seven days.
+- **The file:** `run/team-review.json`, written to `run/team-review.json.tmp` and renamed, so a reader never sees half of it: `{"version": 1, "polled_at": <time>, "channel": "C02JU6C2Z1D", "items": [ … ]}`, items newest `ts` first, each `{repo, number, url, title, ts, ts_raw, slack_author, pr_author, status, reason}`, `status` one of `NEEDS_REVIEW`, `IN_REVIEW`, `CHANGES_REQUESTED`, `DRAFT`, `DONE` (hermes' names, `classify.py:86-90`). Only `NEEDS_REVIEW` opens an Inbox item (contract §2.2).
+
+Output: `posts`, the distinct pull requests the helper returned; `read`, the messages it parsed; `carried`, the items kept from the previous file; `unreadable`, the `<repo>#<n>` of the PRs GitHub did not answer for; `needs_review`, the `<repo>#<n>` of the items now `NEEDS_REVIEW`; `rate_limit` as contract §7.6 step 7 gives it (`cost`, `remaining`, `reset_at`).
+
+```json
+{"ok": true, "posts": 9, "read": 74, "carried": 2, "unreadable": [], "needs_review": ["acme/pay#812", "acme/ui#77"],
+ "rate_limit": {"cost": 1, "remaining": 4986, "reset_at": "2026-10-20T11:00:00Z"}}
+```
+
+Idempotent: the same Slack and GitHub answers give the same file except `polled_at`.
+
+### 21.6 The helper `slack-channel.ts`
+
+`pi/lib/slack-channel.ts` in cpd's `pi/` package, beside the adapter (contract §8 `pi_adapter`). Not a cpd command: `inbox team-poll` (§21.5) runs it as a subprocess. It calls the Slack MCP server's tools **through pi's own MCP client and token store**, so cpd has no HTTP client (hs-d107) and never reads, copies or logs the credential (as hermes' `slack_fetch.py:21-28` did through Hermes' own storage). Evidence and the rejected alternatives: `docs/research/team-review.md`.
+
+```
+node <adapter>/lib/slack-channel.ts --coding-agent <…/@earendil-works/pi-coding-agent/dist/index.js> --channel <C…> --me <U…>
+```
+
+Environment: `PI_CODING_AGENT_DIR` (the agent directory of the pi release, contract §9). cwd is `$CPD_HOME`; the helper hands it to the connection, which sends it to the server as its root (`extensions/mcp/runtime.js:149`). Constants in the helper, each with its source: tool `slack_read_channel`, server entry `slack` of `<agentDir>/mcp.json` (the global file only; a project file is never read), `limit` 200 (`refresh.py:56`), window 7 days (`refresh.py:626-641`), 45 s for the channel read (`slack_fetch.py:183`), 30 s for each thread or reaction read (`slack_fetch.py:211, 324`), at most 8 of those at once (`refresh.py:353`).
+
+What it does:
+1. **Loads pi's modules** by file URL from the directory of `--coding-agent`: `extensions/mcp/config.js` (`loadMcpConfig`) and `extensions/mcp/runtime.js` (`McpServerConnection`, `McpOAuthCredentialStore`, `createDefaultTransport`). pi's `package.json` does not export them, so no bare import works; contract §9's embedded module imports pi the same way. It builds the connection as `pi mcp list` does (`extensions/mcp/cli.js:67-76`) and **closes it before exiting**, so a refreshed token is saved. A failure here, or a changed API, is `slack_helper_failed`.
+2. **Reads the channel**: `callTool("slack_read_channel", {channel_id, limit: 200})`; the text blocks joined by a newline (`slack_fetch.py:164-180`). Not signed in (the connection's state `needs-auth`, pi's message `requires sign-in`, or a failure text containing `invalid_token`, `unauthorized`, `invalid_auth` or `token_expired`, `slack_fetch.py:55, 91-93`) is `slack_auth`. A timeout, a result with `isError`, an empty text or any other failure is `slack_failed`.
+3. **Validates before it answers** (hermes `fetch_slack`, `refresh.py:82-89`): the payload is unwrapped (`unwrap` and `_unescape`, `refresh.py:96-142`: the `{"result": …}` envelope, sometimes truncated, JSON-escaped) and must contain at least one `=== Message from `; else `slack_unparseable` (the bytes read in `details.bytes`), which keeps `inbox team-poll` from replacing its last good file with what looks like a quiet channel.
+4. **Parses** (`parse_messages`, `refresh.py:145-194`): blocks start at `=== Message from `; a block with no `Message TS: <digits.digits>` is skipped; posts older than 7 days are skipped; the poster is the text before the first `(` and then before `<`; the PRs are every `github.com/<owner>/<repo>/pull/<n>` in the block, de-duplicated, trailing `.,)>|` stripped from the repo (`extract_prs`, `classify.py:74, 105-115`); the **primary** PR is the first of them; the newest posting of a PR wins. `reactions` are the names of the block's `Reactions: eyes (1), …` line, without counts (`parse_reactions`, `classify.py:118-127`).
+5. **The claim** (`slack_claim`, `classify.py:141-174`): `claim` is `{kind: "claimed", reason: "claimed with :eyes: in Slack"}` when the reactions include `eyes` (`CLAIM_REACTIONS`); else, after the app's footer line `*Sent using* <@U…|Name>` is removed from the block (`APP_ATTRIBUTION_RE`, `classify.py:82-84`), when the block mentions someone (`<@U…|`): null if `--me` is among them (being named is the request), else `{kind: "claimed", reason: "assigned to someone in Slack"}`; else null.
+6. **Two more reads, for the Slack overrides of §21.5**, each failing soft as in hermes: for every distinct message `ts` among the posts, `slack_read_thread {channel_id, message_ts}`; `thread_tags_me` is whether the replies mention `--me` outside an app footer (`mentions_me`, `classify.py:130-138`); a failed read is false (`thread_text`, `slack_fetch.py:211-231`). For each post whose `claim` is not null and whose `reactions` are not empty, `slack_get_reactions {channel_id, message_ts}`; the `eyes` line is read as `:eyes: × 2 — Ryan Case (U039194B7D2), clayton (U04DB4MTUMR)` (the em dash, `slack_fetch.py:353-364`; the `{"result": "…"}` envelope unwrapped first); `eyes_me` is true when `--me` is the only user id there (a peer's claim wins, `claimed_by_me`, `refresh.py:251-281`), false when a peer is there, null when the read failed or found no one (the caller then reads the claim as a peer's). Hermes matches display names; the helper matches the Slack user id in the parentheses (unverified against the live server).
+
+Output, one JSON value on stdout (contract §1.2), progress on stderr:
+
+```json
+{"ok": true, "channel": "C02JU6C2Z1D", "read": 74,
+ "posts": [{"repo": "acme/pay", "number": 812, "ts": 1760951522.0113, "ts_raw": "1760951522.011300",
+            "author": "Ryan Case", "primary": true, "reactions": ["eyes"],
+            "claim": {"kind": "claimed", "reason": "claimed with :eyes: in Slack"},
+            "eyes_me": false, "thread_tags_me": false}]}
+```
+
+`posts` is newest `ts` first, one entry per PR; `read` is the number of `=== Message from ` blocks in the payload (hermes `scanned`); `ts_raw` is Slack's string, kept exact (`refresh.py:174-176`).
+
+| Failure | Code | Exit |
+|---|---|---|
+| a flag is missing or malformed | `usage` | 2 |
+| the `slack` server is not in `<agentDir>/mcp.json`; the message: `run: pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden` | `slack_not_configured` | 3 |
+| Slack needs a sign-in (step 2); the message: `run: pi mcp login slack` | `slack_auth` | 3 |
+| the channel read failed, timed out, or answered `isError` or no text (step 2) | `slack_failed` | 1 |
+| the payload holds no message (step 3) | `slack_unparseable` | 1 |
+| pi's modules did not load or no longer have the shape the helper uses (step 1; after a pi upgrade); `details.message` is the thrown error | `slack_helper_failed` | 1 |
+
+Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported). The credential is read and refreshed inside pi's modules; the helper holds no token.
+
+**What the User runs once** (`pi mcp login` needs a browser, so it is theirs; cpd never runs it): `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden`, then `pi mcp login slack`, then `pi mcp list` shows `slack: connected`. `--exposure hidden` keeps the user-level entry from handing the Slack tools to every Lead and Worker (`docs/research/team-review.md` §3). If Slack refuses pi's dynamic client registration, the User adds `--oauth-client-id` (pi's `pi mcp add` options; unverified for Slack).
 
 ## 22. `policy`
 
