@@ -249,7 +249,7 @@ fn list_filters_and_derives_place_and_leads() {
         json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
                "state": "idle", "state_label": null, "state_at": "t1", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
                "forked_from": null, "plan_lead": true, "tier": "O3",
-               "cwd": env.root().display().to_string()})
+               "cwd": env.root().display().to_string(), "title": null, "titled_at": null})
     );
     let manager = sessions.iter().find(|s| s["id"] == MANAGER).unwrap();
     assert_eq!(
