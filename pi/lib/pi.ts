@@ -13,6 +13,8 @@ export type SendOptions = { triggerTurn: boolean; deliverAs: "followUp" };
 
 export type Ctx = {
   mode: string;
+  cwd: string;
+  isProjectTrusted(): boolean;
   ui: { notify(message: string, level?: string): void; getEditorText(): string };
   sessionManager: { getSessionId(): string; getEntries(): readonly unknown[] };
   isIdle(): boolean;
@@ -33,7 +35,8 @@ export type ToolDefinition = {
 
 /** A custom message as pi hands it to a renderer, reduced to what the adapter reads. */
 export type RenderedMessage = { customType: string; content: unknown; details?: unknown };
-export type Theme = { fg(color: "dim", text: string): string; bg(color: "customMessageBg", text: string): string };
+/** pi's `Theme`, reduced to what the renderer paints with (colour names are pi's `ThemeColor` and `ThemeBg`). */
+export type Theme = { fg(color: string, text: string): string; bg(color: string, text: string): string; bold(text: string): string };
 export type MessageRenderer = (message: RenderedMessage, options: { expanded: boolean; outputPad: number }, theme: Theme) => Component | undefined;
 
 export type PiApi = {
