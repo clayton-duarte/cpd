@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, run_hook};
-use super::run::{branch_exists, has_origin, ok, rev_parse, run};
+use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run};
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
@@ -262,7 +262,7 @@ fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdErro
     if !has_origin(repo)? {
         return Ok(Remote::None);
     }
-    ok(repo, &["fetch", "origin", base])?;
+    fetch(repo, &["origin", base])?;
     let listed = run(repo, &["ls-remote", "--exit-code", "--heads", "origin", branch])?;
     match listed.code {
         0 => {}
@@ -276,7 +276,7 @@ fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdErro
             .with("stderr", tail(&listed.stderr, TAIL_LINES)));
         }
     }
-    ok(repo, &["fetch", "origin", branch])?;
+    fetch(repo, &["origin", branch])?;
     let remote_branch = format!("origin/{branch}");
     let remote_base = format!("origin/{base}");
     let ancestor = run(repo, &["merge-base", "--is-ancestor", &remote_base, &remote_branch])?;

@@ -295,6 +295,41 @@ fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
 }
 
 #[test]
+fn a_fetch_outlasts_a_worktree_add_in_progress() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    let other = env.root().join("other");
+    env.run_ok(env.root(), "git", &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    commit_file(&env, &other, "new.txt", "new\n");
+    env.git(&other, &["push", "-q", "origin", "main"]);
+    // What `git worktree add` leaves for a moment: an entry whose HEAD is the all-zero placeholder.
+    let adding = repo.join(".git/worktrees/adding");
+    fs::create_dir_all(&adding).unwrap();
+    fs::write(adding.join("HEAD"), format!("{}\n", "0".repeat(40))).unwrap();
+    fs::write(adding.join("commondir"), "../..\n").unwrap();
+    fs::write(adding.join("gitdir"), format!("{}\n", env.root().join("adding/.git").display())).unwrap();
+    let broken = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "fetch", "origin", "main"])).unwrap();
+    assert!(String::from_utf8_lossy(&broken.stderr).contains("bad object worktrees/adding/HEAD"), "{broken:?}");
+
+    let fetched = std::thread::scope(|s| {
+        s.spawn(|| {
+            std::thread::sleep(Duration::from_secs(1));
+            fs::remove_dir_all(&adding).unwrap();
+        });
+        cpd_core::git::run::fetch(&repo, &["origin", "main"])
+    });
+
+    fetched.unwrap();
+    assert_eq!(env.git(&repo, &["rev-parse", "origin/main"]), env.git(&other, &["rev-parse", "HEAD"]));
+    // Any other failure is not retried.
+    let started = Instant::now();
+    let err = cpd_core::git::run::fetch(&repo, &["origin", "no-such-branch"]).unwrap_err();
+    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("fetch")));
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
 fn rule_p_pushes_the_named_commit_not_the_branch_tip() {
     let env = TestEnv::new();
     let repo = env.git_repo("pay");

@@ -70,6 +70,32 @@ pub fn ok(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
     }
 }
 
+/// How many times [`fetch`] runs a fetch that a concurrent `worktree add` broke.
+const FETCH_ROUNDS: u32 = 20;
+
+/// `git fetch <args>`, as [`ok`], retried while it fails on a concurrent
+/// `git worktree add` (contract §7): that writes a placeholder all-zero
+/// `.git/worktrees/<id>/HEAD` before the real one, and the fetch's
+/// connectivity check, which walks every worktree's `HEAD`, dies on it with
+/// `bad object worktrees/<id>/HEAD`. Only that failure is retried, up to 20
+/// rounds 100–500 ms apart; any other is `git_failed` at once.
+pub fn fetch(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
+    let all: Vec<&str> = std::iter::once("fetch").chain(args.iter().copied()).collect();
+    let mut round = 1;
+    loop {
+        let out = run(dir, &all)?;
+        if out.code == 0 {
+            return Ok(out.stdout);
+        }
+        if round >= FETCH_ROUNDS || !out.stderr.contains("bad object worktrees/") {
+            return Err(failed(dir, &all, format!("git fetch exited {}.", out.code), Some(out.code), &out.stderr));
+        }
+        round += 1;
+        let jitter = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() % 401);
+        std::thread::sleep(std::time::Duration::from_millis(100 + u64::from(jitter)));
+    }
+}
+
 /// `git rev-parse <rev>`, trimmed.
 pub fn rev_parse(dir: &Path, rev: &str) -> Result<String, CpdError> {
     Ok(ok(dir, &["rev-parse", "--verify", "--end-of-options", rev])?.trim().to_owned())
