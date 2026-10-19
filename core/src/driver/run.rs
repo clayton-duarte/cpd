@@ -10,7 +10,7 @@ use std::time::Duration;
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
 use super::ledger::{self, Cause, End, Ladder, SOURCE, Target};
@@ -96,6 +96,36 @@ fn alive(pid: u32) -> bool {
     let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return true };
     // `pid (comm) state …`; comm may hold spaces and parentheses.
     stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next()) != Some("Z")
+}
+
+/// What A5 does at a poll of the Worker.
+#[derive(Debug, PartialEq, Eq)]
+enum Decision {
+    /// Nothing yet: not idle, mid-turn, or nudged and not idle again.
+    Wait,
+    /// Idle without a submit, not nudged yet: nudge it, once.
+    Nudge,
+    /// Idle again after the nudge: the Attempt ends `no_submit`.
+    NoSubmit,
+    /// pi stopped with this `stopReason`: the Attempt ends `crashed`.
+    Crashed(String),
+}
+
+/// A5's judgement, pure. `state` is the Session's state; `last_stop` the last
+/// assistant message's `stopReason` and `turns` the count of assistant messages
+/// (both read from the session file only when `state` is `idle`); `nudged` is
+/// the turn count when the Worker was nudged, None when it was not.
+fn judge(state: &str, last_stop: Option<&str>, turns: u64, nudged: Option<u64>) -> Decision {
+    if state != "idle" {
+        return Decision::Wait;
+    }
+    match (last_stop, nudged) {
+        (Some("stop"), None) => Decision::Nudge,
+        (Some("stop"), Some(at)) if turns > at => Decision::NoSubmit,
+        // Mid-turn, no assistant message yet, or nudged and no new turn since.
+        (Some("stop") | Some("toolUse") | None, _) => Decision::Wait,
+        (Some(other), _) => Decision::Crashed(other.to_owned()),
+    }
 }
 
 /// How the Attempt ended, as the driver prints it.
@@ -422,8 +452,8 @@ impl Driver {
         log("A4: waiting for the Worker");
         // The Worker's session file, recorded once pi has created it.
         let mut file: Option<std::path::PathBuf> = None;
-        // The Worker's assistant messages when it was nudged.
-        let mut nudged_at: Option<u64> = None;
+        // The Worker's assistant messages when it was nudged: after a reload, from the Event.
+        let mut nudged_at: Option<u64> = self.nudge_baseline(session)?;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
         let mut watch = PaneWatch::default();
         loop {
@@ -480,35 +510,58 @@ impl Driver {
             // Idle is read from the Session state and confirmed from the file (A5).
             let state: String =
                 self.store.read(|conn| Ok(conn.query_row("SELECT state FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?))?;
-            if state != "idle" {
-                continue;
+            let (stop, turns) = if state == "idle" {
+                let Some(read) = worker::last_stop(&file) else { continue };
+                read
+            } else {
+                (None, 0)
+            };
+            // An Attempt nudged by a driver that left (a reload) has its baseline in the Event;
+            // one nudged before the Event carried it takes the first idle count seen.
+            if state == "idle" && now.nudged {
+                nudged_at.get_or_insert(turns);
             }
-            let Some((stop, turns)) = worker::last_stop(&file) else { continue };
-            match stop.as_deref() {
-                Some("stop") if !now.nudged => {
-                    if self.nudge(&now, session)? {
+            match judge(&state, stop.as_deref(), turns, nudged_at.filter(|_| now.nudged)) {
+                Decision::Wait => {}
+                Decision::Nudge => {
+                    if self.nudge(&now, session, turns)? {
                         nudged_at = Some(turns);
                     }
                 }
-                Some("stop") => {
-                    if turns > *nudged_at.get_or_insert(turns) {
-                        let detail = "The Worker went idle twice without submitting, once after a nudge.".to_owned();
-                        return self.end(&now, End::Failed { cause: Cause::NoSubmit, detail }, dirs);
-                    }
+                Decision::NoSubmit => {
+                    let detail = "The Worker went idle twice without submitting, once after a nudge.".to_owned();
+                    return self.end(&now, End::Failed { cause: Cause::NoSubmit, detail }, dirs);
                 }
-                // Mid-turn, or no assistant message yet.
-                Some("toolUse") | None => {}
-                Some(other) => {
-                    let detail = format!("pi stopped with stopReason {other}.");
+                Decision::Crashed(reason) => {
+                    let detail = format!("pi stopped with stopReason {reason}.");
                     return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
                 }
             }
         }
     }
 
+    /// The Worker's assistant-turn count at its nudge, from the Attempt's
+    /// `attempt-nudge` Event: a resumed driver's baseline (§3.4 A5, §5.2).
+    fn nudge_baseline(&mut self, session: &SessionId) -> Result<Option<u64>, CpdError> {
+        let id = &self.id;
+        self.store.read(|conn| {
+            let turns: Option<i64> = conn
+                .query_row(
+                    "SELECT json_extract(data, '$.turns') FROM events
+                      WHERE kind = 'attempt-nudge' AND plan = ?1 AND attempt = ?2 AND session = ?3
+                      ORDER BY id DESC LIMIT 1",
+                    params![self.plan.as_str(), id.to_string(), session.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten();
+            Ok(turns.and_then(|t| u64::try_from(t).ok()))
+        })
+    }
+
     /// A5's nudge, once: `attempt-nudge` to the Worker's Session, and
     /// `nudged`. False when the Attempt left `running` meanwhile.
-    fn nudge(&mut self, target: &Target, session: &SessionId) -> Result<bool, CpdError> {
+    fn nudge(&mut self, target: &Target, session: &SessionId, turns: u64) -> Result<bool, CpdError> {
         log("A5: the Worker is idle without a submit; nudging it");
         let id = &target.id;
         let prompt = format!(
@@ -525,7 +578,7 @@ impl Driver {
             let text = format!("The Worker of Attempt {id} ended its turn without submitting; it was nudged once.");
             events::append(
                 tx,
-                NewEvent::new(Kind::AttemptNudge, text, json!({"prompt": prompt}))
+                NewEvent::new(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
                     .plan(target.plan.clone())
                     .job(target.job.clone())
                     .attempt(id.clone())
@@ -659,6 +712,30 @@ mod tests {
         }
         child.wait().unwrap();
         assert!(!alive(pid));
+    }
+
+    #[test]
+    fn a5_judges_the_worker_by_state_stop_reason_turns_and_nudge() {
+        use Decision::*;
+        let table: &[(&str, Option<&str>, u64, Option<u64>, Decision)] = &[
+            ("working", Some("stop"), 3, None, Wait),
+            ("working", Some("stop"), 5, Some(3), Wait),
+            ("working", Some("error"), 3, None, Wait),
+            ("stopped", Some("stop"), 3, None, Wait),
+            ("idle", None, 0, None, Wait),
+            ("idle", Some("toolUse"), 3, None, Wait),
+            ("idle", Some("toolUse"), 5, Some(3), Wait),
+            ("idle", Some("stop"), 3, None, Nudge),
+            ("idle", Some("stop"), 0, None, Nudge),
+            ("idle", Some("stop"), 3, Some(3), Wait),
+            ("idle", Some("stop"), 2, Some(3), Wait),
+            ("idle", Some("stop"), 4, Some(3), NoSubmit),
+            ("idle", Some("error"), 3, None, Crashed("error".to_owned())),
+            ("idle", Some("aborted"), 3, Some(3), Crashed("aborted".to_owned())),
+        ];
+        for (state, stop, turns, nudged, want) in table {
+            assert_eq!(judge(state, *stop, *turns, *nudged), *want, "{state} {stop:?} turns {turns} nudged {nudged:?}");
+        }
     }
 
     #[test]
