@@ -2,16 +2,18 @@
 //! machine-wide right column of the cockpit. It takes one snapshot of the read
 //! model ([`read::widgets`]), then follows the Events: it looks at the highest
 //! Event id every [`TICK`] and re-reads when it moved, at most once per
-//! [`COALESCE`]; the load average is re-read at least every [`REFRESH`], since
-//! it is no Event. It makes no write of its own, but for what a click on an owned PR row asks of `cpd session open`. Its one
+//! [`COALESCE`]; the CPU % and memory % are re-read at least every [`REFRESH`], since
+//! they are no Event. It makes no write of its own, but for what a click on an owned PR row asks of `cpd session open`. Its one
 //! key is `q`; mouse capture is on.
 //!
-//! - [`column`]: the drawing of the machine, the PRs, git and Jira;
+//! - [`column`]: the drawing of the machine and the PRs;
+//! - [`host`]: the machine's CPU % and memory %;
 //! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
 //!   the StatusBar's button open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::palette`]'s.
 
 mod column;
+mod host;
 pub mod legend;
 
 use std::process::Command;
@@ -34,14 +36,16 @@ use cpd_core::ids::SessionId;
 use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
+use host::Sampler;
 
 pub use column::{Hit, Machine, draw};
+pub use host::Usage;
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);
 /// At most one snapshot per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
-/// A snapshot and the load at least this often: the load average is no Event.
+/// A snapshot and the CPU and memory sample at least this often: they are no Event.
 const REFRESH: Duration = Duration::from_secs(2);
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
@@ -51,7 +55,8 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let machine = Machine { name: hostname()?, load: load_average()? };
+    let mut sampler = Sampler::default();
+    let machine = Machine { name: hostname()?, usage: sampler.sample()? };
     // The column shows no Event: none is asked for.
     let first = read::widgets(&mut store, config.concurrency, 0)?;
     // From here on this process owns the terminal (commands.md §1.2).
@@ -60,7 +65,7 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
     let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session };
     let result = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture)
         .map_err(terminal_failed)
-        .and_then(|()| show(&mut terminal, &mut store, config.concurrency, first, machine, &lead));
+        .and_then(|()| show(&mut terminal, &mut store, config.concurrency, first, machine, sampler, &lead));
     let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result.map(|()| Output::Owned)
@@ -86,9 +91,11 @@ fn show(
     concurrency: u32,
     mut widgets: Widgets,
     mut machine: Machine,
+    mut sampler: Sampler,
     opener: &Opener,
 ) -> Result<(), CpdError> {
     let mut read_at = Instant::now();
+    let mut sampled_at = read_at;
     let mut hits = Vec::new();
     let mut note = String::new();
     loop {
@@ -112,9 +119,13 @@ fn show(
             let moved = store.read(highest_id)? != widgets.events_cursor;
             if moved || read_at.elapsed() >= REFRESH {
                 widgets = read::widgets(store, concurrency, 0)?;
-                machine.load = load_average()?;
                 read_at = Instant::now();
             }
+        }
+        // The CPU share is over the last sample, so it is taken on its own 2 s timer, not at each Event.
+        if sampled_at.elapsed() >= REFRESH {
+            machine.usage = sampler.sample()?;
+            sampled_at = Instant::now();
         }
     }
 }
@@ -153,23 +164,6 @@ fn hostname() -> Result<String, CpdError> {
         return Err(host_failed("the hostname", format!("`hostname` exited with {}", out.status)));
     }
     Ok(name)
-}
-
-/// The first three fields of the load average: `/proc/loadavg` on Linux, `sysctl -n vm.loadavg` on macOS.
-fn load_average() -> Result<Vec<String>, CpdError> {
-    let text = if cfg!(target_os = "macos") {
-        let out = Command::new("sysctl").args(["-n", "vm.loadavg"]).output().map_err(|e| host_failed("the load", e))?;
-        String::from_utf8_lossy(&out.stdout).into_owned()
-    } else {
-        std::fs::read_to_string("/proc/loadavg").map_err(|e| host_failed("the load", e))?
-    };
-    parse_load(&text).ok_or_else(|| host_failed("the load", format!("{:?} has no three numbers", text.trim())))
-}
-
-/// The three numbers that open `text` (`16.89 24.21 25.00 6/3484 1221694`, or sysctl's `{ 0.52 0.58 0.59 }`).
-fn parse_load(text: &str) -> Option<Vec<String>> {
-    let fields: Vec<String> = text.split_whitespace().filter(|f| *f != "{").take(3).map(str::to_owned).collect();
-    (fields.len() == 3 && fields.iter().all(|f| f.parse::<f64>().is_ok())).then_some(fields)
 }
 
 /// The legend in a tmux popup over the cockpit, sized to it and at most the client's size.
@@ -213,15 +207,5 @@ mod tests {
         for code in [KeyCode::Char('?'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char('j'), KeyCode::Char('Q')] {
             assert!(!quits(&press(code)), "{code:?}");
         }
-    }
-
-    #[test]
-    fn the_load_is_the_first_three_numbers_of_proc_loadavg_or_sysctl() {
-        let load = |text| parse_load(text).map(|l| l.join(" "));
-        assert_eq!(load("16.89 24.21 25.00 6/3484 1221694\n").as_deref(), Some("16.89 24.21 25.00"));
-        assert_eq!(load("{ 0.52 0.58 0.59 }\n").as_deref(), Some("0.52 0.58 0.59"));
-        assert_eq!(load("1.0 2.0"), None);
-        assert_eq!(load("a b c"), None);
-        assert_eq!(load(""), None);
     }
 }

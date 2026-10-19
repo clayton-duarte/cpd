@@ -1,6 +1,6 @@
 //! The Dispatch column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch` and `pr::render`
-//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the open pull requests (two lines each), git and Jira (the last two
-//! still future), under one blank row; each section but the first starts with a header. Pure: [`draw`] only writes to the frame.
+//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine (hostname, CPU % and memory %) and the open pull requests (two lines each), under one blank row; each
+//! section but the first starts with a header. Pure: [`draw`] only writes to the frame.
 
 use cpd_core::ids::SessionId;
 use ratatui::Frame;
@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
+use super::host::Usage;
 use crate::link;
 use crate::palette::{self, Meaning};
 use crate::read::{OpenPr, PrState, ReviewDecision, Widgets};
@@ -33,11 +34,23 @@ impl Hit {
     }
 }
 
-/// The machine the column names: its hostname and the first three fields of its load average.
+/// Nerd Font `nf-oct-cpu` and `nf-md-memory`: one cell each.
+const CPU_ICON: &str = "\u{F4BC}";
+const MEM_ICON: &str = "\u{F035B}";
+
+/// The machine the column names: its hostname and its CPU % and memory %.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Machine {
     pub name: String,
-    pub load: Vec<String>,
+    pub usage: Usage,
+}
+
+impl Machine {
+    /// ` <cpu icon> N%  <mem icon> M%`; the CPU is `–` until a second sample exists.
+    fn usage_line(&self) -> String {
+        let cpu = self.usage.cpu.map_or("–".to_owned(), |c| c.to_string());
+        format!(" {CPU_ICON} {cpu}%  {MEM_ICON} {}%", self.usage.mem)
+    }
 }
 
 fn bold(text: impl Into<String>) -> Span<'static> {
@@ -122,32 +135,21 @@ fn render_header(f: &mut Frame, area: Rect, title: &str) {
     f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
 }
 
-/// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header. A non-empty
+/// Draws the column in `area`: a blank row, the machine, then the PRs under their header. A non-empty
 /// `note` replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR.
 pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &str) -> Vec<Hit> {
-    let [_top, home, _above_prs, prs_header, _below_prs, prs, _above_git, git_header, _below_git, git, _above_jira, jira_header, _below_jira, jira] =
-        Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
+    let [_top, home, _above_prs, prs_header, _below_prs, prs] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
     .areas(area);
     render_header(f, prs_header, "PRs");
-    render_header(f, git_header, "git");
-    render_header(f, jira_header, "Jira");
     f.render_widget(
-        Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(format!(" load {}", machine.load.join(" ")))]),
+        Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(machine.usage_line())]),
         home,
     );
     let mut text = vec![];
@@ -171,8 +173,6 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
             link::link(f.buffer_mut(), Rect::new(x, *y, 1, 1), &pr.url);
         }
     }
-    f.render_widget(Paragraph::new(dim(" (future)")), git);
-    f.render_widget(Paragraph::new(dim(" (future)")), jira);
     if !note.is_empty() {
         let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
         f.render_widget(Clear, last);
