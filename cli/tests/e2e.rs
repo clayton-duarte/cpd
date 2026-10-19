@@ -61,6 +61,12 @@ case "$1 $2" in
   "pr list") echo '[]' ;;
   "pr create") touch "$created"; echo 'https://github.com/acme/pay/pull/7' ;;
   "api graphql")
+    case "$4" in
+      *"p0: repository"*)
+        # `pr open` reads `createdAt` of the pull request it just created.
+        echo '{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"2026-10-14T21:00:00Z","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}}}}'
+        exit 0 ;;
+    esac
     nodes=''
     if [ -e "$created" ]; then
       nodes='{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"2026-10-14T21:00:00Z","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE"}}}]}}'
@@ -447,7 +453,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(pushed, lead_sha);
     // The engine's polls (`api graphql`) aside, `pr open` made these two calls.
     let gh: Vec<_> = fx.env.calls("gh").into_iter().filter(|c| c[0] != "api").collect();
-    assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "open", "--json", "number,url"]);
+    assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "all", "--json", "number,url,state"]);
     assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Retry failed payouts"]);
     let body = &gh[1][9];
     for sha in [&api_merged["data"]["sha"], &ui_merged["data"]["sha"]] {

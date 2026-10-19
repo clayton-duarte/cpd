@@ -12,12 +12,29 @@ use std::time::{Duration, Instant};
 use common::{CPD, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
+use cpd_tui::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED};
+use nix::fcntl::{Flock, FlockArg};
+
+const WORKING: &str = SPINNER[0];
 
 // ---------- the prepared store ----------
 
-/// An env with the config `cpd` needs; its tmux server is the env's private one.
+/// An env with the config `cpd` needs and an engine running (`engine-down` is no row of the Inbox); its tmux server is
+/// the env's private one. The engine's lock is held until the test process ends.
 fn env() -> TestEnv {
+    let env = env_without_engine();
+    let path = env.cpd_home().join("locks/watch.lock");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let lock = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    std::mem::forget(lock);
+    env
+}
+
+/// [`env`] with no engine.
+fn env_without_engine() -> TestEnv {
     let env = TestEnv::new();
     let config = format!(
         "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
@@ -97,6 +114,43 @@ fn session_row(id: &str, name: &str, context: &str, plan: &str, state: &str, lab
     )
 }
 
+/// A Context's Manager Session (contract §3.1): idle, never a row of the tree.
+fn manager_row(id: &str, context: &str) -> String {
+    format!(
+        "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+         VALUES ('{id}', 'manager', '{context}', NULL, NULL, '{context}-manager', '/sessions/{id}.jsonl', '/repo', 'O5',
+                 NULL, 'idle', NULL, '2026-01-03T00:00:00.000Z', '2026-01-02T00:00:07.000Z');"
+    )
+}
+
+/// What the engine's E8 would open for `populate`'s store (the tree reads the Inbox, it does not compute it).
+fn condition(kind: Kind, urgency: Urgency, session: &str, plan: Option<&str>, context: &str) -> Condition {
+    Condition {
+        kind,
+        urgency,
+        subject: format!("session:{session}"),
+        label: format!("{session} label"),
+        url: None,
+        context: Some(ContextId::parse(context).unwrap()),
+        plan: plan.map(|p| PlanId::parse(p).unwrap()),
+        job: None,
+        session: Some(SessionId::parse(session).unwrap()),
+        record: None,
+        event: None,
+    }
+}
+
+/// The items `populate` leaves open: red dialogs of the fork `f-blocked` and of the Lead `l-rel`, and, for the two
+/// Contexts' dots, a white `unread` of alpha's Manager and a magenta `dialog` of beta's.
+fn items() -> Vec<Condition> {
+    vec![
+        condition(Kind::Dialog, Urgency::Red, "f-blocked", Some("ship"), "alpha"),
+        condition(Kind::Dialog, Urgency::Red, "l-rel", Some("rel"), "beta"),
+        condition(Kind::Unread, Urgency::White, "m-alpha", None, "alpha"),
+        condition(Kind::Dialog, Urgency::Magenta, "m-beta", None, "beta"),
+    ]
+}
+
 fn job_row(plan: &str, key: &str, status: &str) -> String {
     let fingerprint = if status == "draft" { "NULL".to_owned() } else { format!("'{}'", "0".repeat(64)) };
     let merged = if status == "merged" { "'abc123'" } else { "NULL" };
@@ -123,6 +177,9 @@ fn moved(context: &str, plan: &str, session: &str, place: &str) -> String {
 ///   `f-idle` and `f-blocked`; Jobs queued, running, failed and two merged), `sketch` (plan; Lead idle; two drafts);
 /// - `beta`: `rel` (pr; its Lead is blocked), `old` (done; its Lead is stopped);
 /// - `gamma`: nothing.
+///
+/// The Inbox ([`items`]) gives the dots their filled dot: `f-blocked` and `l-rel` have a red dialog; the Contexts alpha and beta
+/// have a Manager with an item, which alone fills a Context row's filled dot.
 fn populate(env: &TestEnv) {
     let mut store = open(env);
     let mut s = String::new();
@@ -148,7 +205,31 @@ fn populate(env: &TestEnv) {
     }
     s += &job_row("rel", "r1", "merged");
     s += &moved("alpha", "ship", "l-ship", "chat");
+    s += &manager_row("m-alpha", "alpha");
+    s += &manager_row("m-beta", "beta");
     sql(&mut store, &s);
+    reconcile(&mut store, &items(), &opened_ago()).unwrap();
+}
+
+/// When `populate`'s Inbox items were opened: five minutes and a half ago, so that their age reads `5m` for the half
+/// minute a test takes at most.
+fn opened_ago() -> String {
+    let at = time::OffsetDateTime::now_utc() - time::Duration::seconds(330);
+    at.format(&time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z")).unwrap()
+}
+
+/// The Inbox section of `populate`'s four items in a pane `width` wide: the header, three rows and `+1 more`.
+fn inbox_section(width: usize) -> Vec<String> {
+    let inner = width - 2;
+    let title = " Inbox 4 ";
+    let item = |label: &str| format!(" {NEEDS_YOU} {label}{}5m", " ".repeat(inner - 2 - label.len() - 2));
+    vec![
+        format!(" ──{title}{}", "─".repeat(inner - 2 - title.len())),
+        item("f-blocked label"),
+        item("l-rel label"),
+        item("m-beta label"),
+        " +1 more".to_owned(),
+    ]
 }
 
 // ---------- the pane ----------
@@ -184,10 +265,22 @@ impl<'a> Pane<'a> {
     }
 
     /// The screen, each row without trailing blanks, without the empty rows at the end. The working dot turns with the
-    /// wall clock (`◐◓◑◒`), so every frame reads as the first: a test cannot know which one it catches.
+    /// wall clock (`SPINNER`), so on the row of the one working Lead (its counters `1⋅1⋅0⋅1⋅2`) every frame reads as
+    /// the first: a test cannot know which one it catches. Elsewhere a glyph is what it is: the last frame is the needs-you dot.
     fn screen(&self) -> Vec<String> {
         let out = self.env.tmux(&["capture-pane", "-p", "-t", SESSION]);
-        let text = String::from_utf8(out.stdout).unwrap().replace(['◓', '◑', '◒'], "◐");
+        let text: String = String::from_utf8(out.stdout).unwrap();
+        let text: String = text
+            .lines()
+            .map(|l| {
+                if l.trim_end().ends_with("1⋅1⋅0⋅1⋅2") {
+                    l.chars().map(|c| if SPINNER.iter().any(|g| g.starts_with(c)) { WORKING.chars().next().unwrap() } else { c }).collect()
+                } else {
+                    l.to_owned()
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
         let mut rows: Vec<String> = text.lines().map(|l| l.trim_end().to_owned()).collect();
         while rows.last().is_some_and(String::is_empty) {
             rows.pop();
@@ -293,24 +386,27 @@ fn words(w: &[&str]) -> Vec<String> {
 fn the_tree_of_a_prepared_store() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 14);
+    let pane = Pane::start(&env, 46, 18);
     let screen = pane.ready();
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let mut expected = vec![
+        String::new(),
+        format!(" ▾ {NEEDS_YOU} alpha"),
+        row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
+        format!("   ├ {IDLE} ship·f-id"),
+        format!("   └ {NEEDS_YOU} ship·f-bl"),
+        format!(" ▾ {NEEDS_YOU} beta"),
+        row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
+        row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
+        format!(" ▾ {STOPPED} gamma"),
+    ];
+    expected.extend(["", "", ""].map(String::from)); // the rest of the tree's rows, then the Inbox section pinned below
+    expected.extend(inbox_section(46));
     assert_eq!(
         screen,
-        [
-            String::new(),
-            " ▾ ● alpha".to_owned(),
-            row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
-            row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
-            "   ├ ○ ship·f-id".to_owned(),
-            "   └ ● ship·f-bl".to_owned(),
-            " ▾ ● beta".to_owned(),
-            row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
-            row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"),
-            " ▾ ◌ gamma".to_owned(),
-        ],
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text"
+        expected,
+        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: its header, three items with their age, `+1 more`"
     );
 }
 
@@ -318,7 +414,7 @@ fn the_tree_of_a_prepared_store() {
 fn the_tree_leaves_the_first_and_the_last_column_blank() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 14);
+    let pane = Pane::start(&env, 46, 18);
     let screen = pane.ready();
     // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
     assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
@@ -331,7 +427,8 @@ fn an_empty_store_says_so() {
     let env = env();
     drop(open(&env));
     let pane = Pane::start(&env, 30, 5);
-    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts"]);
+    let header = format!(" ── Inbox 0 {}", "─".repeat(28 - 2 - " Inbox 0 ".len()));
+    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", "", header.as_str()], "the section is there with no item");
 }
 
 #[test]
@@ -376,7 +473,7 @@ fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
     assert!(screen[1].starts_with(" ▾ ") && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
     pane.click(1, 1); // its fold glyph
     let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
-    assert_eq!(folded[1], " ▸ ● alpha 2", "a folded Context draws ▸ and its number of Plans");
+    assert_eq!(folded[1], format!(" ▸ {NEEDS_YOU} alpha 2"), "a folded Context draws ▸, its Manager's dot (its unread item) and its number of Plans");
     assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
     pane.click(1, 1);
     pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
@@ -530,8 +627,28 @@ fn the_tree_follows_the_events_of_the_store() {
     pane.ready();
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
-    let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains("├ ● sketch")));
-    assert!(screen.iter().any(|r| r.starts_with(" ▾ ● alpha")));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(pane.screen().iter().any(|r| r.contains(&format!("├ {IDLE} sketch"))), "a blocked Session is no filled dot until the Inbox has its dialog");
+    // inbox-opened: the engine's E8 opens the dialog
+    let mut store = open(&env);
+    let mut now = items();
+    now.push(condition(Kind::Dialog, Urgency::Magenta, "l-sketch", Some("sketch"), "alpha"));
+    reconcile(&mut store, &now, "2026-01-04T00:01:00.000Z").unwrap();
+    pane.wait("the opened item", |s| s.iter().any(|r| r.contains(&format!("├ {NEEDS_YOU} sketch"))));
+    // inbox-closed: its cause ends
+    reconcile(&mut store, &items(), "2026-01-04T00:02:00.000Z").unwrap();
+    pane.wait("the closed item", |s| s.iter().any(|r| r.contains(&format!("├ {IDLE} sketch"))));
+    // inbox-dismissed, by the command: the red dialog of the fork falls back to its glyph
+    let screen = pane.screen();
+    assert!(screen.iter().any(|r| r.contains(&format!("└ {NEEDS_YOU} ship·f-bl"))));
+    let id = store_item(&mut store, "session:f-blocked");
+    env.cpd(&["inbox", "dismiss", &id.to_string()]).ok();
+    pane.wait("the dismissed item", |s| s.iter().any(|r| r.contains(&format!("└ {IDLE} ship·f-bl"))));
+}
+
+/// The id of the open item of `subject`.
+fn store_item(store: &mut Store, subject: &str) -> i64 {
+    store.read(|c| Ok(c.query_row("SELECT id FROM inbox_items WHERE subject = ?1 AND closed_at IS NULL", [subject], |r| r.get(0))?)).unwrap()
 }
 
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
@@ -550,39 +667,42 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     populate(&env);
     archive(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 16);
+    let pane = Pane::start(&env, 46, 20);
     let screen = pane.ready();
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let mut expected = vec![
+        String::new(),
+        format!(" ▾ {NEEDS_YOU} alpha"),
+        row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
+        format!("   ├ {IDLE} ship·f-id"),
+        format!("   └ {NEEDS_YOU} ship·f-bl"),
+        format!(" ▾ {NEEDS_YOU} beta"),
+        row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
+        "   └ …".to_owned(),
+        " …".to_owned(),
+    ];
+    expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
+    expected.extend(inbox_section(46));
     assert_eq!(
         screen,
-        [
-            String::new(),
-            " ▾ ● alpha".to_owned(),
-            row("⏵ ├ ◐ ship", "1⋅1⋅0⋅1⋅2"),
-            row("  ├ ○ sketch", "2⋅0⋅0⋅0⋅0"),
-            "   ├ ○ ship·f-id".to_owned(),
-            "   └ ● ship·f-bl".to_owned(),
-            " ▾ ● beta".to_owned(),
-            row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"),
-            "   └ …".to_owned(),
-            " …".to_owned(),
-        ],
+        expected,
         "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
     );
     // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
     pane.click(4, 8);
-    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
-    assert_eq!(screen[7..11], [row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
+    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
+    assert_eq!(screen[7..11], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
     // a click on the archived Plan shows its history (below); then the other `…` shows the archived Context
     pane.click(10, 9);
     wait_for_calls(&env, 1);
     pane.click(1, 10);
-    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == " ▾ ◌ gamma"));
-    assert_eq!(screen[9..12], [row("  └ ◌ old", "0⋅0⋅0⋅0⋅0"), " …".to_owned(), " ▾ ◌ gamma".to_owned()]);
+    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == &format!(" ▾ {STOPPED} gamma")));
+    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma")]);
     // a click on beta's `…` collapses its group again
     pane.click(4, 8);
-    let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains("└ ◌ old")));
-    assert_eq!(screen[7..9], [row("  ├ ● rel", "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
+    let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
+    assert_eq!(screen[7..9], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
@@ -595,12 +715,16 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
     let pane = Pane::start(&env, 46, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`: its archived Plan is drawn
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
-    pane.down(6); // ship, sketch, f-idle, f-blocked, rel, and then nowhere: the archived Plan `old` is not a stop
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
+    pane.down(5); // ship, sketch, f-idle, f-blocked, rel
     pane.keys(&["Enter"]);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-rel"])]);
     pane.keys(&["x"]);
     pane.wait("the prompt", |_| pane.footer_has("Close Plan rel?"));
+    pane.keys(&["n"]); // any key but `y` answers it
+    pane.down(1); // then nowhere: the archived Plan `old` is not a stop, the Inbox's first item is
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "f-blocked"]));
 }
 
 #[test]
@@ -616,7 +740,7 @@ fn the_tree_follows_the_archive_events() {
          INSERT INTO events (txn, at, kind, context, plan, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:00.000Z', 'plan-archived', 'beta', 'old', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains("└ ◌ old")));
+    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
     sql(
         &mut open(&env),
         "UPDATE contexts SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'gamma';
@@ -658,7 +782,7 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 14);
+    let pane = Pane::start(&env, 46, 18);
     pane.ready();
     pane.right_click(8, 4); // the fork `ship fork`
     let screen = pane.wait("the fork's menu", |s| menu_open(s, "Open"));
@@ -768,7 +892,7 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     let screen = pane.ready();
     assert_eq!(screen[5], "   └ …", "the archived fork is behind alpha's `…`");
     pane.click(4, 5);
-    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ● ship·f-bl")));
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("└ {IDLE} ship·f-bl"))));
     pane.click(10, 6);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "f-blocked"])]);
     pane.click(8, 4); // a live fork still opens
@@ -784,7 +908,7 @@ fn a_click_that_shows_a_history_is_refused_in_the_note_row() {
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.click(4, 5);
-    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains("└ ● ship·f-bl")));
+    pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("└ {IDLE} ship·f-bl"))));
     pane.click(10, 6);
     pane.wait("the refusal", |_| pane.footer_has("file_unreadable: The session file is missing."));
 }
@@ -833,7 +957,7 @@ fn unarchive_in_the_menu_runs_without_a_prompt_and_a_refusal_shows_in_the_note_r
     let pane = Pane::start(&env, 46, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
     pane.right_click(10, 9); // the archived Plan `old`
     let screen = pane.wait("the menu", |s| menu_open(s, "Rename…"));
     assert!(screen.iter().any(|r| r.contains("│ Rename… ")), "{screen:?}");
@@ -852,7 +976,7 @@ fn rename_on_an_archived_plan_runs_plan_rename() {
     let pane = Pane::start(&env, 60, 16);
     pane.ready();
     pane.click(4, 8); // beta's `…`
-    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains("└ ◌ old")));
+    pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
     pane.right_click(10, 9);
     pane.wait("the menu", |s| menu_open(s, "Rename…"));
     pane.keys(&["Enter"]);
@@ -885,7 +1009,7 @@ fn new_context_asks_a_title_and_runs_context_new_with_the_derived_id() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true,"context":{"id":"building-cpd"}}"#);
-    let pane = Pane::start(&env, 60, 14);
+    let pane = Pane::start(&env, 60, 18);
     pane.ready();
     pane.right_click(5, 12); // the empty area
     pane.wait("the menu", |s| menu_open(s, "New Context…"));
@@ -971,4 +1095,265 @@ fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
         assert_eq!(String::from_utf8_lossy(&buffer.stdout), id);
     }
     assert!(calls(&env).is_empty(), "Copy id runs no cpd command: {:?}", calls(&env));
+}
+
+// ---------- the Inbox section (commands.md §13.2) ----------
+
+#[test]
+fn the_inbox_sections_more_row_expands_the_list_inline_and_less_folds_it() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    let screen = pane.ready();
+    // the section is pinned to the bottom, the Session rows above it
+    assert_eq!(screen[15..], inbox_section(46));
+    pane.click(10, 19); // `+1 more`
+    let screen = pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " − less"));
+    let item = |label: &str| format!(" {NEEDS_YOU} {label}{}5m", " ".repeat(44 - 2 - label.len() - 2));
+    assert_eq!(screen[14..], [inbox_section(46)[..4].to_vec(), vec![item("m-alpha label"), " − less".to_owned()]].concat());
+    pane.click(3, 19); // `− less`
+    let screen = pane.wait("the folded list", |s| s.last().is_some_and(|r| r == " +1 more"));
+    assert_eq!(screen[15..], inbox_section(46));
+    assert!(calls(&env).is_empty(), "expanding and folding are no commands");
+}
+
+/// `populate`'s items and one of each kind that jumps or links; the engine-error is caused by Event `event`.
+fn jumping_items(event: i64) -> Vec<Condition> {
+    let other = |kind, urgency, subject: &str, label: &str| Condition {
+        subject: subject.to_owned(),
+        label: label.to_owned(),
+        session: None,
+        ..condition(kind, urgency, "none", Some("ship"), "alpha")
+    };
+    let mut items = items();
+    items.extend([
+        Condition { event: Some(event), plan: None, context: None, ..other(Kind::EngineError, Urgency::Red, "engine:store", "engine: store busy") },
+        Condition {
+            url: Some("https://github.com/acme/api/pull/12".into()),
+            ..other(Kind::PrFailing, Urgency::Yellow, "pr:acme/api#12", "acme/api#12 failing")
+        },
+        other(Kind::JobStuck, Urgency::Yellow, "job:ship/c", "ship: c is stuck"),
+        Condition { plan: None, ..other(Kind::Question, Urgency::Magenta, "question:q1", "alpha: a question") },
+    ]);
+    items
+}
+
+#[test]
+fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
+    let env = env();
+    populate(&env);
+    let mut store = open(&env);
+    let event = store.read(cpd_core::events::highest_id).unwrap();
+    reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
+    fake_cpd(&env, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
+    // a fake tmux: one client, the popup recorded and not run, the rest the real tmux
+    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    env.fake(
+        "tmux",
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+    );
+    let pane = Pane::start(&env, 46, 26);
+    pane.ready();
+    pane.wait("the more row", |s| s.last().is_some_and(|r| r.starts_with(" +")));
+    let more = pane.screen().len() as u16 - 1;
+    pane.click(10, more);
+    pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " − less"));
+    let row_of = |label: &str| {
+        let screen = pane.screen();
+        screen.iter().position(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n"))) as u16
+    };
+    // dialog: `session open <its Session>`
+    pane.click(10, row_of("f-blocked label"));
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
+    // job-stuck: the Lead of its Plan
+    pane.click(10, row_of("ship: c is stuck"));
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "l-ship"]));
+    // question: the Context's Manager
+    pane.click(10, row_of("alpha: a question"));
+    assert_eq!(wait_for_calls(&env, 4)[2..], [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]);
+    // pr-failing: the label is an OSC 8 link, the view runs nothing, and tmux draws the label whole
+    let failing = row_of("acme/api#12 failing");
+    pane.click(10, failing);
+    // engine-error: the logs popup at the item's Event
+    pane.click(10, row_of("engine: store busy"));
+    let popups = || -> Vec<_> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect() };
+    wait_for(|| !popups().is_empty());
+    let popups = popups();
+    assert_eq!(popups.len(), 1, "{popups:?}");
+    assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view logs --event {event}"));
+    assert!(popups[0].contains(&" logs ".to_owned()), "{:?}", popups[0]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(calls(&env).len(), 4, "the link and the logs ran no cpd command: {:?}", calls(&env));
+}
+
+#[test]
+fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_logs_at_the_bottom() {
+    let env = env_without_engine();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    env.fake(
+        "tmux",
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+    );
+    let pane = Pane::start(&env, 46, 20);
+    let screen = pane.ready();
+    // counted in the header and in `+N more`, first of the rows
+    let section = inbox_section(46);
+    let title = " Inbox 5 ";
+    assert_eq!(screen[15], format!(" ──{title}{}", "─".repeat(44 - 2 - title.len())));
+    assert!(screen[16].starts_with(&format!(" {NEEDS_YOU} engine is down")), "{:?}", screen[16]);
+    assert_eq!(screen[17..19], section[1..3]);
+    assert_eq!(screen[19], " +2 more");
+    pane.click(10, 16);
+    let popups = || -> Vec<_> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect() };
+    wait_for(|| !popups().is_empty());
+    let popups = popups();
+    assert_eq!(popups.len(), 1, "{popups:?}");
+    assert_eq!(popups[0].last().unwrap(), "cpd tui view logs");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(calls(&env).is_empty(), "no cpd command ran: {:?}", calls(&env));
+}
+
+fn wait_for(done: impl Fn() -> bool) {
+    let start = Instant::now();
+    while !done() {
+        assert!(start.elapsed() < Duration::from_secs(10), "timed out");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
+    let env = env();
+    populate(&env);
+    let mut store = open(&env);
+    let event = store.read(cpd_core::events::highest_id).unwrap();
+    reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
+    let pane = Pane::start(&env, 46, 26);
+    pane.ready();
+    pane.wait("the more row", |s| s.last().is_some_and(|r| r.starts_with(" +")));
+    pane.click(10, pane.screen().len() as u16 - 1);
+    let screen = pane.wait("the link's row", |s| s.iter().any(|r| r.contains("acme/api#12")));
+    let expected = format!(" {NEEDS_YOU} acme/api#12 failing{}5m", " ".repeat(44 - 2 - "acme/api#12 failing".len() - 2));
+    let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
+    assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
+}
+
+// ---------- the Inbox's menu and keys (commands.md §13.2, §21) ----------
+
+/// The row of the Inbox item labelled `label`, as the screen has it now (a note below the section moves it up).
+fn item_row(pane: &Pane, label: &str) -> u16 {
+    let screen = pane.screen();
+    screen.iter().position(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n"))) as u16
+}
+
+/// The cursor on the Inbox's first item: down through the Sessions and into the section, then back up to the first.
+fn cursor_on_the_first_item(pane: &Pane) {
+    pane.down(15); // more than there are Sessions and shown items: it stops on the last shown item
+    pane.keys(&["k", "k"]);
+}
+
+#[test]
+fn the_cursor_reaches_the_items_and_d_dismisses_and_s_snoozes_the_one_it_is_on() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    cursor_on_the_first_item(&pane);
+    pane.keys(&["d"]);
+    pane.wait("dismissed", |_| pane.footer_has("dismissed"));
+    assert_eq!(calls(&env), [words(&["inbox", "dismiss", "1"])]);
+    pane.keys(&["j", "s"]);
+    pane.wait("the snooze choices", |s| menu_open(s, "Snooze 15 min"));
+    let screen = pane.screen();
+    assert!(!screen.iter().any(|r| r.contains("Dismiss")), "the choices are the three snoozes:\n{}", screen.join("\n"));
+    pane.keys(&["Down", "Enter"]);
+    pane.wait("snoozed", |_| pane.footer_has("snoozed"));
+    assert_eq!(wait_for_calls(&env, 2)[1], words(&["inbox", "snooze", "2", "1h"]));
+    pane.keys(&["j", "s", "Down", "Down", "Enter"]);
+    assert_eq!(wait_for_calls(&env, 3)[2], words(&["inbox", "snooze", "4", "tomorrow"]));
+    pane.keys(&["s"]);
+    pane.wait("the snooze choices", |s| menu_open(s, "Snooze 15 min"));
+    pane.keys(&["Escape"]);
+    pane.wait("the menu closed", the_menu_is_closed);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(calls(&env).len(), 3, "Esc ran nothing: {:?}", calls(&env));
+}
+
+#[test]
+fn s_and_d_do_nothing_on_a_session_row_or_before_an_arrow_key() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    pane.keys(&["s", "d"]);
+    pane.down(1); // on the first Session
+    pane.keys(&["s", "d"]);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(the_menu_is_closed(&pane.screen()));
+    assert!(calls(&env).is_empty(), "{:?}", calls(&env));
+}
+
+#[test]
+fn enter_on_an_item_jumps_as_a_click_does() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    cursor_on_the_first_item(&pane);
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
+}
+
+#[test]
+fn a_right_click_on_an_item_opens_its_four_entries_and_each_runs_its_command() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    pane.right_click(10, item_row(&pane, "l-rel label")); // `l-rel label`, item 2
+    let screen = pane.wait("the item's menu", |s| menu_open(s, "Snooze 15 min"));
+    for entry in ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"] {
+        assert!(screen.iter().any(|r| r.contains(&format!("│ {entry}"))), "{entry} in\n{}", screen.join("\n"));
+    }
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["inbox", "snooze", "2", "15m"])]);
+    for (i, expected) in [["inbox", "snooze", "2", "1h"], ["inbox", "snooze", "2", "tomorrow"]].into_iter().enumerate() {
+        pane.wait("the menu closed", the_menu_is_closed);
+        pane.right_click(10, item_row(&pane, "l-rel label"));
+        pane.wait("the item's menu", |s| menu_open(s, "Snooze 15 min"));
+        pane.keys(&vec!["Down"; i + 1]);
+        pane.keys(&["Enter"]);
+        assert_eq!(wait_for_calls(&env, 2 + i)[1 + i], words(&expected));
+    }
+    pane.wait("the menu closed", the_menu_is_closed);
+    pane.right_click(10, item_row(&pane, "m-beta label")); // item 4
+    pane.wait("the item's menu", |s| menu_open(s, "Snooze 15 min"));
+    pane.keys(&["Down", "Down", "Down", "Enter"]);
+    assert_eq!(wait_for_calls(&env, 4)[3], words(&["inbox", "dismiss", "4"]));
+    // the header has no menu
+    pane.wait("the menu closed", the_menu_is_closed);
+    pane.right_click(10, item_row(&pane, "── Inbox"));
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(the_menu_is_closed(&pane.screen()));
+    assert_eq!(calls(&env).len(), 4);
+}
+
+#[test]
+fn a_refusal_of_an_item_command_shows_in_the_prompt_row() {
+    let env = env();
+    populate(&env);
+    env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"item_closed","message":"Item 1 is closed.","details":{}}}'; exit 3"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    cursor_on_the_first_item(&pane);
+    pane.keys(&["d"]);
+    pane.wait("the refusal", |_| pane.footer_has("item_closed: Item 1 is closed."));
+    assert_eq!(calls(&env), [words(&["inbox", "dismiss", "1"])]);
 }

@@ -68,6 +68,7 @@ pub enum Command {
     /// Rename a Session (§10.7)
     Rename(RenameArgs),
     /// Report a Session's agent state (pi adapter) (§10.6)
+    #[command(hide = true)]
     State(StateArgs),
     /// The program in every Lead pane (internal; owns its terminal) (§10.8)
     #[command(hide = true)]
@@ -199,6 +200,13 @@ pub struct RunArgs {
     /// The Lead Session this pane runs
     #[arg(value_name = "id")]
     id: SessionId,
+    /// The pid of the pi a previous wrapper left running across its `exec`
+    /// (internal: written only by the wrapper's own `exec`, §10.8)
+    #[arg(long, value_name = "pid", hide = true, value_parser = clap::value_parser!(i32).range(2..))]
+    adopt: Option<i32>,
+    /// With `--adopt`: pi's install changed before the `exec` (internal, §10.8)
+    #[arg(long, hide = true, requires = "adopt")]
+    pi_stale: bool,
 }
 
 pub fn run(command: Command) -> Result<Output, CpdError> {

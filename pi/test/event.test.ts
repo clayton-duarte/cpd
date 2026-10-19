@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { LEAD_MESSAGES } from "../lib/delivery.ts";
-import { KINDS } from "../lib/event.ts";
+import { KINDS, parseLine } from "../lib/event.ts";
 
 /** The kinds of contract.md §5.2's table: the backticked names of the first column of its rows. */
 function contractKinds(): string[] {
@@ -30,4 +30,18 @@ test("KINDS is exactly the kinds of contract §5.2", () => {
 
 test("every key of LEAD_MESSAGES is a known kind", () => {
   for (const k of Object.keys(LEAD_MESSAGES)) assert.ok((KINDS as readonly string[]).includes(k), k);
+});
+
+const WELL_FORMED = { id: 7, at: "t", kind: "job-merged", context: null, plan: null, job: null, attempt: null, session: "s", text: "x", data: {} };
+
+test("parseLine: a well-formed Event of an unknown kind is unknown-kind, not invalid", () => {
+  assert.deepEqual(parseLine(JSON.stringify({ ...WELL_FORMED, kind: "from-the-future" })), { type: "unknown-kind", id: 7 });
+  assert.equal(parseLine(JSON.stringify(WELL_FORMED)).type, "event");
+});
+
+test("parseLine: a malformed line is invalid even with an unknown kind", () => {
+  assert.equal(parseLine("nope").type, "invalid");
+  assert.equal(parseLine(JSON.stringify({ ...WELL_FORMED, kind: "from-the-future", text: 1 })).type, "invalid");
+  assert.equal(parseLine(JSON.stringify({ ...WELL_FORMED, kind: 3 })).type, "invalid");
+  assert.equal(parseLine(JSON.stringify({ ...WELL_FORMED, kind: "from-the-future", id: 0 })).type, "invalid");
 });

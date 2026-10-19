@@ -52,9 +52,10 @@ const NULLABLE = ["context", "plan", "job", "attempt", "session"] as const;
 export type Line =
   | { type: "event"; event: CpdEvent }
   | { type: "failure"; error: CpdError }
+  | { type: "unknown-kind"; id: number }
   | { type: "invalid"; reason: string; id?: number };
 
-/** Parse one stdout line of `events follow` at the boundary (commands.md §11.2): an Event, the failure envelope, or invalid. */
+/** Parse one stdout line of `events follow` at the boundary (commands.md §11.2): an Event, the failure envelope, a well-formed Event of an unknown kind, or invalid. */
 export function parseLine(text: string): Line {
   let json: unknown;
   try {
@@ -68,11 +69,12 @@ export function parseLine(text: string): Line {
   const bad = (reason: string): Line => ({ type: "invalid", reason, ...(id !== undefined ? { id } : {}) });
   if (id === undefined) return bad("`id` is not a positive integer");
   if (typeof json.at !== "string") return bad("`at` is not a string");
-  if (typeof json.kind !== "string" || !(KINDS as readonly string[]).includes(json.kind)) return bad(`unknown kind ${JSON.stringify(json.kind)}`);
-  const kind = json.kind as Kind;
+  if (typeof json.kind !== "string") return bad("`kind` is not a string");
   for (const f of NULLABLE) if (json[f] !== null && typeof json[f] !== "string") return bad(`\`${f}\` is neither a string nor null`);
   if (typeof json.text !== "string") return bad("`text` is not a string");
   if (!isObject(json.data)) return bad("`data` is not an object");
+  if (!(KINDS as readonly string[]).includes(json.kind)) return { type: "unknown-kind", id }; // well-formed, but not a kind this adapter acts on
+  const kind = json.kind as Kind;
   for (const f of NEEDED[kind] ?? []) if (typeof json.data[f] !== "string") return bad(`${kind}: \`data.${f}\` is not a string`);
   if (kind === "session-message" && json.data.from !== null && typeof json.data.from !== "string") return bad("session-message: `data.from` is neither a string nor null");
   return { type: "event", event: json as unknown as CpdEvent };

@@ -260,27 +260,24 @@ fn append_one(store: &mut Store, e: NewEvent) -> Result<i64, CpdError> {
 
 fn refused_append(store: &mut Store, e: NewEvent, why: &str) {
     let err = append_one(store, e).expect_err(why);
-    assert_eq!(err.code(), ErrorCode::StoreFailed, "{why}: {err:?}");
+    assert_eq!(err.code(), ErrorCode::Internal, "{why}: {err:?}");
 }
 
 #[test]
-fn the_kinds_are_exactly_those_of_5_2_and_of_the_table_check() {
+fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
     let names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
     assert_eq!(names, SPEC.iter().map(|s| s.0).collect::<Vec<_>>());
 
-    // The `events.kind` CHECK of the DDL lists the same kinds.
+    // The rows of `event_kinds` (§4.5: a kind exists when its row does) are the same kinds.
     let env = TestEnv::new();
     write_config(&env);
     drop(open(&env));
     let conn = Connection::open(home(&env).db()).unwrap();
-    let ddl: String =
-        conn.query_row("SELECT sql FROM sqlite_schema WHERE name = 'events'", [], |r| r.get(0)).unwrap();
-    let check = ddl.split("kind    TEXT").nth(1).unwrap().split("\n  context ").next().unwrap();
-    let mut in_ddl: Vec<&str> = check.split('\'').skip(1).step_by(2).collect();
-    in_ddl.sort();
+    let mut stmt = conn.prepare("SELECT name FROM event_kinds ORDER BY name").unwrap();
+    let in_table: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
     let mut expected = names.clone();
     expected.sort();
-    assert_eq!(in_ddl, expected);
+    assert_eq!(in_table, expected);
 }
 
 #[test]
@@ -313,7 +310,7 @@ fn a_missing_field_is_refused() {
         for missing in *data {
             let rest: Vec<&str> = data.iter().filter(|k| *k != missing).copied().collect();
             let err = append_one(&mut store, event(kind, always, &rest)).expect_err(&format!("{name} without {missing}"));
-            assert_eq!(err.code(), ErrorCode::StoreFailed);
+            assert_eq!(err.code(), ErrorCode::Internal);
             assert_eq!(err.details()["field"], *missing, "{name}");
         }
     }
@@ -779,14 +776,32 @@ fn follow_since_prints_the_backlog_then_the_new_events() {
     assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
 }
 
+/// What a newer cpd does to the store: a migration this binary lacks (`compat` `additive` or
+/// `breaking`) that changes the schema and is recorded under `cpd_txn()`, stood in by the newest `txns` id.
+fn newer_cpd_migrates(env: &TestEnv, compat: &str) {
+    use rusqlite::functions::FunctionFlags;
+    let conn = Connection::open(home(env).db()).unwrap();
+    let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
+    // One transaction, as a migration is: the follower recomputes the verdict when `schema_version`
+    // moves, so the row must not commit after the DDL.
+    conn.execute_batch("BEGIN; CREATE TABLE newer_things (id INTEGER PRIMARY KEY) STRICT;").unwrap();
+    conn.execute(
+        "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+         VALUES ('29991231T2359-newer', ?1, lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?2, 0)",
+        rusqlite::params![compat, txn],
+    )
+    .unwrap();
+    conn.execute_batch("COMMIT;").unwrap();
+}
+
 #[test]
 fn follow_a_failure_after_the_first_line_is_the_last_line() {
     let env = seeded();
     let mut follower = Follower::start(&env, &["--since", "10"]);
     assert_eq!(follower.next().unwrap()["id"], 11);
     // An upgrade by a newer cpd while the follower runs.
-    let conn = Connection::open(home(&env).db()).unwrap();
-    conn.pragma_update(None, "user_version", 99).unwrap();
+    newer_cpd_migrates(&env, "breaking");
     let last = follower.next().unwrap();
     assert_eq!(last["ok"], false);
     assert_eq!(last["error"]["code"], "store_too_new");
@@ -797,8 +812,7 @@ fn follow_a_failure_after_the_first_line_is_the_last_line() {
 #[test]
 fn follow_exits_on_a_store_too_new_before_it_has_printed_anything() {
     let env = seeded();
-    let conn = Connection::open(home(&env).db()).unwrap();
-    conn.pragma_update(None, "user_version", 99).unwrap();
+    newer_cpd_migrates(&env, "breaking");
     let mut follower = Follower::start(&env, &["--since", "11"]);
     let last = follower.next().unwrap();
     assert_eq!(last["ok"], false);
@@ -812,10 +826,38 @@ fn follow_exits_non_zero_when_the_store_becomes_newer_while_it_is_idle() {
     let env = seeded();
     let mut follower = Follower::start(&env, &["--plan", "pay"]);
     std::thread::sleep(Duration::from_millis(300));
-    let conn = Connection::open(home(&env).db()).unwrap();
-    conn.pragma_update(None, "user_version", 99).unwrap();
+    newer_cpd_migrates(&env, "breaking");
     let last = follower.next().unwrap();
     assert_eq!(last["error"]["code"], "store_too_new");
+    assert_eq!(follower.exit(), 1);
+}
+
+#[test]
+fn follow_goes_on_when_the_store_gains_only_an_additive_migration_this_binary_lacks() {
+    let env = seeded();
+    let mut follower = Follower::start(&env, &["--since", "10"]);
+    assert_eq!(follower.next().unwrap()["id"], 11);
+    // Inside the window (contract §4.5): the verdict is recomputed, still opens, nothing ends.
+    newer_cpd_migrates(&env, "additive");
+    std::thread::sleep(Duration::from_millis(500));
+    let mut store = open(&env);
+    let n = append_watch(&mut store, 1);
+    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
+}
+
+#[test]
+fn follow_ends_when_a_migration_leaves_the_verdict_refusing_even_if_user_version_never_moves() {
+    // `migration_order`-like and `store_too_new` refusals come from the verdict, not from a number:
+    // the schema changes (so `schema_version` moves) and `user_version` stays what it was.
+    let env = seeded();
+    let mut follower = Follower::start(&env, &["--plan", "pay"]);
+    std::thread::sleep(Duration::from_millis(300));
+    newer_cpd_migrates(&env, "breaking");
+    let user_version: i64 = Connection::open(home(&env).db()).unwrap().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_eq!(user_version, cpd_core::store::VERSION);
+    let last = follower.next().unwrap();
+    assert_eq!(last["error"]["code"], "store_too_new");
+    assert_eq!(last["error"]["details"]["floor"], "29991231T2359-newer");
     assert_eq!(follower.exit(), 1);
 }
 

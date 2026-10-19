@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -23,8 +23,9 @@ use super::engine::{Engine, metrics};
 use super::report::{About, Step};
 use crate::driver::ledger::{self, Cause, End, Ladder};
 use crate::driver::lock::{self, Free};
+use crate::driver::worker;
 use crate::error::{CpdError, ErrorCode};
-use crate::host::layout::{MAIN_WINDOW, View, attempt_window};
+use crate::host::layout::{MAIN_WINDOW, View};
 use crate::host::tmux::{OPT_SESSION, Pane, Spawn};
 use crate::ids::{AttemptId, PlanId, SessionId};
 use crate::merge::{self, RepoLock};
@@ -34,7 +35,6 @@ struct Active {
     plan: PlanId,
     id: AttemptId,
     status: String,
-    started_at: String,
     stop_request: Option<String>,
     cancel_requested: bool,
     repo: PathBuf,
@@ -54,7 +54,7 @@ pub(super) fn run(engine: &mut Engine) {
 fn attempts(engine: &mut Engine) {
     let active = engine.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT a.plan, a.id, a.status, a.started_at, a.stop_request, j.cancel_requested_at IS NOT NULL, r.repo
+            "SELECT a.plan, a.id, a.status, a.stop_request, j.cancel_requested_at IS NOT NULL, r.repo
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
               WHERE a.status <> 'ended' ORDER BY a.plan, a.id",
         )?;
@@ -64,20 +64,18 @@ fn attempts(engine: &mut Engine) {
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, Option<String>>(4)?,
-                    r.get::<_, bool>(5)?,
-                    r.get::<_, String>(6)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, bool>(4)?,
+                    r.get::<_, String>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(plan, id, status, started_at, stop_request, cancel_requested, repo)| {
+            .map(|(plan, id, status, stop_request, cancel_requested, repo)| {
                 Ok(Active {
                     plan: PlanId::parse(&plan)?,
                     id: AttemptId::parse(&id)?,
                     status,
-                    started_at,
                     stop_request,
                     cancel_requested,
                     repo: PathBuf::from(repo),
@@ -144,14 +142,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     lock::remove(&engine.home, plan, id)?;
     drop(lock);
     engine.log.line(&format!("E2: the driver of {id} (Plan {plan}) is dead: ended {} / {}", end.outcome(), end.cause()));
-    let name = attempt_window(plan, id);
-    let work = engine.config.tmux.work_session.clone();
-    for pane in engine.tmux.list_panes()? {
-        if pane.session_name == work && pane.window_name == name {
-            engine.tmux.kill_window(&pane.window)?;
-        }
-    }
-    Ok(())
+    worker::kill_attempt_window(&engine.config, &engine.tmux, plan, id)
 }
 
 /// R (§7.4) for the orphaned merges of `repo`, when its per-repo lock is free
@@ -201,30 +192,51 @@ fn stop_request(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     Ok(())
 }
 
-/// Wall time since the Attempt started, minus the time an Escalation of it
-/// was `open` (§3.3, §3.4 A4). Overlapping Escalations count once.
+/// Wall time since the Attempt turned `running` (the time of its `starting →
+/// running` `attempt-status` Event: the wait in `starting`, a review Job's wait
+/// for its Lead, is not counted), minus the time an Escalation of it was
+/// `open` (§3.3, §3.4 A4). Overlapping Escalations count once.
 fn active_time(engine: &mut Engine, active: &Active) -> Result<Duration, CpdError> {
     let (plan, id) = (active.plan.as_str(), active.id.to_string());
-    let open: Vec<(String, Option<String>)> = engine.store.read(|conn| {
+    let (running, open): (Option<String>, Vec<(String, Option<String>)>) = engine.store.read(|conn| {
+        let running = conn
+            .query_row(
+                "SELECT at FROM events WHERE plan = ?1 AND attempt = ?2 AND kind = 'attempt-status' AND json_extract(data, '$.to') = 'running'
+                  ORDER BY id LIMIT 1",
+                [plan, &id],
+                |r| r.get(0),
+            )
+            .optional()?;
         let mut stmt = conn.prepare(
             "SELECT asked_at, coalesce(answered_at, expired_at) FROM escalations WHERE plan = ?1 AND attempt = ?2 ORDER BY asked_at",
         )?;
         let rows = stmt.query_map([plan, &id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        Ok((running, rows))
     })?;
-    let now = OffsetDateTime::now_utc();
-    let started = parse_time(&active.started_at)?;
-    let mut intervals = Vec::with_capacity(open.len());
+    let running = running.ok_or_else(|| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Attempt {id} is running but the Ledger has no `running` attempt-status Event for it."))
+            .with("attempt", id.clone())
+    })?;
+    let mut escalations = Vec::with_capacity(open.len());
     for (asked, closed) in &open {
-        let from = parse_time(asked)?.max(started);
-        let to = closed.as_deref().map(parse_time).transpose()?.unwrap_or(now).min(now);
+        escalations.push((parse_time(asked)?, closed.as_deref().map(parse_time).transpose()?));
+    }
+    Ok(active_between(parse_time(&running)?, OffsetDateTime::now_utc(), &escalations))
+}
+
+/// The time from `running` to `now`, minus the union of the Escalation
+/// intervals (asked, closed; none while still `open`) clipped to that span.
+fn active_between(running: OffsetDateTime, now: OffsetDateTime, escalations: &[(OffsetDateTime, Option<OffsetDateTime>)]) -> Duration {
+    let mut intervals = Vec::with_capacity(escalations.len());
+    for &(asked, closed) in escalations {
+        let from = asked.max(running);
+        let to = closed.unwrap_or(now).min(now);
         if to > from {
             intervals.push((from, to));
         }
     }
-    let paused = union_length(intervals);
-    let active = (now - started) - paused;
-    Ok(Duration::try_from(active).unwrap_or(Duration::ZERO))
+    let active = (now - running) - union_length(intervals);
+    Duration::try_from(active).unwrap_or(Duration::ZERO)
 }
 
 /// The total length of the union of `intervals`.
@@ -374,5 +386,34 @@ mod tests {
     fn times_are_rfc_3339() {
         assert!(parse_time("2026-10-14T21:10:00.000Z").is_ok());
         assert_eq!(parse_time("t").unwrap_err().code(), ErrorCode::StoreFailed);
+    }
+
+    const RUNNING: OffsetDateTime = datetime!(2030-01-01 10:00 UTC);
+
+    fn minutes(n: i64) -> OffsetDateTime {
+        RUNNING + time::Duration::minutes(n)
+    }
+
+    #[test]
+    fn active_time_counts_from_running_not_from_starting() {
+        // The Attempt started 40 minutes before `running`: those minutes are not active time.
+        assert_eq!(active_between(RUNNING, minutes(5), &[]), Duration::from_secs(5 * 60));
+    }
+
+    #[test]
+    fn active_time_is_zero_before_running() {
+        assert_eq!(active_between(minutes(5), RUNNING, &[]), Duration::ZERO);
+    }
+
+    #[test]
+    fn open_escalation_time_is_not_active_time_and_overlaps_count_once() {
+        let escalations = [(minutes(10), Some(minutes(25))), (minutes(20), Some(minutes(30))), (minutes(35), None)];
+        // 40 minutes, minus 10–30 and 35–40 waiting for answers.
+        assert_eq!(active_between(RUNNING, minutes(40), &escalations), Duration::from_secs(15 * 60));
+    }
+
+    #[test]
+    fn an_escalation_asked_before_running_is_clipped_to_running() {
+        assert_eq!(active_between(RUNNING, minutes(10), &[(minutes(-5), Some(minutes(4)))]), Duration::from_secs(6 * 60));
     }
 }
