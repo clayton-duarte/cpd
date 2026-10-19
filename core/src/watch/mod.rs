@@ -8,6 +8,7 @@
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
 //! - [`report`]: an unexpected failure as an `error` Event, once until it clears;
 //! - [`ensure`]: `watch --ensure`, which starts the engine in `cpd-work:watch`;
+//! - [`restart`]: the tmux server's restart: E3's hold while it is pending, the drain, the detached run;
 //! - [`lock`]: `locks/watch.lock`; [`log`]: stderr and `run/watch.log`.
 
 mod completion;
@@ -21,6 +22,7 @@ mod lock;
 mod log;
 mod pr;
 mod report;
+pub mod restart;
 mod schedule;
 
 use crate::error::CpdError;
@@ -36,9 +38,18 @@ pub struct Args {
     /// Start the engine in cpd-work:watch when it is not running, and return at once
     #[arg(long)]
     ensure: bool,
+    /// Restart the tmux server onto the installed tmux (internal: the engine starts it, contract §6.1)
+    #[arg(long, hide = true, conflicts_with = "ensure")]
+    restart_tmux: bool,
 }
 
 /// `cpd watch [--ensure]`.
 pub fn run(args: Args) -> Result<Output, CpdError> {
-    if args.ensure { ensure::ensure() } else { engine::run() }
+    if args.ensure {
+        ensure::ensure()
+    } else if args.restart_tmux {
+        restart::detached()
+    } else {
+        engine::run()
+    }
 }

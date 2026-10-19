@@ -55,7 +55,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Thr
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
-| `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
+| `cpd` (no arguments), `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command. Bare `cpd` is §13.3 (hs-d259) |
 
 `cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "protocol": 4, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet, and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **4** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database, and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7), and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false`, and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
 
@@ -1911,6 +1911,8 @@ Idempotent: read-only; the same `--since` replays the same lines.
 cpd watch [--ensure]
 ```
 
+(and the internal `cpd watch --restart-tmux`, below)
+
 The engine, one per machine (§3.7, §6.6, D5).
 
 **Without `--ensure`:** runs E1–E5 and E7–E9 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
@@ -1921,7 +1923,7 @@ E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E9 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E9 (E3 starts nothing while a tmux restart is pending, and the engine starts that restart once nothing is in the way, §3.7) (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once.
 
@@ -1937,6 +1939,8 @@ Effects: probe `locks/watch.lock` (open and `flock(LOCK_EX | LOCK_NB)`, released
 
 Idempotent: yes; a running engine gives `"started": false` with `"already": true`.
 
+**`--restart-tmux` (internal; hs-d294).** Started by the engine, detached, when a restart of the tmux server is pending and nothing is in the way (contract §3.7, §6.1; §13.3); it is not an interface of the User or an agent. It restarts the server onto the installed tmux as §13.3 describes and exits 0, also when it did nothing (the server needs no restart, it is not safe now, another run holds `locks/tmux-restart.lock`). It prints one JSON value, `{"ok": true, "outcome": "…"}`, and logs to stderr, which the engine appends to `run/tmux-restart.log`. A failed restart exits with its failure and keeps the reason in `run/tmux-restart.pending`.
+
 ## 13. `tui`
 
 ### 13.1 `tui`
@@ -1951,8 +1955,9 @@ Effects, each only when missing:
 - **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd tui view <tree|plan|widgets>` with `@cpd_view` set, and the StatusBar, one row across the full width at the bottom (`split-window -v -f -l 1`), running `cpd tui view statusbar` with `@cpd_view statusbar`; the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. "Plan Lead" here means any Lead with a Plan, as for `session open` (side forks included, a Context's grounded Lead never), and one that `session open` refuses stays where it is while the placeholder keeps the slot (Escalation `tui-cockpit-a1-q3`). The session `cpd-work`.
 - **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` with no `statusbar` pane it adds one (same split) and then runs reset-layout, so the added row is taken from the layout and the other panes get their sizes back (amendment 15, §19).
 - **tmux options:** every option, the border format, the root mouse binding and the conditional `pane-died` hook of §6.1. `host` sets them at every server start, so a server started by `plan new` or `watch --ensure` has them too; `cpd tui` sets them again on a running server (rerunning is safe).
-- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.)
+- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.) Bare `cpd` does it too when it finds a view on an older binary (§13.3).
 - `watch --ensure` (§12).
+- **tmux version** (hs-d294): when the server runs an older tmux than the installed one, marks a restart pending (`run/tmux-restart.pending`, §13.3) and says so on stderr; it never restarts the server itself, since it may run inside it. The engine does it once nothing is in the way.
 - No rows of its own; moving a Lead appends `session-moved`.
 
 | Precondition | Code | Exit |
@@ -1963,7 +1968,7 @@ Effects, each only when missing:
 {"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
+With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2); bare `cpd` is the same attach with the follow-ups of §13.3. Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
 
 ### 13.2 `tui view` (internal)
 
@@ -2122,6 +2127,37 @@ The chat slot is never resized; it takes what is left. The StatusBar's ⧉ click
 
 Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
 
+### 13.3 `cpd` with no arguments
+
+```
+cpd
+```
+
+User decision hs-d259 (2026-10-19), Plan pi-pin, PR `bare`. **Bare `cpd` opens the cockpit.** In a terminal it attaches that terminal to the cockpit (`tmux -L <socket> attach -t <cockpit_session>`, the `attach` of §13.1) after doing every follow-up an update needs, so the User needs no other command after an install. It owns its terminal (§1.2): nothing on success.
+
+**Follow-ups**, in this order:
+
+1. **Engine:** `cpd watch --ensure` (§12).
+2. **Cockpit:** what `cpd tui` does (§13.1): build it when missing, respawn a dead pane of its layout, add a missing pane. One implementation, shared with `cpd tui` (including Plan quality's repair of a cockpit missing a pane): bare `cpd` calls it, never a copy.
+3. **Views on an old binary:** when the panes of the views run an older cpd than the installed one, `cpd tui --respawn` (§13.1).
+4. **tmux version:** when the cockpit's tmux server runs an older tmux than the installed client (`tmux -L <socket> display -p '#{version}'` against `tmux -V`; hs-d166), restart the server onto the installed tmux **when it is safe**, reopen every Lead and Manager Session that had a pane (same pi session file, same place: the chat slot, its parked window, a Context's window), then attach. When it is not safe, **hold, drain, restart** (User, hs-d294):
+   - **Safe** means: no Attempt `starting`, `running` or `merging`, and no Lead or Manager Session mid-turn (state `working`; a `blocked` Session has a dialog open, so it is also not safe). Restarting stops every pi in the server; Leads and Managers resume from their session files.
+   - **Safe now:** bare `cpd` restarts the server itself, in its own process (it runs in a terminal outside the server): it records every Lead and Manager Session with a live pane and its place (`chat`, or parked: its `park-<label>` window, or a Manager's `ctx-<context>` window); `kill-server`; `cpd tui` (the cockpit on the installed tmux, which also runs `watch --ensure`; the last chat Lead is back in the chat slot); then each Session in the same place: the one of the chat slot as `session open` does, the others in a new window running `cpd session run <id>`, which resumes the Session's pi file, each with `session-moved`. It then attaches with the installed tmux and says in one line how many Sessions it reopened.
+   - **Not safe:** it **marks a restart pending** (the file `$CPD_HOME/run/tmux-restart.pending`, JSON `{"at", "server", "installed", "failed"}`; no store change), attaches at once with the **server's own tmux binary** (its path from the server pid, `/proc/<pid>/exe` on Linux), because a newer client cannot attach to an older server (`open terminal failed: not a terminal`, hs-n224), and prints one line saying so and that the restart happens once nothing is in the way. `cpd tui` does the same marking when it finds the server older (it never restarts the server itself, since it may run inside it), and `tui --attach` attaches with the server's own binary then as well.
+   - **While a restart is pending, the engine starts no new Attempt** (E3's hold, contract §3.7); running Attempts finish normally. It is a planned hold, not an error: `cpd doctor` shows it as the `tmux_restart` check ("tmux restart pending", §14.1). Once none runs (no Attempt `starting`, `running` or `merging`) and no Lead or Manager Session is `working` or `blocked`, the engine starts the restart **detached** (`cpd watch --restart-tmux`, internal; `setsid`, its log `run/tmux-restart.log`), because the restart kills the server the engine itself runs in. The detached process takes `locks/tmux-restart.lock`, checks again that it is safe, does what "safe now" does, clears the pending file and logs the result. Then the engine, started again by `cpd tui`, schedules as usual. The User reconnects with bare `cpd`.
+   - **A failed restart** keeps the pending file with `failed` (`at`, `code`, `reason`) and the engine that runs again appends one `error` Event (`source: "watch"`, `code` of the failure, `details: {at, server, installed, log}`); a failed restart holds nothing. The next bare `cpd` finding the server still older tries again (a failed file is marked afresh); finding it as new as the installed tmux, it says the failure in one line and removes the file. Never from inside the cockpit's own server.
+
+Rerunning is safe: a restart already pending keeps its time, and a server that is not older is left alone. Internal command: `cpd watch --restart-tmux` (not an interface of the User or an agent; it conflicts with `--ensure`).
+
+`scripts/restart-tmux.sh` (PR `tmux`) is gone: its checks (the refusal while an Attempt runs, the attach hint with the server's binary) are the binary's own.
+
+**Assumptions, confirmed by the User in the Plan review:**
+
+- **A1** Without a terminal on stdin and stdout, bare `cpd` keeps today's behaviour: the JSON usage error `usage`, exit 2. It does no follow-up.
+- **A2** Inside the cockpit's own server (`$TMUX` names its socket), bare `cpd` does not nest an attach: it does the follow-ups that are safe from inside, never the tmux restart nor the marking of one (it would kill the pane it runs in), and prints one line saying how to reach the cockpit.
+- **A3** Each follow-up's failure is printed in one line on stderr, and the attach still happens when the cockpit exists. When the cockpit does not exist and could not be built, bare `cpd` prints the failure value and exits with its code.
+- **A4** Nothing new in the store: no table, column or Event kind.
+
 ## 14. `doctor`, `config`, `tiers`
 
 ### 14.1 `doctor`
@@ -2158,6 +2194,7 @@ Checks, in order:
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `deploy` |
+| `tmux_restart` | warn | present only while `run/tmux-restart.pending` exists: it passes (`message` "tmux restart pending", `found` the times and versions) while the restart waits, a planned hold of E3 (contract §3.7) and not a failure; it fails, with the reason, when the restart failed (§13.3) |
 
 ```json
 {"ok": true, "checks": [
