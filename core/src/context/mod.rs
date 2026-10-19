@@ -15,6 +15,7 @@ pub(crate) mod distill;
 pub mod inforce;
 pub(crate) mod legacy;
 mod manager;
+mod owner;
 mod pending;
 mod record;
 pub(crate) mod render;
@@ -36,7 +37,7 @@ use crate::args::{PlanArg, Text, Title};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, RecordId, RecordKind, SessionId};
+use crate::ids::{ContextId, OwnerLogin, RecordId, RecordKind, SessionId};
 use crate::output::Output;
 use crate::store::Store;
 
@@ -68,6 +69,8 @@ pub enum Command {
     Pending(pending::PendingArgs),
     /// Build the Context's digest with one-shot pi (§3.12)
     Distill(distill::DistillArgs),
+    /// Set the owner of a Context that has none (§3.13)
+    Owner(owner::OwnerArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -150,6 +153,9 @@ pub struct NewArgs {
     /// The Jira Epic key, stored only
     #[arg(long, value_name = "key")]
     jira: Option<Jira>,
+    /// The GitHub owner of every repo the Context's Plans work on, its policy key
+    #[arg(long, value_name = "login")]
+    owner: OwnerLogin,
 }
 
 #[derive(Args, Debug)]
@@ -248,6 +254,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Manager(args) => manager::manager(args),
         Command::Pending(args) => pending::pending(args),
         Command::Distill(args) => distill::distill(args),
+        Command::Owner(args) => owner::owner(args),
     }
 }
 
@@ -275,14 +282,15 @@ fn session_from_env() -> Result<Option<SessionId>, CpdError> {
 }
 
 fn context_json(row: &ContextRow) -> Value {
-    json!({"id": row.id, "title": row.title, "jira": row.jira, "created_at": row.created_at,
+    json!({"id": row.id, "title": row.title, "jira": row.jira, "owner": row.owner, "created_at": row.created_at,
            "created_on": row.created_on})
 }
 
 /// `context new` (§3.1).
 fn new(args: NewArgs) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
-    let (row, already) = Contexts::new(&config, &mut store).create(&args.id, &Text::from(args.title.clone()), args.jira.as_ref())?;
+    let (home, config, mut store) = open()?;
+    let title = Text::from(args.title.clone());
+    let (row, already) = Contexts::new(&config, &mut store).create(&home, &args.id, &title, args.jira.as_ref(), &args.owner)?;
     let mut out = json!({"context": context_json(&row)});
     if already {
         out["already"] = json!(true);

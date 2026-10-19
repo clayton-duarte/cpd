@@ -32,6 +32,7 @@ pub const TABLE: &[Entry] = &[
     ("context manager", &[Manager], true),
     ("context pending", &[Lead, Manager], false),
     ("context distill", &[Lead], false),
+    ("context owner", &[Lead, Manager], false),
     ("plan new", &[Lead, Manager], true),
     ("plan list", &[Lead, Manager], false),
     ("plan show", &[Lead, Manager], false),
