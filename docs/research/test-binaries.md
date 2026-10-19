@@ -79,10 +79,10 @@ One run of cargo's own runner on the merged binary (`cargo test -p cpd --test it
 
 1. `git mv cli/tests/*.rs cli/tests/it/`, `git mv cli/tests/common cli/tests/it/common`, new `cli/tests/it/main.rs` (54 lines: `mod common;` and `mod x;` per file).
 2. In the 50 files that have `mod common;`: replace it by `use crate::common;` (a `mod common;` inside `ask.rs` would look for `it/ask/common.rs`).
-3. Four hard-coded paths and names that the move breaks (each found by a failing run, not by reading):
+3. Five hard-coded paths and names that the move breaks (each found by a failing run, not by reading):
    - `tui_plan.rs`: `include_str!("../../tui/src/plan/fixtures/cpd-chart.txt")` → one more `../` (compile error).
    - `harness.rs`: `no_fake_sleeps_longer_than_sleep_seconds` reads `CARGO_MANIFEST_DIR + "/tests"` → `"/tests/it"` (it would scan nothing and pass).
-   - Three tests that start `current_exe()` with a test name now need the module path: `harness.rs` `"--exact", "killed_test_helper"` → `"harness::killed_test_helper"`; `store.rs` `"child_writer"` → `"store::child_writer"`; `tui.rs` `the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command` → `tui::...`. Without it, they run 0 tests and fail (5 failures: these three tests' parents `a_killed_test_leaves_no_tmux_server_process_dir_or_reaper`, `a_command_has_no_gh_ssh_or_proxy_variable` and 3 `store` tests that run `child_writer`).
+   - Three tests that start `current_exe()` with a test name now need the module path: `harness.rs` `"--exact", "killed_test_helper"` → `"harness::killed_test_helper"`; `store.rs` `"child_writer"` → `"store::child_writer"`; `tui.rs` `the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command` → `tui::...`. Without it the child runs 0 tests and the parent fails: 5 failures in the first nextest set (`harness::a_killed_test_leaves_no_tmux_server_process_dir_or_reaper`, `tui::a_command_has_no_gh_ssh_or_proxy_variable`, and three `store` tests that run `child_writer`).
 4. `.config/nextest.toml`: `binary_id(cpd::host)` → `binary_id(cpd::it) and test(/^host::/)`, same for `driver_reload` (the groups `tmux-env` and `driver-reload` must keep matching, or `host` and `driver_reload` tests run in parallel). Not verified by a deliberate break; the 1434 tests passed with it.
 5. Not changed by the experiment, to change with it: `docs/implementing.md:119` (`nextest run -p cpd --test host` → `nextest run -p cpd -E 'test(/^host::/)'` or a name filter), and the comments in `.config/nextest.toml` (`cli/tests/host.rs`).
 
