@@ -22,7 +22,7 @@ const LEAD: &str = "lead1";
 /// neither legacy nor its own.
 const NEWER_SCHEMA: i64 = cpd_core::store::VERSION + 1;
 /// The `--version` of a cpd whose verdict opens the store (commands.md §1.2).
-const OPENS: &str = r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":1000,"store":{"opens":true,"refusal":null,"unknown":[],"pending":[]}}'; exit 0"#;
+const OPENS: &str = r#"echo '{"ok":true,"version":"x","store":{"opens":true,"refusal":null,"unknown":[],"pending":[]}}'; exit 0"#;
 
 fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -90,7 +90,7 @@ impl Fixture {
     /// A `cpd` that cannot open the store installed over the wrapper: its `--version` reports a
     /// refusing verdict (`store.opens` false).
     fn install_older(&self) {
-        self.install_script(r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":1001,"store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}'; exit 0"#);
+        self.install_script(r#"echo '{"ok":true,"version":"x","store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}'; exit 0"#);
     }
 
     fn install_script(&self, on_version: &str) {
