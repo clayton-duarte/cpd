@@ -125,10 +125,6 @@ impl Fx {
         self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     fn path(&self, name: &str) -> PathBuf {
         self.env.root().join(name)
     }
@@ -202,9 +198,9 @@ impl Fx {
         let lead = self.env.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"]);
         assert_ne!(lead, old_lead);
         assert_eq!(fs::read_to_string(self.lead.join("api.txt")).unwrap(), "api\n");
-        let status: String = self.query("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'");
+        let status: String = self.env.query("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'");
         assert_eq!(status, "merged");
-        assert_eq!(self.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-retry'"), 0);
+        assert_eq!(self.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-retry'"), 0);
     }
 }
 
@@ -214,7 +210,7 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     let pid = fx.dispatch();
     wait_until_for("the Attempt to run", LONG, || fx.status() == "running");
-    let txns = fx.query::<i64>("SELECT count(*) FROM txns");
+    let txns = fx.env.query::<i64>("SELECT count(*) FROM txns");
 
     fx.install();
     wait_until_for("the driver to reload", LONG, || !fx.runs().is_empty());
@@ -222,7 +218,7 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
     assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process, the same argv");
     fx.assert_lock_held_by(pid);
     assert_eq!(fx.status(), "running");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), txns, "the reload writes nothing");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns, "the reload writes nothing");
 
     fs::write(fx.path("go"), "").unwrap();
     fx.finish(pid);
@@ -390,7 +386,7 @@ sleep 120"#,
         reloaded = reloaded.display()
     ));
     let pid = fx.dispatch();
-    wait_until("the Worker to be nudged", || fx.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-nudge'") == 1);
+    wait_until("the Worker to be nudged", || fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-nudge'") == 1);
 
     fx.install();
     wait_until("the driver to reload", || !fx.runs().is_empty());

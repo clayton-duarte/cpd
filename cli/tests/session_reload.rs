@@ -23,11 +23,6 @@ const NEWER_SCHEMA: i64 = cpd_core::store::VERSION + 1;
 /// The `--version` of a cpd whose verdict opens the store (commands.md §1.2).
 const OPENS: &str = r#"echo '{"ok":true,"version":"x","store":{"opens":true,"refusal":null,"unknown":[],"pending":[]}}'; exit 0"#;
 
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    Store::open(&home, 5000).unwrap().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
-
 /// The finished turn the Lead's session file ends with (§6.7 step 1).
 const FINISHED: &str = "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"a\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n";
 
@@ -302,13 +297,13 @@ fn a_working_lead_survives_an_install_the_wrapper_re_execs_and_pi_is_never_signa
     assert_eq!(f.pi_pids(), [old_pi], "no other pi");
     assert_eq!(f.env.calls("pi").len(), 1);
     assert_eq!(f.pane_pid(), pid);
-    assert_eq!(query::<String>(&f.env, "SELECT state FROM sessions WHERE id = 'lead1'"), "working");
+    assert_eq!(f.env.query::<String>("SELECT state FROM sessions WHERE id = 'lead1'"), "working");
 
     // The new wrapper owns pi as its child: it sees it die and reports it.
     // (An exit 0 would archive the Lead and end the wrapper.)
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(old_pi), nix::sys::signal::Signal::SIGKILL).unwrap();
     wait_until("the new wrapper to see pi exit", || f.screen().contains("pi exited. Press Enter"));
-    assert_eq!(query::<String>(&f.env, "SELECT state FROM sessions WHERE id = 'lead1'"), "stopped");
+    assert_eq!(f.env.query::<String>("SELECT state FROM sessions WHERE id = 'lead1'"), "stopped");
     assert_eq!(f.runs().len(), 1);
     f.env.tmux(&["kill-window", "-t", &f.pane]);
 }
@@ -511,7 +506,7 @@ fn a_wrapper_whose_first_write_meets_a_held_write_lock_waits_and_starts_pi_when_
     wait_until("pi", || f.env.calls("pi").len() == 1 && f.pi_pids().len() == 1);
     assert_eq!(f.pane_dead(), "0");
     assert_eq!(f.pane_pid(), pid, "the same wrapper started pi");
-    let recorded: String = query(&f.env, "SELECT file FROM sessions WHERE id = 'lead1'");
+    let recorded: String = f.env.query("SELECT file FROM sessions WHERE id = 'lead1'");
     assert_eq!(recorded, f.session_file.display().to_string(), "the write that waited was made");
     f.env.tmux(&["kill-window", "-t", &f.pane]);
 }

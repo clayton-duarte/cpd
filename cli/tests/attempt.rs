@@ -87,10 +87,6 @@ impl Fx {
         Store::open(&self.home, 5000).unwrap()
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     /// Job `key` (`running`) with Attempt `<key>-a1` (`running`): its worktree cut from the
     /// Lead Branch HEAD. Returns the worktree.
     fn attempt(&self, key: &str) -> PathBuf {
@@ -179,11 +175,11 @@ impl Fx {
     }
 
     fn status(&self) -> String {
-        self.query("SELECT status FROM attempts WHERE id = 'api-a1'")
+        self.env.query("SELECT status FROM attempts WHERE id = 'api-a1'")
     }
 
     fn txns(&self) -> i64 {
-        self.query("SELECT count(*) FROM txns")
+        self.env.query("SELECT count(*) FROM txns")
     }
 
     fn events(&self, kind: &str) -> Vec<Value> {
@@ -231,14 +227,14 @@ fn submit_moves_the_attempt_to_merging_and_tells_the_worker_to_stop() {
     assert_eq!(submitted_sha, sha);
     assert!(submitted_at.ends_with('Z') && submitted_at.contains('T'), "{submitted_at}");
     assert_eq!(tail, None, "no pre-commit table: nothing ran, check_tail stays null");
-    assert_eq!(fx.query::<String>("SELECT status FROM jobs WHERE key = 'api'"), "running", "the Job stays running");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'api'"), "running", "the Job stays running");
     assert!(!fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit).exists());
 
     let events = fx.events("attempt-status");
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["data"], json!({"from": "running", "to": "merging"}));
     assert_eq!((events[0]["plan"].as_str(), events[0]["job"].as_str(), events[0]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
-    assert_eq!(fx.query::<String>("SELECT command FROM txns ORDER BY id DESC LIMIT 1"), "attempt submit");
+    assert_eq!(fx.env.query::<String>("SELECT command FROM txns ORDER BY id DESC LIMIT 1"), "attempt submit");
 }
 
 #[test]
@@ -247,7 +243,7 @@ fn submit_works_from_a_subdirectory_and_takes_the_plan_from_the_environment() {
     let sha = fx.commit("src/a.rs", "x\n");
     let run = fx.env.command(common::CPD).args(["attempt", "submit", "api-a1"]).env("CPD_PLAN", PLAN).current_dir(fx.work.join("src")).output().unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
-    assert_eq!(fx.query::<String>("SELECT submitted_sha FROM attempts WHERE id = 'api-a1'"), sha);
+    assert_eq!(fx.env.query::<String>("SELECT submitted_sha FROM attempts WHERE id = 'api-a1'"), sha);
 }
 
 #[test]
@@ -359,7 +355,7 @@ fn submit_takes_the_protected_list_from_the_lead_branch_of_the_jobs_pr() {
 
     let error = refused(&fx.env.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]), "gate_tampered", 3);
     assert_eq!(error["details"]["paths"], json!(["verify.sh"]));
-    assert_eq!(fx.query::<String>("SELECT status FROM attempts WHERE id = 'ui-a1'"), "running");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM attempts WHERE id = 'ui-a1'"), "running");
     // The first PR's Lead Branch has no such list: the same file is fine there.
     fx.submit().ok();
     assert_eq!(fx.status(), "merging");
@@ -377,12 +373,12 @@ fn submit_runs_the_quick_check_of_the_jobs_pr_with_its_lead_branch_as_target() {
     fx.env.cpd_in(&ui, &["attempt", "submit", "ui-a1", "--plan", PLAN]).ok();
 
     assert_eq!(fs::read_to_string(fx.env.root().join("repos/target-seen.txt")).unwrap(), "cpd/pay/web\n");
-    let tail: String = fx.query("SELECT check_tail FROM attempts WHERE id = 'ui-a1'");
+    let tail: String = fx.env.query("SELECT check_tail FROM attempts WHERE id = 'ui-a1'");
     assert!(tail.contains("checking-web"), "{tail}");
     // The first PR's Attempt has no hook of its own to run.
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
-    assert_eq!(fx.query::<Option<String>>("SELECT check_tail FROM attempts WHERE id = 'api-a1'"), None);
+    assert_eq!(fx.env.query::<Option<String>>("SELECT check_tail FROM attempts WHERE id = 'api-a1'"), None);
 }
 
 #[test]
@@ -390,7 +386,7 @@ fn submit_runs_the_quick_check_and_keeps_its_tail() {
     let fx = fixture(&[(".config/wt.toml", "[pre-commit]\ncheck = \"echo checking; pwd; cat >/dev/null\"\n")]);
     fx.commit("a.txt", "a\n");
     fx.submit().ok();
-    let tail: String = fx.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
+    let tail: String = fx.env.query("SELECT check_tail FROM attempts WHERE id = 'api-a1'");
     assert!(tail.contains("checking"), "{tail}");
     assert!(tail.contains(fx.work.to_str().unwrap()), "the hook ran in the worktree: {tail}");
     let log = fx.home.hook_log(&plan(), &AttemptId::parse("api-a1").unwrap(), cpd_core::home::Hook::PreCommit);

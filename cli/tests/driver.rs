@@ -112,10 +112,6 @@ impl Fx {
         self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     /// Job `key` of PR `repo` of Plan `pay`, queued with its Locked-Job fingerprint.
     fn add_job(&self, key: &str, needs: &[&str]) {
         self.add_job_in("repo", key, needs);
@@ -196,7 +192,7 @@ impl Fx {
     }
 
     fn job_status(&self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+        self.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
     /// Waits until Attempt `id` is `status` (at most 60 s); returns it.
@@ -232,7 +228,7 @@ impl Fx {
 
     fn events(&self, id: &str) -> Vec<Value> {
         let session: Option<String> =
-            self.query(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"));
+            self.env.query(&format!("SELECT worker_session FROM attempts WHERE plan = 'pay' AND id = '{id}'"));
         let all = self.env.cpd(&["events", "list", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
         all.into_iter()
             .filter(|e| e["attempt"] == id || (session.is_some() && e["session"].as_str() == session.as_deref()))
@@ -257,7 +253,7 @@ impl Fx {
     }
 
     fn txns(&self) -> i64 {
-        self.query("SELECT count(*) FROM txns")
+        self.env.query("SELECT count(*) FROM txns")
     }
 }
 
@@ -880,7 +876,7 @@ fn dispatch_refuses_when_no_slot_is_free() {
 
     refused(&fx.dispatch(JOB), "no_slot", 3);
     assert_eq!(fx.job_status(JOB), "queued");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 0);
 }
 
 #[test]
@@ -987,7 +983,7 @@ fn a_stalled_tool_call_has_its_processes_killed_and_the_worker_keeps_running() {
     // ended, then stays), and the Attempt keeps running.
     assert!(!alive(child), "the tool call is still alive");
     assert_eq!(fx.attempt(ATTEMPT)["status"], "running");
-    let pane: String = fx.query("SELECT tmux_pane FROM sessions WHERE role = 'worker'");
+    let pane: String = fx.env.query("SELECT tmux_pane FROM sessions WHERE role = 'worker'");
     let listed = fx.env.tmux(&["list-panes", "-a", "-F", "#{pane_id} #{pane_dead}"]);
     assert!(String::from_utf8_lossy(&listed.stdout).lines().any(|l| l == format!("{pane} 0")), "{listed:?}");
     // One line in the driver log: the pid, its command line and the idle time.

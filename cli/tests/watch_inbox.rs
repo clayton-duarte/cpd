@@ -89,10 +89,6 @@ impl Fx {
         self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     /// A `failed` Job `key` of Plan `pay` whose `job-failed` Event is `minutes` old.
     fn failed_job(&self, key: &str, minutes: i64) {
         self.fixture(&format!(
@@ -109,7 +105,7 @@ impl Fx {
     fn start(&self) -> Engine {
         let child = self.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine(child);
-        wait_until("watch-started", || self.query::<i64>("SELECT count(*) FROM events WHERE kind = 'watch-started'") == 1);
+        wait_until("watch-started", || self.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'watch-started'") == 1);
         engine
     }
 
@@ -145,15 +141,15 @@ fn a_blocked_lead_in_dispatch_is_a_red_dialog_until_it_works_again() {
 
     wait_until("the dialog", || !fx.open_items().is_empty());
     assert_eq!(fx.open_items(), [("dialog".into(), "red".into(), "session:lead1".into(), "pay asks you".into())]);
-    let id: i64 = fx.query("SELECT id FROM inbox_items WHERE kind = 'dialog'");
+    let id: i64 = fx.env.query("SELECT id FROM inbox_items WHERE kind = 'dialog'");
     assert_eq!(fx.events("inbox-opened"), [json!({"item": id, "kind": "dialog", "urgency": "red", "label": "pay asks you"})]);
-    assert_eq!(fx.query::<String>("SELECT plan || '/' || session FROM events WHERE kind = 'inbox-opened'"), "pay/lead1");
+    assert_eq!(fx.env.query::<String>("SELECT plan || '/' || session FROM events WHERE kind = 'inbox-opened'"), "pay/lead1");
     assert!(fx.events("inbox-closed").is_empty());
 
     fx.fixture("UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'lead1';");
     wait_until("the item to close", || fx.open_items().is_empty());
     assert_eq!(fx.events("inbox-closed"), [json!({"item": id, "kind": "dialog"})]);
-    assert!(fx.query::<Option<String>>(&format!("SELECT closed_at FROM inbox_items WHERE id = {id}")).is_some());
+    assert!(fx.env.query::<Option<String>>(&format!("SELECT closed_at FROM inbox_items WHERE id = {id}")).is_some());
     assert_eq!(fx.events("error"), Vec::<Value>::new());
 }
 
@@ -188,11 +184,11 @@ fn a_tick_with_no_change_writes_no_transaction() {
     let _engine = fx.start();
     wait_until("job-stuck", || !fx.open_items().is_empty());
     let reconciles = "SELECT count(*) FROM txns WHERE command = 'inbox reconcile'";
-    assert_eq!(fx.query::<i64>(reconciles), 1);
-    let (txns, events) = (fx.query::<i64>("SELECT count(*) FROM txns"), fx.query::<i64>("SELECT count(*) FROM events"));
+    assert_eq!(fx.env.query::<i64>(reconciles), 1);
+    let (txns, events) = (fx.env.query::<i64>("SELECT count(*) FROM txns"), fx.env.query::<i64>("SELECT count(*) FROM events"));
 
     fx.env.wait_whole_ticks(3);
-    assert_eq!(fx.query::<i64>(reconciles), 1);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), txns, "no transaction of any step");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM events"), events);
+    assert_eq!(fx.env.query::<i64>(reconciles), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns, "no transaction of any step");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), events);
 }

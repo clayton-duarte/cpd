@@ -500,6 +500,22 @@ impl TestEnv {
         Store::open(&CpdHome::resolve(Some(self.cpd_home().into()), None).unwrap(), 5000).unwrap()
     }
 
+    /// `f` on a read-only connection to this env's store, for a test that only looks: no
+    /// [`Store::open`] (its migration and schema check cost ~30 ms per open in a debug build).
+    /// Panics when the store does not exist or `f` fails.
+    pub fn read<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> T {
+        let db = self.cpd_home().join("cpd.db");
+        let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
+        conn.busy_timeout(Duration::from_secs(5)).expect("set the busy timeout");
+        f(&conn).unwrap_or_else(|e| panic!("read {}: {e}", db.display()))
+    }
+
+    /// The first column of the one row `sql` returns, read with [`TestEnv::read`].
+    pub fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
+        self.read(|conn| conn.query_row(sql, [], |r| r.get(0)))
+    }
+
     /// Runs `sql` as a write of this env's store (a fixture).
     pub fn sql(&self, text: &str) {
         sql(&mut self.store(), text);

@@ -181,10 +181,6 @@ impl Fx {
         self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     /// Job `key` of Plan `pay`, `queued` with its Locked-Job fingerprint, then
     /// moved to `status` by `then` (SQL run after the fingerprint is set).
     fn add_job(&self, key: &str, needs: &[&str], then: &str) {
@@ -270,7 +266,7 @@ impl Fx {
         let engine = Engine { child: Some(child) };
         let pid = engine.pid();
         wait_until("watch-started", || {
-            self.query::<i64>(&format!(
+            self.env.query::<i64>(&format!(
                 "SELECT count(*) FROM events WHERE kind = 'watch-started' AND json_extract(data, '$.pid') = {pid}"
             )) == 1
         });
@@ -316,7 +312,7 @@ impl Fx {
     }
 
     fn job_status(&self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+        self.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 }
 
@@ -517,9 +513,9 @@ fn e1_expires_open_escalations_whose_asker_is_dead() {
         fx.events("escalation-expired"),
         [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"escalation": "api-a1-q1", "reason": "asker_dead"}))]
     );
-    let status = |id: &str| fx.query::<String>(&format!("SELECT status FROM escalations WHERE id = '{id}'"));
+    let status = |id: &str| fx.env.query::<String>(&format!("SELECT status FROM escalations WHERE id = '{id}'"));
     assert_eq!((status("api-a1-q1"), status("api-a1-q2")), ("expired".into(), "open".into()));
-    assert!(fx.query::<Option<String>>("SELECT expired_at FROM escalations WHERE id = 'api-a1-q1'").is_some());
+    assert!(fx.env.query::<Option<String>>("SELECT expired_at FROM escalations WHERE id = 'api-a1-q1'").is_some());
 }
 
 // ---------- E2 ----------
@@ -586,7 +582,7 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
     let retry = fx.events("attempt-retry");
     assert_eq!(retry.len(), 1);
     assert_eq!((&retry[0].3["cause"], &retry[0].3["next_tier"]), (&json!("crashed"), &json!("S3")));
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
 }
 
 #[test]
@@ -798,7 +794,7 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     assert_eq!(panes, [Some(live.as_str()), None, None, Some(waiting.as_str()), None]);
     // Already stopped: its state did not change, so neither did state_at.
     assert_eq!(rows[4].2, "t");
-    assert_eq!(fx.query::<Option<String>>("SELECT state_label FROM sessions WHERE id = 's-dead'"), None);
+    assert_eq!(fx.env.query::<Option<String>>("SELECT state_label FROM sessions WHERE id = 's-dead'"), None);
     let events = fx.events("session-state");
     assert_eq!(events.len(), 2);
     assert!(events.contains(&(Some("pay".into()), None, None, json!({"from": "blocked", "to": "stopped", "label": null}))), "{events:?}");
@@ -840,7 +836,7 @@ fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
     let out = engine.stop();
 
     assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
-    assert_eq!(fx.query::<String>("SELECT state FROM sessions WHERE id = 's-gone'"), "stopped");
+    assert_eq!(fx.env.query::<String>("SELECT state FROM sessions WHERE id = 's-gone'"), "stopped");
     assert_eq!(out.stderr.matches("hologram").count(), 1, "logged once: {out:?}");
 }
 
@@ -863,9 +859,9 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
 
     let started = fx.events("attempt-started");
     assert_eq!(started, [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"number": 1, "tier": "S2", "origin": "ladder"}))]);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 1);
     assert_eq!((fx.job_status("web"), fx.job_status("ui")), ("queued".into(), "queued".into()));
-    assert!(fx.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some());
+    assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some());
     // Its driver runs detached; the Worker exits at once, so it ends crashed.
     let deadline = Instant::now() + Duration::from_secs(60);
     while fx.attempt("api-a1").0 != "ended" {
@@ -929,7 +925,7 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     // The first urgent Job by `seq` started (running Attempts: 2 = concurrency + 1); the second urgent one and the older Job wait.
     let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
     assert_eq!(started, [Some("hot1".to_owned())]);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
 }
 
@@ -958,7 +954,7 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
         assert!(Instant::now() < deadline, "the driver never ended api-a1");
         std::thread::sleep(Duration::from_millis(200));
     }
-    assert!(fx.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some(), "the driver was not started");
+    assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some(), "the driver was not started");
     let texts = fx.texts("attempt-ended");
     assert!(texts.iter().all(|t| !t.contains("cannot run") && !t.contains("deleted")), "{texts:?}");
     assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
@@ -996,7 +992,7 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     assert_eq!((plan.as_deref(), job.as_deref(), attempt.as_deref()), (Some("pay"), Some("api"), None));
     assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("locked_job_tampered")));
     assert!(fx.texts("error")[0].ends_with("See: cpd job show api --plan pay"), "{:?}", fx.texts("error"));
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0);
     assert_eq!(fx.job_status("api"), "queued");
 }
 
@@ -1012,7 +1008,7 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
     fs::remove_file(&installed).unwrap();
     fx.add_job("api", &[], "");
 
-    wait_until("three spawn failures", || fx.query::<i64>("SELECT count(*) FROM attempts WHERE status = 'ended'") >= 3);
+    wait_until("three spawn failures", || fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status = 'ended'") >= 3);
     engine.stop();
 
     assert_ne!(fx.job_status("api"), "failed");
@@ -1056,7 +1052,7 @@ fn e3_does_not_start_a_job_in_its_backoff() {
     fx.env.wait_whole_ticks(3);
     engine.stop();
 
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 9);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 9);
     assert_eq!(fx.job_status("api"), "queued");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
@@ -1203,7 +1199,7 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
 
     assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"pr": "repo", "merged": ["api"], "cancelled": ["web"]}))]);
     assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --pr repo --plan pay"));
-    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_some());
+    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_some());
 }
 
 #[test]
@@ -1218,7 +1214,7 @@ fn e4_sends_all_merged_again_after_a_job_is_appended_and_merged() {
     fs::write(&spec, json!({"goal": "Do it.", "context": "Because.", "touches": ["late.txt"], "acceptance": ["ok"], "out_of_scope": []}).to_string()).unwrap();
     let added = fx.env.command(CPD).args(["job", "add", "late", "--title", "Late", "--tier", "S2", "--spec"]).arg(&spec).args(["--plan", "pay"]).output().unwrap();
     assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stdout));
-    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
+    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
     // The Job merges (set directly; no Worker runs here).
     fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'late'; UPDATE jobs SET status = 'merged', merged_sha = 'def' WHERE key = 'late';");
     wait_until("second all-merged", || fx.count("all-merged") == 2);
@@ -1264,10 +1260,10 @@ fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
     let engine = fx.start();
     fx.env.wait_whole_ticks(3);
     engine.stop();
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
     assert_eq!(fx.job_status("later"), "draft");
     assert_eq!(fx.count("all-merged"), 0, "the PR waits for its draft");
-    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
+    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
 
     fx.env.cpd(&["job", "cancel", "later", "--reason", "Not needed.", "--plan", "pay"]).ok();
     let engine = fx.start();
@@ -1513,9 +1509,9 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     wait_until("E7 to start web", || fx.count("pr-started") == 1);
     engine.stop();
 
-    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
-    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
-    assert!(fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
+    assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
     assert!(!fx.lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
     assert_eq!(fx.count("error"), 0);
 }
@@ -1542,8 +1538,8 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     fx.env.wait_whole_ticks(2);
     let run = engine.stop();
 
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM context_records"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM context_records"), 0);
     assert_eq!(fx.count("context-created") + fx.count("context-record"), 0);
     assert_eq!(fx.count("error"), 0);
     assert!(store.join("context.json").is_file(), "the folder is left alone");

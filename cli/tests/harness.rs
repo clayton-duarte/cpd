@@ -245,7 +245,7 @@ fn executables_are_written_and_copied_only_through_the_harness() {
 
 #[test]
 fn the_shared_helpers_are_defined_only_in_the_harness() {
-    // One wait policy, one refusal check, one fixture writer (tests-build-G2, commands-G4): a file
+    // One wait policy, one refusal check, one fixture writer, one store query (tests-build-G2, commands-G4): a file
     // that needs another shape calls the harness's and wraps it, it does not copy it.
     let found = test_lines_with(&[
         "fn wait_until(",
@@ -254,8 +254,9 @@ fn the_shared_helpers_are_defined_only_in_the_harness() {
         "fn sql(&self",
         "fn sql(env: &TestEnv",
         "fn sql(store: &mut Store",
+        "fn query<T",
     ]);
-    assert!(found.is_empty(), "use common::wait_until, wait_until_for, refused and sql:\n{}", found.join("\n"));
+    assert!(found.is_empty(), "use common::wait_until, wait_until_for, refused, sql and TestEnv::query:\n{}", found.join("\n"));
 }
 
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----

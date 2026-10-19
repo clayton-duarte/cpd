@@ -18,11 +18,6 @@ const LEAD: &str = "lead1";
 const LIMIT: Duration = Duration::from_secs(60);
 const MARGIN: Duration = Duration::from_secs(8);
 
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    Store::open(&home, 5000).unwrap().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
-
 /// The finished turn the Lead's session file ends with.
 const FINISHED: &str = "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"a\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n";
 
@@ -34,7 +29,7 @@ struct Fixture {
 
 impl Fixture {
     fn errors(&self) -> i64 {
-        query(&self.env, "SELECT count(*) FROM events WHERE kind = 'error'")
+        self.env.query("SELECT count(*) FROM events WHERE kind = 'error'")
     }
 }
 
@@ -110,10 +105,10 @@ fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_err
     assert!(f.env.calls("pi")[1].windows(2).any(|w| w == ["--session", &session_file]), "it resumes the session file");
 
     assert_eq!(f.errors(), 1);
-    assert_eq!(query::<String>(&f.env, "SELECT json_extract(data, '$.code') FROM events WHERE kind = 'error'"), "adapter_missing");
-    assert_eq!(query::<String>(&f.env, "SELECT json_extract(data, '$.source') FROM events WHERE kind = 'error'"), "session run");
-    assert_eq!(query::<String>(&f.env, "SELECT json_extract(data, '$.details.session') FROM events WHERE kind = 'error'"), LEAD);
-    assert_eq!(query::<String>(&f.env, "SELECT session FROM events WHERE kind = 'error'"), LEAD);
+    assert_eq!(f.env.query::<String>("SELECT json_extract(data, '$.code') FROM events WHERE kind = 'error'"), "adapter_missing");
+    assert_eq!(f.env.query::<String>("SELECT json_extract(data, '$.source') FROM events WHERE kind = 'error'"), "session run");
+    assert_eq!(f.env.query::<String>("SELECT json_extract(data, '$.details.session') FROM events WHERE kind = 'error'"), LEAD);
+    assert_eq!(f.env.query::<String>("SELECT session FROM events WHERE kind = 'error'"), LEAD);
 
     // The 60 s start again after the restart.
     // time-claim: no second restart and no second Event over two 2 s polls of the watchdog; no per-poll signal from
@@ -126,7 +121,7 @@ fn a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_err
 #[test]
 fn a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone() {
     let f = start("sleep 1; report idle");
-    wait_until("idle", || query::<String>(&f.env, "SELECT state FROM sessions WHERE id = 'lead1'") == "idle");
+    wait_until("idle", || f.env.query::<String>("SELECT state FROM sessions WHERE id = 'lead1'") == "idle");
     // time-claim: an idle pi is left alone past the 60 s limit and a poll of the watchdog; no per-poll signal from
     // `session run`.
     std::thread::sleep((LIMIT + MARGIN).saturating_sub(f.started.elapsed()));
