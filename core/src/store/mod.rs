@@ -257,13 +257,23 @@ impl Store {
 
     /// Runs `f` in a deferred read transaction on the WAL snapshot (§4.2): it
     /// never waits for a writer. Keep it short: one query or one command's reads.
-    /// Writes inside it fail: `cpd_txn()` refuses outside [`Store::write`].
+    /// Nothing inside it writes: `PRAGMA query_only` is on for its duration, so
+    /// DML, DDL and `TEMP` tables fail with SQLite's `attempt to write a
+    /// readonly database` (store-G3), triggers or not.
     pub fn read<T>(&mut self, f: impl FnOnce(&Connection) -> Result<T, CpdError>) -> Result<T, CpdError> {
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
         let result = (|| {
-            let tx = self.conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-            let value = f(&tx)?;
-            tx.commit()?;
+            self.conn.pragma_update(None, "query_only", true)?;
+            let read: Result<T, CpdError> = (|| {
+                let tx = self.conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+                let value = f(&tx)?;
+                tx.commit()?;
+                Ok(value)
+            })();
+            // Off again however the read ended: the next `write` needs it.
+            let off = self.conn.pragma_update(None, "query_only", false);
+            let value = read?;
+            off?;
             Ok(value)
         })();
         result.map_err(|e| enrich(e, &path, busy_ms))
