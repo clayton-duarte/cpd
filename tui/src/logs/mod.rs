@@ -90,11 +90,7 @@ fn show(
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Up | KeyCode::Char('k') => log.scroll_up(1),
-                        KeyCode::Down | KeyCode::Char('j') => log.scroll_down(1),
-                        KeyCode::PageUp => log.scroll_up(log.page()),
-                        KeyCode::PageDown => log.scroll_down(log.page()),
-                        _ => {}
+                        code => log.key(code),
                     }
                 }
             }

@@ -20,6 +20,7 @@ pub mod palette;
 mod plan;
 pub mod read;
 mod runner;
+mod scroll;
 mod statusbar;
 mod tree;
 pub mod widgets;

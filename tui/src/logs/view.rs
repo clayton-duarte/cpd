@@ -2,6 +2,7 @@
 //! Events and keys, and [`draw`] only writes to the frame.
 
 use ratatui::Frame;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -9,14 +10,13 @@ use ratatui::widgets::Paragraph;
 
 use cpd_core::events::Event;
 use crate::palette::{self, Meaning};
+use crate::scroll::Scroll;
 
-/// The Events and where the view is: `up` lines above the bottom (0: it shows the bottom, so it follows).
+/// The Events and where the view is (a [`Scroll`] over one row per Event: it follows the bottom until scrolled up).
 #[derive(Clone, Debug, Default)]
 pub struct Log {
     events: Vec<Event>,
-    up: usize,
-    /// The rows of Events the last [`Log::fit`] gave.
-    height: usize,
+    scroll: Scroll,
     /// The error of the last failed read (one row), shown in the last row until a read succeeds.
     pub error: Option<String>,
 }
@@ -28,46 +28,42 @@ impl Log {
 
     /// Whether the view shows the bottom, and so follows new Events.
     pub fn follows(&self) -> bool {
-        self.up == 0
+        self.scroll.follows()
     }
 
     /// Appends Events (newest last). A view that was scrolled up stays on the same lines; one at the bottom follows.
     pub fn push(&mut self, events: Vec<Event>) {
-        if self.up > 0 {
-            self.up += events.len();
-        }
         self.events.extend(events);
-        self.clamp();
+        self.scroll.fit(self.events.len(), self.scroll.height());
     }
 
     /// The view is `height` rows tall, its last row for the error while there is one.
     pub fn fit(&mut self, height: u16) {
-        self.height = usize::from(height.saturating_sub(u16::from(self.error.is_some())));
-        self.clamp();
-    }
-
-    fn clamp(&mut self) {
-        self.up = self.up.min(self.events.len().saturating_sub(self.height));
+        self.scroll.fit(self.events.len(), usize::from(height.saturating_sub(u16::from(self.error.is_some()))));
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
-        self.up = self.up.saturating_add(lines);
-        self.clamp();
+        self.scroll.by(-(lines.min(isize::MAX as usize) as isize));
     }
 
     pub fn scroll_down(&mut self, lines: usize) {
-        self.up = self.up.saturating_sub(lines);
+        self.scroll.by(lines.min(isize::MAX as usize) as isize);
+    }
+
+    /// A key of the view: the scrolling keys of [`Scroll::key`].
+    pub fn key(&mut self, code: KeyCode) {
+        self.scroll.key(code);
     }
 
     /// A page: the rows of the view.
     pub fn page(&self) -> usize {
-        self.height.max(1)
+        self.scroll.page()
     }
 
     /// The Events on screen, oldest first.
     pub fn visible(&self) -> &[Event] {
-        let end = self.events.len() - self.up.min(self.events.len());
-        &self.events[end.saturating_sub(self.height)..end]
+        let top = self.scroll.top();
+        &self.events[top..(top + self.scroll.height()).min(self.events.len())]
     }
 }
 
@@ -110,4 +106,40 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
         log.visible().iter().map(|e| line(e, usize::from(area.width))).collect()
     };
     f.render_widget(Paragraph::new(lines), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(n: usize) -> Event {
+        Event {
+            id: n as i64,
+            at: "2026-01-01T00:00:00.000Z".into(),
+            kind: "note".into(),
+            context: None,
+            plan: None,
+            job: None,
+            attempt: None,
+            session: None,
+            text: format!("event {n}"),
+            data: serde_json::Value::Null,
+        }
+    }
+
+    /// tui-G1: the log's keys are the Worker and history views' (`Scroll::key`), `End` and `G` included.
+    #[test]
+    fn the_log_scrolls_with_the_keys_of_the_other_views_and_end_follows_the_bottom() {
+        let mut log = Log::new((0..10).map(event).collect());
+        log.fit(4);
+        log.key(KeyCode::Char('k'));
+        assert!(!log.follows());
+        assert_eq!(log.visible()[3].id, 8);
+        log.key(KeyCode::End);
+        assert!(log.follows(), "End follows the bottom again");
+        assert_eq!(log.visible()[3].id, 9);
+        log.key(KeyCode::PageUp);
+        log.key(KeyCode::Char('G'));
+        assert!(log.follows(), "so does G");
+    }
 }
