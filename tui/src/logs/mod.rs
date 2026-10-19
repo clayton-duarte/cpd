@@ -1,6 +1,7 @@
 //! The `logs` view (commands.md §13.2, §17; R36): the Event log, in a tmux popup opened by the StatusBar's
 //! `▤` button (`cpd tui action logs`). It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
-//! `events.poll_ms` and appends what is new. ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it. It makes no
+//! `events.poll_ms` and appends what is new. ↑↓, j/k, PgUp/PgDn and the mouse wheel scroll (the dialog kit's
+//! scrolling, mouse capture on); its title is a section header; `q` or Esc closes it. It makes no
 //! write of its own. With `--event <id>` it opens at that Event (a click on an `engine-error` or `engine-down` Inbox
 //! item): the Event's line is selected and scrolled into view, and the view does not follow until the User scrolls to the
 //! bottom; an Event outside the latest [`RECENT`] is read on its own and shown first.
@@ -12,7 +13,7 @@ mod view;
 
 use std::time::Duration;
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind};
 
 pub use self::view::{Log, draw};
 use super::read;
@@ -75,10 +76,23 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     };
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
+    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
     let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-    let result = show(&mut terminal, &mut store, poll, first.events_cursor, log);
+    let result = mouse
+        .map_err(|e| terminal_failed(&e))
+        .and_then(|()| show(&mut terminal, &mut store, poll, first.events_cursor, log));
+    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result.map(|()| Output::Owned)
+}
+
+fn terminal_failed(e: &std::io::Error) -> CpdError {
+    CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view logs failed: {e}.")).with("command", "tui view logs")
+}
+
+/// The keys that close the view.
+fn closes(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('q') | KeyCode::Esc)
 }
 
 /// Draws and follows until `q` or Esc.
@@ -89,10 +103,7 @@ fn show(
     mut cursor: i64,
     mut log: Log,
 ) -> Result<(), CpdError> {
-    let terminal_failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view logs failed: {e}."))
-            .with("command", "tui view logs")
-    };
+    let terminal_failed = |e: std::io::Error| terminal_failed(&e);
     loop {
         terminal
             .draw(|f| {
@@ -101,17 +112,11 @@ fn show(
             })
             .map_err(terminal_failed)?;
         if event::poll(poll).map_err(terminal_failed)? {
-            if let Event::Key(key) = event::read().map_err(terminal_failed)? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Up | KeyCode::Char('k') => log.scroll_up(1),
-                        KeyCode::Down | KeyCode::Char('j') => log.scroll_down(1),
-                        KeyCode::PageUp => log.scroll_up(log.page()),
-                        KeyCode::PageDown => log.scroll_down(log.page()),
-                        _ => {}
-                    }
-                }
+            match event::read().map_err(terminal_failed)? {
+                Event::Key(key) if key.kind == KeyEventKind::Press && closes(key.code) => return Ok(()),
+                Event::Key(key) => drop(log.key(key)),
+                Event::Mouse(mouse) => drop(log.mouse(mouse)),
+                _ => {}
             }
         }
         if store.read(highest_id)? != cursor {
