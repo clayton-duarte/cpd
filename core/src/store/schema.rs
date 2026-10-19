@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "f72ed54c354fea63a224b0dd208d5d18e2531313b9de102f1a7f003673f2ba4a";
+pub const SCHEMA_HASH: &str = "7c2d30f837583ab0c6d963e397463974bdcb018b06d527bec5ea00bfcee98c9f";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -1236,6 +1236,10 @@ mod tests {
             .collect();
         expected.push(serde_json::json!([2, "pull_requests", "[1]", "insert"]));
         expected.push(serde_json::json!([2, "pull_requests", "[2]", "insert"]));
+        // The policy keys' fill updates the PRs that have a pull request and the Context whose PRs agree on an owner.
+        for (tbl, pk) in [("prs", r#"["dn","web"]"#), ("prs", r#"["pr","a-very-long-repository-n"]"#), ("contexts", r#"["ctx"]"#)] {
+            expected.push(serde_json::json!([2, tbl, pk, "update"]));
+        }
         assert_eq!(rows(&mut store, "SELECT txn, tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"), expected);
 
         // AUTOINCREMENT goes on after the kept ids.
@@ -1529,7 +1533,14 @@ mod tests {
         );
         assert_eq!(
             rows(&mut store, "SELECT tbl, pk, op FROM history WHERE txn = 2 ORDER BY id"),
-            vec![serde_json::json!(["pull_requests", "[1]", "insert"]), serde_json::json!(["pull_requests", "[2]", "insert"])]
+            vec![
+                serde_json::json!(["pull_requests", "[1]", "insert"]),
+                serde_json::json!(["pull_requests", "[2]", "insert"]),
+                // The policy keys' fill: the two linked PRs get a name, the Context an owner.
+                serde_json::json!(["prs", r#"["op","pay"]"#, "update"]),
+                serde_json::json!(["prs", r#"["dn","web"]"#, "update"]),
+                serde_json::json!(["contexts", r#"["ctx"]"#, "update"]),
+            ]
         );
     }
 
@@ -2347,7 +2358,7 @@ mod tests {
         write(&mut store, "UPDATE jobs SET review = 1 WHERE plan = 'pl' AND key = 'a';
                            UPDATE plans SET title = 'G2' WHERE id = 'gr'")
             .unwrap();
-        let after = rows(&mut store, "SELECT tbl, after FROM history WHERE op = 'update' ORDER BY id");
+        let after = rows(&mut store, "SELECT tbl, after FROM history WHERE op = 'update' AND tbl IN ('jobs', 'plans') ORDER BY id");
         let job: Value = serde_json::from_str(after[0][1].as_str().unwrap()).unwrap();
         assert_eq!((job["pr"].clone(), job["review"].clone()), (Value::from("my-repo-git"), Value::from(1)));
         let plan: Value = serde_json::from_str(after[1][1].as_str().unwrap()).unwrap();
@@ -2492,7 +2503,7 @@ mod tests {
                 let mut rows_before = rows_before;
                 assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
                 // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(46));
+                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(47));
                 assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
                 assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
                 let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
@@ -2502,6 +2513,18 @@ mod tests {
                 for row in rows_before.get_mut("jobs").unwrap() {
                     *row = format!("{},0]", row.strip_suffix(']').unwrap());
                 }
+                // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
+                // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
+                assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
+                for table in ["contexts", "prs"] {
+                    for row in rows_after.get_mut(table).unwrap() {
+                        let at = row.rfind(',').unwrap();
+                        *row = format!("{}]", &row[..at]);
+                    }
+                }
+                let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
+                assert_eq!(history_after[..history_before.len()], history_before[..]);
+                assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
                 assert_eq!(rows_after, rows_before);
             }
 
