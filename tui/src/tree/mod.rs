@@ -8,17 +8,20 @@
 //! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`menu`]: its parts (the right-click menu);
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
+//! - [`inbox`]: the Inbox section at the column's bottom (header, up to 3 items, `+N more`) and what a click on an item does:
+//!   `session open`, the logs popup at the item's Event, or nothing (the label is an OSC 8 link);
 //! - [`follow`]: `cpd events follow`, which tells it when to take a new snapshot.
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
 //! Enter opens the cursor's Session in the chat slot and focuses it; `n` starts a new Plan; `x` closes a
-//! Session's pane; `?` opens the legend. A click on a Context's fold glyph collapses or expands it, elsewhere on a live Context row opens its Manager (`context manager`, then `session open`), on a Session opens it, on a `…` row expands the archived rows
+//! Session's pane; `?` opens the legend. After the last Session the cursor goes on into the Inbox's item rows (Enter jumps, `s` snoozes, `d` dismisses; the right-click menu of an item has the same entries). A click on a Context's fold glyph collapses or expands it, elsewhere on a live Context row opens its Manager (`context manager`, then `session open`), on a Session opens it, on a `…` row expands the archived rows
 //! (muted, dotted guides) and on their dotted line collapses them; a right click opens the menu.
 
 mod actions;
 mod cursor;
 mod follow;
+mod inbox;
 mod menu;
 mod prompt;
 mod rows;
@@ -135,6 +138,12 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
             Effect::Legend => {
                 // `display-popup` returns when the popup closes; only a failure is said
                 if let Err(why) = runner.legend() {
+                    view.done(Err(why));
+                }
+            }
+            Effect::Logs(event) => {
+                // `display-popup` returns when the popup closes; only a failure is said
+                if let Err(why) = runner.logs(event) {
                     view.done(Err(why));
                 }
             }

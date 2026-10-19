@@ -96,7 +96,7 @@ pub fn managed(mut c: ContextNode, dot: Dot) -> ContextNode {
 }
 
 pub fn tree(contexts: Vec<ContextNode>) -> Tree {
-    Tree { contexts, events_cursor: 1 }
+    Tree { contexts, events_cursor: 1, inbox: Vec::new(), engine_running: true }
 }
 
 /// Every state of a Session, a side fork, a Plan in each phase and an empty Context:

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::Connection;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::bad_row;
@@ -14,8 +14,20 @@ use crate::ids::PlanId;
 /// The Job statuses of §3.2, in the order `counts` lists them.
 pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed", "cancelled"];
 
-/// One Job with its Dependencies. The Spec arrays are kept as the JSON values
-/// stored, so a fingerprint hashes exactly what the database holds.
+/// The Spec of a Job (§2.2): all five fields, or none (a stub, below). The
+/// arrays are kept as the JSON values stored, so a fingerprint hashes exactly
+/// what the database holds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JobSpec {
+    pub goal: String,
+    pub context: String,
+    pub touches: Value,
+    pub acceptance: Value,
+    pub out_of_scope: Value,
+}
+
+/// One Job with its Dependencies. A **stub draft** (hs-d241, §2.2) has no Tier,
+/// no Spec, or neither: only a `draft` or a `cancelled` Job can (§4.4 CHECK).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Job {
     pub seq: i64,
@@ -23,12 +35,8 @@ pub struct Job {
     /// The key of the PR the Job belongs to (`jobs.pr`, §2.2).
     pub pr: String,
     pub title: String,
-    pub tier: String,
-    pub goal: String,
-    pub context: String,
-    pub touches: Value,
-    pub acceptance: Value,
-    pub out_of_scope: Value,
+    pub tier: Option<String>,
+    pub spec: Option<JobSpec>,
     pub status: String,
     pub appended: bool,
     /// A review Job (`jobs.review`, B2).
@@ -49,13 +57,45 @@ impl Job {
         self.status == "draft"
     }
 
+    /// What a stub lacks (`details.jobs[].missing` of `draft_incomplete`, commands.md §4.6):
+    /// `tier` and/or `spec`; empty for a Job that has both.
+    pub fn missing(&self) -> Vec<&'static str> {
+        [("tier", self.tier.is_none()), ("spec", self.spec.is_none())].into_iter().filter_map(|(name, lacks)| lacks.then_some(name)).collect()
+    }
+
+    /// The Tier, for what runs a Job: a Job that is not a draft always has it (§4.4 CHECK), so its absence is a bad row.
+    pub fn require_tier(&self) -> Result<&str, CpdError> {
+        self.tier.as_deref().ok_or_else(|| bad_row(format!("Job {} has no tier", self.key)))
+    }
+
+    /// The Spec, for what runs a Job, as [`Job::require_tier`].
+    pub fn require_spec(&self) -> Result<&JobSpec, CpdError> {
+        self.spec.as_ref().ok_or_else(|| bad_row(format!("Job {} has no Spec", self.key)))
+    }
+
+    /// `{goal, tier, context, touches, acceptance, out_of_scope}`: what the fingerprints of §2.3
+    /// hash, JSON null for what a stub lacks (a stub is hashed as it is).
+    pub fn locked_fields(&self) -> Map<String, Value> {
+        let spec = self.spec.as_ref();
+        let field = |f: fn(&JobSpec) -> Value| spec.map_or(Value::Null, f);
+        let mut fields = Map::new();
+        fields.insert("tier".into(), json!(self.tier));
+        fields.insert("goal".into(), field(|s| json!(s.goal)));
+        fields.insert("context".into(), field(|s| json!(s.context)));
+        fields.insert("touches".into(), field(|s| s.touches.clone()));
+        fields.insert("acceptance".into(), field(|s| s.acceptance.clone()));
+        fields.insert("out_of_scope".into(), field(|s| s.out_of_scope.clone()));
+        fields
+    }
+
     /// The fields `plan show` prints for a Job (commands.md §4.3), without its Attempts.
     pub fn to_json(&self) -> Value {
+        let spec = |f: fn(&JobSpec) -> Value| self.spec.as_ref().map_or(Value::Null, f);
         json!({
             "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "status": self.status, "tier": self.tier,
             "appended": self.appended, "review": self.review, "needs": self.needs,
-            "goal": self.goal, "context": self.context, "touches": self.touches,
-            "acceptance": self.acceptance, "out_of_scope": self.out_of_scope,
+            "goal": spec(|s| json!(s.goal)), "context": spec(|s| json!(s.context)), "touches": spec(|s| s.touches.clone()),
+            "acceptance": spec(|s| s.acceptance.clone()), "out_of_scope": spec(|s| s.out_of_scope.clone()),
             "fingerprint": self.fingerprint, "retry_tier": self.retry_tier,
             "cancel_reason": self.cancel_reason, "cancel_requested_at": self.cancel_requested_at,
             "failed_cause": self.failed_cause, "merged_sha": self.merged_sha, "created_at": self.created_at,
@@ -79,9 +119,9 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     let rows = stmt
         .query_map([plan.as_str()], |r| {
             Ok((
-                (r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?),
-                (r.get::<_, String>(5)?, r.get::<_, String>(6)?),
-                (r.get::<_, String>(7)?, r.get::<_, String>(8)?, r.get::<_, String>(9)?),
+                (r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?),
+                (r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?),
+                (r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?),
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
                 (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?),
@@ -96,18 +136,26 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                     .filter(Value::is_array)
                     .ok_or_else(|| bad_row(format!("Job {plan}/{key} has {name} {text:?}")))
             };
+            // The Spec is all or nothing (§4.4 CHECK).
+            let spec = match (goal, context, touches, acceptance, out_of_scope) {
+                (Some(goal), Some(context), Some(touches), Some(acceptance), Some(out_of_scope)) => Some(JobSpec {
+                    goal,
+                    context,
+                    touches: array("touches", &touches)?,
+                    acceptance: array("acceptance", &acceptance)?,
+                    out_of_scope: array("out_of_scope", &out_of_scope)?,
+                }),
+                (None, None, None, None, None) => None,
+                _ => return Err(bad_row(format!("Job {plan}/{key} has some of its Spec fields and not all"))),
+            };
             Ok(Job {
-                touches: array("touches", &touches)?,
-                acceptance: array("acceptance", &acceptance)?,
-                out_of_scope: array("out_of_scope", &out_of_scope)?,
+                spec,
                 needs: needs.remove(&key).unwrap_or_default(),
                 seq,
                 key,
                 pr,
                 title,
                 tier,
-                goal,
-                context,
                 status,
                 appended,
                 review,
@@ -145,10 +193,9 @@ pub(super) fn sha256_of(value: &Value) -> String {
 pub fn locked_fingerprint(job: &Job) -> String {
     let mut needs = job.needs.clone();
     needs.sort();
-    sha256_of(&json!({
-        "goal": job.goal, "tier": job.tier, "context": job.context, "touches": job.touches,
-        "acceptance": job.acceptance, "out_of_scope": job.out_of_scope, "needs": needs,
-    }))
+    let mut fields = job.locked_fields();
+    fields.insert("needs".into(), json!(needs));
+    sha256_of(&Value::Object(fields))
 }
 
 /// The Locked Jobs whose stored fingerprint differs from the recomputed one:
@@ -213,12 +260,8 @@ mod tests {
             key: key.into(),
             pr: "web".into(),
             title: format!("Title {key}"),
-            tier: "S2".into(),
-            goal: "g".into(),
-            context: "c".into(),
-            touches: json!(["a"]),
-            acceptance: json!(["b"]),
-            out_of_scope: json!([]),
+            tier: Some("S2".into()),
+            spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),
             status: status.into(),
             appended: false,
             review: false,

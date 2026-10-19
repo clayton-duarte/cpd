@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -16,10 +17,15 @@ use super::file::Config;
 use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::deadline::{self, Failed};
 use crate::store::Store;
 
 /// The embedded module; its header says how it is run.
 const MODULE: &str = include_str!("catalog.mjs");
+
+/// The module's deadline (contract §9): it loads pi's packages and reads no
+/// network (`allowModelNetwork: false`); a cold catalog measured 0.68 s (median, commands-F3).
+const NODE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// A pi install located as contract §9 says.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,19 +124,28 @@ fn tail(bytes: &[u8]) -> String {
 /// models under the installed pi's version; otherwise computed from pi and
 /// written in one transaction, replacing what was cached.
 pub fn load(config: &Config) -> Result<Catalog, CpdError> {
-    let pi = locate_pi()?;
     let mut store = Store::open(&CpdHome::from_env()?, config.timeouts.store_busy_ms.into())?;
+    load_with(config, &mut store)
+}
+
+/// [`load`] through a `store` the caller already holds, so the catalog does not
+/// open a second one (flock, pragmas, schema hash).
+pub fn load_with(config: &Config, store: &mut Store) -> Result<Catalog, CpdError> {
+    load_from(&locate_pi()?, config, store)
+}
+
+fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catalog, CpdError> {
     let models = [config.tiers.o.as_str(), config.tiers.s.as_str(), config.tiers.h.as_str()];
-    if let Some(cached) = cache::read(&mut store, &pi.version, models)? {
+    if let Some(cached) = cache::read(store, &pi.version, models)? {
         return Ok(cached);
     }
-    let catalog = read(&pi, config)?;
-    cache::write(&mut store, &catalog)?;
+    let catalog = read(pi, config, NODE_DEADLINE)?;
+    cache::write(store, &catalog)?;
     Ok(catalog)
 }
 
-/// Runs the embedded module with pi's Node and builds the [`Catalog`] from what it prints.
-pub(crate) fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError> {
+/// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
+pub(crate) fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
     let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h)];
     let node = node();
     let mut cmd = Command::new(&node);
@@ -141,8 +156,9 @@ pub(crate) fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError>
         .env("PI_MANAGED_INSTALL_ROOT", pi.agent_dir.join("install"))
         .current_dir(&pi.agent_dir)
         .stdin(Stdio::null());
-    let out = cmd.output().map_err(|e| {
-        catalog_failed(format!("cannot run {}: {e}.", node.display())).with("node", node.display().to_string())
+    let out = deadline::output(&mut cmd, "node", deadline).map_err(|e| match e {
+        Failed::Io(e) => catalog_failed(format!("cannot run {}: {e}.", node.display())).with("node", node.display().to_string()),
+        Failed::Timeout(e) => e,
     })?;
     if !out.status.success() {
         return Err(catalog_failed(format!("the catalog module failed under pi {}.", pi.version))
@@ -192,4 +208,39 @@ pub(crate) fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError>
     }
     let [o, s, h]: [TierModel; 3] = models.try_into().expect("one model per letter");
     Ok(Catalog { pi_version: pi.version.clone(), o, s, h })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pi() -> PiInstall {
+        PiInstall {
+            agent_dir: PathBuf::from("/nonexistent/agent"),
+            version: "9.9.9".into(),
+            coding_agent_entry: PathBuf::from("/nonexistent/coding-agent.js"),
+            pi_ai_entry: PathBuf::from("/nonexistent/pi-ai.js"),
+        }
+    }
+
+    /// commands-F3: the catalog is read through the Store the caller passes, not
+    /// through a second one opened from `$CPD_HOME` (the test sets none).
+    #[test]
+    fn load_from_uses_the_given_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let (config, _) = Config::parse("version = 1\nmachine = \"hs\"\n", &home.config()).unwrap();
+        let tier = |model: &str| TierModel { model: model.to_owned(), efforts: vec![0, 1, 2] };
+        let cached = Catalog {
+            pi_version: "9.9.9".into(),
+            o: tier(&config.tiers.o),
+            s: tier(&config.tiers.s),
+            h: tier(&config.tiers.h),
+        };
+        cache::write(&mut store, &cached).unwrap();
+
+        // pi's entry points do not exist: a cache miss would fail in `read`.
+        assert_eq!(load_from(&pi(), &config, &mut store).unwrap(), cached);
+    }
 }

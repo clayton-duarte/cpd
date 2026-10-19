@@ -174,7 +174,10 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
     };
     let (tier, origin) = match (retry, &previous) {
         (Some(tier), _) => (Tier::parse(tier).map_err(|_| bad(format!("retry_tier {tier:?} of Job {key}")))?, Origin::Retry),
-        (None, None) => (Tier::parse(&job.tier).map_err(|_| bad(format!("tier {:?} of Job {key}", job.tier)))?, Origin::Ladder),
+        (None, None) => {
+            let tier = job.require_tier()?;
+            (Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Job {key}")))?, Origin::Ladder)
+        }
         (None, Some((number, tier, never_started))) => {
             let last = Tier::parse(tier).map_err(|_| bad(format!("tier {tier:?} of Attempt {key}-a{number}")))?;
             if *never_started {
