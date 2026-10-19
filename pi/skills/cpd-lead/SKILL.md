@@ -36,6 +36,7 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 - **Resolve first, ask second.** A Worker escalates to you; only you escalate to the User. Answer what the Spec, Requirements, interview answers, assumptions, Context records or repo already settle. Otherwise ask the User directly (`ask_user_question`); never route a Worker's question or a User decision through the Manager. Ask the User only for decisions you cannot derive.
 - **Stay free for the User.** Never poll, sleep or run a foreground loop. After `cpd_plan_review` or `ask_user_question`, stop. Events arrive as new turns.
 - **Register planned work at once (hs-d239).** No planned work lives only in your chat. Every batch, follow-up PR or later fix you intend is registered in cpd the moment you plan it, even when it cannot run yet: as stub drafts (`cpd job add <k> --draft --title "<title>"`; Tier and Spec come later with `cpd job edit <k> --tier <T> --spec <file>`, and a Plan review refuses a draft that lacks either), as Jobs with needs, or, for a follow-up PR, `cpd pr add <key> --repo <path> --needs <k>` plus its stub drafts. When you report next steps, name the registered Job and PR keys. The adapter's hidden turn-end reminder (`cpd reminder (hs-d239)`) means you spoke of further work and forgot to register it: register it now.
+- **Decided work is queued, undecided design is a draft (hs-d301).** Work that only carries out a decision the User already recorded (no open design choice) is added queued (`cpd job add` without `--draft`) with a Spec that cites the decision; it needs no Plan review. Research outcomes, options and scope you propose are drafts and go through a Plan review. When unsure, a draft. It is still registered at once (hs-d239).
 - **Append-only once locked.** Never edit, delete or reopen. Change Locked work only by retrying a failed Job, cancelling a Job or appending a Job or a PR, also after the Plan is `done` (commands in [Dispatching](#dispatching) and [Addressing](#addressing)). A **draft** Job is not Locked: edit or cancel it in any phase. History is never deleted.
 - **Never review inside your own session.** Your session is the User's conversation: do not read code, diffs, logs or long documents into it to judge them. Give the work to a Worker (a research Job, or a review Job for the whole Plan): [Judging material](#judging-material).
 - Debug with `cpd plan show`, `cpd job show <k>`, `cpd attempt show <attempt-id>` and `cpd attempt read <attempt-id>`. Never touch tmux panes, worktrees or the Ledger directly.
@@ -115,7 +116,7 @@ The spec file has `goal`, `context`, `touches`, `acceptance` and `out_of_scope`.
 - **Every PR needs at least one Job.**
 - **Tier:** `S1` for coding, `H2` for docs. Use `O` only for judgement-heavy work.
 - **Complete and guess-free:** a fresh Worker with only this Spec must finish without asking. If you cannot fill a field without guessing, return to [Clarifying](#clarifying).
-- **Plan every batch now.** Cut the work into batches that each need the User's approval (for example: the first PR's Jobs, then the Jobs that depend on a research finding, then a follow-up PR). Draft **all** of them, so the Plan view shows the whole Plan. A later batch not yet specified is a stub draft (`cpd job add <k> --draft --title "<title>"`, no Tier or Spec); complete it with `cpd job edit <k> --tier <T> --spec <file>` before its review. The first batch is what you review and lock in [Approving](#approving); every PR needs at least one Job in it. Add each later batch with `--draft` right after the lock ([Approving](#approving) step 5): `plan lock` queues every Job drafted before it.
+- **Plan every batch now.** Cut the work into batches that each need the User's approval (for example: the first PR's Jobs, then the Jobs that depend on a research finding, then a follow-up PR). Draft **all** of them, so the Plan view shows the whole Plan (a batch that only carries out a recorded User decision is added queued instead, hs-d301: see [Approving](#approving) step 5). A later batch not yet specified is a stub draft (`cpd job add <k> --draft --title "<title>"`, no Tier or Spec); complete it with `cpd job edit <k> --tier <T> --spec <file>` before its review. The first batch is what you review and lock in [Approving](#approving); every PR needs at least one Job in it. Add each later batch with `--draft` right after the lock ([Approving](#approving) step 5): `plan lock` queues every Job drafted before it.
 
 ### Sequencing
 
@@ -159,6 +160,8 @@ cpd pr edit <key> --needs <k1,k2>
    cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key> --needs <k1,k2> --draft
    ```
 
+   **Decided work is not a draft (hs-d301).** A Job that only carries out a decision the User already recorded, with no open design choice, is added queued: the same command without `--draft`, with a Spec that cites the decision. It shows in the Plan view and runs without a second approval. Undecided design (research outcomes, options, scope you propose) is a draft and goes through a Plan review. When unsure, a draft.
+
    A draft may need other drafts or Locked Jobs; a Job added without `--draft` may not need a draft (`needs_unavailable`). The Spec rules of [Dividing](#dividing) apply. Drafts stay editable and cancellable in every phase (`cpd job edit`, `cpd job cancel`, as in step 3). They start only when the User approves them: [Starting a later batch](#starting-a-later-batch).
 
 ### Dispatching
@@ -186,7 +189,7 @@ A message that starts `cpd adapter:` comes from the pi adapter, not from a Plan:
 
 #### Starting a later batch
 
-A batch added as drafts ([Approving](#approving) step 5, or a follow-up PR after `plan-done`) starts only with the User's approval, in any phase after the lock:
+A batch added as drafts ([Approving](#approving) step 5, or a follow-up PR after `plan-done`) starts only with the User's approval, in any phase after the lock. Only undecided design is a batch of drafts: decided work is added queued and needs no review (hs-d301; when unsure, a draft):
 
 1. Revise the drafts if the work since changed them (`cpd job edit <k> --spec <file.json>`; drop one as in [Approving](#approving) step 3).
 2. Run `cpd plan render`, read the file it returns, and show the batch to the User in chat (the drafts are marked under review; the Locked Jobs are context).

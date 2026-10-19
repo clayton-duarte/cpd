@@ -481,3 +481,18 @@ test("urgent Jobs: both skills state the flag, the command and the explicit-requ
   }
   assert.ok(synopses().get("job urgent")!.has("--plan"), "commands.md documents job urgent");
 });
+
+test("cpd-lead adds decided work queued and keeps drafts for undecided design (hs-d301)", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.match(text, /hs-d301/);
+  assert.match(text, /added queued/);
+  assert.match(text, /Spec that cites the decision/);
+  assert.match(text, /When unsure, a draft/);
+  assert.match(text, /hs-d239/);
+});
+
+test("cpd-manager names the decision of routed decided work and says it needs no review (hs-d301)", () => {
+  const text = skillFiles("cpd-manager")[0]!.text;
+  assert.match(text, /name the decision id/);
+  assert.match(text, /needs no Plan review/);
+});
