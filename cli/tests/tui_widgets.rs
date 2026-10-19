@@ -180,9 +180,9 @@ fn plain(symbol: &str) -> String {
     out
 }
 
-/// A PR's first line on a pane of `width` columns: its name, then `↗` in the last column.
+/// A PR's first line on a pane of `width` columns: its name, then `󰏌` in the last column.
 fn first_line(name: &str, width: usize) -> String {
-    format!("{name:<w$}↗", w = width - 1)
+    format!("{name:<w$}󰏌", w = width - 1)
 }
 
 /// The first cell of the first row at or after `from` that contains `needle` (every glyph here is one column wide).
@@ -509,7 +509,7 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
     assert!(got.iter().all(|r| r.chars().count() <= 24), "{got:#?}");
     assert!(got.contains(&format!("  open {} changes request", palette::CHECKS_FAILED)), "the pane clips what is left:\n{got:#?}");
     let narrow = rows(&render(8, 25, &w));
-    assert!(narrow.contains(&" acme… ↗".to_owned()), "the name is cut before the arrow when it must be:\n{narrow:#?}");
+    assert!(narrow.contains(&" acme… 󰏌".to_owned()), "the name is cut before the arrow when it must be:\n{narrow:#?}");
 }
 
 #[test]
@@ -525,11 +525,11 @@ fn a_short_pane_drops_the_pull_requests_that_do_not_fit_from_the_end() {
     }
 }
 
-// ---------- the ↗ links and the owned rows ----------
+// ---------- the 󰏌 links and the owned rows ----------
 
-/// The cell of a linked `↗`: its symbol is wrapped in the OSC 8 escapes of its link.
+/// The cell of a linked `󰏌`: its symbol is wrapped in the OSC 8 escapes of its link.
 fn linked_arrow(url: &str) -> String {
-    format!("\x1b]8;;{url}\x07↗\x1b]8;;\x07")
+    format!("\x1b]8;;{url}\x07󰏌\x1b]8;;\x07")
 }
 
 #[test]
@@ -539,7 +539,7 @@ fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
     let buf = render(46, 25, &w);
     for (y, number, repo) in [(6, 4, "acme/web"), (8, 9, "acme/repo"), (10, 20, "acme/repo")] {
         assert_eq!(buf[(45, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "row {y}");
-        assert_eq!(plain(buf[(45, y)].symbol()), "↗", "row {y}");
+        assert_eq!(plain(buf[(45, y)].symbol()), "󰏌", "row {y}");
         assert_eq!(row(&buf, y).chars().count(), 46, "the arrow is the last column of row {y}");
         assert_eq!(plain(buf[(45, y + 1)].symbol()), " ", "the second line has no arrow");
     }
@@ -560,7 +560,7 @@ fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
         assert!([1, 2, 12, 45].iter().all(|x| dim(*x, y)), "row {y} is dim: the name and the arrow");
         assert!([2, 3, 12, 20].iter().all(|x| dim(*x, y + 1)), "row {} is dim: the second line", y + 1);
     }
-    assert_eq!(plain(buf[(45, 6)].symbol()), "↗", "the arrow stays on an unowned PR");
+    assert_eq!(plain(buf[(45, 6)].symbol()), "󰏌", "the arrow stays on an unowned PR");
     // The owned one (here also the active one) is not dim.
     assert!([1, 2, 12, 45].iter().all(|x| !dim(*x, 10)) && [2, 20].iter().all(|x| !dim(*x, 11)));
 }
@@ -685,11 +685,11 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
     for name in [" acme/web#4", " acme/repo#9", " acme/repo#20"] {
         let line = screen.iter().find(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {screen:#?}"));
         assert_eq!(line.chars().count(), width, "the arrow ends {name}'s line at the right edge: {line:?}");
-        assert!(line.ends_with('↗'), "{line:?}");
+        assert!(line.ends_with('󰏌'), "{line:?}");
     }
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     for url in ["https://github.com/acme/web/pull/4", "https://github.com/acme/repo/pull/9", "https://github.com/acme/repo/pull/20"] {
-        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗"))), "{url}: {styled:?}");
+        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\󰏌"))), "{url}: {styled:?}");
     }
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
 }

@@ -90,7 +90,7 @@ pub struct PrNode {
 pub struct Pull {
     pub number: i64,
     pub state: PrState,
-    /// `pull_requests.url`: what the title's `↗` links to.
+    /// `pull_requests.url`: what the title's `󰏌` links to.
     pub url: String,
     /// `pull_requests.mergeable = 'conflicting'` as of the last poll; `unknown` is not a conflict.
     pub conflicting: bool,
