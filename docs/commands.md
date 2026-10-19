@@ -1281,19 +1281,23 @@ Idempotent: yes; the rows hold what was reported, so a rerun with no change on G
 ### 9.3 `pr rebase`
 
 ```
-cpd pr rebase [--pr <key>] [--plan <id>]
+cpd pr rebase [--pr <key>] [--plan <id>] [--continue | --abort]
 ```
 
-Rebases the PR's Lead Branch onto its base and pushes (§7.6); also how Jobs Merged into an `open` PR reach its pull request. The Gate runs only when the PR's `pr.gate` is `local` (contract §8.3, hs-d292); with `ci` there is no Gate and the two Gate rows below do not apply.
+Rebases the PR's Lead Branch onto its base and pushes (§7.6); also how Jobs Merged into an `open` PR reach its pull request. On a conflict the rebase **stays in progress in the PR's Lead worktree** and the command exits `rebase_conflict`; the Lead resolves the files and runs `--continue` (the rest of the rebase, the Gate and the lease push) or `--abort` (hs-d289; contract §7.6 "The conflict stop"). The Gate runs only when the PR's `pr.gate` is `local` (contract §8.3, hs-d292); with `ci` there is no Gate and the two Gate rows below do not apply.
 
 | Flag | Meaning |
 |---|---|
 | `--pr <key>` | the PR to rebase, selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
+| `--continue` | finish the rebase stopped at a conflict, then Gate and push (below); no other flag but `--pr`/`--plan`; not with `--abort` (`usage`, exit 2) |
+| `--abort` | `git rebase --abort` in the Lead worktree: the Lead Branch back where it was |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the PR is `open`, before the Gate and again after it | `illegal_transition` | 3 |
-| `git merge-tree` reports no conflict; `details.files` lists them | `rebase_conflict` | 3 |
+| `git merge-tree` reports no conflict, and the rebase has no unexpected one; else the rebase is left **in progress** in the Lead worktree (nothing pushed, nothing else changed); `details.files` the conflicted paths, `details.worktree` its path, `details.next` the `--continue` command, `details.abort` the `--abort` command | `rebase_conflict` | 3 |
+| no rebase is already in progress in the Lead worktree (a stop of an earlier run); `details.next`, `details.abort` as above | `rebase_in_progress` | 3 |
+| the Lead worktree has no tracked local changes, which `git rebase` would refuse (checked only when a conflict needs the rebase there); `details.files` lists them | `lead_worktree_dirty` | 3 |
 | guard U: an Attempt of the PR whose compare-and-swap is in the snapshot and whose driver lives ends within 60 s; `details.attempt` names it; rerun | `cas_lost` | 3 |
 | the Lead Branch's compare-and-swap succeeds within 3 tries (merges kept moving it) | `cas_lost` | 3 |
 | the PR's policy resolves (contract §8.3 "Validation", `details` as there): its Context has an owner | `owner_unset` | 3 |
@@ -1305,13 +1309,45 @@ Rebases the PR's Lead Branch onto its base and pushes (§7.6); also how Jobs Mer
 
 The Lead worktree's local changes refuse nothing (hs-d243; `dirty_target` is no longer a refusal of this command).
 
-Effects: no lock (hs-d243); merges into the PR go on during the command. §7.6 steps 1–9: `fetch origin <base>`; the snapshot `S`; `merge-tree`; a gate worktree `<repo-parent>/<repo-name>.<plan>.<key>.gate-<pid>` detached at `S` and the `rebase origin/<base>` in it, giving `R'`; guard U (R for an Attempt of the PR with a dead driver whose compare-and-swap is in `S`; a wait of at most 60 s for one with a live driver); the lease `X0`, the tracking ref `refs/remotes/origin/<lead branch>` read then (what cpd last saw of the remote branch, its own pushes and those of the merges guard U waited for included, so a push cpd has not seen refuses instead of being overwritten; Escalation nl-pr-a1-q1); `update-ref -m "cpd: pr rebase <plan>/<key>" refs/heads/<lead branch> R' S`, back to the snapshot when the ref moved; rule S on the Lead worktree (a stop appends `error` `lead_worktree_stale` and does not fail the command); with `pr.gate` `local` (contract §8.3, hs-d292) the Gate in the gate worktree, `pre-start` then `pre-merge` from its `.config/wt.toml` (R19), outputs to `run/<plan>/logs/pr-<key>.pre-start.log` and `pr-<key>.pre-merge.log`, then the gate worktree removed; the PR re-read; `push --porcelain --force-with-lease=refs/heads/<lead branch>:<X0> origin R':refs/heads/<lead branch>`, then, when the Lead Branch moved past R' during the Gate, rule P with its tip (a failure of either push is `git_failed`, except a rejection of the first when the remote tip already contains R', which is a success: two `pr rebase` of the PR at once push the same R', and the second can lose the race inside the remote; Escalation nl-pr-a1-q2). On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays (the compare-and-swap moved it before the Gate), and the Lead appends fix Jobs to the PR, then runs `pr rebase --pr <key>` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` in the gate worktree, which is removed, and `rebase_conflict`.
+Effects: no lock (hs-d243); merges into the PR go on during the command. §7.6 steps 1–9: `fetch origin <base>`; the snapshot `S`; `merge-tree`; a gate worktree `<repo-parent>/<repo-name>.<plan>.<key>.gate-<pid>` detached at `S` and the `rebase origin/<base>` in it, giving `R'`; guard U (R for an Attempt of the PR with a dead driver whose compare-and-swap is in `S`; a wait of at most 60 s for one with a live driver); the lease `X0`, the tracking ref `refs/remotes/origin/<lead branch>` read then (what cpd last saw of the remote branch, its own pushes and those of the merges guard U waited for included, so a push cpd has not seen refuses instead of being overwritten; Escalation nl-pr-a1-q1); `update-ref -m "cpd: pr rebase <plan>/<key>" refs/heads/<lead branch> R' S`, back to the snapshot when the ref moved; rule S on the Lead worktree (a stop appends `error` `lead_worktree_stale` and does not fail the command); with `pr.gate` `local` (contract §8.3, hs-d292) the Gate in the gate worktree, `pre-start` then `pre-merge` from its `.config/wt.toml` (R19), outputs to `run/<plan>/logs/pr-<key>.pre-start.log` and `pr-<key>.pre-merge.log`, then the gate worktree removed; the PR re-read; `push --porcelain --force-with-lease=refs/heads/<lead branch>:<X0> origin R':refs/heads/<lead branch>`, then, when the Lead Branch moved past R' during the Gate, rule P with its tip (a failure of either push is `git_failed`, except a rejection of the first when the remote tip already contains R', which is a success: two `pr rebase` of the PR at once push the same R', and the second can lose the race inside the remote; Escalation nl-pr-a1-q2). On `gate_failed` or `gate_error` nothing is pushed; the rebased Lead Branch stays (the compare-and-swap moved it before the Gate), and the Lead appends fix Jobs to the PR, then runs `pr rebase --pr <key>` again once they are Merged. **Rows**: none; the Ledger does not record the Lead Branch's SHA, so there is no Event. On an unexpected rebase conflict: `git rebase --abort` in the gate worktree, which is removed, then the conflict stop below.
 
 ```json
 {"ok": true, "plan": "pay-4521", "pr": "api", "rebased": true, "old": "4b825dc…", "new": "77aa01e…", "pushed": true}
 ```
 
-Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `pr.gate` `local`) and the push run.
+Idempotent: yes; a base that has not moved gives `"rebased": false`, and only the Gate (with `pr.gate` `local`) and the push run. A run that stops at a conflict is repeatable only through `--continue`/`--abort`: a second plain run answers `rebase_in_progress`.
+
+**The conflict stop** (contract §7.6). On a conflict nothing is aborted: the Lead worktree holds the rebase, stopped at the first conflicting commit, and the Lead Branch ref is unchanged until the rebase finishes. The error:
+
+```json
+{"ok": false, "error": {"code": "rebase_conflict", "message": "…", "details": {"files": ["src/a.rs"], "worktree": "/…/repo.pay-4521.api", "next": "cpd pr rebase --pr api --continue", "abort": "cpd pr rebase --pr api --abort"}}}
+```
+
+The Lead edits the files and runs `git -C <worktree> add <files>` (no `git commit`, no `git push`), then `--continue`.
+
+### `pr rebase --continue`
+
+Finishes the stopped rebase, then the Gate and the lease push of `pr rebase`. Order, each refusal changing nothing:
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `--continue` and `--abort` together | `usage` | 2 |
+| the PR is `open`, before the Gate and again after it | `illegal_transition` | 3 |
+| the PR's policy resolves (§8.3): `owner_unset` (3), `owner_unknown` (1), `policy_invalid` (1), as above | as listed | |
+| a rebase is in progress in the Lead worktree | `no_rebase_in_progress` | 3 |
+| no conflict marker remains: no unmerged path, no `<<<<<<<` / `=======` / `>>>>>>>` line at column 0 in a changed file; `details.files` lists the paths, `details.next` the same command | `rebase_conflict` | 3 |
+| the Lead Branch is still at the tip the rebase started from (a merge landed during the stop otherwise); `details.reason` `lead_branch_moved`, `details.tip`; the Lead runs `--abort`, then `pr rebase` | `cas_lost` | 3 |
+| guard U (as above; `details.attempt`) | `cas_lost` | 3 |
+| `GIT_EDITOR=true git rebase --continue` does not stop at the next conflicting commit; if it does, `details.files` are that commit's, and the Lead repeats | `rebase_conflict` | 3 |
+| `git rebase --continue` fails otherwise; `details.stderr`; the rebase stays in progress | `git_failed` | 1 |
+| `gate_error` and `gate_failed` as the rows above; nothing is pushed, the rebased Lead Branch stays | `gate_error` / `gate_failed` | 1 / 3 |
+| the push, as above: `--force-with-lease` against `X0`, `X0` read after guard U | `git_failed` | 1 |
+
+Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the tip the rebase started from, `rebase-merge/orig-head`); `GIT_EDITOR=true git -C <lead worktree> rebase --continue` (no editor; messages kept); `R'` the Lead worktree's `HEAD`; no rule S (that worktree was the one rebased); the Gate in a gate worktree at `R'` and the push exactly as `pr rebase` (contract §7.6 C0–C6), the Gate only when `pr.gate` is `local`. No `fetch`: the rebase ends on the `origin/<base>` it started from. **Rows**: none; no Event. Output as `pr rebase`, `"rebased": true`, `old` = `S`, `new` = `R'`. Idempotent: no; a second run is `no_rebase_in_progress`.
+
+### `pr rebase --abort`
+
+`git -C <lead worktree> rebase --abort`: the Lead Branch and the Lead worktree as before the stop. Refuses `no_rebase_in_progress` (exit 3) when none is in progress. It asks no PR status, runs no Gate and no `fetch`, pushes nothing, appends no Event; then rule S on the Lead worktree (a stop appends `error` `lead_worktree_stale`, never fails it). Output `{"ok": true, "plan": "pay-4521", "pr": "api", "aborted": true, "tip": "4b825dc…"}`. Idempotent: no; a second run is `no_rebase_in_progress`.
 
 ### 9.4 `pr add`
 
