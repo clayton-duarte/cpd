@@ -341,6 +341,41 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
 }
 
+/// Puts a `git` first on the env's `PATH` that runs the real git, except that a merge's
+/// compare-and-swap (`update-ref -m "cpd: merge …"`) waits until `release` exists (at most
+/// 60 s). There is no per-repo lock to hold any more (hs-d243), so a test that must see the
+/// driver in `merging` before the merge lands holds the merge itself.
+fn hold_merges_until(env: &TestEnv, release: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path)
+        .filter(|dir| *dir != env.bin())
+        .map(|dir| dir.join("git"))
+        .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+        .expect("git on PATH");
+    let script = format!(
+        r#"#!/bin/sh
+real='{real}'
+cas= merge=
+for a in "$@"; do
+  case "$a" in
+    update-ref) cas=1 ;;
+    "cpd: merge "*) merge=1 ;;
+  esac
+done
+if [ -n "$cas" ] && [ -n "$merge" ]; then
+  i=0
+  while [ ! -e '{release}' ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done
+fi
+exec "$real" "$@"
+"#,
+        real = real.display(),
+        release = release.display(),
+    );
+    let wrapper = env.bin().join("git");
+    write_executable(&wrapper, &script);
+}
+
 /// engine-G3: a driver log line starts with a time, as `watch.log`'s do (RFC 3339 UTC, milliseconds).
 #[test]
 fn driver_log_lines_start_with_a_time() {
@@ -368,8 +403,9 @@ fn driver_log_lines_start_with_a_time() {
 fn the_workers_window_is_killed_when_the_driver_sees_merging() {
     let fx = fx();
     fx.pi(WORKER);
-    // The merge waits for the per-repo lock, so A9's kill (after the merge) cannot be what is seen.
-    let lock = cpd_core::merge::RepoLock::wait(&fx.home(), &fx.repo).unwrap();
+    // The merge's compare-and-swap waits for `release`, so A9's kill (after the merge) cannot be what is seen.
+    let release = fx.env.root().join("release");
+    hold_merges_until(&fx.env, &release);
 
     let out = fx.dispatch(JOB).ok();
     fx.wait_status(ATTEMPT, "merging");
@@ -380,7 +416,7 @@ fn the_workers_window_is_killed_when_the_driver_sees_merging() {
     }
     assert_eq!(fx.attempt(ATTEMPT)["status"], "merging");
 
-    drop(lock);
+    fs::write(&release, "").unwrap();
     let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
     assert_eq!(attempt["outcome"], "merged");
 }
@@ -831,6 +867,99 @@ fn a_driver_refuses_an_attempt_that_is_not_starting() {
     let json: Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["error"]["code"], "illegal_transition");
     assert_eq!(fx.txns(), before);
+}
+
+/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
+/// marker in the file) and releases it after `hold`. Returns once the lock is held.
+fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
+    use nix::fcntl::{Flock, FlockArg};
+    use std::io::Write;
+    let locks = env.cpd_home().join("locks");
+    fs::create_dir_all(&locks).unwrap();
+    let file = OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
+    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
+    lock.write_all(marker.to_string().as_bytes()).unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        let _ = lock.set_len(0);
+        drop(lock);
+    })
+}
+
+/// hs-n278: a driver that starts while another cpd migrates the store waits for it, as it waits for a busy
+/// store (contract §3.4), instead of dying `lock_timeout` after `store_busy_ms`. Its Attempt is not
+/// `starting`, so once the store opens it refuses with `illegal_transition`, which proves it got that far.
+#[test]
+fn a_driver_waits_out_a_migration_longer_than_store_busy_ms() {
+    let fx = fx_with("[timeouts]\nstore_busy_ms = 300\n");
+    let lock = starting(&fx);
+    fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
+    let release = migrating_for(&fx.env, Duration::from_millis(1500));
+    let start = Instant::now();
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+    let waited = start.elapsed();
+    release.join().unwrap();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "illegal_transition", "{out:?}");
+    assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("waiting for cpd pid"), "{out:?}");
+}
+
+/// hs-n278: a driver that ends on a store newer than its binary (an install raced a migration) leaves the marker
+/// E2 reads, so the Attempt is not its Worker's failure. It ends no Attempt itself.
+#[test]
+fn a_driver_ending_on_store_too_new_leaves_the_infra_marker_and_ends_nothing() {
+    let fx = fx();
+    let lock = starting(&fx);
+    // Above any user_version this binary knows (contract §4.5).
+    rusqlite::Connection::open(fx.home().db()).unwrap().pragma_update(None, "user_version", 4999).unwrap();
+    let plan = PlanId::parse(PLAN).unwrap();
+    let attempt = AttemptId::parse(ATTEMPT).unwrap();
+    let marker = fx.home().attempt_infra(&plan, &attempt);
+    assert!(!marker.exists());
+
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "store_too_new", "{out:?}");
+    assert_eq!(fx.home().infra(&plan, &attempt).unwrap().map(|(infra, _)| infra.code()), Some("store_too_new"));
+}
+
+/// Another failure of the driver leaves no marker: the ladder counts it.
+#[test]
+fn a_driver_refusing_for_another_reason_leaves_no_infra_marker() {
+    let fx = fx();
+    let lock = starting(&fx);
+    fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "illegal_transition", "{out:?}");
+    let marker = fx.home().attempt_infra(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
+    assert!(!marker.exists());
 }
 
 // ---------- job dispatch refusals ----------
