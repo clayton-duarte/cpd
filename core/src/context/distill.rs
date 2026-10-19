@@ -7,13 +7,15 @@
 //! the run dies, so a Context never has two runs and a crash leaves no stale lock.
 
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use clap::Args;
 use serde_json::{Value, json};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::digest::{self, Digest, Invalid};
 use super::render::Indexed;
@@ -143,15 +145,14 @@ impl Run<'_> {
         let tmp = self.home.context_digest_tmp(self.context, upto);
         // Only `plan` and `brief` records came since: the records in force are the same, so are the topic sections.
         let carried = latest.filter(|d| in_force.iter().all(|(seq, _)| u64::try_from(*seq).is_ok_and(|s| s <= d.upto_seq)));
-        let distilled = match &carried {
+        let ran = match &carried {
             Some(d) => {
                 fs::write(&tmp, digest::topic_sections(&d.text)).map_err(|e| io_failed("write", &tmp, &e))?;
-                false
+                None
             }
             None => {
                 self.write_inputs(&dir, &in_force)?;
-                self.run_pi(upto)?;
-                true
+                Some(self.run_pi(upto)?)
             }
         };
         let mut bytes = fs::read(&tmp).map_err(|e| io_failed("read", &tmp, &e))?;
@@ -163,17 +164,27 @@ impl Run<'_> {
         let expect = digest::Expect::of(&in_force);
         if let Err(invalid) = digest::validate(&bytes, &expect, digest::LIMIT) {
             let kept = digest::keep_invalid(self.home, self.context, upto)?;
+            if let Some(ran) = &ran {
+                self.log_run(ran, upto, "invalid");
+            }
             return Err(self.invalid(upto, &invalid, &kept));
+        }
+        if let Some(ran) = &ran {
+            self.log_run(ran, upto, "valid");
         }
         let file = digest::install(self.home, self.context, upto, &expect)?;
         let text = fs::read_to_string(&file).map_err(|e| io_failed("read", &file, &e))?;
         let installed = Digest { upto_seq: upto, file, text };
-        Ok(json!({
+        let mut out = json!({
             "context": self.context.as_str(),
-            "distilled": distilled,
+            "distilled": ran.is_some(),
             "digest": digest_json(Some(&installed)),
             "records_in_force": in_force.len(),
-        }))
+        });
+        if let Some(ran) = &ran {
+            out["run"] = ran.figures();
+        }
+        Ok(out)
     }
 
     fn already(&self, digest: Option<&Digest>, in_force: usize) -> Value {
@@ -193,9 +204,10 @@ impl Run<'_> {
         fs::write(&records, records_md(in_force)).map_err(|e| io_failed("write", &records, &e))
     }
 
-    /// Step 4: the distiller, stdout to `<upto_seq>.md.tmp`, stderr to the log. A failure removes the `.md.tmp`
-    /// and appends the `error` Event.
-    fn run_pi(&mut self, upto: u64) -> Result<(), CpdError> {
+    /// Step 4: the distiller in JSON mode, its stderr to the log, its stdout read by cpd: the final assistant
+    /// text goes to `<upto_seq>.md.tmp` and the usage it reports is returned. A failure appends the `error`
+    /// Event; every run that started pi appends its line to `runs.jsonl`, a failed one here.
+    fn run_pi(&mut self, upto: u64) -> Result<Ran, CpdError> {
         let tier = self.config.context_distill_tier;
         let models = &self.config.tiers;
         let model = match tier.letter() {
@@ -203,7 +215,8 @@ impl Run<'_> {
             Letter::S => &models.s,
             Letter::H => &models.h,
         };
-        let launch = pi::distiller(&format!("{model}:{}", tier.level()));
+        let model = format!("{model}:{}", tier.level());
+        let launch = pi::distiller(&model);
         let dir = self.home.context_digest_dir(self.context);
         let log = log_path(self.home, self.context);
         let tmp = self.home.context_digest_tmp(self.context, upto);
@@ -211,7 +224,6 @@ impl Run<'_> {
         let mut log_file = OpenOptions::new().create(true).append(true).open(&log).map_err(|e| io_failed("open", &log, &e))?;
         // The tail of pi's stderr is what this run appended after this point.
         let offset = log_file.metadata().map_err(|e| io_failed("read", &log, &e))?.len();
-        let out = File::create(&tmp).map_err(|e| io_failed("create", &tmp, &e))?;
         let mut command = Command::new(&launch.argv[0]);
         command.args(&launch.argv[1..]);
         for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("CPD_")) {
@@ -221,17 +233,59 @@ impl Run<'_> {
             .envs(&launch.env)
             .current_dir(&dir)
             .stdin(Stdio::null())
-            .stdout(out)
+            .stdout(Stdio::piped())
             .stderr(log_file.try_clone().map_err(|e| io_failed("use", &log, &e))?);
-        let failure = match wait_limited(&mut command, limit) {
+        let started_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
+        let started = Instant::now();
+        let waited = wait_limited(&mut command, limit);
+        let mut ran = Ran { started_at, seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0, model, usage: None };
+        let failure = match waited {
             Err(e) => Failed::Spawn(e.to_string()),
             Ok(Waited::TimedOut) => Failed::Timeout(limit),
-            Ok(Waited::Exited(status)) if status.success() => return Ok(()),
-            Ok(Waited::Exited(status)) => Failed::Exit(status),
+            Ok(Waited::Exited { status, stdout }) => {
+                let parsed = stdout.map_err(|e| format!("pi's output cannot be read: {e}")).and_then(|bytes| pi_json::parse(&bytes));
+                match (status.success(), parsed) {
+                    (true, Ok(output)) => {
+                        ran.usage = output.usage;
+                        match output.answer {
+                            Ok(text) => {
+                                let text = if text.ends_with('\n') { text } else { format!("{text}\n") };
+                                fs::write(&tmp, text).map_err(|e| io_failed("write", &tmp, &e))?;
+                                return Ok(ran);
+                            }
+                            Err(why) => Failed::Output(why),
+                        }
+                    }
+                    (true, Err(why)) => Failed::Output(why),
+                    (false, parsed) => {
+                        ran.usage = parsed.ok().and_then(|output| output.usage);
+                        Failed::Exit(status)
+                    }
+                }
+            }
         };
         let _ = log_file.flush();
+        self.log_run(&ran, upto, "failed");
         digest::discard(self.home, self.context, upto)?;
         Err(self.pi_failed(upto, &failure, tail_of(&log, offset)))
+    }
+
+    /// Appends the run's line to `runs.jsonl` (contract §4.6 "The run log"). A write failure fails nothing: it
+    /// goes to the log.
+    fn log_run(&self, ran: &Ran, upto: u64, result: &str) {
+        let mut line = ran.figures();
+        line["started_at"] = json!(ran.started_at);
+        line["context"] = json!(self.context.as_str());
+        line["upto_seq"] = json!(upto);
+        line["result"] = json!(result);
+        let path = runs_path(self.home, self.context);
+        let written = OpenOptions::new().create(true).append(true).open(&path).and_then(|mut file| writeln!(file, "{line}"));
+        if let Err(e) = written {
+            let note = format!("cannot append to {}: {e}", path.display());
+            if let Ok(mut log) = OpenOptions::new().create(true).append(true).open(log_path(self.home, self.context)) {
+                let _ = writeln!(log, "cpd: {note}");
+            }
+        }
     }
 
     /// Appends the run's one `error` Event and returns the error of the same code.
@@ -291,6 +345,7 @@ impl Run<'_> {
                 ("exit", Some(status), format!("pi {how}"))
             }
             Failed::Timeout(limit) => ("timeout", None, format!("pi ran longer than {} minutes and was killed", limit.as_secs() / 60)),
+            Failed::Output(why) => ("output", None, format!("pi gave no usable answer: {why}")),
         };
         let message = format!("The distiller of Context {} failed: {what}.", self.context);
         let mut error = CpdError::new(ErrorCode::DistillFailed, message)
@@ -310,6 +365,11 @@ impl Run<'_> {
 /// `run/context-digests/<context>/distill.log`: every run's stderr, appended (contract §1.4).
 pub fn log_path(home: &CpdHome, context: &ContextId) -> PathBuf {
     home.context_digest_dir(context).join("distill.log")
+}
+
+/// `run/context-digests/<context>/runs.jsonl`: one line per run that started pi, appended (contract §1.4, §4.6).
+pub fn runs_path(home: &CpdHome, context: &ContextId) -> PathBuf {
+    home.context_digest_dir(context).join("runs.jsonl")
 }
 
 fn io_failed(what: &str, path: &Path, e: &io::Error) -> CpdError {
@@ -337,22 +397,157 @@ enum Failed {
     Spawn(String),
     Exit(ExitStatus),
     Timeout(Duration),
+    /// pi exited 0 but its JSON stream cannot be read or holds no usable final assistant text.
+    Output(String),
+}
+
+/// What one pi run took and reported; the figures of its `runs.jsonl` line and of `run` in the command's output.
+struct Ran {
+    started_at: String,
+    seconds: f64,
+    /// The `<model>:<level>` given to pi.
+    model: String,
+    /// `None` when pi reported none (a spawn failure, a kill, a stream without an assistant message).
+    usage: Option<pi_json::Usage>,
+}
+
+impl Ran {
+    fn figures(&self) -> Value {
+        let usage = self.usage.as_ref();
+        json!({
+            "seconds": self.seconds,
+            "model": self.model,
+            "tokens_in": usage.map(|u| u.tokens_in),
+            "tokens_out": usage.map(|u| u.tokens_out),
+            "cost": usage.map(|u| u.cost),
+        })
+    }
+}
+
+/// pi's `--mode json` stream (pi `docs/json.md`, `docs/message-types.md`), parsed once at the boundary.
+mod pi_json {
+    use serde::Deserialize;
+    use serde_json::Value;
+
+    /// What the assistant messages of a run reported, summed.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub struct Usage {
+        /// Every token read by the model: `input`, `cacheRead` and `cacheWrite` (pi reports them apart, and
+        /// a cached prompt is nearly all of the `cacheRead` or `cacheWrite`).
+        pub tokens_in: u64,
+        /// `output`, which already includes `reasoning`.
+        pub tokens_out: u64,
+        /// `cost.total`, in the unit pi reports (US dollars).
+        pub cost: f64,
+    }
+
+    /// What a stream says: the run's usage and its answer, or why there is none.
+    #[derive(Debug, PartialEq)]
+    pub struct Output {
+        pub usage: Option<Usage>,
+        pub answer: Result<String, String>,
+    }
+
+    #[derive(Deserialize)]
+    struct Line {
+        #[serde(rename = "type")]
+        kind: String,
+        message: Option<Value>,
+    }
+
+    #[derive(Deserialize)]
+    struct Assistant {
+        content: Vec<Block>,
+        usage: Raw,
+        #[serde(rename = "stopReason")]
+        stop_reason: String,
+        #[serde(rename = "errorMessage")]
+        error_message: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct Block {
+        #[serde(rename = "type")]
+        kind: String,
+        text: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct Raw {
+        input: u64,
+        output: u64,
+        #[serde(rename = "cacheRead")]
+        cache_read: u64,
+        #[serde(rename = "cacheWrite")]
+        cache_write: u64,
+        cost: Cost,
+    }
+
+    #[derive(Deserialize)]
+    struct Cost {
+        total: f64,
+    }
+
+    /// Reads the stream: strict JSONL (one object per LF-terminated line), where each assistant `message_end`
+    /// is a finished message. The answer is the text of the last one, which must have stopped normally
+    /// (`stop`: pi exits 0 for an `error`, `aborted` or `length` stop in this mode) and not be blank.
+    /// `Err` when a line is not JSON or an assistant message lacks what pi's docs promise.
+    pub fn parse(bytes: &[u8]) -> Result<Output, String> {
+        let mut usage: Option<Usage> = None;
+        let mut last: Option<Assistant> = None;
+        for (n, line) in bytes.split(|b| *b == b'\n').enumerate() {
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            if line.is_empty() {
+                continue;
+            }
+            let at = n + 1;
+            let event: Line = serde_json::from_slice(line).map_err(|e| format!("line {at} of pi's output is not an event: {e}"))?;
+            let Some(message) = event.message.filter(|m| event.kind == "message_end" && m["role"] == "assistant") else { continue };
+            let message: Assistant = serde_json::from_value(message).map_err(|e| format!("the assistant message on line {at} is malformed: {e}"))?;
+            let sum = usage.get_or_insert(Usage { tokens_in: 0, tokens_out: 0, cost: 0.0 });
+            sum.tokens_in += message.usage.input + message.usage.cache_read + message.usage.cache_write;
+            sum.tokens_out += message.usage.output;
+            sum.cost += message.usage.cost.total;
+            last = Some(message);
+        }
+        let answer = match last {
+            None => Err("the stream has no assistant message".to_owned()),
+            Some(m) if m.stop_reason != "stop" => {
+                let why = m.error_message.map(|e| format!(": {e}")).unwrap_or_default();
+                Err(format!("the final assistant message stopped with `{}`{why}", m.stop_reason))
+            }
+            Some(m) => {
+                let text: String = m.content.iter().filter(|b| b.kind == "text").filter_map(|b| b.text.as_deref()).collect();
+                if text.trim().is_empty() { Err("the final assistant message has no text".to_owned()) } else { Ok(text) }
+            }
+        };
+        Ok(Output { usage, answer })
+    }
 }
 
 /// What became of a child that was given a time limit.
 #[derive(Debug)]
 enum Waited {
-    Exited(ExitStatus),
+    /// It ended; `stdout` is everything it printed (empty when its stdout was not piped).
+    Exited { status: ExitStatus, stdout: io::Result<Vec<u8>> },
     TimedOut,
 }
 
-/// Runs `command` and waits at most `limit`; a child still alive then is killed and reaped.
+/// Runs `command` and waits at most `limit`, reading its piped stdout meanwhile so a full pipe never stalls
+/// it; a child still alive then is killed and reaped.
 fn wait_limited(command: &mut Command, limit: Duration) -> io::Result<Waited> {
     let mut child = command.spawn()?;
+    let reader = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            out.read_to_end(&mut bytes).map(|_| bytes)
+        })
+    });
     let deadline = Instant::now() + limit;
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok(Waited::Exited(status));
+            let stdout = reader.map_or(Ok(Vec::new()), |r| r.join().expect("the reader of pi's output does not panic"));
+            return Ok(Waited::Exited { status, stdout });
         }
         if Instant::now() >= deadline {
             child.kill()?;
@@ -409,7 +604,7 @@ mod tests {
 
     #[test]
     fn a_child_that_ends_in_time_reports_its_status() {
-        let Waited::Exited(status) = wait_limited(Command::new("sh").args(["-c", "exit 3"]), Duration::from_secs(30)).unwrap() else {
+        let Waited::Exited { status, .. } = wait_limited(Command::new("sh").args(["-c", "exit 3"]), Duration::from_secs(30)).unwrap() else {
             panic!("it ended in time")
         };
         assert_eq!(status.code(), Some(3));
