@@ -34,6 +34,12 @@ pub struct StartCtx<'a> {
     pub command: &'a str,
 }
 
+/// How many Attempts may be not `ended` for the Attempt about to start: `concurrency`,
+/// and one more for an urgent Job (§3.7 E3).
+pub fn slot_limit(concurrency: u32, urgent: bool) -> i64 {
+    i64::from(concurrency) + i64::from(urgent)
+}
+
 /// How an Attempt came to be (§2.2 Attempt `origin`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Origin {
@@ -88,13 +94,17 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
                 .with("job", key.as_str()));
         }
         let active: i64 = tx.query_row("SELECT count(*) FROM attempts WHERE status <> 'ended'", [], |r| r.get(0))?;
-        if active >= i64::from(ctx.config.concurrency) {
+        // An urgent Job may start one Attempt beyond `concurrency` (§3.7 E3).
+        let urgent: bool = tx.query_row("SELECT urgent FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?;
+        let limit = slot_limit(ctx.config.concurrency, urgent);
+        if active >= limit {
             return Err(CpdError::new(
                 ErrorCode::NoSlot,
-                format!("{active} Attempts are running, the machine's concurrency is {}: wait for one to end.", ctx.config.concurrency),
+                format!("{active} Attempts are running, the limit is {limit} (concurrency {}): wait for one to end.", ctx.config.concurrency),
             )
             .with("active", active)
-            .with("concurrency", ctx.config.concurrency));
+            .with("concurrency", ctx.config.concurrency)
+            .with("urgent", urgent));
         }
         insert(tx, plan, key, &next)
     })?;

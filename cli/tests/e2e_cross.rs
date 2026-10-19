@@ -359,7 +359,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     ]);
     assert_eq!(
         out["job"],
-        json!({"key": "audit", "pr": "a2", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true})
+        json!({"key": "audit", "pr": "a2", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true, "urgent": false})
     );
 
     // ---------- 4. review and lock: only a1 starts (A8)

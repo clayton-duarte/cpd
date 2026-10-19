@@ -193,7 +193,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("plan-phase", "cp", "", &["from", "to"], &["jobs", "pr"]),
     ("plan-review", "cp", "", &["review", "fingerprint", "status"], &["feedback"]),
     ("plan-done", "cp", "", &["prs"], &[]),
-    ("job-added", "cpj", "", &["pr", "status", "appended", "tier", "needs", "review"], &[]),
+    ("job-added", "cpj", "", &["pr", "status", "appended", "tier", "needs", "review", "urgent"], &[]),
     ("job-edited", "cpj", "", &["fields"], &[]),
     ("job-merged", "cpja", "", &["sha", "tier"], &["cancel_too_late"]),
     ("job-failed", "cpj", "a", &["cause", "detail", "tier", "attempts"], &[]),

@@ -143,7 +143,7 @@ fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
 fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut hits = vec![];
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note)).unwrap();
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note, 0).hits).unwrap();
     (terminal.backend().buffer().clone(), hits)
 }
 
@@ -169,9 +169,9 @@ fn plain(symbol: &str) -> String {
     out
 }
 
-/// A PR's first line on a pane of `width` columns: its name, then `↗` in the last column.
+/// A PR's first line on a pane of `width` columns: its name, then `󰏌` in the last column.
 fn first_line(name: &str, width: usize) -> String {
-    format!("{name:<w$}↗", w = width - 1)
+    format!("{name:<w$}󰏌", w = width - 1)
 }
 
 /// The first cell of the first row at or after `from` that contains `needle` (every glyph here is one column wide).
@@ -240,7 +240,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, ""))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, "", 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
@@ -254,6 +254,8 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
     let (got, _) = column(25);
     let (prs, git, jira) = (header("PRs"), header("git"), header("Jira"));
     let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
+    let failed_open = format!("  open {} changes requested  cpd-tui cockpit c…", palette::CHECKS_FAILED);
+    let none_open = format!("  open {} no review  Plan fresh", palette::CHECKS_NONE);
     let expected = [
         "",
         " homeserver",
@@ -262,9 +264,9 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
         prs.as_str(),
         "",
         seven.as_str(),
-        "  open ✗ changes requested  cpd-tui cockpit c…",
+        failed_open.as_str(),
         eleven.as_str(),
-        "  open – no review  Plan fresh",
+        none_open.as_str(),
         "",
         "",
         "",
@@ -304,6 +306,9 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
     let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
     assert_eq!(listed, [("acme/web", 4), ("acme/repo", 9), ("acme/repo", 20)]);
     let got = rows(&render(46, 25, &w));
+    let draft_failed = format!("  draft {} changes requested  Older web fix", palette::CHECKS_FAILED);
+    let open_approved = format!("  open {} approved  Middle one", palette::CHECKS_PASSED);
+    let open_pending = format!("  open {} no review  Mine to review", palette::CHECKS_PENDING);
     let (web4, repo9, repo20) =
         (first_line(" acme/web#4", 46), first_line(" acme/repo#9", 46), first_line(" acme/repo#20", 46));
     assert_eq!(
@@ -312,11 +317,11 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
             header("PRs").as_str(),
             "",
             web4.as_str(),
-            "  draft ✗ changes requested  Older web fix",
+            draft_failed.as_str(),
             repo9.as_str(),
-            "  open ✓ approved  Middle one",
+            open_approved.as_str(),
             repo20.as_str(),
-            "  open … no review  Mine to review",
+            open_pending.as_str(),
         ],
         "{got:#?}"
     );
@@ -331,9 +336,9 @@ fn a_conflicting_pr_shows_conflict_on_its_second_line_and_the_others_do_not() {
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let buf = render(46, 25, &w);
     let got = rows(&buf);
-    assert_eq!(got[7], "  draft ✗ changes requested  Older web fix");
-    assert_eq!(got[9], "  open ✓ approved conflict  Middle one");
-    assert_eq!(got[11], "  open … no review  Mine to review");
+    assert_eq!(got[7], format!("  draft {} changes requested  Older web fix", palette::CHECKS_FAILED));
+    assert_eq!(got[9], format!("  open {} approved conflict  Middle one", palette::CHECKS_PASSED));
+    assert_eq!(got[11], format!("  open {} no review  Mine to review", palette::CHECKS_PENDING));
     let (x, y) = find(&buf, "conflict");
     assert_eq!(buf[(x, y)].fg, palette::color(Meaning::Failed));
 }
@@ -452,8 +457,8 @@ fn the_column_takes_every_colour_from_the_palette() {
     let c = palette::color;
     // The PRs: state and checks.
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
-    assert_eq!(fg(find(&buf, "✗")), c(Meaning::Failed));
-    assert_eq!(fg(find(&buf, "–")), c(Meaning::Nothing));
+    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Failed));
+    assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
     // The headers: grey, the title a reversed block, not bold.
     for title in ["PRs", "git", "Jira"] {
         let (x, y) = find(&buf, &format!("── {title} "));
@@ -486,34 +491,36 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let wide = rows(&render(30, 25, &w));
-    assert!(wide.contains(&"  open ✗ changes requested".to_owned()), "no room for a title of 4 characters:\n{wide:#?}");
+    assert!(wide.contains(&format!("  open {} changes requested", palette::CHECKS_FAILED)), "no room for a title of 4 characters:\n{wide:#?}");
     let got = rows(&render(36, 25, &w));
-    assert!(got.contains(&"  open ✗ changes requested  cpd-tui…".to_owned()), "{got:#?}");
+    assert!(got.contains(&format!("  open {} changes requested  cpd-tui…", palette::CHECKS_FAILED)), "{got:#?}");
     let got = rows(&render(24, 25, &w));
     assert!(got.iter().all(|r| r.chars().count() <= 24), "{got:#?}");
-    assert!(got.contains(&"  open ✗ changes request".to_owned()), "the pane clips what is left:\n{got:#?}");
+    assert!(got.contains(&format!("  open {} changes request", palette::CHECKS_FAILED)), "the pane clips what is left:\n{got:#?}");
     let narrow = rows(&render(8, 25, &w));
-    assert!(narrow.contains(&" acme… ↗".to_owned()), "the name is cut before the arrow when it must be:\n{narrow:#?}");
+    assert!(narrow.contains(&" acme… 󰏌".to_owned()), "the name is cut before the arrow when it must be:\n{narrow:#?}");
 }
 
 #[test]
-fn a_short_pane_drops_the_pull_requests_that_do_not_fit_from_the_end() {
+fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    // Beside the 14 rows of the blank row, the machine, the headers and their blank rows, each pull request takes 2.
-    for (height, listed) in [(14 + 6, 3), (14 + 5, 2), (14 + 2, 1), (14 + 1, 0)] {
+    // Beside the 14 rows of the blank row, the machine, the headers and their blank rows, each pull request takes 2, and
+    // when some are hidden the `▼` row takes one more.
+    for (height, listed) in [(14 + 6, 3), (14 + 5, 2), (14 + 4, 1), (14 + 3, 1), (14 + 2, 0), (14 + 1, 0)] {
         let got = rows(&render(46, height, &w)).join("\n");
         let shown = ["acme/web#4", "acme/repo#9", "acme/repo#20"].iter().filter(|n| got.contains(**n)).count();
         assert_eq!(shown, listed, "height {height}:\n{got}");
         assert!(listed == 0 || got.contains("acme/web#4"), "the oldest stay:\n{got}");
+        assert_eq!(got.contains(&format!("▼ {} more", 3 - listed)), listed < 3, "height {height}:\n{got}");
     }
 }
 
-// ---------- the ↗ links and the owned rows ----------
+// ---------- the 󰏌 links and the owned rows ----------
 
-/// The cell of a linked `↗`: its symbol is wrapped in the OSC 8 escapes of its link.
+/// The cell of a linked `󰏌`: its symbol is wrapped in the OSC 8 escapes of its link.
 fn linked_arrow(url: &str) -> String {
-    format!("\x1b]8;;{url}\x07↗\x1b]8;;\x07")
+    format!("\x1b]8;;{url}\x07󰏌\x1b]8;;\x07")
 }
 
 #[test]
@@ -523,7 +530,7 @@ fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
     let buf = render(46, 25, &w);
     for (y, number, repo) in [(6, 4, "acme/web"), (8, 9, "acme/repo"), (10, 20, "acme/repo")] {
         assert_eq!(buf[(45, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "row {y}");
-        assert_eq!(plain(buf[(45, y)].symbol()), "↗", "row {y}");
+        assert_eq!(plain(buf[(45, y)].symbol()), "󰏌", "row {y}");
         assert_eq!(row(&buf, y).chars().count(), 46, "the arrow is the last column of row {y}");
         assert_eq!(plain(buf[(45, y + 1)].symbol()), " ", "the second line has no arrow");
     }
@@ -544,7 +551,7 @@ fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
         assert!([1, 2, 12, 45].iter().all(|x| dim(*x, y)), "row {y} is dim: the name and the arrow");
         assert!([2, 3, 12, 20].iter().all(|x| dim(*x, y + 1)), "row {} is dim: the second line", y + 1);
     }
-    assert_eq!(plain(buf[(45, 6)].symbol()), "↗", "the arrow stays on an unowned PR");
+    assert_eq!(plain(buf[(45, 6)].symbol()), "󰏌", "the arrow stays on an unowned PR");
     // The owned one (here also the active one) is not dim.
     assert!([1, 2, 12, 45].iter().all(|x| !dim(*x, 10)) && [2, 20].iter().all(|x| !dim(*x, 11)));
 }
@@ -656,11 +663,11 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
     for name in [" acme/web#4", " acme/repo#9", " acme/repo#20"] {
         let line = screen.iter().find(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {screen:#?}"));
         assert_eq!(line.chars().count(), width, "the arrow ends {name}'s line at the right edge: {line:?}");
-        assert!(line.ends_with('↗'), "{line:?}");
+        assert!(line.ends_with('󰏌'), "{line:?}");
     }
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     for url in ["https://github.com/acme/web/pull/4", "https://github.com/acme/repo/pull/9", "https://github.com/acme/repo/pull/20"] {
-        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗"))), "{url}: {styled:?}");
+        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\󰏌"))), "{url}: {styled:?}");
     }
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
 }
@@ -692,6 +699,65 @@ fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_ru
     assert!(chat.lines().any(|l| l.starts_with("l-mine|")), "the Lead is in `main`: {chat}");
 }
 
+/// A wheel notch (`down` or up) at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting: 65 down, 64 up).
+fn wheel(env: &TestEnv, pane: &str, down: bool, column: u16, row: u16) {
+    let button = if down { 65 } else { 64 };
+    tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<{button};{};{}M", column + 1, row + 1)]);
+}
+
+#[test]
+fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
+    let env = pane_env();
+    let mut store = open(&env);
+    let mut s = String::new();
+    for n in 1..=21 {
+        s += &pull_request("acme/repo", n, "A title", false, "open", "none", "passed", &format!("2026-01-03T00:{n:02}:00.000Z"));
+    }
+    sql(&mut store, &s);
+    drop(store);
+    let pane = start(&env, "view");
+    let has = |s: &[String], name: &str| s.iter().any(|r| r.starts_with(&format!(" {name} ")));
+    // 40 rows less the 14 of the rest of the column leave 26 for the PRs: 12 whole ones beside the `▼` row.
+    // (polling for the whole screen: a capture can catch the pane mid-draw)
+    wait_for_screen(&env, &pane, "the first PRs and the cue below", |s| {
+        s.iter().any(|r| r == " ▼ 9 more")
+            && has(s, "acme/repo#1")
+            && has(s, "acme/repo#12")
+            && !has(s, "acme/repo#13")
+            && !s.iter().any(|r| r.contains('▲'))
+    });
+    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
+    let cue = styled.lines().find(|l| l.contains("▼ 9 more")).unwrap();
+    assert!(cue.contains("\x1b[2m"), "the cue is dim: {cue:?}");
+
+    // A notch outside the section does nothing; one inside moves by one pull request.
+    wheel(&env, &pane, true, 3, 1);
+    wheel(&env, &pane, true, 3, 10);
+    wait_for_screen(&env, &pane, "one pull request down", |s| {
+        s.iter().any(|r| r == " ▲ 1 more") && s.iter().any(|r| r == " ▼ 8 more") && has(s, "acme/repo#2") && !has(s, "acme/repo#1")
+    });
+
+    // Past the end it stops, with the last pull request at the bottom and no cue below.
+    for _ in 0..20 {
+        wheel(&env, &pane, true, 3, 10);
+    }
+    wait_for_screen(&env, &pane, "the end", |s| {
+        s.iter().any(|r| r == " ▲ 9 more")
+            && has(s, "acme/repo#21")
+            && has(s, "acme/repo#10")
+            && !has(s, "acme/repo#9")
+            && !s.iter().any(|r| r.contains('▼'))
+    });
+
+    // And back up, one at a time.
+    wheel(&env, &pane, false, 3, 10);
+    wait_for_screen(&env, &pane, "one back up", |s| s.iter().any(|r| r == " ▲ 8 more") && s.iter().any(|r| r == " ▼ 1 more") && has(s, "acme/repo#9") && !has(s, "acme/repo#21"));
+    for _ in 0..20 {
+        wheel(&env, &pane, false, 3, 10);
+    }
+    wait_for_screen(&env, &pane, "the top", |s| s.iter().any(|r| r == " ▼ 9 more") && has(s, "acme/repo#1") && !s.iter().any(|r| r.contains('▲')));
+}
+
 #[test]
 fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click() {
     let env = pane_env();
@@ -721,6 +787,90 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
 
     click(&env, &pane, 3, 6);
     wait_for_screen(&env, &pane, "the note gone", |s| last_row(s) == " (future)");
+}
+
+#[test]
+fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    sql(&mut store, "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20); UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;");
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
+    let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
+    let mut drawn = None;
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w, &machine(), "", 0))).unwrap();
+    let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
+    let buf = terminal.backend().buffer().clone();
+    for (y, icon) in [(7, false), (9, true), (11, true)] {
+        assert_eq!(buf[(45, y)].symbol(), if icon { "\u{F062D}" } else { " " }, "row {y}");
+    }
+    assert_eq!(
+        icons.iter().map(|i| (i.area, i.pull.as_str())).collect::<Vec<_>>(),
+        [(ratatui::layout::Rect::new(45, 9, 1, 1), "acme/repo#9"), (ratatui::layout::Rect::new(45, 11, 1, 1), "acme/repo#20")]
+    );
+    let [hit] = &hits[..] else { panic!("{hits:?}") };
+    assert!(!hit.contains(ratatui::layout::Position::new(45, 11)), "the owned row's session open excludes the icon");
+    assert!(hit.contains(ratatui::layout::Position::new(44, 11)));
+}
+
+/// The Deploy column in the cockpit with a fake `tmux` on `PATH`: `list-clients` says one client of 200x60, `display-popup`
+/// does nothing (the call is recorded), and the rest is the real tmux.
+fn fake_tmux(env: &TestEnv) {
+    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    env.fake(
+        "tmux",
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+    );
+}
+
+fn popups(env: &TestEnv) -> Vec<Vec<String>> {
+    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
+}
+
+#[test]
+fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lead() {
+    const ICON: char = '\u{F062D}';
+    let env = pane_env();
+    let mut store = prs_store(&env);
+    // `acme/repo#20` (owned by `mine`) and `acme/repo#9` (no owner) are clean, `acme/web#4` is blocked.
+    sql(
+        &mut store,
+        "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20);
+         UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;",
+    );
+    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
+    drop(store);
+    let view = cockpit(&env);
+    let shown = wait_for_screen(&env, &view, "the merge icons", |s| s.iter().any(|r| r.contains(ICON)));
+    let width = tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<usize>().unwrap();
+    // The icon is the last column of the second line, under the arrow; only the clean ones have it.
+    for (name, icon) in [(" acme/web#4", false), (" acme/repo#9", true), (" acme/repo#20", true)] {
+        let first = shown.iter().position(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {shown:#?}"));
+        let second = &shown[first + 1];
+        assert_eq!(second.ends_with(ICON), icon, "{name}: {second:?}");
+        if icon {
+            assert_eq!(second.chars().count(), width, "the icon is the last column: {second:?}");
+        }
+    }
+    assert_eq!(shown.iter().filter(|r| r.contains(ICON)).count(), 2, "{shown:#?}");
+
+    fake_tmux(&env);
+    let before = moved_events(&env);
+    let second_line = |name: &str| u16::try_from(shown.iter().position(|r| r.starts_with(name)).unwrap() + 1).unwrap();
+    // The unowned row's icon, then the owned row's: each opens its popup and neither runs `session open`.
+    for (n, (name, pull)) in [(" acme/repo#9", "acme/repo#9"), (" acme/repo#20", "acme/repo#20")].into_iter().enumerate() {
+        click(&env, &view, u16::try_from(width).unwrap() - 1, second_line(name));
+        wait_until("the popup", || popups(&env).len() == n + 1);
+        let popup = &popups(&env)[n];
+        let at = popup.iter().position(|a| a == "display-popup").unwrap();
+        assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge '{pull}'"), "{popup:?}");
+        assert_eq!(popup[at + 1], "-E", "{popup:?}");
+    }
+    // time-claim: over the next redraws after both clicks, no third popup opens and no `session open` runs.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(popups(&env).len(), 2);
+    assert_eq!(moved_events(&env), before, "no `session open` ran");
+    assert_eq!(focused_session(&env), "1||widgets", "the focus did not move");
 }
 
 // ---------- the legend ----------

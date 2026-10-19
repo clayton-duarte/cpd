@@ -874,6 +874,62 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     }
 }
 
+/// SQL that marks Job `key` urgent, for `add_job`'s `then`.
+fn urgent(key: &str) -> String {
+    format!("UPDATE jobs SET urgent = 1 WHERE plan = 'pay' AND key = '{key}';")
+}
+
+/// The work session as tui leaves it, with remain-on-exit (§6.1), and a Worker that stays alive.
+fn work_session_with_a_worker_that_stays(fx: &Fx) {
+    fx.env.fake_pi(&format!("sleep {SLEEP_SECONDS}"));
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", &SLEEP_SECONDS.to_string()][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+}
+
+/// E3 starts urgent Ready Jobs first (§3.7): with every slot free, the urgent Job goes before an older non-urgent one.
+#[test]
+fn e3_starts_an_urgent_job_before_an_older_one() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    fx.add_job("old", &[], "");
+    fx.add_job("hot", &[], &urgent("hot"));
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") >= 1);
+    // Two more ticks: the one slot is taken, so the older Job still waits.
+    std::thread::sleep(Duration::from_millis(2500));
+    engine.stop();
+
+    let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
+    assert_eq!(started, [Some("hot".to_owned())]);
+    assert_eq!((fx.job_status("hot"), fx.job_status("old")), ("running".into(), "queued".into()));
+}
+
+/// An urgent Job may start one Attempt beyond `concurrency`, and no more; the extra slot is never a non-urgent Job's.
+#[test]
+fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    // One Attempt is running: the only slot is taken.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_job("old", &[], "");
+    fx.add_job("hot1", &[], &urgent("hot1"));
+    fx.add_job("hot2", &[], &urgent("hot2"));
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") >= 1);
+    std::thread::sleep(Duration::from_millis(2500));
+    engine.stop();
+
+    // The first urgent Job by `seq` started (running Attempts: 2 = concurrency + 1); the second urgent one and the older Job wait.
+    let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
+    assert_eq!(started, [Some("hot1".to_owned())]);
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
+    assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
+}
+
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
 /// E3 starts an Attempt. The driver starts from the path recorded at start
 /// (`cannot run <path> (deleted)` before).

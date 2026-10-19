@@ -906,7 +906,7 @@ fn record_of(id: &RecordId) -> Record {
 }
 
 #[test]
-fn a_digest_missing_one_of_the_unplanned_records_is_rejected() {
+fn a_digest_missing_a_decision_or_open_question_of_the_unplanned_records_is_rejected() {
     let wanted = unplanned_ids();
     for known in ["hs-d62", "hs-d194", "hs-n127", "hs-n107", "hs-d163"] {
         assert!(wanted.contains(&known.parse().unwrap()), "{known} is in unplanned.md: {wanted:?}");
@@ -916,23 +916,39 @@ fn a_digest_missing_one_of_the_unplanned_records_is_rejected() {
     // The Context holds each of them, in force.
     let records: Vec<(i64, Record)> = wanted.iter().enumerate().map(|(i, id)| (i as i64 + 1, record_of(id))).collect();
     let as_of = records.len() as i64;
-    let in_force: Vec<RecordId> = inforce::in_force(&records, as_of).into_iter().map(|(_, r)| r.id.clone()).collect();
-    assert_eq!(in_force, wanted);
+    let in_force = inforce::in_force(&records, as_of);
+    assert_eq!(in_force.iter().map(|(_, r)| r.id.clone()).collect::<Vec<_>>(), wanted);
+    let expect = digest::Expect::of(&in_force);
+
+    // The topic sections must cite every decision and open question (D-a); a note, an answer and an answered
+    // question are listed by cpd's index, so a digest may leave them out.
+    let answered: Vec<&RecordId> = in_force.iter().filter_map(|(_, r)| r.question()).collect();
+    let required = |id: &RecordId| match id.kind() {
+        RecordKind::Decision => true,
+        RecordKind::Question => !answered.contains(&id),
+        _ => false,
+    };
+    assert!(wanted.iter().any(|id| required(id)) && wanted.iter().any(|id| !required(id)), "both kinds are exercised");
 
     let digest_of = |ids: &[&RecordId]| ids.iter().map(|id| format!("- Statement [{id}].\n")).collect::<String>();
     let all: Vec<&RecordId> = wanted.iter().collect();
-    assert_eq!(digest::validate(digest_of(&all).as_bytes(), &in_force, digest::LIMIT), Ok(()));
+    assert_eq!(digest::validate(digest_of(&all).as_bytes(), &expect, digest::LIMIT), Ok(()));
 
     for left_out in &wanted {
         let some: Vec<&RecordId> = wanted.iter().filter(|id| *id != left_out).collect();
-        let invalid = digest::validate(digest_of(&some).as_bytes(), &in_force, digest::LIMIT).unwrap_err();
-        assert_eq!(invalid.missing, [left_out.clone()], "leaving out {left_out}");
-        assert!(invalid.stray.is_empty());
+        let result = digest::validate(digest_of(&some).as_bytes(), &expect, digest::LIMIT);
+        if required(left_out) {
+            let invalid = result.unwrap_err();
+            assert_eq!(invalid.missing, [left_out.clone()], "leaving out {left_out}");
+            assert!(invalid.stray.is_empty());
+        } else {
+            assert_eq!(result, Ok(()), "leaving out {left_out}, which cpd's index lists");
+        }
     }
 
     // Citing a record that is no longer in force is refused too.
     let mut with_stray = digest_of(&all);
     with_stray.push_str("- Old [hs-d1].\n");
-    let invalid = digest::validate(with_stray.as_bytes(), &in_force, digest::LIMIT).unwrap_err();
+    let invalid = digest::validate(with_stray.as_bytes(), &expect, digest::LIMIT).unwrap_err();
     assert_eq!((invalid.missing.is_empty(), invalid.stray), (true, vec!["hs-d1".parse().unwrap()]));
 }
