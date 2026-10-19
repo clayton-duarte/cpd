@@ -579,7 +579,7 @@ fn a_follow_that_fails_is_shown_in_the_footer() {
     // not through `Store`, which keeps the Events append-only
     let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
     raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
-    let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("is above the highest Event id")));
+    let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("Event cursor")));
     assert!(screen.iter().any(|r| r.starts_with(" ▾ ● alpha")), "the tree stays: {screen:?}");
 }
 

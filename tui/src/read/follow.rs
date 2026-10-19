@@ -29,7 +29,7 @@ impl Follow {
             if highest < from {
                 return Err(CpdError::new(
                     ErrorCode::CursorAhead,
-                    format!("The Event cursor {from} is above the highest Event id, {highest}: the database changed."),
+                    format!("Event cursor {from} is above the highest Event id, {highest}: the database changed."),
                 )
                 .with("cursor", from)
                 .with("highest", highest));

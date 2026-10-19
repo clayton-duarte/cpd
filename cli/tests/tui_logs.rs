@@ -276,6 +276,22 @@ fn a_failed_read_keeps_the_events_and_shows_the_error_until_a_read_succeeds() {
     wait_screen(&env, &pane, "the error to go", |r| r.get(4).is_some_and(|l| l == " 00:00:09 event 9"));
 }
 
+/// A follow that fails is shown in the last row, as a failed read is (tui-G4): the highest Event id fell below the
+/// cursor, which is what a replaced database looks like. The Events stay.
+#[test]
+fn a_follow_that_fails_is_shown_and_the_events_stay() {
+    let env = env();
+    let mut store = open(&env);
+    append_numbered(&mut store, 0, 10);
+    let pane = start(&env, &["logs"], 80, 5);
+    wait_screen(&env, &pane, "the latest Events", |r| r.get(4).is_some_and(|l| l == " 00:00:09 event 9"));
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > 5;");
+    let rows = wait_screen(&env, &pane, "the error in the last row", |r| r.get(4).is_some_and(|l| l.contains("Event cursor")));
+    assert_eq!(rows[3], " 00:00:09 event 9", "the Events stay: {rows:?}");
+}
+
 #[test]
 fn the_logs_view_needs_a_terminal() {
     let env = env();

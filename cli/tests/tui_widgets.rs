@@ -708,6 +708,21 @@ fn a_failed_read_keeps_the_column_and_shows_the_error_until_a_read_succeeds() {
     });
 }
 
+/// A follow that fails is shown in the column's last row, the column stays (tui-G4): the highest Event id fell below
+/// the cursor, which is what a replaced database looks like.
+#[test]
+fn a_follow_that_fails_is_shown_and_the_column_stays() {
+    let env = pane_env();
+    prs_store(&env);
+    let pane = start(&env, "view");
+    wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
+    let screen = wait_for_screen(&env, &pane, "the error in the last row", |s| s.iter().any(|r| r.contains("Event cursor")));
+    assert!(screen.iter().any(|r| r.contains("acme/repo#20")), "the column stays: {screen:?}");
+}
+
 #[test]
 fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_run_nothing() {
     let env = pane_env();

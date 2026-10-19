@@ -162,6 +162,30 @@ fn a_failed_read_keeps_the_workers_and_shows_the_error_until_a_read_succeeds() {
     });
 }
 
+/// A follow that fails is shown in the note's place, the workers stay (tui-G4): the highest Event id fell below the
+/// cursor, which is what a replaced database looks like.
+#[test]
+fn a_follow_that_fails_is_shown_and_the_workers_stay() {
+    let env = env();
+    sql(
+        &env,
+        &(plan_with_attempts(&["running"])
+            + "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+               VALUES (cpd_txn(), '2026-01-03T00:00:00.000Z', 'plan-phase', 'ctx', 'ship', NULL, 'fixture', '{}');"),
+    );
+    let pane = start_view(&env, 160);
+    row_ending(&env, &pane, "workers 1/4");
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
+    let mut row = String::new();
+    wait_until("the error in the row", || {
+        row = tmux_out(&env, &["capture-pane", "-p", "-t", &pane]).lines().next().unwrap_or("").to_owned();
+        row.contains("Event cursor")
+    });
+    assert!(row.trim_end().ends_with("workers 1/4"), "the workers stay: {row:?}");
+}
+
 #[test]
 fn an_unknown_view_is_usage_and_the_statusbar_needs_a_terminal() {
     let env = env();

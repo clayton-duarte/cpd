@@ -513,6 +513,25 @@ fn a_failed_snapshot_keeps_the_chart_and_shows_the_error_until_a_snapshot_succee
     screen_when(&env, &pane, "the error to go", |s| !s.iter().any(|l| l.contains("no such table")) && title(s));
 }
 
+/// A follow that fails is shown below the chart, for longer than one snapshot (tui-G4): the highest Event id fell below
+/// the cursor, which is what a replaced database looks like. The chart stays.
+#[test]
+fn a_follow_that_fails_is_shown_below_the_chart() {
+    let env = env();
+    sql(&env, &plan_with("deploy", Some((7, "none")), &[("a", "merged", "S3", &[], 1)]));
+    let pane = start_view(&env);
+    let title = |s: &[String]| s.iter().any(|l| l.contains("#7 open ↗"));
+    screen_when(&env, &pane, "the chart", title);
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
+    screen_when(&env, &pane, "the error", |s| s.iter().any(|l| l.contains("Event cursor")));
+    // a snapshot is retaken meanwhile (the refresh): the error stays
+    std::thread::sleep(Duration::from_secs(3));
+    let screen = screen(&env, &pane);
+    assert!(screen.iter().any(|l| l.contains("Event cursor")) && title(&screen), "{screen:?}");
+}
+
 #[test]
 fn without_a_port_file_the_pending_review_row_has_no_arrow() {
     let env = env();
