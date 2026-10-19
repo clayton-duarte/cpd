@@ -615,7 +615,16 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     sql(&env, &in_chat("ctx", "side", "lead-side"));
     screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
     sql(&env, &in_chat("ctx", "ship", "lead-ship"));
-    let back = screen_when(&env, &pane, "the first Plan again", |s| s.iter().any(|l| l.contains(" j")));
+    // a frame reaches the pane in more than one write (the view's stdout flushes every 1024 bytes), so a capture can
+    // show the first rows of the chart and nothing below: wait for the whole frame, and compare the last capture
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let back = loop {
+        let now = screen(&env, &pane);
+        if now == scrolled || Instant::now() >= deadline {
+            break now;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert_eq!(back, scrolled, "{}", back.join("\n"));
     assert_ne!(back, top);
     assert!(!selected(&tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane])), "a pill is selected");

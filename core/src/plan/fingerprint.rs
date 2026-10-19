@@ -43,9 +43,13 @@ pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrSpec>, CpdErro
 /// lock must not void a review of the drafts (§2.3).
 pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
     let phase: Option<String> = conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
-    let reviews_prs = matches!(phase.as_deref(), None | Some("grounding" | "plan"));
-    let prs = if reviews_prs { load_prs(conn, plan)? } else { Vec::new() };
+    let prs = if reviews_prs(phase.as_deref()) { load_prs(conn, plan)? } else { Vec::new() };
     Ok(of(&jobs::load(conn, plan)?, &prs))
+}
+
+/// Whether the review of a Plan in `phase` (none: not found) covers its PRs: before the lock only.
+pub(super) fn reviews_prs(phase: Option<&str>) -> bool {
+    matches!(phase, None | Some("grounding" | "plan"))
 }
 
 /// `sha256` of `{jobs, prs}` (§2.3): `jobs` is the Locked fields of every
