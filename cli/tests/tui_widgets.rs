@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::host::tmux::PANE_DIED_HOOK;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
 use cpd_tui::read::{self, Dot, Widgets};
@@ -687,6 +688,24 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
         assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗"))), "{url}: {styled:?}");
     }
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
+}
+
+/// `q` does nothing in the column: with the cockpit's `pane-died` hook a view that exits is started again, so a `q` that
+/// ended the program would be a restart (tui-W1).
+#[test]
+fn q_does_not_end_the_view() {
+    let env = pane_env();
+    prs_store(&env);
+    let pane = start(&env, "view");
+    tmux_out(&env, &["set", "-p", "-t", &pane, "@cpd_view", "widgets"]);
+    tmux_out(&env, &["set", "-g", "remain-on-exit", "on"]);
+    tmux_out(&env, &["set-hook", "-g", "pane-died", PANE_DIED_HOOK]);
+    wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]);
+    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid} #{pane_dead}"]), format!("{pid} 0"), "the program ended");
+    assert!(screen(&env, &pane).iter().any(|r| r.contains("acme/repo#20")));
 }
 
 /// A failed read keeps the column on screen and shows the error in its last row; the next refresh reads again, and the

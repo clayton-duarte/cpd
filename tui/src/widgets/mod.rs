@@ -17,7 +17,7 @@ pub mod legend;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
+use ratatui::crossterm::event::{self, Event, MouseButton, MouseEventKind};
 use ratatui::layout::Position;
 
 use super::read::{self, OpenPr};
@@ -75,7 +75,7 @@ struct Opener<'a> {
     cockpit: &'a str,
 }
 
-/// Draws and follows until `q`. A failed read keeps what is on screen and shows its error in the last row, until a read
+/// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). A left click on an owned PR row (not on its
 /// `↗`) opens its Lead in the chat slot; a refusal is the `note` in the column's last row until the next click.
 fn show(
@@ -100,7 +100,6 @@ fn show(
         if event::poll(TICK)? {
             redraw = true; // a click, a key or a resize
             match event::read()? {
-                Event::Key(key) if quits(&key) => return Ok(()),
                 Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                     note.clear();
                     let at = Position::new(m.column, m.row);
@@ -158,11 +157,6 @@ pub(crate) fn open_lead(run_command: RunCommand, tmux: &Tmux, cockpit: &str, ses
 pub(crate) fn main_panes(tmux: &Tmux, cockpit: &str) -> Result<Vec<Pane>, CpdError> {
     let all = tmux.list_panes()?;
     Ok(all.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect())
-}
-
-/// `q` is the view's only key (commands.md §13.2): `?` belongs to the tree and the StatusBar.
-fn quits(key: &KeyEvent) -> bool {
-    key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q')
 }
 
 fn host_failed(what: &str, why: impl std::fmt::Display) -> CpdError {
@@ -227,16 +221,6 @@ mod tests {
         assert_eq!(newest_client("100 80 24\n300 215 62\n200 120 30\n"), Some((215, 62)));
         assert_eq!(newest_client(""), None);
         assert_eq!(newest_client("junk\n"), None);
-    }
-
-    #[test]
-    fn q_is_the_only_key() {
-        // Mouse clicks are handled apart, in `show`; no other key does anything.
-        let press = |code| KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE);
-        assert!(quits(&press(KeyCode::Char('q'))));
-        for code in [KeyCode::Char('?'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char('j'), KeyCode::Char('Q')] {
-            assert!(!quits(&press(code)), "{code:?}");
-        }
     }
 
     #[test]

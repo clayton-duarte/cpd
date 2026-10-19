@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::PANE_DIED_HOOK;
@@ -127,7 +127,7 @@ impl<'a> Pane<'a> {
             &width.to_string(),
             "-y",
             &height.to_string(),
-            "sleep 3600",
+            &format!("sleep {SLEEP_SECONDS}"),
             ";",
             "set-option",
             "-p",

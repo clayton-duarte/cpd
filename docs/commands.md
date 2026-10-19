@@ -1793,14 +1793,16 @@ cpd tui view history <id>
 
 The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§1.2), make no writes of their own, and change state only by running `cpd` commands (`session open`, `plan new`, `session close`, `session park`, …) as subprocesses. What they read is §17.
 
+A view in a pane never exits on a key: the `pane-died` hook (§6.1) starts a view again whenever its program exits, so `q` in the Worker view closes the pane (`kill-pane`) and the widgets view has no `q`. A view that fails (at start or later) prints its error, waits 3 s and then exits, so the hook does not start it again in a tight loop. Without a terminal the error is returned at once.
+
 **Cockpit parity** (User, 2026-10-15). The cockpit matches the running cpd 1 cockpit exactly: layout, elements, text, colours, keys, mouse and behaviour. The reference was cpd 1's cockpit spike, `tui/` on branch `main` before the switch-over (`tui/src/*.rs`, `tui/README.md`; `tui/` now holds the Rust cockpit crate `cpd-tui`); the checklist of every difference is [cockpit-parity.md](cockpit-parity.md). Where this section states a deviation, it is deliberate and has its reason.
 
 | View | What it is | Keys and mouse |
 |---|---|---|
 | `tree` | the **Context column**: Contexts, their Plans' Lead Sessions, and counters | ↑↓ and j/k move the cursor, Enter opens the Lead in the chat slot, `n` a new Plan, `x` closes a Lead's pane, `?` the legend; clicks and the right-click menu as below |
 | `plan` | the **Plan view**: one box per PR of the chat slot's Plan, each holding the flowchart of its Jobs | ←→↑↓ and h/j/k/l select, Enter opens a Job's Worker, Esc clears the selection; the wheel scrolls (3 rows, 4 columns); clicks as below; no `q`. The view remembers each Plan's scroll offset while it runs and restores it when a Lead of that Plan comes back to the chat slot (a Plan Lead and its side forks share it), clamped to the chart, which may have changed size; the selection is not kept (reset), and a restart of the view forgets every offset (User, hs-d197) |
-| `widgets` | the **Deploy column**: the machine, the cockpit's PRs, git and Jira (future) | `q` quits; a left click on an owned PR row brings its Lead into the chat slot (below); mouse capture on |
-| `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `← last` dim | `q` or Esc quits; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
+| `widgets` | the **Deploy column**: the machine, the cockpit's PRs, git and Jira (future) | no keys; a left click on an owned PR row brings its Lead into the chat slot (below); mouse capture on |
+| `worker` | the read-only Worker view: the Attempt's Worker session file (vision decision 5), `you` and its text in cyan, `agent` in green, `→ tool` in yellow, `← last` dim | `q` or Esc closes the pane (`kill-pane`: the `pane-died` hook would start an exited view again); ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
 | `history` | an archived Session's history, read-only: the Session's pi file drawn with the Worker view's renderer (`tui/src/worker/render.rs`); its top line is `<name> (archived, read-only)`. Started by `session history` (§10.12) in the chat slot | `q` or Esc quits to the placeholder text; ↑/k, ↓/j, PageUp, PageDown and the wheel (3 rows) scroll; End or `G` follows the end again; no other keys |
 | `statusbar` | one row across the bottom | no keys, no focus; clicks on its buttons |
 | `chat` | the chat slot's placeholder (§10) | none |
