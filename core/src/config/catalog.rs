@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -16,10 +17,15 @@ use super::file::Config;
 use super::tier::{Catalog, Letter, TierModel, effort_of_level};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::deadline::{self, Failed};
 use crate::store::Store;
 
 /// The embedded module; its header says how it is run.
 const MODULE: &str = include_str!("catalog.mjs");
+
+/// The module's deadline (contract §9): it loads pi's packages and reads no
+/// network (`allowModelNetwork: false`); a cold catalog measured 0.68 s (median, commands-F3).
+const NODE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// A pi install located as contract §9 says.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,13 +139,13 @@ fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catal
     if let Some(cached) = cache::read(store, &pi.version, models)? {
         return Ok(cached);
     }
-    let catalog = read(pi, config)?;
+    let catalog = read(pi, config, NODE_DEADLINE)?;
     cache::write(store, &catalog)?;
     Ok(catalog)
 }
 
-/// Runs the embedded module with pi's Node and builds the [`Catalog`] from what it prints.
-pub(crate) fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError> {
+/// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
+pub(crate) fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
     let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h)];
     let node = node();
     let mut cmd = Command::new(&node);
@@ -150,8 +156,9 @@ pub(crate) fn read(pi: &PiInstall, config: &Config) -> Result<Catalog, CpdError>
         .env("PI_MANAGED_INSTALL_ROOT", pi.agent_dir.join("install"))
         .current_dir(&pi.agent_dir)
         .stdin(Stdio::null());
-    let out = cmd.output().map_err(|e| {
-        catalog_failed(format!("cannot run {}: {e}.", node.display())).with("node", node.display().to_string())
+    let out = deadline::output(&mut cmd, "node", deadline).map_err(|e| match e {
+        Failed::Io(e) => catalog_failed(format!("cannot run {}: {e}.", node.display())).with("node", node.display().to_string()),
+        Failed::Timeout(e) => e,
     })?;
     if !out.status.success() {
         return Err(catalog_failed(format!("the catalog module failed under pi {}.", pi.version))

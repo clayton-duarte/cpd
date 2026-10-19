@@ -1333,6 +1333,39 @@ fn version_on_a_newer_database_succeeds_and_does_not_change_it() {
     assert_eq!(fs::read(home(&env).db()).unwrap(), before);
 }
 
+/// store-W8: a held `locks/store.lock` is waited for at most `busy_ms`.
+#[test]
+fn a_held_setup_lock_gives_lock_timeout_after_store_busy_ms() {
+    use nix::fcntl::{Flock, FlockArg};
+    let env = TestEnv::new();
+    let h = home(&env);
+    fs::create_dir_all(h.locks_dir()).unwrap();
+    let path = h.locks_dir().join("store.lock");
+    let file = fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
+    let held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let opener = std::thread::spawn(move || {
+        let start = Instant::now();
+        let result = Store::open(&h, 300).map(drop);
+        tx.send((result, start.elapsed())).unwrap();
+    });
+    let received = rx.recv_timeout(Duration::from_secs(10));
+    drop(held); // lets a still-waiting opener finish
+    opener.join().unwrap();
+    let (result, waited) = received.expect("Store::open still waited for the lock after 10 s");
+
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
+    assert!(waited >= Duration::from_millis(300), "gave up after {waited:?}");
+    assert!(waited < Duration::from_secs(5), "waited {waited:?}");
+    assert!(err.message().contains("store.lock"), "{err}");
+    assert!(err.message().contains("300"), "{err}");
+    assert_eq!(err.details()["lock"], path.display().to_string());
+    assert_eq!(err.details()["waited_ms"], 300);
+    assert!(!home(&env).db().exists(), "a refused open created the database");
+}
+
 /// `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6) are both `store_busy` (contract §4.2).
 #[test]
 fn sqlite_busy_and_sqlite_locked_are_store_busy() {
