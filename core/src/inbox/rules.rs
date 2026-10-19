@@ -28,9 +28,9 @@ pub struct EngineError {
     pub event: i64,
 }
 
-/// The `state_label`s of a `blocked` Session that are not a dialog: a Worker's
-/// question goes to its Lead, a plan review has its own kind.
-const NOT_A_DIALOG: [&str; 2] = ["cpd: Worker question", "cpd: plan review"];
+/// The `state_label` of a `blocked` Session that is not a dialog: a plan review has its own kind. A Worker's question
+/// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
+const PLAN_REVIEW: &str = "cpd: plan review";
 
 /// Every condition of the kinds, in the order of the kinds. `now` and
 /// `stuck_after` decide `job-stuck`; `errors` are the engine's active ones.
@@ -72,12 +72,12 @@ fn time_of(what: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
 
 /// The id of a Session's latest `session-state` Event.
 const LATEST_STATE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state')";
-/// The id of its latest finished reply turn: its latest `session-state` Event from `working` or `blocked` to `idle`
+/// The id of its latest finished reply turn: its latest `session-state` Event from `working`, `waiting` or `blocked` to `idle`
 /// with `data.reply` true, a turn that answered the User (a start or reload, `stopped` to `idle`, is not one; a turn
 /// that answered an Event or another Session is not one either; hs-d242, hs-d278).
 const LATEST_IDLE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
                                 AND json_extract(e.data, '$.to') = 'idle'
-                                AND json_extract(e.data, '$.from') IN ('working', 'blocked')
+                                AND json_extract(e.data, '$.from') IN ('working', 'waiting', 'blocked')
                                 AND json_extract(e.data, '$.reply') = 1)";
 /// The id of its latest `session-moved` Event with `place: chat`.
 const LATEST_CHAT: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
@@ -152,8 +152,7 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
 
 /// `dialog`: a Lead, fork or Manager asks the User something. Red when its Plan is in `dispatch` or `deploy`, else magenta.
 fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let [worker_question, plan_review] = NOT_A_DIALOG;
-    let filter = format!("s.state = 'blocked' AND s.state_label NOT IN ('{worker_question}', '{plan_review}')");
+    let filter = format!("s.state = 'blocked' AND s.state_label <> '{PLAN_REVIEW}'");
     Ok(seats(conn, LATEST_STATE, &filter)?
         .into_iter()
         .map(|seat| {
@@ -168,7 +167,7 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 }
 
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
-/// latest finished reply turn (`working` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
+/// latest finished reply turn (`working`, `waiting` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
 /// (never in the slot counts as older than everything).
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = format!("s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)");
@@ -566,11 +565,14 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_question_and_a_plan_review_label_are_not_dialogs() {
+    fn a_lead_waiting_for_a_worker_and_a_plan_review_label_are_not_dialogs() {
         let mut f = fixture("dispatch");
-        f.state("l-pay", "blocked", Some("cpd: Worker question"));
+        f.state("l-pay", "waiting", Some("cpd: Worker question"));
         f.state("mgr", "blocked", Some("cpd: plan review"));
         assert!(f.of(Kind::Dialog).is_empty());
+        // `blocked` is the human's whatever its label: the Worker question is `waiting` now (hs-d303).
+        f.state("l-pay", "blocked", Some("cpd: Worker question"));
+        assert_eq!(f.of(Kind::Dialog).len(), 1);
     }
 
     #[test]
@@ -592,7 +594,7 @@ mod tests {
         assert!(f.of(Kind::Dialog).is_empty());
         f.state("wk", "idle", None);
         assert!(f.of(Kind::Unread).is_empty());
-        f.state("wk", "blocked", Some("cpd: Worker question"));
+        f.state("wk", "waiting", Some("cpd: question to the Lead"));
         assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
     }
 
@@ -659,13 +661,13 @@ mod tests {
     }
 
     #[test]
-    fn a_working_or_blocked_session_going_idle_after_the_visit_is_unread() {
-        for before in ["working", "blocked"] {
+    fn a_working_waiting_or_blocked_session_going_idle_after_the_visit_is_unread() {
+        for before in ["working", "waiting", "blocked"] {
             let mut f = fixture("dispatch");
             f.reply("l-pay");
             f.moved("l-pay", "chat");
             f.moved("l-pay", "parked");
-            f.state("l-pay", before, (before == "blocked").then_some("Which?"));
+            f.state("l-pay", before, (before != "working").then_some("Which?"));
             let idle = f.reply("l-pay");
             assert_eq!(one(f.of(Kind::Unread)).event, Some(idle), "{before} -> idle");
         }
@@ -680,6 +682,8 @@ mod tests {
         f.state("mgr", "working", None);
         f.state("mgr", "blocked", Some("Which?"));
         assert!(f.of(Kind::Unread).is_empty(), "blocked is a dialog, not unread");
+        f.state("mgr", "waiting", Some("cpd: Worker question"));
+        assert!(f.of(Kind::Unread).is_empty(), "waiting is not unread");
         f.state("mgr", "stopped", None);
         assert!(f.of(Kind::Unread).is_empty());
     }

@@ -190,7 +190,7 @@ pub struct StateArgs {
     /// The agent state
     #[arg(value_name = "state")]
     state: State,
-    /// Why it is blocked: required with `blocked`, refused otherwise
+    /// Why it is waiting or blocked: required with `waiting` and `blocked`, refused otherwise
     #[arg(long, value_name = "text")]
     label: Option<Label>,
     /// The run that ended answered a message the User wrote to this Session: allowed only with `idle`

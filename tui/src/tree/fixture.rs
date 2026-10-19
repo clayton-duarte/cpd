@@ -34,6 +34,7 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         plan_lead: false,
         dot: match state {
             State::Blocked => Dot::Red,
+            State::Waiting => Dot::Idle,
             State::Working => Dot::Working,
             State::Idle => Dot::Idle,
             State::Stopped => Dot::Stopped,
