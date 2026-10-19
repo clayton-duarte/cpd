@@ -222,14 +222,48 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
     if !busy.is_empty() {
         return Ok(Outcome::Busy(busy));
     }
+    // Everything said to the old server is said by its own binary (`/proc/<pid>/exe`): the installed
+    // tmux may be another version, and a dying server answers it with errors (hs-n285).
+    let old = tmux.on_server_binary()?;
     let cockpit = config.tmux.cockpit_session.as_str();
-    let placed = session::placed(store, &tmux, cockpit)?;
-    log(&format!("restarting the tmux server -L {} (tmux {server} -> {installed}); Sessions with a pane: {}", tmux.socket(), placed.len()));
-    tmux.kill_server()?;
+    // The list of what to restore is taken before the kill, from the store as well as from the panes.
+    let placed = session::placed(store, &old, cockpit)?;
+    log(&format!("restarting the tmux server -L {} (tmux {server} -> {installed}); Sessions to reopen: {}", tmux.socket(), placed.len()));
+    old.kill_server()?;
     log("the server is gone");
-    wait_engine_gone(home)?;
 
-    // The cockpit on the installed tmux, and the engine again (`watch --ensure`).
+    // From here on nothing stops the restart: each step that fails is kept, and the next one runs, so
+    // the cockpit is rebuilt and every Session is reopened whatever went wrong before.
+    let mut problems: Vec<String> = Vec::new();
+    let mut note = |what: String| problems.push(what);
+    for (id, e) in session::gone(store, &placed, "tmux restart") {
+        note(format!("the rows of Session {id} were not written ({})", e.message()));
+    }
+    if let Err(e) = wait_engine_gone(home) {
+        note(e.message().to_owned());
+    }
+    match rebuild_cockpit(home) {
+        Ok(()) => log("the cockpit is built on the installed tmux"),
+        Err(e) => note(e.message().to_owned()),
+    }
+
+    let failed = session::reopen(&placed);
+    if !failed.is_empty() {
+        let list: Vec<String> = failed.iter().map(|(id, e)| format!("{id} ({})", e.message())).collect();
+        note(format!("these Sessions were not reopened: {}. Open each with cpd session open", list.join("; ")));
+    }
+    if !problems.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::TmuxFailed,
+            format!("The server was restarted but not all of it came back: {}.", problems.join("; ")),
+        ));
+    }
+    log(&format!("reopened {} Session(s); done", placed.len()));
+    Ok(Outcome::Restarted { reopened: placed.len() })
+}
+
+/// The cockpit on the installed tmux, and the engine again (`cpd tui` runs `watch --ensure`).
+fn rebuild_cockpit(home: &CpdHome) -> Result<(), CpdError> {
     let installed_cpd = exe::started_as()?;
     let out = Command::new(installed_cpd)
         .arg("tui")
@@ -247,18 +281,7 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
         let tail = String::from_utf8_lossy(&out.stdout).trim().to_owned() + &String::from_utf8_lossy(&out.stderr);
         return Err(CpdError::new(ErrorCode::TmuxFailed, format!("cpd tui failed after the server was killed: {}", tail.trim())));
     }
-    log("the cockpit is built on the installed tmux");
-
-    let failed = session::reopen(&placed);
-    if !failed.is_empty() {
-        let list: Vec<String> = failed.iter().map(|(id, e)| format!("{id} ({})", e.message())).collect();
-        return Err(CpdError::new(
-            ErrorCode::TmuxFailed,
-            format!("The server was restarted but these Sessions were not reopened: {}. Open each with cpd session open.", list.join("; ")),
-        ));
-    }
-    log(&format!("reopened {} Session(s); done", placed.len()));
-    Ok(Outcome::Restarted { reopened: placed.len() })
+    Ok(())
 }
 
 /// Waits until no engine holds its lock: the killed server's panes got `SIGHUP`, and `cpd tui`
