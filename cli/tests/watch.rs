@@ -1005,10 +1005,10 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
     let fx = fx("concurrency = 1\nretry_cap = 0");
     let config = fx.env.cpd_home().join("config.toml");
     fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 0.1\n")).unwrap();
-    let unit = Duration::from_millis(100);
+    let unit = Duration::from_millis(50);
     let installed = fx.env.root().join("cpd-installed");
     copy_executable(CPD, &installed);
-    let engine = fx.start_with(&installed, &[("CPD_TEST_BACKOFF_UNIT", "0.1")]);
+    let engine = fx.start_with(&installed, &[("CPD_TEST_BACKOFF_UNIT", "0.05")]);
     fs::remove_file(&installed).unwrap();
     fx.add_job("api", &[], "");
 
