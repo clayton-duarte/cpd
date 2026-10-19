@@ -62,12 +62,12 @@ pub struct AddArgs {
     /// The title
     #[arg(long, value_name = "text")]
     title: Text,
-    /// The Tier: <O|S|H><0-5>
+    /// The Tier: <O|S|H><0-5> (required, except with --draft)
     #[arg(long, value_name = "T")]
-    tier: Tier,
-    /// The Spec file (JSON)
+    tier: Option<Tier>,
+    /// The Spec file (JSON) (required, except with --draft)
     #[arg(long, value_name = "file")]
-    spec: PathBuf,
+    spec: Option<PathBuf>,
     /// Dependencies, comma-separated
     #[arg(long, value_name = "k1,k2", value_delimiter = ',')]
     needs: Vec<JobKey>,
@@ -76,7 +76,8 @@ pub struct AddArgs {
     #[arg(long, conflicts_with = "needs")]
     review: bool,
     /// Add it as a draft in a phase after plan too: the engine never runs it
-    /// until a Plan review of the drafts is approved
+    /// until a Plan review of the drafts is approved. Needs no --tier and no
+    /// --spec: a stub draft, completed later with job edit
     #[arg(long)]
     draft: bool,
     #[command(flatten)]

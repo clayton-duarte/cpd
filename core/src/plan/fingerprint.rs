@@ -50,7 +50,8 @@ pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdE
 
 /// `sha256` of `{jobs, prs}` (§2.3): `jobs` is the Locked fields of every
 /// `draft` Job (title, Tier, Spec, needs and PR, with the key, as cpd 1 §11
-/// `plan render`), ordered by key; `prs` is `{key, repo, base, needs}` of
+/// `plan render`), ordered by key, a stub with its missing fields as JSON
+/// `null` (hs-d241); `prs` is `{key, repo, base, needs}` of
 /// every PR in `prs` that is not `cancelled`, ordered by key, `needs` sorted.
 pub fn of(jobs: &[Job], prs: &[PrSpec]) -> String {
     let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_draft()).collect();
@@ -60,10 +61,9 @@ pub fn of(jobs: &[Job], prs: &[PrSpec]) -> String {
         .map(|j| {
             let mut needs = j.needs.clone();
             needs.sort();
-            json!({
-                "key": j.key, "pr": j.pr, "title": j.title, "tier": j.tier, "goal": j.goal, "context": j.context,
-                "touches": j.touches, "acceptance": j.acceptance, "out_of_scope": j.out_of_scope, "needs": needs,
-            })
+            let mut fields = j.locked_fields();
+            fields.extend([("key".into(), json!(j.key)), ("pr".into(), json!(j.pr)), ("title".into(), json!(j.title)), ("needs".into(), json!(needs))]);
+            Value::Object(fields)
         })
         .collect();
     let mut prs: Vec<&PrSpec> = prs.iter().filter(|p| p.status != "cancelled").collect();
@@ -83,6 +83,7 @@ pub fn of(jobs: &[Job], prs: &[PrSpec]) -> String {
 mod tests {
     use sha2::{Digest, Sha256};
 
+    use super::super::jobs::JobSpec;
     use super::*;
 
     fn job(key: &str, status: &str, needs: &[&str]) -> Job {
@@ -91,12 +92,8 @@ mod tests {
             key: key.into(),
             pr: "web".into(),
             title: format!("Title {key}"),
-            tier: "S2".into(),
-            goal: "g".into(),
-            context: "c".into(),
-            touches: json!(["a"]),
-            acceptance: json!(["b"]),
-            out_of_scope: json!([]),
+            tier: Some("S2".into()),
+            spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: json!(["a"]), acceptance: json!(["b"]), out_of_scope: json!([]) }),
             status: status.into(),
             appended: false,
             review: false,
@@ -125,12 +122,29 @@ mod tests {
         retitled.title = "New".into();
         assert_ne!(of(&[a.clone(), retitled], &prs), base);
         let mut retiered = b.clone();
-        retiered.tier = "O3".into();
+        retiered.tier = Some("O3".into());
         assert_ne!(of(&[a.clone(), retiered], &prs), base);
         let mut moved = b;
         moved.pr = "api".into();
         assert_ne!(of(&[a, moved], &prs), base, "a Job's PR counts");
         assert_eq!(of(&[], &[]), format!("{:x}", Sha256::digest(br#"{"jobs":[],"prs":[]}"#)));
+    }
+
+    #[test]
+    fn the_plan_fingerprint_covers_a_stub_as_it_is_with_null_for_what_it_lacks() {
+        let mut stub = job("a", "draft", &[]);
+        (stub.tier, stub.spec) = (None, None);
+        let expected = format!(
+            "{:x}",
+            Sha256::digest(
+                br#"{"jobs":[{"acceptance":null,"context":null,"goal":null,"key":"a","needs":[],"out_of_scope":null,"pr":"web","title":"Title a","tier":null,"touches":null}],"prs":[]}"#
+            )
+        );
+        assert_eq!(of(&[stub.clone()], &[]), expected);
+        let mut tiered = stub.clone();
+        tiered.tier = Some("S2".into());
+        assert_ne!(of(&[tiered.clone()], &[]), expected, "a Tier changes it");
+        assert_ne!(of(&[job("a", "draft", &[])], &[]), of(&[tiered], &[]), "so does the Spec");
     }
 
     #[test]
