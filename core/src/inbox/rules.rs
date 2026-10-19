@@ -13,7 +13,7 @@ use time::format_description::well_known::Rfc3339;
 use super::model::{Condition, Kind, Urgency};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::host::addr::{URL_HOST, review_host};
+use crate::host::addr::review_host;
 use crate::ids::{ContextId, JobKey, PlanId, RecordId, SessionId};
 use crate::plan::Phase;
 use crate::store::Store;
@@ -421,6 +421,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
+    use crate::host::addr::URL_HOST;
 
     const NOW: OffsetDateTime = datetime!(2026-01-02 00:00 UTC);
     const TEN: Duration = Duration::from_secs(600);

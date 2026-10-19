@@ -1236,6 +1236,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     // pr-failing, which the Plan `ship` owns here: its Lead
     pane.click(10, row_of("acme/api#12 failing"));
     assert_eq!(wait_for_calls(&env, 7)[6], words(&["session", "open", "l-ship"]));
+    pane.wait("the note gone", |_| !pane.footer_has("copied")); // the rows below move with it
     // engine-error: the logs popup at the item's Event
     pane.click(10, row_of("engine: store busy"));
     let popups = || -> Vec<_> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect() };
