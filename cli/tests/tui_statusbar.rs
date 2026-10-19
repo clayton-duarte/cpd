@@ -210,3 +210,29 @@ fn an_unknown_view_is_usage_and_the_statusbar_needs_a_terminal() {
     let run = env.cpd(&["tui", "view", "statusbar"]);
     assert_eq!((run.exit, run.error()["code"].as_str()), (3, Some("not_a_terminal")), "{run:?}");
 }
+
+/// A click on a button runs tmux (the legend popup returns when it closes): the row keeps following the slots meanwhile
+/// (tui-W7). The `tmux` first on `PATH` takes 4 s to answer `list-clients`, the first call of the legend button.
+#[test]
+fn the_row_keeps_updating_while_a_button_runs_tmux() {
+    let env = env();
+    sql(&env, &plan_with_attempts(&[]));
+    let real = std::env::var("PATH")
+        .unwrap()
+        .split(':')
+        .map(|dir| std::path::Path::new(dir).join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH");
+    env.fake("tmux", &format!(r#"case " $* " in *" list-clients "*) sleep 4;; esac; exec {} "$@""#, real.display()));
+    let pane = start_view(&env, 40);
+    row_ending(&env, &pane, "workers 0/4");
+    // the legend button, `?`, is the second glyph (column 2); a click is a press and a release, SGR-encoded
+    for end in ['M', 'm'] {
+        tmux_out(&env, &["send-keys", "-t", &pane, "-l", &format!("\x1b[<0;3;1{end}")]);
+    }
+    wait_until("the legend button's tmux call", || env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "list-clients")));
+    let clicked = Instant::now();
+    sql(&env, &(attempt_row(1, "running") + &event("attempt-started")));
+    row_ending(&env, &pane, "workers 1/4");
+    assert!(clicked.elapsed() < Duration::from_secs(3), "the row followed the slots at once: {:?}", clicked.elapsed());
+}
