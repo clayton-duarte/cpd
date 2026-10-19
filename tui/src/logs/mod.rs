@@ -1,12 +1,12 @@
 //! The `logs` view (commands.md §13.2, §17; R36): the Event log, in a tmux popup opened by the StatusBar's
-//! `▤` button. It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
+//! `▤` button (`cpd tui action logs`). It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
 //! `events.poll_ms` and appends what is new. ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it. It makes no
 //! write of its own. With `--event <id>` it opens at that Event (a click on an `engine-error` or `engine-down` Inbox
 //! item): the Event's line is selected and scrolled into view, and the view does not follow until the User scrolls to the
 //! bottom; an Event outside the latest [`RECENT`] is read on its own and shown first.
 //!
 //! - [`view`]: the state and the drawing;
-//! - [`open`], [`open_at`] and [`popup_args`]: the popup, which the button and the Inbox click run.
+//! - [`popup_args`] and [`open_at`]: the popup, which `cpd tui action logs` and the Inbox click open.
 
 mod view;
 
@@ -50,11 +50,6 @@ pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
         None => "cpd tui view logs".to_owned(),
     };
     args
-}
-
-/// The StatusBar's `▤` click: the log in a tmux popup over the cockpit, at the bottom.
-pub(crate) fn open(tmux: &Tmux) -> Result<(), CpdError> {
-    open_at(tmux, None)
 }
 
 /// The log in a tmux popup over the cockpit, at the Event `event` (the bottom with none): the click on an Inbox item.
