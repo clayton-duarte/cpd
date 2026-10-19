@@ -767,7 +767,7 @@ Every write transaction starts by inserting its row into `txns` with an explicit
 
 The **schema check**: at open, cpd hashes `SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name` and compares it with the hash the binary embeds for the current `user_version`. A mismatch means someone dropped or changed a trigger or table: write commands refuse with `store_tampered` (exit 1); read commands still work and report it in their `tamper` field. This plus the history replaces cpd 1's `bd history` actor check (§8).
 
-The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check; every Locked Job whose recomputed fingerprint differs from the stored one; any `history` row whose `txn` has no `txns` row. The threat is an agent writing the Ledger outside cpd, as in cpd 1; a local user who drops the triggers, edits and recreates them exactly is out of scope (in cpd 1 the beads database could be edited the same way).
+The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check; every Locked Job whose recomputed fingerprint differs from the stored one; any `history` row whose `txn` has no `txns` row. The check reads only the `txn` column of `history` (through `history_txn`), never `before` or `after`, so the shape of an `update` row (§4.4, "History row shape") does not change it: a full row or a changed-column row is judged the same. The threat is an agent writing the Ledger outside cpd, as in cpd 1; a local user who drops the triggers, edits and recreates them exactly is out of scope (in cpd 1 the beads database could be edited the same way).
 
 ### 4.4 DDL
 
@@ -1130,6 +1130,8 @@ CREATE TABLE tier_catalog (
 ) STRICT;
 ```
 
+**History row shape** (hs-d234, sql-F2). An `insert` row holds the whole new row in `after`; a `delete` row holds the whole old row in `before` (`json_object` of every column, as the `_hist_ins` trigger above). An `update` row holds **the key and only the columns that changed**: `before` and `after` are JSON objects with the same keys, the primary-key columns of the table (always) and each other column whose value differs (`OLD.c IS NOT NEW.c`, so a change to or from `NULL` counts), `before` with the old values and `after` with the new ones. A column that did not change is absent from both. An `UPDATE` that changes no column still writes one row, with the key columns only. Why: a row of `jobs` carries long text (7 KB on average) and a status flip used to store it twice. The history stays replayable: apply an `update`'s `after` to the row as the earlier rows left it. `pk` is unchanged.
+
 **Triggers.** For each table `T` in `contexts`, `context_records`, `plans`, `pull_requests`, `prs`, `pr_needs`, `plan_reviews`, `jobs`, `dependencies`, `attempts`, `escalations`, `sessions`, `inbox_items` and `tier_catalog`, the migration that creates or rebuilds `T` creates three triggers, generated from the column list (shown for `escalations`; the others differ only in table name, primary key and columns):
 
 ```sql
@@ -1144,21 +1146,28 @@ END;
 CREATE TRIGGER escalations_hist_upd AFTER UPDATE ON escalations BEGIN
   INSERT INTO history(txn, tbl, pk, op, before, after) VALUES (cpd_txn(), 'escalations',
     json_array(NEW.plan, NEW.id), 'update',
-    json_object('plan', OLD.plan, 'id', OLD.id, 'attempt', OLD.attempt, 'number', OLD.number,
-                'question', OLD.question, 'status', OLD.status, 'answer', OLD.answer,
-                'asker_pid', OLD.asker_pid, 'asked_at', OLD.asked_at,
-                'answered_at', OLD.answered_at, 'expired_at', OLD.expired_at),
-    json_object('plan', NEW.plan, 'id', NEW.id, 'attempt', NEW.attempt, 'number', NEW.number,
-                'question', NEW.question, 'status', NEW.status, 'answer', NEW.answer,
-                'asker_pid', NEW.asker_pid, 'asked_at', NEW.asked_at,
-                'answered_at', NEW.answered_at, 'expired_at', NEW.expired_at));
+    (SELECT json_group_object(k, v) FROM (
+       SELECT 'plan' AS k, OLD.plan AS v UNION ALL SELECT 'id', OLD.id
+       UNION ALL SELECT 'attempt', OLD.attempt WHERE OLD.attempt IS NOT NEW.attempt
+       UNION ALL SELECT 'number', OLD.number WHERE OLD.number IS NOT NEW.number
+       UNION ALL SELECT 'question', OLD.question WHERE OLD.question IS NOT NEW.question
+       -- … one line for each of the other columns: status, answer, asker_pid,
+       --   asked_at, answered_at, expired_at
+    )),
+    (SELECT json_group_object(k, v) FROM (
+       SELECT 'plan' AS k, NEW.plan AS v UNION ALL SELECT 'id', NEW.id
+       UNION ALL SELECT 'attempt', NEW.attempt WHERE OLD.attempt IS NOT NEW.attempt
+       UNION ALL SELECT 'number', NEW.number WHERE OLD.number IS NOT NEW.number
+       UNION ALL SELECT 'question', NEW.question WHERE OLD.question IS NOT NEW.question
+       -- … the same other columns
+    )));
 END;
 CREATE TRIGGER escalations_no_delete BEFORE DELETE ON escalations BEGIN
   SELECT RAISE(ABORT, 'append_only: escalations');
 END;
 ```
 
-The store Job generates these triggers from the table definitions above (primary key: `id` for `contexts`, `plans` and `sessions`; `seq` for `context_records` and `jobs`; `id` for `pull_requests` and `inbox_items` too, the declared `PRIMARY KEY` for the others, `prs` and `pr_needs` included), and a test asserts that every column of every table appears in its `json_object` calls.
+The store Job generates these triggers from the table definitions above (primary key: `id` for `contexts`, `plans` and `sessions`; `seq` for `context_records` and `jobs`; `id` for `pull_requests` and `inbox_items` too, the declared `PRIMARY KEY` for the others, `prs` and `pr_needs` included), and a test asserts that every column of every table appears in its `_hist_ins` and `_hist_del` `json_object` calls and in the changed-column lines of its `_hist_upd` (the `escalations_hist_upd` above abbreviates the repeated lines).
 
 The exceptions to "never delete": a pull request row that no PR points to may be deleted (the poller deletes it when its pull request leaves the open search; hs-d96, D5), a Dependency of a `draft` Job may be deleted (that is how `job edit --needs` changes a draft), and a PR's need may be deleted while its Plan is in `grounding` or `plan` (that is how `pr edit --needs` changes it; R34). `pr_needs` gets `pr_needs_no_delete` and `pr_needs_hist_del`, written as below for `dependencies` with the condition `(SELECT phase FROM plans WHERE id = OLD.plan) NOT IN ('grounding', 'plan')` and the error `pr_locked`:
 
@@ -1287,7 +1296,8 @@ CREATE TRIGGER events_no_delete  BEFORE DELETE ON events  BEGIN SELECT RAISE(ABO
   - above N: refuse with `store_too_new` (exit 1): an older binary never writes a newer schema. A process keeps its connection for its life, so every write transaction re-reads `user_version` after `BEGIN IMMEDIATE` and refuses with `store_too_new` the same way, before its `txns` row.
 - **The hash check of a migration** (hs-n121, S2): after the last missing migration and before the commit, inside the same transaction, the binary computes the schema hash (§4.3) of the database as the migrations left it and compares it with the embedded hash of the version it reached (`N`, or the highest version it applied). A mismatch rolls the whole transaction back, so `user_version` and every table stay as they were, and the command fails with `migration_failed` (exit 1; `details: {version, expected, actual}`, the hashes). The check is the one the `equal to N` case runs at every start-up, made before the commit instead of only at the next open, so a migration that produces a schema the binary does not describe can never be committed. Rerunning is safe: nothing was written.
 - **Exception:** `cpd --version` opens the database read-only and reports `user_version` as `store_schema`, without migrating it and without the check above; it reports the binary's own `N` as `schema` (commands.md §1.2). It never creates or writes the database. A binary can open the store when `store_schema` is `null` (no database) or `<= schema`.
-- A migration that adds or renames columns drops and recreates the history triggers of that table, so the triggers always list every column.
+- A migration that adds or renames columns drops and recreates the history triggers of that table, so the triggers always list every column (the `_hist_upd` trigger tests each one for a change, §4.4).
+- **History `update` rows hold only the changed columns** (hs-d234, sql-F2; §4.4, "History row shape"). The change to the `_hist_upd` triggers of every table is a **named migration**, made with `scripts/new-migration.sh` (never a numbered `NNNN.sql`): it drops and recreates the `_hist_upd` trigger of each table in the list under §4.4's **Triggers**, and its schema hash entry is added with it. It rewrites no row: existing `update` rows in `history` keep their full `before` and `after` (the table is append-only), so a reader treats an `update` row as holding at least the key and the changed columns.
 - **Migration 2** (cockpit parity; a real `cpd.db` exists since migration 1 shipped, so the change is a migration and not an edit of §4.4): adds three nullable columns to `plans`, each with its own check, then drops and recreates `plans`' history triggers (the rule above):
 
   ```sql
