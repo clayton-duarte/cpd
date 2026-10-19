@@ -4,8 +4,6 @@
 use std::fs::File;
 use std::process::{Command as Process, Stdio};
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
@@ -18,6 +16,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
 use crate::ids::ContextId;
+use crate::lock;
 use crate::output::Output;
 
 #[derive(clap::Subcommand, Debug)]
@@ -171,19 +170,14 @@ fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the engine's lock {}: {what}.", path.display()))
             .with("lock", path.display().to_string())
     };
-    let mut file = match File::open(&path) {
+    let file = match File::open(&path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(failed(&e)),
     };
-    loop {
-        match Flock::lock(file, FlockArg::LockSharedNonblock) {
-            Ok(_released_on_drop) => return Ok(false),
-            Err((_, Errno::EWOULDBLOCK)) => return Ok(true),
-            Err((back, Errno::EINTR)) => file = back,
-            Err((_, errno)) => return Err(failed(&format!("flock failed: {errno}"))),
-        }
-    }
+    // The probe's shared lock is let go when `file` drops.
+    let shared = lock::shared(&file).map_err(|e| failed(&format!("flock failed: {e}")))?;
+    Ok(!shared)
 }
 
 fn context_exists(conn: &Connection, context: &ContextId) -> Result<(), CpdError> {

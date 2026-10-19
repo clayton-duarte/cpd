@@ -6,8 +6,6 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
 
 use super::feedback;
@@ -23,6 +21,7 @@ use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::lock;
 use crate::merge::RepoLock;
 use crate::output::Output;
 use crate::store::WriteTxn;
@@ -117,20 +116,18 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
 
 /// `flock` on `path`, waiting at most [`LOCK_WAIT`]: `lock_timeout` (exit 5). The
 /// descriptor stays open while waiting.
-fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
+fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
     let failed = |what: &dyn std::fmt::Display| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the lock {}: {what}.", path.display())).with("lock", path.display().to_string())
     };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
-    let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(lock) => return Ok(lock),
-            Err((back, Errno::EWOULDBLOCK | Errno::EINTR)) => file = back,
-            Err((_, errno)) => return Err(failed(&format!("flock failed: {errno}"))),
+        if lock::try_lock(&file).map_err(|e| failed(&format!("flock failed: {e}")))? {
+            return Ok(file);
         }
         if Instant::now() >= deadline {
             return Err(CpdError::new(
