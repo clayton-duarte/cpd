@@ -12,7 +12,8 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
 use crate::git::worktree::list as worktrees;
-use crate::ids::{PlanId, PrKey};
+use crate::ids::{OwnerLogin, PlanId, PrKey, RepoName};
+use crate::policy::{PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::PrRow;
@@ -25,6 +26,8 @@ const COMMAND: &str = "pr add";
 struct Wanted {
     key: PrKey,
     repo: String,
+    /// The repo's GitHub name, from its `origin` (§8.3).
+    name: RepoName,
     base: String,
     /// `--needs` as given (sorted); `Some(vec![])` is `--no-needs`; `None`: the default.
     needs: Option<Vec<String>>,
@@ -56,9 +59,11 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     env.store.read(|conn| check_plan(conn, &plan))?;
     let repo = main_worktree(&args.repo)?;
+    let name = key_repo(&mut env, &plan, &repo)?;
     let wanted = Wanted {
         base: resolve_base(&repo, args.base.as_deref())?,
         repo: repo.display().to_string(),
+        name,
         key: args.key,
         needs,
     };
@@ -98,13 +103,35 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         }
     };
     let mut out = json!({"pr": {
-        "key": wanted.key, "repo": wanted.repo, "base": wanted.base, "needs": needs,
+        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": wanted.base, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended,
     }});
     if already {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
+}
+
+/// Keys the repo (contract §8.3, hs-d288), in the order of commands.md §9.4: the Plan's Context
+/// has an owner (`owner_unset`), the repo keys from its `origin` (`repo_unkeyed`), of that owner
+/// (`owner_mismatch`), whose policy files resolve (`owner_unknown`, `policy_invalid`). Returns the
+/// repo's name. Shared with `pr edit --repo`; reads and writes nothing.
+pub(super) fn key_repo(env: &mut Env, plan: &PlanId, repo: &Path) -> Result<RepoName, CpdError> {
+    let (context, owner): (String, Option<String>) = env.store.read(|conn| {
+        Ok(conn.query_row("SELECT c.id, c.owner FROM plans p JOIN contexts c ON c.id = p.context WHERE p.id = ?1", [plan.as_str()], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?)
+    })?;
+    let Some(owner) = owner else {
+        return Err(owner_unset(&crate::ids::ContextId::parse(&context)?));
+    };
+    let owner = OwnerLogin::parse(&owner)?;
+    let (repo_owner, name) = repo_key(repo)?;
+    if repo_owner != owner {
+        return Err(owner_mismatch(&owner, &repo_owner));
+    }
+    resolve(&env.home, &PolicyKey::Repo(owner, name.clone()))?;
+    Ok(name)
 }
 
 /// `pr add` is for every phase (D1), but not for an archived Plan (`archived`); returns the phase.
@@ -169,9 +196,9 @@ fn same(existing: &PrRow, wanted: &Wanted, prs: &[PrRow]) -> bool {
 
 fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
     tx.execute(
-        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
-         SELECT ?1, ?2, ?3, ?4, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
-        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, wanted.base, lead_branch],
+        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, created_txn, created_at)
+         SELECT ?1, ?2, ?3, ?6, ?4, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, wanted.base, lead_branch, wanted.name.as_str()],
     )?;
     for need in needs {
         tx.execute("INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), wanted.key.as_str(), need.as_str()])?;

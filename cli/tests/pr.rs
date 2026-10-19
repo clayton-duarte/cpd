@@ -77,10 +77,11 @@ fn fx_with(phase: &str, config_extra: &str) -> Fx {
 /// `job` is the status of the Plan's one Job, `merged` or `cancelled`.
 fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     let env = TestEnv::new();
-    let repo = env.git_repo("pay").canonicalize().unwrap();
+    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    let repo = env.keyed_repo("pay").canonicalize().unwrap();
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
     let created = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
@@ -135,7 +136,7 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
         _ => String::new(),
     };
     let sql = format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
@@ -297,10 +298,10 @@ impl Fx {
     /// `cpd/pay/web`, Lead worktree `web.pay.web`, Job `ui`; the fake `gh` answers for it
     /// (pull request 813) when run in that worktree. Returns the Lead worktree.
     fn add_web(&self, state: Web) -> PathBuf {
-        let repo = self.env.git_repo("web").canonicalize().unwrap();
+        let repo = self.env.keyed_repo("web").canonicalize().unwrap();
         let origin = self.env.root().join("repos/web-origin.git");
         self.git(self.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-        self.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        self.env.local_origin(&repo, &origin);
         self.git(&repo, &["push", "-q", "origin", "main"]);
         let lead = repo.parent().unwrap().join("web.pay.web");
         let mut sha = String::new();
@@ -892,6 +893,49 @@ fn open_refuses_a_failed_gate_and_pushes_nothing() {
     assert!(fx.events("plan-phase").is_empty());
 }
 
+/// A fixture of `phase` under policy `pr.gate = "ci"` (cpd's default), whose failing `pre-merge` leaves a marker if it runs.
+fn ci_fx_with_failing_hook(phase: &str) -> (Fx, PathBuf) {
+    let fx = fx(phase);
+    fx.env.owner_policy("acme", "[pr]\ngate = \"ci\"\n");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}; exit 3\"\n", marker.display()));
+    (fx, marker)
+}
+
+#[test]
+fn open_with_gate_ci_runs_no_gate_and_pushes() {
+    let (fx, marker) = ci_fx_with_failing_hook("dispatch");
+
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["phase"], "deploy");
+    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()), "the Lead Branch was pushed");
+}
+
+#[test]
+fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
+    let (fx, marker) = ci_fx_with_failing_hook("deploy");
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    fx.advance_base("base.txt", "base\n");
+
+    let out = fx.pr("rebase").ok();
+
+    assert_eq!(out["rebased"], true);
+    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()), "the rebased branch was pushed");
+}
+
+#[test]
+fn open_with_gate_local_runs_the_gate_that_the_ci_policy_skips() {
+    let fx = fx("dispatch");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}; exit 3\"\n", marker.display()));
+
+    assert_eq!(code(&fx.pr("open")), ("gate_failed".into(), 3));
+    assert!(marker.exists());
+}
+
 #[test]
 fn open_reports_a_gate_that_could_not_be_judged_as_gate_error() {
     let fx = fx("dispatch");
@@ -1401,6 +1445,19 @@ fn a_second_identical_poll_writes_nothing() {
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
     assert_eq!(fx.gh_calls().iter().filter(|c| is_search(c)).count(), 2);
     assert!(fx.gh_calls().iter().all(|c| !is_lookup(c)), "812 is in the search: no lookup");
+}
+
+#[test]
+fn poll_does_not_tell_the_plan_of_failed_checks_when_the_policy_says_none() {
+    let fx = fx("deploy");
+    fx.env.owner_policy("acme", "[pr.feedback]\nchecks = \"none\"\n");
+    fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["feedback"], json!([]));
+    assert_eq!(fx.pr_data().2, "failed", "the row still records the checks");
+    assert!(fx.events("pr-feedback").is_empty());
 }
 
 #[test]
@@ -2459,8 +2516,88 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
 fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     let f = fx("dispatch");
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
-    let other = f.env.git_repo("other").canonicalize().unwrap();
+    let other = f.env.keyed_repo("other").canonicalize().unwrap();
     let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(needs_of(&f, "fix").is_empty());
+}
+
+const GONE_URL: &str = "https://github.com/gone/shop/pull/20";
+
+impl Fx {
+    /// A second Plan `bob` in Context `ctx2` of owner `gone`, its PR `shop` open as pull request 20 of `gone/shop`.
+    /// The owner file of `gone` is written, then deleted: the one owner this machine has no file for.
+    fn add_bob_without_an_owner_file(&self) {
+        self.env.owner_policy("gone", "");
+        fs::remove_file(self.env.cpd_home().join("policy/owners/gone.toml")).unwrap();
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute_batch(&format!(
+                    "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx2', 'Ctx2', 'gone', 't', 't');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead2', 'lead', 'ctx2', 'bob', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                       VALUES ('bob', 'ctx2', 'Bob', 'deploy', 'lead2', 't', 't');
+                     INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+                       VALUES ('gone/shop', 20, '{GONE_URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', 'opened');
+                     INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                                      pr_number, pr_url, pr_opened_at, pull_request)
+                       VALUES ('bob', 'shop', '/r', 'main', 'shop', 'open', 'cpd/bob/shop', '/w', cpd_txn(), 't', 't',
+                               20, '{GONE_URL}', 'opened', (SELECT id FROM pull_requests WHERE number = 20));"
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// `(plan, data)` of every `error` Event of source `pr poll` that is not a clean-up failure.
+    fn policy_errors(&self) -> Vec<(String, Value)> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT plan, data FROM events WHERE kind = 'error' AND json_extract(data, '$.source') = 'pr poll'
+                        AND json_extract(data, '$.code') <> 'cleanup_failed' ORDER BY id",
+                )?;
+                Ok(stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
+                    .collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap()
+    }
+}
+
+#[test]
+fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges() {
+    let fx = fx("deploy");
+    fx.add_bob_without_an_owner_file();
+    // bob's checks turned failed (it would be told, were its policy known); pay's PR merged, so it is looked up.
+    fx.search(&[node("gone/shop", 20, "OPEN", None, Some("FAILURE"))]);
+    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")))]);
+
+    let out = fx.poll_all();
+
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!((out["done"].clone(), out["feedback"].clone()), (json!(["pay"]), json!([])));
+    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("done".to_owned(), "merged".to_owned()));
+    assert_eq!(fx.events("pr-merged").len(), 1);
+    // bob's row is written as usual, and bob is told nothing.
+    let bob: String = fx.store().read(|c| Ok(c.query_row("SELECT checks FROM pull_requests WHERE number = 20", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(bob, "failed");
+    let told: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM events WHERE kind = 'pr-feedback'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(told, 0);
+    // One `error` Event names the plan, the PR and the code.
+    let errors = fx.policy_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].0, "bob");
+    assert_eq!(errors[0].1["code"], "owner_unknown");
+    assert_eq!(errors[0].1["details"]["plan"], "bob");
+    assert_eq!(errors[0].1["details"]["pr"], "shop");
+    assert_eq!(errors[0].1["details"]["owner"], "gone");
+    assert!(errors[0].1["message"].as_str().unwrap().contains("PR shop (#20) of Plan bob"), "{}", errors[0].1["message"]);
+
+    // Once per episode: the next polls, still failing the same way, append nothing and write nothing.
+    let events = fx.event_count();
+    fx.poll_all();
+    fx.poll_all();
+    assert_eq!((fx.policy_errors().len(), fx.event_count()), (1, events));
 }

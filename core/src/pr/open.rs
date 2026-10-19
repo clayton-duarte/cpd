@@ -11,7 +11,7 @@ use crate::plan::PrRow;
 use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
-use super::{Args, Env, gate, illegal_phase, short};
+use super::{Args, Env, gate, illegal_phase, pr_policy, short};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git;
@@ -31,6 +31,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         Step::Already(done) => return Ok(done),
         Step::Go(key) => key,
     };
+    let policy = pr_policy(&mut env, &id, &key)?;
     let list = require_jobs_done(&mut env, &plan, &key)?;
 
     // No lock and no R (hs-d243): an unrecorded merge leaves its Job `running`,
@@ -62,7 +63,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     }
     // 1. G, read once; 2. the Gate on it, in a gate worktree of its own.
     let sha = git::run::rev_parse(std::path::Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
-    gate(&env, &id, pr, &sha, &format!("pr open --pr {key}"))?;
+    gate(&env, &policy, &id, pr, &sha, &format!("pr open --pr {key}"))?;
 
     // The PR is read again: another `pr open` may have opened it during the Gate.
     let plan = env.plan(&id)?;

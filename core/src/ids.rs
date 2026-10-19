@@ -371,6 +371,77 @@ impl fmt::Display for RecordId {
 
 id_traits!(RecordId);
 
+/// A GitHub owner login (contract §2.1, hs-d288): `^[a-z0-9](-?[a-z0-9])*$`,
+/// 1–39 characters, ASCII-lowercased when parsed. The policy key's owner.
+/// An invalid one is `usage` (commands.md §3.1).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OwnerLogin(String);
+
+impl OwnerLogin {
+    const EXPECTED: &'static str = "^[a-z0-9](-?[a-z0-9])*$, 1-39 characters";
+
+    pub fn parse(s: &str) -> Result<Self, CpdError> {
+        let lowered = s.to_ascii_lowercase();
+        let alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+        let ok = (1..=39).contains(&lowered.len())
+            && lowered.chars().all(|c| alnum(c) || c == '-')
+            && !lowered.starts_with('-')
+            && !lowered.ends_with('-')
+            && !lowered.contains("--");
+        if ok {
+            Ok(OwnerLogin(lowered))
+        } else {
+            Err(invalid(ErrorCode::Usage, "owner login", s, Self::EXPECTED))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for OwnerLogin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+id_traits!(OwnerLogin);
+
+/// A GitHub repository name without its owner (contract §2.1, hs-d288):
+/// `^[a-z0-9._-]{1,100}$`, ASCII-lowercased when parsed. An invalid one is `usage`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RepoName(String);
+
+impl RepoName {
+    const EXPECTED: &'static str = "^[a-z0-9._-]{1,100}$";
+
+    pub fn parse(s: &str) -> Result<Self, CpdError> {
+        let lowered = s.to_ascii_lowercase();
+        let ok = (1..=100).contains(&lowered.len())
+            && lowered
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'));
+        if ok {
+            Ok(RepoName(lowered))
+        } else {
+            Err(invalid(ErrorCode::Usage, "repo name", s, Self::EXPECTED))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for RepoName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+id_traits!(RepoName);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,5 +606,19 @@ mod tests {
         assert_eq!(serde_json::to_string(&id).unwrap(), "\"api-schema-a2\"");
         let err = serde_json::from_str::<PlanId>("\"Bad\"").unwrap_err();
         assert!(err.to_string().contains("invalid_plan_id"), "{err}");
+    }
+
+    #[test]
+    fn owner_login_and_repo_name_follow_contract_2_1() {
+        assert_eq!(OwnerLogin::parse("Clayton-Duarte").unwrap().as_str(), "clayton-duarte");
+        for bad in ["", "-a", "a-", "a--b", "a_b", "a b", &"a".repeat(40)] {
+            assert_eq!(OwnerLogin::parse(bad).unwrap_err().code(), ErrorCode::Usage, "{bad}");
+        }
+        assert!(OwnerLogin::parse(&"a".repeat(39)).is_ok());
+        assert_eq!(RepoName::parse("My.Repo_x-1").unwrap().as_str(), "my.repo_x-1");
+        for bad in ["", "a/b", "a b", &"a".repeat(101)] {
+            assert_eq!(RepoName::parse(bad).unwrap_err().code(), ErrorCode::Usage, "{bad}");
+        }
+        assert!(RepoName::parse(&"a".repeat(100)).is_ok());
     }
 }

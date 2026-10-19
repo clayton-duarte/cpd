@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::row::PlanPrs;
 use crate::plan::PrRow;
-use super::{Args, Env, gate, illegal_phase};
+use super::{Args, Env, gate, illegal_phase, pr_policy};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, Push};
 use crate::output::Output;
@@ -23,10 +23,11 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let key = pr.key.clone();
     let branch = pr.lead_branch.clone();
     let lead = pr.lead(&id)?.clone();
+    let policy = pr_policy(&mut env, &id, &key)?;
 
     // 1. G, read once; 2. the Gate on it, in a gate worktree of its own.
     let sha = git::run::rev_parse(std::path::Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
-    gate(&env, &id, pr, &sha, &format!("pr push --pr {key}"))?;
+    gate(&env, &policy, &id, pr, &sha, &format!("pr push --pr {key}"))?;
 
     // The PR is read again: merged during the Gate, nothing is pushed.
     let plan = env.plan(&id)?;

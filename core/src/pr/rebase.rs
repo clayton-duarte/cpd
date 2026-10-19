@@ -10,8 +10,9 @@ use serde_json::json;
 
 use super::row::PlanPrs;
 use crate::plan::PrRow;
-use super::{Args, Env, gate_hooks, illegal_phase, refusal, short};
+use super::{Args, Env, gate_hooks, illegal_phase, pr_policy, refusal, short};
 use crate::config::{self, Catalog};
+use crate::policy::Gate;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, GateWorktree, Push, TAIL_LINES, tail};
@@ -35,6 +36,7 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     let plan = env.plan(&id)?;
     let pr = require_open(&plan, &args)?.clone();
     let key = pr.key.clone();
+    let policy = pr_policy(&mut env, &id, &key)?;
     let lead = pr.lead(&id)?.clone();
     let repo = std::path::Path::new(&pr.repo);
     let branch = pr.lead_branch.as_str();
@@ -105,7 +107,12 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 
     // 8. The Gate on R', in the gate worktree; it is removed whatever the result.
     let again = format!("pr rebase --pr {key}");
-    worktree.gate_and_remove(&gate_hooks(&env, &id, &pr))?.map_err(|r| refusal(&id, &pr, &new, r, &again))?;
+    // Under a `pr.gate` other than `local` (§8.3) nothing runs: the gate worktree only goes.
+    if policy.pr.gate == Gate::Local {
+        worktree.gate_and_remove(&gate_hooks(&env, &id, &pr))?.map_err(|r| refusal(&id, &pr, &new, r, &again))?;
+    } else {
+        worktree.remove()?;
+    }
     // The PR is read again: merged during the Gate, nothing is pushed.
     let plan = env.plan(&id)?;
     require_open(&plan, &args)?;

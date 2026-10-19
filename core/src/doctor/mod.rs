@@ -16,11 +16,25 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::output::Output;
 use crate::store::Store;
+use crate::watch;
 use check::{Check, Severity};
 
 /// Each probe's deadline (commands.md §14.1): `doctor` is run when something is wrong,
 /// so a hung tool is a failed check, not a hung `doctor`.
 const DEADLINE: Duration = Duration::from_secs(10);
+
+/// The `tmux_restart` check, present only while a restart of the tmux server is pending or has
+/// failed (contract §6.1): pending is a planned hold, not an error (the engine starts no Attempt
+/// until it has run); a failed restart is a warning with its reason.
+fn tmux_restart(home: &CpdHome) -> Option<Check> {
+    let name = "tmux_restart";
+    match watch::restart::read(home) {
+        Ok(None) => None,
+        Ok(Some(pending)) if pending.failed.is_none() => Some(Check::pass(name, Severity::Warn).message("tmux restart pending").found(pending.describe())),
+        Ok(Some(pending)) => Some(Check::fail(name, Severity::Warn, pending.describe())),
+        Err(e) => Some(Check::from_error(name, Severity::Warn, &e)),
+    }
+}
 
 /// `cpd doctor` takes no arguments.
 #[derive(clap::Args, Clone, Debug, PartialEq, Eq)]
@@ -53,6 +67,7 @@ pub fn run(_args: Args) -> Result<Output, CpdError> {
     checks.push(with_config("pi_adapter", Severity::Error, &pi::adapter));
     checks.push(with_config("lead_packages", Severity::Warn, &pi::lead_packages));
     checks.push(state::watch(&home, store.as_mut()));
+    checks.extend(tmux_restart(&home));
 
     let failed: Vec<&str> = checks.iter().filter(|c| c.is_error_failure()).map(|c| c.name).collect();
     if failed.is_empty() {
