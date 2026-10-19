@@ -422,33 +422,16 @@ fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
     assert!(panes.iter().all(|p| p.pane != other), "{panes:?}");
 }
 
-/// Puts `bin/tmux` = `body` first on this process's `PATH` until dropped.
-/// Only while holding [`TMUX_ENV`] (a [`Server`]), like `TMUX_TMPDIR`.
-struct FakeTmux(Option<std::ffi::OsString>);
-
-impl FakeTmux {
-    fn new(s: &Server, body: &str) -> FakeTmux {
-        s.env.fake("tmux", body);
-        let old = std::env::var_os("PATH");
-        let mut path = std::ffi::OsString::from(s.env.bin());
-        if let Some(old) = &old {
-            path.push(":");
-            path.push(old);
-        }
-        // SAFETY: serialised by TMUX_ENV, which `s` holds.
-        unsafe { std::env::set_var("PATH", path) };
-        FakeTmux(old)
-    }
-}
-
-impl Drop for FakeTmux {
-    fn drop(&mut self) {
-        // SAFETY: as in `FakeTmux::new`.
-        match self.0.take() {
-            Some(old) => unsafe { std::env::set_var("PATH", old) },
-            None => unsafe { std::env::remove_var("PATH") },
-        }
-    }
+/// Runs the test `name` of this binary again in a child process born with `env`'s `bin/` first on `PATH` and `vars`,
+/// so the wrapper finds `env`'s fake `tmux` and no other test sees either; panics unless it passed.
+fn rerun_with_fake_tmux(env: &TestEnv, name: &str, vars: &[(&str, &str)]) {
+    let mut path = vec![env.bin()];
+    path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child.args(["--exact", name, "--nocapture"]).env("PATH", std::env::join_paths(path).unwrap()).envs(vars.iter().copied());
+    let out = common::output(&mut child).unwrap();
+    let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success() && printed.contains("1 passed"), "{printed}");
 }
 
 /// Whether process `pid` is running (a zombie is not).
@@ -456,37 +439,34 @@ fn running(pid: i32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
 }
 
-/// Restores `PATH` and drops the tmux deadline override when the test ends, even on a panic.
-struct Restore(Option<std::ffi::OsString>);
-
-impl Drop for Restore {
-    fn drop(&mut self) {
-        // SAFETY: still under TMUX_ENV (the Server is dropped after this guard).
-        unsafe {
-            match self.0.take() {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-            std::env::remove_var("CPD_TEST_DEADLINE_TMUX");
-        }
-    }
-}
-
 /// engine-W8 (§6.3 liveness): only tmux saying that no server runs means "no panes".
 /// Any other failure of `list-panes` and `list-sessions` is `tmux_failed`, so E2 and the
 /// driver never read a tmux hiccup as every pane gone.
 #[test]
 fn list_panes_is_empty_only_when_tmux_says_no_server_runs() {
-    let s = server();
-    {
-        let _fake = FakeTmux::new(&s, "echo 'lost server' >&2; exit 1");
-        assert_eq!(s.tmux.list_panes().unwrap_err().code(), ErrorCode::TmuxFailed);
-        assert_eq!(s.tmux.server_running().unwrap_err().code(), ErrorCode::TmuxFailed);
+    const NAME: &str = "list_panes_is_empty_only_when_tmux_says_no_server_runs";
+    const CASE: &str = "CPD_TEST_FAKE_TMUX_CASE";
+    // In the child: the fake `tmux` first on `PATH`, which ignores the socket and the tmpdir.
+    let fake = || Tmux::with_tmpdir("cpd-test-fake", std::env::temp_dir().join("cpd-test-fake-unused"));
+    match std::env::var(CASE).as_deref() {
+        Ok("failure") => {
+            assert_eq!(fake().list_panes().unwrap_err().code(), ErrorCode::TmuxFailed);
+            assert_eq!(fake().server_running().unwrap_err().code(), ErrorCode::TmuxFailed);
+            return;
+        }
+        Ok("no-server") => {
+            assert!(fake().list_panes().unwrap().is_empty());
+            assert!(!fake().server_running().unwrap());
+            return;
+        }
+        _ => {}
     }
-    {
-        let _fake = FakeTmux::new(&s, "echo 'no server running on /tmp/tmux-1000/x' >&2; exit 1");
-        assert!(s.tmux.list_panes().unwrap().is_empty());
-        assert!(!s.tmux.server_running().unwrap());
+    let s = server();
+    for (case, body) in [("failure", "echo 'lost server' >&2; exit 1"), ("no-server", "echo 'no server running on /tmp/tmux-1000/x' >&2; exit 1")] {
+        let before = s.env.calls("tmux").len();
+        s.env.fake("tmux", body);
+        rerun_with_fake_tmux(&s.env, NAME, &[(CASE, case)]);
+        assert!(s.env.calls("tmux").len() > before, "the child of {case} ran the fake tmux");
     }
     // The real tmux with no socket file: "error connecting to <socket> (No such file or directory)".
     assert!(s.tmux.list_panes().unwrap().is_empty());
@@ -505,16 +485,7 @@ fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() 
         let env = TestEnv::new();
         let pidfile = env.root().join("sleep.pid");
         env.fake("tmux", &format!("sleep {SLEEP_SECONDS} & echo $! > '{}'; wait", pidfile.display()));
-        let mut path = vec![env.bin()];
-        path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-        child
-            .args(["--exact", NAME, "--nocapture"])
-            .env("PATH", std::env::join_paths(path).unwrap())
-            .env("CPD_TEST_DEADLINE_TMUX", "1");
-        let out = common::output(&mut child).unwrap();
-        let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-        assert!(out.status.success() && printed.contains("1 passed"), "{printed}");
+        rerun_with_fake_tmux(&env, NAME, &[("CPD_TEST_DEADLINE_TMUX", "1")]);
         // The sleeper would run SLEEP_SECONDS: its death is the group kill, not its own end.
         let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
         wait_until("the fake tmux's child to die", || !running(pid));
