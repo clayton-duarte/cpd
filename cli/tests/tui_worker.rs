@@ -258,6 +258,36 @@ fn a_session_with_no_file_registered_says_so() {
     assert_eq!(screen[0], " No session file yet: the Worker has not started its Session.");
 }
 
+const EVENT: &str = "INSERT INTO events (txn, at, kind, context, plan, attempt, session, text, data)
+     VALUES (cpd_txn(), '2026-01-03T00:02:00.000Z', 'session-state', 'alpha', 'ship', 'api-a1', 'w1', 'fixture', '{}');";
+
+/// The status at the foot follows the Events (commands.md §17): a Session that changed state shows its new one.
+#[test]
+fn the_status_follows_the_events_of_the_store() {
+    let env = env();
+    populate(&env, None);
+    let pane = Pane::start(&env, 70, 3);
+    pane.wait("the status", |s| s.iter().any(|r| r == STATUS));
+    sql(&env, &format!("UPDATE sessions SET state = 'idle' WHERE id = 'w1'; {EVENT}"));
+    pane.wait("the new state", |s| s.iter().any(|r| r == " api-a1 running · idle"));
+}
+
+/// A follow that fails is shown, the snapshot stays (tui-G4): the highest Event id fell below the cursor, which is
+/// what a replaced database looks like.
+#[test]
+fn a_follow_that_fails_is_shown_and_the_status_stays() {
+    let env = env();
+    populate(&env, None);
+    sql(&env, EVENT);
+    let pane = Pane::start(&env, 100, 3);
+    pane.wait("the status", |s| s.iter().any(|r| r == STATUS));
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
+    let screen = pane.wait("the error", |s| s.iter().any(|r| r.contains("Event cursor")));
+    assert!(screen.iter().any(|r| r.contains("No session file yet")), "the view stays: {screen:?}");
+}
+
 #[test]
 fn an_unknown_attempt_or_plan_is_refused_before_drawing() {
     let env = env();

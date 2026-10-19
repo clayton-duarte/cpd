@@ -25,7 +25,6 @@ use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::events::highest_id;
 use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::{Pane, Tmux, chat_slot};
@@ -54,12 +53,13 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let machine = Machine { name: hostname()?, load: load_average()? };
             // The column shows no Event: none is asked for.
             let first = read::widgets(&mut store, config.concurrency, 0)?;
-            Ok((store, config, first, machine))
+            let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
+            Ok((store, config, first, machine, follow))
         },
-        |terminal, (mut store, config, first, machine)| {
+        |terminal, (mut store, config, first, machine, follow)| {
             let tmux = Tmux::new(config.tmux.socket.clone());
             let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session };
-            show(terminal, &mut store, config.concurrency, first, machine, &lead)
+            show(terminal, &mut store, follow, config.concurrency, first, machine, &lead)
         },
     )
 }
@@ -77,6 +77,7 @@ struct Opener<'a> {
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
+    mut follow: read::Follow,
     concurrency: u32,
     mut widgets: Widgets,
     mut machine: Machine,
@@ -107,7 +108,7 @@ fn show(
         if read_at.elapsed() >= COALESCE {
             let retry = error.is_some();
             let read = (|| {
-                let moved = store.read(highest_id)? != widgets.events_cursor;
+                let moved = !follow.poll(store)?.is_empty();
                 if !(moved || retry || read_at.elapsed() >= REFRESH) {
                     return Ok(None);
                 }

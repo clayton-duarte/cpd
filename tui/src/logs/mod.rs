@@ -19,7 +19,6 @@ use super::runner::{ViewError, kept};
 use super::{Capture, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::events::highest_id;
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
@@ -59,9 +58,10 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let first = read::logs(&mut store, RECENT)?;
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            Ok((store, poll, first))
+            let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
+            Ok((store, poll, follow, first))
         },
-        |terminal, (mut store, poll, first)| show(terminal, &mut store, poll, first),
+        |terminal, (mut store, poll, follow, first)| show(terminal, &mut store, poll, follow, first),
     )
 }
 
@@ -71,9 +71,9 @@ fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
     poll: Duration,
+    mut follow: read::Follow,
     first: read::Logs,
 ) -> Result<(), ViewError> {
-    let mut cursor = first.events_cursor;
     let mut log = Log::new(first.events);
     loop {
         terminal.draw(|f| {
@@ -94,14 +94,9 @@ fn show(
                 }
             }
         }
-        // the cursor stays where it was on a failure, so the next poll reads what was missed
-        let read = store.read(highest_id).and_then(|latest| match latest != cursor {
-            true => read::logs_after(store, cursor).map(Some),
-            false => Ok(None),
-        });
-        if let Some(Some(next)) = kept(read, &mut log.error) {
-            cursor = next.events_cursor;
-            log.push(next.events);
+        // the follow's cursor stays where it was on a failure, so the next poll reads what was missed
+        if let Some(events) = kept(follow.poll(store), &mut log.error) {
+            log.push(events);
         }
     }
 }

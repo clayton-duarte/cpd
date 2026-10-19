@@ -7,8 +7,8 @@
 //! returns) and renders it ([`render`]): what the Worker was told, said and
 //! did. The file is not in the database. Every [`CHECK`] the view looks at
 //! the file's size and modification time and re-reads it when either changed,
-//! and takes a new snapshot of the Attempt and its Session, which gives the
-//! state at the foot and the file once the driver has registered it. The view
+//! and, when an Event came (followed in process, [`read::Follow`]), takes a new snapshot of the
+//! Attempt and its Session, which gives the state at the foot and the file once the driver has registered it. The view
 //! writes nothing and starts no process.
 //!
 //! Keys: Up/`k`, Down/`j`, PageUp, PageDown and the mouse wheel scroll; End or
@@ -59,11 +59,12 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     // `plan_not_found` and `attempt_not_found` refuse before anything is drawn.
     let snapshot = read::worker(&mut store, plan, &args.attempt)?;
+    let follow = read::Follow::new(&mut store, &[], snapshot.events_cursor)?;
     run_view(
         "worker",
         Capture::Mouse,
         || Ok(snapshot),
-        |terminal, snapshot| Ok(event_loop(terminal, &mut store, plan, &args.attempt, snapshot)?),
+        |terminal, snapshot| Ok(event_loop(terminal, &mut store, follow, plan, &args.attempt, snapshot)?),
     )
 }
 
@@ -78,6 +79,7 @@ struct Stamp {
 fn event_loop(
     terminal: &mut DefaultTerminal,
     store: &mut Store,
+    mut follow: read::Follow,
     plan: &PlanId,
     attempt: &AttemptId,
     first: Worker,
@@ -90,10 +92,15 @@ fn event_loop(
     loop {
         if last_check.elapsed() >= CHECK {
             last_check = Instant::now();
-            // a failed read keeps the snapshot, the error is the note, the next check reads again (runner::kept)
+            // a failed poll or read keeps the snapshot, the error is the note, the next check tries again (runner::kept)
             let mut error = None;
-            if let Some(worker) = kept(read::worker(store, plan, attempt), &mut error) {
-                snapshot = Some(worker);
+            let retry = !view.note.is_empty();
+            if let Some(events) = kept(follow.poll(store), &mut error) {
+                if retry || !events.is_empty() {
+                    if let Some(worker) = kept(read::worker(store, plan, attempt), &mut error) {
+                        snapshot = Some(worker);
+                    }
+                }
             }
             view.note = error.unwrap_or_default();
             refresh(&mut view, &mut shown, snapshot.as_ref());

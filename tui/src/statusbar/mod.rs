@@ -31,7 +31,6 @@ use super::runner::{ViewError, kept};
 use super::{Capture, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
-use cpd_core::events::highest_id;
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
@@ -77,11 +76,12 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let first = read::widgets(&mut store, config.concurrency, 0)?;
-            Ok((store, config, first))
+            let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
+            Ok((store, config, first, follow))
         },
-        |terminal, (mut store, config, first)| {
+        |terminal, (mut store, config, first, follow)| {
             let tmux = Tmux::new(config.tmux.socket.clone());
-            show(terminal, &mut store, &config, &tmux, Workers::of(&first.slots), first.events_cursor)
+            show(terminal, &mut store, follow, &config, &tmux, Workers::of(&first.slots))
         },
     )
 }
@@ -91,10 +91,10 @@ pub(super) fn run() -> Result<Output, CpdError> {
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
+    mut follow: read::Follow,
     config: &Config,
     tmux: &Tmux,
     mut workers: Workers,
-    mut cursor: i64,
 ) -> Result<(), ViewError> {
     let mut clickable: Vec<(Rect, Action)> = Vec::new();
     let mut note = String::new();
@@ -126,7 +126,7 @@ fn show(
         if read_at.elapsed() >= COALESCE {
             let retry = error.is_some();
             let read = (|| {
-                let moved = store.read(highest_id)? != cursor;
+                let moved = !follow.poll(store)?.is_empty();
                 if !(moved || retry || read_at.elapsed() >= REFRESH) {
                     return Ok(None);
                 }
@@ -135,7 +135,7 @@ fn show(
             match kept(read, &mut error) {
                 Some(None) => {} // nothing moved
                 Some(Some(next)) => {
-                    (workers, cursor) = (Workers::of(&next.slots), next.events_cursor);
+                    workers = Workers::of(&next.slots);
                     read_at = Instant::now();
                 }
                 None => read_at = Instant::now(), // retried after the next COALESCE

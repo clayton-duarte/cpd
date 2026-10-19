@@ -40,7 +40,7 @@ use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
-use cpd_core::events::{self, Event, highest_id};
+use cpd_core::events::{Event, highest_id};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
@@ -260,10 +260,11 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let snap = snapshot(&mut store, &home)?;
             let actions = Actions::new(home.clone(), &config, run_command);
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            Ok((store, home, snap, poll, actions))
+            let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
+            Ok((store, home, snap, poll, follow, actions))
         },
-        |terminal, (mut store, home, mut snap, poll, actions)| {
-            show(terminal, &mut store, &home, &mut snap, poll, &actions)
+        |terminal, (mut store, home, mut snap, poll, follow, actions)| {
+            show(terminal, &mut store, &home, &mut snap, poll, follow, &actions)
         },
     )
 }
@@ -275,10 +276,13 @@ fn show(
     home: &CpdHome,
     snap: &mut Snapshot,
     poll: Duration,
+    mut follow: read::Follow,
     actions: &Actions,
 ) -> Result<(), ViewError> {
     let mut ui = Ui::default();
-    let follow = store.read(|conn| events::Selection::resolve(conn, None, None, None, Vec::new()))?;
+    // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
+    // (runner::kept), the snapshot's error first
+    let (mut snapshot_error, mut follow_error) = (None, None);
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
     loop {
         if let Some(c) = snap.centre.as_mut() {
@@ -291,21 +295,15 @@ fn show(
                 continue;
             }
             fetched = Instant::now();
-            // a failed fetch or snapshot is retried at the next refresh (`stale`), the error shown until a snapshot succeeds
-            let mut fetch_error = None;
-            match kept(store.read(|conn| follow.fetch(conn, snap.cursor, None, 500)), &mut fetch_error) {
-                Some(events) => {
-                    if let Some(last) = events.last() {
-                        snap.cursor = last.id;
-                    }
-                    stale |= events.iter().any(|e| concerns(e, snap.centre.as_ref()));
-                }
-                None => (ui.error, stale) = (fetch_error, true),
+            if let Some(events) = kept(follow.poll(store), &mut follow_error) {
+                stale |= events.iter().any(|e| concerns(e, snap.centre.as_ref()));
             }
+            ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
             if due(stale, taken.elapsed()) {
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                let next = kept(snapshot(store, home), &mut ui.error);
-                stale = ui.error.is_some();
+                let next = kept(snapshot(store, home), &mut snapshot_error);
+                stale = snapshot_error.is_some();
+                ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
                 if let Some(next) = next {
                     *snap = next;
                     let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
