@@ -1,7 +1,8 @@
 //! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a header
 //! ` Inbox <n> `, up to [`SHOWN`] item rows `<dot> <label>` with the age right-aligned, and, with more items, a row
 //! `+<n> more` that expands the list inline and becomes `− less`. Whether it is expanded is view state only. Expanded, it is
-//! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
+//! capped at the rows the column's split gives it (the tree has two thirds, hs-d307; `View::draw_at`) and its items scroll
+//! inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command, the merge popup of
 //! its pull request, or the copy of its `url`. The label of a link kind is also an OSC 8 link to the `url` (`crate::link`, which the terminal opens with its
