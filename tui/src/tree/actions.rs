@@ -5,7 +5,7 @@
 //! (`select-pane`), and `?` opens the legend popup.
 //! A click on a Context row runs `context manager` (§3.10), then the Open of the Manager it returns.
 //! The menu's Open, Close, Archive, Unarchive, Rename…, Fork…, New session…, New Plan… and New Context… are
-//! the same commands; Copy id is the one that runs `tmux set-buffer -w` instead (OSC 52). After New Plan…, Fork… and
+//! the same commands (all but Open and Unarchive after a dialog popup, [`super::ask`]); Copy id is the one that runs `tmux set-buffer -w` instead (OSC 52). After New Plan…, Fork… and
 //! New session… succeed, the new Lead is opened in the chat slot (`session open`, then the focus, as Open does). Two flows run more than one: an Archive of the chat slot's Lead frees the slot first
 //! ([`Free`], F3), and a click on an archived Session runs `session history` and focuses the chat (F5).
 //!
@@ -23,7 +23,10 @@ use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::{Tmux, chat_slot};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
+use super::ask::{Dialogs, Question};
+use crate::dialog::{self, validate::Validator};
 use crate::widgets::open_legend;
+use cpd_core::error::CpdError;
 
 /// The object an archive or unarchive is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,10 +101,10 @@ pub enum Action {
     RenameSession { id: SessionId, name: String },
     /// `session fork <source> --name=<name>` (§10.3): Fork… and New session….
     Fork { source: SessionId, name: String },
-    /// `session close <id>` (§10.9): `x`.
+    /// `session close <id>` (§10.9): `x` and the menu's Close, after their `confirm` popup.
     Close(SessionId),
-    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, at once, after `free` when the
-    /// archived Lead holds the chat slot.
+    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, after its `confirm` popup and after
+    /// `free` when the archived Lead holds the chat slot.
     Archive { subject: Subject, free: Option<Free> },
     /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
     Unarchive(Subject),
@@ -115,7 +118,7 @@ pub enum Action {
 }
 
 /// The refusal of `x` on the Session in the chat slot (the reference's), also when `session close` refuses it
-/// because it moved there while the prompt was open.
+/// because it moved there while the popup was open.
 pub const IN_CHAT_SLOT: &str = "switch to another session first";
 
 impl Action {
@@ -258,9 +261,25 @@ impl Runner {
         crate::logs::open_at(&self.tmux, event).map_err(|e| e.message().to_owned())
     }
 
+    /// Opens the dialog popup of `question` and returns when it closes: the command its answer makes, none when the
+    /// User cancelled.
+    pub fn ask(&self, question: Question) -> Result<Option<Action>, String> {
+        question.ask(self)
+    }
+
     /// `?`: the legend popup; returns when it closes.
     pub fn legend(&self) -> Result<(), String> {
         open_legend(&self.tmux).map_err(|e| e.message().to_owned())
+    }
+}
+
+impl Dialogs for Runner {
+    fn input(&self, title: &str, prompt: &str, initial: &str, validator: Validator) -> Result<Option<String>, CpdError> {
+        dialog::input(&self.tmux, title, prompt, initial, validator)
+    }
+
+    fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError> {
+        dialog::confirm(&self.tmux, title, text, yes_label)
     }
 }
 

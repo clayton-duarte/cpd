@@ -4,7 +4,8 @@
 //! runs it, then hands the result to [`View::done`].
 //!
 //! Keys (commands.md §13.2): ↑↓ and j/k move the cursor, Enter opens the cursor's Session, `n` starts a new Plan,
-//! `x` closes a Session's pane, `?` opens the legend. After the last Session the cursor goes on into the Inbox
+//! `x` closes a Session's pane (both ask in a dialog popup, as the menu's `…`, Close and Archive do; the view has no
+//! inline prompt), `?` opens the legend. After the last Session the cursor goes on into the Inbox
 //! section's item rows (and back up); there Enter jumps to the item's cause, `s` opens the snooze choices and `d`
 //! dismisses. No other key does anything. A right click opens the menu
 //! ([`super::menu`]), which then takes every key and click.
@@ -22,7 +23,7 @@ use super::actions::{Action, Free, IN_CHAT_SLOT, Subject, Until};
 use super::cursor::{self, Input};
 use super::inbox::{self, Hit, Jump, Shape};
 use super::menu::{self, Item, Kind, Menu};
-use super::prompt::{Ask, Outcome, Prompt, Target};
+use super::ask::{Ask, Question};
 use super::rows::{self, Id, Row};
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::session::State;
@@ -33,33 +34,32 @@ use crate::read::{ContextNode, SessionNode, Tree};
 const NAME_MAX: usize = 80;
 const FORK_SUFFIX: &str = " (fork)";
 
-/// The prompt of Fork… and New session…: the name of a fork of `source`, starting with `<label> (fork)` (the label cut
+/// The popup of Fork… and New session…: the name of a fork of `source`, starting with `<label> (fork)` (the label cut
 /// so that the name is not too long).
-fn fork_of(source: &SessionNode, label: &str) -> Prompt {
+fn fork_of(title: &'static str, source: &SessionNode, label: &str) -> Question {
     let label: String = label.chars().take(NAME_MAX - FORK_SUFFIX.len()).collect();
-    Prompt::typed(Ask::Fork { source: source.id.clone() }, format!("{label}{FORK_SUFFIX}"))
+    Question::input(title, Ask::Fork { source: source.id.clone() }, format!("{label}{FORK_SUFFIX}"))
 }
 
-/// The prompt of Rename… on `row`, starting with its current label.
-fn rename_of(row: &Row<'_>) -> Option<Prompt> {
+/// The popup of Rename… on `row`, starting with its current label.
+fn rename_of(row: &Row<'_>) -> Option<Question> {
     let ask = match *row {
         Row::Context(c) => Ask::RenameContext(c.id.clone()),
         Row::Plan(_, p) => Ask::RenamePlan(p.head.id.clone()),
         Row::Fork(_, _, s) => Ask::RenameSession(s.id.clone()),
         Row::More => return None,
     };
-    Some(Prompt::typed(ask, row.label()))
+    Some(Question::input("Rename", ask, row.label()))
 }
 
 /// What `x` and the menu's Close do on `row`: the confirmation, or the note that refuses it (the Session is in the
 /// chat slot); nothing on a row with no Session.
-fn close_of(row: Row<'_>) -> Option<Result<Prompt, &'static str>> {
+fn close_of(row: Row<'_>) -> Option<Result<Question, &'static str>> {
     let session = row.session()?;
     if session.is_active() {
         return Some(Err(IN_CHAT_SLOT));
     }
-    let target = Target { id: session.id.clone(), label: row.label(), working: session.state == State::Working };
-    Some(Ok(Prompt::close(target)))
+    Some(Ok(Question::close(session.id.clone(), &row.label(), session.state == State::Working)))
 }
 
 /// The object an archive command of the row names: the Context, the Plan, or the fork; none for a `…` row.
@@ -78,6 +78,8 @@ pub enum Effect {
     None,
     /// Run this command, then call [`View::done`] with the result.
     Run(Action),
+    /// Open this dialog popup, then run the command its answer makes, if any ([`Question::ask`]); a failure is the note.
+    Ask(Question),
     /// Open the legend popup (`?`); a failure is the note.
     Legend,
     /// Open the logs popup at this Event (the bottom with none): a click on an `engine-error` or `engine-down` item.
@@ -92,8 +94,7 @@ pub struct View {
     focused: bool,
     /// The cursor stays hidden until the first arrow key.
     last_input: Input,
-    prompt: Option<Prompt>,
-    /// The right-click menu, while it is open; never together with a prompt.
+    /// The right-click menu, while it is open.
     menu: Option<Menu>,
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
@@ -117,7 +118,6 @@ impl View {
             known: HashSet::new(),
             focused,
             last_input: Input::Click,
-            prompt: None,
             menu: None,
             pane: Rect::default(),
             inbox_expanded: false,
@@ -180,29 +180,6 @@ impl View {
         if key.kind != KeyEventKind::Press {
             return Effect::None;
         }
-        // An open prompt takes every key; mouse clicks are ignored meanwhile.
-        if let Some(prompt) = self.prompt.as_mut() {
-            return match prompt.key(key) {
-                Outcome::Open => Effect::None,
-                Outcome::Cancel => {
-                    self.prompt = None;
-                    Effect::None
-                }
-                Outcome::NewPlan { context, id } => {
-                    self.prompt = None;
-                    let title = id.to_string();
-                    Effect::Run(Action::NewPlan { context, id, title })
-                }
-                Outcome::Run(action) => {
-                    self.prompt = None;
-                    Effect::Run(action)
-                }
-                Outcome::Close { id } => {
-                    self.prompt = None;
-                    Effect::Run(Action::Close(id))
-                }
-            };
-        }
         // An open menu takes every key.
         if let Some(menu) = self.menu.as_mut() {
             return match menu.key(key) {
@@ -217,15 +194,15 @@ impl View {
         match key.code {
             KeyCode::Char('n') => {
                 self.note.clear();
-                if let Some((row, session, plan)) = self.cursor_row().and_then(|r| Some((r, r.session()?, r.plan()?))) {
-                    let target = Target { id: session.id.clone(), label: row.label(), working: session.state == State::Working };
-                    self.prompt = Some(Prompt::name(target, plan.head.context.clone()));
+                if let Some((row, plan)) = self.cursor_row().and_then(|r| r.session().and(r.plan()).map(|p| (r, p))) {
+                    let ask = Ask::NamedPlan { context: plan.head.context.clone(), label: row.label() };
+                    return Effect::Ask(Question::input("New Plan", ask, String::new()));
                 }
             }
             KeyCode::Char('x') => {
                 self.note.clear();
                 let asked = self.cursor_row().and_then(close_of);
-                self.ask(asked);
+                return self.ask(asked);
             }
             KeyCode::Char('s') => {
                 self.note.clear();
@@ -290,9 +267,6 @@ impl View {
     }
 
     pub fn mouse(&mut self, m: MouseEvent) -> Effect {
-        if self.prompt.is_some() {
-            return Effect::None;
-        }
         let at = Position::new(m.column, m.row);
         // a right click on the Inbox section: the menu of an item row; the header and `+<n> more` have none
         if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
@@ -336,7 +310,7 @@ impl View {
         self.menu = Kind::of(row).map(|kind| Menu::new(kind, path.unwrap_or_default(), at));
     }
 
-    /// The item picked in the menu, which is closed: the command to run, a prompt to ask first, or the note.
+    /// The item picked in the menu, which is closed: the command to run, a popup to ask first, or the note.
     fn pick(&mut self, item: Item) -> Effect {
         let Some(menu) = self.menu.take() else { return Effect::None };
         self.note.clear();
@@ -351,41 +325,32 @@ impl View {
         }
         if item == Item::NewContext {
             let taken = self.tree.contexts.iter().map(|c| c.id.to_string()).collect();
-            self.prompt = Some(Prompt::typed(Ask::NewContext { taken }, String::new()));
-            return Effect::None;
+            return Effect::Ask(Question::input("New Context", Ask::NewContext { taken }, String::new()));
         }
         // the row may be gone, with a snapshot taken while the menu was open
         let Some(row) = rows::row(&self.tree, &menu.path) else { return Effect::None };
         match item {
             Item::Open => row.session().map_or(Effect::None, |s| Effect::Run(Action::Open(s.id.clone()))),
-            Item::Close => {
-                self.ask(close_of(row));
-                Effect::None
-            }
+            Item::Close => self.ask(close_of(row)),
             Item::Archive => {
                 let Some(subject) = subject_of(&row) else { return Effect::None };
                 match self.free_for(&row, &menu.path) {
-                    Some(free) => Effect::Run(Action::Archive { subject, free }),
+                    Some(free) => Effect::Ask(Question::archive(&row.label(), Action::Archive { subject, free })),
                     None => Effect::None,
                 }
             }
             Item::Unarchive => subject_of(&row).map_or(Effect::None, |subject| Effect::Run(Action::Unarchive(subject))),
-            Item::Rename => {
-                self.ask(rename_of(&row).map(Ok));
-                Effect::None
-            }
+            Item::Rename => self.ask(rename_of(&row).map(Ok)),
             Item::Fork | Item::NewSession => {
-                let prompt = row.session().map(|source| fork_of(source, &row.label()));
-                self.ask(prompt.map(Ok));
-                Effect::None
+                let title = if item == Item::Fork { "Fork" } else { "New session" };
+                self.ask(row.session().map(|source| Ok(fork_of(title, source, &row.label()))))
             }
             Item::NewPlan => {
-                let prompt = match row {
-                    Row::Context(c) => Some(self.new_plan_in(c)),
+                let asked = match row {
+                    Row::Context(c) => Some(Ok(self.new_plan_in(c))),
                     _ => None,
                 };
-                self.ask(prompt.map(Ok));
-                Effect::None
+                self.ask(asked)
             }
             Item::CopyId => row.shown_id().map_or(Effect::None, |id| Effect::Run(Action::CopyId(id))),
             // an Inbox item's entries are the menu's `inbox` branch above
@@ -423,18 +388,21 @@ impl View {
         Some(Some(next.map_or(Free::Park, |(_, s)| Free::Open(s.id.clone()))))
     }
 
-    /// The prompt of New Plan… in `context` (R34 A12: no repo).
-    fn new_plan_in(&self, context: &ContextNode) -> Prompt {
+    /// The popup of New Plan… in `context` (R34 A12: no repo).
+    fn new_plan_in(&self, context: &ContextNode) -> Question {
         let taken = self.tree.contexts.iter().flat_map(|c| &c.plans).map(|p| p.head.id.to_string()).collect();
-        Prompt::typed(Ask::NewPlan { context: context.id.clone(), taken }, String::new())
+        Question::input("New Plan", Ask::NewPlan { context: context.id.clone(), taken }, String::new())
     }
 
-    /// Opens the prompt, or says why not.
-    fn ask(&mut self, asked: Option<Result<Prompt, &'static str>>) {
+    /// The popup to open, or the note that says why not.
+    fn ask(&mut self, asked: Option<Result<Question, &'static str>>) -> Effect {
         match asked {
-            Some(Ok(prompt)) => self.prompt = Some(prompt),
-            Some(Err(note)) => self.note = note.into(),
-            None => {}
+            Some(Ok(question)) => Effect::Ask(question),
+            Some(Err(note)) => {
+                self.note = note.into();
+                Effect::None
+            }
+            None => Effect::None,
         }
     }
 
@@ -500,23 +468,18 @@ impl View {
         (above != Some(path.as_slice())).then_some(path)
     }
 
-    /// The text of the footer: the prompt, else the note of the last action.
-    fn footer(&self) -> String {
-        self.prompt.as_ref().map(Prompt::text).unwrap_or_else(|| self.note.clone())
-    }
-
     /// [`View::draw_at`] now.
     pub fn draw(&mut self, f: &mut Frame, frame: usize) {
         self.draw_at(f, frame, OffsetDateTime::now_utc());
     }
 
     /// Draw a blank row, the tree below it, the Inbox section pinned under the tree and (when there is something to
-    /// say) the footer in the rows at the bottom: the reference's layout, the prompt bold. One blank column is left on
+    /// say) the note of the last action in the rows at the bottom: the reference's layout. One blank column is left on
     /// each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`); the Inbox items'
     /// ages are taken at `now`, from their `opened_at`, so they need no read.
     pub fn draw_at(&mut self, f: &mut Frame, frame: usize, now: OffsetDateTime) {
         let inner = f.area().inner(Margin::new(1, 0));
-        let footer = self.footer();
+        let footer = self.note.clone();
         let width = inner.width.max(1) as usize;
         let wrapped = footer.chars().count().div_ceil(width);
         let footer_height =
@@ -541,8 +504,7 @@ impl View {
         let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
         inbox::draw(f, inbox_area, &self.tree.inbox, self.inbox_expanded, inbox_cursor, now, frame);
         if footer_height > 0 {
-            let style = if self.prompt.is_some() { palette::note().bold() } else { palette::note() };
-            f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
+            f.render_widget(Paragraph::new(footer).style(palette::note()).wrap(Wrap { trim: false }), footer_area);
         }
         let cursor = self.cursor_shown() && self.inbox_cursor.is_none();
         rows::draw(f, list, &self.tree, &mut self.state, cursor, frame);
