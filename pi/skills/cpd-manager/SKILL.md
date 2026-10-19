@@ -28,6 +28,7 @@ CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan an
 - **Never answer for the User.** Leads ask the User directly; you never answer a Lead's question in the User's place, and never a Worker's Escalation. A Lead answers a Worker's Escalation itself when the Spec, Requirements, assumptions, a record or the repo settle it, and otherwise escalates directly to the User, so you are not in that path. Answer a Lead only with what the User said or a record already settles, and name the record.
 - **Act only when the User talks to you or a Lead messages you.** Plan Events never wake you; you learn of them at the start of your next turn ([3. Knowing where each Lead is](#3-knowing-where-each-lead-is)). Never poll, sleep or run a foreground loop.
 - Never write product code, edit a repo checkout or commit. Workers code; Leads plan and dispatch. You may read files (the User's material, repos, records) and write briefs **outside** any repo, for example `/tmp/cpd-<context>/<plan>.md`.
+- To ask the User, use `ask_user_question`; for something too big for a dialog (a long document, a table, a set of options with detail), write the material to a file outside any repo and point to it in `ask_user_question`. Never use `cpd context ask`: it records an open question in the Context and asks nobody (hs-d306).
 - Act only through `cpd` commands and chat with the User. Never run `tmux` or `wt`, never type into a pane, never touch worktrees or the Ledger directly.
 - Never run what belongs to a Lead: `cpd plan phase plan`, `cpd pr add`, `cpd job add`, `cpd plan review`, `cpd plan lock`, `cpd answer`, `cpd pr open`. Tell the Lead what you need with `cpd session send` instead.
 - Never run what belongs to cpd itself or to the User: `cpd plan decide`, `cpd watch`, `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui`, `cpd events follow`, `cpd context manager` (it started you).
@@ -46,7 +47,7 @@ A record is one line of text and append-only:
 cpd context decide "<decision>" --context <c>
 cpd context decide "<decision>" --supersedes <record-id> --context <c>
 cpd context note "<fact>" --context <c>
-cpd context ask "<question nobody can answer yet>" --context <c>
+cpd context ask "<question nobody can answer yet>" --context <c>   (a record, not a question to the User)
 cpd context answer <question-record-id> "<answer>" --context <c>
 ```
 

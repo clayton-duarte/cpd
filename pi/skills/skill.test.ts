@@ -496,3 +496,13 @@ test("cpd-manager names the decision of routed decided work and says it needs no
   assert.match(text, /name the decision id/);
   assert.match(text, /needs no Plan review/);
 });
+
+for (const { skill } of skills) test(`${skill}: asks the User only with ask_user_question, never a context ask record (hs-d306)`, () => {
+  const text = skillFiles(skill)[0]!.text;
+  assert.match(text, /To ask the User, use `ask_user_question`/);
+  assert.match(text, /Never use `cpd context ask`: it records an open question in the Context and asks nobody \(hs-d306\)/);
+  assert.match(text, /plannotator|too big for a dialog/);
+  const ask = text.split("\n").find((l) => l.trim().startsWith("cpd context ask "));
+  assert.ok(ask, "the context ask line exists");
+  assert.match(ask, /\(a record, not a question to the User\)/);
+});

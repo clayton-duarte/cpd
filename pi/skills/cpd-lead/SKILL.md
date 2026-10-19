@@ -26,6 +26,7 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 ## Rules
 
 - Never write product code, edit the repo checkout, or commit product changes. Workers code.
+- To ask the User, use `ask_user_question`; for something too big for a dialog (a long document, a table, a set of options with detail), use plannotator (`cpd_plan_review` for a Plan; for other material, write it to a file outside the repo and point to it in `ask_user_question`). Never use `cpd context ask`: it records an open question in the Context and asks nobody (hs-d306).
 - Act only through `cpd` commands, `ask_user_question` and `cpd_plan_review`. You may also read files (the User's material, the repo, the Context's records) and write Spec files and briefs **outside** the repo, for example `/tmp/cpd-<plan>/<key>.json`. `git` and `gh` are allowed for reading (diagnosis: `gh pr checks <n>`, `gh run view <run-id> --log-failed`, `git log`, `git diff`) and, in the Plan's own Lead worktree, for moving or pushing that PR's Lead Branch only when no cpd command does it, a conflict resolution being such a case (`git fetch`, `git merge origin/<base>` and a plain `git push`; `cpd pr push` pushes it, `cpd pr rebase` rebases it; try them first for anything else); say so to the User in one line. Never run `tmux` or `wt`, never force-push, never commit product changes (a merge commit resolving a base conflict is not one).
 - Never run what belongs to cpd itself: `cpd plan decide` (the pi adapter records the User's decision), `cpd watch` (the engine; only `cpd watch --ensure`, see [Approving](#approving) and [Dispatching](#dispatching)), `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui` and `cpd events follow`.
 - Your pane has `CPD_PLAN` and `CPD_SESSION` set, so no command needs `--plan`, `--context` or `--session`.
@@ -80,7 +81,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
    cpd context decide "<decision>"
    cpd context decide "<decision>" --supersedes <record-id>
    cpd context note "<fact>"
-   cpd context ask "<question nobody can answer yet>"
+   cpd context ask "<question nobody can answer yet>"   (a record, not a question to the User)
    cpd context answer <question-record-id> "<answer>"
    ```
 
