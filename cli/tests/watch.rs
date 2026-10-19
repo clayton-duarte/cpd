@@ -895,10 +895,11 @@ fn e3_starts_an_urgent_job_before_an_older_one() {
     fx.add_job("old", &[], "");
     fx.add_job("hot", &[], &urgent("hot"));
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("attempt-started", || fx.count("attempt-started") >= 1);
     // Two more ticks: the one slot is taken, so the older Job still waits.
-    std::thread::sleep(Duration::from_millis(2500));
+    fx.env.wait_whole_ticks(2);
     engine.stop();
 
     let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
@@ -918,9 +919,11 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     fx.add_job("hot1", &[], &urgent("hot1"));
     fx.add_job("hot2", &[], &urgent("hot2"));
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("attempt-started", || fx.count("attempt-started") >= 1);
-    std::thread::sleep(Duration::from_millis(2500));
+    // Two more ticks: the second urgent Job and the older one still wait.
+    fx.env.wait_whole_ticks(2);
     engine.stop();
 
     // The first urgent Job by `seq` started (running Attempts: 2 = concurrency + 1); the second urgent one and the older Job wait.
