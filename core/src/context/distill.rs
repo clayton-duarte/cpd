@@ -594,6 +594,48 @@ mod tests {
         );
     }
 
+    fn assistant(text: &str, stop: &str, input: u64, cache_read: u64, cache_write: u64, output: u64, cost: f64) -> String {
+        json!({"type": "message_end", "message": {
+            "role": "assistant",
+            "content": [{"type": "thinking", "thinking": "hm"}, {"type": "text", "text": text}],
+            "usage": {"input": input, "output": output, "cacheRead": cache_read, "cacheWrite": cache_write, "reasoning": 1,
+                      "totalTokens": 0, "cost": {"total": cost}},
+            "stopReason": stop,
+        }})
+        .to_string()
+    }
+
+    #[test]
+    fn the_stream_gives_the_final_assistant_text_and_the_summed_usage() {
+        let user = json!({"type": "message_end", "message": {"role": "user", "content": "x"}});
+        let stream = format!(
+            "{{\"type\":\"session\"}}\n{user}\n\n{}\r\n{{\"type\":\"turn_end\",\"message\":{{\"role\":\"assistant\"}}}}\n{}\n",
+            assistant("first", "stop", 1, 2, 3, 4, 0.5),
+            assistant("# Digest\n[hs-d1]", "stop", 10, 0, 100, 20, 0.25)
+        );
+        let out = pi_json::parse(stream.as_bytes()).unwrap();
+        assert_eq!(out.answer, Ok("# Digest\n[hs-d1]".to_owned()));
+        assert_eq!(out.usage, Some(pi_json::Usage { tokens_in: 116, tokens_out: 24, cost: 0.75 }));
+    }
+
+    #[test]
+    fn a_stream_without_a_usable_answer_still_reports_its_usage() {
+        let out = pi_json::parse(assistant("cut", "length", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
+        assert_eq!(out.usage, Some(pi_json::Usage { tokens_in: 1, tokens_out: 2, cost: 0.1 }));
+        assert!(out.answer.unwrap_err().contains("`length`"));
+        assert!(pi_json::parse(assistant(" \n", "stop", 1, 0, 0, 2, 0.1).as_bytes()).unwrap().answer.is_err());
+        let none = pi_json::parse(b"{\"type\":\"agent_start\"}\n").unwrap();
+        assert_eq!((none.usage, none.answer.is_err()), (None, true));
+    }
+
+    #[test]
+    fn a_stream_that_is_not_pi_json_cannot_be_parsed() {
+        assert!(pi_json::parse(b"# Digest\n").unwrap_err().contains("line 1"));
+        assert!(pi_json::parse(b"[1]\n").is_err());
+        let no_usage = r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"stop"}}"#;
+        assert!(pi_json::parse(no_usage.as_bytes()).unwrap_err().contains("malformed"));
+    }
+
     #[test]
     fn a_child_that_outlives_its_limit_is_killed() {
         let started = Instant::now();

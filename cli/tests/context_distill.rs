@@ -21,6 +21,36 @@ use time::macros::format_description;
 
 const CONTEXT: &str = "ctx";
 
+/// Shell for a fake `pi`: `reply` reads the digest text on stdin and prints pi's `--mode json` stream for a
+/// one-shot run (shapes recorded from pi 1.3.0, see `RECORDED`) whose final assistant message holds it, with
+/// usage 2 input + 100 cache-read + 631 cache-write = 733 tokens in, 4 out, cost 0.25.
+const REPLY: &str = r##"reply() {
+  text=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/$/\\n/' | tr -d '\n')
+  printf '%s\n' '{"type":"session","version":3,"id":"x","timestamp":"2026-10-19T01:59:25.851Z","cwd":"/"}' '{"type":"agent_start"}'
+  printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"%s"}],"usage":{"input":2,"output":4,"cacheRead":100,"cacheWrite":631,"reasoning":1,"totalTokens":737,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0.25}},"stopReason":"stop"}}\n' "$text"
+  printf '%s\n' '{"type":"agent_settled","aborted":false}'
+}"##;
+
+/// A fake `pi` that prints `digest` (shell) as the final assistant message of a JSON stream.
+fn says(digest: &str) -> String {
+    format!("{REPLY}\n{{\n{digest}\n}} | reply")
+}
+
+/// A real `pi --mode json` run of one turn answering `OK` (pi 1.3.0; the system message is left out, the
+/// rest is verbatim): 2 input + 731 cache-write = 733 tokens in, 4 out, cost 0.00467875.
+const RECORDED: &str = r##"cat <<'EOF'
+{"type":"session","version":3,"id":"01a151e2-939a-7161-b027-0b67b600ab0c","timestamp":"2026-10-19T01:59:25.851Z","cwd":"/tmp/d2probe"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"<file name=\"/tmp/d2probe/p.md\">\nsay ok\n\n</file>\n"}],"timestamp":1792375166181}}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"<file name=\"/tmp/d2probe/p.md\">\nsay ok\n\n</file>\n"}],"timestamp":1792375166181}}
+{"type":"message_start","message":{"role":"assistant","content":[],"api":"anthropic-messages","provider":"github-copilot","model":"claude-opus-5","usage":{"input":2,"output":1,"cacheRead":0,"cacheWrite":731,"totalTokens":734,"cost":{"input":1e-05,"output":2.5e-05,"cacheRead":0,"cacheWrite":0.00456875,"total":0.00460375},"cacheWrite1h":0},"stopReason":"pending","timestamp":1792375166218,"responseId":"msg_011CgAmYt1THcx6U18TiHg6J"}}
+{"type":"message_update","usage":{"input":2,"output":4,"cacheRead":0,"cacheWrite":731,"totalTokens":737,"cost":{"input":1e-05,"output":0.0001,"cacheRead":0,"cacheWrite":0.00456875,"total":0.00467875},"cacheWrite1h":0,"reasoning":0},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"OK"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"OK"}],"api":"anthropic-messages","provider":"github-copilot","model":"claude-opus-5","usage":{"input":2,"output":4,"cacheRead":0,"cacheWrite":731,"totalTokens":737,"cost":{"input":1e-05,"output":0.0001,"cacheRead":0,"cacheWrite":0.00456875,"total":0.00467875},"cacheWrite1h":0,"reasoning":0},"stopReason":"stop","timestamp":1792375166218,"responseId":"msg_011CgAmYt1THcx6U18TiHg6J","rawStopReason":"end_turn","durationMs":1177,"thinkingLevel":"high"}}
+{"type":"turn_end","message":{"role":"assistant","content":[{"type":"text","text":"OK"}],"api":"anthropic-messages","provider":"github-copilot","model":"claude-opus-5","usage":{"input":2,"output":4,"cacheRead":0,"cacheWrite":731,"totalTokens":737,"cost":{"input":1e-05,"output":0.0001,"cacheRead":0,"cacheWrite":0.00456875,"total":0.00467875},"cacheWrite1h":0,"reasoning":0},"stopReason":"stop","timestamp":1792375166218,"responseId":"msg_011CgAmYt1THcx6U18TiHg6J","rawStopReason":"end_turn","durationMs":1177,"thinkingLevel":"high"},"toolResults":[]}
+{"type":"agent_settled","aborted":false}
+EOF"##;
+
 /// A fake `pi` whose digest is the header line of every record in `records.md` (each cites its record), minus
 /// those of the ids in `$OMIT` (space separated).
 const CITES_ALL: &str = r##"echo "# Digest"
@@ -45,7 +75,7 @@ fn fx() -> Fx {
         ),
     )
     .unwrap();
-    env.fake_pi(CITES_ALL);
+    env.fake_pi(&says(CITES_ALL));
     // The engine's E5 runs `cpd pr poll` from `PATH`, through a `gh` that finds no pull requests.
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
@@ -82,7 +112,7 @@ impl Fx {
         let Ok(entries) = fs::read_dir(self.digests()) else { return Vec::new() };
         let mut names: Vec<String> = entries
             .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .filter(|n| !["prompt.md", "records.md", "distill.log"].contains(&n.as_str()))
+            .filter(|n| !["prompt.md", "records.md", "distill.log", "runs.jsonl"].contains(&n.as_str()))
             .collect();
         names.sort();
         names
@@ -107,6 +137,12 @@ impl Fx {
 
     fn pi_calls(&self) -> usize {
         self.env.calls("pi").len()
+    }
+
+    /// The lines of the Context's `runs.jsonl`.
+    fn runs(&self) -> Vec<Value> {
+        let text = fs::read_to_string(self.digests().join("runs.jsonl")).unwrap_or_default();
+        text.lines().map(|l| serde_json::from_str(l).expect("a run line is JSON")).collect()
     }
 
     /// The `error` Events of `context distill`.
@@ -170,7 +206,7 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     assert_eq!(
         calls,
         [vec![
-            "--print", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", &model, "--",
+            "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", &model, "--",
             "@prompt.md", "@records.md",
         ]]
     );
@@ -185,13 +221,45 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     let again = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(again["already"], true, "{again}");
     assert_eq!(fx.pi_calls(), 1);
+
+    // The run's cost is in the output and in the one line of the runs log (tokens in count the cached prompt).
+    let run = &out["run"];
+    assert_eq!((run["tokens_in"].clone(), run["tokens_out"].clone(), run["cost"].clone(), run["model"].clone()), (json!(733), json!(4), json!(0.25), json!(model)), "{out}");
+    assert!(run["seconds"].as_f64().is_some_and(|s| s >= 0.0), "{run}");
+    assert_eq!(run.as_object().unwrap().len(), 5, "{run}");
+    let runs = fx.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let line = &runs[0];
+    assert_eq!((line["context"].clone(), line["upto_seq"].clone(), line["result"].clone()), (json!(CONTEXT), json!(upto), json!("valid")));
+    assert_eq!((line["tokens_in"].clone(), line["tokens_out"].clone(), line["cost"].clone(), line["model"].clone()), (json!(733), json!(4), json!(0.25), json!(model)));
+    assert_eq!(line["seconds"], run["seconds"]);
+    let started = line["started_at"].as_str().unwrap();
+    time::OffsetDateTime::parse(started, &time::format_description::well_known::Rfc3339).expect("started_at is RFC 3339");
+    assert!(started.ends_with('Z'), "{started}");
+    assert_eq!(line.as_object().unwrap().len(), 9, "{line}");
+}
+
+#[test]
+fn a_recorded_pi_transcript_gives_the_digest_and_one_correct_line() {
+    let fx = fx();
+    fx.decide("Use sqlite.");
+    fx.env.fake_pi(RECORDED);
+    // "OK" cites no decision, so the digest is invalid; what matters is that it is the final assistant message.
+    refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let upto = fx.highest_seq();
+    assert_eq!(fs::read_to_string(fx.digests().join(format!("{upto}.md.invalid"))).unwrap(), "OK\n");
+    let runs = fx.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    let line = &runs[0];
+    assert_eq!((line["tokens_in"].clone(), line["tokens_out"].clone(), line["cost"].clone()), (json!(733), json!(4), json!(0.00467875)), "{line}");
+    assert_eq!((line["result"].clone(), line["upto_seq"].clone()), (json!("invalid"), json!(upto)));
 }
 
 #[test]
 fn the_distiller_gets_no_cpd_variable() {
     let fx = fx();
     fx.decide("Use sqlite.");
-    fx.env.fake_pi(&format!("env > \"$HOME/pi.env\"\n{CITES_ALL}"));
+    fx.env.fake_pi(&format!("env > \"$HOME/pi.env\"\n{}", says(CITES_ALL)));
     let mut command = fx.env.command(CPD);
     command.args(["context", "distill", "--context", CONTEXT]).env("CPD_SESSION", "3f0c1b2a-5d4e-4f60-8a7b-9c0d1e2f3a4b").env("CPD_PLAN", "alpha");
     let out = command.output().unwrap();
@@ -211,7 +279,7 @@ fn an_invalid_digest_is_kept_with_one_error_event_and_the_previous_valid_one_sta
     let kept = fs::read_to_string(fx.digests().join(&before[0])).unwrap();
 
     let d2 = fx.decide("Use flock.");
-    fx.env.fake_pi("echo '# Digest'; echo 'Cites a ghost [hs-d99] and nothing else.'");
+    fx.env.fake_pi(&says("echo '# Digest'; echo 'Cites a ghost [hs-d99] and nothing else.'"));
     let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
     let error = refused(&run, "distill_invalid", 1);
     let details = &error["details"];
@@ -239,23 +307,25 @@ fn an_invalid_digest_is_kept_with_one_error_event_and_the_previous_valid_one_sta
     assert_eq!((event["context"].clone(), event["plan"].clone(), event["session"].clone()), (Value::Null, Value::Null, Value::Null));
 
     // A rerun runs again, and a good answer then lands and removes the kept invalid digest.
-    fx.env.fake_pi(CITES_ALL);
+    fx.env.fake_pi(&says(CITES_ALL));
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
     assert_eq!(fx.errors().len(), 1);
+    let results: Vec<Value> = fx.runs().iter().map(|r| r["result"].clone()).collect();
+    assert_eq!(results, [json!("valid"), json!("invalid"), json!("valid")], "every run that started pi is logged, in order");
 }
 
 #[test]
 fn the_next_invalid_digest_replaces_the_kept_one() {
     let fx = fx();
     fx.decide("Use sqlite.");
-    fx.env.fake_pi("echo 'first failure'");
+    fx.env.fake_pi(&says("echo 'first failure'"));
     refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     let first = format!("{}.md.invalid", fx.highest_seq());
     assert_eq!(fx.digest_files(), [first.clone()]);
 
     fx.decide("Use flock.");
-    fx.env.fake_pi("echo 'second failure'");
+    fx.env.fake_pi(&says("echo 'second failure'"));
     refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     let second = format!("{}.md.invalid", fx.highest_seq());
     assert_ne!(first, second);
@@ -268,7 +338,7 @@ fn a_decision_cited_only_in_the_index_is_invalid() {
     let fx = fx();
     let d = fx.decide("Use sqlite.");
     // The model writes its own index, as before D-a, and nothing in a topic section.
-    fx.env.fake_pi(&format!("echo '# Digest'; echo 'Nothing cited.'; echo; echo '## Record index'; echo '- [{d}] decision'"));
+    fx.env.fake_pi(&says(&format!("echo '# Digest'; echo 'Nothing cited.'; echo; echo '## Record index'; echo '- [{d}] decision'")));
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     assert_eq!(error["details"]["missing"], json!([d]), "{error}");
     let kept = fs::read_to_string(error["details"]["invalid"].as_str().unwrap()).unwrap();
@@ -282,7 +352,7 @@ fn notes_and_answers_need_no_topic_citation_but_cpds_index_lists_them() {
     let n = fx.cpd(&["context", "note", "A note.", "--context", CONTEXT]).ok()["record"]["id"].as_str().unwrap().to_owned();
     let q = fx.cpd(&["context", "ask", "Which port?", "--context", CONTEXT]).ok()["record"]["id"].as_str().unwrap().to_owned();
     let a = fx.cpd(&["context", "answer", &q, "Port 80.", "--context", CONTEXT]).ok()["record"]["id"].as_str().unwrap().to_owned();
-    fx.env.fake_pi(&format!("echo '# Digest'; echo 'Only the decision [{d}].'"));
+    fx.env.fake_pi(&says(&format!("echo '# Digest'; echo 'Only the decision [{d}].'")));
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     let text = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
     let (topic, index) = text.split_once("\n## Record index\n").unwrap();
@@ -297,7 +367,7 @@ fn notes_and_answers_need_no_topic_citation_but_cpds_index_lists_them() {
 fn a_digest_over_the_limit_is_invalid() {
     let fx = fx();
     let d = fx.decide("Use sqlite.");
-    fx.env.fake_pi(&format!("echo '[{d}]'; i=0; while [ $i -lt 400 ]; do printf '%0100d\\n' 0; i=$((i+1)); done"));
+    fx.env.fake_pi(&says(&format!("echo '[{d}]'; i=0; while [ $i -lt 400 ]; do printf '%0100d\\n' 0; i=$((i+1)); done")));
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     assert!(error["details"]["bytes"].as_u64().unwrap() > 32768, "{error}");
     assert_eq!((error["details"]["missing"].clone(), error["details"]["stray"].clone()), (json!([]), json!([])));
@@ -322,6 +392,38 @@ fn a_failing_pi_is_distill_failed_with_its_stderr_tail() {
     assert_eq!(events[0]["context"], Value::Null);
     let log = fs::read_to_string(details["log"].as_str().unwrap()).unwrap();
     assert!(log.contains("model unavailable"));
+    let runs = fx.runs();
+    assert_eq!(runs.len(), 1, "a failed run is logged too: {runs:?}");
+    assert_eq!(runs[0]["result"], "failed");
+    assert_eq!((runs[0]["tokens_in"].clone(), runs[0]["tokens_out"].clone(), runs[0]["cost"].clone()), (Value::Null, Value::Null, Value::Null));
+    assert!(runs[0]["seconds"].is_number());
+}
+
+#[test]
+fn output_that_is_not_pi_json_is_distill_failed_output() {
+    let fx = fx();
+    fx.decide("Use sqlite.");
+    fx.env.fake_pi("echo '# Digest, as the text mode printed it'");
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
+    assert_eq!((error["details"]["reason"].clone(), error["details"]["exit"].clone()), (json!("output"), Value::Null));
+    assert!(error["message"].as_str().unwrap().contains("line 1"), "{error}");
+    assert!(fx.digest_files().is_empty(), "no .md.tmp is left");
+    assert_eq!(fx.errors().len(), 1);
+    assert_eq!(fx.runs()[0]["result"], "failed");
+}
+
+#[test]
+fn an_answer_cut_at_the_output_limit_fails_the_run_but_its_cost_is_logged() {
+    let fx = fx();
+    fx.decide("Use sqlite.");
+    // pi exits 0 in JSON mode when the final message stopped with `length`.
+    fx.env.fake_pi(&says("echo 'half'").replace(r#""stopReason":"stop""#, r#""stopReason":"length""#));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
+    assert_eq!(error["details"]["reason"], "output");
+    assert!(error["message"].as_str().unwrap().contains("length"), "{error}");
+    assert!(fx.digest_files().is_empty());
+    let runs = fx.runs();
+    assert_eq!((runs[0]["result"].clone(), runs[0]["tokens_in"].clone(), runs[0]["cost"].clone()), (json!("failed"), json!(733), json!(0.25)));
 }
 
 #[test]
@@ -334,6 +436,8 @@ fn pi_that_cannot_start_is_distill_failed_spawn() {
     assert_eq!(error["details"]["reason"], "spawn");
     assert_eq!(error["details"]["exit"], Value::Null);
     assert_eq!(fx.errors().len(), 1);
+    let runs = fx.runs();
+    assert_eq!((runs[0]["result"].clone(), runs[0]["tokens_out"].clone(), runs[0]["cost"].clone()), (json!("failed"), Value::Null, Value::Null));
 }
 
 #[test]
@@ -352,6 +456,8 @@ fn only_plan_records_since_the_digest_carry_it_forward_without_pi() {
     assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
     assert_eq!(fs::read_to_string(fx.digests().join(&fx.digest_files()[0])).unwrap(), text, "one topic text, one index, not two");
     assert_eq!(fx.pi_calls(), 1, "pi ran once, for the first digest");
+    assert_eq!(fx.runs().len(), 1, "the carried-forward run ran no pi and logs nothing");
+    assert!(out.get("run").is_none(), "{out}");
 }
 
 #[test]
@@ -508,7 +614,7 @@ fn the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once() {
     let held = Flock::lock(File::create(home.distill_lock(&ContextId::parse("quiet").unwrap())).unwrap(), FlockArg::LockExclusiveNonblock).unwrap();
 
     // A slow pi, so a second start would overlap the first.
-    fx.env.fake_pi(&format!("sleep 3\n{CITES_ALL}"));
+    fx.env.fake_pi(&format!("sleep 3\n{}", says(CITES_ALL)));
     let engine = start_engine(&fx);
     let digest = |c: &str| home.context_digest_dir(&ContextId::parse(c).unwrap());
     let has_digest = |c: &str| fs::read_dir(digest(c)).is_ok_and(|d| d.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".md") && e.file_name() != "prompt.md" && e.file_name() != "records.md"));
@@ -542,7 +648,7 @@ fn the_engine_tries_a_failed_seq_once_until_a_newer_record_arrives() {
     assert_eq!((fx.pi_calls(), fx.errors().len()), (1, 1), "not repeated at every tick");
 
     fx.insert(CONTEXT, "hs-d2", &ago(20), "Another.", Draft::Decision { supersedes: None });
-    fx.env.fake_pi(CITES_ALL);
+    fx.env.fake_pi(&says(CITES_ALL));
     wait_until("the digest", || fx.digest_files() == [format!("{}.md", fx.highest_seq())]);
     stop_engine(engine);
 }

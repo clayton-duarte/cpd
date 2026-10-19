@@ -240,8 +240,9 @@ pub fn worker(launch: &WorkerLaunch) -> Launch {
 /// The distiller (contract §6.5 "Distiller", §4.6): a one-shot pi that reads
 /// `prompt.md` and `records.md` in its working directory and prints its JSON
 /// event stream (`--mode json`, hs-d244 D-d: the only mode that reports tokens
-/// and cost) to stdout, whose final assistant message is the digest. No session, no extension, no skill, no context file, no tool, and
-/// no `CPD_*` variable: it is no Session.
+/// and cost) to stdout, whose final assistant message is the digest. No
+/// session, no extension, no skill, no context file, no tool, and no `CPD_*`
+/// variable: it is no Session.
 pub fn distiller(model: &str) -> Launch {
     let argv = [
         "pi", "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", model,
