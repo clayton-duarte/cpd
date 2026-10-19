@@ -568,3 +568,9 @@ test("cpd-lead resolves a PR conflict inline and pushes through the Gate, never 
   assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
   assert.match(rule, /never with `git push`/);
 });
+
+test("cpd-manager never blocks and says the adapter refuses waits over 30 seconds", () => {
+  const text = skillFiles("cpd-manager")[0]!.text;
+  assert.match(text, /\*\*Never block\.\*\*/);
+  assert.match(text, /waits longer than 30 seconds/);
+});
