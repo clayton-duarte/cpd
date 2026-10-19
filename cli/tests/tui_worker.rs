@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use common::{CPD, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::host::tmux::PANE_DIED_HOOK;
 use cpd_core::store::Store;
 use serde_json::json;
 
@@ -21,7 +22,11 @@ use serde_json::json;
 
 fn env() -> TestEnv {
     let env = TestEnv::new();
-    std::fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n").unwrap();
+    let config = format!(
+        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+        env.tmux_socket()
+    );
+    std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();
     env
 }
 
@@ -96,12 +101,23 @@ struct Pane<'a> {
 impl<'a> Pane<'a> {
     /// Runs `cpd tui view worker api-a1 --plan ship` in a `width` × `height` pane of the env's private tmux server.
     fn start(env: &'a TestEnv, width: u16, height: u16) -> Pane<'a> {
+        Pane::start_command(env, width, height, &format!("{CPD} tui view worker api-a1 --plan ship"))
+    }
+
+    /// Runs `command` as the cockpit runs a view: the pane carries `@cpd_view` before the command starts, and the
+    /// server has the cockpit's `pane-died` hook, so a view that exits is started again (contract §6.1).
+    fn start_command(env: &'a TestEnv, width: u16, height: u16, command: &str) -> Pane<'a> {
         let out = env.tmux(&[
             "-u",
             "set-option",
             "-g",
             "remain-on-exit",
             "on",
+            ";",
+            "set-hook",
+            "-g",
+            "pane-died",
+            PANE_DIED_HOOK,
             ";",
             "new-session",
             "-d",
@@ -111,7 +127,20 @@ impl<'a> Pane<'a> {
             &width.to_string(),
             "-y",
             &height.to_string(),
-            &format!("{CPD} tui view worker api-a1 --plan ship"),
+            "sleep 3600",
+            ";",
+            "set-option",
+            "-p",
+            "-t",
+            SESSION,
+            "@cpd_view",
+            "worker",
+            ";",
+            "respawn-pane",
+            "-k",
+            "-t",
+            SESSION,
+            command,
         ]);
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         Pane { env }
@@ -146,9 +175,9 @@ impl<'a> Pane<'a> {
         assert!(self.env.tmux(&args).status.success());
     }
 
-    fn dead(&self) -> bool {
-        let out = self.env.tmux(&["list-panes", "-t", SESSION, "-F", "#{pane_dead}"]);
-        String::from_utf8_lossy(&out.stdout).trim() == "1"
+    /// Whether the pane is gone: it was the session's only pane, so the session goes with it.
+    fn closed(&self) -> bool {
+        !self.env.tmux(&["has-session", "-t", SESSION]).status.success()
     }
 }
 
@@ -217,7 +246,7 @@ fn an_appended_entry_is_followed_at_the_end() {
 }
 
 #[test]
-fn scrolling_leaves_the_end_and_q_ends_the_view() {
+fn scrolling_leaves_the_end_and_q_closes_the_pane() {
     let env = env();
     let file = session_file(&env);
     populate(&env, Some(&file));
@@ -229,12 +258,27 @@ fn scrolling_leaves_the_end_and_q_ends_the_view() {
     assert_eq!(screen, ["16:33:44 you", "      Implement the API.", "16:33:44 agent", STATUS]);
     pane.keys(&["G"]);
     pane.wait("the end again", |s| s.iter().any(|r| r.contains("test result")));
+    // The pane carries `@cpd_view` and the server respawns a dead one: `q` must close the pane, not end the program.
     pane.keys(&["q"]);
     let start = Instant::now();
-    while !pane.dead() {
-        assert!(start.elapsed() < Duration::from_secs(10), "q did not end the view");
+    while !pane.closed() {
+        assert!(start.elapsed() < Duration::from_secs(10), "q did not close the pane");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// A view that fails at start (here: no such Attempt) is started again by the hook; it waits before it exits and
+/// says why, so it is not started in a tight loop.
+#[test]
+fn a_view_that_fails_to_start_backs_off_instead_of_looping() {
+    let env = env();
+    populate(&env, None);
+    let log = env.root().join("starts");
+    let pane = Pane::start_command(&env, 80, 6, &format!("echo start >> {}; {CPD} tui view worker nosuch-a9 --plan ship", log.display()));
+    pane.wait("the failure on screen", |s| s.iter().any(|r| r.contains("nosuch-a9")));
+    std::thread::sleep(Duration::from_secs(6));
+    let starts = std::fs::read_to_string(&log).unwrap().lines().count();
+    assert!((1..=4).contains(&starts), "{starts} starts in 6 s: a tight loop");
 }
 
 #[test]
