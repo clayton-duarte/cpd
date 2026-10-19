@@ -291,6 +291,27 @@ fn the_logs_view_needs_a_terminal() {
     assert_eq!((run.exit, run.error()["code"].as_str()), (3, Some("not_a_terminal")), "{run:?}");
 }
 
+// ---------- the legend popup scrolls too ----------
+
+#[test]
+fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes_it() {
+    let env = env();
+    let pane = start(&env, &["legend"], 100, 10);
+    let rows = wait_screen(&env, &pane, "the legend", |r| r.first().is_some_and(|l| l.starts_with("── Legend: what")));
+    assert!(rows[0].contains(" 1-9/"), "{:?}", rows[0]);
+    assert!(rows[2].contains("Meanings"), "{rows:?}");
+    wheel(&env, &pane, false, 5, 5);
+    let rows = wait_screen(&env, &pane, "the wheel down", |r| r.first().is_some_and(|l| l.contains(" 4-12/")));
+    assert!(rows[0].starts_with("── Legend: what"), "the title stays");
+    assert!(!rows.iter().any(|l| l.contains("Meanings")), "{rows:?}");
+    wheel(&env, &pane, true, 5, 5);
+    wait_screen(&env, &pane, "the wheel up", |r| r.first().is_some_and(|l| l.contains(" 1-9/")));
+    tmux_out(&env, &["send-keys", "-t", &pane, "PageDown"]);
+    wait_screen(&env, &pane, "a page down", |r| r.first().is_some_and(|l| l.contains(" 10-18/")));
+    tmux_out(&env, &["send-keys", "-t", &pane, "x"]);
+    wait_until("the legend to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+}
+
 // ---------- the button ----------
 
 #[test]
