@@ -156,7 +156,7 @@ impl Fx {
                 "version = 1\nmachine = \"m1\"\n\
                  [tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
                  [timeouts]\nfork_quiet_seconds = 1\n\
-                 [watch]\ntick_seconds = 1\npr_poll_seconds = 1\n\
+                 [watch]\ntick_seconds = 0.2\npr_poll_seconds = 1\n\
                  [tmux]\nsocket = \"{}\"\n",
                 env.tmux_socket()
             ),

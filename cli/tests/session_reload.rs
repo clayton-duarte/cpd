@@ -120,7 +120,7 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[timeouts]\nfork_quiet_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[timeouts]\nfork_quiet_seconds = 1\npi_stop_seconds = 3\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
@@ -241,7 +241,7 @@ fn alive(pid: i32) -> bool {
 }
 
 #[test]
-fn a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_new_binary_starts_pi_again() {
+fn a_pi_that_ignores_sigterm_is_killed_after_pi_stop_seconds_and_the_new_binary_starts_pi_again() {
     let f = start_with("idle", ":");
     let pid = f.pane_pid();
     let old_pi = f.pi_pids()[0];
@@ -250,13 +250,13 @@ fn a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_new_binary_star
     f.install();
 
     wait_until("SIGTERM to reach pi", || !f.signals().is_empty());
-    std::thread::sleep(Duration::from_secs(3));
-    assert!(alive(old_pi), "pi is not killed before the ten seconds are up");
+    std::thread::sleep(Duration::from_secs(1));
+    assert!(alive(old_pi), "pi is not killed before pi_stop_seconds (3) are up");
     assert_eq!(f.env.calls("pi").len(), 1);
     assert!(f.runs().is_empty(), "the wrapper waits for pi");
 
     wait_until("pi restarted", || f.env.calls("pi").len() == 2);
-    assert!(installed_at.elapsed() >= Duration::from_secs(10), "killed after {:?}", installed_at.elapsed());
+    assert!(installed_at.elapsed() >= Duration::from_secs(3), "killed after {:?}", installed_at.elapsed());
     assert!(!alive(old_pi), "the old pi is dead");
     assert_eq!(f.signals(), "TERM\n", "SIGTERM once, then SIGKILL");
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD}")], "the same process re-execed the new file");
