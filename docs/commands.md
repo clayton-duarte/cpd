@@ -54,7 +54,7 @@ Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Thr
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
-| `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command |
+| `cpd` (no arguments), `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command. Bare `cpd` is §13.3 (hs-d259) |
 
 `cpd --version` (like `--help`) prints one JSON value too: `{"ok": true, "version": "0.0.0", "protocol": 4, "store": {"opens": true, "refusal": null, "unknown": [], "pending": []}}`. `store` is the **verdict** of contract §4.5 ("The window") on `$CPD_HOME`'s database opened read-only, computed by the one function every guard uses (`store::verdict`): `null` when the database file does not exist; otherwise `opens` (`true` when this binary can open the store, migrating or converting it if needed), `refusal` (`null`, or `{"code", "message"}` with `code` one of `store_too_new`, `store_failed`, `migration_changed`, `migration_order`, §1.3) when `opens` is `false`, `unknown` (the migration names the store has applied that this binary lacks, in name order: inside the window they are all additive) and `pending` (the names of this binary's migrations the store has not applied, in the order they would be applied; for an unconverted store the legacy names it lacks, then every named one). `unknown` and `pending` are `[]` for a store that is not named yet, and filled whenever the store is a named store, whether or not it opens. `protocol` is an integer, **4** today (1 until Plan manager added `session-message`, 2 until Plan inbox added the four `inbox-*` kinds, 3 until `session state idle --reply`, hs-d278), raised whenever an Event kind, an Event `data` field the pi adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on (contract §5.2 "The protocol number"); the adapter checks it (§15.2). `--version` never creates, migrates or writes the database, and runs neither the schema check nor the conversion. **The guards read `store`:** a driver or a Lead's wrapper reloads into a binary only when `store` is `null` or `store.opens` is `true` (contract §3.4, §6.7), and `scripts/install-cpd.sh` refuses a build whose `store.opens` is `false`, and a Lead Branch build that carries a migration file that is not on `origin/main` (contract §3.7).
 
@@ -1889,7 +1889,7 @@ Effects, each only when missing:
 - **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd tui view <tree|plan|widgets>` with `@cpd_view` set, and the StatusBar, one row across the full width at the bottom (`split-window -v -f -l 1`), running `cpd tui view statusbar` with `@cpd_view statusbar`; the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. "Plan Lead" here means any Lead with a Plan, as for `session open` (side forks included, a Context's grounded Lead never), and one that `session open` refuses stays where it is while the placeholder keeps the slot (Escalation `tui-cockpit-a1-q3`). The session `cpd-work`.
 - **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` with no `statusbar` pane it adds one (same split) and then runs reset-layout, so the added row is taken from the layout and the other panes get their sizes back (amendment 15, §19).
 - **tmux options:** every option, the border format, the root mouse binding and the conditional `pane-died` hook of §6.1. `host` sets them at every server start, so a server started by `plan new` or `watch --ensure` has them too; `cpd tui` sets them again on a running server (rerunning is safe).
-- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.)
+- **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.) Bare `cpd` does it too when it finds a view on an older binary (§13.3).
 - `watch --ensure` (§12).
 - No rows of its own; moving a Lead appends `session-moved`.
 
@@ -1901,7 +1901,7 @@ Effects, each only when missing:
 {"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
+With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2); bare `cpd` is the same attach with the follow-ups of §13.3. Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
 
 ### 13.2 `tui view` (internal)
 
@@ -2056,6 +2056,32 @@ The column has no engine line, no slots, no Escalations, no Events and no footer
 The chat slot is never resized; it takes what is left. The StatusBar's ⧉ click runs it in-process; `cpd tui` runs it once, right after building a new `main` and after adding a missing StatusBar to an existing one (§13.1).
 
 Refusal before drawing: an unknown view or Attempt is `usage` or `attempt_not_found`. Idempotent: they only read.
+
+### 13.3 `cpd` with no arguments
+
+```
+cpd
+```
+
+User decision hs-d259 (2026-10-19), Plan pi-pin, PR `bare`. **Bare `cpd` opens the cockpit.** In a terminal it attaches that terminal to the cockpit (`tmux -L <socket> attach -t <cockpit_session>`, the `attach` of §13.1) after doing every follow-up an update needs, so the User needs no other command after an install. It owns its terminal (§1.2): nothing on success.
+
+**Follow-ups**, in this order:
+
+1. **Engine:** `cpd watch --ensure` (§12).
+2. **Cockpit:** what `cpd tui` does (§13.1): build it when missing, respawn a dead pane of its layout, add a missing pane. One implementation, shared with `cpd tui` (including Plan quality's repair of a cockpit missing a pane): bare `cpd` calls it, never a copy.
+3. **Views on an old binary:** when the panes of the views run an older cpd than the installed one, `cpd tui --respawn` (§13.1).
+4. **tmux version:** when the cockpit's tmux server runs an older tmux than the installed client (`tmux -L <socket> display -p '#{version}'` against `tmux -V`; hs-d166), restart the server onto the installed tmux **when it is safe**, reopen every Lead and Manager Session that had a pane (same pi session file, same place: the chat slot, its parked window, a Context's window), then attach.
+   - **Safe** means: no Attempt `starting`, `running` or `merging`, and no Lead or Manager Session mid-turn (state `working`; a `blocked` Session has a dialog open, so it is also not safe). Restarting stops every pi in the server; Leads and Managers resume from their session files.
+   - **Not safe:** attach at once with the **server's own tmux binary** (its path from the server pid, `/proc/<pid>/exe` on Linux), because a newer client cannot attach to an older server (`open terminal failed: not a terminal`, hs-n224); try the restart again at the next bare `cpd`; print one line saying so.
+
+This moves `scripts/restart-tmux.sh` into the binary (contract §6.1); the script and its tests are deleted when nothing else needs them.
+
+**Assumptions, confirmed by the User in the Plan review:**
+
+- **A1** Without a terminal on stdin and stdout, bare `cpd` keeps today's behaviour: the JSON usage error `usage`, exit 2. It does no follow-up.
+- **A2** Inside the cockpit's own server (`$TMUX` names its socket), bare `cpd` does not nest an attach: it does the follow-ups that are safe from inside, never the tmux restart (it would kill the pane it runs in), and prints one line saying how to reach the cockpit.
+- **A3** Each follow-up's failure is printed in one line on stderr, and the attach still happens when the cockpit exists. When the cockpit does not exist and could not be built, bare `cpd` prints the failure value and exits with its code.
+- **A4** Nothing new in the store: no table, column or Event kind.
 
 ## 14. `doctor`, `config`, `tiers`
 
