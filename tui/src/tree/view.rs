@@ -1637,9 +1637,9 @@ mod tests {
         format!(" ── Inbox {n} {}", "─".repeat(41 - 2 - title.chars().count()))
     }
 
-    /// An item row at 43 columns: the margin, `● `, the label, the age ending at the last column of the inner area.
+    /// An item row at 43 columns: the margin, the filled dot, the label, the age ending at the last column of the inner area.
     fn item_row(label: &str, age: &str) -> String {
-        format!(" ● {label}{}{age}", " ".repeat(41 - 2 - label.chars().count() - age.chars().count()))
+        format!(" {NEEDS_YOU} {label}{}{age}", " ".repeat(41 - 2 - label.chars().count() - age.chars().count()))
     }
 
     #[test]
@@ -1647,7 +1647,7 @@ mod tests {
         let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
         assert_eq!(rows[15], header(0));
         assert_eq!(rows[14], "", "no rows");
-        assert_eq!(rows[1], " ▾ ● alpha", "the tree above is where it was");
+        assert_eq!(rows[1], format!(" ▾ {NEEDS_YOU} alpha"), "the tree above is where it was");
     }
 
     #[test]
@@ -1687,7 +1687,7 @@ mod tests {
         click(&mut view, 20, 13);
         let rows = text_rows(&draw_now(&mut view, 43, 14));
         assert_eq!(rows[7], header(5), "{rows:?}");
-        assert!(rows[1..7].iter().any(|r| r.starts_with("   └ ● rel")), "the cursor's Session is in the rows left: {rows:?}");
+        assert!(rows[1..7].iter().any(|r| r.starts_with(&format!("   └ {NEEDS_YOU} rel"))), "the cursor's Session is in the rows left: {rows:?}");
         assert!(!rows[1..7].iter().any(|r| r.contains("alpha")), "the top of the tree scrolled away: {rows:?}");
     }
 
@@ -1698,10 +1698,10 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 16));
         let label = "f-blocked: a very long question th…"; // 41 - 2 (dot) - 1 (space) - 3 (age) = 35 columns
         assert_eq!(label.chars().count(), 35);
-        assert_eq!(rows[15], format!(" ● {label} 42s"));
+        assert_eq!(rows[15], format!(" {NEEDS_YOU} {label} 42s"));
         view.tree.inbox[0].label = "x".repeat(33);
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[15], format!(" ● {}   42s", "x".repeat(33)), "a label that fits is not cut");
+        assert_eq!(rows[15], format!(" {NEEDS_YOU} {}   42s", "x".repeat(33)), "a label that fits is not cut");
     }
 
     #[test]
@@ -2040,7 +2040,7 @@ mod tests {
         let mut view = with_inbox(5);
         let rows = text_rows(&draw_now(&mut view, 43, 5));
         assert_eq!(rows[0], "");
-        assert!(rows[1].starts_with(" ⏵ ├ ◐ ship"), "one row for the tree, scrolled to the cursor: {rows:?}");
+        assert!(rows[1].starts_with(&format!(" ⏵ ├ {WORKING} ship")), "one row for the tree, scrolled to the cursor: {rows:?}");
         assert_eq!(rows[2], header(5), "{rows:?}");
         view.done(Err("closed".into()));
         let rows = text_rows(&draw_now(&mut view, 43, 8));

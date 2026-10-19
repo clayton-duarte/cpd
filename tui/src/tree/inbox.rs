@@ -1,5 +1,5 @@
 //! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a header
-//! ` Inbox <n> `, up to [`SHOWN`] item rows `● <label>` with the age right-aligned, and, with more items, a row
+//! ` Inbox <n> `, up to [`SHOWN`] item rows `<dot> <label>` with the age right-aligned, and, with more items, a row
 //! `+<n> more` that expands the list inline and becomes `− less`. Whether it is expanded is view state only.
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, or nothing,
@@ -26,7 +26,7 @@ use cpd_core::inbox::model::{Item, Kind};
 /// How many item rows the section shows before `+<n> more`.
 pub const SHOWN: usize = 3;
 
-/// `● ` before the label.
+/// The dot and a space before the label.
 const DOT_WIDTH: usize = 2;
 
 /// What a row of the section is, by its offset from the header's row.
@@ -134,7 +134,7 @@ fn is_link(kind: Kind) -> bool {
     matches!(kind, Kind::PlanReview | Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested)
 }
 
-/// An item's row text: `● <label>`, the label cut with `…` so that it never reaches the age, and the age. Returns the
+/// An item's row text: `<dot> <label>`, the label cut with `…` so that it never reaches the age, and the age. Returns the
 /// line and the number of cells of the label.
 fn item_line(item: &Item, age: &str, width: usize, frame: usize) -> (Line<'static>, usize) {
     let room = width.saturating_sub(DOT_WIDTH + 1 + age.chars().count());
@@ -368,7 +368,7 @@ mod tests {
             .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
             .collect();
         let text = printed(&bytes);
-        assert!(text.contains(&format!("●{pieces}3m")), "the dot, the label in pieces of two cells, the age: {text:?}");
+        assert!(text.contains(&format!("{}{pieces}3m", palette::NEEDS_YOU)), "the dot, the label in pieces of two cells, the age: {text:?}");
         assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the dot or the age");
         // an item with no url, or of a kind that jumps, has no link
         let sink = Sink::default();
