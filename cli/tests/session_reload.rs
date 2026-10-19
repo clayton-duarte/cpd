@@ -46,6 +46,24 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// Starts the wrapper in a new pane of the cockpit.
+    fn launch(&mut self) {
+        self.launch_for(LEAD);
+    }
+
+    /// Starts `session run <id>` in a new pane of the cockpit.
+    fn launch_for(&mut self, id: &str) {
+        let ok = |args: &[&str]| {
+            let out = self.env.tmux(args);
+            assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        let command = format!("exec '{}' session run {id}", self.installed.display());
+        let pane = ok(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
+        ok(&["set", "-p", "-t", &pane, "@cpd_session", id]);
+        self.pane = pane;
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.env.home().join(name)
     }
@@ -136,9 +154,15 @@ impl Fixture {
         conn.execute_batch(sql).unwrap();
     }
 
+    /// `1` once the pane's program ended (the cockpit keeps such a pane).
+    fn pane_dead(&self) -> String {
+        let out = self.env.tmux(&["display-message", "-p", "-t", &self.pane, "#{pane_dead}"]);
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    }
+
     /// What the pane shows: the wrapper's stderr is its terminal.
     fn screen(&self) -> String {
-        String::from_utf8(self.env.tmux(&["capture-pane", "-p", "-J", "-t", &self.pane]).stdout).unwrap()
+        String::from_utf8(self.env.tmux(&["capture-pane", "-p", "-J", "-S", "-", "-t", &self.pane]).stdout).unwrap()
     }
 }
 
@@ -152,11 +176,23 @@ fn start(state: &str) -> Fixture {
 /// As [`start`]; `on_term` is what the fake pi runs after it records `SIGTERM`
 /// (`exit 0`, or `:` to ignore it). Every pi records its pid in `pi.pids`.
 fn start_with(state: &str, on_term: &str) -> Fixture {
+    let mut fixture = prepare(state, on_term, 5000);
+    fixture.launch();
+    // The fake records its call before it runs its body, so the call alone does not
+    // say that the pid is written. The pid is written last, after the trap is set:
+    // once it is there, the pi can be signalled and its pid read.
+    wait_until("the first pi", || fixture.env.calls("pi").len() == 1 && fixture.pi_pids().len() == 1);
+    fixture
+}
+
+/// As [`start_with`], up to the pane: the wrapper is not started, so a test can set the store up first.
+/// `store_busy_ms` is the config's.
+fn prepare(state: &str, on_term: &str, store_busy_ms: u32) -> Fixture {
     let env = TestEnv::new();
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[timeouts]\nfork_quiet_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[timeouts]\nfork_quiet_seconds = 1\nstore_busy_ms = {store_busy_ms}\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
@@ -195,21 +231,9 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
     let installed = bin.join("cpd");
     fs::copy(CPD, &installed).unwrap();
 
-    let ok = |args: &[&str]| {
-        let out = env.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    ok(&["new-session", "-d", "-s", "cpd", "-n", "main", &format!("sleep {SLEEP_SECONDS}")]);
-    let command = format!("exec '{}' session run {LEAD}", installed.display());
-    let pane = ok(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
-    ok(&["set", "-p", "-t", &pane, "@cpd_session", LEAD]);
-    let fixture = Fixture { env, installed, session_file, pane };
-    // The fake records its call before it runs its body, so the call alone does not
-    // say that the pid is written. The pid is written last, after the trap is set:
-    // once it is there, the pi can be signalled and its pid read.
-    wait_until("the first pi", || fixture.env.calls("pi").len() == 1 && fixture.pi_pids().len() == 1);
-    fixture
+    let out = env.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", &format!("sleep {SLEEP_SECONDS}")]);
+    assert!(out.status.success(), "tmux new-session: {}", String::from_utf8_lossy(&out.stderr));
+    Fixture { env, installed, session_file, pane: String::new() }
 }
 
 #[test]
@@ -446,5 +470,53 @@ fn a_lead_wrapper_whose_pi_exits_does_not_exec_a_cpd_older_than_the_store() {
     wait_until("the wrapper to carry on", || f.screen().contains("pi exited. Press Enter"));
     assert!(f.runs().is_empty(), "the older cpd was exec'd: {:?}", f.runs());
     assert_eq!(f.env.calls("pi").len(), 1);
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+/// The root of the `no_cockpit` flake: a Lead wrapper whose first store write waits longer than
+/// `store_busy_ms` for the write lock used to end with `store_busy`, and its pane with it. It
+/// says what it waits for and starts pi once the lock is free.
+#[test]
+fn a_wrapper_whose_first_write_meets_a_held_write_lock_waits_and_starts_pi_when_it_is_released() {
+    // A tenth of a second: the lock is held for much longer than `store_busy_ms`.
+    let mut f = prepare("idle", "exit 0", 100);
+    // A pane that ends stays, dead, as in cpd's cockpit (SERVER_OPTIONS).
+    f.env.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+    let holder = rusqlite::Connection::open(f.env.cpd_home().join("cpd.db")).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    f.launch();
+    wait_until("the wrapper to say it waits for the store", || f.screen().contains("Waiting for the store"));
+    let pid = f.pane_pid();
+    // Several tries of the wrapper, each longer than `store_busy_ms`: it neither ended nor started pi.
+    std::thread::sleep(Duration::from_millis(2500));
+    let screen = f.screen();
+    assert_eq!(screen.matches("Waiting for the store").count(), 1, "said once: {screen}");
+    assert!(screen.contains("recording the session file") && screen.contains("store_busy"), "{screen}");
+    assert_eq!(f.pane_dead(), "0", "the wrapper ended: {screen}");
+    assert_eq!(f.pane_pid(), pid);
+    assert!(f.env.calls("pi").is_empty(), "pi started under the lock");
+
+    holder.execute_batch("COMMIT").unwrap();
+    wait_until("pi", || f.env.calls("pi").len() == 1 && f.pi_pids().len() == 1);
+    assert_eq!(f.pane_dead(), "0");
+    assert_eq!(f.pane_pid(), pid, "the same wrapper started pi");
+    let recorded: String = query(&f.env, "SELECT file FROM sessions WHERE id = 'lead1'");
+    assert_eq!(recorded, f.session_file.display().to_string(), "the write that waited was made");
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+/// What does not heal still ends a wrapper, as before: a Session that does not exist.
+#[test]
+fn a_wrapper_whose_session_does_not_exist_still_ends_with_that_error() {
+    let mut f = prepare("idle", "exit 0", 100);
+    f.env.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+
+    f.launch_for("nosuch");
+    wait_until("the wrapper to end", || f.pane_dead() == "1");
+    let screen = f.screen();
+    assert!(screen.contains("session_not_found"), "{screen}");
+    assert!(!screen.contains("Waiting for the store"), "{screen}");
+    assert!(f.env.calls("pi").is_empty());
     f.env.tmux(&["kill-window", "-t", &f.pane]);
 }
