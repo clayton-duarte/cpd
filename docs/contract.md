@@ -1725,6 +1725,7 @@ Every message in the table that is not marked steered is a follow-up. The turn c
 | `mouse` | `on` | clicks in the ratatui panes |
 | `default-terminal` | `tmux-256color` | |
 | `extended-keys` | `on` | pi's keys (verified by the User) |
+| `extended-keys-format` | `csi-u` | pi's keys under tmux >= 3.5 or so: the default `xterm` makes pi warn `extended-keys-format is xterm, pi works best with csi-u`. Set with `set -gq`, so an older tmux that does not know the option starts without an error |
 | `terminal-features` | append `xterm*:extkeys,xterm-ghostty:extkeys,xterm-ghostty:hyperlinks` | `hyperlinks`: inside tmux, pi emits clickable OSC 8 links only when the client lists it (pi-tui `terminal-image.js`), and tmux forwards them only then |
 | `escape-time` | `10` | |
 | `status` | `off` | the cockpit draws its own bars |

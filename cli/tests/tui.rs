@@ -45,6 +45,12 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// `tmux <args>`'s stdout, or `None` when tmux refuses (an option it does not know).
+fn tmux_try(env: &TestEnv, args: &[&str]) -> Option<String> {
+    let out = env.tmux(args);
+    out.status.success().then(|| String::from_utf8(out.stdout).unwrap())
+}
+
 /// One pane of `cpd:main`.
 #[derive(Debug, Clone, PartialEq)]
 struct Pane {
@@ -236,6 +242,11 @@ fn assert_server_options(env: &TestEnv) {
     for option in SERVER_OPTIONS {
         match option {
             ["set", "-g", name, value] => assert_eq!(tmux_out(env, &["show", "-gv", name]).trim_end_matches('\n'), *value, "{name}"),
+            // `-q`: tmux older than 3.5 or so does not know the option, and there is nothing to read back
+            ["set", "-gq", name, value] => match tmux_try(env, &["show", "-gv", name]) {
+                Some(shown) => assert_eq!(shown.trim_end_matches('\n'), *value, "{name}"),
+                None => eprintln!("{name} not asserted: this tmux does not know the option"),
+            },
             ["set", "-as", name, value] => {
                 let shown = tmux_out(env, &["show", "-sv", name]);
                 for feature in value.split(',').filter(|f| !f.is_empty()) {

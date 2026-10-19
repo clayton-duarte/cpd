@@ -85,6 +85,7 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "focus-events", "on"],
     &["set", "-g", "default-terminal", "tmux-256color"],
     &["set", "-g", "extended-keys", "on"],
+    &["set", "-gq", "extended-keys-format", "csi-u"],
     &["set", "-as", "terminal-features", TERMINAL_FEATURES],
     &["set", "-g", "escape-time", "10"],
     &["set", "-g", "status", "off"],

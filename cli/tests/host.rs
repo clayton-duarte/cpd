@@ -107,6 +107,13 @@ fn assert_server_options(s: &Server) {
     ] {
         assert_eq!(s.tmux.global_option(option).unwrap(), value, "{option}");
     }
+    // `extended-keys-format` exists from tmux 3.5 or so; an older tmux ignores the `set -gq`
+    let format = s.env.tmux(&["show", "-gv", "extended-keys-format"]);
+    if format.status.success() {
+        assert_eq!(String::from_utf8_lossy(&format.stdout).trim(), "csi-u", "extended-keys-format");
+    } else {
+        eprintln!("extended-keys-format not asserted: this tmux does not know the option");
+    }
     assert!(s.tmux.global_option("pane-border-format").unwrap().contains(", Deploy ,"));
     let features = s.tmux.global_option("terminal-features").unwrap();
     for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
