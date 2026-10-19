@@ -111,7 +111,7 @@ hermes-config `plugins/cockpit/` (read from a clone at the time of writing). The
 **Not ported (writes and UI):** `post_pr.py`, `approve.py`, `request_changes.py`, `claim.py`, `add_reaction`, `post_message` and `mark_merged` write to Slack or GitHub; the Inbox only reads. `verdict.py` (AI verdicts), the pane and `storage.py` (hermes' own store) are not the Inbox's.
 
 **Deviations from hermes, each deliberate:**
-1. `ME` (the User's GitHub login) is read from GitHub (`viewer { login }`) instead of being a constant; `SLACK_ME_ID`, the channel and the bot logins are config keys (`inbox.slack_user_id`, `inbox.team_channel`, `inbox.bot_reviewers`, contract §8.2), whose defaults are hermes' values where one exists, so nothing about one person is in the code.
+1. `ME` (the User's GitHub login) is read from GitHub (`viewer { login }`) instead of being a constant; `SLACK_ME_ID`, the channel and the bot logins are config keys (`inbox.slack_user_id`, `inbox.team_channel`, `inbox.bot_reviewers`, contract §8.2), so nothing about one person is in the code. Only the bot list has hermes' values as its default; the channel and the user id are empty, which switches the item off until the User sets them.
 2. Who reacted: hermes matches the reactor's display name against `"clayton duarte"`/`"clayton"` after stripping the `(U…)` id (`refresh.py` 248, `slack_fetch.py` 361). The helper matches the **Slack user id** in that parenthesis (the shape in `slack_fetch.py:353`: `:eyes: × 2 — Ryan Case (U039194B7D2), clayton (U04DB4MTUMR)`), against `inbox.slack_user_id`: one identity instead of three spellings. Unverified against the live server.
 
 ## 7. Open questions for the Lead
@@ -123,4 +123,5 @@ See the end of the Job's final message; repeated here so they travel with the fi
 3. **Thread and reaction reads.** hermes' two Slack overrides cost extra calls per refresh: `slack_read_thread` for every distinct post in the 7-day window (`refresh.py` 334-362: "EVERY ref … with no caching", 8 in parallel) and `slack_get_reactions` for claimed posts. At a 5-minute cadence that is the heaviest Slack load of the design; the Job's brief names neither. The contract ports both (`thread_tags_me`, `eyes_me`); say if they should be cut.
 4. **Engine stall.** E10 is synchronous like E5 (contract §3.7), up to its 120 s deadline; a detached run like E9 would not hold the tick but needs its own error path.
 5. **Slack accepts pi as an OAuth client?** (§2.2.) First `pi mcp login slack` is the test.
-6. **hs id** of the decision "Team review Inbox": the contract cites it by name; fill in the `hs-d` number.
+6. **Cadence.** `watch.team_review_seconds` defaults to 300 as the brief proposes; hermes' code says "five-minute poll" (`refresh.py:191`) but its cron job ran every 15 minutes (`cron-jobs.json` backup of 2026-10-15). The Slack load of a 5-minute poll (the channel, every thread, one GitHub call) is unmeasured.
+7. **hs id** of the decision "Team review Inbox": the contract cites it by name; fill in the `hs-d` number.
