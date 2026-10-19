@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5 and E7–E9 (E6 was removed) every
+//! `watch-started`, then E1–E5 and E7–E10 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule};
+use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, titles};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -55,6 +55,8 @@ pub(super) struct Engine {
     pub paused_until: Option<Instant>,
     /// E9: the highest record `seq` of each Context a distill run was started for in this engine's life.
     pub distill_started: HashMap<ContextId, i64>,
+    /// E10: the retitle runs this engine started and has not seen end.
+    pub titles: titles::Runs,
     /// When the engine last started the detached tmux restart (contract §6.1).
     pub restart_started: Option<Instant>,
 }
@@ -85,11 +87,21 @@ impl Engine {
         self.report.active()
     }
 
-    /// One tick: the tmux restart's drain, then E1–E5 and E7–E9 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, then E1–E5 and E7–E10 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 9] =
-            [restart::drain, escalations::run, liveness::run, schedule::run, completion::run, pr::run, start_prs, inbox::run, distill::run];
+        let steps: [fn(&mut Engine); 10] = [
+            restart::drain,
+            escalations::run,
+            liveness::run,
+            schedule::run,
+            completion::run,
+            pr::run,
+            start_prs,
+            inbox::run,
+            distill::run,
+            titles::run,
+        ];
         for step in steps {
             if stopping() {
                 return;
@@ -218,6 +230,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         last_poll_end: None,
         paused_until: None,
         distill_started: HashMap::new(),
+        titles: titles::Runs::default(),
         restart_started: None,
     };
 

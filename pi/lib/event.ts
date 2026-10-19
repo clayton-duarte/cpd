@@ -5,7 +5,7 @@ import { errorOfEnvelope, isObject, type CpdError } from "./cpd.ts";
  * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
  * or the output of a command the adapter runs changes in a way the adapter depends on.
  */
-export const PROTOCOL = 4;
+export const PROTOCOL = 5;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
@@ -15,7 +15,7 @@ export const KINDS = [
   "attempt-started", "attempt-status", "attempt-retry", "attempt-nudge",
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
-  "session-registered", "session-state", "session-moved", "session-renamed",
+  "session-registered", "session-state", "session-moved", "session-renamed", "session-titled",
   "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-message",
   "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-opened", "pr-merged",

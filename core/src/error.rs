@@ -97,6 +97,7 @@ error_codes! {
     CleanupFailed = "cleanup_failed" => Failure,
     DistillInvalid = "distill_invalid" => Failure,
     DistillFailed = "distill_failed" => Failure,
+    TitleFailed = "title_failed" => Failure,
     // Policies (contract §8.3, hs-d288).
     PolicyInvalid = "policy_invalid" => Failure,
     OwnerUnknown = "owner_unknown" => Failure,
@@ -394,6 +395,7 @@ mod tests {
             (ErrorCode::PrTitleRequired, 3),
             (ErrorCode::NeedsOtherPr, 3),
             (ErrorCode::PrNotFound, 4),
+            (ErrorCode::TitleFailed, 1),
             (ErrorCode::PolicyInvalid, 1),
             (ErrorCode::OwnerUnknown, 1),
             (ErrorCode::RepoUnkeyed, 1),

@@ -75,6 +75,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session send` | Send a message to a Lead (§10.13) | Lead, Manager | |
 | `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
 | `cpd session state` | Report a Session's agent state (pi adapter) (§10.6) | internal | |
+| `cpd session retitle` | Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14) | internal | |
 | `cpd session run` | The program in every Lead pane (internal; owns its terminal) (§10.8) | internal | |
 | `cpd events` | Events (commands.md §11) | | |
 | `cpd events list` | List Events (§11.1) | Manager | |

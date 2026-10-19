@@ -1402,6 +1402,33 @@ fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
 }
 
 #[test]
+fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
+    let env = TestEnv::new();
+    setup(&env);
+    let out = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts"]).ok();
+    let (lead, pane) = (out["lead"]["session"].as_str().unwrap().to_owned(), out["lead"]["pane"].as_str().unwrap().to_owned());
+    // Untitled: the header follows the rename (the test above). Titled: it keeps the title.
+    store(&env)
+        .write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{lead}';")))
+        .unwrap();
+    env.tmux(&["set", "-p", "-t", &pane, "@cpd_title", "Dynamic subject"]);
+
+    env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
+    assert_eq!(pane_title(&env, &pane), "Dynamic subject");
+    assert_eq!(query::<String>(&env, "SELECT title FROM plans WHERE id = 'pay'"), "Retry the payouts");
+    assert_eq!(events(&env, "plan-renamed").len(), 1);
+
+    env.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
+    assert_eq!(pane_title(&env, &pane), "Dynamic subject");
+
+    // A rerun with the same title repairs a cleared header to the dynamic title.
+    env.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
+    let again = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(pane_title(&env, &pane), "Dynamic subject");
+}
+
+#[test]
 fn rename_refusals() {
     let env = TestEnv::new();
     let repo = setup(&env);
