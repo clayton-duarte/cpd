@@ -147,9 +147,23 @@ fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View,
                     view.done(Err(why));
                 }
             }
+            Effect::Merge(pull) => {
+                // `display-popup` returns when the popup closes; only a failure is said
+                if let Err(why) = runner.merge(&pull) {
+                    view.done(Err(why));
+                }
+                // a merge shows on this loop's snapshot
+                dirty = true;
+                last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+            }
             Effect::Run(action) => {
                 view.done(runner.run(&action));
                 // the tree shows the result on this loop's snapshot
+                dirty = true;
+                last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+            }
+            Effect::Steps(steps) => {
+                view.done(runner.run_all(&steps));
                 dirty = true;
                 last_snapshot = Instant::now() - SNAPSHOT_EVERY;
             }

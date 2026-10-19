@@ -21,6 +21,7 @@ use tui_tree_widget::TreeState;
 use super::actions::{Action, Free, IN_CHAT_SLOT, Subject, Until};
 use super::cursor::{self, Input};
 use super::inbox::{self, Hit, Jump, Shape};
+use crate::merge::Pull;
 use super::menu::{self, Item, Kind, Menu};
 use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
@@ -82,8 +83,12 @@ pub enum Effect {
     Run(Action),
     /// Open the legend popup (`?`); a failure is the note.
     Legend,
-    /// Open the logs popup at this Event (the bottom with none): a click on an `engine-error` or `engine-down` item.
+    /// Run these actions in order, then call [`View::done`] with the result: a click on a `plan-review` item.
+    Steps(Vec<Action>),
+    /// Open the logs popup at this Event (the bottom with none): a click on an `engine-error` item.
     Logs(Option<i64>),
+    /// Open the merge popup of this pull request: a click on a `pr-ready` item. A failure is the note.
+    Merge(Pull),
 }
 
 pub struct View {
@@ -519,7 +524,9 @@ impl View {
     fn jump(&self, i: usize) -> Effect {
         match inbox::jump(&self.tree, &self.tree.inbox[i]) {
             Some(Jump::Run(action)) => Effect::Run(action),
+            Some(Jump::Steps(steps)) => Effect::Steps(steps),
             Some(Jump::Logs(event)) => Effect::Logs(event),
+            Some(Jump::Merge(pull)) => Effect::Merge(pull),
             None => Effect::None,
         }
     }
@@ -1795,6 +1802,27 @@ mod tests {
     }
 
     #[test]
+    fn a_click_on_pr_ready_opens_the_merge_popup_and_on_plan_review_runs_the_lead_then_the_copy() {
+        let mut view = View::new(sample(), true);
+        let mut ready = item(1, InboxKind::PrReady, Urgency::Yellow, "api#3 ready", "2026-01-02T23:00:00.000Z");
+        ready.subject = "pr:acme/api#3".into();
+        let mut review = item(2, InboxKind::PlanReview, Urgency::Magenta, "ship plan review", "2026-01-02T23:00:00.000Z");
+        review.plan = Some(PlanId::parse("ship").unwrap());
+        review.url = Some("http://10.0.0.5:20000/".into());
+        let mut odd = item(3, InboxKind::PrReady, Urgency::Yellow, "odd ready", "2026-01-02T23:00:00.000Z");
+        odd.url = Some("https://x.io/odd".into());
+        view.tree.inbox = vec![ready, review, odd];
+        draw_now(&mut view, 43, 16);
+        let first = inbox_row(&view, 0);
+        assert_eq!(click(&mut view, 10, first), Effect::Merge(Pull::from_subject("pr:acme/api#3").unwrap()));
+        assert_eq!(
+            click(&mut view, 10, first + 1),
+            Effect::Steps(vec![Action::Open(sid("l-ship")), Action::CopyUrl("http://10.0.0.5:20000/".into())])
+        );
+        assert_eq!(click(&mut view, 10, first + 2), Effect::None, "a subject that is no pull request: no popup");
+    }
+
+    #[test]
     fn a_click_on_a_link_kind_copies_its_url_the_header_changes_nothing_and_a_question_opens_the_manager() {
         let mut view = with_inbox(2);
         draw_now(&mut view, 43, 16);
@@ -1811,14 +1839,14 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_an_archived_sessions_item_shows_its_history_and_an_engine_down_opens_the_logs_at_the_bottom() {
+    fn a_click_on_an_archived_sessions_item_shows_its_history_and_an_engine_down_starts_the_engine() {
         let mut view = View::new(archived(), true);
         let mut unread = item(7, InboxKind::Unread, Urgency::White, "ship review has a reply", "2026-01-02T23:00:00.000Z");
         unread.session = Some(sid("f-blocked"));
         let down = item(8, InboxKind::EngineDown, Urgency::Red, "engine is down", "2026-01-02T23:00:00.000Z");
         view.tree.inbox = vec![down, unread];
         draw_now(&mut view, 43, 18);
-        assert_eq!(click(&mut view, 10, 16), Effect::Logs(None));
+        assert_eq!(click(&mut view, 10, 16), Effect::Run(Action::EnsureWatch));
         assert_eq!(click(&mut view, 10, 17), Effect::Run(Action::History(sid("f-blocked"))));
     }
 

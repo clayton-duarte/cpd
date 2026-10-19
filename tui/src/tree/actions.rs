@@ -23,6 +23,7 @@ use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::{Tmux, chat_slot};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
+use crate::merge::Pull;
 use crate::widgets::open_legend;
 
 /// The object an archive or unarchive is about.
@@ -111,6 +112,10 @@ pub enum Action {
     /// `tmux set-buffer -w -- <url>`: a click on an Inbox item that only has a link (no Plan to open). The note says
     /// the modifier-click opens it.
     CopyUrl(String),
+    /// `watch --ensure` (§12): a click on an `engine-down` item starts the engine; idempotent.
+    EnsureWatch,
+    /// No command: only the note, as a step of a flow (`plan-review` with no review page yet).
+    Note(String),
     /// `inbox snooze <id> <15m|1h|tomorrow>` (§21.3): the Inbox menu's and `s`'s Snooze entries.
     Snooze { item: i64, until: Until },
     /// `inbox dismiss <id>` (§21.4): the Inbox menu's Dismiss and `d`.
@@ -146,6 +151,8 @@ impl Action {
             Action::Archive { subject, .. } => subject.command("archive"),
             Action::Unarchive(subject) => subject.command("unarchive"),
             Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
+            Action::EnsureWatch => words(&["watch", "--ensure"]),
+            Action::Note(_) => Vec::new(),
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
         }
@@ -200,6 +207,9 @@ impl Action {
             Action::Unarchive(_) => "unarchived".into(),
             Action::CopyId(id) => format!("copied {id}"),
             Action::CopyUrl(url) => format!("copied {url}: Cmd-click the row to open it"),
+            Action::EnsureWatch if reply["already"] == true => "already running".into(),
+            Action::EnsureWatch => "engine started".into(),
+            Action::Note(note) => note.clone(),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),
         }
@@ -227,10 +237,16 @@ impl Runner {
 
     /// Runs the action's steps: the note of the last, or why one failed (the flow stops there).
     pub fn run(&self, action: &Action) -> Result<String, String> {
+        self.run_all(&action.steps())
+    }
+
+    /// Runs each of `steps` (themselves expanded to their own steps), stopping at the first that fails: the note of the last.
+    pub fn run_all(&self, steps: &[Action]) -> Result<String, String> {
         let mut note = String::new();
-        for step in action.steps() {
+        for step in steps.iter().flat_map(Action::steps) {
             let reply = match step {
                 Action::CopyId(_) | Action::CopyUrl(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
+                Action::Note(_) => Value::Null,
                 _ => command(&step)?,
             };
             note = step.done(&reply);
@@ -256,10 +272,15 @@ impl Runner {
         Ok(())
     }
 
-    /// A click on an `engine-error` or `engine-down` Inbox item: the logs popup at the Event (the bottom with none);
+    /// A click on an `engine-error` Inbox item: the logs popup at the Event (the bottom with none);
     /// returns when it closes.
     pub fn logs(&self, event: Option<i64>) -> Result<(), String> {
         crate::logs::open_at(&self.tmux, event).map_err(|e| e.message().to_owned())
+    }
+
+    /// A click on a `pr-ready` item: the merge popup of `pull`; returns when it closes.
+    pub fn merge(&self, pull: &Pull) -> Result<(), String> {
+        crate::merge::open(&self.tmux, &pull.to_string()).map_err(|e| e.message().to_owned())
     }
 
     /// `?`: the legend popup; returns when it closes.
@@ -357,6 +378,7 @@ mod tests {
             (Action::Snooze { item: 12, until: Until::Hour1 }, vec!["inbox", "snooze", "12", "1h"]),
             (Action::Snooze { item: 7, until: Until::Tomorrow }, vec!["inbox", "snooze", "7", "tomorrow"]),
             (Action::Dismiss(12), vec!["inbox", "dismiss", "12"]),
+            (Action::EnsureWatch, vec!["watch", "--ensure"]),
         ];
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");
@@ -389,6 +411,16 @@ mod tests {
         let copy = Action::CopyUrl("https://x.io/1".into());
         assert_eq!(sequence(&copy), [vec!["set-buffer", "-w", "--", "https://x.io/1"]]);
         assert_eq!(copy.done(&json!(null)), "copied https://x.io/1: Cmd-click the row to open it");
+    }
+
+    #[test]
+    fn ensure_watch_says_whether_it_started_the_engine_and_a_note_is_no_command() {
+        assert_eq!(Action::EnsureWatch.done(&json!({"ok": true, "started": true, "pane": "%3"})), "engine started");
+        assert_eq!(Action::EnsureWatch.done(&json!({"ok": true, "started": false, "already": true})), "already running");
+        assert_eq!(Action::EnsureWatch.failed("watch_start_failed", "x"), "watch_start_failed: x");
+        let note = Action::Note("no review page yet".into());
+        assert_eq!(note.argv(), Vec::<String>::new());
+        assert_eq!(note.done(&json!(null)), "no review page yet");
     }
 
     #[test]

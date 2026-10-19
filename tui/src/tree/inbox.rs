@@ -3,8 +3,8 @@
 //! `+<n> more` that expands the list inline and becomes `− less`. Whether it is expanded is view state only. Expanded, it is
 //! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
 //!
-//! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, or the copy of its
-//! `url`. The label of a link kind is also an OSC 8 link to the `url` (`crate::link`, which the terminal opens with its
+//! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, the merge popup of
+//! its pull request, or the copy of its `url`. The label of a link kind is also an OSC 8 link to the `url` (`crate::link`, which the terminal opens with its
 //! modifier-click). Everything here is pure but [`draw`], which only writes to the frame.
 
 use ratatui::Frame;
@@ -18,6 +18,7 @@ use time::format_description::well_known::Rfc3339;
 use super::actions::Action;
 use super::rows::truncate;
 use crate::link::link;
+use crate::merge::Pull;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, Tree};
 use crate::widgets::{Window, dim, max_scroll, section_header, window};
@@ -159,8 +160,12 @@ fn age_of(opened_at: &str, now: OffsetDateTime) -> String {
 pub enum Jump {
     /// Run this command and focus the chat slot (a click on a Session row).
     Run(Action),
+    /// These actions in order, each stopping the flow when it is refused: `plan-review` opens its Lead, then copies its page.
+    Steps(Vec<Action>),
     /// The logs popup, at this Event; at the bottom with none.
     Logs(Option<i64>),
+    /// The merge popup of this pull request (`pr-ready`).
+    Merge(Pull),
 }
 
 /// `session open <id>`, or `session history <id>` for an archived Session (as a click on its tree row).
@@ -175,24 +180,32 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
     if archived { Action::History(id.clone()) } else { Action::Open(id.clone()) }
 }
 
-/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts. A Plan's Lead for
-/// `plan-review` and a pull request a Plan owns; the `url` copied for the others that are a link (its OSC 8 link stays
-/// for the terminal's modifier-click). `None` only for an item without what its jump needs.
+/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts. `engine-down`
+/// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
+/// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (or says there is
+/// none yet); the `url` is copied for `pr-failing`, `pr-changes` and `review-requested` (their OSC 8 link stays for the
+/// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
         Kind::JobStuck => Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?)),
-        Kind::EngineError | Kind::EngineDown => Some(Jump::Logs(item.event)),
+        Kind::EngineError => Some(Jump::Logs(item.event)),
+        Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
-        Kind::PlanReview => Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?)),
-        Kind::PrFailing | Kind::PrChanges | Kind::PrReady if item.plan.is_some() => {
-            Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?))
+        Kind::PlanReview => {
+            let open = open_lead(tree, item.plan.as_ref()?)?;
+            let page = item.url.as_ref().map_or_else(|| Action::Note(NO_REVIEW_PAGE.into()), |url| Action::CopyUrl(url.clone()));
+            Some(Jump::Steps(vec![open, page]))
         }
-        Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested => {
+        Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
+        Kind::PrFailing | Kind::PrChanges | Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }
     }
 }
+
+/// The note of a `plan-review` click when the Plan has no port file, so no page to copy.
+const NO_REVIEW_PAGE: &str = "no review page yet";
 
 /// `session open` of the Lead of Plan `plan` (`session history` if archived); none for a Plan the tree does not have.
 fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
@@ -407,7 +420,7 @@ mod tests {
         assert_eq!(jump(&tree, &with(Kind::Unread, &session)), open("m-alpha"));
         assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), open("l-ship"), "the Lead of the item's Plan");
         assert_eq!(jump(&tree, &with(Kind::EngineError, &event)), Some(Jump::Logs(Some(7))));
-        assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Logs(None)), "engine-down has no Event: the bottom");
+        assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Run(Action::EnsureWatch)), "engine-down starts the engine");
         assert_eq!(jump(&tree, &with(Kind::Question, &context)), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
         let url = |item: &mut Item| item.url = Some("https://example.com".into());
         let owned = |item: &mut Item| {
@@ -415,10 +428,33 @@ mod tests {
             url(item);
         };
         let copy = Some(Jump::Run(Action::CopyUrl("https://example.com".into())));
-        assert_eq!(jump(&tree, &with(Kind::PlanReview, &owned)), open("l-ship"), "the Lead of the review's Plan");
-        for kind in [Kind::PrFailing, Kind::PrChanges, Kind::PrReady] {
-            assert_eq!(jump(&tree, &with(kind, &owned)), open("l-ship"), "{kind:?} of a Plan's pull request");
-            assert_eq!(jump(&tree, &with(kind, &url)), copy, "{kind:?} no Plan owns copies its url");
+        let steps = |action| Some(Jump::Steps(vec![Action::Open(sid("l-ship")), action]));
+        assert_eq!(
+            jump(&tree, &with(Kind::PlanReview, &owned)),
+            steps(Action::CopyUrl("https://example.com".into())),
+            "the Lead of the review's Plan, then the page's url"
+        );
+        assert_eq!(
+            jump(&tree, &with(Kind::PlanReview, &plan)),
+            steps(Action::Note("no review page yet".into())),
+            "no port file: the Lead, and the note says so"
+        );
+        let merge = |subject: &str| Pull::from_subject(subject).map(Jump::Merge);
+        let ready = |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
+        assert!(merge("pr:acme/api#3").is_some());
+        assert_eq!(jump(&tree, &with(Kind::PrReady, &ready("pr:acme/api#3"))), merge("pr:acme/api#3"), "a pull request no Plan owns");
+        let owned_ready = |item: &mut Item| {
+            plan(item);
+            ready("pr:acme/api#3")(item);
+        };
+        assert_eq!(jump(&tree, &with(Kind::PrReady, &owned_ready)), merge("pr:acme/api#3"), "a Plan's pull request");
+        assert_eq!(jump(&tree, &with(Kind::PrReady, &|i| i.url = Some("https://example.com".into()))), None, "subject:1 is no pull request");
+        for subject in ["acme/api#3", "pr:api#3", "pr:acme/api", "pr:acme/api#x", "pr:acme/api#0", "session:l-ship", "pr:"] {
+            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?} gives no merge popup");
+        }
+        for kind in [Kind::PrFailing, Kind::PrChanges] {
+            assert_eq!(jump(&tree, &with(kind, &owned)), copy, "{kind:?} copies its url, a Plan's or not");
+            assert_eq!(jump(&tree, &with(kind, &url)), copy);
         }
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &url)), copy);
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &owned)), copy, "a review request is never a Plan's");
