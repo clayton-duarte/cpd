@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::attempt::ledger::{self, Cause, End, Ladder};
+use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use super::lock::Starter;
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
@@ -111,7 +111,7 @@ pub fn start(store: &mut Store, ctx: &StartCtx<'_>, plan: &PlanId, key: &JobKey)
             let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
             store.write(ctx.command, |tx| {
                 let target = ledger::load(tx, plan, &next.attempt)?;
-                ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, None, &ladder)
+                ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, None, &ladder, Stage::Driver)
             })?;
             drop(lock);
             return Err(error);

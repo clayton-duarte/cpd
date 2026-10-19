@@ -6,12 +6,12 @@
 //! No Gate runs here (R19): a merge is checked by the quick check at submit,
 //! the tamper check (step 4) and a clean rebase (step 5).
 
-mod ledger;
 mod lock;
 mod recover;
 
 use serde_json::Value;
 
+use crate::attempt::ledger::{self, Stage};
 use crate::config::{Catalog, Config};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
@@ -19,7 +19,8 @@ use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId};
 use crate::store::Store;
 
-pub use ledger::{Attempt, End, Failure, Ladder, end_merging, load};
+// The merge's causes are the shared `Cause`; `Failure` is the name its callers know.
+pub use crate::attempt::ledger::{Attempt, Cause as Failure, End, Ladder, load};
 pub use lock::{DriverLock, RepoLock, take_free_driver_lock};
 pub use recover::{Recovered, recover};
 
@@ -76,7 +77,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
     // Step 10, and every other end, while the lock is held.
     store.write(ctx.source, |tx| {
-        ledger::end_merging(tx, &target, &end, metrics.as_ref(), &ladder)?;
+        ledger::end(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Merge)?;
         if let Some(e) = &stale {
             ledger::append_error(tx, &target, ctx.source, e, recover::stale_text(&target, e))?;
         }

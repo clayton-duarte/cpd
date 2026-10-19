@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use super::Ctx;
-use super::ledger::{self, Attempt, End, Failure, Ladder};
+use crate::attempt::ledger::{self, Attempt, Cause, End, Ladder, Stage};
 use super::lock::{RepoLock, take_free_driver_lock};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
@@ -79,7 +79,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             let end = End::Merged { sha: tip };
             let metrics = (ctx.metrics)(attempt);
             store.write(ctx.source, |tx| {
-                ledger::end_merging(tx, attempt, &end, metrics.as_ref(), &ladder)?;
+                ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge)?;
                 if let Some(e) = &stale {
                     ledger::append_error(tx, attempt, ctx.source, e, stale_text(attempt, e))?;
                 }
@@ -98,12 +98,12 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             let end = match cancel {
                 Some(_) => End::Cancelled,
                 None => End::Failed {
-                    cause: Failure::Crashed,
+                    cause: Cause::Crashed,
                     detail: "The driver died during the merge, before the Lead Branch moved.".to_owned(),
                 },
             };
             let metrics = (ctx.metrics)(attempt);
-            store.write(ctx.source, |tx| ledger::end_merging(tx, attempt, &end, metrics.as_ref(), &ladder))?;
+            store.write(ctx.source, |tx| ledger::end(tx, attempt, &end, metrics.as_ref(), &ladder, Stage::Merge))?;
             Ok(Some(end))
         }
         // R4: git failed; nothing changes, reported once per Attempt.

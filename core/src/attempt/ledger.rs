@@ -14,9 +14,6 @@ use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
 
-/// The `txns.command` and the `source` of the driver's `error` Events.
-pub const SOURCE: &str = "attempt run";
-
 /// An Attempt with what the driver and the merge need of its Job, PR and Plan.
 #[derive(Clone, Debug)]
 pub struct Attempt {
@@ -130,17 +127,26 @@ pub fn cancel_request(conn: &Connection, plan: &PlanId, job: &JobKey) -> Result<
         .optional()?)
 }
 
-/// The causes the driver ends an Attempt with before its merge (§3.4).
+/// The causes an Attempt ends `failed` with (§3.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cause {
     /// A1–A2: the worktree or `pre-start` failed.
     SetupFailed,
     /// A5 after E2 set `stop_request = timed_out`.
     TimedOut,
-    /// The Worker pane is dead, pi stopped badly, or the driver failed.
+    /// The Worker pane is dead, pi stopped badly, the driver failed, or (R3)
+    /// the driver died before the merge's compare-and-swap.
     Crashed,
     /// A5: idle twice without a submit, nudged in between.
     NoSubmit,
+    /// Merge step 5: the rebase conflicted.
+    MergeConflict,
+    /// Merge step 8: the Lead Branch kept moving.
+    CasLost,
+    /// Merge step 3: the Lead worktree is not clean.
+    DirtyTarget,
+    /// Merge step 4: the diff touches protected paths (§7.5).
+    Tampered,
 }
 
 impl Cause {
@@ -150,27 +156,34 @@ impl Cause {
             Cause::TimedOut => "timed_out",
             Cause::Crashed => "crashed",
             Cause::NoSubmit => "no_submit",
+            Cause::MergeConflict => "merge_conflict",
+            Cause::CasLost => "cas_lost",
+            Cause::DirtyTarget => "dirty_target",
+            Cause::Tampered => "tampered",
         }
     }
 
     /// A ladder cause sends the Job back to `queued` while the ladder allows (§3.4, §9).
     pub fn is_ladder(self) -> bool {
-        matches!(self, Cause::Crashed | Cause::NoSubmit)
+        matches!(self, Cause::Crashed | Cause::NoSubmit | Cause::MergeConflict)
     }
 }
 
-/// How an Attempt that is not `merging` ends.
+/// How an Attempt ends.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum End {
+    /// `merged` / `merged`: the Lead Branch is at `sha` (the merge only).
+    Merged { sha: String },
     /// `cancelled` / `cancel_requested`.
     Cancelled,
-    /// `failed` / `cause`; `detail` explains it.
+    /// `failed` / `cause`; `detail` explains it (for `merge_conflict`, the files).
     Failed { cause: Cause, detail: String },
 }
 
 impl End {
     pub fn outcome(&self) -> &'static str {
         match self {
+            End::Merged { .. } => "merged",
             End::Cancelled => "cancelled",
             End::Failed { .. } => "failed",
         }
@@ -178,6 +191,7 @@ impl End {
 
     pub fn cause(&self) -> &'static str {
         match self {
+            End::Merged { .. } => "merged",
             End::Cancelled => "cancel_requested",
             End::Failed { cause, .. } => cause.as_str(),
         }
@@ -190,39 +204,83 @@ pub struct Ladder<'a> {
     pub retry_cap: u32,
 }
 
-/// Ends `target`, which must still be in the status it was read in
-/// (`starting` or `running`), and moves its Job out of `running`, in the
-/// caller's transaction (§3.2, §3.4): `cas_lost` when either changed. Records
-/// `metrics` (A9) and appends the Event of §3.4's table: `job-cancelled`,
-/// `attempt-retry` or `job-failed`.
-pub fn end(tx: &WriteTxn<'_>, target: &Attempt, end: &End, metrics: Option<&Value>, ladder: &Ladder<'_>) -> Result<(), CpdError> {
-    let (plan, job, id) = (target.plan.as_str(), target.job.as_str(), target.id.to_string());
+/// Who ends the Attempt, and so which status it must still be in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// The driver or the engine, before the merge: `starting` or `running`.
+    /// Never [`End::Merged`].
+    Driver,
+    /// The merge, or R: `merging`.
+    Merge,
+}
+
+impl Stage {
+    fn accepts(self, status: &str) -> bool {
+        match self {
+            Stage::Driver => matches!(status, "starting" | "running"),
+            Stage::Merge => status == "merging",
+        }
+    }
+
+    /// Who the `cas_lost` message blames.
+    fn ran(self) -> &'static str {
+        match self {
+            Stage::Driver => "driver",
+            Stage::Merge => "merge",
+        }
+    }
+}
+
+/// Ends `attempt`, which must still be in the status it was read in (and in
+/// one `stage` accepts), and moves its Job out of `running`, in the caller's
+/// transaction (§3.2, §3.4): `cas_lost` when either changed. Records
+/// `metrics` (A9) and appends the Event of §3.4's table: `job-merged`,
+/// `job-cancelled`, `attempt-retry` or `job-failed`.
+pub fn end(tx: &WriteTxn<'_>, attempt: &Attempt, end: &End, metrics: Option<&Value>, ladder: &Ladder<'_>, stage: Stage) -> Result<(), CpdError> {
+    debug_assert!(stage == Stage::Merge || !matches!(end, End::Merged { .. }), "only the merge ends an Attempt merged");
+    let (plan, job, id) = (attempt.plan.as_str(), attempt.job.as_str(), attempt.id.to_string());
     let cas_lost = |what: &str| {
-        CpdError::new(ErrorCode::CasLost, format!("{what} changed while the driver ran; nothing was written."))
+        CpdError::new(ErrorCode::CasLost, format!("{what} changed while the {} ran; nothing was written.", stage.ran()))
             .with("plan", plan)
             .with("attempt", id.clone())
     };
-    if !matches!(target.status.as_str(), "starting" | "running") {
-        return Err(cas_lost("The Attempt's status").with("status", target.status.clone()));
+    if !stage.accepts(&attempt.status) {
+        return Err(cas_lost("The Attempt's status").with("status", attempt.status.clone()));
     }
+    let merged_sha = match end {
+        End::Merged { sha } => Some(sha.as_str()),
+        _ => None,
+    };
     let changed = tx.execute(
-        "UPDATE attempts SET status = 'ended', outcome = ?4, cause = ?5, metrics = ?6,
+        "UPDATE attempts SET status = 'ended', outcome = ?4, cause = ?5, merged_sha = ?6, metrics = ?7,
                 ended_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND id = ?2 AND status = ?3",
-        params![plan, id, target.status, end.outcome(), end.cause(), metrics.map(Value::to_string)],
+        params![plan, id, attempt.status, end.outcome(), end.cause(), merged_sha, metrics.map(Value::to_string)],
     )?;
     if changed == 0 {
         return Err(cas_lost("The Attempt's status"));
     }
-    let tier = target.tier.to_string();
+    let tier = attempt.tier.to_string();
     let show = format!("cpd job show {job} --plan {plan}");
     let (status, failed_cause, event) = match end {
+        End::Merged { sha } => {
+            let cancel_too_late = cancel_request(tx, &attempt.plan, &attempt.job)?.is_some();
+            let mut text = format!("Job {job} merged: Attempt {id} fast-forwarded {} to {}.", attempt.lead_branch, short(sha));
+            if cancel_too_late {
+                text.push_str(" Its cancel request came too late: the merge had already happened.");
+            }
+            text.push_str(&format!(" Next: {show}"));
+            ("merged", None, NewEvent::job_merged(text, sha, &tier, cancel_too_late))
+        }
         End::Cancelled => {
-            let reason = cancel_request(tx, &target.plan, &target.job)?.ok_or_else(|| cas_lost("The Job's cancel request"))?;
-            let text = format!("Job {job} cancelled ({reason}): its driver stopped Attempt {id}. Next: cpd plan show --plan {plan}");
+            let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.ok_or_else(|| cas_lost("The Job's cancel request"))?;
+            let text = match stage {
+                Stage::Driver => format!("Job {job} cancelled ({reason}): its driver stopped Attempt {id}. Next: cpd plan show --plan {plan}"),
+                Stage::Merge => format!("Job {job} cancelled ({reason}): Attempt {id} stopped before its merge. Next: cpd plan show --plan {plan}"),
+            };
             ("cancelled", None, NewEvent::job_cancelled(text, &reason))
         }
-        End::Failed { cause, detail } => match next_tier(tx, target, *cause, ladder)? {
+        End::Failed { cause, detail } => match next_tier(tx, attempt, *cause, ladder)? {
             Some(next) => {
                 let text = format!(
                     "Attempt {id} of Job {job} failed ({}): {detail} The Job is queued again at Tier {next}. Next: {show}",
@@ -242,13 +300,13 @@ pub fn end(tx: &WriteTxn<'_>, target: &Attempt, end: &End, metrics: Option<&Valu
         },
     };
     let changed = tx.execute(
-        "UPDATE jobs SET status = ?3, failed_cause = ?4 WHERE plan = ?1 AND key = ?2 AND status = 'running'",
-        params![plan, job, status, failed_cause],
+        "UPDATE jobs SET status = ?3, merged_sha = ?4, failed_cause = ?5 WHERE plan = ?1 AND key = ?2 AND status = 'running'",
+        params![plan, job, status, merged_sha, failed_cause],
     )?;
     if changed == 0 {
         return Err(cas_lost("The Job's status"));
     }
-    events::append(tx, event.plan(target.plan.clone()).job(target.job.clone()).attempt(target.id.clone()))?;
+    events::append(tx, event.plan(attempt.plan.clone()).job(attempt.job.clone()).attempt(attempt.id.clone()))?;
     Ok(())
 }
 
@@ -269,37 +327,33 @@ pub(crate) fn automatic_attempts(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Re
 /// ladder has one and the automatic Attempts since the last `job retry` are
 /// fewer than `1 + retry_cap`. An Attempt whose driver never started
 /// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
-fn next_tier(tx: &WriteTxn<'_>, target: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
+/// (A `merging` Attempt always had a driver.)
+fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
     if !cause.is_ladder() {
         return Ok(None);
     }
     let never_started: bool = tx.query_row(
         "SELECT driver_pid IS NULL FROM attempts WHERE plan = ?1 AND id = ?2",
-        params![target.plan.as_str(), target.id.to_string()],
+        params![attempt.plan.as_str(), attempt.id.to_string()],
         |r| r.get(0),
     )?;
     if never_started {
-        return Ok(Some(target.tier));
+        return Ok(Some(attempt.tier));
     }
-    if automatic_attempts(tx, target.plan.as_str(), target.job.as_str())? >= 1 + i64::from(ladder.retry_cap) {
+    if automatic_attempts(tx, attempt.plan.as_str(), attempt.job.as_str())? >= 1 + i64::from(ladder.retry_cap) {
         return Ok(None);
     }
-    ladder.catalog.next(target.tier)
+    ladder.catalog.next(attempt.tier)
 }
 
-/// Appends an `error` Event about `target` (§5.2): an unexpected failure of
-/// the driver (commands.md §6.4).
-pub fn append_error(tx: &WriteTxn<'_>, target: &Attempt, error: &CpdError) -> Result<(), CpdError> {
-    let text = format!(
-        "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
-        target.id,
-        error.message(),
-        target.id,
-        target.plan
-    );
+/// Appends an `error` Event about `attempt` (§5.2) for `error`, from `source`.
+pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String) -> Result<(), CpdError> {
     events::append(
         tx,
-        NewEvent::error(text, SOURCE, error.code().as_str(), error.message(), error.details()).plan(target.plan.clone()).job(target.job.clone()).attempt(target.id.clone()),
+        NewEvent::error(text, source, error.code().as_str(), error.message(), error.details())
+            .plan(attempt.plan.clone())
+            .job(attempt.job.clone())
+            .attempt(attempt.id.clone()),
     )?;
     Ok(())
 }
