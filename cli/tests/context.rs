@@ -38,10 +38,9 @@ fn new_context(env: &TestEnv) {
     env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
 }
 
+/// [`common::refused`], and nothing on stderr.
 fn refused(run: Run, exit: i32, expected: &str) -> Value {
-    let error = run.error();
-    assert_eq!(run.exit, exit, "{run:?}");
-    assert_eq!(error["code"], expected, "{error}");
+    let error = common::refused(&run, expected, exit);
     assert_eq!(run.stderr, "", "{run:?}");
     error
 }
@@ -678,15 +677,6 @@ fn hs_tmux() -> TestEnv {
     env
 }
 
-fn sql(env: &TestEnv, sql: &str) {
-    let (_, _, mut store) = library(env);
-    store.write("fixture", |tx| {
-        tx.execute_batch(sql)?;
-        Ok(())
-    })
-    .unwrap();
-}
-
 fn count(env: &TestEnv, sql: &str) -> i64 {
     let (_, _, mut store) = library(env);
     store.read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
@@ -707,7 +697,7 @@ fn pane(env: &TestEnv, id: &str) -> String {
     assert!(started.status.success(), "{}", String::from_utf8_lossy(&started.stderr));
     let pane = String::from_utf8(started.stdout).unwrap().trim().to_owned();
     assert!(env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]).status.success());
-    sql(env, &format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
+    env.sql(&format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
     pane
 }
 
@@ -737,8 +727,7 @@ fn archivable(env: &TestEnv) {
     fixture_plan(env, "pay", CTX);
     fixture_plan(env, "ship", CTX);
     fixture_plan(env, "side", "other");
-    sql(
-        env,
+    env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
            VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
                   ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O5', 'idle', 't', 't0', NULL);
@@ -821,7 +810,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
     for (kind, apply) in blockers {
         let env = hs_tmux();
         archivable(&env);
-        sql(&env, &apply);
+        env.sql(&apply);
         let (events_before, panes_before) = (event_count(&env), live_panes(&env));
         let error = refused(env.cpd(&["context", "archive", CTX]), 3, "archive_blocked");
         let listed = error["details"]["blockers"].as_array().unwrap();

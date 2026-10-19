@@ -4,9 +4,10 @@ use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
-use super::{ContextRow, Select, open};
+use super::{ContextRow, Select};
+use crate::env::Env;
 use crate::error::CpdError;
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::OwnerLogin;
 use crate::output::Output;
 use crate::policy::{PolicyKey, owner_set, resolve};
@@ -20,7 +21,7 @@ pub struct OwnerArgs {
 }
 
 pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
-    let (home, _, mut store) = open()?;
+    let Env { home, mut store, .. } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
     let login = &args.login;
     let out = |already: bool| {
@@ -52,7 +53,7 @@ pub(super) fn owner(args: OwnerArgs) -> Result<Output, CpdError> {
             return Ok(has_owner(owner.flatten())?.is_some());
         }
         let text = format!("Context {id} has the owner {login}.");
-        append(tx, NewEvent::new(Kind::ContextOwner, text, json!({"owner": login})).context(id.clone()))?;
+        append(tx, NewEvent::context_owner(text, login.as_str()).context(id.clone()))?;
         Ok(false)
     })?;
     out(already)

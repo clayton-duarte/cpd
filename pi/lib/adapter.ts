@@ -1,4 +1,3 @@
-import { Text } from "@earendil-works/pi-tui";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -8,16 +7,17 @@ import { cursorFrom } from "./cursor.ts";
 import { errorMessage, eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } from "./delivery.ts";
 import type { CpdEvent } from "./event.ts";
 import { parseLine, PROTOCOL } from "./event.ts";
-import { DEFAULT_TIMING, Follower, type Schedule, type Spawn, type Timing } from "./follower.ts";
-import type { CommandCtx, Ctx, Exec, Message, MessageRenderer, PiApi } from "./pi.ts";
+import { DEFAULT_TIMING, Follower, PERMANENT_CODES, type Schedule, type Spawn, type Timing } from "./follower.ts";
+import type { CommandCtx, Ctx, Exec, Message, PiApi } from "./pi.ts";
 import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
 import { POLICY_SECTION, policySection } from "./policy.ts";
+import { RENDERED_TYPES, Rendering } from "./render.ts";
 import { isTyped, startsReply } from "./reply.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
-import { CONTEXT_TYPE, contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS, summaryLine } from "./updates.ts";
+import { contextCursorFrom, contextUpdate, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS } from "./updates.ts";
 
 export type Options = {
   /** The environment read at `session_start` (`CPD_SESSION`, `CPD_PLAN`, `CPD_HOME`). Default: `process.env`. */
@@ -28,13 +28,6 @@ export type Options = {
   schedule?: Schedule;
   /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
   reload?: { dir?: string; intervalMs?: number; longRefusalMs?: number } & Validation;
-};
-
-/** commands.md §15.7 "Display": collapsed, one dim line of counts; expanded, the full text. The model gets `content` either way. A message without counts (an older adapter's) is shown in full. */
-export const renderContext: MessageRenderer = (message, { expanded, outputPad }, theme) => {
-  const counts = countsOf(message.details);
-  const text = expanded || counts === undefined ? String(message.content) : theme.fg("dim", summaryLine(counts));
-  return new Text(text, outputPad, 0, (t) => theme.bg("customMessageBg", t));
 };
 
 export const QUESTION_LABEL = "cpd: Worker question";
@@ -69,7 +62,7 @@ type Run = {
   reload: Poll | undefined;
   /** §15.8: the last run ended on a message that spoke of further work and named no registered key; the next `before_agent_start` adds the reminder once. */
   reminderDue: boolean;
-  /** The text of the `cpd-policy` section (§15.9), or undefined: none, or `cpd policy show` failed. */
+  /** The text of the `cpd-policy` section (§15.10), or undefined: none, or `cpd policy show` failed. */
   policy: string | undefined;
   /** True once the missing-`sections` failure is reported, so it is reported once per run (§8.3 "Delivery to agents"). */
   sectionsReported: boolean;
@@ -94,6 +87,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   const env = options.env ?? process.env;
   let run: Run | undefined;
   let toolRegistered = false;
+  // Set while the start-up `session show` is being retried (§15.2 step 1); `stop` aborts it.
+  let showRetry: AbortController | undefined;
   // The context of `session_start`: `ctx.ui` is only handed to handlers.
   const ctxOf: { current: Ctx | undefined } = { current: undefined };
 
@@ -149,7 +144,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       (e) => deliver("session state", e),
     );
 
-  pi.registerMessageRenderer(CONTEXT_TYPE, renderContext);
+  // commands.md §15.9: one renderer for every cpd customType; its style is read at `session_start`.
+  const rendering = new Rendering();
+  for (const type of RENDERED_TYPES) pi.registerMessageRenderer(type, rendering.render);
 
   // ---- reload after an install ----
 
@@ -180,6 +177,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
 
   async function start(ctx: Ctx, reason: string): Promise<void> {
     if (ctx.mode !== "tui") return;
+    rendering.load(env, { cwd: ctx.cwd, trusted: ctx.isProjectTrusted() });
     const id = env.CPD_SESSION;
     if (id === undefined || id === "") return;
     await stop(); // a start without a shutdown (never seen) must not leave a second follower behind
@@ -194,13 +192,53 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     // 1. who am I
     let info: SessionInfo;
     try {
-      info = parseSession(await call(["session", "show", id]));
+      info = await showSession(id);
     } catch (e) {
-      deliver("session show", e);
+      const err = toCpdError(e);
+      deliver("session show", err);
+      if (PERMANENT_CODES.has(err.code)) return;
+      const retry = (showRetry = new AbortController());
+      void retryShow(id, retry, err.code)
+        .then((shown) => (shown ? begin(ctx, id, shown, reason) : undefined))
+        .catch((e) => deliver("start-up", e));
       return;
     }
+    await begin(ctx, id, info, reason);
+  }
 
-    // 1b. the policy text (§15.9): a failure is an error message and no section
+  const showSession = async (id: string) => parseSession(await call(["session", "show", id]));
+
+  /** §15.2 step 1 again, with the follower's back-off, until it works, is refused for good, or the run is stopped (then `undefined`). A code is reported once. */
+  async function retryShow(id: string, retry: AbortController, reported: string): Promise<SessionInfo | undefined> {
+    const seen = new Set([reported]);
+    let delay = timing.restartInitialMs;
+    for (;;) {
+      await sleep(delay, undefined, { signal: retry.signal }).catch(() => undefined);
+      if (retry.signal.aborted) return undefined;
+      delay = Math.min(delay * 2, timing.restartMaxMs);
+      try {
+        const info = await showSession(id);
+        if (retry.signal.aborted) return undefined;
+        showRetry = undefined;
+        return info;
+      } catch (e) {
+        if (retry.signal.aborted) return undefined;
+        const err = toCpdError(e);
+        if (!seen.has(err.code)) {
+          seen.add(err.code);
+          deliver("session show", err);
+        }
+        if (PERMANENT_CODES.has(err.code)) {
+          showRetry = undefined;
+          return undefined;
+        }
+      }
+    }
+  }
+
+  /** §15.2 steps 2 to 6, once the Session is known. */
+  async function begin(ctx: Ctx, id: string, info: SessionInfo, reason: string): Promise<void> {
+    // 1b. the policy text (§15.10): a failure is an error message and no section
     let policy: string | undefined;
     try {
       policy = policySection(await call(["policy", "show"]));
@@ -333,6 +371,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   }
 
   async function stop(): Promise<void> {
+    showRetry?.abort();
+    showRetry = undefined;
     abort.abort(); // also a start still waiting for `session show`
     const r = run;
     if (!r) return;
@@ -361,6 +401,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (parsed.type === "failure") {
       r.failureLineThisRun = true;
       followerError(r, parsed.error);
+      if (PERMANENT_CODES.has(parsed.error.code)) r.follower.stop(); // a refusal: restarting would fail the same way (§15.2)
       return false;
     }
     if (parsed.type === "unknown-kind") {
@@ -406,7 +447,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
     const rule = LEAD_MESSAGES[ev.kind];
     if (rule) {
-      pi.sendMessage(eventMessage(ev, r.id), FOLLOW_UP(rule.turn));
+      pi.sendMessage(eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
       if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation as string}`, QUESTION_LABEL)) refresh(r);
       return;
     }
@@ -724,7 +765,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     if (r) r.facts.reply = startsReply(event);
   });
 
-  // §15.9: the policy section of the run, for every role. Returns nothing: it only sets the section.
+  // §15.10: the policy section of the run, for every role. Returns nothing: it only sets the section.
   pi.on("before_agent_start", function policyHandler(event) {
     const r = run;
     const text = r?.policy;
@@ -751,13 +792,13 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   });
 
   // pi's dialogs (`ctx.ui.select/confirm/input/editor/custom`): `pi.on` has no unsubscribe, so the run is checked.
-  for (const [event, active] of [["ui_prompt_start", true], ["ui_prompt_end", false]] as const) {
-    pi.on(event, () => {
-      const r = run;
-      if (!r) return;
-      if (r.facts.prompt(active)) refresh(r);
-    });
-  }
+  const onPrompt = (active: boolean) => {
+    const r = run;
+    if (!r) return;
+    if (r.facts.prompt(active)) refresh(r);
+  };
+  pi.on("ui_prompt_start", () => onPrompt(true));
+  pi.on("ui_prompt_end", () => onPrompt(false));
 
   pi.on("agent_settled", (_event, ctx) => {
     const r = run;

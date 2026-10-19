@@ -108,6 +108,9 @@ pub enum Action {
     /// `tmux set-buffer -w -- <id>` (hs-d102): the menu's Copy id; the id is the one the row shows. The only action
     /// that is no `cpd` command.
     CopyId(String),
+    /// `tmux set-buffer -w -- <url>`: a click on an Inbox item that only has a link (no Plan to open). The note says
+    /// the modifier-click opens it.
+    CopyUrl(String),
     /// `inbox snooze <id> <15m|1h|tomorrow>` (§21.3): the Inbox menu's and `s`'s Snooze entries.
     Snooze { item: i64, until: Until },
     /// `inbox dismiss <id>` (§21.4): the Inbox menu's Dismiss and `d`.
@@ -144,7 +147,7 @@ impl Action {
             Action::Close(id) => words(&["session", "close", id.as_str()]),
             Action::Archive { subject, .. } => subject.command("archive"),
             Action::Unarchive(subject) => subject.command("unarchive"),
-            Action::CopyId(id) => words(&["set-buffer", "-w", "--", id.as_str()]),
+            Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
         }
@@ -198,6 +201,7 @@ impl Action {
             Action::Unarchive(_) if reply["already"] == true => "already unarchived".into(),
             Action::Unarchive(_) => "unarchived".into(),
             Action::CopyId(id) => format!("copied {id}"),
+            Action::CopyUrl(url) => format!("copied {url}: Cmd-click the row to open it"),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),
         }
@@ -228,7 +232,7 @@ impl Runner {
         let mut note = String::new();
         for step in action.steps() {
             let reply = match step {
-                Action::CopyId(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
+                Action::CopyId(_) | Action::CopyUrl(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
                 _ => command(&step)?,
             };
             note = step.done(&reply);
@@ -384,6 +388,13 @@ mod tests {
         }
         let argv = Tmux::new("sock").argv(&Action::CopyId("ship".into()).argv());
         assert_eq!(argv, ["tmux", "-L", "sock", "-f", "/dev/null", "set-buffer", "-w", "--", "ship"]);
+    }
+
+    #[test]
+    fn copy_url_is_the_same_tmux_command_and_its_note_says_how_to_open_the_link() {
+        let copy = Action::CopyUrl("https://x.io/1".into());
+        assert_eq!(sequence(&copy), [vec!["set-buffer", "-w", "--", "https://x.io/1"]]);
+        assert_eq!(copy.done(&json!(null)), "copied https://x.io/1: Cmd-click the row to open it");
     }
 
     #[test]

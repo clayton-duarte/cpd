@@ -9,11 +9,12 @@ use serde_json::json;
 use super::add::{key_repo, main_worktree, no_branch_clash, resolve_base};
 use super::{EditArgs, Env, check_needs, find_pr, plan_phase, pr_locked, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, PrKey, RepoName};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::{PrSpec, load_prs};
+use crate::plan::PrRow;
+use crate::plan::fingerprint::load_prs;
 
 const COMMAND: &str = "pr edit";
 
@@ -28,8 +29,8 @@ struct Edits {
 
 enum Decision {
     /// No value changes.
-    Already(PrSpec),
-    Update { before: PrSpec, after: PrSpec, fields: Vec<&'static str> },
+    Already(PrRow),
+    Update { before: PrRow, after: PrRow, fields: Vec<&'static str> },
 }
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
@@ -67,7 +68,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
                 Decision::Update { before, after, fields } => {
                     update(tx, &plan, &before, &after, edits.name.as_ref())?;
                     let text = format!("PR {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
-                    append(tx, NewEvent::new(Kind::PrEdited, text, json!({"pr": key, "fields": fields})).plan(plan.clone()))?;
+                    append(tx, NewEvent::pr_edited(text, &key, &fields).plan(plan.clone()))?;
                     Ok((after, fields, false))
                 }
             })?
@@ -82,7 +83,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
 
 /// The PR `key`, which must be editable: the Plan in `grounding` or `plan`
 /// (`pr_locked`), the PR `waiting` (`illegal_transition`).
-fn waiting_pr(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<PrSpec, CpdError> {
+fn waiting_pr(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<PrRow, CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     let phase = plan_phase(conn, plan)?;
@@ -112,7 +113,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
         let prs = load_prs(conn, plan)?;
         check_needs(&prs, plan, Some(key), needs)?;
         after.needs = needs.clone();
-        let others: Vec<PrSpec> = prs.into_iter().filter(|p| p.key != after.key).chain([after.clone()]).collect();
+        let others: Vec<PrRow> = prs.into_iter().filter(|p| p.key != after.key).chain([after.clone()]).collect();
         if let Some(cycle) = cycle(&others) {
             return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The new needs of {key} make a cycle: {}.", cycle.join(" → ")))
                 .with("plan", plan.as_str())
@@ -131,11 +132,11 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
 
 /// Writes the changed `prs` columns, and deletes and inserts `pr_needs` rows
 /// to match (§4.4 allows deletion in `grounding` and `plan`).
-fn update(tx: &Connection, plan: &PlanId, before: &PrSpec, after: &PrSpec, name: Option<&RepoName>) -> Result<(), CpdError> {
+fn update(tx: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, name: Option<&RepoName>) -> Result<(), CpdError> {
     if (&before.repo, &before.base) != (&after.repo, &after.base) {
         tx.execute(
             "UPDATE prs SET repo = ?1, base = ?2, name = coalesce(?5, name) WHERE plan = ?3 AND key = ?4 AND status = 'waiting'",
-            rusqlite::params![after.repo, after.base, plan.as_str(), after.key, name.map(RepoName::as_str)],
+            rusqlite::params![after.repo.as_str(), after.base.as_str(), plan.as_str(), after.key.as_str(), name.map(RepoName::as_str)],
         )?;
     }
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
@@ -149,8 +150,8 @@ fn update(tx: &Connection, plan: &PlanId, before: &PrSpec, after: &PrSpec, name:
 
 /// A cycle among the needs of the PRs that are not `cancelled`, as the keys
 /// along it (the first repeated at the end), if there is one.
-fn cycle(prs: &[PrSpec]) -> Option<Vec<String>> {
-    let graph: BTreeMap<&str, &PrSpec> = prs.iter().filter(|p| p.status != "cancelled").map(|p| (p.key.as_str(), p)).collect();
+fn cycle(prs: &[PrRow]) -> Option<Vec<String>> {
+    let graph: BTreeMap<&str, &PrRow> = prs.iter().filter(|p| p.status != "cancelled").map(|p| (p.key.as_str(), p)).collect();
     let mut done: Vec<&str> = Vec::new();
     for start in graph.keys() {
         if let Some(found) = visit(start, &graph, &mut done, &mut Vec::new()) {
@@ -160,7 +161,7 @@ fn cycle(prs: &[PrSpec]) -> Option<Vec<String>> {
     None
 }
 
-fn visit<'a>(key: &'a str, graph: &BTreeMap<&'a str, &'a PrSpec>, done: &mut Vec<&'a str>, path: &mut Vec<&'a str>) -> Option<Vec<String>> {
+fn visit<'a>(key: &'a str, graph: &BTreeMap<&'a str, &'a PrRow>, done: &mut Vec<&'a str>, path: &mut Vec<&'a str>) -> Option<Vec<String>> {
     if let Some(at) = path.iter().position(|k| *k == key) {
         let mut found: Vec<String> = path[at..].iter().map(|k| (*k).to_owned()).collect();
         found.push(key.to_owned());
@@ -185,14 +186,8 @@ fn visit<'a>(key: &'a str, graph: &BTreeMap<&'a str, &'a PrSpec>, done: &mut Vec
 mod tests {
     use super::*;
 
-    fn pr(key: &str, status: &str, needs: &[&str]) -> PrSpec {
-        PrSpec {
-            key: key.into(),
-            repo: "/r".into(),
-            base: "main".into(),
-            needs: needs.iter().map(|n| (*n).to_owned()).collect(),
-            status: status.into(),
-        }
+    fn pr(key: &str, status: &str, needs: &[&str]) -> PrRow {
+        PrRow::fixture(key, "/r", "main", needs, status)
     }
 
     #[test]

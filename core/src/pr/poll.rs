@@ -6,24 +6,23 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
-use super::row::PlanRow;
+use super::row::PlanPrs;
 use super::status::PrState;
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::lock;
 use crate::merge::RepoLock;
 use crate::output::Output;
 use crate::policy::Checks;
@@ -140,20 +139,18 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
 
 /// `flock` on `path`, waiting at most [`LOCK_WAIT`]: `lock_timeout` (exit 5). The
 /// descriptor stays open while waiting.
-fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
+fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
     let failed = |what: &dyn std::fmt::Display| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the lock {}: {what}.", path.display())).with("lock", path.display().to_string())
     };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
-    let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(lock) => return Ok(lock),
-            Err((back, Errno::EWOULDBLOCK | Errno::EINTR)) => file = back,
-            Err((_, errno)) => return Err(failed(&format!("flock failed: {errno}"))),
+        if lock::try_lock(&file).map_err(|e| failed(&format!("flock failed: {e}")))? {
+            return Ok(file);
         }
         if Instant::now() >= deadline {
             return Err(CpdError::new(
@@ -247,8 +244,7 @@ fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), Cpd
             details.insert("plan".into(), json!(plan));
             details.insert("pr".into(), json!(pr));
             details.insert("number".into(), json!(number));
-            let data = json!({"source": COMMAND, "code": error.code().as_str(), "message": message, "details": details});
-            append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+            append(tx, NewEvent::error(text, COMMAND, error.code().as_str(), &message, details).plan(plan.clone()))?;
         }
         Ok(())
     })
@@ -261,8 +257,7 @@ fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &
         return Ok(false);
     }
     let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons);
-    let data = feedback::data(key.as_str(), &change.after, &reasons);
-    append(tx, NewEvent::new(Kind::PrFeedback, text, data).plan(plan.clone()))?;
+    append(tx, feedback::event(text, key.as_str(), &change.after, &reasons).plan(plan.clone()))?;
     Ok(true)
 }
 
@@ -279,8 +274,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
         return Err(cas_lost(id, key));
     }
     let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
-    let data = json!({"pr": key, "number": pull.number, "url": pull.url, "merged_at": pull.merged_at});
-    append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
+    append(tx, NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref()).plan(id.clone()))?;
     // The last PR to merge ends the Plan (§3.1).
     let unmerged: i64 =
         tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
@@ -297,12 +291,12 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     }
     let merged = merged_prs(tx, id, key, pull.merged_at.as_deref())?;
     let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
-    append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged})).plan(id.clone()))?;
+    append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
     Ok(true)
 }
 
 /// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
-fn plan_prs(env: &mut Env, plan: &PlanRow) -> Result<Vec<Value>, CpdError> {
+fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
     env.store.read(|conn| {
         plan.live()
             .map(|pr| {
@@ -394,8 +388,8 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
             let message = format!("The clean-up of the merged PR {pr} of Plan {plan} did not remove {path}: {reason}");
             let text = format!("{message} It is retried by every later poll, except a dirty or unpushed Lead worktree, which stays until you deal with it.");
             let details = json!({"plan": plan, "pr": pr, "path": path, "reason": reason});
-            let data = json!({"source": COMMAND, "code": ErrorCode::CleanupFailed.as_str(), "message": message, "details": details});
-            append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+            let event = NewEvent::error(text, COMMAND, ErrorCode::CleanupFailed.as_str(), &message, details);
+            append(tx, event.plan(plan.clone()))?;
         }
         Ok(())
     })

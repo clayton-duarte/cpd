@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 16
+-- cpd-migration: breaking after 18
 -- The policy keys (contract §4.5 "The policy keys", §4.4, §8.3, hs-d288): the
 -- Context's owner and the PR's repo name, the Event kind `context-owner`
 -- (§5.2) and the fill of both columns. The history triggers of `contexts` and

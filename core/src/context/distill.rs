@@ -6,7 +6,7 @@
 //! holds `locks/distill-<context>.lock`, a `flock(2)` lock the kernel frees when
 //! the run dies, so a Context never has two runs and a crash leaves no stale lock.
 
-use std::fs::{self, File, OpenOptions, TryLockError};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -19,13 +19,15 @@ use time::format_description::well_known::Rfc3339;
 
 use super::digest::{self, Digest, Invalid};
 use super::render::Indexed;
-use super::{ContextRow, Record, Select, inforce, open};
+use super::{ContextRow, Record, Select, inforce};
 use crate::config::{Config, Letter};
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
 use crate::host::pi;
 use crate::ids::{ContextId, RecordId};
+use crate::lock;
 use crate::output::Output;
 use crate::store::Store;
 
@@ -83,16 +85,15 @@ impl Lock {
             .truncate(false)
             .open(&path)
             .map_err(|e| lock_failed(&path, e))?;
-        match file.try_lock() {
-            Ok(()) => Ok(Lock { _file: file }),
-            Err(TryLockError::WouldBlock) => Err(CpdError::new(
-                ErrorCode::DistillRunning,
-                format!("A distill run of Context {context} is alive: there is one at a time per Context."),
-            )
-            .with("context", context.as_str())
-            .with("lock", path.display().to_string())),
-            Err(TryLockError::Error(e)) => Err(lock_failed(&path, e)),
+        if lock::try_lock(&file).map_err(|e| lock_failed(&path, e))? {
+            return Ok(Lock { _file: file });
         }
+        Err(CpdError::new(
+            ErrorCode::DistillRunning,
+            format!("A distill run of Context {context} is alive: there is one at a time per Context."),
+        )
+        .with("context", context.as_str())
+        .with("lock", path.display().to_string()))
     }
 }
 
@@ -105,16 +106,14 @@ pub fn running(home: &CpdHome, context: &ContextId) -> Result<bool, CpdError> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(lock_failed(&path, e)),
     };
-    match file.try_lock() {
-        Ok(()) => Ok(false),
-        Err(TryLockError::WouldBlock) => Ok(true),
-        Err(TryLockError::Error(e)) => Err(lock_failed(&path, e)),
-    }
+    // The probe's lock is let go when `file` drops.
+    let free = lock::try_lock(&file).map_err(|e| lock_failed(&path, e))?;
+    Ok(!free)
 }
 
 /// `context distill` (§3.12).
 pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
-    let (home, config, mut store) = open()?;
+    let Env { home, config, mut store } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     store.read(|conn| ContextRow::require(conn, &context))?;
     let _lock = Lock::take(&home, &context)?;
@@ -349,14 +348,9 @@ impl Run<'_> {
 
     /// Appends the run's one `error` Event and returns the error of the same code.
     fn fail(&mut self, error: CpdError, text: String) -> CpdError {
-        let data = json!({
-            "source": SOURCE,
-            "code": error.code().as_str(),
-            "message": error.message(),
-            "details": error.details(),
-        });
+        let event = NewEvent::error(text, SOURCE, error.code().as_str(), error.message(), error.details());
         // No `context`, `plan` or `session`: §5.3 would wake every Lead of the Context for it.
-        match self.store.write(SOURCE, |tx| events::append(tx, NewEvent::new(Kind::Error, text, data))) {
+        match self.store.write(SOURCE, |tx| events::append(tx, event)) {
             Ok(_) => error,
             Err(e) => e.with("while_reporting", error.message()),
         }

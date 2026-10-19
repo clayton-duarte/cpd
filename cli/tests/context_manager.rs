@@ -6,9 +6,8 @@
 mod common;
 
 use std::fs;
-use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, refused, wait_until};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
@@ -23,32 +22,6 @@ fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
-}
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// `config.toml` on this env's private tmux server.
-fn write_config(env: &TestEnv, extra: &str) {
-    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n{extra}\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
-    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-}
-
-/// A fake `cpd` for the panes: the placeholder view sleeps; everything else is the built binary.
-fn fake_cpd(env: &TestEnv) {
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
 }
 
 /// A fake `pi` that creates its session file (when given `--session-id`), records
@@ -88,8 +61,8 @@ fn cockpit(env: &TestEnv) {
 
 /// The env with its config, the fakes, Context `ctx` with a note, and no cockpit yet.
 fn setup(env: &TestEnv) {
-    write_config(env, "");
-    fake_cpd(env);
+    env.write_tmux_config("");
+    env.fake_cpd_views();
     fake_pi(env);
     env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.cpd(&["context", "note", "Mind the ledger.", "--context", "ctx"]).ok();
@@ -239,7 +212,7 @@ fn a_managers_pi_gets_no_plannotator_variable_from_its_callers() {
 fn the_manager_tier_is_the_config_key() {
     let env = TestEnv::new();
     setup(&env);
-    write_config(&env, "manager_tier = \"O3\"");
+    env.write_tmux_config("manager_tier = \"O3\"");
     cockpit(&env);
     let out = env.cpd(&["context", "manager", "--context", "ctx"]).ok();
     let id = out["manager"]["session"].as_str().unwrap();

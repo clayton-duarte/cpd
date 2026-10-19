@@ -13,14 +13,16 @@ use nix::unistd::Pid;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
-use super::ledger::{self, Cause, End, Ladder, SOURCE, Target};
+use crate::clock;
+use crate::attempt::ledger::{self, Attempt as Target, Cause, End, Ladder, Stage};
 use super::lock;
 use super::stall;
 use super::worker;
 use super::RunArgs;
 use crate::config::{Catalog, Config, load_catalog};
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::host::exe::{Exe, Refusal};
@@ -31,7 +33,10 @@ use crate::merge;
 use crate::output::Output;
 use crate::plan::jobs;
 use crate::plan::locked_fingerprint;
-use crate::store::Store;
+use crate::store::{Persist, Store};
+
+/// The `txns.command` and the `source` of the driver's `error` Events.
+const SOURCE: &str = "attempt run";
 
 /// How often A4 looks at the Attempt, its Session and its pane.
 const POLL: Duration = Duration::from_millis(500);
@@ -193,8 +198,9 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // until this function returns, which is the driver's whole life.
     let lock = lock::inherited(&home, &plan, &id)?;
     let exe = Exe::current()?;
-    let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    // A transient store error never ends the Attempt: every read and write of
+    // this driver waits it out (§3.4), the open included.
+    let Env { home, config, store } = Env::open_home_persistent(home, Persist::new(|line| log(line), || false))?;
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
 
@@ -210,8 +216,22 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     }
 }
 
-fn log(line: &str) {
-    eprintln!("cpd attempt run: {line}");
+/// One line of the driver's log (`run/<plan>/logs/attempt-<id>.log`), prefixed with the time like `watch.log`'s.
+pub(super) fn log(line: &str) {
+    eprintln!("{} cpd attempt run: {line}", clock::now());
+}
+
+/// Appends an `error` Event about `target` (§5.2): an unexpected failure of
+/// the driver (commands.md §6.4).
+fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdError) -> Result<(), CpdError> {
+    let text = format!(
+        "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
+        target.id,
+        error.message(),
+        target.id,
+        target.plan
+    );
+    ledger::append_error(tx, target, SOURCE, error, text)
 }
 
 impl Driver {
@@ -398,10 +418,9 @@ impl Driver {
                 return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {} is no longer starting.", target.id)));
             }
             let text = format!("Worker {name} of Attempt {} registered.", target.id);
-            let data = json!({"role": "worker", "name": name, "forked_from": forked_from, "tier": tier});
             events::append(
                 tx,
-                NewEvent::new(Kind::SessionRegistered, text, data)
+                NewEvent::session_registered(text, "worker", &name, forked_from, &tier)
                     .context(target.context.clone())
                     .plan(target.plan.clone())
                     .session(session.clone()),
@@ -428,16 +447,15 @@ impl Driver {
             );
             events::append(
                 tx,
-                NewEvent::new(Kind::AttemptStatus, text, json!({"from": "starting", "to": "running"}))
+                NewEvent::attempt_status(text, "starting", "running")
                     .plan(target.plan.clone())
                     .job(target.job.clone())
                     .attempt(target.id.clone()),
             )?;
             let text = format!("Worker of Attempt {} is in its work window.", target.id);
-            let data = json!({"pane": pane.pane.as_str(), "window": pane.window.as_str(), "place": "work"});
             events::append(
                 tx,
-                NewEvent::new(Kind::SessionMoved, text, data)
+                NewEvent::session_moved(text, Some(pane.pane.as_str()), Some(pane.window.as_str()), "work")
                     .context(target.context.clone())
                     .plan(target.plan.clone())
                     .session(session.clone()),
@@ -578,7 +596,7 @@ impl Driver {
             let text = format!("The Worker of Attempt {id} ended its turn without submitting; it was nudged once.");
             events::append(
                 tx,
-                NewEvent::new(Kind::AttemptNudge, text, json!({"prompt": prompt, "turns": turns}))
+                NewEvent::attempt_nudge(text, &prompt, turns)
                     .plan(target.plan.clone())
                     .job(target.job.clone())
                     .attempt(id.clone())
@@ -601,7 +619,7 @@ impl Driver {
             if now.status == "merging" {
                 return Ok(true);
             }
-            ledger::end(tx, &now, &end, metrics.as_ref(), &ladder)?;
+            ledger::end(tx, &now, &end, metrics.as_ref(), &ladder, Stage::Driver)?;
             Ok(false)
         })?;
         if submitted {
@@ -622,7 +640,7 @@ impl Driver {
         let target = self.load()?;
         if let Err(e) = worker::kill_window(&self.config, &self.tmux, &target) {
             log(&format!("killing the Worker's window failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| ledger::append_error(tx, &target, &e));
+            let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e));
         }
         // The safe point before A8's rebase.
         self.reload_if_installed()?;
@@ -655,7 +673,7 @@ impl Driver {
         result = result.and(removed);
         if let Err(e) = result {
             log(&format!("A9 failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| ledger::append_error(tx, target, &e));
+            let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e));
         }
     }
 
@@ -667,7 +685,7 @@ impl Driver {
     fn fail(&mut self, error: &CpdError) {
         log(&format!("failed: {}: {}", error.code().as_str(), error.message()));
         let Ok(target) = self.load() else { return };
-        if let Err(e) = self.store.write(SOURCE, |tx| ledger::append_error(tx, &target, error)) {
+        if let Err(e) = self.store.write(SOURCE, |tx| append_error(tx, &target, error)) {
             log(&format!("cannot append the error Event: {}", e.message()));
         }
         if !matches!(target.status.as_str(), "starting" | "running") || self.catalog.is_none() {
@@ -677,7 +695,7 @@ impl Driver {
         let metrics = PiDirs::from_env().ok().and_then(|dirs| worker::metrics(&dirs, target.worker_session.as_ref()));
         let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
         let ended = self.store.write(SOURCE, |tx| {
-            ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, metrics.as_ref(), &ladder)
+            ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, metrics.as_ref(), &ladder, Stage::Driver)
         });
         if let Err(e) = ended {
             log(&format!("cannot end the Attempt: {}", e.message()));

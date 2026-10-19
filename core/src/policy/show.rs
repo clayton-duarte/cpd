@@ -9,12 +9,10 @@ use serde_json::{json, Map, Value};
 use super::resolve::{owners_dir, repos_dir};
 use super::domain::{FEEDBACK_CHECKS, GATE};
 use super::{audience, check_file_names, resolve, Domain, DomainSource, PolicyKey};
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName, SessionId};
 use crate::output::Output;
-use crate::store::Store;
 
 #[derive(Args, Debug)]
 pub struct ShowArgs {
@@ -113,9 +111,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     if args.repo.is_some() && args.owner.is_none() {
         return Err(CpdError::new(ErrorCode::Usage, "--repo goes with --owner only."));
     }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let Env { home, mut store, .. } = Env::open()?;
     let (role, key) = if let Some(pr) = &args.pr {
         let plan = args.plan.as_ref().ok_or_else(|| {
             CpdError::new(ErrorCode::PlanRequired, "No Plan selected: pass --plan <id> or set CPD_PLAN.")

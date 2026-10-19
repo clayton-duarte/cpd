@@ -4,7 +4,7 @@ import { CpdError, isObject } from "./cpd.ts";
 export const POLICY_SECTION = "cpd-policy";
 
 /**
- * The text of a `cpd policy show` output (commands.md §22.1, §15.9): every domain whose `audience` holds the output's `role`
+ * The text of a `cpd policy show` output (commands.md §22.1, §15.10): every domain whose `audience` holds the output's `role`
  * and whose `text` is not empty, in the output's order, each as `## <domain> (<source>)` and its text; blocks are separated by a blank line.
  * `undefined` when no domain has text. The adapter trusts the output's `role` and `audience`; it never picks a key or reads a file.
  * An output of another shape is `bad_output`.
