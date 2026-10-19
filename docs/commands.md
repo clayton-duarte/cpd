@@ -626,7 +626,7 @@ Idempotent: yes. When the latest review is `pending` for the current fingerprint
 cpd plan decide <review> (--approve | --reject) [--feedback-file <file>] [--plan <id>]
 ```
 
-Records the User's decision. Called by the pi adapter with plannotator's result (§15.5); replaces cpd 1's `plan decision` (cpd 1 §11), whose `--pending` step is now `plan review`. The cpd-lead skill forbids the Lead to run it.
+Records the User's decision. Called by the pi adapter with plannotator's result (§15.5); replaces cpd 1's `plan decision` (cpd 1 §11), whose `--pending` step is now `plan review`. The cpd-lead skill forbids the Lead to run it. Internal (§1.1): hidden in clap, run only by the pi adapter.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1514,7 +1514,7 @@ Idempotent: yes.
 cpd session state <working|blocked|idle|stopped> [--label <text>] [--session <id>]
 ```
 
-How the pi adapter reports its agent state (§3.6, D4). `--label` is required with `blocked` and refused with any other state (`usage`); 1–80 characters.
+How the pi adapter reports its agent state (§3.6, D4). `--label` is required with `blocked` and refused with any other state (`usage`); 1–80 characters. Internal (§1.1): hidden in clap, run only by the pi adapter.
 
 | Precondition | Code | Exit |
 |---|---|---|
