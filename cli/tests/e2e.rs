@@ -331,7 +331,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
     assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false}));
-    let review = fx.ok(&["plan", "review", "--plan", PLAN]);
+    let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     assert_eq!(review["review"]["id"], "r1");
     let decided = fx.ok(&["plan", "decide", "r1", "--approve", "--plan", PLAN]);
     assert_eq!(decided["current"], true);

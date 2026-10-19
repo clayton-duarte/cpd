@@ -365,7 +365,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     );
 
     // ---------- 4. review and lock: only a1 starts (A8)
-    let review = fx.ok(&["plan", "review", "--plan", PLAN]);
+    let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     fx.ok(&["plan", "decide", review["review"]["id"].as_str().unwrap(), "--approve", "--plan", PLAN]);
     let out = fx.ok(&["plan", "lock", "--plan", PLAN]);
     assert_eq!(out["phase"], "dispatch");
