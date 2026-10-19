@@ -36,7 +36,7 @@ use ratatui::widgets::{Paragraph, Widget};
 use self::actions::Actions;
 use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
-use crate::link::link;
+use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
 use super::read::{self, ChatSlot, PlanBoxes, Pulse, ReviewStatus};
 use super::{RunCommand, not_a_terminal, on_a_terminal};
@@ -79,12 +79,12 @@ const FRAME: Duration = Duration::from_millis(100);
 /// chart touches the pane's edges, and scrolled the chart reaches them.
 const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 
-/// The row above the boxes while the Plan's latest Plan review is pending (commands.md §13.2): ` Plan review r<n> pending ↗`.
+/// The row above the boxes while the Plan's latest Plan review is pending (commands.md §13.2): ` Plan review r<n> pending 󰏌`.
 #[derive(Debug, PartialEq, Eq)]
 struct ReviewRow {
     number: u32,
     /// `http://<host>:<port>`, the port of `run/<plan>/plannotator-port`; `None` when that file is missing or holds
-    /// no port: the row shows without the `↗`.
+    /// no port: the row shows without the `󰏌`.
     url: Option<String>,
 }
 
@@ -104,7 +104,7 @@ impl ReviewRow {
             Span::styled("pending", palette::fg(Meaning::Review)),
         ];
         if self.url.is_some() {
-            spans.push(" ↗".into());
+            spans.push(format!(" {CUE}").into());
         }
         Line::from(spans)
     }
@@ -116,7 +116,7 @@ impl ReviewRow {
         let width = line.width() as u16;
         line.render(area, buf);
         if let Some(url) = &self.url {
-            // from `Plan` (after the leading blank) through `↗`
+            // from `Plan` (after the leading blank) through `󰏌`
             link(buf, Rect::new(area.x + 1, area.y, width - 1, 1).intersection(area), url);
         }
     }
@@ -599,26 +599,26 @@ mod tests {
     #[test]
     fn a_pending_review_is_a_row_above_the_boxes_which_start_one_row_lower() {
         let row = ReviewRow { number: 2, url: Some(URL.into()) };
-        assert_eq!(row.line().to_string(), " Plan review r2 pending ↗");
+        assert_eq!(row.line().to_string(), " Plan review r2 pending 󰏌");
         assert_eq!(row.line().spans[1].style.fg, palette::fg(Meaning::Review).fg);
 
         let without = drawn(&centre(None));
         let (buf, rows, ui) = drawn(&centre(Some(row)));
         // the row is indented by the margin, on the pane's first row; the boxes are one row lower than they were
-        assert_eq!(rows[0], "   Plan review r2 pending ↗");
+        assert_eq!(rows[0], "   Plan review r2 pending 󰏌");
         assert_eq!(rows[1], "", "the boxes' own margin row");
         assert_eq!(rows[2], without.1[1], "the first border, one row lower");
-        assert_eq!(rows[2], "  ┌ api · api → main · #12 open ↗ ┐");
+        assert_eq!(rows[2], "  ┌ api · api 󱦰 main · #12 open 󰏌 ┐");
         assert_eq!(without.1[0], "");
         assert_eq!((ui.body.y, ui.body.height), (1, 6), "clicks and scrolling use the area between the row and the message row");
         assert_eq!(without.2.body.y, 0);
-        // `pending` is yellow, `↗` links to the plannotator page; the title's `↗` still links to the pull request
+        // `pending` is yellow, `󰏌` links to the plannotator page; the title's `󰏌` still links to the pull request
         assert_eq!(buf[(18, 0)].fg, palette::fg(Meaning::Review).fg.unwrap());
-        assert_eq!(linked(&buf, 0, OPEN), (3..=26).collect::<Vec<u16>>(), "`Plan` through `↗`, not the blank before it");
+        assert_eq!(linked(&buf, 0, OPEN), (3..=26).collect::<Vec<u16>>(), "`Plan` through `󰏌`, not the blank before it");
         let pull = "\x1b]8;;https://github.com/acme/api/pull/12\x07";
         let title: Vec<char> = rows[2].chars().collect();
-        let (first, arrow) = (title.iter().position(|&c| c == '#').unwrap() as u16, title.iter().position(|&c| c == '↗').unwrap() as u16);
-        assert_eq!(linked(&buf, 2, pull), (first..=arrow).collect::<Vec<u16>>(), "the title's `#12 open ↗` links to the pull request");
+        let (first, arrow) = (title.iter().position(|&c| c == '#').unwrap() as u16, title.iter().position(|&c| c.to_string() == CUE).unwrap() as u16);
+        assert_eq!(linked(&buf, 2, pull), (first..=arrow).collect::<Vec<u16>>(), "the title's `#12 open 󰏌` links to the pull request");
     }
 
     #[test]
