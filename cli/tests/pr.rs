@@ -2211,3 +2211,83 @@ fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(needs_of(&f, "fix").is_empty());
 }
+
+const GONE_URL: &str = "https://github.com/gone/shop/pull/20";
+
+impl Fx {
+    /// A second Plan `bob` in Context `ctx2` of owner `gone`, its PR `shop` open as pull request 20 of `gone/shop`.
+    /// The owner file of `gone` is written, then deleted: the one owner this machine has no file for.
+    fn add_bob_without_an_owner_file(&self) {
+        self.env.owner_policy("gone", "");
+        fs::remove_file(self.env.cpd_home().join("policy/owners/gone.toml")).unwrap();
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute_batch(&format!(
+                    "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx2', 'Ctx2', 'gone', 't', 't');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead2', 'lead', 'ctx2', 'bob', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                       VALUES ('bob', 'ctx2', 'Bob', 'deploy', 'lead2', 't', 't');
+                     INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+                       VALUES ('gone/shop', 20, '{GONE_URL}', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', 'opened');
+                     INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                                      pr_number, pr_url, pr_opened_at, pull_request)
+                       VALUES ('bob', 'shop', '/r', 'main', 'shop', 'open', 'cpd/bob/shop', '/w', cpd_txn(), 't', 't',
+                               20, '{GONE_URL}', 'opened', (SELECT id FROM pull_requests WHERE number = 20));"
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    /// `(plan, data)` of every `error` Event of source `pr poll` that is not a clean-up failure.
+    fn policy_errors(&self) -> Vec<(String, Value)> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT plan, data FROM events WHERE kind = 'error' AND json_extract(data, '$.source') = 'pr poll'
+                        AND json_extract(data, '$.code') <> 'cleanup_failed' ORDER BY id",
+                )?;
+                Ok(stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
+                    .collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap()
+    }
+}
+
+#[test]
+fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges() {
+    let fx = fx("deploy");
+    fx.add_bob_without_an_owner_file();
+    // bob's checks turned failed (it would be told, were its policy known); pay's PR merged, so it is looked up.
+    fx.search(&[node("gone/shop", 20, "OPEN", None, Some("FAILURE"))]);
+    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")))]);
+
+    let out = fx.poll_all();
+
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!((out["done"].clone(), out["feedback"].clone()), (json!(["pay"]), json!([])));
+    assert_eq!((fx.plan_row().0, fx.pr_status("repo")), ("done".to_owned(), "merged".to_owned()));
+    assert_eq!(fx.events("pr-merged").len(), 1);
+    // bob's row is written as usual, and bob is told nothing.
+    let bob: String = fx.store().read(|c| Ok(c.query_row("SELECT checks FROM pull_requests WHERE number = 20", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(bob, "failed");
+    let told: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM events WHERE kind = 'pr-feedback'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(told, 0);
+    // One `error` Event names the plan, the PR and the code.
+    let errors = fx.policy_errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].0, "bob");
+    assert_eq!(errors[0].1["code"], "owner_unknown");
+    assert_eq!(errors[0].1["details"]["plan"], "bob");
+    assert_eq!(errors[0].1["details"]["pr"], "shop");
+    assert_eq!(errors[0].1["details"]["owner"], "gone");
+    assert!(errors[0].1["message"].as_str().unwrap().contains("PR shop (#20) of Plan bob"), "{}", errors[0].1["message"]);
+
+    // Once per episode: the next polls, still failing the same way, append nothing and write nothing.
+    let events = fx.event_count();
+    fx.poll_all();
+    fx.poll_all();
+    assert_eq!((fx.policy_errors().len(), fx.event_count()), (1, events));
+}
