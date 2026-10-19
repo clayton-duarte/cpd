@@ -31,7 +31,7 @@ use crate::merge;
 use crate::output::Output;
 use crate::plan::jobs;
 use crate::plan::locked_fingerprint;
-use crate::store::Store;
+use crate::store::{Persist, Store};
 
 /// How often A4 looks at the Attempt, its Session and its pane.
 const POLL: Duration = Duration::from_millis(500);
@@ -194,7 +194,9 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     let lock = lock::inherited(&home, &plan, &id)?;
     let exe = Exe::current()?;
     let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    // A transient store error never ends the Attempt: every read and write of
+    // this driver waits it out (§3.4), the open included.
+    let store = Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), Persist::new(|line| log(line), || false))?;
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
 
