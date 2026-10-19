@@ -215,6 +215,8 @@ fn an_install_re_execs_an_idle_wrapper_at_once_keeping_pi_and_a_new_pi_then_rest
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")], "the same process re-execed the new file");
     // Several polls: pi runs on, untouched, under the new wrapper.
+    // time-claim: the re-exec'd wrapper leaves pi alone over five 0.5 s polls; no per-poll signal from `session run` (a
+    // poll that changes nothing leaves nothing behind).
     std::thread::sleep(Duration::from_millis(2500));
     assert!(f.signals().is_empty(), "pi was signalled");
     assert!(alive(old_pi));
@@ -265,6 +267,8 @@ fn a_working_lead_survives_an_install_the_wrapper_re_execs_and_pi_is_never_signa
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")]);
     assert!(f.screen().contains("new cpd installed"), "{}", f.screen());
     // Several polls: the Lead is working, pi runs on and nothing else happens.
+    // time-claim: the Lead is working, so pi runs on and nothing else happens over five 0.5 s polls of the new wrapper;
+    // no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_millis(2500));
     assert!(f.signals().is_empty(), "pi was signalled");
     assert!(alive(old_pi));
@@ -294,6 +298,8 @@ fn a_pi_that_changed_before_the_install_is_restarted_at_idle_by_the_new_wrapper(
 
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi} --pi-stale")]);
+    // time-claim: the Lead is working, so the new wrapper does not restart the stale pi over five 0.5 s polls;
+    // no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_millis(2500));
     assert!(f.signals().is_empty(), "the Lead is working: pi runs on");
     assert_eq!(f.env.calls("pi").len(), 1);
@@ -349,6 +355,8 @@ fn a_newer_store_does_not_end_a_wrapper_and_the_new_cpd_that_opens_it_adopts_pi(
     f.migrate_store();
     wait_until("the wrapper to say its read failed", || f.screen().contains("Retrying at the next poll"));
     // Several polls: said once, nothing ended, nothing signalled.
+    // time-claim: the failed read is said once, and nothing ends or is signalled, over nine 0.5 s polls of the wrapper;
+    // no per-poll signal from `session run` (a failed read leaves nothing but its first line).
     std::thread::sleep(Duration::from_millis(4500));
     let screen = f.screen();
     assert_eq!(screen.matches("Retrying at the next poll").count(), 1, "{screen}");
@@ -362,6 +370,7 @@ fn a_newer_store_does_not_end_a_wrapper_and_the_new_cpd_that_opens_it_adopts_pi(
     f.install_script(&format!("echo '{{\"ok\":true,\"version\":\"x\",\"schema\":{NEWER_SCHEMA},\"store_schema\":{NEWER_SCHEMA}}}'; exit 0"));
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")]);
+    // time-claim: the adopting wrapper leaves pi alone over five 0.5 s polls; no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_millis(2500));
     assert!(alive(old_pi) && f.signals().is_empty(), "pi was touched");
     assert_eq!(f.env.calls("pi").len(), 1);
@@ -378,6 +387,8 @@ fn a_failing_store_read_is_said_once_and_retried_with_pi_untouched() {
 
     f.migrate_store();
     wait_until("the wrapper to say its read failed", || f.screen().contains("Retrying at the next poll"));
+    // time-claim: the failed read is said once, and pi is not touched, over nine 0.5 s polls of the wrapper;
+    // no per-poll signal from `session run` (a failed read leaves nothing but its first line).
     std::thread::sleep(Duration::from_millis(4500));
     let screen = f.screen();
     assert_eq!(screen.matches("Retrying at the next poll").count(), 1, "{screen}");
@@ -420,6 +431,7 @@ fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_in
     f.install();
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")], "the same process re-execed the new file");
+    // time-claim: the re-exec'd wrapper leaves pi alone over five 0.5 s polls; no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_millis(2500));
     assert!(f.signals().is_empty(), "pi was signalled");
     assert!(alive(old_pi));

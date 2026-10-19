@@ -3,8 +3,7 @@
 
 mod common;
 
-use common::TestEnv;
-use cpd_core::error::CpdError;
+use common::{TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
 use cpd_core::store::Store;
@@ -16,15 +15,6 @@ const FP: &str = "00000000000000000000000000000000000000000000000000000000000000
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn ctx(id: &str) -> ContextId {

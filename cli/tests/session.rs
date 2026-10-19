@@ -1596,7 +1596,6 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     let current = env.home().join(".pi/agent/install/current-version");
     fs::create_dir_all(current.parent().unwrap()).unwrap();
     fs::write(&current, "1.2.0\n").unwrap();
-    std::thread::sleep(Duration::from_secs(2));
     let pane = run_lead_with_pane(&env, "side");
     wait_until("pi", || env.calls("pi").len() == 1);
 
