@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 
 use super::run::{branch_exists, current_branch, ok, rev_parse, run};
 use super::worktree::{list, worktree_of_branch};
-use super::{TAIL_LINES, tail};
+use super::TAIL_LINES;
 use crate::error::CpdError;
 use crate::home::Hook;
 
@@ -91,7 +91,7 @@ pub struct Operation<'a> {
 }
 
 /// Reads `hook` from `<worktree>/.config/wt.toml`, renders and runs its commands
-/// in `worktree`, and writes the whole output to `log`.
+/// in `worktree`, and writes the output to `log` as it arrives.
 ///
 /// `operation` is needed by every hook cpd runs; without it the `base` and
 /// `target` variables are undefined. `timeout` is `setup_minutes` for `pre-start`,
@@ -158,15 +158,22 @@ fn run_with_branch(
         blocks.push(rendered);
     }
 
-    let done = exec::execute(&blocks, &cwd, timeout);
-    let text = done.output.iter().map(|l| format!("{l}\n")).collect::<String>();
-    let tail = Some(tail(&text, TAIL_LINES));
+    // The log is opened first and written as the output arrives (a killed hook
+    // or driver still leaves it, and `tail -f` works).
+    let file = match log.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::File::create(log)) {
+        Ok(file) => file,
+        Err(e) => {
+            let why = format!("Cannot write {}: {e}.", log.display());
+            return Ok(HookResult { outcome: HookOutcome::Error(HookError::Io(why)), tail: None });
+        }
+    };
+    let done = exec::execute(&blocks, &cwd, timeout, file, TAIL_LINES);
+    let tail = Some(done.tail.join("\n"));
 
-    let written = log
-        .parent()
-        .map_or(Ok(()), fs::create_dir_all)
-        .and_then(|()| fs::write(log, &text))
-        .map_err(|e| HookError::Io(format!("Cannot write {}: {e}.", log.display())));
+    let written = match done.log_error {
+        None => Ok(()),
+        Some(e) => Err(HookError::Io(format!("Cannot write {}: {e}.", log.display()))),
+    };
     let outcome = match (done.failure, written) {
         (None, Ok(())) => HookOutcome::Passed,
         (Some(exec::Ended::Exit(exit)), _) => HookOutcome::Failed { exit },

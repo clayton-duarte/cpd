@@ -9,26 +9,58 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 dest_dir="${HOME:?HOME is not set}/.local/bin"
 adapter_dir="$dest_dir/../share/cpd/pi"
 
+db="${CPD_HOME:-$HOME/.cpd}/cpd.db"
+
+# Refuse, before building or replacing anything, a build that carries a migration
+# that is not on origin/main (contract §3.7, hs-d178 D4): a preview would apply it
+# to the shared database before the PR merges. A file of the working tree that is
+# added, modified or untracked counts; one that only origin/main has does not (the
+# store check below decides that). Git only: it needs nothing from the new binary.
+migrations=core/src/store/migrations
+if ! git -C "$root" fetch --quiet origin main; then
+  echo "cpd install refused: cannot fetch origin/main to check that this build's migrations are on it." >&2
+  exit 1
+fi
+unmerged=
+for file in "$root/$migrations"/*; do
+  [ -f "$file" ] || continue
+  name=$(basename "$file")
+  if ! git -C "$root" cat-file -e "origin/main:$migrations/$name" 2>/dev/null ||
+    ! git -C "$root" show "origin/main:$migrations/$name" | cmp -s - "$file"; then
+    unmerged="${unmerged:+$unmerged, }$name"
+  fi
+done
+if [ -n "$unmerged" ]; then
+  echo "cpd install refused: this build carries migration $unmerged that is not on origin/main, and a preview would apply it to $db before the PR merges. Merge main into this branch, or wait until the PR merges, then install again." >&2
+  exit 1
+fi
+
 "$root/scripts/cargo.sh" build --release --locked --manifest-path "$root/Cargo.toml" -p cpd
 
 target_dir="${CARGO_TARGET_DIR:-$root/target}"
 
 # Refuse, before replacing anything, a build that cannot open the database
-# (contract §3.7, hs-d151): ask the new binary, with the caller's CPD_HOME.
+# (contract §3.7, hs-d151): ask the new binary, with the caller's CPD_HOME, for
+# its store verdict (`store`: null without a database, else `opens`).
 if ! version=$("$target_dir/release/cpd" --version 2>&1); then
   echo "cpd install refused: $target_dir/release/cpd --version failed:" >&2
   echo "$version" >&2
   exit 1
 fi
-schema=$(printf '%s' "$version" | sed -n 's/.*"schema": *\([0-9][0-9]*\).*/\1/p')
-store_schema=$(printf '%s' "$version" | sed -n 's/.*"store_schema": *\([0-9][0-9]*\).*/\1/p')
-if [ -z "$schema" ]; then
-  echo "cpd install refused: $target_dir/release/cpd --version reports no schema:" >&2
+if ! printf '%s' "$version" | grep -q '"store": *\(null\|{\)'; then
+  echo "cpd install refused: $target_dir/release/cpd --version reports no store verdict:" >&2
   echo "$version" >&2
   exit 1
 fi
-if [ -n "$store_schema" ] && [ "$store_schema" -gt "$schema" ]; then
-  echo "cpd install refused: this build supports store schema $schema but ${CPD_HOME:-$HOME/.cpd}/cpd.db is at $store_schema; merge main into this branch, then install again." >&2
+if printf '%s' "$version" | grep -q '"opens": *false'; then
+  code=$(printf '%s' "$version" | sed -n 's/.*"refusal": *{[^}]*"code": *"\([^"]*\)".*/\1/p')
+  message=$(printf '%s' "$version" | sed -n 's/.*"refusal": *{.*"message": *"\(\(\\.\|[^"\\]\)*\)".*/\1/p')
+  echo "cpd install refused: this build cannot open $db: $message" >&2
+  case $code in
+    store_too_new) echo "merge main into this branch, then install again" >&2 ;;
+    migration_changed) echo "the branch's migration differs from the one this store applied; restore it from origin/main or wait for the store to be repaired" >&2 ;;
+    migration_order) echo "rename the branch's breaking migration to a newer name with scripts/new-migration.sh, then install again" >&2 ;;
+  esac
   exit 1
 fi
 

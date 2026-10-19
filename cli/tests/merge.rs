@@ -176,6 +176,18 @@ impl Fx {
         self.git(dir, &["rev-parse", "HEAD"])
     }
 
+    /// Records the Attempt worktree's HEAD as the `submitted_sha`: for a test that
+    /// builds its Attempt branch after the `submitted` fixture, as a submit would have.
+    fn resubmit(&self, attempt: &AttemptId, worktree: &Path) {
+        let tip = self.git(worktree, &["rev-parse", "HEAD"]);
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute("UPDATE attempts SET submitted_sha = ?2 WHERE plan = 'pay' AND id = ?1", params![attempt.to_string(), tip])?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
     /// Another Job's merge: a commit on the Lead Branch, through the Lead worktree.
     fn advance_lead(&self, path: &str, content: &str) -> String {
         self.commit(&self.lead, path, content)
@@ -432,6 +444,7 @@ fn an_attempt_that_already_contains_the_lead_tip_lands_as_is_with_its_merge_comm
     fs::write(worktree.join("README.md"), "resolved\n").unwrap();
     fx.git(&worktree, &["add", "-A"]);
     fx.git(&worktree, &["commit", "-q", "-m", "merge the base"]);
+    fx.resubmit(&attempt, &worktree);
     let tip = fx.git(&worktree, &["rev-parse", "HEAD"]);
 
     let result = fx.merge(&attempt);
@@ -539,6 +552,7 @@ fn tampered_when_the_diff_touches_a_protected_path() {
     let fx = fx();
     let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
     fx.commit(&worktree, ".config/wt.toml", "pre-merge = \"true\"\n");
+    fx.resubmit(&attempt, &worktree);
     let old = fx.lead_sha();
 
     let result = fx.merge(&attempt);
@@ -547,6 +561,22 @@ fn tampered_when_the_diff_touches_a_protected_path() {
     assert_eq!(fx.lead_sha(), old);
     let data = fx.assert_failed(&attempt, "api", "tampered");
     assert!(data["detail"].as_str().unwrap().contains(".config/wt.toml"));
+}
+
+#[test]
+fn a_commit_after_submit_ends_tampered_and_merges_nothing() {
+    let fx = fx();
+    let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+    let submitted = fx.git(&worktree, &["rev-parse", "HEAD"]);
+    let late = fx.commit(&worktree, "late.txt", "late\n");
+    let old = fx.lead_sha();
+
+    let result = fx.merge(&attempt);
+
+    assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+    assert_eq!(fx.lead_sha(), old);
+    let data = fx.assert_failed(&attempt, "api", "tampered");
+    assert_eq!(data["detail"], format!("the Attempt branch moved after submit ({submitted} -> {late})"));
 }
 
 #[test]
@@ -576,8 +606,9 @@ fn base_edits(fx: &Fx, path: &str, content: Option<&str>) {
 }
 
 /// The Attempt's worktree merges `origin/main` (the Lead tip is its ancestor, so no rebase).
-fn merge_the_base(fx: &Fx, worktree: &Path) -> String {
+fn merge_the_base(fx: &Fx, attempt: &AttemptId, worktree: &Path) -> String {
     fx.git(worktree, &["merge", "-q", "--no-ff", "-m", "merge the base", "origin/main"]);
+    fx.resubmit(attempt, worktree);
     fx.git(worktree, &["rev-parse", "HEAD"])
 }
 
@@ -587,7 +618,7 @@ fn an_attempt_that_merges_a_base_with_changed_protected_files_is_merged() {
         let (fx, _) = fx_origin();
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
-        let tip = merge_the_base(&fx, &worktree);
+        let tip = merge_the_base(&fx, &attempt, &worktree);
 
         let result = fx.merge(&attempt);
 
@@ -603,8 +634,9 @@ fn an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampere
         let (fx, _) = fx_origin();
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
-        merge_the_base(&fx, &worktree);
+        merge_the_base(&fx, &attempt, &worktree);
         fx.commit(&worktree, path, "protected = [\"mine\"]\n");
+        fx.resubmit(&attempt, &worktree);
         let old = fx.lead_sha();
 
         let result = fx.merge(&attempt);
@@ -623,7 +655,7 @@ fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_merged() {
         fx.git(&fx.lead, &["merge", "-q", "--ff-only", "origin/main"]);
         let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
         base_edits(&fx, path, None);
-        let tip = merge_the_base(&fx, &worktree);
+        let tip = merge_the_base(&fx, &attempt, &worktree);
         assert!(!worktree.join(path).exists());
 
         let result = fx.merge(&attempt);

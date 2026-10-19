@@ -1,14 +1,23 @@
 //! Running git (contract §7): every call is `git -C <dir> <argv…>` with
 //! `GIT_TERMINAL_PROMPT=0`, the ref-lock timeouts of [`LOCK_TIMEOUTS`] and
-//! stdin from `/dev/null`.
+//! stdin from `/dev/null`, under a deadline.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::json;
 
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
+use crate::host::deadline::{self, Failed};
+
+/// A local git call's deadline (contract §7): a local repo answers in seconds.
+const LOCAL_DEADLINE: Duration = Duration::from_secs(60);
+/// A network call's deadline (`fetch`, `push`, `ls-remote`; contract §7): a slow
+/// remote gets minutes, a stalled one (an ssh or TCP stall, which
+/// `GIT_TERMINAL_PROMPT=0` does not stop) ends and releases the locks held across it.
+const NETWORK_DEADLINE: Duration = Duration::from_secs(300);
 
 /// The config every git call gets through `GIT_CONFIG_COUNT` (contract §7, hs-d243 G2):
 /// a ref or `packed-refs` lock held by another git process is waited for up to
@@ -38,18 +47,23 @@ pub(super) fn failed(dir: &Path, args: &[&str], message: String, exit: Option<i3
 }
 
 /// Runs `git -C <dir> <args>` and returns what it printed, whatever its exit
-/// code. Only a git that cannot start, or dies from a signal, is an error.
+/// code. Only a git that cannot start, dies from a signal (`git_failed`) or runs
+/// past its deadline (`tool_timeout`) is an error.
 pub fn run(dir: &Path, args: &[&str]) -> Result<Out, CpdError> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(dir).args(args).env("GIT_TERMINAL_PROMPT", "0");
-    command.env("GIT_CONFIG_COUNT", LOCK_TIMEOUTS.len().to_string());
+    let limit = match args.first() {
+        Some(&("fetch" | "push" | "ls-remote")) => NETWORK_DEADLINE,
+        _ => LOCAL_DEADLINE,
+    };
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).args(args).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+    cmd.env("GIT_CONFIG_COUNT", LOCK_TIMEOUTS.len().to_string());
     for (i, (key, value)) in LOCK_TIMEOUTS.iter().enumerate() {
-        command.env(format!("GIT_CONFIG_KEY_{i}"), key).env(format!("GIT_CONFIG_VALUE_{i}"), value);
+        cmd.env(format!("GIT_CONFIG_KEY_{i}"), key).env(format!("GIT_CONFIG_VALUE_{i}"), value);
     }
-    let output = command
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| failed(dir, args, format!("Cannot run git: {e}."), None, ""))?;
+    let output = deadline::output(&mut cmd, "git", limit).map_err(|e| match e {
+        Failed::Io(e) => failed(dir, args, format!("Cannot run git: {e}."), None, ""),
+        Failed::Timeout(e) => e,
+    })?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     match output.status.code() {

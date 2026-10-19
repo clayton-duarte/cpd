@@ -10,7 +10,7 @@ use super::lock::take_free_driver_lock;
 use crate::driver::lock;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
-use crate::host::layout::attempt_window;
+use crate::driver::worker;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId};
 use crate::store::Store;
@@ -88,7 +88,11 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
             };
             let metrics = (ctx.metrics)(attempt);
             store.write(ctx.source, |tx| ledger::end_merging(tx, attempt, &end, metrics.as_ref(), &ladder))?;
+            // A9: the Attempt is ended, its worktree is kept, its window goes; the driver lock file goes
+            // too, whether or not the kill worked (each item best effort).
+            let killed = kill_window(ctx, attempt);
             lock::remove(ctx.home, &attempt.plan, &attempt.id)?;
+            killed?;
             Ok(Some(end))
         }
         // R4: git failed; nothing changes, reported once per Attempt.
@@ -139,16 +143,14 @@ pub(super) fn push_text(attempt: &Attempt, error: &CpdError) -> String {
 /// The rest of A9 after R2: kill the Attempt's tmux window, remove its
 /// worktree and branch (§3.4, §7.2).
 fn rest_of_a9(ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
+    // Best effort per item: a window that cannot be killed does not keep the worktree.
+    let killed = kill_window(ctx, attempt);
+    let removed = git::remove_merged_attempt(&attempt.lead_worktree, &attempt.worktree, &attempt.branch);
+    killed.and(removed)
+}
+
+/// A9's kill of the Attempt's window, as the driver does it (retried).
+fn kill_window(ctx: &Ctx<'_>, attempt: &Attempt) -> Result<(), CpdError> {
     let tmux = Tmux::new(ctx.config.tmux.socket.as_str());
-    let name = attempt_window(&attempt.plan, &attempt.id);
-    let windows: Vec<_> = tmux
-        .list_panes()?
-        .into_iter()
-        .filter(|p| p.session_name == ctx.config.tmux.work_session && p.window_name == name)
-        .map(|p| p.window)
-        .collect();
-    for window in windows {
-        tmux.kill_window(&window)?;
-    }
-    git::remove_merged_attempt(&attempt.lead_worktree, &attempt.worktree, &attempt.branch)
+    worker::kill_attempt_window(ctx.config, &tmux, &attempt.plan, &attempt.id)
 }
