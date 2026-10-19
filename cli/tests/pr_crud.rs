@@ -233,7 +233,8 @@ fn add_keys_the_repo_before_anything_is_written() {
     assert_eq!(error["details"]["owner"], "acme");
     fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
 
-    // With every refusal cleared, the same add succeeds.
+    // With every refusal cleared (`remote remove` dropped the tracking ref), the same add succeeds.
+    fx.env.git(&fx.pay, &["update-ref", "refs/remotes/origin/main", "main"]);
     fx.add("api", &fx.pay, &[]).ok();
 }
 
