@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde_json::json;
 
-use super::moves::{park_lead, require_lead, slot, unreadable};
+use super::moves::{park_lead, require_lead, slot};
 use super::row;
 use super::{Env, HistoryArgs, PROGRAM};
 use crate::error::{CpdError, ErrorCode};
@@ -25,7 +25,7 @@ pub(super) fn history(args: HistoryArgs) -> Result<Output, CpdError> {
         CpdError::new(ErrorCode::FileUnreadable, format!("Session {} has no session file.", session.id))
             .with("session", session.id.as_str())
     })?;
-    std::fs::File::open(&file).map_err(|e| unreadable(std::path::Path::new(&file), e).with("session", session.id.as_str()))?;
+    std::fs::File::open(&file).map_err(|e| CpdError::file_unreadable(std::path::Path::new(&file), e).with("session", session.id.as_str()))?;
 
     let tmux = env.tmux();
     let cockpit = env.config.tmux.cockpit_session.clone();

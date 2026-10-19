@@ -5,8 +5,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use rusqlite::params;
 use serde_json::json;
 
@@ -14,6 +12,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::PlanId;
+use crate::lock;
 use crate::store::Store;
 
 /// The Plan's port: the one in its file when that is inside the range and no other live Plan holds it, else
@@ -86,17 +85,12 @@ fn write_port(path: &Path, port: u16) -> Result<(), CpdError> {
     })
 }
 
-fn lock(path: &Path) -> Result<Flock<File>, CpdError> {
+fn lock(path: &Path) -> Result<File, CpdError> {
     let dir = path.parent().expect("a lock file has a directory");
     fs::create_dir_all(dir).map_err(|e| io_error("create", dir, &e))?;
-    let mut file = OpenOptions::new().create(true).append(true).open(path).map_err(|e| io_error("open", path, &e))?;
-    loop {
-        match Flock::lock(file, FlockArg::LockExclusive) {
-            Ok(lock) => return Ok(lock),
-            Err((f, Errno::EINTR)) => file = f,
-            Err((_, errno)) => return Err(io_error("lock", path, &std::io::Error::from(errno))),
-        }
-    }
+    let file = OpenOptions::new().create(true).append(true).open(path).map_err(|e| io_error("open", path, &e))?;
+    lock::blocking(&file).map_err(|e| io_error("lock", path, &e))?;
+    Ok(file)
 }
 
 fn io_error(what: &str, path: &Path, e: &std::io::Error) -> CpdError {
