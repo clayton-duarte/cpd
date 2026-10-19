@@ -28,10 +28,6 @@ fn fixture(env: &TestEnv, sql: &str) {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
 }
 
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
-
 /// Plan `pl` (Lead session `lead-pl`), Job `a` running, and Attempt `a-a1`
 /// `running` with Worker Session `w1` `working`.
 fn setup(env: &TestEnv) {
@@ -144,7 +140,7 @@ fn ask_blocks_until_answered_and_prints_the_answer() {
     setup(&env);
     let child = spawn_ask(&env, "Which field names?");
     let pid = child.id();
-    wait_until("ask to open a-a1-q1", || query::<i64>(&env, "SELECT count(*) FROM escalations WHERE id = 'a-a1-q1'") != 0);
+    wait_until("ask to open a-a1-q1", || env.query::<i64>("SELECT count(*) FROM escalations WHERE id = 'a-a1-q1'") != 0);
 
     // While it waits: the row is open, the Worker Session blocked, both Events appended.
     let (status, asker_pid, question): (String, u32, String) = store(&env)
@@ -178,7 +174,7 @@ fn every_ask_is_a_new_escalation() {
     for k in 1..=2 {
         let child = spawn_ask(&env, "Again?");
         let id = format!("a-a1-q{k}");
-        wait_until(&format!("ask to open {id}"), || query::<i64>(&env, &format!("SELECT count(*) FROM escalations WHERE id = '{id}'")) != 0);
+        wait_until(&format!("ask to open {id}"), || env.query::<i64>(&format!("SELECT count(*) FROM escalations WHERE id = '{id}'")) != 0);
         env.cpd(&["answer", &id, "Yes.", "--plan", "pl"]).ok();
         assert_eq!(finish(child).ok()["escalation"], id.as_str());
     }
@@ -218,7 +214,7 @@ fn ask_refuses_an_attempt_that_is_not_running() {
     fixture(&env, "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'a-a1';");
     refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "attempt_not_running", 3);
     // Nothing was written.
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM escalations"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM escalations"), 0);
     assert!(events(&env, "escalation").is_empty());
 }
 
@@ -235,7 +231,7 @@ fn ask_refusals_before_the_attempt() {
     // A stopped Worker Session cannot become blocked (§3.6): nothing is written.
     fixture(&env, "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';");
     refused(&env.cpd(&["ask", "a-a1", "Q?", "--plan", "pl"]), "illegal_transition", 3);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM escalations"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM escalations"), 0);
 }
 
 #[test]
@@ -289,7 +285,7 @@ fn answer_is_refused_unless_the_escalation_is_open() {
     env.cpd(&["answer", "a-a1-q1", "First.", "--plan", "pl"]).ok();
     let events_before = events(&env, "escalation-answered").len();
     refused(&env.cpd(&["answer", "a-a1-q1", "Second.", "--plan", "pl"]), "escalation_answered", 3);
-    assert_eq!(query::<String>(&env, "SELECT answer FROM escalations WHERE id = 'a-a1-q1'"), "First.");
+    assert_eq!(env.query::<String>("SELECT answer FROM escalations WHERE id = 'a-a1-q1'"), "First.");
     assert_eq!(events(&env, "escalation-answered").len(), events_before);
 
     fixture(
@@ -310,5 +306,5 @@ fn answer_refusals_before_the_escalation() {
     refused(&env.cpd(&["answer", "a-a1-q1", "A."]), "plan_required", 2);
     refused(&env.cpd(&["answer", "q1", "A.", "--plan", "pl"]), "invalid_escalation_id", 2);
     refused(&env.cpd(&["answer", "a-a1-q1", "", "--plan", "pl"]), "usage", 2);
-    assert_eq!(query::<String>(&env, "SELECT status FROM escalations WHERE id = 'a-a1-q1'"), "open");
+    assert_eq!(env.query::<String>("SELECT status FROM escalations WHERE id = 'a-a1-q1'"), "open");
 }

@@ -116,10 +116,6 @@ impl Fx {
         self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     /// A Job of PR `repo` as the engine leaves it in `status` (no Attempt; a made-up fingerprint).
     fn insert_job(&self, key: &str, status: &str) {
         let (columns, values) = match status {
@@ -242,8 +238,8 @@ fn a_review_job_needs_every_existing_job_of_its_pr_that_is_not_cancelled() {
     let shown = fx.env.cpd(&["plan", "show", "--plan", PLAN]).ok()["jobs"].clone();
     let flag = |k: &str| shown.as_array().unwrap().iter().find(|j| j["key"] == k).unwrap()["review"].clone();
     assert_eq!((flag("final"), flag("api")), (json!(true), json!(false)));
-    assert_eq!(fx.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'final'"), 1);
-    assert_eq!(fx.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'api'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'final'"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'api'"), 0);
     let events = fx.env.cpd(&["events", "list", "--kind", "job-added", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
     let added = events.iter().find(|e| e["job"] == "final").expect("job-added");
     assert_eq!(added["data"]["review"], true);
@@ -265,12 +261,12 @@ fn a_job_added_later_does_not_become_a_dependency_of_the_review_job() {
 fn a_review_add_is_idempotent_until_another_job_is_added() {
     let fx = fx();
     fx.add("final", &["--review"]).ok();
-    let before: i64 = fx.query("SELECT count(*) FROM txns");
+    let before: i64 = fx.env.query("SELECT count(*) FROM txns");
 
     let again = fx.add("final", &["--review"]).ok();
 
     assert_eq!(again["already"], true);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), before, "a rerun writes nothing");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), before, "a rerun writes nothing");
     fx.add("fix", &[]).ok();
     refused(&fx.add("final", &["--review"]), "job_key_exists", 3);
     // The same key without --review is another Job.
@@ -286,7 +282,7 @@ fn a_review_job_takes_no_needs_and_refuses_a_failed_job_of_its_pr() {
     fx.insert_job("broken", "failed");
     let error = refused(&fx.add("final", &["--review"]), "needs_unavailable", 3);
     assert_eq!(error["details"]["jobs"], json!(["broken"]));
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE key = 'final'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE key = 'final'"), 0);
 }
 
 // ---------- the Worker ----------
@@ -407,7 +403,7 @@ fn the_worker_starts_only_once_the_lead_is_idle() {
     // Still waiting: `starting`, no Worker, no Session, nothing forked.
     assert_eq!(fx.attempt("final-a1")["status"], "starting");
     assert!(fx.env.calls("pi").is_empty());
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM sessions WHERE role = 'worker'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions WHERE role = 'worker'"), 0);
 
     fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");
     let attempt = fx.wait_end("final-a1", &out["pid"]);

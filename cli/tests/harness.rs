@@ -245,7 +245,7 @@ fn executables_are_written_and_copied_only_through_the_harness() {
 
 #[test]
 fn the_shared_helpers_are_defined_only_in_the_harness() {
-    // One wait policy, one refusal check, one fixture writer (tests-build-G2, commands-G4): a file
+    // One wait policy, one refusal check, one fixture writer, one store query (tests-build-G2, commands-G4): a file
     // that needs another shape calls the harness's and wraps it, it does not copy it.
     let found = test_lines_with(&[
         "fn wait_until(",
@@ -254,8 +254,9 @@ fn the_shared_helpers_are_defined_only_in_the_harness() {
         "fn sql(&self",
         "fn sql(env: &TestEnv",
         "fn sql(store: &mut Store",
+        "fn query<T",
     ]);
-    assert!(found.is_empty(), "use common::wait_until, wait_until_for, refused and sql:\n{}", found.join("\n"));
+    assert!(found.is_empty(), "use common::wait_until, wait_until_for, refused, sql and TestEnv::query:\n{}", found.join("\n"));
 }
 
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
@@ -472,4 +473,22 @@ fn sql_writes_the_envs_store() {
     env.cpd(&["context", "new", "c1", "--title", "Before"]).ok();
     env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
+}
+
+#[test]
+fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
+    let a = TestEnv::new();
+    let b = TestEnv::new();
+    for env in [&a, &b] {
+        let store = env.store();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    }
+    a.write_tmux_config("");
+    b.write_tmux_config("");
+    a.cpd(&["context", "new", "c1", "--title", "Only in a"]).ok();
+    assert_eq!(a.cpd(&["context", "list"]).ok()["contexts"].as_array().unwrap().len(), 1);
+    assert_eq!(b.cpd(&["context", "list"]).ok()["contexts"], serde_json::json!([]));
+
+    let empty = TestEnv::empty();
+    assert_eq!(std::fs::read_dir(empty.cpd_home()).unwrap().count(), 0, "an empty env's CPD_HOME is empty");
 }

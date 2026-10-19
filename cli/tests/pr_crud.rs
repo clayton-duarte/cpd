@@ -47,10 +47,6 @@ impl Fx {
         Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     /// `cpd pr <args> --plan pay-1`.
     fn pr(&self, args: &[&str]) -> Run {
         let mut all = vec!["pr"];
@@ -78,7 +74,7 @@ impl Fx {
 
     /// The counts of `txns` and `events`: unchanged by a refusal and by an `already`.
     fn writes(&self) -> (i64, i64) {
-        (self.query("SELECT count(*) FROM txns"), self.query("SELECT count(*) FROM events"))
+        (self.env.query("SELECT count(*) FROM txns"), self.env.query("SELECT count(*) FROM events"))
     }
 
     fn events(&self, kind: &str) -> Vec<Value> {
@@ -91,7 +87,7 @@ impl Fx {
     }
 
     fn needs(&self, pr: &str) -> String {
-        self.query(&format!("SELECT coalesce(group_concat(needs), '') FROM (SELECT needs FROM pr_needs WHERE pr = '{pr}' ORDER BY needs)"))
+        self.env.query(&format!("SELECT coalesce(group_concat(needs), '') FROM (SELECT needs FROM pr_needs WHERE pr = '{pr}' ORDER BY needs)"))
     }
 
     /// [`common::refused`], and nothing written.
@@ -310,9 +306,9 @@ fn add_moves_the_legacy_lead_branch_of_a_merged_pr() {
     assert_eq!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "", "gone on origin");
     assert_eq!(fx.env.git(&lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay-1/old", "the worktree follows");
     let branches: Vec<String> =
-        fx.query::<String>("SELECT group_concat(key || '=' || lead_branch) FROM (SELECT * FROM prs ORDER BY key)").split(',').map(str::to_owned).collect();
+        fx.env.query::<String>("SELECT group_concat(key || '=' || lead_branch) FROM (SELECT * FROM prs ORDER BY key)").split(',').map(str::to_owned).collect();
     assert_eq!(branches, ["fix=cpd/pay-1/fix", "old=cpd/pay-1/old"]);
-    assert_eq!(fx.query::<String>("SELECT phase FROM plans"), "dispatch");
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans"), "dispatch");
 
     // A second PR finds nothing to move.
     fx.add("more", &fx.pay, &[]).ok();
@@ -327,7 +323,7 @@ fn add_completes_a_legacy_move_that_stopped_after_the_rename() {
     fx.add("fix", &fx.pay, &[]).ok();
     assert_eq!(fx.env.git(&origin, &["branch", "--list", "cpd/pay-1*"]), "");
     assert_eq!(fx.env.git(&fx.pay, &["rev-parse", "refs/heads/cpd/pay-1/old"]), sha);
-    assert_eq!(fx.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1/old");
+    assert_eq!(fx.env.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1/old");
 }
 
 #[test]
@@ -340,8 +336,8 @@ fn add_refuses_push_failed_when_origin_will_not_delete_and_writes_nothing() {
     assert_eq!(error["details"]["branch"], "cpd/pay-1");
     assert_eq!(error["details"]["repo"], fx.pay.display().to_string());
     assert!(error["details"]["stderr"].as_str().is_some_and(|s| s.contains("no")), "{error}");
-    assert_eq!(fx.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1");
-    assert_eq!(fx.query::<String>("SELECT phase FROM plans"), "done");
+    assert_eq!(fx.env.query::<String>("SELECT lead_branch FROM prs WHERE key = 'old'"), "cpd/pay-1");
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans"), "done");
 }
 
 #[test]
@@ -487,7 +483,7 @@ fn cancel_removes_the_pr_and_keeps_its_key() {
     let out = fx.pr(&["cancel", "web"]).ok();
     assert_eq!(out["pr"], json!({"key": "web", "status": "cancelled"}));
     assert!(out.get("already").is_none());
-    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "cancelled");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "cancelled");
     let cancelled = fx.events("pr-cancelled");
     assert_eq!(cancelled.len(), 1);
     assert_eq!((cancelled[0]["plan"].clone(), cancelled[0]["data"].clone()), (json!("pay-1"), json!({"pr": "web"})));
@@ -518,7 +514,7 @@ fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
     assert_eq!((error["details"]["jobs"].clone(), error["details"]["prs"].clone()), (json!([]), json!(["web"])));
     fx.pr(&["edit", "web", "--no-needs"]).ok();
     fx.pr(&["cancel", "api"]).ok();
-    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "cancelled");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "cancelled");
 }
 
 // ---------- the plan fingerprint ----------

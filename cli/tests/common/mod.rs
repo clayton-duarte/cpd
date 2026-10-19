@@ -5,9 +5,10 @@
 //! - `$CPD_HOME` and `$HOME` there, never the real `~/.cpd` or home;
 //! - a private tmux server: its own `TMUX_TMPDIR` and socket name, killed on drop,
 //!   so the cockpit server `-L cpd` is never touched;
-//! - a teardown (`teardown.sh`, run by `Drop` and by a detached reaper when the test
-//!   process is killed) that kills the tmux server and every process whose command
-//!   line or cwd is under the directory, then removes the directory;
+//! - a teardown that kills the tmux server and every process whose command line or cwd
+//!   is under the directory, then removes the directory: run in-process by `Drop`
+//!   ([`TestEnv::teardown`]), and by a detached reaper (`teardown.sh`) when the test
+//!   process is killed;
 //! - a `bin/` directory first on `PATH`, for fake `pi` and `gh` scripts that
 //!   record their calls; `gh`, `pi`, `curl`, `wget` and `ssh` start as shims that
 //!   exit 97 (`no fake installed for <name>`), and no `GH_*`, `GITHUB_*`, `SSH_*`
@@ -29,7 +30,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{PoisonError, RwLock};
+use std::os::unix::process::CommandExt;
+use std::sync::{Mutex, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -37,6 +39,8 @@ use cpd::cli::Cli;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
+use nix::sys::signal::{Signal, kill, killpg};
+use nix::unistd::Pid;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -46,11 +50,12 @@ pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 /// The longest any fake sleeps, so the leftovers of a killed test run end by themselves.
 pub const SLEEP_SECONDS: u64 = 120;
 
-/// The teardown script: `sh teardown.sh` tears the env down and removes its directory;
-/// `sh teardown.sh watch <pid>` (the reaper) waits until `<pid>` is gone or the directory
-/// is, and then tears down if the directory is still there. `dir` and `socket` are
-/// prepended by [`TestEnv::new`]. Never kills the script itself, its ancestors or its
-/// descendants. Linux only (`/proc`). Idempotent.
+/// The reaper's teardown script: `sh teardown.sh watch <pid>` waits until `<pid>` (the test
+/// process) is gone or the directory is, and then tears down if the directory is still there;
+/// `sh teardown.sh` tears down at once. The same teardown as [`TestEnv::teardown`], which
+/// `Drop` runs in-process (no process to start, one `/proc` scan): this one runs only when
+/// the test process was killed. `dir` and `socket` are prepended by [`TestEnv::new`]. Never
+/// kills the script itself, its ancestors or its descendants. Linux only (`/proc`). Idempotent.
 const TEARDOWN_SH: &str = r#"
 me=$$
 
@@ -293,6 +298,11 @@ pub fn sql(store: &mut Store, text: &str) {
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
+    /// The reaper ([`TestEnv::start_reaper`]), until the teardown stops it.
+    reaper: Mutex<Option<Child>>,
+    /// When the reaper started, in clock ticks since boot (`/proc/<pid>/stat` field 22): every
+    /// process this env starts starts at or after it.
+    since: OnceLock<u64>,
 }
 
 /// The result of one `cpd` run.
@@ -332,10 +342,20 @@ impl Run {
 }
 
 impl TestEnv {
+    /// A new env whose `$CPD_HOME` already has a store: a copy of [`store_template`], so the
+    /// first command opens it instead of creating and migrating one (~0.2 s). A test of what
+    /// happens before the store exists uses [`TestEnv::empty`].
     pub fn new() -> TestEnv {
+        let env = TestEnv::empty();
+        fs::copy(store_template(), env.cpd_home().join("cpd.db")).expect("copy the store template");
+        env
+    }
+
+    /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
+    pub fn empty() -> TestEnv {
         let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir().expect("temp dir");
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
-        let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()) };
+        let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None), since: OnceLock::new() };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -362,28 +382,59 @@ impl TestEnv {
         self.root().join("teardown.sh")
     }
 
-    /// Starts the reaper: a detached (`setsid`, stdio on /dev/null) `teardown.sh watch`
-    /// that runs the teardown once this test process is gone, so a killed test leaves nothing
-    /// behind. It exits by itself when the directory is gone (a normal drop).
+    /// Starts the reaper: `teardown.sh watch`, detached (a session of its own, stdio on
+    /// /dev/null), that runs the teardown once this test process is gone, so a killed test
+    /// leaves nothing behind. It is a child of the test process, so [`TestEnv::teardown`]
+    /// knows its pid and stops it first: it is never one of the processes the teardown
+    /// searches for and waits out.
     fn start_reaper(&self) {
-        let status = run_quietly(
-            Command::new("sh")
-                .arg("-c")
-                .arg(r#"setsid sh "$0" watch "$1" </dev/null >/dev/null 2>&1 &"#)
-                .arg(self.teardown_script())
-                .arg(std::process::id().to_string())
-                .current_dir("/"),
-        )
-        .expect("start the reaper");
-        assert!(status.success(), "the reaper did not start: {status}");
+        let mut cmd = Command::new("sh");
+        cmd.arg(self.teardown_script())
+            .arg("watch")
+            .arg(std::process::id().to_string())
+            .current_dir("/")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: setsid(2) is async-signal-safe, and nothing else runs between fork and exec.
+        unsafe {
+            cmd.pre_exec(|| nix::unistd::setsid().map(drop).map_err(io::Error::from));
+        }
+        let reaper = spawn(&mut cmd).expect("start the reaper");
+        let since = start_ticks(Pid::from_raw(reaper.id() as i32)).expect("the reaper's start time");
+        self.since.set(since).expect("one reaper per env");
+        *self.reaper.lock().unwrap_or_else(PoisonError::into_inner) = Some(reaper);
     }
 
-    /// Kills this env's tmux server, then every process whose command line or cwd is
-    /// under its directory (SIGTERM, SIGKILL after a short grace; never the test process
-    /// or its ancestors), then removes the directory. Idempotent; also what the reaper runs.
+    /// Stops the reaper, kills this env's tmux server, then every process started since the env
+    /// whose command line or cwd is under its directory (SIGTERM, SIGKILL after a grace of up to
+    /// 1 s; never the test process or its ancestors), then removes the directory. Idempotent.
+    /// In-process: the reaper's `teardown.sh` does the same when the test process was killed.
     pub fn teardown(&self) {
-        if self.teardown_script().exists() {
-            let _ = run_quietly(Command::new("sh").arg(self.teardown_script()).current_dir("/"));
+        if let Some(mut reaper) = self.reaper.lock().unwrap_or_else(PoisonError::into_inner).take() {
+            // Its session is its process group: the shell and its `sleep`.
+            let _ = killpg(Pid::from_raw(reaper.id() as i32), Signal::SIGKILL);
+            let _ = reaper.wait();
+        }
+        let socket = self.root().join("tmux").join(format!("tmux-{}", uid())).join(&self.tmux_socket);
+        if socket.exists() {
+            let _ = run_quietly(self.command("tmux").arg("-L").arg(&self.tmux_socket).arg("kill-server").current_dir("/"));
+        }
+        for _ in 0..5 {
+            let pids = processes_under(self.root(), self.since.get().copied().unwrap_or(0));
+            if pids.is_empty() {
+                break;
+            }
+            for &pid in &pids {
+                let _ = kill(pid, Signal::SIGTERM);
+            }
+            let grace = Instant::now() + Duration::from_secs(1);
+            while pids.iter().any(|&pid| alive(pid)) && Instant::now() < grace {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            for &pid in &pids {
+                let _ = kill(pid, Signal::SIGKILL);
+            }
         }
         let _ = fs::remove_dir_all(self.root());
     }
@@ -452,6 +503,22 @@ impl TestEnv {
     /// The store of this env's `$CPD_HOME`, opened (migrated) now.
     pub fn store(&self) -> Store {
         Store::open(&CpdHome::resolve(Some(self.cpd_home().into()), None).unwrap(), 5000).unwrap()
+    }
+
+    /// `f` on a read-only connection to this env's store, for a test that only looks: no
+    /// [`Store::open`] (its migration and schema check cost ~30 ms per open in a debug build).
+    /// Panics when the store does not exist or `f` fails.
+    pub fn read<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> T {
+        let db = self.cpd_home().join("cpd.db");
+        let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
+        conn.busy_timeout(Duration::from_secs(5)).expect("set the busy timeout");
+        f(&conn).unwrap_or_else(|e| panic!("read {}: {e}", db.display()))
+    }
+
+    /// The first column of the one row `sql` returns, read with [`TestEnv::read`].
+    pub fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
+        self.read(|conn| conn.query_row(sql, [], |r| r.get(0)))
     }
 
     /// Runs `sql` as a write of this env's store (a fixture).
@@ -630,6 +697,86 @@ impl Drop for TestEnv {
         // Kills the tmux server, the env's processes and removes its directory.
         self.teardown();
     }
+}
+
+/// A store as `cpd` creates it in an empty `$CPD_HOME` (migrated, checkpointed, no WAL), made
+/// once per build of `cpd` and shared by the test processes: a file under Cargo's
+/// `CARGO_TARGET_TMPDIR` named after the binary's size and modification time. A process that
+/// finds none makes one in an [`TestEnv::empty`] env with the real binary and renames it into
+/// place (atomic: concurrent makers each write a whole one).
+fn store_template() -> &'static Path {
+    static TEMPLATE: OnceLock<PathBuf> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        use std::os::unix::fs::MetadataExt;
+        let binary = fs::metadata(CPD).expect("stat the cpd binary");
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+        let path = dir.join(format!("cpd-store-{}-{}.{}.db", binary.len(), binary.mtime(), binary.mtime_nsec()));
+        if path.exists() {
+            return path;
+        }
+        let env = TestEnv::empty();
+        env.write_config("version = 1\nmachine = \"m1\"\n");
+        env.cpd(&["events", "list"]).ok();
+        let db = env.cpd_home().join("cpd.db");
+        assert!(!env.cpd_home().join("cpd.db-wal").exists(), "cpd left a WAL beside the template store");
+        let partial = dir.join(format!("cpd-store-{}.partial", std::process::id()));
+        fs::copy(&db, &partial).expect("copy the new store");
+        fs::rename(&partial, &path).expect("put the store template in place");
+        path
+    })
+}
+
+/// This process's user id: the owner of `/proc/self`.
+fn uid() -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata("/proc/self").expect("stat /proc/self").uid()
+}
+
+/// Whether `pid` is running (a zombie is dead; a pid with no `/proc` entry is gone).
+fn alive(pid: Pid) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat"))
+        .is_ok_and(|s| s.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z') && !rest.starts_with('X')))
+}
+
+/// When `pid` started, in clock ticks since boot (`/proc/<pid>/stat` field 22); `None` when it is gone.
+fn start_ticks(pid: Pid) -> Option<u64> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(") ")?.1.split(' ').nth(19)?.parse().ok()
+}
+
+/// The live processes of this user that started at or after `since` (clock ticks since boot)
+/// and whose command line contains `dir` or whose cwd is under it, but the test process and its
+/// ancestors: one pass over `/proc`, in this process (the teardown's search). Processes of other
+/// users are skipped (they cannot be signalled), and so are the older ones without reading
+/// their command line: on a busy machine that read is the search's cost.
+fn processes_under(dir: &Path, since: u64) -> Vec<Pid> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let uid = uid();
+    let needle = dir.as_os_str().as_bytes();
+    let mut protected = vec![nix::unistd::getpid()];
+    let mut parent = nix::unistd::getppid();
+    while parent.as_raw() > 1 && !protected.contains(&parent) {
+        protected.push(parent);
+        let Ok(stat) = fs::read_to_string(format!("/proc/{parent}/stat")) else { break };
+        let Some(ppid) = stat.rsplit_once(") ").and_then(|(_, rest)| rest.split(' ').nth(1)?.parse().ok()) else { break };
+        parent = Pid::from_raw(ppid);
+    }
+    let Ok(entries) = fs::read_dir("/proc") else { return Vec::new() };
+    entries
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let pid = Pid::from_raw(e.file_name().to_str()?.parse().ok()?);
+            (pid.as_raw() > 1 && !protected.contains(&pid) && e.metadata().ok()?.uid() == uid).then_some((pid, e.path()))
+        })
+        .filter(|(pid, proc_dir)| {
+            let recent = start_ticks(*pid).is_some_and(|t| t >= since);
+            let by_cmdline = || fs::read(proc_dir.join("cmdline")).is_ok_and(|c| c.windows(needle.len()).any(|w| w == needle));
+            let by_cwd = || fs::read_link(proc_dir.join("cwd")).is_ok_and(|cwd| cwd.starts_with(dir));
+            recent && (by_cmdline() || by_cwd()) && alive(*pid)
+        })
+        .map(|(pid, _)| pid)
+        .collect()
 }
 
 fn assert_ok(program: &str, args: &[&str], out: &Output) {

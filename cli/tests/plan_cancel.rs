@@ -28,10 +28,6 @@ fn fixture(env: &TestEnv, sql: &str) {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
 }
 
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
-
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
@@ -195,17 +191,17 @@ fn finish(child: std::process::Child) -> Run {
 /// Runs `plan cancel`, and ends the running Attempt as soon as the stop request is recorded.
 fn cancel_with_engine(env: &TestEnv, extra: &[&str]) -> Run {
     let child = spawn_cancel(env, extra);
-    wait_until("the stop request", || query::<i64>(env, "SELECT count(*) FROM events WHERE kind = 'job-cancel-requested'") == 1);
+    wait_until("the stop request", || env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'job-cancel-requested'") == 1);
     engine_ends_attempts(env);
     finish(child)
 }
 
 fn job_status(env: &TestEnv, key: &str) -> String {
-    query(env, &format!("SELECT status FROM jobs WHERE key = '{key}'"))
+    env.query(&format!("SELECT status FROM jobs WHERE key = '{key}'"))
 }
 
 fn pr_status(env: &TestEnv, key: &str) -> String {
-    query(env, &format!("SELECT status FROM prs WHERE key = '{key}'"))
+    env.query(&format!("SELECT status FROM prs WHERE key = '{key}'"))
 }
 
 fn gh_closes(env: &TestEnv) -> Vec<Vec<String>> {
@@ -233,13 +229,13 @@ fn cancels_jobs_closes_open_prs_and_the_lead_and_archives_the_plan() {
     let mut cancelled: Vec<&str> = out["cancelled"].as_array().unwrap().iter().map(|k| k.as_str().unwrap()).collect();
     cancelled.sort();
     assert_eq!(cancelled, ["d", "f", "q", "r"]);
-    assert_eq!(query::<String>(&env, "SELECT cancel_reason FROM jobs WHERE key = 'q'"), "abandoned");
+    assert_eq!(env.query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'q'"), "abandoned");
     assert_eq!(events(&env, "job-cancelled").iter().filter(|e| e["data"]["reason"] == "abandoned").count(), 3);
     assert_eq!(events(&env, "job-cancel-requested").len(), 1);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM attempts WHERE status <> 'ended'"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 0);
 
     // The open Escalation expired.
-    assert_eq!(query::<String>(&env, "SELECT status FROM escalations"), "expired");
+    assert_eq!(env.query::<String>("SELECT status FROM escalations"), "expired");
     assert_eq!(events(&env, "escalation-expired")[0]["data"], json!({"escalation": "r-a1-q1", "reason": "abandoned"}));
 
     // Pull requests: the open one is closed, the merged one and the waiting PR are not touched.
@@ -258,8 +254,8 @@ fn cancels_jobs_closes_open_prs_and_the_lead_and_archives_the_plan() {
     // The Plan and its Sessions are archived: the Plan holds no port.
     assert_eq!(out["archived"][0], json!({"kind": "plan", "id": "pay"}));
     assert_eq!(out["archived"].as_array().unwrap().len(), 3);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE archived_at IS NULL"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions WHERE archived_at IS NULL"), 0);
     assert_eq!(events(&env, "plan-archived").len(), 1);
     assert_eq!(events(&env, "session-archived").len(), 2);
     assert!(out.get("already").is_none());
@@ -270,7 +266,7 @@ fn reason_defaults_to_plan_cancelled() {
     let env = TestEnv::new();
     setup(&env);
     cancel_with_engine(&env, &[]).ok();
-    assert_eq!(query::<String>(&env, "SELECT cancel_reason FROM jobs WHERE key = 'q'"), "plan cancelled");
+    assert_eq!(env.query::<String>("SELECT cancel_reason FROM jobs WHERE key = 'q'"), "plan cancelled");
 }
 
 #[test]
@@ -280,11 +276,11 @@ fn a_rerun_writes_nothing_and_calls_nothing() {
     cancel_with_engine(&env, &[]).ok();
     // The poller has read the closure since.
     fixture(&env, "UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
-    let (events_before, calls) = (query::<i64>(&env, "SELECT count(*) FROM events"), env.calls("gh").len());
+    let (events_before, calls) = (env.query::<i64>("SELECT count(*) FROM events"), env.calls("gh").len());
 
     let again = env.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
     assert_eq!(again, json!({"ok": true, "cancelled": [], "closed_prs": [], "closed": [], "archived": [], "already": true}));
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), events_before);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), events_before);
     assert_eq!(env.calls("gh").len(), calls);
 }
 
@@ -298,7 +294,7 @@ fn a_rerun_finishes_what_a_failed_run_left() {
     let error = refused(&failed, "gh_failed", 1);
     assert_eq!(error["details"]["argv"], json!(["gh", "pr", "close", "11", "--repo", "acme/api"]));
     assert_eq!(job_status(&env, "q"), "cancelled");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 0);
     assert!(has_pane(&env, &lead), "the Lead is closed after the pull requests");
 
     // gh works again: the rest is done.
@@ -329,7 +325,7 @@ fn a_failing_job_cancel_halfway_is_finished_by_a_rerun() {
     assert_eq!(first.error()["code"], "store_failed", "{first:?}");
     assert_eq!((job_status(&env, "d").as_str(), job_status(&env, "q").as_str(), job_status(&env, "f").as_str()), ("cancelled", "cancelled", "cancelled"));
     assert_eq!(events(&env, "job-cancel-requested").len(), 1, "the running Job before it has its request");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 0);
     assert!(gh_closes(&env).is_empty(), "nothing after the failure ran");
 
     // The Attempt of `x` exists now: the rerun asks for both stops, and finishes.
@@ -344,7 +340,7 @@ fn a_failing_job_cancel_halfway_is_finished_by_a_rerun() {
     let out = finish(child).ok();
     assert_eq!(out["cancelled"], json!(["x"]), "`r` was asked before");
     assert_eq!(out["archived"].as_array().unwrap().len(), 3);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
     assert_eq!(gh_closes(&env).len(), 1);
 }
 
@@ -422,11 +418,11 @@ fn a_pending_plan_review_blocks_and_nothing_is_written() {
             "f".repeat(64)
         ),
     );
-    let before = query::<i64>(&env, "SELECT count(*) FROM events");
+    let before = env.query::<i64>("SELECT count(*) FROM events");
     let error = refused(&env.cpd(&["plan", "cancel", "--plan", "pay"]), "archive_blocked", 3);
     assert_eq!(error["details"]["blockers"][0]["kind"], "review");
     assert_eq!(error["details"]["blockers"].as_array().unwrap().len(), 1, "a running Job does not block");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), before);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), before);
     assert_eq!(job_status(&env, "q"), "queued");
 }
 
@@ -436,10 +432,10 @@ fn the_lead_in_the_chat_slot_blocks_and_nothing_is_written() {
     cockpit(&env);
     let (lead, _) = setup(&env);
     env.cpd(&["session", "open", &lead]).ok();
-    let before = query::<i64>(&env, "SELECT count(*) FROM events");
+    let before = env.query::<i64>("SELECT count(*) FROM events");
     let error = refused(&env.cpd(&["plan", "cancel", "--plan", "pay"]), "in_chat_slot", 3);
     assert_eq!(error["details"]["next"], "cpd session park");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), before);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), before);
     assert_eq!(job_status(&env, "q"), "queued");
     assert!(gh_closes(&env).is_empty());
 }
@@ -451,6 +447,6 @@ fn a_gh_failure_for_a_pull_request_already_closed_is_not_a_failure() {
     // `gh pr close` fails (a merged pull request cannot be closed); `gh pr view` says it is merged.
     env.fake_gh("case \"$1 $2\" in\n\"pr close\") echo 'already merged' >&2; exit 1;;\n\"pr view\") echo '{\"state\":\"MERGED\"}';;\nesac\nexit 0");
     cancel_with_engine(&env, &[]).ok();
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
 }
 

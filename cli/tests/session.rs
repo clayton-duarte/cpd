@@ -112,10 +112,6 @@ fn exec_sql(env: &TestEnv, sql: &str) {
     store(env).write("test", |tx| exec(tx, sql)).unwrap();
 }
 
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
-
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
@@ -339,10 +335,10 @@ fn state_follows_section_3_6() {
 
     // Unchanged: nothing written, no Event.
     let before = events(&env, "session-state").len();
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     assert_eq!(state(&["blocked", "--label", "cpd: Worker question"]).ok()["already"], true);
     assert_eq!(events(&env, "session-state").len(), before);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
 
     // A new label is a change.
     assert_eq!(state(&["blocked", "--label", "cpd: plan review"]).ok()["from"], "blocked");
@@ -385,11 +381,11 @@ fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
     };
 
     // Only `idle` takes `--reply`; a refusal writes nothing.
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     for other in [&["working", "--reply"][..], &["blocked", "--label", "x", "--reply"], &["stopped", "--reply"]] {
         refused(&state(other), "usage", 2);
     }
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
 
     state(&["working"]).ok();
     state(&["idle", "--reply"]).ok();
@@ -400,10 +396,10 @@ fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
     state(&["working"]).ok();
     state(&["idle"]).ok();
     assert_eq!(events(&env, "session-state").last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null}));
-    let (events_before, txns) = (events(&env, "session-state").len(), query::<i64>(&env, "SELECT count(*) FROM txns"));
+    let (events_before, txns) = (events(&env, "session-state").len(), env.query::<i64>("SELECT count(*) FROM txns"));
     assert_eq!(state(&["idle", "--reply"]).ok()["already"], true);
     assert_eq!(events(&env, "session-state").len(), events_before);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
 }
 
 #[test]
@@ -446,7 +442,7 @@ fn fork_refusals_register_nothing() {
     // No tmux server, so no cockpit.
     let error = refused(&env.cpd(&["session", "fork", LEAD1, "--message-file", message]), "no_cockpit", 3);
     assert_eq!(error["details"]["next"], "cpd tui");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), 4);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions"), 4);
 }
 
 #[test]
@@ -970,7 +966,7 @@ fn close_refusals_and_nothing_to_close() {
     // A pane that is gone, with E2 not having recorded it: nothing is written.
     exec_sql(&env, "UPDATE sessions SET tmux_pane = '%99' WHERE id = 'lead2'");
     assert_eq!(env.cpd(&["session", "close", LEAD2]).ok()["already"], true);
-    assert_eq!(query::<String>(&env, "SELECT tmux_pane FROM sessions WHERE id = 'lead2'"), "%99");
+    assert_eq!(env.query::<String>("SELECT tmux_pane FROM sessions WHERE id = 'lead2'"), "%99");
     assert_eq!(events(&env, "session-moved").len(), 0);
     assert_eq!(events(&env, "session-state").len(), 0);
 }
@@ -1249,7 +1245,7 @@ fn open_and_fork_of_an_archived_session_are_refused_before_any_tmux() {
         let error = refused(&env.cpd(&args), "archived", 3);
         assert_eq!(error["details"]["next"], "cpd session unarchive lead2");
     }
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), 4);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions"), 4);
     assert_eq!(events(&env, "session-registered").len(), 1);
 }
 
@@ -1607,7 +1603,7 @@ fn quitting_pi_archives_a_side_fork_and_closes_its_pane() {
     for other in [LEAD1, LEAD2, "side2"] {
         assert!(!session_archived(&env, other), "{other}");
     }
-    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
 }
 
 #[test]
@@ -1621,12 +1617,12 @@ fn quitting_a_plan_s_own_lead_archives_the_plan_with_its_fork() {
     wait_until("the archive", || session_archived(&env, LEAD2));
     wait_until("both panes to go", || !pane_exists(&env, &lead) && !pane_exists(&env, &fork));
     assert!(session_archived(&env, "side2"));
-    assert!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'other'").is_some());
+    assert!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'other'").is_some());
     assert_eq!(events(&env, "plan-archived").len(), 1);
     assert_eq!(events(&env, "session-archived").len(), 2);
     // Another Plan is untouched.
     assert!(!session_archived(&env, LEAD1));
-    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
 }
 
 #[test]
@@ -1679,7 +1675,7 @@ fn a_refused_archive_prints_the_refusal_and_offers_the_resume_in_place() {
     assert!(shown.contains("Job api of Plan pay is running."), "{shown}");
     // Nothing was archived, and the Lead was not parked.
     assert!(!session_archived(&env, LEAD1));
-    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
     assert_eq!(events(&env, "session-archived").len() + events(&env, "plan-archived").len(), 0);
     assert_eq!((slot(&env).pane, slot(&env).session), (pane, LEAD1.to_owned()));
 }

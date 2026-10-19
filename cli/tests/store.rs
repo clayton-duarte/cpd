@@ -101,7 +101,7 @@ fn names(conn: &Connection, sql: &str) -> BTreeSet<String> {
 
 #[test]
 fn a_new_database_is_wal_with_cpds_application_id() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let store = open(&env);
     assert_eq!(store.path(), env.cpd_home().join("cpd.db"));
     assert!(store.schema_mismatch().is_none());
@@ -155,7 +155,7 @@ fn a_file_that_is_not_a_database_is_store_failed() {
 
 #[test]
 fn a_foreign_application_id_is_refused_and_never_written() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let conn = Connection::open(home(&env).db()).unwrap();
     conn.pragma_update(None, "application_id", 42).unwrap();
     drop(conn);
@@ -918,7 +918,7 @@ fn only_the_live_sessions_are_in_sessions_live() {
 
 #[test]
 fn migrating_an_empty_file_creates_the_schema_once() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     fs::write(home(&env).db(), b"").unwrap();
     let store = open(&env);
     assert!(store.schema_mismatch().is_none());
@@ -942,7 +942,7 @@ fn migrating_an_empty_file_creates_the_schema_once() {
 
 #[test]
 fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its_schema_hash() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
@@ -976,7 +976,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
 
 #[test]
 fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let mut store = fixture_store(&env);
     let columns: i64 = store
         .read(|c| Ok(c.query_row("SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')", [], |r| r.get(0))?))
@@ -1023,7 +1023,7 @@ fn a_newer_schema_is_store_too_new() {
 
 #[test]
 fn a_failed_migration_rolls_back_entirely() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     // A database whose migration 1 cannot apply: a table `history` already exists.
     raw(&env).execute_batch("CREATE TABLE history (x)").unwrap();
     let err = Store::open(&home(&env), 5000).err().unwrap();
@@ -1041,7 +1041,7 @@ fn a_failed_migration_rolls_back_entirely() {
 
 #[test]
 fn a_migration_whose_schema_differs_from_the_expected_hash_rolls_back() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     // Every migration applies, but the schema it leaves is not the one the binary
     // describes: an object the migrations do not know stays in `sqlite_schema`.
     raw(&env).execute_batch("CREATE TABLE stray (x)").unwrap();
@@ -1097,7 +1097,7 @@ fn pragmas(store: &mut Store) -> (i64, i64) {
 
 #[test]
 fn foreign_keys_are_on_and_legacy_alter_table_off_after_the_migrating_open() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let mut store = open(&env);
     assert_eq!(pragmas(&mut store), (1, 0));
 }
@@ -1129,7 +1129,7 @@ fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
 
 #[test]
 fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_runner() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let mut store = open(&env);
     let rows: Vec<(String, String, i64, i64)> = store
         .read(|c| {
@@ -1506,7 +1506,7 @@ fn only_busy_and_locked_are_transient() {
 
 #[test]
 fn processes_opening_a_new_database_at_once_migrate_it_once() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let writers: Vec<Writer> = (0..4).map(|i| Writer::spawn(&env, &format!("w{i}"), 20_000, 0, None)).collect();
     let mut ids: Vec<u64> = writers
         .into_iter()
@@ -1528,7 +1528,7 @@ fn processes_opening_a_new_database_at_once_migrate_it_once() {
 
 #[test]
 fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let out = env.cpd(&["--version"]).ok();
     assert!(out["store"].is_null(), "{out}");
     assert_eq!(out["protocol"], 4, "{out}");
@@ -1568,7 +1568,7 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
         (13, &["0014-register"][..]),
         (14, &[][..]),
     ] {
-        let env = TestEnv::new();
+        let env = TestEnv::empty();
         // `--version` reads only `user_version` of a legacy store: it never converts.
         raw(&env).pragma_update(None, "user_version", version).unwrap();
         let before = fs::read(home(&env).db()).unwrap();
@@ -1578,7 +1578,7 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
         assert_eq!(fs::read(home(&env).db()).unwrap(), before, "version {version}");
     }
     // 15 is no legacy version: a numbered migration this binary lacks.
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     raw(&env).pragma_update(None, "user_version", 15).unwrap();
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
@@ -1623,7 +1623,7 @@ fn version_refuses_a_store_whose_floor_it_lacks() {
 #[test]
 fn a_held_setup_lock_gives_lock_timeout_after_store_busy_ms() {
     use nix::fcntl::{Flock, FlockArg};
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let h = home(&env);
     fs::create_dir_all(h.locks_dir()).unwrap();
     let path = h.locks_dir().join("store.lock");

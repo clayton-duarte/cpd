@@ -8,17 +8,7 @@ mod common;
 use std::fs;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, refused, wait_until};
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::{Value, json};
-
-fn store(env: &TestEnv) -> Store {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
@@ -228,14 +218,14 @@ fn a_second_call_changes_nothing() {
     let id = first["manager"]["session"].as_str().unwrap().to_owned();
     pi_envs(&env, &id, 1);
     let slot_before = slot(&env);
-    let events_before: i64 = query(&env, "SELECT count(*) FROM events");
+    let events_before: i64 = env.query("SELECT count(*) FROM events");
     let panes_before = panes(&env);
 
     let second = env.cpd(&["context", "manager", "--context", "ctx"]).ok();
     assert_eq!(second["started"], false);
     assert_eq!(second["manager"], first["manager"]);
     assert_eq!(manager_ids(&env), [id]);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), events_before);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), events_before);
     assert_eq!(panes(&env), panes_before);
     assert_eq!(slot(&env), slot_before);
     assert_eq!(env.calls("pi").len(), 1);
