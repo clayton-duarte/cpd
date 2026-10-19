@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cpd_core::home::CpdHome;
 use cpd_core::host::git_guard::{self, NO_GIT, REFUSAL};
@@ -12,18 +13,24 @@ use cpd_core::host::git_guard::{self, NO_GIT, REFUSAL};
 mod common;
 use common::{output, write_executable};
 
+/// `install` writes a file while another test may spawn a child that inherits the open
+/// descriptor, and then executing the file fails with ETXTBSY (see `common::write_executable`):
+/// so the tests of this file run one at a time.
+static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
 struct Wrapper {
+    _one: MutexGuard<'static, ()>,
     _tmp: tempfile::TempDir,
     home: CpdHome,
 }
 
 impl Wrapper {
     fn new() -> Wrapper {
+        let one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
         let tmp = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(tmp.path().join("cpd-home").into()), None).unwrap();
-        // `install` is not under test's lock: write through it before any test spawns.
         git_guard::install(&home).unwrap();
-        Wrapper { _tmp: tmp, home }
+        Wrapper { _one: one, _tmp: tmp, home }
     }
 
     fn bin(&self) -> PathBuf {
