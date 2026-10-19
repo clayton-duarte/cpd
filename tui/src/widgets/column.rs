@@ -72,7 +72,8 @@ fn truncate(text: &str, max: usize) -> String {
 /// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󰏌` in the last column, then
 /// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󰏌`.
 /// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
-/// A conflicting one adds ` conflict` in red after the review (kept red under the active and dim styles).
+/// A conflicting one adds ` conflict` after the review (the colour is kept under the active and dim styles). A pull request
+/// a Plan owns draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them, hs-d302); one no Plan owns, in red.
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
 fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
@@ -83,7 +84,8 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
         ReviewDecision::ChangesRequested => "changes requested",
         ReviewDecision::None => "no review",
     };
-    let (icon, checks) = palette::checks(pr.checks);
+    let owned = pr.lead.is_some();
+    let (icon, checks) = palette::checks_of(pr.checks, owned);
     let conflict = " conflict";
     let used = 2 + state_text.chars().count() + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
     let mut spans = vec![
@@ -95,7 +97,8 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
         review.into(),
     ];
     if pr.conflicting {
-        spans.push(Span::styled(conflict, palette::fg(Meaning::Failed)));
+        let (_, meaning) = if owned { palette::PR_CONFLICT_OWNED } else { palette::PR_CONFLICT };
+        spans.push(Span::styled(conflict, palette::fg(meaning)));
     }
     let reserved = if pr.clean { 2 } else { 0 };
     let room = width.saturating_sub(used + 2 + reserved);
@@ -422,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_pr_shows_conflict_in_red_after_its_review_and_others_do_not() {
+    fn an_owned_conflicting_pr_shows_conflict_in_the_waiting_colour_after_its_review_and_others_do_not() {
         let mut p = pr(7, Some("l-a"));
         assert_eq!(second_line(&p, 40).0, format!("  open {} no review  A title", palette::CHECKS_PASSED));
         p.conflicting = true;
@@ -430,20 +433,44 @@ mod tests {
         assert_eq!(line, format!("  open {} no review conflict  A title", palette::CHECKS_PASSED));
         let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
         for dx in 0..8 {
-            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed));
+            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Waiting), "its Lead fixes it: waiting, not red");
         }
-        assert_ne!(buf[(x - 2, 7)].fg, palette::color(Meaning::Failed), "the review is not red");
+        assert_ne!(buf[(x - 2, 7)].fg, palette::color(Meaning::Waiting), "the review is not waiting");
     }
 
     #[test]
-    fn conflict_keeps_its_red_under_the_active_and_dim_styles() {
-        for (active, lead, modifier) in [(true, Some("l-a"), Modifier::REVERSED | Modifier::BOLD), (false, None, Modifier::DIM)] {
+    fn an_unowned_conflicting_pr_keeps_conflict_red() {
+        let mut p = pr(7, None);
+        p.conflicting = true;
+        let (line, buf) = second_line(&p, 40);
+        let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
+        for dx in 0..8 {
+            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed), "no Plan owns it: the User's to fix");
+        }
+    }
+
+    #[test]
+    fn failed_checks_are_waiting_on_an_owned_pr_and_red_on_an_unowned_one() {
+        for (lead, meaning) in [(Some("l-a"), Meaning::Waiting), (None, Meaning::Failed)] {
+            let mut p = pr(7, lead);
+            p.checks = crate::read::Checks::Failed;
+            let (line, buf) = second_line(&p, 40);
+            let x = line.find(palette::CHECKS_FAILED).map(|b| line[..b].chars().count() as u16).unwrap();
+            assert_eq!(buf[(x, 7)].fg, palette::color(meaning), "{lead:?}");
+        }
+    }
+
+    #[test]
+    fn conflict_keeps_its_colour_under_the_active_and_dim_styles() {
+        for (active, lead, modifier, meaning) in
+            [(true, Some("l-a"), Modifier::REVERSED | Modifier::BOLD, Meaning::Waiting), (false, None, Modifier::DIM, Meaning::Failed)]
+        {
             let mut p = pr(7, lead);
             p.conflicting = true;
             p.active = active;
             let (line, buf) = second_line(&p, 40);
             let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
-            assert_eq!(buf[(x, 7)].fg, palette::color(Meaning::Failed));
+            assert_eq!(buf[(x, 7)].fg, palette::color(meaning));
             assert!(buf[(x, 7)].modifier.contains(modifier));
         }
     }

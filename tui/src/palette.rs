@@ -260,6 +260,19 @@ pub const PR_LEGEND: [(&str, PrState); 3] = [("open", PrState::Open), ("merged",
 /// meaning: the plan view's PR box title and the legend's PR states.
 pub const PR_CONFLICT: (&str, Meaning) = ("conflict", Meaning::Failed);
 
+/// What a conflicting open pull request that a cpd Plan owns reads: its Lead fixes it (hs-d302), so it is `Waiting`, not
+/// red. [`PR_CONFLICT`] is the one no Plan owns, the User's to fix.
+pub const PR_CONFLICT_OWNED: (&str, Meaning) = ("conflict", Meaning::Waiting);
+
+/// [`checks`] of a pull request that is `owned` by a Plan or not: owned failed checks are `Waiting` (the Lead fixes
+/// them, hs-d302), not red; every other value is [`checks`]'.
+pub fn checks_of(c: Checks, owned: bool) -> (&'static str, Meaning) {
+    match (c, owned) {
+        (Checks::Failed, true) => (CHECKS_FAILED, Meaning::Waiting),
+        _ => checks(c),
+    }
+}
+
 /// Icon and meaning of a PR's checks.
 pub fn checks(c: Checks) -> (&'static str, Meaning) {
     match c {
@@ -434,6 +447,12 @@ mod tests {
         }
         assert_eq!(PR_LEGEND.map(|(_, s)| s), states.map(|(s, _)| s));
         assert_eq!(PR_CONFLICT, ("conflict", pr_state(PrState::Closed)));
+        assert_eq!(PR_CONFLICT_OWNED, ("conflict", Meaning::Waiting));
+        assert_eq!(checks_of(Checks::Failed, true), (CHECKS_FAILED, Meaning::Waiting));
+        assert_eq!(checks_of(Checks::Failed, false), checks(Checks::Failed));
+        for c in [Checks::Passed, Checks::Pending, Checks::None] {
+            assert_eq!(checks_of(c, true), checks(c), "{c:?}");
+        }
         let table = [
             (Checks::Passed, CHECKS_PASSED, Meaning::Done),
             (Checks::Failed, CHECKS_FAILED, Meaning::Failed),

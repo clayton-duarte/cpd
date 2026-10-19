@@ -69,11 +69,11 @@ impl From<Urgency> for Dot {
 }
 
 /// The kinds a Plan's own Lead shows besides the ones linked to it (§17, "Which items fill which row").
-const PLAN_KINDS: [Kind; 5] = [Kind::PlanReview, Kind::JobStuck, Kind::PrFailing, Kind::PrChanges, Kind::PrReady];
+const PLAN_KINDS: [Kind; 3] = [Kind::PlanReview, Kind::JobStuck, Kind::PrReady];
 
 /// The urgency of the most urgent of the `visible` items that fill the dot of `session`: its `dialog` and `unread`
 /// items (`inbox_items.session`) and, when it is the Lead of `lead_of`, the Plan's `plan-review`, `job-stuck` and
-/// `pr-*` items (§17). `visible` is the open items that are neither snoozed nor dismissed.
+/// `pr-ready` items (§17; `pr-failing` and `pr-changes` are only for pull requests no Plan owns, hs-d302). `visible` is the open items that are neither snoozed nor dismissed.
 pub fn urgency(visible: &[Item], session: &SessionId, lead_of: Option<&PlanId>) -> Option<Urgency> {
     visible
         .iter()
@@ -173,8 +173,6 @@ mod tests {
         let kinds = [
             (Kind::PlanReview, Urgency::Magenta),
             (Kind::JobStuck, Urgency::Red),
-            (Kind::PrFailing, Urgency::Red),
-            (Kind::PrChanges, Urgency::Red),
             (Kind::PrReady, Urgency::Yellow),
         ];
         for (kind, u) in kinds {
@@ -182,6 +180,16 @@ mod tests {
             assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), Some(u), "the Lead of pp: {kind:?}");
             assert_eq!(urgency(&items, &id("s-fork"), None), None, "a fork: {kind:?}");
             assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("qq"))), None, "the Lead of another Plan: {kind:?}");
+        }
+    }
+
+    /// A Plan-owned pull request's failure reaches its Lead as `pr-feedback`, never red (hs-d302); the kinds are for
+    /// the ones no Plan owns, which belong to no Plan.
+    #[test]
+    fn pr_failing_and_pr_changes_never_fill_a_plans_lead() {
+        for kind in [Kind::PrFailing, Kind::PrChanges] {
+            let items = [item(kind, Urgency::Red, None, Some("pp"))];
+            assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), None, "{kind:?}");
         }
     }
 

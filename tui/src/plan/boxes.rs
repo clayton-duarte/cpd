@@ -75,17 +75,18 @@ fn state_text(state: PrState) -> &'static str {
     }
 }
 
-/// The word and colour of a pull request's state in a title: `conflict` (failed) for an open one that conflicts, else
+/// The word and colour of a pull request's state in a title: `conflict` (waiting: every box's pull request is one a
+/// Plan owns, so its Lead fixes it, hs-d302) for an open one that conflicts, else
 /// its state in the palette's PR state colour. The title and its link's width both use it.
 fn state_word(pull: &Pull) -> (&'static str, Meaning) {
     match pull.state {
-        PrState::Open if pull.conflicting => palette::PR_CONFLICT,
+        PrState::Open if pull.conflicting => palette::PR_CONFLICT_OWNED,
         state => (state_text(state), palette::pr_state(state)),
     }
 }
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󰏌` once the PR has
-/// a pull request, the state in the palette's PR state colour (`conflict`, failed, for an open one that conflicts), else the PR's status, dim.
+/// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts), else the PR's status, dim.
 pub fn title(pr: &PrNode) -> Line<'static> {
     let mut spans: Vec<Span<'static>> =
         vec![" ".into(), pr.key.to_string().bold(), format!(" · {} {TO} {} · ", pr.repo_name, pr.base).into()];
@@ -393,14 +394,16 @@ mod tests {
     }
 
     #[test]
-    fn an_open_pull_request_that_conflicts_reads_conflict_in_the_failed_colour() {
-        let failed = palette::fg(Meaning::Failed).fg;
+    fn an_open_pull_request_that_conflicts_reads_conflict_in_the_waiting_colour() {
+        // every box is a PR a Plan owns: its Lead fixes the conflict (hs-d302), so it is waiting, never red
+        let failed = palette::fg(Meaning::Waiting).fg;
         let mut p = pr("api", &[]);
         p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󰏌 ");
         assert_eq!(t.spans[4].style.fg, failed);
-        // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the failed colour
+        assert_ne!(t.spans[4].style.fg, palette::fg(Meaning::Failed).fg);
+        // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the waiting colour
         p.pull = Some(pull(12, PrState::Open));
         let t = title(&p);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
