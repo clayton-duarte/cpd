@@ -780,6 +780,17 @@ fn a_pull_request_is_conflicting_only_when_the_poll_saw_a_conflict() {
     }
 }
 
+#[test]
+fn an_open_pull_request_is_clean_only_when_its_merge_state_is_clean() {
+    let (_env, mut store) = fixture();
+    let clean = |store: &mut Store| read::widgets(store, 3, 0).unwrap().prs.iter().find(|p| p.number == 7).unwrap().clean;
+    assert!(!clean(&mut store), "a fresh row reads `unknown`");
+    for (merge_state, want) in [("clean", true), ("blocked", false), ("unstable", false), ("unknown", false)] {
+        sql(&mut store, &format!("UPDATE pull_requests SET merge_state = '{merge_state}' WHERE number = 7"));
+        assert_eq!(clean(&mut store), want, "{merge_state}");
+    }
+}
+
 /// A Plan as `plan new` leaves it: in grounding, with its Lead and no `prs` row (hs-n54).
 fn add_plan_without_pr(store: &mut Store) {
     let lead = session_row("l-fresh", "lead", "gamma", "fresh", None, "idle", None, "2026-01-02T00:00:09.000Z");

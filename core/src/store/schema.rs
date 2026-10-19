@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "1ee8139a5bb66c61a28ed8edf439e417ee124f183ea95cb830a1b73e6c0e979b";
+pub const SCHEMA_HASH: &str = "f72ed54c354fea63a224b0dd208d5d18e2531313b9de102f1a7f003673f2ba4a";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -2498,6 +2498,10 @@ mod tests {
                 let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
                 assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
                 assert_eq!(txns_after.len(), txns_before.len() + 1);
+                // `job-urgent` added the column `urgent`, last: every Job reads 0, the default.
+                for row in rows_before.get_mut("jobs").unwrap() {
+                    *row = format!("{},0]", row.strip_suffix(']').unwrap());
+                }
                 assert_eq!(rows_after, rows_before);
             }
 

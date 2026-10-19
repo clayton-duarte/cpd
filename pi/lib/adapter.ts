@@ -386,7 +386,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
     const rule = LEAD_MESSAGES[ev.kind];
     if (rule) {
-      pi.sendMessage(eventMessage(ev, r.id), FOLLOW_UP(rule.turn));
+      pi.sendMessage(eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
       if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation as string}`, QUESTION_LABEL)) refresh(r);
       return;
     }

@@ -413,6 +413,13 @@ export class FakePi implements PiApi {
     return out;
   }
 
+  /** A run is active and a tool call is in progress: what a busy Lead looks like to the adapter. */
+  async busy(): Promise<void> {
+    this.idle = false;
+    await this.fire("agent_start");
+    await this.fire("tool_execution_start", { toolCallId: "t1", toolName: "bash", args: {} });
+  }
+
   /** `cpd` messages delivered (not the adapter's own errors). */
   delivered(): Sent[] {
     return this.sent.filter((s) => s.message.customType === "cpd" && (s.message.details as any)?.delivered_to !== undefined);

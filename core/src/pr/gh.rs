@@ -258,6 +258,33 @@ pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
     }
 }
 
+/// `gh pr view <n> --repo <repo> --json state,mergeStateStatus,headRefOid,title`: what `pr merge` re-checks (`title` is selected, as the docs say, and not kept).
+#[derive(Debug, Deserialize)]
+pub struct MergeView {
+    /// `OPEN`, `CLOSED` or `MERGED`.
+    pub state: String,
+    /// GitHub's word: `CLEAN`, `BLOCKED`, `DIRTY`…
+    #[serde(rename = "mergeStateStatus")]
+    pub merge_state: String,
+    #[serde(rename = "headRefOid")]
+    pub head: String,
+}
+
+/// The pull request `number` of `repo`, read fresh from GitHub.
+pub fn view_for_merge(cwd: &Path, repo: &str, number: i64) -> Result<MergeView, CpdError> {
+    let n = number.to_string();
+    let args = ["pr", "view", &n, "--repo", repo, "--json", "state,mergeStateStatus,headRefOid,title"];
+    parse(&args, &run(cwd, &args)?)
+}
+
+/// `gh pr merge <number> --repo <repo> --squash --delete-branch --match-head-commit <head>`: GitHub
+/// refuses when the branch is no longer at `head`.
+pub fn merge_pr(cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
+    let n = number.to_string();
+    let args = ["pr", "merge", &n, "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", head];
+    run(cwd, &args).map(drop)
+}
+
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
 /// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.

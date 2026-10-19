@@ -9,7 +9,7 @@ export type Exec = (command: string, args: string[], options?: ExecOptions) => P
 import type { Component } from "@earendil-works/pi-tui";
 
 export type Message = { customType: string; content: string; display: boolean; details: unknown };
-export type SendOptions = { triggerTurn: boolean; deliverAs: "followUp" };
+export type SendOptions = { triggerTurn: boolean; deliverAs: "followUp" | "steer" };
 
 export type Ctx = {
   mode: string;

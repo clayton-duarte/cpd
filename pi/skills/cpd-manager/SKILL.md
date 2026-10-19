@@ -83,6 +83,7 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 - **On demand:** `cpd plan list --context <c>` for every Plan's phase, Job counts and PRs; `cpd plan show --plan <p>` for one Plan's PRs, Jobs and open Escalations.
 - **Check hs-d239 for each Plan.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up PRs, later fixes) as draft Jobs, Jobs or PRs. When something announced is missing, ask the Lead with `cpd session send <lead-session> "<text>"` to register it (`cpd job add <k> --draft --title "…"`, `cpd pr add <key> --repo <path> --needs <k>`) and to name its key.
 - A Plan's phases are grounding → plan → dispatch → deploy → done. A `job-failed` or `escalation` line is its Lead's to handle; mention it to the User only when it touches the Epic (a blocked Plan, a cut that no longer holds).
+- **Urgent Jobs.** Mark a Job urgent **only when the User explicitly asks**, usually for something that blocks all work or an incident. For a queued Job run `cpd job urgent <k> --plan <p>` instead of `cpd job dispatch`; for a new one ask its Lead to add it with `cpd job add <k> … --urgent` (`cpd session send <lead-session> "<text>"`). The engine then starts it first and may run it as one Attempt beyond `concurrency`.
 - When a Plan is done, record what outlives it and tell the User which Plans remain.
 
 ## 4. Messaging a Lead
