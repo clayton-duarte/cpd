@@ -730,6 +730,35 @@ fn a_selected_pill_opens_its_worker_beside_the_chat_and_a_second_enter_closes_it
     wait_until("the Worker pane to close", || !workers().contains("worker"));
 }
 
+/// Opening a Worker runs several tmux calls (`toggle_worker`): the view keeps following Events meanwhile (tui-W7). The
+/// `tmux` first on `PATH` takes 4 s to answer `split-window`, the call that makes the pane.
+#[test]
+fn the_chart_keeps_following_events_while_a_worker_pane_is_being_opened() {
+    let env = env();
+    sql(&env, &plan_with("dispatch", None, &[("a", "merged", "O3", &[], 1)]));
+    let (plan, _chat) = centre(&env);
+    screen_when(&env, &plan, "the chart", |s| s.len() > 2 && s[2].contains(" a "));
+    let real = std::env::var("PATH")
+        .unwrap()
+        .split(':')
+        .map(|dir| std::path::Path::new(dir).join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH");
+    env.fake("tmux", &format!(r#"case " $* " in *" split-window "*) sleep 4;; esac; exec {} "$@""#, real.display()));
+    tmux_out(&env, &["send-keys", "-t", &plan, "Right"]);
+    tmux_out(&env, &["send-keys", "-t", &plan, "Enter"]);
+    wait_until("the split-window call", || env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "split-window")));
+    let opening = Instant::now();
+    sql(
+        &env,
+        &(job_row("ship", "b", "queued", "S3")
+            + &need_row("ship", "b", "a")
+            + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
+    );
+    screen_when(&env, &plan, "Job b", |s| s.len() > 2 && s[2].contains(" b "));
+    assert!(opening.elapsed() < Duration::from_secs(3), "the chart followed at once: {:?}", opening.elapsed());
+}
+
 #[test]
 fn another_job_retargets_the_worker_pane_in_place() {
     let env = env();
