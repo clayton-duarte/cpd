@@ -379,12 +379,12 @@ mod tests {
         assert_eq!(levels(&prs), [0, 1]);
         let b = layout(&prs, &[], 0);
         snap(&b.chart, "
-┌ api · api-repo → main · merged ┐
+┌ api · api-repo 󱦰 main · merged ┐
 │ no Jobs                        │
 └───────────────┬────────────────┘
                 ╰╮
-                 ▼
-┌ web · web-repo → main · dispatch ┐
+                 󱦳
+┌ web · web-repo 󱦰 main · dispatch ┐
 │ no Jobs                          │
 └──────────────────────────────────┘");
     }
