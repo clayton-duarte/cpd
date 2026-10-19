@@ -1774,7 +1774,7 @@ fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
     env.cpd(&["plan", "review", "--plan", "pay"]).ok();
     env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     let out = lock().ok();
-    assert_eq!(out["jobs"], json!(["a", "also", "b"]));
+    assert_eq!(out["jobs"], json!(["a", "b", "also"]), "in creation order");
     assert_eq!(job_status(&env, "also"), "queued");
     assert_eq!(job_status(&env, "later"), "cancelled");
 }
