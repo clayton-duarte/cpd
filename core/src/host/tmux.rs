@@ -323,9 +323,19 @@ impl Tmux {
         }
     }
 
-    /// Whether the server is running (it has at least one session).
+    /// Whether the server is running (it has at least one session). False
+    /// only when tmux says no server runs ([`no_server`]); any other failure
+    /// is `tmux_failed` (contract §6.3 liveness, engine-W8).
     pub fn server_running(&self) -> Result<bool, CpdError> {
-        self.check(&strings(&["list-sessions", "-F", "#{session_id}"]))
+        let args = strings(&["list-sessions", "-F", "#{session_id}"]);
+        let out = self.output(&args)?;
+        if out.status.success() {
+            return Ok(true);
+        }
+        if no_server(&String::from_utf8_lossy(&out.stderr)) {
+            return Ok(false);
+        }
+        Err(self.failed(&args, &out))
     }
 
     /// `has-session -t =<name>`: an exact name match. False when no server runs.
@@ -481,15 +491,21 @@ impl Tmux {
         self.run(&strings(&["kill-window", "-t", window.as_str()])).map(drop)
     }
 
-    /// `list-panes -a`: every pane of the server; none when no server runs.
+    /// `list-panes -a`: every pane of the server; none only when tmux says no
+    /// server runs ([`Tmux::server_running`]), else `tmux_failed`.
     pub fn list_panes(&self) -> Result<Vec<Pane>, CpdError> {
         let args = strings(&["list-panes", "-a", "-F", LIST_PANES_FORMAT]);
-        let out = self.output(&args)?;
+        let mut out = self.output(&args)?;
         if !out.status.success() {
             if !self.server_running()? {
                 return Ok(Vec::new());
             }
-            return Err(self.failed(&args, &out));
+            // The server was starting (another caller's `new-session`) when the
+            // first call connected: list again, once.
+            out = self.output(&args)?;
+            if !out.status.success() {
+                return Err(self.failed(&args, &out));
+            }
         }
         let stdout = String::from_utf8_lossy(&out.stdout);
         let mut panes = Vec::new();
@@ -509,6 +525,17 @@ impl Tmux {
             .with("exit", 0)
             .with("stdout", output.to_owned())
     }
+}
+
+/// Whether a failed call's stderr is tmux saying that no server runs: its
+/// socket file is missing (`error connecting to <socket> (No such file or
+/// directory)`) or nothing listens on it (`no server running on <socket>`),
+/// as tmux 3.4 prints them.
+fn no_server(stderr: &str) -> bool {
+    stderr.lines().any(|line| {
+        line.starts_with("no server running on ")
+            || (line.starts_with("error connecting to ") && line.ends_with("(No such file or directory)"))
+    })
 }
 
 /// The arguments of [`Tmux::create_session`]'s call: `new-session -d -s <name>

@@ -1,5 +1,5 @@
 //! The `statusbar` view (commands.md §13.2, §17), the bottom row of the cockpit, on a private tmux server: the three
-//! glyph buttons at the left and `workers N/M` at the right edge, from the Attempts holding a slot and config `concurrency`.
+//! glyph buttons at the left, and at the right edge `inbox <n>` (from the Inbox's visible items) and `workers N/M` (from the Attempts holding a slot and config `concurrency`).
 //!
 //! The store is prepared through the store API (`Store::write`), as `tui_plan.rs` does; the view runs as
 //! `cpd tui view statusbar` in a pane, and its screen is read with `tmux capture-pane`.
@@ -122,4 +122,52 @@ fn an_unknown_view_is_usage_and_the_statusbar_needs_a_terminal() {
     assert_eq!((run.exit, run.error()["code"].as_str()), (2, Some("usage")), "{run:?}");
     let run = env.cpd(&["tui", "view", "statusbar"]);
     assert_eq!((run.exit, run.error()["code"].as_str()), (3, Some("not_a_terminal")), "{run:?}");
+}
+
+/// An open Inbox item of `urgency`; its `subject` and label are `name`.
+fn item(urgency: &str, name: &str) -> String {
+    format!(
+        "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at)
+         VALUES ('engine-error', '{urgency}', '{name}', '{name}', '2026-01-02T00:00:00.000Z');"
+    )
+}
+
+/// Waits until the row ends with `tail` and returns the screen's first row with its escape codes (`capture-pane -e`).
+fn styled_row_ending(env: &TestEnv, pane: &str, tail: &str) -> String {
+    row_ending(env, pane, tail);
+    tmux_out(env, &["capture-pane", "-p", "-e", "-t", pane]).lines().next().unwrap_or("").to_owned()
+}
+
+#[test]
+fn the_inbox_counts_the_visible_open_items_in_the_colour_of_the_most_urgent() {
+    let env = env();
+    sql(&env, &plan_with_attempts(&[]));
+    let pane = start_view(&env, 60);
+    // nothing open: a dim zero, with no colour (SGR 2 is dim; tmux writes colours 1 and 3 as `38;5;1`, `38;5;3`)
+    let row = styled_row_ending(&env, &pane, "inbox 0 workers 0/4");
+    assert!(row.contains("\x1b[2minbox 0\x1b[0m"), "{row:?}");
+
+    // red, yellow and white are open; a snoozed, a dismissed and a closed red one are not counted
+    sql(
+        &env,
+        &format!(
+            "{}{}{}{}{}{}
+             UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'snoozed';
+             UPDATE inbox_items SET dismissed_at = '2026-01-03T00:00:00.000Z' WHERE subject = 'dismissed';
+             UPDATE inbox_items SET closed_at = '2026-01-03T00:00:00.000Z' WHERE subject = 'closed';",
+            item("red", "red"),
+            item("yellow", "yellow"),
+            item("white", "white"),
+            item("red", "snoozed"),
+            item("red", "dismissed"),
+            item("red", "closed"),
+        ),
+    );
+    let row = styled_row_ending(&env, &pane, "inbox 3 workers 0/4");
+    assert!(row.contains("\x1b[38;5;1minbox 3"), "red: {row:?}");
+
+    // the red one is dismissed: the most urgent left is yellow
+    sql(&env, "UPDATE inbox_items SET dismissed_at = '2026-01-04T00:00:00.000Z' WHERE subject = 'red';");
+    let row = styled_row_ending(&env, &pane, "inbox 2 workers 0/4");
+    assert!(row.contains("\x1b[38;5;3minbox 2"), "yellow: {row:?}");
 }

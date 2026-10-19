@@ -386,8 +386,9 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert!(!hooks(&fx, "shared").contains("cpd/chain/a2"));
     assert_eq!(hooks(&fx, "web"), "");
     // R35 per PR branch: a1's Lead Branch is on its remote at once; the others are nowhere.
+    // Its Job may have merged and pushed meanwhile, so the remote tip holds `main`, not equals it.
     let base_a = fx.git(&fx.shared.path, &["rev-parse", "main"]);
-    assert_eq!(fx.git(&fx.shared.origin, &["rev-parse", "refs/heads/cpd/chain/a1"]), base_a);
+    fx.git(&fx.shared.origin, &["merge-base", "--is-ancestor", &base_a, "refs/heads/cpd/chain/a1"]);
     assert_eq!(fx.git(&fx.shared.path, &["branch", "--list", "cpd/chain/*"]), "+ cpd/chain/a1");
     assert_eq!(fx.git(&fx.web.path, &["branch", "--list", "cpd/chain/*"]), "");
     let events = fx.events();
@@ -396,6 +397,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let pr_started = of_kind(&events, "pr-started");
     assert_eq!(pr_started.len(), 1, "{pr_started:?}");
     assert_eq!((&pr_started[0]["data"]["pr"], &pr_started[0]["data"]["by"]), (&json!("a1"), &json!("lock")));
+    assert_eq!((&pr_started[0]["data"]["base_sha"], &pr_started[0]["data"]["pushed"]), (&json!(base_a), &json!(true)), "{pr_started:?}");
     let engine = fx.engine_pid();
 
     // ---------- 5. a1's Job merges and is pushed; all-merged names the PR (A2, A10)

@@ -9,14 +9,13 @@ use std::sync::mpsc::{self, Receiver};
 
 use serde_json::Value;
 
-/// The kinds the tree acts on: §17's list, with the Job, Attempt, Escalation and Plan review kinds that
-/// change a Plan's counters and whether it needs the User.
+/// The kinds the tree acts on: §17's list (the `inbox-*` kinds included: the Inbox says who needs the User), with
+/// the Job and Attempt kinds that change a Plan's counters.
 pub const KINDS: &[&str] = &[
     "context-created",
     "context-grounded",
     "plan-created",
     "plan-phase",
-    "plan-review",
     "plan-done",
     "job-added",
     "job-edited",
@@ -25,9 +24,6 @@ pub const KINDS: &[&str] = &[
     "job-retried",
     "job-cancelled",
     "attempt-status",
-    "escalation",
-    "escalation-answered",
-    "escalation-expired",
     "session-registered",
     "session-state",
     "session-moved",
@@ -37,6 +33,10 @@ pub const KINDS: &[&str] = &[
     "context-archived",
     "plan-archived",
     "session-archived",
+    "inbox-opened",
+    "inbox-closed",
+    "inbox-snoozed",
+    "inbox-dismissed",
 ];
 
 /// What the follower says.
@@ -109,6 +109,10 @@ mod tests {
             "context-archived",
             "plan-archived",
             "session-archived",
+            "inbox-opened",
+            "inbox-closed",
+            "inbox-snoozed",
+            "inbox-dismissed",
         ] {
             assert!(KINDS.contains(&kind), "{kind}");
         }

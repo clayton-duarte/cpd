@@ -9,3 +9,7 @@
 # test's descriptors. A test that must not overlap others goes in a test group
 # here (`[test-groups]`, `max-threads = 1`, and a `[[profile.default.overrides]]`
 # with a `filter` and `test-group`), the reason beside it.
+
+# hs-d236: a red run lists every failing test, not only the first.
+[profile.default]
+fail-fast = false

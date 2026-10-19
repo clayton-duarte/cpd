@@ -4,7 +4,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::TestEnv;
 use cpd_core::error::ErrorCode;
@@ -312,6 +312,27 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
     assert_eq!(tail.lines().next(), Some("41"));
     assert_eq!(tail.lines().last(), Some("100"));
     assert_eq!(fs::read_to_string(&h.log).unwrap().lines().count(), 100);
+}
+
+#[test]
+fn the_log_has_a_hooks_line_before_the_hook_ends() {
+    let h = hooks("pre-merge = \"echo first; sleep 3; echo last\"\n");
+    let (repo, log) = (h.repo.clone(), h.log.clone());
+    let runner = std::thread::spawn(move || {
+        let op = Operation { branch: "main" };
+        run_hook(Hook::PreMerge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while fs::read_to_string(&h.log).unwrap_or_default() != "first\n" && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let seen = fs::read_to_string(&h.log).unwrap_or_default();
+    let ended = runner.is_finished();
+    let result = runner.join().unwrap();
+    assert_eq!(seen, "first\n", "the log before the hook ended");
+    assert!(!ended, "the hook ended before the log was read");
+    assert_eq!(result.tail.as_deref(), Some("first\nlast"));
+    assert_eq!(fs::read_to_string(&h.log).unwrap(), "first\nlast\n");
 }
 
 #[test]

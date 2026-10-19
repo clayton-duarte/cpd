@@ -170,7 +170,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
 
     let mut cmd = env.command(CPD);
     let args = ["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts", "--jira", "PAY-1", "--brief-file", brief.to_str().unwrap()];
-    let out = cmd.env("PLANNOTATOR_PORT", "19432-19439").env("PLANNOTATOR_REMOTE", "1").args(args).current_dir(&home_dir).output().unwrap();
+    let out = cmd.env("PLANNOTATOR_PORT", "19432-19439").env("PLANNOTATOR_REMOTE", "0").env("PLANNOTATOR_URL_HOST", "review.test").args(args).current_dir(&home_dir).output().unwrap();
     let out = Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() }.ok();
     let session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(
@@ -201,6 +201,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
         "CPD_PLAN=pay".to_owned(),
         "PLANNOTATOR_PORT=19432-19439".to_owned(),
         "PLANNOTATOR_REMOTE=1".to_owned(),
+        "PLANNOTATOR_URL_HOST=review.test".to_owned(),
     ] {
         assert!(pane_vars.contains(&var.as_str()), "{var} not in {pane_vars:?}");
     }

@@ -20,7 +20,7 @@
 //! process (ETXTBSY, see [`write_executable`]): write scripts with
 //! [`write_executable`] and spawn only through [`spawn`] / [`output`].
 
-#![allow(dead_code)]
+#![allow(dead_code)] // Every test file compiles this module whole and uses a subset of it.
 
 use std::ffi::OsStr;
 use std::fs;

@@ -50,8 +50,19 @@ pub(super) fn ensure() -> Result<Output, CpdError> {
         Some((_, pane)) => pane,
         None => tmux.new_window(work, WATCH_WINDOW, &spawn)?.1,
     };
-    wait_started(&tmux, &mut store, &pane, since)?;
-    Ok(Output::success(json!({"started": true, "pane": pane.as_str()})))
+    match wait_started(&tmux, &mut store, &pane, since) {
+        Ok(()) => Ok(Output::success(json!({"started": true, "pane": pane.as_str()}))),
+        // A concurrent call started an engine first: ours lost the lock and its
+        // pane died. The engine runs, which is what the caller asked for.
+        Err(e) if e.code() == ErrorCode::WatchStartFailed && lock::held(&home)? => {
+            let dead = tmux.list_panes()?.into_iter().find(|p| p.pane == pane && p.dead);
+            if let Some(dead) = dead {
+                tmux.kill_window(&dead.window)?;
+            }
+            Ok(Output::success(json!({"started": false, "already": true})))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Waits until the engine in `pane` has taken the lock, which it proves by
