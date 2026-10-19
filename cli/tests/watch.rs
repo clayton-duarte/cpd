@@ -1356,10 +1356,12 @@ fn install_puts_the_adapter_at_share_cpd_pi_without_its_tests() {
     let env = TestEnv::new();
     install(&env);
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    // `install` runs the script from the fake checkout (`Checkout::new`): compare with its `pi/`.
+    let checkout = env.root().join("repos/install-clone");
     let adapter = env.home().join(".local/share/cpd/pi");
-    let expected: Vec<String> = tree(&root.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
-    assert!(expected.contains(&"package.json".to_string()) && expected.contains(&"extension.ts".to_string()), "{expected:?}");
+    let expected: Vec<String> = tree(&checkout.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
+    assert!(expected.contains(&"extension.ts".to_string()) && expected.contains(&"lib/cpd.ts".to_string()), "{expected:?}");
+    assert!(tree(&checkout.join("pi")).contains(&"test/cpd.test.ts".to_string()));
     assert_eq!(tree(&adapter), expected);
     // No temporary directory is left beside it.
     assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
