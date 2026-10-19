@@ -97,7 +97,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 - **What:** "a rich terminal UI for GitHub that doesn't break your flow": PRs, issues and notifications ([README](https://github.com/dlvhdr/gh-dash)). Built with Bubble Tea and Lip Gloss, so it is in the Charm showcase ([list entry](https://github.com/charm-and-friends/charm-in-the-wild#development-tools)).
 - **Layout:** a tab row of **sections**, each a GitHub search filter and a title; a table below; a preview pane (default open, 45 % of the width to the right, or 40 % of the height below on a narrow terminal: [defaults](https://github.com/dlvhdr/gh-dash/blob/HEAD/docs/src/content/docs/configuration/defaults.mdx)). Columns of the PR table: updatedAt, state, repo, title, author, labels, comments, reviewStatus, ci, lines ([PR layout](https://github.com/dlvhdr/gh-dash/blob/HEAD/docs/src/content/docs/configuration/layout/pr.mdx)).
 - **Status and alerts:** `ci` and `reviewStatus` are one-icon columns; notification sections filter by reason (`review-requested`, `mention`, `assign`, `participating`: [notification sections](https://github.com/dlvhdr/gh-dash/blob/HEAD/docs/src/content/docs/configuration/notification-section.mdx)); sections refetch on an interval (`refetchIntervalMinutes: 30`).
-- **Driven by:** keys (`s` switch view, `/` search, `r`/`R` refresh, `v` approve, `m` merge, `w` watch checks, `C` checkout, `d` diff: [global](https://github.com/dlvhdr/gh-dash/blob/HEAD/docs/src/content/docs/getting-started/keybindings/global.mdx), [selected PR](https://github.com/dlvhdr/gh-dash/blob/HEAD/docs/src/content/docs/getting-started/keybindings/selected-pr.mdx)); every key is overridable and user "custom actions" are shell commands.
+- **Driven by:** keys (`s` switch view, `/` search, `r`/`R` refresh, `v` approve, `m` merge, `w` watch checks, `C` checkout, `d` diff: [global](https://github.com/dlvhdr/gh-dash/blob/HEAD/docs/src/content/docs/getting-started/keybindings/global.mdx), [selected PR](https://github.com/dlvhdr/gh-dash/blob/HEAD/docs/src/content/docs/getting-started/keybindings/selected-pr.mdx)); every key is overridable and the README lists "custom actions to perform your specific workflow needs".
 - **Standout:** *the lists are saved questions* ("involves me, not by me, updated in 2 weeks"), each with a count, instead of one flat list.
 
 **I-04. Saved-question sections in the Deploy column.**
@@ -126,8 +126,8 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 ### 3.3 k9s
 
 - **What:** a terminal UI for a Kubernetes cluster ([README](https://github.com/derailed/k9s)).
-- **Layout:** a header (context info, key hints, logo; `ctrl-e` toggles it, `headless: true` hides it), a table of one resource kind, **breadcrumbs** at the bottom (`ctrl-g` toggles). `crumbsless`, `logoless`, `splashless` are config keys ([README config](https://github.com/derailed/k9s#k9s-configuration)).
-- **Status and alerts:** row colours by state (skins, e.g. `skin: dracula`); a `pulses` view (`:pulses`) and an `xray` view; `popeye` for a cluster sanitizer; `readOnly: true` disables every modifying command.
+- **Layout:** a header (inferred to hold cluster info and key hints, plus a logo; `ctrl-e` toggles it, `headless: true` hides it), a table of one resource kind, **breadcrumbs** at the bottom (`ctrl-g` toggles). `crumbsless`, `logoless`, `splashless` are config keys ([README config](https://github.com/derailed/k9s#k9s-configuration)).
+- **Status and alerts:** colour skins (e.g. `skin: dracula`; that rows are coloured by state is inferred); a `pulses` view (`:pulses`) and an `xray` view; `popeye` for a cluster sanitizer; `readOnly: true` disables every modifying command.
 - **Driven by:** command mode: `:pod` shows pods, `:pod ns-x`, `:pod /fred` (filtered), `:pod @ctx1` (switch context); `/filter` with regex, `/!` inverse, `/-l labels`, `/-f` fuzzy; `esc` goes back, `-` returns to the previous command (like `cd -`); `?` lists keys; **hotkeys** (`hotkeys.yaml`: a key bound to `xray deploy`) and **plugins** (`plugins.yaml`: a shortcut runs a command against the selected row) ([README table](https://github.com/derailed/k9s#key-bindings)). **Mouse is off by default** (`enableMouse: false`): the opposite of cpd's rule.
 - **Standout:** one text box reaches anything; users add their own jumps and actions as a file.
 
@@ -176,7 +176,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 
 - **What:** a resource monitor with graphs ([README](https://github.com/aristocratos/btop)).
 - **Layout:** boxes (cpu, mem, net, proc, optional gpu 5/6/7/0 toggles) with rounded corners (`rounded_corners` is a config key); **presets**: `presets = "cpu:1:default,proc:0:default cpu:0:default,mem:0:default,net:0:default cpu:0:block,net:0:tty"`, up to nine, each a box list with a graph symbol; preset 0 is "all boxes" ([README config](https://github.com/aristocratos/btop#configurability)).
-- **Status and alerts:** graphs drawn in braille characters (U+2800–U+28FF; a `block` and a `tty` fallback) ([README, fonts](https://github.com/aristocratos/btop#compilation-linux)); themes are files in a themes directory.
+- **Status and alerts:** graphs drawn in braille characters (U+2800–U+28FF; a `block` and a `tty` fallback) ([README, fonts](https://github.com/aristocratos/btop#prerequisites)); themes are files in a themes directory.
 - **Driven by:** "full mouse support: all buttons with a highlighted key are clickable and mouse scrolling works in process list and menu boxes"; a game-inspired menu for every config option ([README features](https://github.com/aristocratos/btop#features)).
 - **Standout:** *key hints are buttons*: the highlighted letter in a label is both the shortcut and the click target.
 
@@ -188,7 +188,7 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 
 **I-11. A braille sparkline for the host load in the Deploy column.**
 - **Pattern:** a graph that scrolls in braille cells with a block fallback.
-- **Source:** btop [README, graphs](https://github.com/aristocratos/btop#compilation-linux); ratatui's `Sparkline` and `Chart` widgets with a braille marker (from ratatui docs; **unverified** here that the pinned ratatui version has them).
+- **Source:** btop [README, graphs](https://github.com/aristocratos/btop#prerequisites); ratatui's `Sparkline` and `Chart` widgets with a braille marker (from ratatui docs; **unverified** here that the pinned ratatui version has them).
 - **cpd mapping:** the Deploy column's machine section (`load a b c`, soon CPU and memory %). Two lines of braille history under the numbers show a trend, not a number. Serves **P**, **L**.
 - **Effort:** S. One widget and a ring buffer in the view; no new data beyond what is planned.
 
@@ -221,15 +221,15 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 
 - **What:** an async terminal file manager in Rust ([README](https://github.com/sxyazi/yazi)).
 - **Layout:** Miller columns: parent, current, preview, in the ratio `ratio = [1, 4, 3]` ([yazi-default.toml](https://github.com/sxyazi/yazi/blob/HEAD/yazi-config/preset/yazi-default.toml)); tabs; a header with the path and a status bar; a **tasks** overlay.
-- **Status and alerts:** "async task scheduling and management: real-time progress updates, task cancellation, and internal task priority"; a notify component; a client-server "data distribution service" with pub-sub across instances ([README features](https://github.com/sxyazi/yazi#yazi---️-blazing-fast-terminal-file-manager)).
+- **Status and alerts:** "async task scheduling and management: real-time progress updates, task cancellation, and internal task priority"; a notify component; a client-server "data distribution service" with pub-sub across instances ([README features](https://github.com/sxyazi/yazi)).
 - **Driven by:** vim keys, mouse, drag and drop, which-key style popups, a Lua plugin system with UI plugins.
 - **Standout:** the preview follows the cursor, and long jobs live in a task list you can open.
 
 **I-13. A task list popup: everything in flight, with progress and cancel.**
 - **Pattern:** a task manager overlay with per-task progress and cancel.
-- **Source:** yazi [README, features](https://github.com/sxyazi/yazi#yazi---️-blazing-fast-terminal-file-manager).
+- **Source:** yazi [README, features](https://github.com/sxyazi/yazi).
 - **cpd mapping:** the StatusBar says `workers N/M`; a click would open a popup listing each Attempt holding a slot: Plan, Job, state, age, last tool line, and a cancel button. Today he finds a Worker by walking the flow chart. Serves **P**, **F**.
-- **Effort:** M. A new popup view on the status bar's workers indicator; it reads Attempts (the statusbar already does) and runs the existing cancel command (name to be checked in `docs/commands.md`).
+- **Effort:** M. A new popup view on the status bar's workers indicator; it reads Attempts (the statusbar already does) and runs a cancel (`job cancel`, `docs/commands.md` §5.3, cancels a Job; whether an Attempt-level stop exists is not checked here).
 
 ```
  ┌ workers 3/4 ─────────────────────────────────────────┐
