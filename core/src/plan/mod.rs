@@ -54,6 +54,7 @@ pub enum Command {
     /// Request the User's approval of the draft Jobs (§4.6)
     Review(ReviewArgs),
     /// Record the User's decision on a Plan review (§4.7)
+    #[command(hide = true)]
     Decide(DecideArgs),
     /// Lock the Plan and start dispatching (§4.8)
     Lock(LockArgs),
