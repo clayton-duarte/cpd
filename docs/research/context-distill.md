@@ -98,4 +98,57 @@ What a one-shot pi auxiliary agent needs from cpd, from this pilot.
 
 ## Repair turn against a full rerun (Job `d2-repair`, hs-d244 D-c)
 
-Work in progress: measurements below.
+**Question.** When the digest is invalid, does a repair turn (pi gets the invalid digest, the missing and stray ids and the text of the missing records, and answers) fix it more cheaply than a full rerun? **Answer: yes, if the repair returns only an addition and cpd appends it.** On 1–16 missing decisions it was valid 7 of 7, at $0.027 and 6 s on average, against $0.066 and 37 s (warm cache) or $0.25 (cold) for a rerun that was valid 0 of 9. A repair that returns the whole corrected digest is no cheaper than a rerun and failed 3 of 10. Recommendation and Job at the end.
+
+### Setup
+
+- Scratch `CPD_HOME` (`/tmp`, removed after), a fresh store of this branch's binary (`target/debug/cpd`) with the `building-cpd` rows copied from `~/.cpd` as in the first section (the User's store is at schema 14, the binary's at 13). Records up to `seq` 439: 428 rows, 379 in force, **204 decisions and open questions to cite**; `records.md` is 181,318 bytes, the same size as before.
+- **Rerun** = `cpd context distill` as shipped on this branch (prompt of D-a: topic sections only, cpd appends the index; `pi --mode json`). Cost, tokens and time are the lines of `runs.jsonl` (d2-cost). Tier S2 = `claude-sonnet-5.5:medium`, H3 = `claude-haiku-4.5:high`. The kept `439.md.invalid` of each failed run was the input of the repair runs.
+- **Repair** is not built (out of scope), so it ran by hand with the distiller's pi argv (`--mode json --no-session --no-extensions --no-skills --no-context-files --no-tools --model <m> -- @prompt.md @digest.md @missing.md @problem.md`) in a directory of those files: `digest.md` the invalid topic sections, `missing.md` the blocks of the missing records in the format of `records.md`, `problem.md` the missing and stray ids, `prompt.md` the repair prompt. Cost and tokens are the sum of the `usage` of pi's assistant messages, the figures cpd's log takes. A Python checker applying the rules of `digest::validate` judged each result; it gave the same size as cpd for an invalid digest (21,619 bytes, 1 missing). Runs were one at a time. A repair's input has no cached prefix, so its cost is a cold one and nothing in it is shared with the rerun's cache.
+- Two repair shapes. **A, full:** the prompt is the distiller's rules plus "keep the digest, add what is missing, drop stray ids" and the answer is the whole corrected digest. **B, addition:** "do not rewrite `digest.md`; write only `## Additions`, one statement per topic with a citation of each missing id"; cpd would append it to the topic sections and validate the total.
+- Nine invalid digests came from the reruns: S2 ×6 (2, 10, 7, 9, 16 and 6 missing, none stray) and H3 ×3 (1, 145 and 127 missing). A tenth was made by hand: the 2-missing S2 digest plus one statement citing `hs-d184`, a superseded decision (the only stray case; a model's stray cite did not occur in these runs).
+
+### The rerun arm
+
+| Run | Tier | Wall | Tokens in/out | Cost | Missing |
+|---|---|---|---|---|---|
+| 1 | H3 | 128.1 s | 59,021 / 10,278 | $0.125 | 1 |
+| 2 | H3 | 47.5 s | 59,021 / 3,187 | $0.022 | 145 |
+| 3 | H3 | 66.9 s | 59,021 / 4,723 | $0.030 | 127 |
+| 4 | S2 | 33.3 s | 77,491 / 5,185 | **$0.246** (cold) | 2 |
+| 5 | S2 | 38.6 s | 77,491 / 6,064 | $0.068 | 10 |
+| 6 | S2 | 36.2 s | 77,491 / 5,571 | $0.064 | 7 |
+| 7 | S2 | 47.3 s | 77,491 / 7,162 | **$0.265** (cold) | 9 |
+| 8 | S2 | 36.5 s | 77,491 / 5,634 | $0.064 | 16 |
+| 9 | S2 | 37.6 s | 77,491 / 5,843 | $0.066 | 6 |
+
+**0 of 9 valid** (0 of 6 at S2, 0 of 3 at H3). The cost depends on pi's prompt cache: a run right after another is warm (about $0.065 at S2), the first after a pause is cold (about $0.25; runs 4 and 7). The same few decisions are missed again and again, as in `v1`: of the six S2 runs, `hs-d132` was missed 5 times, `hs-d60` 4, `hs-d16`, `hs-d81`, `hs-d82` and `hs-d99` 3 each. So a rerun is not an independent chance of a valid digest here: it is the same recall task (rule 3 of the D-a prompt asks the model to remember 204 ids), and **the shipped prompt fails at S2 as `v1` did**. This is a finding of its own (and why the repair matters now), not a measure of repair.
+
+### The repair arm
+
+| Shape | Tier | Runs | Valid | Cost (mean, range) | Wall (mean, range) | Out tokens | In tokens |
+|---|---|---|---|---|---|---|---|
+| **B, addition**, 1–16 missing | S2 | 7 | **7** | **$0.027** ($0.018–0.036) | **6.0 s** (2.9–8.7) | 212–1,329 | 6,085–9,298 |
+| B, addition, 1–10 missing | H3 | 4 | 4 | $0.022 ($0.018–0.028) | 28 s (21–37) | 2,123–4,085 | 4,861–6,669 |
+| A, full digest, 1–16 missing | S2 | 10 | 7 | $0.071 ($0.053–0.097) | 25 s (18–35) | 3,686–7,304 | 6,196–9,409 |
+| A, full digest, 2 and 7 missing | H3 | 2 | 2 | $0.030 ($0.027–0.033) | 62 s (55–69) | 4,120–5,124 | 4,953–5,914 |
+| B, addition, 145 and 127 missing | S2 | 2 | **0** | $0.125 ($0.111–0.139) | 34 s (24–43) | 3,557–6,953 | 27,709–30,325 |
+
+- **B wins and is the only shape that does.** It costs 41% of a warm rerun ($0.027 against $0.066), 11% of a cold one, takes a sixth of the time, and the answer is 0.6–2.9 KB for 1–10 missing records (about 250 bytes a record). All 7 results were valid and under the limit (21.9–29.7 KB with cpd's index; the most, 29.7 KB, was after 9 additions on a digest that already had 26.9 KB).
+- **A is not cheaper than a rerun** ($0.071 against $0.066 warm; it rewrites the same 12 KB) and **failed 3 of 10**: twice on the same input (the 1-missing H3 digest: the model rewrote and merged, and kept 97 of the 221 citations, so 124 decisions it had cited became missing; the rule "keep every citation" did not hold), once because 5 of 16 missing ids were still not cited. A full rewrite can make a valid-but-for-one digest worse. The only stray case (A, 1 synthetic stray plus 2 missing) was fixed.
+- **Tier:** H3 also repaired 4 of 4 (B) and 2 of 2 (A) and costs about the same ($0.022 against $0.027), but is 3–10 times slower than S2 for B; with one sample size no better. S2 stays the repair Tier (the distiller's own).
+- **Many missing records break it.** The two H3 digests that missed 145 and 127 decisions are not repairable: the missing records are 51–61 KB (28–30k input tokens), the answer is 3.6–7 k tokens, and the result either still missed 2 ids or was **39,731 bytes, over the 32 KB limit**; $0.11–0.14, no cheaper than a rerun. The measured range of B is 1–16 missing; above that, nothing is claimed.
+- **B's price:** its text is an appended `## Additions` section (topics under `###`), not merged into the digest's topics. It is complete and cited, less well organised. Not measured: whether a Lead reads such a digest worse.
+- **Stray ids** need no model: cpd can remove an id from its bracket itself (guess, unmeasured). B cannot rewrite, so it does not fix them; the stray case is the one A fixed.
+
+### Recommendation
+
+**Build the repair turn, shape B, S2, at most one per run.** After `digest::validate` fails with **only `missing` ids** (no stray, not too big) and at most **16–20** of them (measured up to 16), cpd runs one more pi with the invalid digest, the problem and the missing records, appends the `## Additions` text to the topic sections, and validates again. If that is also invalid, the run fails as it does today, and `.md.invalid` keeps the **repaired** text (the last one tried). A rerun after a failure stays what the next debounce does; it was valid 0 of 9 here.
+
+On these figures the repair is the thing that makes the distiller succeed on this Context: the run plus one repair is about $0.09 (warm) and 43 s, against a failure. Independent of this Job, the prompt's rule 3 is a recall rule again, and should be reworked (copy-based, as v4's index was); a better prompt would leave fewer repairs, not make the repair useless, since a rate of 0 of 6 at S2 is far from 100%.
+
+**Job to propose** (not built here):
+
+- **Title:** `distill-repair`: one repair turn after an invalid digest (hs-d244 D-c).
+- **Tier:** S2 (a loop in one function, a prompt, a pi argv, a fake-pi test, doc amendments).
+- **Files:** `docs/contract.md` §4.6 and `docs/commands.md` §3.12 (first, hs-d4: the repair step, its limit, what `.md.invalid` holds, a `kind` in the `runs.jsonl` line); `core/src/context/distill.rs` (the repair step after `validate`, its run log line); `core/src/context/distill_repair_prompt.md` (new: the B prompt of this section); `core/src/host/pi.rs` (the distiller's argv takes the input files); `cli/tests/context.rs` and the fake pi of `distill.rs` tests (invalid then repaired, invalid then still invalid, too many missing, stray id: no repair).
