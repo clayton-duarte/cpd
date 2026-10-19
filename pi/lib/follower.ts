@@ -17,6 +17,21 @@ export type Timing = {
 
 export const DEFAULT_TIMING: Timing = { restartInitialMs: 1_000, restartMaxMs: 30_000, requestTimeoutMs: 15_000, pollMs: 1_000, shutdownWaitMs: 2_000, callTimeoutMs: 30_000 };
 
+/**
+ * Error codes that are a refusal of the call itself (commands.md §1.2, §11.2): the same call fails the same way every time,
+ * so nothing is retried. Every other code (a busy or too-new store, a spawn failure, an exit without a line) may pass.
+ */
+export const PERMANENT_CODES: ReadonlySet<string> = new Set([
+  "usage",
+  "session_required",
+  "invalid_session_id",
+  "session_ambiguous",
+  "session_not_found",
+  "plan_not_found",
+  "context_not_found",
+  "cursor_ahead",
+]);
+
 export type Spawn = typeof nodeSpawn;
 
 /** How the restart is scheduled; tests pass their own to see the delays instead of waiting for them. */

@@ -42,8 +42,6 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 /// How long the Lead in the chat slot must have been idle before a reload
 /// restarts its pi without it being parked (hs-d49).
 const CHAT_IDLE: Duration = Duration::from_secs(10 * 60);
-/// How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
-const PI_STOP: Duration = Duration::from_secs(10);
 /// How often the adapter watchdog reads the Session's state while pi runs (commands.md §10.8).
 const WATCHDOG_POLL: Duration = Duration::from_secs(2);
 /// How long a Session may stay `stopped` while its pi runs before the wrapper
@@ -61,6 +59,8 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     check_pane(&env.tmux(), &row.id)?;
     let exe = Exe::current()?;
     let dirs = PiDirs::from_env()?;
+    // How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
+    let pi_stop = Duration::from_secs(u64::from(env.config.timeouts.pi_stop_seconds));
     // The pi a previous wrapper left running across its `exec` (§6.7 "Reload on install"): the first round adopts it.
     let mut adopted = args.adopt.map(|pid| (PiProc::adopt(Pid::from_raw(pid)), args.pi_stale));
     // Store errors the loop has logged, so each code is said once (a store error never ends a wrapper while pi runs).
@@ -118,7 +118,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 print!("  new pi installed: restarting pi for {}…\n", row.name);
                 let _ = std::io::stdout().flush();
                 // The adapter reports `stopped` at `session_shutdown`; this process does not.
-                stop_pi(&mut pi, PI_STOP);
+                stop_pi(&mut pi, pi_stop);
                 return Err(reload(&exe, &row.id, None));
             }
             if watched.elapsed() >= WATCHDOG_POLL {
@@ -127,7 +127,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 if missing.unwrap_or(false) {
                     print!("  adapter missing: restarting pi for {}…\n", row.name);
                     let _ = std::io::stdout().flush();
-                    stop_pi(&mut pi, PI_STOP);
+                    stop_pi(&mut pi, pi_stop);
                     continue 'run;
                 }
             }

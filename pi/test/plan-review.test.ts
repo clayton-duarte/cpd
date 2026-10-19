@@ -439,9 +439,9 @@ test("cpd_plan_review is registered for Plan Leads: it runs plan review and retu
   assert.equal(tool.exposure, "model-only");
 
   f.respond("plan-review", { ok: true, review: { id: "r1", status: "pending" }, path: `${f.cpdHome}/run/p1/plan-r1.md`, next: "The User reviews the plan in plannotator. Stop and wait for the decision message." });
-  const out = await tool.execute("call-1", {}, undefined, undefined, f.pi.ctx());
+  const out = await f.pi.runTool(tool);
   assert.deepEqual(f.argvs().find((a) => a[1] === "review"), ["plan", "review", "--plan", "p1"]);
-  assert.equal(out.content[0]!.text, "The User reviews the plan in plannotator. Stop and wait for the decision message.");
+  assert.equal(out.text, "The User reviews the plan in plannotator. Stop and wait for the decision message.");
   await settle();
   assert.equal(requests(f).length, 0, "a new request opens through its Event, not through the tool");
 });
@@ -452,7 +452,7 @@ test("the tool passes CPD_PLAN to plan review", async (t) => {
   await lead(f);
   process.env.CPD_PLAN = "p1";
   f.respond("plan-review", { ok: true, review: { id: "r1" }, next: "n" });
-  await f.pi.tools[0]!.execute("c", {}, undefined, undefined, f.pi.ctx());
+  await f.pi.runTool(f.pi.tools[0]!);
   assert.deepEqual(f.argvs().find((a) => a[1] === "review"), ["plan", "review", "--plan", "p1"]);
 });
 
@@ -465,16 +465,16 @@ test("the tool: `already` with no pending entry opens the review itself, so a re
   const tool = f.pi.tools[0]!;
   f.respond("plan-review", { ok: true, already: true, review: { id: "r1", status: "pending" }, next: "wait" });
 
-  const first = await tool.execute("c", {}, undefined, undefined, f.pi.ctx());
-  assert.equal(first.content[0]!.text, "wait");
+  const first = await f.pi.runTool(tool);
+  assert.equal(first.text, "wait");
   assert.equal(f.pi.errors().length, 1, "the failed open is delivered");
   assert.deepEqual(entries(f), []);
 
   answer = opened();
-  await tool.execute("c", {}, undefined, undefined, f.pi.ctx());
+  await f.pi.runTool(tool);
   assert.deepEqual(entries(f), [{ plan: "p1", review: "r1", plannotator_id: "pn-1", status: "pending" }]);
 
-  await tool.execute("c", {}, undefined, undefined, f.pi.ctx()); // pending entry now: nothing to open
+  await f.pi.runTool(tool); // pending entry now: nothing to open
   assert.equal(requests(f, "plan-review").length, 2);
 });
 
@@ -483,7 +483,7 @@ test("the tool: a refusal of plan review is thrown with its code", async (t) => 
   t.after(() => f.close());
   await lead(f);
   f.respond("plan-review", { ok: false, error: { code: "no_draft_jobs", message: "No draft Jobs.", details: {} } }, { exit: 3 });
-  await assert.rejects(f.pi.tools[0]!.execute("c", {}, undefined, undefined, f.pi.ctx()), (e: any) => e.code === "no_draft_jobs");
+  await assert.rejects(f.pi.runTool(f.pi.tools[0]!), (e: any) => e.code === "no_draft_jobs");
 });
 
 test("the tool is not registered for a Worker", async (t) => {
