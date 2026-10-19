@@ -272,6 +272,23 @@ fn list_filters_and_derives_place_and_leads() {
     refused(&env.cpd(&["session", "list", "--plan", "Bad"]), "invalid_plan_id", 2);
 }
 
+/// sql-F5, commands-F4: the Plan-Lead lookup is a join: a Session that leads two
+/// Plans is still one row, and a Session that leads none is not a Plan's Lead.
+#[test]
+fn list_gives_a_session_leading_two_plans_one_row() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(
+        &env,
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('again', 'ctx', 'Again', 'grounding', 'lead1', 't')",
+    );
+    let sessions = env.cpd(&["session", "list"]).ok()["sessions"].clone();
+    let sessions = sessions.as_array().unwrap();
+    let leads: Vec<(&str, bool)> =
+        sessions.iter().map(|s| (s["id"].as_str().unwrap(), s["plan_lead"].as_bool().unwrap())).collect();
+    assert_eq!(leads, [(MANAGER, false), (LEAD1, true), (LEAD2, true), (WORKER, false)]);
+}
+
 #[test]
 fn show_adds_created_at_registered_event_and_open_escalations() {
     let env = TestEnv::new();
