@@ -833,6 +833,52 @@ fn a_driver_refuses_an_attempt_that_is_not_starting() {
     assert_eq!(fx.txns(), before);
 }
 
+/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
+/// marker in the file) and releases it after `hold`. Returns once the lock is held.
+fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
+    use nix::fcntl::{Flock, FlockArg};
+    use std::io::Write;
+    let locks = env.cpd_home().join("locks");
+    fs::create_dir_all(&locks).unwrap();
+    let file = OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
+    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
+    lock.write_all(marker.to_string().as_bytes()).unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        let _ = lock.set_len(0);
+        drop(lock);
+    })
+}
+
+/// hs-n278: a driver that starts while another cpd migrates the store waits for it, as it waits for a busy
+/// store (contract §3.4), instead of dying `lock_timeout` after `store_busy_ms`. Its Attempt is not
+/// `starting`, so once the store opens it refuses with `illegal_transition`, which proves it got that far.
+#[test]
+fn a_driver_waits_out_a_migration_longer_than_store_busy_ms() {
+    let fx = fx_with("[timeouts]\nstore_busy_ms = 300\n");
+    let lock = starting(&fx);
+    fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
+    let release = migrating_for(&fx.env, Duration::from_millis(1500));
+    let start = Instant::now();
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+    let waited = start.elapsed();
+    release.join().unwrap();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "illegal_transition", "{out:?}");
+    assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("waiting for cpd pid"), "{out:?}");
+}
+
 // ---------- job dispatch refusals ----------
 
 #[test]
