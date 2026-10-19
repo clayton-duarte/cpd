@@ -47,6 +47,14 @@ By kind (run 5): 1,004 integration tests (`cli/tests/`, the `cpd::*` binaries) t
 
 Per binary (run 5, the largest): `session_watchdog` 142.6 s (3 tests), `cpd-core` 105.7 s (390), `watch` 104.0 s (41), `pr` 80.9 s (75), `plan` 63.8 s (49), `session` 63.1 s (53), `driver` 55.0 s (25), `session_reload` 54.4 s (10), `merge` 49.9 s (40), `config` 44.8 s (30), `doctor` 44.6 s (32), `job` 40.1 s (32), `git` 39.2 s (48), `tui_tree` 36.9 s (45), `context_distill` 32.9 s (13). The full table is what `scripts/test-time.sh` prints.
 
+### 2.1 Second Attempt: the base and today's main side by side, under heavy load
+
+Attempt sp-profile-2-a1, 2026-10-19 16:15-16:40 UTC (12:15-12:40 on hs's clock), did not wait for a calm machine: beside it ran three other Worktrees' nextest runs (a Gate's `npm run verify`, a `nextest run --workspace --no-fail-fast`, a `nextest run -p cpd -E 'binary(pr) | … | binary(watch)'`) and `node --test` runs (`ps` before). Two `scripts/test-time.sh` full runs, started 1 minute apart and run at the same time: the base `8df1af8` (this branch) and today's main `74d5f99` (a scratch worktree with this script and the `timing` profile copied in; main has #104 and 1,830 tests).
+
+| build | load before → after (1 min) | wall (s) | sum (s) | tests | result |
+|---|---|---|---|---|---|
+| base `8df1af8` | 74.9 → 113.3 | 575.6 | 7,835.8 | 1,728 | all pass |
+
 ## 3. Where the clock goes
 
 From the JUnit timestamps (each test's start and duration) of run 5, the tests running at once, per 5 s: **16.0 from 0 to 90 s, then 4.8, 2.7 and 2.0 until the end.** The last 30 s are the two `session_watchdog` tests: nextest starts tests in binary order, these start at 52.0 s and take 66.9 and 68.5 s. For every run, wall − sum / 16 = 22.5-32.6 s: that is the tail.
