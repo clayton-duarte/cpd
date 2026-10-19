@@ -384,12 +384,10 @@ mod tests {
         for line in doc[start..].lines() {
             if line.starts_with('|') {
                 in_table = true;
-                let cells: Vec<&str> = line.trim().trim_matches('|').split('|').collect();
                 // Cells may contain `|` inside code spans (`"local" \| "ci"`): rejoin on the escape.
                 let line = line.replace("\\|", "\u{1}");
                 let cells: Vec<String> =
                     line.trim().trim_matches('|').split('|').map(|c| c.replace('\u{1}', "|").trim().to_owned()).collect();
-                let _ = cells.len();
                 if cells[0] == "Domain" || cells[0].starts_with("---") {
                     continue;
                 }
