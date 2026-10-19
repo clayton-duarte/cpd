@@ -9,7 +9,7 @@
 //! with exit 0, so no test attaches for real, except the one that pins which
 //! tmux program attaches.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::os::unix::fs::MetadataExt;

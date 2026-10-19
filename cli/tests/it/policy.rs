@@ -2,7 +2,7 @@
 //! `$CPD_HOME`, with Contexts, Plans, PRs, Jobs, Attempts and Sessions written
 //! straight into the database and policy files written by hand.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::PathBuf;

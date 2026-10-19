@@ -4,6 +4,7 @@ mod common;
 
 mod ask;
 mod attempt;
+mod bare;
 mod cargo_script;
 mod config;
 mod context_distill;
@@ -32,6 +33,7 @@ mod plan_cancel;
 mod plan_overlap;
 mod plan;
 mod plan_show;
+mod policy;
 mod pr_cleanup;
 mod pr_crud;
 mod preview_script;
