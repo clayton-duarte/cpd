@@ -26,6 +26,7 @@ use super::{Env, RunArgs, bad_row, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::exe::{Exe, Refusal, Watched};
+use crate::host::addr::review_host;
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::events::{Kind, NewEvent, append};
 use crate::host::{PaneId, Tmux};
@@ -181,8 +182,8 @@ fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, 
     let Some(start) = start(env, dirs, row)? else { return Ok(None) };
     let candidates = pi::lead_candidates(&env.config.pi_adapter_dir()?, &env.config.lead_pi_packages);
     let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), dirs, &mut std::io::stderr());
-    // `PLANNOTATOR_REMOTE` comes from cpd's environment; the port is the Plan's, whatever the environment holds.
-    let plannotator = Plannotator { port: port.map(|p| p.to_string()), remote: Plannotator::from_env().remote };
+    // The port is the Plan's, whatever the environment holds; the host is the review host (§6.5).
+    let plannotator = Plannotator { port: port.map(|p| p.to_string()), url_host: review_host(&mut std::io::stderr()) };
     let launch = pi::lead(&LeadLaunch {
         home: &env.home,
         session: &row.id,

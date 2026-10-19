@@ -4,7 +4,8 @@
 
 use serde_json::json;
 
-use super::row::{self, Phase, PlanRow};
+use super::row::Phase;
+use super::show::{Head, load_head};
 use super::{Env, PhaseArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
@@ -12,7 +13,7 @@ use crate::output::Output;
 
 const COMMAND: &str = "plan phase";
 
-fn illegal(plan: &PlanRow, to: Phase) -> CpdError {
+fn illegal(plan: &Head, to: Phase) -> CpdError {
     CpdError::new(
         ErrorCode::IllegalTransition,
         format!("Plan {} cannot move from {} to {} by hand: only grounding → plan is (§3.1).", plan.id, plan.phase.as_str(), to.as_str()),
@@ -25,7 +26,7 @@ fn illegal(plan: &PlanRow, to: Phase) -> CpdError {
 pub(super) fn phase(args: PhaseArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let plan = env.store.read(|conn| row::load(conn, &id))?;
+    let plan = env.store.read(|conn| load_head(conn, &id))?;
     if args.phase != Phase::Plan {
         return Err(illegal(&plan, args.phase));
     }
