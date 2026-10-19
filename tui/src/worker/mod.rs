@@ -89,8 +89,10 @@ fn event_loop(
     let mut snapshot = Some(first);
     let mut last_check = Instant::now();
     refresh(&mut view, &mut shown, snapshot.as_ref());
+    let mut redraw = true; // the pane is written to only when something changed: the Worker, its file, input, a resize
     loop {
         if last_check.elapsed() >= CHECK {
+            let before = (view.status.clone(), view.note.clone(), shown.clone());
             last_check = Instant::now();
             // a failed poll or read keeps the snapshot, the error is the note, the next check tries again (runner::kept)
             let mut error = None;
@@ -104,11 +106,16 @@ fn event_loop(
             }
             view.note = error.unwrap_or_default();
             refresh(&mut view, &mut shown, snapshot.as_ref());
+            redraw |= before != (view.status.clone(), view.note.clone(), shown.clone());
         }
-        terminal.draw(|f| view.draw(f))?;
+        if redraw {
+            terminal.draw(|f| view.draw(f))?;
+            redraw = false;
+        }
         if !event::poll(TICK)? {
             continue;
         }
+        redraw = true;
         match event::read()? {
             Event::Key(key) => {
                 if view.key(key) {

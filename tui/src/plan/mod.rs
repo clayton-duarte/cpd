@@ -49,17 +49,14 @@ use cpd_core::store::Store;
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 
-/// The snapshot is retaken at least this often, Event or not: a conflict clears with no Event (`mergeable` changes
-/// silently), as the `widgets` view's `REFRESH` (§17).
-const REFRESH: Duration = Duration::from_secs(2);
-
-/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (`stale`), else after
-/// [`REFRESH`].
+/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it or a pull request row
+/// changed (`stale`: a conflict clears with no Event, `mergeable` changes silently, §17), never else.
 fn due(stale: bool, since: Duration) -> bool {
-    since >= if stale { COALESCE } else { REFRESH }
+    stale && since >= COALESCE
 }
 
-/// The view redraws at least this often, for the spinner (one frame: palette.rs); a redraw reads nothing from the store.
+/// While a spinner is on screen ([`Centre::spins`]) the view redraws this often (one frame: palette.rs); a redraw reads
+/// nothing from the store. With none, it draws only when something changed.
 const FRAME: Duration = Duration::from_millis(250);
 
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
@@ -119,12 +116,20 @@ struct Centre {
 }
 
 impl Centre {
-    /// Draw the boxes again at spinner frame `frame`, from the Plan already read.
-    fn turn(&mut self, frame: usize) {
-        if frame != self.frame {
+    /// A Job runs: its pill's icon is the spinner, which turns with the clock.
+    fn spins(&self) -> bool {
+        self.plan.jobs.iter().any(|j| flow::Live::of(j) == Some(flow::Live::Running))
+    }
+
+    /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
+    /// frame is not the one drawn. Whether it did.
+    fn turn(&mut self, frame: usize) -> bool {
+        let turned = frame != self.frame && self.spins();
+        if turned {
             self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, frame).with_margin(MARGIN);
             self.frame = frame;
         }
+        turned
     }
 }
 
@@ -284,19 +289,25 @@ fn show(
     // (runner::kept), the snapshot's error first
     let (mut snapshot_error, mut follow_error) = (None, None);
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
+    // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
+    let mut redraw = true;
     loop {
         if let Some(c) = snap.centre.as_mut() {
-            c.turn(palette::frame(SystemTime::now()));
+            redraw |= c.turn(palette::frame(SystemTime::now()));
         }
-        terminal.draw(|f| ui.draw(f, snap.centre.as_ref()))?;
+        if redraw {
+            terminal.draw(|f| ui.draw(f, snap.centre.as_ref()))?;
+            redraw = false;
+        }
         if !event::poll(poll.min(FRAME))? {
             // idle: look for Events, every `poll`
             if fetched.elapsed() < poll {
                 continue;
             }
             fetched = Instant::now();
-            if let Some(events) = kept(follow.poll(store), &mut follow_error) {
-                stale |= events.iter().any(|e| concerns(e, snap.centre.as_ref()));
+            let shown = ui.error.clone();
+            if let Some(changes) = kept(follow.poll_changes(store), &mut follow_error) {
+                stale |= changes.pulls || changes.events.iter().any(|e| concerns(e, snap.centre.as_ref()));
             }
             ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
             if due(stale, taken.elapsed()) {
@@ -305,6 +316,7 @@ fn show(
                 stale = snapshot_error.is_some();
                 ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
                 if let Some(next) = next {
+                    redraw = true;
                     *snap = next;
                     let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                     if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
@@ -313,8 +325,10 @@ fn show(
                 }
                 taken = Instant::now();
             }
+            redraw |= ui.error != shown;
             continue;
         }
+        redraw = true; // a key, a click, a resize
         let mut open = None::<String>;
         let mut unselect = None::<String>; // the Job whose Worker pane closes
         match event::read()? {
@@ -390,11 +404,11 @@ mod tests {
 
 
     #[test]
-    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_else_every_two_seconds() {
+    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_and_never_else() {
         let ms = Duration::from_millis;
         assert!(!due(true, ms(499)) && due(true, ms(500)), "an Event that concerns it: coalesced at 500 ms");
-        assert!(!due(false, ms(1999)) && due(false, ms(2000)), "no Event: every 2 s");
-        assert!(due(false, Duration::from_secs(60)));
+        assert!(!due(false, ms(2000)), "nothing changed: no snapshot (tui-F3)");
+        assert!(!due(false, Duration::from_secs(60)));
     }
 
     const URL: &str = "http://localhost:19433";
@@ -613,6 +627,21 @@ mod tests {
     fn draw(ui: &mut Ui, centre: &Centre) {
         let mut terminal = Terminal::new(TestBackend::new(PANE.0, PANE.1)).unwrap();
         terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
+    }
+
+    #[test]
+    fn the_chart_turns_with_the_clock_only_while_a_job_runs() {
+        let mut queued = scroll_centre("plan-a", 3);
+        assert!(!queued.spins());
+        assert!(!queued.turn(1), "nothing spins: nothing to draw again");
+        assert_eq!(queued.frame, 0);
+
+        let mut running = scroll_centre("plan-a", 3);
+        running.plan.jobs[1].status = JobStatus::Running;
+        assert!(running.spins());
+        assert!(running.turn(1), "a new frame of the spinner");
+        assert!(!running.turn(1), "the same frame: nothing to draw again");
+        assert_eq!(running.frame, 1);
     }
 
     #[test]

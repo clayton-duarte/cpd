@@ -1,14 +1,16 @@
 //! The Events the tree acts on (commands.md §17): the view takes a new snapshot when one of these came, because the
 //! tree shows counts and states that the Events' `data` does not carry. The view follows them in process, with
-//! [`crate::read::Follow`].
+//! [`crate::read::Follow`]. Nothing else makes it read again but a change of a `pull_requests` row, which has no Event:
+//! so every Event that moves a row the snapshot reads is here (tui-F3).
 
 use cpd_core::events::Kind;
 
-/// The kinds the tree acts on: §17's list, with the Job, Attempt, Escalation and Plan review kinds that
-/// change a Plan's counters and whether it needs the User.
+/// The kinds the tree acts on: §17's list, with the Job, Attempt, Escalation, PR and Plan review kinds that
+/// change a Plan's counters and whether it needs the User, and the Context records it counts.
 pub const KINDS: &[Kind] = &[
     Kind::ContextCreated,
     Kind::ContextGrounded,
+    Kind::ContextRecord,
     Kind::PlanCreated,
     Kind::PlanPhase,
     Kind::PlanReview,
@@ -19,7 +21,16 @@ pub const KINDS: &[Kind] = &[
     Kind::JobFailed,
     Kind::JobRetried,
     Kind::JobCancelled,
+    Kind::AttemptStarted,
+    Kind::AttemptRetry,
     Kind::AttemptStatus,
+    Kind::AllMerged,
+    Kind::PrAdded,
+    Kind::PrEdited,
+    Kind::PrCancelled,
+    Kind::PrStarted,
+    Kind::PrOpened,
+    Kind::PrMerged,
     Kind::Escalation,
     Kind::EscalationAnswered,
     Kind::EscalationExpired,
@@ -43,7 +54,17 @@ mod tests {
         for kind in [
             Kind::ContextCreated,
             Kind::ContextGrounded,
+            Kind::ContextRecord,
             Kind::PlanCreated,
+            Kind::AttemptStarted,
+            Kind::AttemptRetry,
+            Kind::AllMerged,
+            Kind::PrAdded,
+            Kind::PrEdited,
+            Kind::PrCancelled,
+            Kind::PrStarted,
+            Kind::PrOpened,
+            Kind::PrMerged,
             Kind::PlanPhase,
             Kind::PlanDone,
             Kind::SessionRegistered,

@@ -22,7 +22,7 @@ use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
 use cpd_core::session::State;
 use crate::palette;
-use crate::read::{ContextNode, SessionNode, Tree};
+use crate::read::{ContextNode, Dot, SessionNode, Tree};
 
 /// The longest name of a Session (commands.md §1.4).
 const NAME_MAX: usize = 80;
@@ -113,6 +113,13 @@ impl View {
         };
         view.refresh(tree);
         view
+    }
+
+    /// A working dot is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot of an archived
+    /// Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
+    pub fn animated(&self) -> bool {
+        let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
+        sessions.any(|s| s.dot == Dot::Working && !s.is_archived())
     }
 
     /// A new snapshot: keep the cursor on its Session.
@@ -447,6 +454,23 @@ mod tests {
         terminal.draw(|f| view.draw(f, 0)).unwrap();
         let buf = terminal.backend().buffer();
         (0..height).map(|y| (0..width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()).collect()
+    }
+
+    #[test]
+    fn the_tree_is_animated_only_while_a_live_working_dot_is_in_it() {
+        assert!(View::new(sample(), true).animated(), "the sample's `ship` Lead is working");
+        let each = |tree: &mut Tree, f: &dyn Fn(&mut SessionNode)| {
+            tree.contexts.iter_mut().flat_map(|c| &mut c.plans).flat_map(|p| &mut p.sessions).for_each(f);
+        };
+        let mut tree = sample();
+        each(&mut tree, &|s| {
+            if s.dot == Dot::Working {
+                s.archived_at = Some("2026-02-01T00:00:00.000Z".into());
+            }
+        });
+        assert!(!View::new(tree.clone(), true).animated(), "an archived Session's dot never turns");
+        each(&mut tree, &|s| s.dot = Dot::Idle);
+        assert!(!View::new(tree, true).animated());
     }
 
     #[test]

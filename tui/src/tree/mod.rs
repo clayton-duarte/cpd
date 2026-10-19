@@ -47,16 +47,15 @@ use view::{Effect, View};
 
 /// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
-/// A snapshot is taken at least this often even with no Event: a pull request's checks can change with none (§17).
-const SNAPSHOT_AT_LEAST_EVERY: Duration = Duration::from_secs(2);
-/// How long the loop waits for a key or a click before it looks at the follower again and redraws. The spinner turns
-/// every 250 ms (`palette::frame`), so the tree is redrawn at least that often.
+/// How long the loop waits for a key or a click before it looks at the follower and the clock again. The spinner turns
+/// every 250 ms (`palette::frame`): while one is on screen ([`View::animated`]) the tree is redrawn that often, else only
+/// when something changed.
 const TICK: Duration = Duration::from_millis(100);
 
-/// A new snapshot is due: an Event came and `since` the last one reaches [`SNAPSHOT_EVERY`], or `since` reaches
-/// [`SNAPSHOT_AT_LEAST_EVERY`].
+/// A new snapshot is due: an Event came, or a pull request row changed (a pull request's checks change with no Event,
+/// §17), and `since` the last snapshot reaches [`SNAPSHOT_EVERY`]. With nothing changed none is ever due.
 fn snapshot_due(dirty: bool, since: Duration) -> bool {
-    (dirty && since >= SNAPSHOT_EVERY) || since >= SNAPSHOT_AT_LEAST_EVERY
+    dirty && since >= SNAPSHOT_EVERY
 }
 
 pub(super) fn run() -> Result<Output, CpdError> {
@@ -92,25 +91,36 @@ fn event_loop(
     // a failed snapshot is retried at the next refresh, with no Event needed; a failed poll at the next poll. Both are
     // shown (runner::kept): the footer says the snapshot's error, else the follow's.
     let (mut snapshot_error, mut follow_error) = (None, None);
+    // what the last draw showed of the clock, and whether anything changed since: the pane is written to only then
+    let (mut redraw, mut drawn_frame) = (true, palette::frame(SystemTime::now()));
     loop {
+        let error = view.error.clone();
         if last_poll.elapsed() >= poll {
             last_poll = Instant::now();
-            dirty |= kept(follow.poll(store), &mut follow_error).is_some_and(|events| !events.is_empty());
+            dirty |= kept(follow.poll_changes(store), &mut follow_error).is_some_and(|changes| changes.any());
             view.error = snapshot_error.clone().or_else(|| follow_error.clone());
         }
         if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) {
             if let Some(tree) = kept(read::tree(store), &mut snapshot_error) {
-                view.refresh(tree);
+                if tree.contexts != view.tree.contexts {
+                    view.refresh(tree);
+                    redraw = true;
+                }
             }
             dirty = false;
             last_snapshot = Instant::now();
             view.error = snapshot_error.clone().or_else(|| follow_error.clone());
         }
         let frame = palette::frame(SystemTime::now());
-        terminal.draw(|f| view.draw(f, frame))?;
+        redraw |= view.error != error || (view.animated() && frame != drawn_frame);
+        if redraw {
+            terminal.draw(|f| view.draw(f, frame))?;
+            (redraw, drawn_frame) = (false, frame);
+        }
         if !event::poll(TICK)? {
             continue;
         }
+        redraw = true; // a key, a click, a resize, the focus
         let effect = match event::read()? {
             Event::FocusGained => {
                 view.focus(true);
@@ -150,11 +160,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_snapshot_is_due_on_an_event_after_half_a_second_and_with_none_after_two() {
+    fn a_snapshot_is_due_on_a_change_after_half_a_second_and_never_with_none() {
         let ms = Duration::from_millis;
         assert!(!snapshot_due(false, ms(0)));
-        assert!(!snapshot_due(false, ms(1999)), "no Event: not yet");
-        assert!(snapshot_due(false, ms(2000)), "no Event, yet pull request checks may have changed");
+        assert!(!snapshot_due(false, ms(2000)), "no change: no snapshot (tui-F3)");
+        assert!(!snapshot_due(false, Duration::from_secs(3600)));
         assert!(!snapshot_due(true, ms(499)), "at most one snapshot per 500 ms");
         assert!(snapshot_due(true, ms(500)));
     }

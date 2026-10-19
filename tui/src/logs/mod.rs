@@ -75,12 +75,17 @@ fn show(
     first: read::Logs,
 ) -> Result<(), ViewError> {
     let mut log = Log::new(first.events);
+    let mut redraw = true; // the pane is written to only when something changed: Events, an error, input, a resize
     loop {
-        terminal.draw(|f| {
-            log.fit(f.area().height);
-            draw(f, f.area(), &log);
-        })?;
+        if redraw {
+            terminal.draw(|f| {
+                log.fit(f.area().height);
+                draw(f, f.area(), &log);
+            })?;
+            redraw = false;
+        }
         if event::poll(poll)? {
+            redraw = true;
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
@@ -95,8 +100,11 @@ fn show(
             }
         }
         // the follow's cursor stays where it was on a failure, so the next poll reads what was missed
+        let shown = log.error.clone();
         if let Some(events) = kept(follow.poll(store), &mut log.error) {
+            redraw |= !events.is_empty();
             log.push(events);
         }
+        redraw |= log.error != shown;
     }
 }
