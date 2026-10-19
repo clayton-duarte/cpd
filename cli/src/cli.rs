@@ -10,7 +10,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
-use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, pr, session, watch};
+use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, policy, pr, session, watch};
 
 
 /// cpd 2: every command prints exactly one JSON value on stdout.
@@ -42,6 +42,9 @@ pub enum Command {
     /// Pull requests (commands.md §9)
     #[command(subcommand)]
     Pr(pr::Command),
+    /// Policies (commands.md §22)
+    #[command(subcommand)]
+    Policy(policy::Command),
     /// Sessions and their tmux panes (commands.md §10)
     #[command(subcommand)]
     Session(session::Command),
@@ -86,6 +89,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Pr(c) => pr::run(c),
+        Command::Policy(c) => policy::run(c),
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),
         Command::Inbox(c) => inbox::cmd::run(c),

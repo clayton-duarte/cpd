@@ -4,12 +4,14 @@
 //! - [`domain`]: the domains, [`Policy`], the audience table;
 //! - [`load`]: parsing and validating one scope file;
 //! - [`origin`]: keying a repo from its `origin` URL;
-//! - [`resolve`]: the default, the owner file, the repo file, per domain.
+//! - [`resolve`]: the default, the owner file, the repo file, per domain;
+//! - [`show`]: `cpd policy show`.
 
 mod domain;
 mod load;
 mod origin;
 mod resolve;
+mod show;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{ContextId, OwnerLogin, RepoName};
@@ -18,6 +20,20 @@ use crate::session::Role;
 pub use domain::{
     audience, Checks, Domain, DomainSource, Feedback, Gate, Policy, Pr, Scope, Source, Sources, Text,
 };
+/// The `policy` commands (commands.md §22).
+#[derive(clap::Subcommand, Debug)]
+pub enum Command {
+    /// Show the resolved policy of a key (§22.1)
+    Show(show::ShowArgs),
+}
+
+/// Runs a `policy` command.
+pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
+    match command {
+        Command::Show(args) => show::show(args),
+    }
+}
+
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
 pub use resolve::{default_policy, key_of_scope_file, resolve, resolve_unowned_row};
