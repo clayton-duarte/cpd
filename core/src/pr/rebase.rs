@@ -245,7 +245,7 @@ fn report_stale(env: &mut Env, plan: &PlanId, key: &PrKey, lead: &Path, stale: &
         lead.display()
     );
     let mut details = stale.details().clone();
-    details["pr"] = json!(key);
+    details.insert("pr".to_owned(), json!(key));
     let data = json!({"source": COMMAND, "code": stale.code().as_str(), "message": stale.message(), "details": details});
     env.store.write(COMMAND, |tx| {
         append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
