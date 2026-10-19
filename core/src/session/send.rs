@@ -4,7 +4,6 @@
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
-use super::moves::unreadable;
 use super::row::{self, Role, Row};
 use super::state::scoped;
 use super::{Env, SendArgs, archive};
@@ -40,7 +39,7 @@ fn check(target: &Row) -> Result<(), CpdError> {
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let text = match (args.text, &args.file) {
         (Some(text), None) => text,
-        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| unreadable(path, e))?.parse::<Text>()?,
+        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?.parse::<Text>()?,
         _ => unreachable!("clap requires exactly one of <text> and --file"),
     };
     let from = sender()?;

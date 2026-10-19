@@ -24,8 +24,7 @@ pub struct Spec {
 /// (commands.md §1.5), else [`parse`]'s `spec_invalid`.
 pub fn read(path: &Path) -> Result<Spec, CpdError> {
     let text = std::fs::read_to_string(path).map_err(|e| {
-        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::file_unreadable(path, e)
     })?;
     parse(&text).map_err(|e| e.with("file", path.display().to_string()))
 }

@@ -88,11 +88,6 @@ fn fork_name(source: &str) -> String {
     format!("{source} (fork)").chars().take(Name::MAX_CHARS).collect()
 }
 
-pub(super) fn unreadable(path: &Path, e: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {e}.", path.display()))
-        .with("path", path.display().to_string())
-}
-
 fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
     let failed = |e: std::io::Error| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot write {}: {e}.", path.display()))
@@ -124,7 +119,7 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         .map(|(context, _)| context)
         .ok_or_else(|| CpdError::plan_not_found(&plan))?;
     let message = match &args.message_file {
-        Some(path) => Some(std::fs::read_to_string(path).map_err(|e| unreadable(path, e))?),
+        Some(path) => Some(std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?),
         None => None,
     };
     let tmux = env.tmux();
@@ -365,7 +360,7 @@ pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<PathBuf>
             let path = home.manager_message(&row.context);
             return match std::fs::File::open(&path) {
                 Ok(_) => Ok(Some(path)),
-                Err(e) => Err(unreadable(&path, e)),
+                Err(e) => Err(CpdError::file_unreadable(&path, e)),
             };
         }
         return Ok(None);
@@ -380,7 +375,7 @@ pub(super) fn first_message(home: &CpdHome, row: &Row) -> Result<Option<PathBuf>
     };
     path.map(|p| match std::fs::File::open(&p) {
         Ok(_) => Ok(p),
-        Err(e) => Err(unreadable(&p, e)),
+        Err(e) => Err(CpdError::file_unreadable(&p, e)),
     })
     .transpose()
 }

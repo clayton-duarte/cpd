@@ -201,8 +201,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 /// else `file_unreadable` (commands.md §1.5).
 fn read_text_file(path: &Path) -> Result<String, CpdError> {
     std::fs::read_to_string(path).map_err(|e| {
-        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {e}.", path.display()))
-            .with("path", path.display().to_string())
+        CpdError::file_unreadable(path, e)
     })
 }
 
