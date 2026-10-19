@@ -1,6 +1,6 @@
 //! The harness itself: isolation of `$CPD_HOME`, git, tmux and the fakes.
 
-mod common;
+use crate::common;
 
 use common::{SLEEP_SECONDS, TestEnv};
 
@@ -137,14 +137,23 @@ fn calls_come_back_in_the_order_they_started() {
     assert_eq!(got, (0..30).map(|i| i.to_string()).collect::<Vec<_>>());
 }
 
+/// The `.rs` files of the test binary (`cli/tests/it/`, not its `common/`). The guards below scan these: a wrong
+/// directory would scan nothing and pass, so this asserts it found more than 50.
+fn test_files() -> Vec<std::path::PathBuf> {
+    let dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/tests/it";
+    let files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|e| e == "rs"))
+        .collect();
+    assert!(files.len() > 50, "the harness guards saw {} files in {dir}: they scan the wrong directory", files.len());
+    files
+}
+
 #[test]
 fn no_fake_sleeps_longer_than_sleep_seconds() {
     let mut found = Vec::new();
-    for entry in std::fs::read_dir(env!("CARGO_MANIFEST_DIR").to_owned() + "/tests").unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "rs") {
-            continue;
-        }
+    for path in test_files() {
         let text = std::fs::read_to_string(&path).unwrap();
         for (n, line) in text.lines().enumerate() {
             for (at, _) in line.match_indices("sleep ") {
@@ -161,9 +170,8 @@ fn no_fake_sleeps_longer_than_sleep_seconds() {
 /// The text of every test file of this crate but this one, as (path, line number, line).
 fn test_source_lines() -> Vec<(String, usize, String)> {
     let mut lines = Vec::new();
-    for entry in std::fs::read_dir(env!("CARGO_MANIFEST_DIR").to_owned() + "/tests").unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "rs") || path.file_name().is_some_and(|n| n == "harness.rs") {
+    for path in test_files() {
+        if path.file_name().is_some_and(|n| n == "harness.rs") {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
@@ -352,7 +360,7 @@ fn a_killed_test_leaves_no_tmux_server_process_dir_or_reaper() {
     use std::io::{BufRead, BufReader};
 
     let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "killed_test_helper", "--nocapture", "--test-threads=1"])
+        .args(["--exact", "harness::killed_test_helper", "--nocapture", "--test-threads=1"])
         .env(HELPER_GATE, "1")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

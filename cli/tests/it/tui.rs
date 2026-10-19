@@ -3,7 +3,7 @@
 //! (§13.2), on a private tmux server with a fake `cpd` on `PATH` whose
 //! not-yet-implemented views just sleep.
 
-mod common;
+use crate::common;
 
 use std::fs;
 
@@ -507,7 +507,7 @@ const AMBIENT: [&str; 10] = ["GH_TOKEN", "GH_HOST", "GITHUB_TOKEN", "SSH_AUTH_SO
 #[test]
 fn a_command_has_no_gh_ssh_or_proxy_variable() {
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-    child.args(["--ignored", "--exact", "the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command"]);
+    child.args(["--ignored", "--exact", "tui::the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command"]);
     for name in AMBIENT {
         child.env(name, "leak");
     }

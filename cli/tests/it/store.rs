@@ -1,7 +1,7 @@
 //! The SQLite store (contract §4.1–§4.5): open, the DDL, its constraints and
 //! triggers, writes only through cpd, migrations and two writers.
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -1267,7 +1267,7 @@ impl Writer {
     fn spawn_with(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>, release: Option<&Path>) -> Writer {
         let out = env.root().join(format!("{name}.json"));
         let mut cmd = env.command(std::env::current_exe().unwrap());
-        cmd.args(["child_writer", "--exact", "--test-threads=1", "--quiet"])
+        cmd.args(["store::child_writer", "--exact", "--test-threads=1", "--quiet"])
             .env("STORE_CHILD_OUT", &out)
             .env("STORE_CHILD_HOME", env.cpd_home())
             .env("STORE_CHILD_BUSY_MS", busy_ms.to_string())

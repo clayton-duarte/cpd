@@ -3,7 +3,7 @@
 //! server (the click is raw mouse bytes sent to the StatusBar's pane; `tmux` on `PATH` is a fake that answers
 //! `list-clients` and records `display-popup`, and runs the real one for the rest).
 
-mod common;
+use crate::common;
 
 use std::fs;
 

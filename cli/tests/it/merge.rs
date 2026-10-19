@@ -4,7 +4,7 @@
 //! No Gate runs at the merge (R19): there is no `gate_failed` or `gate_error`
 //! outcome (Escalation rs-merge-a1-q1).
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

@@ -1,7 +1,7 @@
 //! `pr merge` (commands.md §9.10), run as the built binary with a fake `gh` that records its argv.
 //! The command needs no Plan, no Context and no database row.
 
-mod common;
+use crate::common;
 
 use common::{TestEnv, refused};
 use serde_json::json;

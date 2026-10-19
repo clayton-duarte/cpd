@@ -3,7 +3,7 @@
 //! git repos and a private tmux server, with a fake `cpd` on `PATH` for the
 //! panes (`session run`) and for `watch --ensure`.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

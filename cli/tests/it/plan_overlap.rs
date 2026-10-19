@@ -2,7 +2,7 @@
 //! §4.6, B4-A3, hs-n201): the built binary against a temporary `$CPD_HOME` with
 //! Plans written straight into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 

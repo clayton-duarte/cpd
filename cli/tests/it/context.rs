@@ -2,7 +2,7 @@
 //! built binary. The records live only in the database: no directory, no git,
 //! no lock file.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::PathBuf;

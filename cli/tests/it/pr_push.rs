@@ -1,7 +1,7 @@
 //! `pr push` (commands.md §9.9, contract §7.6): the built binary against a temporary
 //! repo with a bare `origin` and a Plan written straight into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::PathBuf;

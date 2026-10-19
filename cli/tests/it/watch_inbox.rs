@@ -2,7 +2,7 @@
 //! store, items open and close within two ticks with their Events, a failed Job is stuck only after
 //! `inbox.stuck_job_minutes`, and a tick with no change writes nothing.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::process::{Child, Stdio};

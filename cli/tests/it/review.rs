@@ -1,7 +1,7 @@
 //! There is no `review` command: R19 removed the Job-level Reviewer
 //! (commands.md §7, §20), so it is an unknown command like any other.
 
-mod common;
+use crate::common;
 
 use common::TestEnv;
 

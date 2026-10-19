@@ -4,7 +4,7 @@
 //! (`capture-pane`) and presses keys (`send-keys`). Rendering and scrolling are
 //! unit-tested in `tui/src/history/` and `tui/src/worker/`.
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 

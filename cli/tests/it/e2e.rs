@@ -9,7 +9,7 @@
 //! written into the database by hand: every row comes from a `cpd` command,
 //! the engine or a driver, so the bugs between areas show up here.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::os::unix::fs::symlink;

@@ -3,7 +3,7 @@
 //! a temporary `$CPD_HOME`, temporary git repos, and a Plan written straight
 //! into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::PathBuf;

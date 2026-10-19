@@ -2,7 +2,7 @@
 //! built binary. Fixture items come from `model::reconcile`, as the engine's
 //! E8 writes them.
 
-mod common;
+use crate::common;
 
 use std::fs::{self, File};
 

@@ -1,7 +1,7 @@
 //! `cpd context pending` (commands.md §3.11, hs-d159 P1): the built binary
 //! against a temporary `$CPD_HOME` with Plans written straight into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 

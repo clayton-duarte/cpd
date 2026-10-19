@@ -1,7 +1,7 @@
 //! Events (contract §5.1, §5.2, §5.4; commands.md §11): the append API, and
 //! `events list` and `events follow` run as the built binary.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::io::{BufRead, BufReader};

@@ -1,7 +1,7 @@
 //! `cpd doctor` (commands.md §14.1): the machine's checks, each against fake
 //! tools on a `PATH` that holds only the test's `bin/`.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::os::unix::fs::symlink;

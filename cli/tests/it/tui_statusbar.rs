@@ -4,7 +4,7 @@
 //! The store is prepared through the store API (`Store::write`), as `tui_plan.rs` does; the view runs as
 //! `cpd tui view statusbar` in a pane, and its screen is read with `tmux capture-pane`.
 
-mod common;
+use crate::common;
 
 use std::fs;
 

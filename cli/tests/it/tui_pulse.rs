@@ -1,7 +1,7 @@
 //! Pulse's read model (`read::manager_slot`, `read::pulse`), against a store prepared through the store
 //! API. Every read takes a fixed `now_ms`: no wall clock, no sleeps.
 
-mod common;
+use crate::common;
 
 use common::{TestEnv, sql};
 use cpd_core::home::CpdHome;

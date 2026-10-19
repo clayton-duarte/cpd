@@ -3,7 +3,7 @@
 //! through the store API (as `tui_read.rs` does, since Plans and Sessions belong to
 //! their areas), and the palette the two share.
 
-mod common;
+use crate::common;
 
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};

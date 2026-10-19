@@ -2,7 +2,7 @@
 //! §4.5, R34): the built binary against a temporary `$CPD_HOME` with a Plan
 //! written straight into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 

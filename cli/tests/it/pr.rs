@@ -2,7 +2,7 @@
 //! built binary against temporary repos with a bare `origin`, a fake `gh`, and
 //! a Plan written straight into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

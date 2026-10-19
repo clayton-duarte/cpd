@@ -2,7 +2,7 @@
 //! tmux server: the wrapper's calls, and the windows and panes of §6.2 found
 //! by their `@cpd_*` options.
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::thread::sleep;
@@ -428,7 +428,7 @@ fn rerun_with_fake_tmux(env: &TestEnv, name: &str, vars: &[(&str, &str)]) {
     let mut path = vec![env.bin()];
     path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
     let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-    child.args(["--exact", name, "--nocapture"]).env("PATH", std::env::join_paths(path).unwrap()).envs(vars.iter().copied());
+    child.args(["--exact", &format!("host::{name}"), "--nocapture"]).env("PATH", std::env::join_paths(path).unwrap()).envs(vars.iter().copied());
     let out = common::output(&mut child).unwrap();
     let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(out.status.success() && printed.contains("1 passed"), "{printed}");

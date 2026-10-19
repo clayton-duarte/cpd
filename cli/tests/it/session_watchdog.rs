@@ -4,7 +4,7 @@
 //! the wrapper, so these tests wait it out, in a pane of a private tmux server
 //! with a fake `pi`.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::time::{Duration, Instant};

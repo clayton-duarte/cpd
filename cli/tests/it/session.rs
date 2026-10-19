@@ -2,7 +2,7 @@
 //! 1–3), run as the built binary against a private tmux server, with fake
 //! `pi` and `cpd` scripts on `PATH`.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::PathBuf;

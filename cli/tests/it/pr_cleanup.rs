@@ -2,7 +2,7 @@
 //! contract §7.2; hs-d138, hs-d142): the built binary against temporary repos
 //! with a bare `origin`, a fake `gh`, and Plans written straight into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

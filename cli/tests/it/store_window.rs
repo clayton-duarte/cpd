@@ -3,7 +3,7 @@
 //! refuses one whose newest breaking migration it lacks. The migrations this
 //! binary lacks are applied by hand, as a newer binary would have.
 
-mod common;
+use crate::common;
 
 use std::fs;
 

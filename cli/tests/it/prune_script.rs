@@ -1,7 +1,7 @@
 //! `scripts/prune-worktrees.sh`: the one-time cleanup of leftover worktrees whose work is on
 //! origin/main (hs-d138, hs-d143).
 
-mod common;
+use crate::common;
 
 use std::collections::BTreeSet;
 use std::fs;

@@ -1,7 +1,7 @@
 //! `cpd config` and `cpd tiers` (commands.md §14.2, §14.3; contract §8, §9):
 //! the built binary, a temporary `$CPD_HOME`, and a fake pi install.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::os::unix::fs::symlink;

@@ -1,7 +1,7 @@
 //! `scripts/preview-tui.sh`: previews a build in the cockpit's views only.
 //! Fakes only: tmux, the installed cpd and cargo (which writes a fake preview cpd).
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

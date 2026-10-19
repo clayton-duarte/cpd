@@ -3,7 +3,7 @@
 //! built binary against a private tmux server, with fake `pi` and `cpd`
 //! scripts on `PATH`.
 
-mod common;
+use crate::common;
 
 use std::fs;
 

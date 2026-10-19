@@ -1,7 +1,7 @@
 //! `cpd context distill` (commands.md §3.12, contract §4.6 "The distill run") and the engine's debounced
 //! rebuild (contract §3.7 E9), run as the built binary with a fake `pi` on `PATH`.
 
-mod common;
+use crate::common;
 
 use std::fs::{self, File};
 use std::path::PathBuf;

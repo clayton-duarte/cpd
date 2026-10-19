@@ -2,7 +2,7 @@
 //! and its refusal, the signals, `--ensure`, and each step E1–E6 (E7, the PR start, is in pr_start.rs) on a
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
-mod common;
+use crate::common;
 #[path = "common/checkout.rs"]
 mod checkout;
 

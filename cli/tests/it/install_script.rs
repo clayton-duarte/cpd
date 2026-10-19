@@ -3,7 +3,7 @@
 //! refuses by the `store` verdict of the build's `--version`. Fakes only: cargo "builds" a fake
 //! `cpd`, and the checkout, with an `origin/main` of its own, is a temporary git repo.
 
-mod common;
+use crate::common;
 #[path = "common/checkout.rs"]
 mod checkout;
 

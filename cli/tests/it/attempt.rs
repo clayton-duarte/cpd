@@ -4,7 +4,7 @@
 //! Sessions are fixtures written straight into the database; the commands
 //! under test are the only ones that write the rest.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

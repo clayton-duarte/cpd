@@ -6,7 +6,7 @@
 //! re-execs the wrapper at once and the new process adopts pi; only a new pi
 //! restarts pi, at the Lead's idle.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::PathBuf;

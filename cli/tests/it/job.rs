@@ -4,7 +4,7 @@
 //! fixtures; the commands under test are the only ones that write Jobs.
 //! pi is a fake install whose Tier catalog is seeded in the cache, so no node runs.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::PathBuf;

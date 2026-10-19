@@ -14,7 +14,7 @@
 //!   or proxy variable reaches a command, so no test reaches pi or the network;
 //! - temporary git repos with a fixed identity and no global or system config.
 //!
-//! Use it from a test file with `mod common;`.
+//! Use it from a test file with `use crate::common;`.
 //!
 //! Writing a script and executing it must not overlap with spawning in one test
 //! process (ETXTBSY, see [`write_executable`]): write scripts with

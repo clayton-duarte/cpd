@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-mod common;
+use crate::common;
 use common::{output, write_executable};
 
 fn script() -> PathBuf {

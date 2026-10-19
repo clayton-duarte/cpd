@@ -2,7 +2,7 @@
 //! that confirm or cancel, and the result or the error that follows. `pr merge` runs in the view's process and reaches
 //! the fake `gh` of the env, whose recorded argv says whether a merge ran. The click is raw mouse bytes sent to the pane.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::time::Duration;

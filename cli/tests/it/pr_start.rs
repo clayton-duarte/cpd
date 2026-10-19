@@ -5,7 +5,7 @@
 //! temporary `$CPD_HOME`, repos with bare `origin`s and a Plan written straight
 //! into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

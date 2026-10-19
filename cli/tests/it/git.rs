@@ -1,6 +1,6 @@
 //! The git layer (contract §7.1–§7.3, §7.5) against temporary repos.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -535,7 +535,7 @@ fn cockpit_pi_and_cpd_variables_do_not_reach_hooks() {
     // The variables are on a child's `Command`, never in this multi-threaded process's environment.
     let out = common::output(
         std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "hook_env_helper", "--test-threads=1"])
+            .args(["--exact", "git::hook_env_helper", "--test-threads=1"])
             .env(HOOK_ENV_GATE, "x")
             .env("TMUX", "/tmp/fake,1,0")
             .env("TMUX_PANE", "%9")
@@ -828,7 +828,7 @@ fn a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
     const NAME: &str = "a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout";
     if std::env::var_os("CPD_TEST_DEADLINE_GIT").is_none() {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-        child.args(["--exact", NAME, "--nocapture"]).env("CPD_TEST_DEADLINE_GIT", "1");
+        child.args(["--exact", &format!("git::{NAME}"), "--nocapture"]).env("CPD_TEST_DEADLINE_GIT", "1");
         let out = common::output(&mut child).unwrap();
         let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         assert!(out.status.success() && printed.contains("1 passed"), "{printed}");

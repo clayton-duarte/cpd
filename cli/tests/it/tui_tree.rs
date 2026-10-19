@@ -5,7 +5,7 @@
 //! command line. The rendering of single rows, colours and keys is unit-tested
 //! in `tui/src/tree/`.
 
-mod common;
+use crate::common;
 
 use common::{CPD, TestEnv, sql};
 use cpd_core::home::CpdHome;

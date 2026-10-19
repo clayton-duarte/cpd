@@ -12,7 +12,7 @@
 //! into the database by hand: every row comes from a `cpd` command, the engine
 //! or a driver.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::os::unix::fs::symlink;

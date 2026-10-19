@@ -2,7 +2,7 @@
 //! a private tmux server, a fake `pi`-less cockpit (a fake `cpd` for the panes) and a fake `gh`.
 //! Jobs, Attempts and PR rows that only the engine reaches are written straight into the database.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::process::Stdio;

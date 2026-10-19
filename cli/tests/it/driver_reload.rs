@@ -5,7 +5,7 @@
 //! `merged`. An install here is a new script renamed over the copy; it records
 //! its pid and arguments and then becomes the built `cpd`.
 
-mod common;
+use crate::common;
 
 use std::fs::{self, File};
 use std::path::PathBuf;

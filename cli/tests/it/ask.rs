@@ -3,7 +3,7 @@
 //! written straight into the database, as fixtures: they belong to other
 //! areas. `ask` blocks, so it runs as a child process the test answers.
 
-mod common;
+use crate::common;
 
 use std::process::{Child, Stdio};
 

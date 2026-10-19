@@ -1,6 +1,6 @@
 //! `pr view` (commands.md §9.8): a PR's checks, reviews and comments, read-only.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::PathBuf;

@@ -2,7 +2,7 @@
 //! store API (`Store::write`, as the other areas' tests do, because Plans, Jobs
 //! and Attempts belong to their areas) and through the built `cpd` commands.
 
-mod common;
+use crate::common;
 
 use std::fs::{self, File};
 use std::sync::Mutex;

@@ -5,7 +5,7 @@
 //! There is no Reviewer (R19, Escalation rs-driver-a1-q1): a submitted Attempt
 //! goes straight to the merge.
 
-mod common;
+use crate::common;
 
 use std::fs::{self, File, OpenOptions};
 use std::path::PathBuf;

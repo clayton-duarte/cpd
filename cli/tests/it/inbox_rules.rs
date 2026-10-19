@@ -1,7 +1,7 @@
 //! The Inbox's core conditions (contract §2.2 "Inbox item", §3.7 E8) computed from a store the built binary wrote:
 //! a Plan's Lead that blocks, a Context's questions and answers, and the pull requests the poll wrote.
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::time::Duration;

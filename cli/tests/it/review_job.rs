@@ -4,7 +4,7 @@
 //! without commits that only a review Job may make, and a merge that ends
 //! `merged` and leaves the Lead Branch where it is. A fake pi stands for the Worker.
 
-mod common;
+use crate::common;
 
 use std::fs::{self, File};
 use std::path::PathBuf;

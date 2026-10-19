@@ -5,7 +5,7 @@
 //! rendering of messages, wrapping and scrolling is unit-tested in
 //! `tui/src/worker/`.
 
-mod common;
+use crate::common;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
