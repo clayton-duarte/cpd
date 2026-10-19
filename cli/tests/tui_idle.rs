@@ -142,11 +142,10 @@ fn usage(pid: u32) -> Usage {
 }
 
 /// The views `(name, args)` this file runs: one pane each.
-const VIEWS: [(&str, &[&str]); 6] = [
+const VIEWS: [(&str, &[&str]); 5] = [
     ("tree", &["tree"]),
     ("plan", &["plan"]),
     ("widgets", &["widgets"]),
-    ("statusbar", &["statusbar"]),
     ("logs", &["logs"]),
     ("worker", &["worker", "o1-a1", "--plan", "other"]),
 ];
@@ -209,12 +208,13 @@ fn idle(env: &TestEnv, views: &[&str]) -> Vec<(String, Usage)> {
         .collect()
 }
 
-/// tui-F1: the widgets and statusbar views re-read the whole Dispatch model every 2 s (1.9 MB each on the live store).
+/// tui-F1: the widgets view re-read the whole Dispatch model every 2 s (1.9 MB on the live store; the StatusBar is
+/// tmux's status line since #108, fed by the engine).
 #[test]
 fn idle_dispatch_views_read_next_to_nothing() {
     let env = env();
     env.sql(&fixture());
-    for (name, used) in idle(&env, &["widgets", "statusbar"]) {
+    for (name, used) in idle(&env, &["widgets"]) {
         assert!(used.rchar < READ_LIMIT, "{name} read {} B while nothing changed", used.rchar);
     }
 }
@@ -235,7 +235,7 @@ fn idle_tree_and_plan_read_next_to_nothing() {
 fn idle_views_write_nothing_to_the_terminal() {
     let env = env();
     env.sql(&fixture());
-    for (name, used) in idle(&env, &["tree", "plan", "widgets", "statusbar", "logs", "worker"]) {
+    for (name, used) in idle(&env, &["tree", "plan", "widgets", "logs", "worker"]) {
         let allowed = if name == "widgets" { 2 + window().as_secs() / 5 } else { 0 };
         assert!(used.syscw <= allowed, "{name} wrote {} times while nothing changed", used.syscw);
     }

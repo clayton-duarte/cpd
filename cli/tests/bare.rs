@@ -139,12 +139,12 @@ fn runs(pid: u32, exe: &str) -> bool {
     (proc.dev(), proc.ino()) == (file.dev(), file.ino())
 }
 
-/// Waits until the five views of `cpd:main` all run `exe`; their pids.
+/// Waits until the four views of `cpd:main` all run `exe`; their pids.
 fn wait_views_run(env: &TestEnv, exe: &str) -> Vec<(String, u32)> {
     let mut views = Vec::new();
     wait_until(&format!("the views to run {exe}"), || {
         views = view_pids(env);
-        views.len() == 5 && views.iter().all(|(_, pid)| runs(*pid, exe))
+        views.len() == 4 && views.iter().all(|(_, pid)| runs(*pid, exe))
     });
     views
 }
@@ -185,26 +185,31 @@ fn in_a_terminal_it_builds_the_cockpit_starts_the_engine_and_attaches() {
 
     let socket = env.tmux_socket();
     assert_eq!(attach_calls(&env), [["-L", socket, "-f", "/dev/null", "attach", "-t", "cpd"]]);
-    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "statusbar", "tree", "widgets"]);
+    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
     // The engine runs in its own session.
     assert_eq!(tmux_out(&env, &["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]).trim(), "watch");
     assert_eq!(tmux_out(&env, &["list-panes", "-t", "=cpd-work:watch", "-F", "#{pane_dead}"]).trim(), "0");
 }
 
 #[test]
-fn it_adds_a_pane_the_layout_is_missing() {
+fn it_removes_an_older_cpds_statusbar_pane() {
     let env = env();
     assert_eq!(run_in_terminal(&env, "first", false, "").exit_code(), 0);
-    let bar = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view}"])
+    // A main built by an older cpd: the StatusBar pane at the bottom (the StatusBar is now the status line).
+    let tree = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id} #{@cpd_view}"])
         .lines()
-        .find_map(|l| l.strip_suffix(" statusbar").map(str::to_owned))
+        .find_map(|l| l.strip_suffix(" tree").map(str::to_owned))
         .unwrap();
-    tmux_out(&env, &["kill-pane", "-t", &bar]);
-    assert_eq!(view_pids(&env).len(), 4);
+    let bar = tmux_out(&env, &["split-window", "-d", "-v", "-f", "-l", "1", "-t", &tree, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    let bar = bar.trim();
+    tmux_out(&env, &["set", "-p", "-t", bar, "@cpd_view", "statusbar"]);
+    assert_eq!(view_pids(&env).len(), 5);
 
     let t = run_in_terminal(&env, "second", false, "");
     assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "statusbar", "tree", "widgets"]);
+    let panes = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{pane_id}"]);
+    assert!(!panes.lines().any(|p| p == bar), "the old StatusBar pane is gone: {panes}");
+    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
     assert_eq!(attach_calls(&env).len(), 2);
 }
 
@@ -447,7 +452,7 @@ fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_
     assert!(slot.lines().any(|l| l == "lead1"), "{slot}");
     assert_ne!(tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]).lines().find(|l| l.ends_with(" lead1")), Some(lead1_pane.as_str()));
     // The cockpit is whole: its views, and a Lead (not the placeholder) in the chat slot.
-    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["plan", "statusbar", "tree", "widgets"]);
+    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["plan", "tree", "widgets"]);
     // Each pane runs `cpd session run <id>`: the fake cpd was called again for each Session.
     for id in ["lead1", "lead2", "manager1"] {
         let runs = env.calls("cpd").iter().filter(|c| c.as_slice() == ["session", "run", id]).count();
@@ -581,7 +586,7 @@ fn once_nothing_runs_the_engine_restarts_the_server_detached_and_every_session_i
     assert_eq!(kill_server_calls(&env), 1);
     assert_eq!(session_windows(&env), places());
     assert!(tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}"]).lines().any(|l| l == "lead1"));
-    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["plan", "statusbar", "tree", "widgets"]);
+    assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["plan", "tree", "widgets"]);
     for id in ["lead1", "lead2", "manager1"] {
         let runs = env.calls("cpd").iter().filter(|c| c.as_slice() == ["session", "run", id]).count();
         assert_eq!(runs, 2, "{id}");

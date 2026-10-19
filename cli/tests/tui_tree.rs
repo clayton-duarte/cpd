@@ -1437,20 +1437,28 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
         });
         assert_eq!(copy[copy.len() - 3..], words(&["-w", "--", url]));
     };
+    // a command runs off the UI thread with `running: …` in the footer, which moves the Inbox rows: the next row is
+    // looked up once it has ended
+    let ended = || pane.wait("the command to end", |_| !pane.footer_has("running:"));
     // dialog: `session open <its Session>`
     pane.click(10, row_of("f-blocked label"));
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
+    ended();
     // job-stuck: the Lead of its Plan
     pane.click(10, row_of("ship: c is stuck"));
     assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "l-ship"]));
+    ended();
     // question: the Context's Manager
     pane.click(10, row_of("alpha: a question"));
     assert_eq!(wait_for_calls(&env, 4)[2..], [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]);
+    ended();
     // plan-review, and a pull request a Plan owns: the Lead of the Plan
     pane.click(10, row_of("ship plan review"));
     assert_eq!(wait_for_calls(&env, 5)[4], words(&["session", "open", "l-ship"]));
+    ended();
     pane.click(10, row_of("acme/api#3 ready"));
     assert_eq!(wait_for_calls(&env, 6)[5], words(&["session", "open", "l-ship"]));
+    ended();
     // a pull request no Plan owns, and a review request: the url is copied, and the note says how to open it
     pane.click(10, row_of("acme/web#4 changes requested"));
     copied(1, "https://x.io/changes");
@@ -1461,6 +1469,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     // pr-failing, which the Plan `ship` owns here: its Lead
     pane.click(10, row_of("acme/api#12 failing"));
     assert_eq!(wait_for_calls(&env, 7)[6], words(&["session", "open", "l-ship"]));
+    ended();
     pane.wait("the note gone", |_| !pane.footer_has("copied")); // the rows below move with it
     // engine-error: the logs popup at the item's Event
     pane.click(10, row_of("engine: store busy"));

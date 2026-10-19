@@ -1,7 +1,6 @@
 //! The `logs` view and the StatusBar's `▤` button (commands.md §13.2, §17; R36): the Event log's snapshot,
-//! following and scrolling with ratatui's `TestBackend`, the view itself and the button's click on a private tmux
-//! server (the click is raw mouse bytes sent to the StatusBar's pane; `tmux` on `PATH` is a fake that answers
-//! `list-clients` and records `display-popup`, and runs the real one for the rest).
+//! following and scrolling with ratatui's `TestBackend`, the view itself on a private tmux server, and the button's
+//! `cpd tui action logs` (`tmux` on `PATH` is a fake that answers the client's size and records `display-popup`).
 
 mod common;
 
@@ -361,53 +360,41 @@ fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
     assert_eq!(small[3], " logs ");
 }
 
-/// The StatusBar in a one-row window, with a fake `tmux` on `PATH`: `list-clients` says one client of 200x60,
-/// `display-popup` does nothing, and the rest is the real tmux.
-fn statusbar_with_fake_tmux(env: &TestEnv) -> String {
-    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    let pane = start(env, &["statusbar"], 80, 1);
+/// A fake `tmux` on `PATH`: client `/dev/pts/9` is 200x60, `display-popup` does nothing.
+fn fake_tmux(env: &TestEnv) {
     env.fake(
         "tmux",
-        &format!(
-            "case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac",
-            real.trim()
-        ),
+        "case \"$*\" in\n *'display -p -c /dev/pts/9 '*) echo '200 60';;\n *display-popup*) ;;\n *) exit 1;;\nesac",
     );
-    pane
 }
 
 fn popups(env: &TestEnv) -> Vec<Vec<String>> {
     env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
 }
 
-/// A left click at 1-based `column` of the pane's one row, as the terminal sends it (SGR mouse reporting).
-fn click(env: &TestEnv, pane: &str, column: u16) {
-    for end in ['M', 'm'] {
-        tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<0;{column};1{end}")]);
-    }
-}
-
 #[test]
-fn a_click_on_the_logs_button_opens_the_popup_and_the_others_do_not() {
+fn the_logs_action_opens_the_popup_on_the_clicking_client() {
     let env = env();
-    let pane = statusbar_with_fake_tmux(&env);
-    wait_screen(&env, &pane, "the buttons", |r| r.first().is_some_and(|l| l.starts_with("⧉ ? ▤")));
-    // `▤` is column 4 (0-based)
-    click(&env, &pane, 5);
-    wait_until("the popup", || !popups(&env).is_empty());
+    fake_tmux(&env);
+    let run = env.cpd(&["tui", "action", "logs", "--client", "/dev/pts/9"]);
+    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
     let popup = popups(&env).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
-    // `tmux -L <socket> -f /dev/null display-popup -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
+    // `tmux -L <socket> -f /dev/null display-popup -c <client> -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
     let (w, h) = cpd_tui::widgets::legend::size();
     assert_eq!(
         popup[at..],
-        ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view logs"]
+        [
+            "display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(),
+            "cpd tui view logs"
+        ]
     );
     assert!(popup[..at].starts_with(&["-L".to_owned(), env.tmux_socket().to_owned()]), "{popup:?}");
 
-    // a click on the legend button opens the legend, not the log
-    click(&env, &pane, 3);
-    wait_until("the legend popup", || popups(&env).len() == 2);
+    // the legend action opens the legend, not the log
+    let run = env.cpd(&["tui", "action", "legend", "--client", "/dev/pts/9"]);
+    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(popups(&env).len(), 2);
     assert!(popups(&env)[1].contains(&" legend ".to_owned()));
 }
 

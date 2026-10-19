@@ -1,9 +1,12 @@
 //! `cpd tui [--attach] [--respawn]` (commands.md §13.1; contract §6.1, §6.2,
 //! §6.4 with amendment 9): builds the cockpit's `main` window when it is
-//! missing, respawns a dead pane of its layout and adds each pane of it that
-//! is gone, sets §6.1's server options again, with `--respawn` restarts every live view, starts the engine, and
-//! with `--attach` replaces itself with `tmux attach`. When the server runs an older tmux than the
+//! missing, respawns a dead pane of its layout and adds each pane of it that is
+//! gone, sets §6.1's server options and the cockpit session's status line (the StatusBar) again, with
+//! `--respawn` restarts every live view, starts the engine, and with
+//! `--attach` replaces itself with `tmux attach`. When the server runs an older tmux than the
 //! installed one it marks a restart pending (contract §6.1; [`cpd_core::watch::restart`]).
+//! Also reset-layout (commands.md §13.2), and `cpd tui action`, what a click on a StatusBar
+//! button runs.
 //!
 //! The layout, from the spike's `cockpit.sh` (branch `cpd/cpd-ui`):
 //!
@@ -13,13 +16,15 @@
 //! | 20 %  +-------------------+  20 %   |
 //! |       | chat slot (80 %)  |         |
 //! +-------+-------------------+---------+
-//! | StatusBar: one row across the width  |
-//! +--------------------------------------+
 //! ```
 //!
+//! Below it, tmux's status line of the cockpit session is the StatusBar
+//! (contract §6.1); it has no pane.
+//!
 //! A new `main` is reset to these sizes once it is built (A3); an existing one
-//! is not, unless it lacked a pane of the layout: the panes added are followed
-//! by the reset (amendment 15).
+//! is not, unless it lacked a pane of the layout or still had an older cpd's
+//! StatusBar pane: the panes added, or the kill, are followed by the reset
+//! (amendment 15).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -30,12 +35,13 @@ use std::path::{Path, PathBuf};
 use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
-use super::{RunCommand, not_a_terminal, on_a_terminal, statusbar};
+use super::widgets::legend;
+use super::{RunCommand, logs, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
 use cpd_core::host::exe::started_as;
-use cpd_core::host::layout::{MAIN_WINDOW, chat_slot, view_pane};
+use cpd_core::host::layout::{LEGACY_STATUSBAR, MAIN_WINDOW, chat_slot, view_pane};
 use cpd_core::host::tmux::{installed_version, older_version};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View};
 use cpd_core::ids::SessionId;
@@ -46,7 +52,7 @@ use cpd_core::watch::restart;
 
 /// The views of `main`'s layout: a dead one is respawned (amendment 9). The
 /// `worker` view is not part of it: it is opened and closed by the plan view.
-const LAYOUT: [View; 5] = [View::Tree, View::Plan, View::Widgets, View::Chat, View::Statusbar];
+const LAYOUT: [View; 4] = [View::Tree, View::Plan, View::Widgets, View::Chat];
 
 pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Result<Output, CpdError> {
     if attach && !on_a_terminal() {
@@ -91,8 +97,9 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
 
 /// The cockpit part of `cpd tui` and of bare `cpd`: builds `main` when it is
 /// missing, else respawns its dead panes, with `respawn` every live view, and
-/// adds each pane of its layout that is gone; sets the server options again; brings
-/// the last chat Lead into a new chat slot (built, or the chat slot added again). Returns whether it built `main` and the panes
+/// removes an older cpd's StatusBar pane; sets the server options and the
+/// status line again; brings the last chat
+/// Lead into a new chat slot. Returns whether it built `main` and the panes
 /// restarted by `respawn`.
 fn ensure(
     tmux: &Tmux,
@@ -114,8 +121,10 @@ fn ensure(
             respawned = respawn_live_views(tmux, home, &main)?;
         }
         chat_added = add_missing_panes(tmux, home, cockpit, &main)?.contains(&View::Chat);
+        remove_old_statusbar(tmux, cockpit)?;
     }
     tmux.apply_server_options()?;
+    tmux.apply_status_line(cockpit)?;
     if chat_added {
         if let Some(lead) = store.read(last_chat_lead)? {
             open_lead(run_command, &lead)?;
@@ -144,7 +153,7 @@ fn home_spawn(home: &CpdHome, argv: Vec<String>) -> Spawn {
     }
 }
 
-/// Builds `<cockpit>:main` with its five panes, each marked with `@cpd_view`,
+/// Builds `<cockpit>:main` with its four panes, each marked with `@cpd_view`,
 /// starting the server and the cockpit session when they are missing. A
 /// cockpit session that exists without `main` (`plan new` creates it with
 /// the first Lead's park window, commands.md §4.1) gets `main` as a new window.
@@ -162,18 +171,10 @@ fn build(tmux: &Tmux, home: &CpdHome, cockpit: &str) -> Result<(), CpdError> {
     tmux.set_pane_view(&widgets, View::Widgets)?;
     let chat = tmux.split_window(&plan, Split::Below, Some("80%"), &spawn(View::Chat))?;
     tmux.set_pane_view(&chat, View::Chat)?;
-    add_statusbar(tmux, home, &tree)?;
-    statusbar::layout::reset(tmux, cockpit)?;
+    reset_layout(tmux, cockpit)?;
     // The keyboard goes to the chat slot, as in the spike.
     tmux.run(&["select-pane".to_owned(), "-t".to_owned(), chat.as_str().to_owned()])?;
     Ok(())
-}
-
-/// Adds the StatusBar: a one-row pane across the full width at the bottom of
-/// the window of `target`.
-fn add_statusbar(tmux: &Tmux, home: &CpdHome, target: &PaneId) -> Result<(), CpdError> {
-    let bar = tmux.split_window(target, Split::Bottom, Some("1"), &view_spawn(home, View::Statusbar))?;
-    tmux.set_pane_view(&bar, View::Statusbar)
 }
 
 /// Adds each pane of the layout that `main` lacks (the User killed it, or a
@@ -195,10 +196,9 @@ fn add_missing_panes(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) 
         Some(tree) => tree,
         None => add(View::Tree, &any.pane, &["-h", "-b", "-f"], Some("20%"))?,
     };
-    let widgets = match found(View::Widgets) {
-        Some(widgets) => widgets,
-        None => add(View::Widgets, &any.pane, &["-h", "-f"], Some("20%"))?,
-    };
+    if found(View::Widgets).is_none() {
+        add(View::Widgets, &any.pane, &["-h", "-f"], Some("20%"))?;
+    }
     let (plan, slot) = (found(View::Plan), chat_slot(main, cockpit).map(|p| p.pane.clone()));
     match (plan, slot) {
         (Some(_), Some(_)) => {}
@@ -209,18 +209,8 @@ fn add_missing_panes(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) 
             add(View::Chat, &plan, &["-v"], Some("80%"))?;
         }
     }
-    match found(View::Statusbar) {
-        None => drop(add(View::Statusbar, &any.pane, &["-v", "-f"], Some("1"))?),
-        // A tree or widgets added across the whole height has cut the row short: it spans the width again.
-        Some(bar) if added.iter().any(|v| matches!(v, View::Tree | View::Widgets)) => {
-            let anchor = if added.contains(&View::Tree) { tree } else { widgets };
-            let args = ["join-pane", "-d", "-f", "-v", "-l", "1", "-s", bar.as_str(), "-t", anchor.as_str()];
-            tmux.run(&args.map(str::to_owned))?;
-        }
-        Some(_) => {}
-    }
     if !added.is_empty() {
-        statusbar::layout::reset(tmux, cockpit)?;
+        reset_layout(tmux, cockpit)?;
     }
     Ok(added)
 }
@@ -246,6 +236,146 @@ fn split(tmux: &Tmux, home: &CpdHome, view: View, target: &PaneId, flags: &[&str
     })?;
     tmux.set_pane_view(&pane, view)?;
     Ok(pane)
+}
+
+/// An existing `main` that still has an older cpd's StatusBar pane loses it
+/// once (`kill-pane`), then gets reset-layout, so the other panes take the
+/// freed row and get their sizes back (commands.md §13.1, amendment 15).
+fn remove_old_statusbar(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
+    let old: Vec<PaneId> =
+        main_views(tmux, cockpit)?.into_iter().filter(|(_, view)| view == LEGACY_STATUSBAR).map(|(pane, _)| pane).collect();
+    if old.is_empty() {
+        return Ok(());
+    }
+    for pane in &old {
+        tmux.kill_pane(pane)?;
+    }
+    reset_layout(tmux, cockpit)
+}
+
+/// Each pane of `<cockpit>:main` with its raw `@cpd_view` (empty when unset).
+/// Raw, because [`Tmux::list_panes`] skips a pane whose value is no [`View`]
+/// (an older cpd's StatusBar, a newer cpd's view), and warns on stderr about a
+/// newer one, which `cpd tui action` must never print.
+fn main_views(tmux: &Tmux, cockpit: &str) -> Result<Vec<(PaneId, String)>, CpdError> {
+    let args = ["list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{window_name}\t#{@cpd_view}"].map(str::to_owned);
+    let out = tmux.run(&args)?;
+    let mut panes = Vec::new();
+    for line in out.lines() {
+        let fields: Vec<&str> = line.split('\t').collect();
+        let [pane, session, window, view] = fields[..] else {
+            return Err(unexpected_listing(tmux, line));
+        };
+        if session == cockpit && window == MAIN_WINDOW {
+            panes.push((PaneId::parse(pane).ok_or_else(|| unexpected_listing(tmux, line))?, view.to_owned()));
+        }
+    }
+    Ok(panes)
+}
+
+fn unexpected_listing(tmux: &Tmux, line: &str) -> CpdError {
+    CpdError::new(ErrorCode::TmuxFailed, "tmux list-panes printed unexpected output.")
+        .with("socket", tmux.socket())
+        .with("stdout", line.to_owned())
+}
+
+/// Reset-layout (commands.md §13.2): the views resized, in order, with the
+/// `resize-pane` flag and size of each. tmux takes a percentage as a share of
+/// the window. The chat slot is never resized: it takes what is left.
+const RESET_ORDER: [(View, &str, &str); 4] =
+    [(View::Tree, "-x", "20%"), (View::Widgets, "-x", "20%"), (View::Plan, "-y", "20%"), (View::Worker, "-x", "30%")];
+
+/// The ordered `resize-pane` arguments that reset the window, given each pane
+/// as `(pane, view)`. The Worker's step is only there when a Worker pane is open.
+fn reset_steps(panes: &[(PaneId, View)]) -> Vec<Vec<String>> {
+    RESET_ORDER
+        .iter()
+        .filter_map(|(view, flag, size)| {
+            let (id, _) = panes.iter().find(|(_, v)| v == view)?;
+            Some(["resize-pane", "-t", id.as_str(), flag, size].map(String::from).to_vec())
+        })
+        .collect()
+}
+
+/// Resets the layout of `<cockpit>:main`: `cpd tui` runs it after building
+/// `main`, `cpd tui action reset` on the StatusBar's ⧉ click.
+fn reset_layout(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
+    let panes: Vec<(PaneId, View)> =
+        main_views(tmux, cockpit)?.into_iter().filter_map(|(pane, view)| Some((pane, View::parse(&view)?))).collect();
+    for step in reset_steps(&panes) {
+        tmux.run(&step)?;
+    }
+    Ok(())
+}
+
+/// What a StatusBar button does: the range names of contract §6.1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Action {
+    Reset,
+    Legend,
+    Logs,
+}
+
+impl Action {
+    fn parse(s: &str) -> Option<Action> {
+        match s {
+            "reset" => Some(Action::Reset),
+            "legend" => Some(Action::Legend),
+            "logs" => Some(Action::Logs),
+            _ => None,
+        }
+    }
+}
+
+/// `cpd tui action <reset|legend|logs> --client <name>` (commands.md §13.2):
+/// runs the click of a StatusBar button on client `client`. It prints
+/// nothing, on stdout or stderr, and always exits 0: tmux's `run-shell -b`
+/// puts the active pane into view mode on a failure or any output. A failure
+/// is shown with `display-message -c <client>` instead, and if even that
+/// fails, it is dropped.
+pub(super) fn action(name: Option<&str>, client: &str) -> Output {
+    if let Err(e) = run_action(name, client) {
+        if let Ok(tmux) = action_tmux() {
+            let message = format!("cpd tui action: {}", e.message());
+            // `-l`: the message is shown as is, not expanded as a format.
+            let _ = tmux.run(&["display-message".to_owned(), "-l".to_owned(), "-c".to_owned(), client.to_owned(), message]);
+        }
+    }
+    Output::Owned
+}
+
+/// The tmux server of the cockpit, from config `tmux.socket`.
+fn action_tmux() -> Result<Tmux, CpdError> {
+    Ok(Tmux::new(Config::load(&CpdHome::from_env()?)?.tmux.socket))
+}
+
+fn run_action(name: Option<&str>, client: &str) -> Result<(), CpdError> {
+    let action = name.and_then(Action::parse).ok_or_else(|| {
+        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend or logs.", name.unwrap_or("")))
+    })?;
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    let tmux = Tmux::new(config.tmux.socket.clone());
+    let popup = match action {
+        Action::Reset => return reset_layout(&tmux, &config.tmux.cockpit_session),
+        Action::Legend => legend::popup_args(client_size(&tmux, client)?),
+        Action::Logs => logs::popup_args(client_size(&tmux, client)?, None),
+    };
+    tmux.run(&on_client(popup, client)).map(drop)
+}
+
+/// `(columns, rows)` of client `client` (`display -p -c`). tmux prints an
+/// empty line, and exits 0, for a client that does not exist.
+fn client_size(tmux: &Tmux, client: &str) -> Result<(u16, u16), CpdError> {
+    let out = tmux.run(&["display", "-p", "-c", client, "#{client_width} #{client_height}"].map(str::to_owned))?;
+    let size = out.trim().split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+    size.ok_or_else(|| CpdError::new(ErrorCode::TmuxFailed, format!("no tmux client {client:?}.")).with("socket", tmux.socket()))
+}
+
+/// `display-popup …` aimed at `client` (`-c`), so it opens there only.
+fn on_client(mut popup: Vec<String>, client: &str) -> Vec<String> {
+    popup.splice(1..1, ["-c".to_owned(), client.to_owned()]);
+    popup
 }
 
 /// `--respawn`: restarts every live pane of `main` that has `@cpd_view` (the
@@ -478,7 +608,44 @@ fn server_tmux(tmux: &Tmux, after: &str) -> Result<Option<PathBuf>, CpdError> {
 
 #[cfg(test)]
 mod tests {
-    use super::names_socket;
+    use super::*;
+
+    fn panes(views: &[Option<View>]) -> Vec<(PaneId, View)> {
+        views.iter().enumerate().filter_map(|(i, v)| Some((PaneId::parse(&format!("%{i}"))?, (*v)?))).collect()
+    }
+
+    fn joined(steps: Vec<Vec<String>>) -> Vec<String> {
+        steps.iter().map(|s| s.join(" ")).collect()
+    }
+
+    #[test]
+    fn the_reset_applies_the_sizes_in_order() {
+        // %0 tree, %1 chat, %2 widgets, %3 plan
+        let p = panes(&[Some(View::Tree), Some(View::Chat), Some(View::Widgets), Some(View::Plan)]);
+        assert_eq!(joined(reset_steps(&p)), ["resize-pane -t %0 -x 20%", "resize-pane -t %2 -x 20%", "resize-pane -t %3 -y 20%"]);
+    }
+
+    #[test]
+    fn an_open_worker_pane_is_resized_last_to_30_percent() {
+        let p = panes(&[Some(View::Tree), Some(View::Chat), Some(View::Worker), Some(View::Widgets), Some(View::Plan)]);
+        let s = joined(reset_steps(&p));
+        assert_eq!(s.len(), 4);
+        assert_eq!(s[3], "resize-pane -t %2 -x 30%");
+    }
+
+    #[test]
+    fn the_actions_are_the_status_line_ranges() {
+        assert_eq!(["reset", "legend", "logs"].map(Action::parse), [Some(Action::Reset), Some(Action::Legend), Some(Action::Logs)]);
+        assert_eq!(Action::parse(""), None);
+        assert_eq!(Action::parse("Reset"), None);
+    }
+
+    #[test]
+    fn a_popup_opens_on_the_clicking_client() {
+        let popup = on_client(legend::popup_args((215, 62)), "/dev/pts/4");
+        assert_eq!(popup[..5], ["display-popup", "-c", "/dev/pts/4", "-E", "-T"]);
+        assert!(popup.contains(&" legend ".to_owned()));
+    }
 
     #[test]
     fn tmux_names_the_socket_of_its_server() {

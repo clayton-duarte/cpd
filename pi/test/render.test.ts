@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test, mock } from "node:test";
 import { type Component, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { errorMessage, eventMessage, sessionMessage } from "../lib/delivery.ts";
-import type { CpdEvent } from "../lib/event.ts";
+import type { CpdEvent, EventOf } from "../lib/event.ts";
 import type { Message, MessageRenderer, RenderedMessage, Theme } from "../lib/pi.ts";
 import { loadStyle, RENDERED_TYPES, Rendering, type Style } from "../lib/render.ts";
 import { contextUpdate, type ContextRecord, type PendingPlan, type PlanEvent } from "../lib/updates.ts";
@@ -43,6 +43,7 @@ const HEAD = (summary: string) => ` <customMessageLabel>⦁</> <toolTitle><b>cpd
 const rail = (line: string) => `<dim> │ </><toolOutput>${line}</>`;
 const closing = (word: string) => `<dim> └ </><dim>${word}</>`;
 
+const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
 const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev(7, kind, over) as unknown as CpdEvent;
 const deep = <T>(m: T): T => structuredClone(m);
 
@@ -81,16 +82,16 @@ test("an empty content shows no body", () => {
 // ---- Session messages ----
 
 test("a message from the User: `Message from the User`", () => {
-  const m = sessionMessage(event("session-message", { data: { from: null, text: "hi there", wake: false } }), ID, null);
+  const m = sessionMessage(sessionEvent({ data: { from: null, text: "hi there", wake: false } }), ID, null);
   assert.deepEqual(show(m, false), [HEAD("Message from the User"), closing("Click to expand")]);
   assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User: hi there"), closing("Click to collapse")]);
 });
 
 test("a message from a Session: its name, or its id when it has none", () => {
-  const named = sessionMessage(event("session-message", { data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
+  const named = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
   assert.deepEqual(show(named, false), [HEAD("Message from cross-repo"), closing("Click to expand")]);
   assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}): hello`)]);
-  const unnamed = sessionMessage(event("session-message", { data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
+  const unnamed = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
   assert.deepEqual(show(unnamed, false)[0], HEAD(`Message from ${OTHER}`));
 });
 

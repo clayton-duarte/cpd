@@ -29,6 +29,7 @@ pub(super) enum Step {
     E4,
     E5,
     E7,
+    Workers,
     E8,
     E9,
 }
@@ -42,6 +43,7 @@ impl fmt::Display for Step {
             Step::E4 => "E4 (completion)",
             Step::E5 => "E5 (PR)",
             Step::E7 => "E7 (PR start)",
+            Step::Workers => "the @cpd_workers step",
             Step::E8 => "E8 (Inbox)",
             Step::E9 => "E9 (Context digests)",
         })
@@ -59,6 +61,7 @@ impl Step {
             Step::E5 => "E5",
             Step::E7 => "E7",
             Step::E8 => "E8",
+            Step::Workers => "@cpd_workers",
             Step::E9 => "E9",
         }
     }
