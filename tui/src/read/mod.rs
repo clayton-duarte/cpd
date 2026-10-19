@@ -5,8 +5,8 @@
 //! - [`plan_boxes()`] and [`chat_slot()`]: the plan view, one Plan's PRs with their Jobs, Attempts and
 //!   Dependencies, and the Plan of the Lead in the chat slot; [`flow()`]: one Plan's Jobs, Escalations,
 //!   review and first PR (`plan show`);
-//! - [`widgets()`]: the Dispatch column, slots, the engine, the open pull requests,
-//!   open Escalations and the latest Events (`plan list`);
+//! - [`widgets()`]: slots, the engine, the Plans, the open pull requests, open Escalations and the latest Events
+//!   (`plan list`); the views read only what they draw: [`open_prs()`] (the Dispatch column) and [`slots()`] (the StatusBar);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
 //! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`).
 //!
@@ -41,10 +41,10 @@ pub use shared::{
     PrState, ReviewStatus, SessionNode,
 };
 pub use dot::{Dot, DotInputs};
-pub use follow::Follow;
+pub use follow::{Changes, Follow};
 pub use logs::{Logs, logs, logs_after};
 pub use tree::{ContextNode, PlanNode, Tree, tree};
 pub use widgets::{
-    Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, widgets,
+    Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, slots, widgets,
 };
 pub use worker::{AttemptDetail, AttemptEscalation, Worker, worker};

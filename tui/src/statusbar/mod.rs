@@ -3,8 +3,10 @@
 //! indicator `workers N/M`. It has no keys and never takes keyboard focus (the root mouse binding passes a click on
 //! with `send-keys -M`, §6.3).
 //!
-//! It refreshes like the `widgets` view: it looks at the store's highest Event id every [`TICK`] and re-reads the
-//! slots when it moved, at most once per [`COALESCE`], and at least every [`REFRESH`]. No subprocess, no `gh`.
+//! It looks at the store's highest Event id every [`TICK`] and re-reads the slots ([`read::slots`], the one thing it
+//! draws) when it moved, at most once per [`COALESCE`]: a slot is taken and given back by Events, so nothing is read
+//! on a timer. It draws when the workers, the note, the size or a click changed, not on every tick. No subprocess, no
+//! `gh`.
 //!
 //! - [`bar`]: the row's drawing and its clickable items;
 //! - [`workers`]: the indicator;
@@ -40,8 +42,6 @@ use cpd_core::store::Store;
 const TICK: Duration = Duration::from_millis(200);
 /// At most one read per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
-/// A read at least this often.
-const REFRESH: Duration = Duration::from_secs(2);
 
 /// The buttons: one glyph, one cell each.
 const RESET_BUTTON: &str = "⧉";
@@ -75,13 +75,13 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let home = CpdHome::from_env()?;
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let first = read::widgets(&mut store, config.concurrency, 0)?;
-            let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
-            Ok((store, config, first, follow))
+            let (slots, cursor) = read::slots(&mut store, config.concurrency)?;
+            let follow = read::Follow::new(&mut store, &[], cursor)?;
+            Ok((store, config, Workers::of(&slots), follow))
         },
-        |terminal, (mut store, config, first, follow)| {
+        |terminal, (mut store, config, workers, follow)| {
             let tmux = Tmux::new(config.tmux.socket.clone());
-            show(terminal, &mut store, follow, &config, &tmux, Workers::of(&first.slots))
+            show(terminal, &mut store, follow, &config, &tmux, workers)
         },
     )
 }
@@ -100,13 +100,18 @@ fn show(
     let mut note = String::new();
     let mut error = None::<String>;
     let mut read_at = Instant::now();
+    let mut redraw = true;
     loop {
-        let shown = error.as_deref().unwrap_or(&note);
-        terminal.draw(|f| {
-            let (left, right) = items(&workers, shown, f.area().width);
-            clickable = bar::draw(f, f.area(), &left, &right);
-        })?;
+        if redraw {
+            let shown = error.as_deref().unwrap_or(&note);
+            terminal.draw(|f| {
+                let (left, right) = items(&workers, shown, f.area().width);
+                clickable = bar::draw(f, f.area(), &left, &right);
+            })?;
+            redraw = false;
+        }
         if event::poll(TICK)? {
+            redraw = true; // a click or a resize
             if let Event::Mouse(m) = event::read()? {
                 if m.kind == MouseEventKind::Down(MouseButton::Left) {
                     note.clear();
@@ -124,22 +129,24 @@ fn show(
             }
         }
         if read_at.elapsed() >= COALESCE {
-            let retry = error.is_some();
+            let (retry, shown) = (error.is_some(), error.clone());
             let read = (|| {
                 let moved = !follow.poll(store)?.is_empty();
-                if !(moved || retry || read_at.elapsed() >= REFRESH) {
+                if !(moved || retry) {
                     return Ok(None);
                 }
-                read::widgets(store, config.concurrency, 0).map(Some)
+                read::slots(store, config.concurrency).map(|(slots, _)| Some(Workers::of(&slots)))
             })();
             match kept(read, &mut error) {
                 Some(None) => {} // nothing moved
                 Some(Some(next)) => {
-                    workers = Workers::of(&next.slots);
+                    redraw |= next != workers;
+                    workers = next;
                     read_at = Instant::now();
                 }
                 None => read_at = Instant::now(), // retried after the next COALESCE
             }
+            redraw |= error != shown;
         }
     }
 }
