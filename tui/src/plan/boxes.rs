@@ -429,12 +429,8 @@ mod tests {
         assert!(t.spans[3].style.add_modifier.contains(Modifier::DIM));
     }
 
-    #[test]
-    fn a_pull_request_adds_its_arrow_to_the_title_and_widens_the_box_by_it() {
-        let mut api = pr("api", &[]);
-        let before = layout(&[api.clone()], &[], 0).chart;
-        api.pull = Some(pull(12, PrState::Open));
-        let c = layout(&[api], &[], 0).chart;
+    /// The chart with its OSC 8 link sequences stripped, so it reads as plain text.
+    fn without_links(c: &Chart) -> Chart {
         let mut plain = Chart { buf: c.buf.clone(), pills: Vec::new(), columns: Vec::new() };
         let mut covered = 0;
         for cell in &mut plain.buf.content {
@@ -448,14 +444,13 @@ mod tests {
             let symbol = cell.symbol().replace("\x1b]8;;https://github.com/acme/repo/pull/12\x07", "").replace("\x1b]8;;\x07", "");
             cell.set_symbol(&symbol);
         }
-        snap(&plain, "
-┌ api · api-repo → main · #12 open ↗ ┐
-│ no Jobs                            │
-└────────────────────────────────────┘");
-        assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open ↗` is two cells longer than `dispatch`");
-        // every cell of `#12 open ↗`, and no other, is under the OSC 8 link to the pull request; a piece's second cell
-        // keeps its symbol but is covered by the piece
-        let top: Vec<char> = text(&plain).lines().next().unwrap().chars().collect();
+        plain
+    }
+
+    /// The cells of the title row under the link to the pull request, and the cells of `#` and `↗` in the plain chart.
+    /// A piece's second cell keeps its symbol but is covered by the piece.
+    fn link_cells(c: &Chart, plain: &Chart) -> (Vec<u16>, u16, u16) {
+        let top: Vec<char> = text(plain).lines().next().unwrap().chars().collect();
         let first = top.iter().position(|&ch| ch == '#').unwrap() as u16;
         let arrow = top.iter().position(|&ch| ch == '↗').unwrap() as u16;
         let mut covered = Vec::new();
@@ -465,6 +460,36 @@ mod tests {
                 covered.extend(x..x + c.buf[(x, 0)].cell_width().max(1));
             }
         }
+        (covered, first, arrow)
+    }
+
+    #[test]
+    fn a_conflicting_pull_request_links_exactly_its_number_conflict_and_arrow() {
+        let mut api = pr("api", &[]);
+        api.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
+        let c = layout(&[api], &[], 0).chart;
+        let plain = without_links(&c);
+        snap(&plain, "
+┌ api · api-repo → main · #12 conflict ↗ ┐
+│ no Jobs                                │
+└────────────────────────────────────────┘");
+        let (covered, first, arrow) = link_cells(&c, &plain);
+        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict ↗` whole, not the key nor the separators");
+    }
+
+    #[test]
+    fn a_pull_request_adds_its_arrow_to_the_title_and_widens_the_box_by_it() {
+        let mut api = pr("api", &[]);
+        let before = layout(&[api.clone()], &[], 0).chart;
+        api.pull = Some(pull(12, PrState::Open));
+        let c = layout(&[api], &[], 0).chart;
+        let plain = without_links(&c);
+        snap(&plain, "
+┌ api · api-repo → main · #12 open ↗ ┐
+│ no Jobs                            │
+└────────────────────────────────────┘");
+        assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open ↗` is two cells longer than `dispatch`");
+        let (covered, first, arrow) = link_cells(&c, &plain);
         assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `↗`, not the key nor the separators");
         assert!(before.buf.content.iter().all(|cell| !cell.symbol().contains("]8;;")), "no pull request, no link");
     }
