@@ -533,7 +533,7 @@ fn no_key_but_the_references_does_anything() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 14);
+    let pane = Pane::start(&env, 46, 18);
     pane.ready();
     let before = pane.wait("the whole view, the Inbox section's last row included", |s| s.last().is_some_and(|r| r == " +1 more"));
     pane.down(2); // on sketch
