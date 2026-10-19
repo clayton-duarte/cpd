@@ -209,6 +209,7 @@ error_codes! {
     PrNotReady = "pr_not_ready" => Refused,
     PrEnded = "pr_ended" => Refused,
     PrClosed = "pr_closed" => Refused,
+    BaseBehind = "base_behind" => Refused,
     NeedsOtherPr = "needs_other_pr" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
@@ -390,6 +391,7 @@ mod tests {
             (ErrorCode::PrNotReady, 3),
             (ErrorCode::PrEnded, 3),
             (ErrorCode::PrClosed, 3),
+            (ErrorCode::BaseBehind, 3),
             (ErrorCode::NeedsOtherPr, 3),
             (ErrorCode::PrNotFound, 4),
             (ErrorCode::PolicyInvalid, 1),
