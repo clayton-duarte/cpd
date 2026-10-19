@@ -72,15 +72,29 @@ chmod 755 "$tmp"
 mv -f "$tmp" "$dest_dir/cpd"
 trap - EXIT
 
-# The adapter is replaced as a whole; tests are not part of the install.
+# The adapter is replaced as a whole; tests are not part of the install. It is
+# built in a directory of its own name beside the old one ($$ keeps concurrent
+# installs apart) and swapped in with one rename, so the adapter directory is
+# never missing or half written: the first install renames it into place, a
+# later one exchanges the two directories (renameat2 RENAME_EXCHANGE, Linux,
+# glibc 2.28) and then deletes the old one, now under the temporary name.
 mkdir -p "$(dirname "$adapter_dir")"
 adapter_tmp="$adapter_dir.tmp.$$"
 trap 'rm -rf "$adapter_tmp"' EXIT
 mkdir -p "$adapter_tmp"
 cp -R "$root/pi/." "$adapter_tmp/"
 rm -rf "$adapter_tmp/test"
-rm -rf "$adapter_dir"
-mv "$adapter_tmp" "$adapter_dir"
+if [ -d "$adapter_dir" ]; then
+  python3 -c 'import ctypes, sys
+RENAME_EXCHANGE, AT_FDCWD = 2, -100
+a, b = (p.encode() for p in sys.argv[1:])
+if ctypes.CDLL(None, use_errno=True).renameat2(AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE) != 0:
+    e = ctypes.get_errno()
+    sys.exit("renameat2 %s <-> %s: errno %d" % (sys.argv[1], sys.argv[2], e))' "$adapter_tmp" "$adapter_dir"
+else
+  mv "$adapter_tmp" "$adapter_dir"
+fi
+rm -rf "$adapter_tmp"
 trap - EXIT
 
 echo "installed $dest_dir/cpd and $adapter_dir" >&2

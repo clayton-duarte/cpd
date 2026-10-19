@@ -9,8 +9,8 @@ use crate::common::TestEnv;
 
 const SCRIPTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts");
 
-/// A clone of an origin whose `main` has the install script, `scripts/cargo.sh`, a one-file
-/// adapter and the migration files `on_main` (each with its own name as text).
+/// A clone of an origin whose `main` has the install script, `scripts/cargo.sh`, a small
+/// adapter (with a `test/` that an install must not copy) and the migration files `on_main` (each with its own name as text).
 pub struct Checkout {
     /// The clone: the tree the script builds from.
     pub root: PathBuf,
@@ -23,8 +23,11 @@ impl Checkout {
         for script in ["install-cpd.sh", "cargo.sh"] {
             fs::copy(Path::new(SCRIPTS).join(script), origin.join("scripts").join(script)).unwrap();
         }
-        fs::create_dir_all(origin.join("pi")).unwrap();
-        fs::write(origin.join("pi/package.json"), "{}\n").unwrap();
+        for file in ["package.json", "extension.ts", "lib/cpd.ts", "lib/adapter.ts", "test/cpd.test.ts"] {
+            let path = origin.join("pi").join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, format!("{file}\n")).unwrap();
+        }
         let migrations = origin.join("core/src/store/migrations");
         fs::create_dir_all(&migrations).unwrap();
         for name in on_main {

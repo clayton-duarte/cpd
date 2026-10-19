@@ -7,6 +7,8 @@
     "moduleResolution": "nodenext",
     "allowImportingTsExtensions": true,
     "target": "ES2023",
+    // pi 1.3.0's own .d.ts files do not typecheck under these settings (TS1543 JSON import attributes, a missing @modelcontextprotocol/sdk); our code is still checked.
+    "skipLibCheck": true,
     "types": ["node"]
   },
   "include": ["pi"]
