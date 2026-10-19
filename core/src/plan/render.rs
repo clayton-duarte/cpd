@@ -316,6 +316,15 @@ mod tests {
     }
 
     #[test]
+    fn the_paths_cell_shows_five_paths_and_counts_the_rest() {
+        let paths = |n: usize| (1..=n).map(|i| format!("a/{i}.rs")).collect::<Vec<_>>();
+        assert_eq!(paths_cell(&paths(1)), "`a/1.rs`");
+        assert_eq!(paths_cell(&paths(5)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`");
+        assert_eq!(paths_cell(&paths(6)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +1");
+        assert_eq!(paths_cell(&paths(40)), "`a/1.rs`, `a/2.rs`, `a/3.rs`, `a/4.rs`, `a/5.rs`, +35");
+    }
+
+    #[test]
     fn a_plan_without_prs_says_so() {
         assert_eq!(markdown("T", "ctx", "plan", &[], &[], &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
     }
