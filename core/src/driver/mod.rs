@@ -18,12 +18,11 @@ mod worker;
 use serde_json::json;
 
 use crate::args::PlanArg;
-use crate::config::{Config, load_catalog};
+use crate::config::load_catalog;
+use crate::env::Env;
 use crate::error::CpdError;
-use crate::home::CpdHome;
 use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
-use crate::store::Store;
 
 pub use start::{Origin, StartCtx, Started, start};
 
@@ -56,9 +55,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
 /// `cpd job dispatch` (commands.md §5.5): starts one Ready Job now, as E3 does.
 pub fn dispatch(args: DispatchArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let Env { home, config, mut store } = Env::open()?;
     let catalog = load_catalog(&config)?;
     let ctx = StartCtx { home: &home, config: &config, catalog: &catalog, command: "job dispatch" };
     let started = start(&mut store, &ctx, &plan, &args.key)?;

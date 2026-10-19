@@ -16,6 +16,7 @@ use super::stall;
 use super::worker;
 use super::RunArgs;
 use crate::config::{Catalog, Config, load_catalog};
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
@@ -98,8 +99,7 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // until this function returns, which is the driver's whole life.
     let lock = lock::inherited(&home, &plan, &id)?;
     let exe = Exe::current()?;
-    let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let Env { home, config, store } = Env::open_home(home)?;
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
 
