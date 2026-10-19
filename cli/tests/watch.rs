@@ -253,9 +253,10 @@ impl Fx {
         self.start_from(Path::new(CPD))
     }
 
-    /// `start` with the engine run from the binary at `exe`; E5 polls every tick ([`PR_POLL_EVERY_TICK`]).
+    /// `start` with the engine run from the binary at `exe`; E5 polls every tick and the engine and its drivers look
+    /// every 50 ms ([`common::PLAN_POLLS`]).
     fn start_from(&self, exe: &Path) -> Engine {
-        self.start_with(exe, &[PR_POLL_EVERY_TICK])
+        self.start_with(exe, &common::PLAN_POLLS)
     }
 
     /// `start_from` with the variables `vars` added to the engine's environment.
