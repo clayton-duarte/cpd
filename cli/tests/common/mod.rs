@@ -300,9 +300,18 @@ pub struct TestEnv {
     tmux_socket: String,
     /// The reaper ([`TestEnv::start_reaper`]), until the teardown stops it.
     reaper: Mutex<Option<Child>>,
-    /// When the reaper started, in clock ticks since boot (`/proc/<pid>/stat` field 22): every
-    /// process this env starts starts at or after it.
-    since: OnceLock<u64>,
+    /// The reaper's start: every process this env starts starts at or after it.
+    since: OnceLock<Since>,
+}
+
+/// When a process started: its pid and its start time.
+#[derive(Clone, Copy, Debug)]
+struct Since {
+    /// The kernel hands out pids in increasing order, wrapping at `pid_max`: until the counter
+    /// wraps, a process started later has a larger pid.
+    pid: i32,
+    /// Clock ticks since boot (`/proc/<pid>/stat` field 22).
+    ticks: u64,
 }
 
 /// The result of one `cpd` run.
@@ -401,7 +410,8 @@ impl TestEnv {
             cmd.pre_exec(|| nix::unistd::setsid().map(drop).map_err(io::Error::from));
         }
         let reaper = spawn(&mut cmd).expect("start the reaper");
-        let since = start_ticks(Pid::from_raw(reaper.id() as i32)).expect("the reaper's start time");
+        let pid = reaper.id() as i32;
+        let since = Since { pid, ticks: start_ticks(Pid::from_raw(pid)).expect("the reaper's start time") };
         self.since.set(since).expect("one reaper per env");
         *self.reaper.lock().unwrap_or_else(PoisonError::into_inner) = Some(reaper);
     }
@@ -421,7 +431,7 @@ impl TestEnv {
             let _ = run_quietly(self.command("tmux").arg("-L").arg(&self.tmux_socket).arg("kill-server").current_dir("/"));
         }
         for _ in 0..5 {
-            let pids = processes_under(self.root(), self.since.get().copied().unwrap_or(0));
+            let pids = processes_under(self.root(), self.since.get().copied());
             if pids.is_empty() {
                 break;
             }
@@ -744,12 +754,18 @@ fn start_ticks(pid: Pid) -> Option<u64> {
     stat.rsplit_once(") ")?.1.split(' ').nth(19)?.parse().ok()
 }
 
-/// The live processes of this user that started at or after `since` (clock ticks since boot)
-/// and whose command line contains `dir` or whose cwd is under it, but the test process and its
-/// ancestors: one pass over `/proc`, in this process (the teardown's search). Processes of other
-/// users are skipped (they cannot be signalled), and so are the older ones without reading
-/// their command line: on a busy machine that read is the search's cost.
-fn processes_under(dir: &Path, since: u64) -> Vec<Pid> {
+/// The live processes of this user that started at or after `since` (every process when
+/// `None`) and whose command line contains `dir` or whose cwd is under it, but the test process
+/// and its ancestors: one pass over `/proc`, in this process (the teardown's search). Processes
+/// of other users are skipped (they cannot be signalled), and so are the older ones without
+/// reading their command line: on a busy machine those reads are the search's cost.
+///
+/// The kernel hands out pids in increasing order up to `pid_max`, then wraps. So while its
+/// counter (`ns_last_pid`, read after the listing) is at or above `since.pid`, every process
+/// started since has a pid between the two, and the entries outside are not even read; once it
+/// has wrapped, every entry is (a whole cycle of `pid_max`, millions of processes, within one
+/// env does not happen).
+fn processes_under(dir: &Path, since: Option<Since>) -> Vec<Pid> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::MetadataExt;
     let uid = uid();
@@ -763,19 +779,26 @@ fn processes_under(dir: &Path, since: u64) -> Vec<Pid> {
         parent = Pid::from_raw(ppid);
     }
     let Ok(entries) = fs::read_dir("/proc") else { return Vec::new() };
-    entries
-        .filter_map(|e| {
-            let e = e.ok()?;
-            let pid = Pid::from_raw(e.file_name().to_str()?.parse().ok()?);
-            (pid.as_raw() > 1 && !protected.contains(&pid) && e.metadata().ok()?.uid() == uid).then_some((pid, e.path()))
-        })
-        .filter(|(pid, proc_dir)| {
-            let recent = start_ticks(*pid).is_some_and(|t| t >= since);
+    let listed: Vec<i32> = entries.filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok()).collect();
+    let last_pid: Option<i32> = fs::read_to_string("/proc/sys/kernel/ns_last_pid").ok().and_then(|s| s.trim().parse().ok());
+    let pids = match (since, last_pid) {
+        (Some(since), Some(last)) if last >= since.pid => since.pid..=last,
+        _ => 2..=i32::MAX,
+    };
+    let min_ticks = since.map_or(0, |s| s.ticks);
+    listed
+        .into_iter()
+        .filter(|pid| pids.contains(pid))
+        .map(Pid::from_raw)
+        .filter(|pid| pid.as_raw() > 1 && !protected.contains(pid))
+        .filter(|pid| {
+            let proc_dir = PathBuf::from(format!("/proc/{pid}"));
+            let mine = || fs::metadata(&proc_dir).is_ok_and(|m| m.uid() == uid);
+            let recent = || start_ticks(*pid).is_some_and(|t| t >= min_ticks);
             let by_cmdline = || fs::read(proc_dir.join("cmdline")).is_ok_and(|c| c.windows(needle.len()).any(|w| w == needle));
             let by_cwd = || fs::read_link(proc_dir.join("cwd")).is_ok_and(|cwd| cwd.starts_with(dir));
-            recent && (by_cmdline() || by_cwd()) && alive(*pid)
+            mine() && recent() && (by_cmdline() || by_cwd()) && alive(*pid)
         })
-        .map(|(pid, _)| pid)
         .collect()
 }
 
