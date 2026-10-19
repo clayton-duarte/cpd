@@ -1038,6 +1038,11 @@ mod tests {
         pull_request(&mut f, 7, "passed", "mergeable", "approved");
         set(&mut f, 6, "review_requested = 1");
         f.job("a", "queued");
+        // A PR points to the row: its Context's owner keys it (an unset one is `owner_unset`, not this test's subject).
+        f.sql("UPDATE contexts SET owner = 'acme'");
+        let owners = f.home.root().join("policy/owners");
+        std::fs::create_dir_all(&owners).unwrap();
+        std::fs::write(owners.join("acme.toml"), "").unwrap();
         f.sql("UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = 6),
                               pr_number = 6, pr_url = 'https://github.com/acme/shop/pull/6', pr_opened_at = 't'");
         for kind in [Kind::PrFailing, Kind::PrChanges, Kind::ReviewRequested] {
