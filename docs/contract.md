@@ -955,11 +955,11 @@ CREATE TABLE plan_reviews (
   id           TEXT NOT NULL,
   number       INTEGER NOT NULL CHECK (number >= 1),
   fingerprint  TEXT NOT NULL CHECK (length(fingerprint) = 64),
-  title        TEXT,  -- hs-d291, migration review-title (additive): null for a review made before it; the 1–72 character rule is enforced in the binary (§2.1)
   status       TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
   feedback     TEXT,
   requested_at TEXT NOT NULL,
   decided_at   TEXT,
+  title        TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 72),  -- hs-d291, migration `review-title` (additive, so last): null for a review made before it; one line, no control characters is checked at the boundary (`PrTitle`)
   PRIMARY KEY (plan, id),
   UNIQUE (plan, number),
   CHECK (id = 'r' || number),
