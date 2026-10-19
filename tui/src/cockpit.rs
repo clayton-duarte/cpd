@@ -62,7 +62,12 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
     let watch = command(run_command, &["watch", "--ensure"])?;
     // An older server is restarted by the engine once nothing is in the way (contract §6.1).
     let after = match mark_if_older(&home, &tmux) {
-        Ok(Some(why)) => why,
+        Ok(Some(why)) => {
+            if !attach {
+                eprintln!("cpd tui: the tmux server runs an older tmux than the installed one{why}.");
+            }
+            why
+        }
         Ok(None) => String::new(),
         Err(e) => {
             eprintln!("cpd tui: cannot compare the tmux server's version with the installed tmux: {}", e.message());
