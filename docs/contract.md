@@ -1853,7 +1853,7 @@ Who runs R:
 - Nobody else (hs-d243). The merge needs no R first: step 3 is gone, and rule S finishes a dead driver's stale Lead worktree. `pr open` needs none: an unrecorded merge leaves its Job `running`, which `jobs_not_done` refuses. `pr push` needs none: pushing a commit the Ledger has or has not recorded changes nothing for R.
 - **Nothing restarts a driver at A8.** A dead driver's Attempt is ended by R or E2, never resumed; an implementation that adds a restart at A8 must run R first, so a merge is never done twice.
 
-A driver killed while its `git update-ref` child runs frees its driver lock before git finishes, so R can decide R3 a few milliseconds before the compare-and-swap lands (I infer: the driver's descriptors are close-on-exec, §3.4). This was so under the per-repo lock too, and hs-d243 does not change it.
+A driver killed while its `git update-ref` child runs frees its driver lock before git finishes, so R can decide R3 a few milliseconds before the compare-and-swap lands (unverified, inferred: the driver's descriptors are close-on-exec, §3.4). This was so under the per-repo lock too, and hs-d243 does not change it.
 
 **A review Job's merge** (B2). The driver runs step 1 (cancel check), step 2 (snapshot `old`) and step 7 (cancel check again); it skips steps 4–6 and 8–9 (no tamper check, rebase, fast-forward, push or worktree sync: the Attempt has no commits and the Lead Branch does not move), then runs step 10 with `merged_sha = old`. R ends a review Attempt found in `merging` with a free driver lock `merged` (its submit already proved the findings file and the absence of commits), with `merged_sha` the Lead Branch's tip at that moment, and pushes nothing. A9 removes its worktree and branch as for a merged Attempt (`git branch -d` succeeds: the branch has no commits of its own).
 
@@ -1968,7 +1968,6 @@ stall_seconds = 1200         # a Worker idle in one tool call this long has that
 ask_minutes = 60             # an Escalation expires after this
 setup_minutes = 15           # pre-start
 gate_minutes = 30            # pre-commit and pre-merge
-lock_wait_seconds = 900      # pr rebase waiting for the per-repo lock
 store_busy_ms = 5000         # SQLite busy timeout (§4.2)
 fork_quiet_seconds = 5       # fork-when-idle (§6.7)
 distill_minutes = 15         # a distill run kills its pi after this (§4.6)
@@ -2009,7 +2008,7 @@ work_session = "cpd-work"    # the hidden session for Workers and watch
 | `events.poll_ms` | int | `200` | 20–10000 |
 | `tmux.socket`, `tmux.cockpit_session`, `tmux.work_session` | text | above | `^[A-Za-z0-9_-]{1,32}$`; the two sessions differ |
 
-Removed by R19: `default_review_tier` and `review_mode` (there is no Reviewer). Removed from cpd 1 §5: `herdrSession` (herdr is dropped) and `askTimeoutMinutes`, `attemptTimeoutMinutes`, `tickSeconds`, `prPollSeconds`, which moved into tables. `CPD_HOME` stays an environment variable, not a key.
+Removed by R19: `default_review_tier` and `review_mode` (there is no Reviewer). Removed by hs-d243: `timeouts.lock_wait_seconds` (there is no per-repo lock to wait for, §7); a file that still sets it is `config_invalid`, as any unknown key. Removed from cpd 1 §5: `herdrSession` (herdr is dropped) and `askTimeoutMinutes`, `attemptTimeoutMinutes`, `tickSeconds`, `prPollSeconds`, which moved into tables. `CPD_HOME` stays an environment variable, not a key.
 
 ## 9. Tiers
 
@@ -2056,6 +2055,7 @@ Kept from cpd 1 §7, with one change in how pi's catalog is read.
 | The Manager role (Plan manager B3: hs-d83..hs-d86, hs-d92, hs-d129, hs-d133, hs-d154; B3-A1..A5) | §2.2 Context, Context record (`brief`), Session (`manager`), Archived; §3.1 (The Context's Manager), §3.6; §4.4, §4.5 (migration 0010); §5.2, §5.3 (digest); §6.2, §6.4, §6.5; §8.2 (`manager_tier`) |
 | Plumbing (hs-d139, hs-d140, hs-a3): the merge step skips its rebase when the Lead tip is already in the Attempt; `pr push`; `events follow` ends on store errors and re-execs after an install; `job add` re-arms `all-merged`; short Session ids | §1.2 (`push_rejected`, `session_ambiguous`), §2.2 PR, §3.7 E4, §5.2 `all-merged`, §5.4, §7.4 step 5, §7.6 `pr push`; `commands.md` §1.3, §5.1, §9.9, §10 (every command that takes a Session), §11.2; `docs/implementing.md` |
 | The distilled Context (hs-d182, hs-d192, hs-d194, hs-n111; D1–D7 of PR `distill`, Plan cross-repo; the pilot of Epic B, hs-n95) | D1 the digest files: §1.4, §2.2 Context record, §4.6; D2 records in force: §4.6; D3 validation: §1.2 (`distill_invalid`), §4.6, §5.2 `error`; D4 the engine rebuild: §1.2 (`distill_running`), §3.7 E9, §6.4; D5 the distiller: §4.6, §6.5, §8.2 (`context_distill_tier`, `timeouts.distill_minutes`), §9; D6 consumers: §3.1, §4.6, §6.5; D7: §4.6 "Nothing is lost"; `commands.md` §3.3, §3.12, §4.1, §3.10; `docs/implementing.md` |
+| No per-repo lock (hs-d243, User, 2026-10-19; design `docs/research/no-repo-lock.md`): no lock between PRs or Plans; inside one PR, ref and status compare-and-swaps, rule S, rule P, guard U and a gate worktree per Gate run | §1.2 (`lock_timeout`), §1.4 (`repo-<sha1>.lock` removed, `pr-<key>.pre-start.log`), §3.4 (`dirty_target` no longer produced), §3.7 E2, §7 (G1 no `.git/config` writes, G2 ref-lock timeouts), §7.1 (gate worktree, the Lead worktree a view), §7.2 (`--no-track`, the clean-up), §7.3 (`pre-merge` in a gate worktree, `branch`), §7.4 (step 3 removed, steps 8–9, rule S, rule P, R), §7.6 (the Gate on a snapshot, `pr open`, `pr rebase` with guard U, `pr push`), §8.2 (`lock_wait_seconds` removed); `commands.md` §4.8, §6.4, §9.1, §9.2, §9.3, §9.7, §9.9; `docs/implementing.md` (`sha1`) |
 | D1 every command prints one JSON value; exit codes | §1.2 |
 | D2 `plan new --context X` forks the Context's grounded Lead (**superseded** by hs-d92: `plan new` starts a fresh Lead, the grounded Lead is retired) | §2.2 Context, §3.1 (The grounded Lead is retired), §4.5 migration 0010 |
 | D3 `workflow` becomes `plan` | §1.3 (`--plan`, `CPD_PLAN`), §2.2 Plan, CONTEXT.md |
