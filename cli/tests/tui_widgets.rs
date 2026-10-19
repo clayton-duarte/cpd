@@ -180,9 +180,9 @@ fn plain(symbol: &str) -> String {
     out
 }
 
-/// A PR's first line on a pane of `width` columns: its name, then `↗` in the last column.
+/// A PR's first line on a pane of `width` columns: its name, then `󰏌` in the last column.
 fn first_line(name: &str, width: usize) -> String {
-    format!("{name:<w$}↗", w = width - 1)
+    format!("{name:<w$}󰏌", w = width - 1)
 }
 
 /// The first cell of the first row at or after `from` that contains `needle` (every glyph here is one column wide).
@@ -265,6 +265,8 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
     let (got, _) = column(25);
     let (prs, git, jira) = (header("PRs"), header("git"), header("Jira"));
     let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
+    let failed_open = format!("  open {} changes requested  cpd-tui cockpit c…", palette::CHECKS_FAILED);
+    let none_open = format!("  open {} no review  Plan fresh", palette::CHECKS_NONE);
     let expected = [
         "",
         " homeserver",
@@ -273,9 +275,9 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
         prs.as_str(),
         "",
         seven.as_str(),
-        "  open ✗ changes requested  cpd-tui cockpit c…",
+        failed_open.as_str(),
         eleven.as_str(),
-        "  open – no review  Plan fresh",
+        none_open.as_str(),
         "",
         "",
         "",
@@ -315,6 +317,9 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
     let listed: Vec<(&str, i64)> = w.prs.iter().map(|p| (p.repo.as_str(), p.number)).collect();
     assert_eq!(listed, [("acme/web", 4), ("acme/repo", 9), ("acme/repo", 20)]);
     let got = rows(&render(46, 25, &w));
+    let draft_failed = format!("  draft {} changes requested  Older web fix", palette::CHECKS_FAILED);
+    let open_approved = format!("  open {} approved  Middle one", palette::CHECKS_PASSED);
+    let open_pending = format!("  open {} no review  Mine to review", palette::CHECKS_PENDING);
     let (web4, repo9, repo20) =
         (first_line(" acme/web#4", 46), first_line(" acme/repo#9", 46), first_line(" acme/repo#20", 46));
     assert_eq!(
@@ -323,11 +328,11 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
             header("PRs").as_str(),
             "",
             web4.as_str(),
-            "  draft ✗ changes requested  Older web fix",
+            draft_failed.as_str(),
             repo9.as_str(),
-            "  open ✓ approved  Middle one",
+            open_approved.as_str(),
             repo20.as_str(),
-            "  open … no review  Mine to review",
+            open_pending.as_str(),
         ],
         "{got:#?}"
     );
@@ -342,9 +347,9 @@ fn a_conflicting_pr_shows_conflict_on_its_second_line_and_the_others_do_not() {
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let buf = render(46, 25, &w);
     let got = rows(&buf);
-    assert_eq!(got[7], "  draft ✗ changes requested  Older web fix");
-    assert_eq!(got[9], "  open ✓ approved conflict  Middle one");
-    assert_eq!(got[11], "  open … no review  Mine to review");
+    assert_eq!(got[7], format!("  draft {} changes requested  Older web fix", palette::CHECKS_FAILED));
+    assert_eq!(got[9], format!("  open {} approved conflict  Middle one", palette::CHECKS_PASSED));
+    assert_eq!(got[11], format!("  open {} no review  Mine to review", palette::CHECKS_PENDING));
     let (x, y) = find(&buf, "conflict");
     assert_eq!(buf[(x, y)].fg, palette::color(Meaning::Failed));
 }
@@ -463,8 +468,8 @@ fn the_column_takes_every_colour_from_the_palette() {
     let c = palette::color;
     // The PRs: state and checks.
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
-    assert_eq!(fg(find(&buf, "✗")), c(Meaning::Failed));
-    assert_eq!(fg(find(&buf, "–")), c(Meaning::Nothing));
+    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Failed));
+    assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
     // The headers: grey, the title a reversed block, not bold.
     for title in ["PRs", "git", "Jira"] {
         let (x, y) = find(&buf, &format!("── {title} "));
@@ -497,14 +502,14 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
     let wide = rows(&render(30, 25, &w));
-    assert!(wide.contains(&"  open ✗ changes requested".to_owned()), "no room for a title of 4 characters:\n{wide:#?}");
+    assert!(wide.contains(&format!("  open {} changes requested", palette::CHECKS_FAILED)), "no room for a title of 4 characters:\n{wide:#?}");
     let got = rows(&render(36, 25, &w));
-    assert!(got.contains(&"  open ✗ changes requested  cpd-tui…".to_owned()), "{got:#?}");
+    assert!(got.contains(&format!("  open {} changes requested  cpd-tui…", palette::CHECKS_FAILED)), "{got:#?}");
     let got = rows(&render(24, 25, &w));
     assert!(got.iter().all(|r| r.chars().count() <= 24), "{got:#?}");
-    assert!(got.contains(&"  open ✗ changes request".to_owned()), "the pane clips what is left:\n{got:#?}");
+    assert!(got.contains(&format!("  open {} changes request", palette::CHECKS_FAILED)), "the pane clips what is left:\n{got:#?}");
     let narrow = rows(&render(8, 25, &w));
-    assert!(narrow.contains(&" acme… ↗".to_owned()), "the name is cut before the arrow when it must be:\n{narrow:#?}");
+    assert!(narrow.contains(&" acme… 󰏌".to_owned()), "the name is cut before the arrow when it must be:\n{narrow:#?}");
 }
 
 #[test]
@@ -522,11 +527,11 @@ fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
     }
 }
 
-// ---------- the ↗ links and the owned rows ----------
+// ---------- the 󰏌 links and the owned rows ----------
 
-/// The cell of a linked `↗`: its symbol is wrapped in the OSC 8 escapes of its link.
+/// The cell of a linked `󰏌`: its symbol is wrapped in the OSC 8 escapes of its link.
 fn linked_arrow(url: &str) -> String {
-    format!("\x1b]8;;{url}\x07↗\x1b]8;;\x07")
+    format!("\x1b]8;;{url}\x07󰏌\x1b]8;;\x07")
 }
 
 #[test]
@@ -536,7 +541,7 @@ fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
     let buf = render(46, 25, &w);
     for (y, number, repo) in [(6, 4, "acme/web"), (8, 9, "acme/repo"), (10, 20, "acme/repo")] {
         assert_eq!(buf[(45, y)].symbol(), linked_arrow(&format!("https://github.com/{repo}/pull/{number}")), "row {y}");
-        assert_eq!(plain(buf[(45, y)].symbol()), "↗", "row {y}");
+        assert_eq!(plain(buf[(45, y)].symbol()), "󰏌", "row {y}");
         assert_eq!(row(&buf, y).chars().count(), 46, "the arrow is the last column of row {y}");
         assert_eq!(plain(buf[(45, y + 1)].symbol()), " ", "the second line has no arrow");
     }
@@ -557,7 +562,7 @@ fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
         assert!([1, 2, 12, 45].iter().all(|x| dim(*x, y)), "row {y} is dim: the name and the arrow");
         assert!([2, 3, 12, 20].iter().all(|x| dim(*x, y + 1)), "row {} is dim: the second line", y + 1);
     }
-    assert_eq!(plain(buf[(45, 6)].symbol()), "↗", "the arrow stays on an unowned PR");
+    assert_eq!(plain(buf[(45, 6)].symbol()), "󰏌", "the arrow stays on an unowned PR");
     // The owned one (here also the active one) is not dim.
     assert!([1, 2, 12, 45].iter().all(|x| !dim(*x, 10)) && [2, 20].iter().all(|x| !dim(*x, 11)));
 }
@@ -682,11 +687,11 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
     for name in [" acme/web#4", " acme/repo#9", " acme/repo#20"] {
         let line = screen.iter().find(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {screen:#?}"));
         assert_eq!(line.chars().count(), width, "the arrow ends {name}'s line at the right edge: {line:?}");
-        assert!(line.ends_with('↗'), "{line:?}");
+        assert!(line.ends_with('󰏌'), "{line:?}");
     }
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     for url in ["https://github.com/acme/web/pull/4", "https://github.com/acme/repo/pull/9", "https://github.com/acme/repo/pull/20"] {
-        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\↗"))), "{url}: {styled:?}");
+        assert!(styled.lines().any(|l| l.contains(&format!("]8;;{url}\x1b\\󰏌"))), "{url}: {styled:?}");
     }
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
 }

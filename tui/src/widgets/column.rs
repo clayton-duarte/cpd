@@ -13,18 +13,15 @@ use crate::link;
 use crate::palette::{self, Meaning};
 use crate::read::{OpenPr, PrState, ReviewDecision, Widgets};
 
-/// The glyph at the right end of a PR's first line: a link to the pull request.
-const ARROW: &str = "↗";
-
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
 
-/// What a click on an owned PR reaches: its two lines, except the `↗` cell (the terminal opens that link).
+/// What a click on an owned PR reaches: its two lines, except the `󰏌` cell (the terminal opens that link).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hit {
     /// The PR's two rows, the column's full width.
     pub area: Rect,
-    /// The `↗` cell, inside `area`.
+    /// The `󰏌` cell, inside `area`.
     pub arrow: Position,
     /// The merge icon's cell, inside `area`, when the PR shows one.
     pub icon: Option<Position>,
@@ -72,8 +69,8 @@ fn truncate(text: &str, max: usize) -> String {
     cut
 }
 
-/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `↗` in the last column, then
-/// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `↗`.
+/// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󰏌` in the last column, then
+/// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󰏌`.
 /// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
 /// A conflicting one adds ` conflict` in red after the review (kept red under the active and dim styles).
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
@@ -112,7 +109,7 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
         spans.push(" ".repeat(width.saturating_sub(shown + 1)).into());
         spans.push(MERGE.into());
     }
-    let first = Line::from(vec![bold(name), gap.into(), ARROW.into()]);
+    let first = Line::from(vec![bold(name), gap.into(), link::CUE.into()]);
     let second = Line::from(spans);
     let style = if pr.active {
         Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD)
@@ -227,7 +224,7 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
     let mut text = vec![];
     let mut hits = vec![];
     let mut icons = vec![];
-    // The `↗` is the last column of the section's first line of each PR, the merge icon that of its second.
+    // The `󰏌` is the last column of the section's first line of each PR, the merge icon that of its second.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
         text.extend(pr_lines(pr, usize::from(prs.width)));
@@ -381,11 +378,11 @@ mod tests {
     fn a_pr_ends_its_first_line_in_a_linked_arrow_and_the_name_never_reaches_it() {
         let (buf, _) = drawn(24, 20, &widgets(vec![pr(7, Some("l-a"))]), "");
         // the arrow's cell carries the link: its symbol is wrapped in the OSC 8 escapes
-        let link = "\x1b]8;;https://github.com/acme/repo/pull/7\x07↗\x1b]8;;\x07";
+        let link = format!("\x1b]8;;https://github.com/acme/repo/pull/7\x07{}\x1b]8;;\x07", link::CUE);
         assert_eq!(row(&buf, 6), format!(" acme/repo#7{}{link}", " ".repeat(11)));
         // the name is cut before the arrow's column and its gap
         let (buf, _) = drawn(9, 20, &widgets(vec![pr(7, Some("l-a"))]), "");
-        assert_eq!(row(&buf, 6).replace(link, "↗"), " acme/… ↗");
+        assert_eq!(row(&buf, 6).replace(&link, link::CUE), format!(" acme/… {}", link::CUE));
     }
 
     #[test]
@@ -395,7 +392,7 @@ mod tests {
             assert_eq!(buf[(1, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
             assert_eq!(buf[(2, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
         }
-        assert!(buf[(29, 6)].modifier.contains(Modifier::DIM) && buf[(29, 6)].symbol().contains('↗'), "the arrow stays");
+        assert!(buf[(29, 6)].modifier.contains(Modifier::DIM) && buf[(29, 6)].symbol().contains(link::CUE), "the arrow stays");
         let [hit] = &hits[..] else { panic!("{hits:?}") };
         assert_eq!(hit.lead.as_str(), "l-a");
         assert_eq!((hit.area, hit.arrow, hit.icon), (Rect::new(0, 8, 30, 2), Position::new(29, 8), None));
@@ -426,10 +423,10 @@ mod tests {
     #[test]
     fn a_conflicting_pr_shows_conflict_in_red_after_its_review_and_others_do_not() {
         let mut p = pr(7, Some("l-a"));
-        assert_eq!(second_line(&p, 40).0, "  open ✓ no review  A title");
+        assert_eq!(second_line(&p, 40).0, format!("  open {} no review  A title", palette::CHECKS_PASSED));
         p.conflicting = true;
         let (line, buf) = second_line(&p, 40);
-        assert_eq!(line, "  open ✓ no review conflict  A title");
+        assert_eq!(line, format!("  open {} no review conflict  A title", palette::CHECKS_PASSED));
         let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
         for dx in 0..8 {
             assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed));
@@ -454,18 +451,19 @@ mod tests {
     fn a_narrow_column_cuts_the_title_before_conflict() {
         let mut p = pr(7, Some("l-a"));
         p.conflicting = true;
-        assert_eq!(second_line(&p, 28).0, "  open ✓ no review conflict");
-        assert_eq!(second_line(&p, 32).0, "  open ✓ no review conflict");
-        assert_eq!(second_line(&p, 33).0, "  open ✓ no review conflict  A t…");
+        let open = format!("  open {} no review conflict", palette::CHECKS_PASSED);
+        assert_eq!(second_line(&p, 28).0, open);
+        assert_eq!(second_line(&p, 32).0, open);
+        assert_eq!(second_line(&p, 33).0, format!("{open}  A t…"));
     }
 
     #[test]
     fn a_clean_pr_ends_its_second_line_in_the_merge_icon_and_others_have_none() {
         let mut p = pr(7, Some("l-a"));
-        assert_eq!(second_line(&p, 40).0, "  open ✓ no review  A title");
+        assert_eq!(second_line(&p, 40).0, "  open \u{F05E0} no review  A title");
         p.clean = true;
         let (line, _) = second_line(&p, 40);
-        assert_eq!(line, format!("  open ✓ no review  A title{}{MERGE}", " ".repeat(40 - 27 - 1)));
+        assert_eq!(line, format!("  open \u{F05E0} no review  A title{}{MERGE}", " ".repeat(40 - 27 - 1)));
         assert_eq!(line.chars().count(), 40, "the icon is the last column");
         assert!(!row(&drawn(40, 20, &widgets(vec![p]), "").0, 6).contains(MERGE), "never on the first line");
     }
@@ -476,7 +474,7 @@ mod tests {
         p.clean = true;
         p.title = "A very long title indeed".to_owned();
         let (line, _) = second_line(&p, 32);
-        assert_eq!(line, format!("  open ✓ no review  A very lo… {MERGE}"));
+        assert_eq!(line, format!("  open \u{F05E0} no review  A very lo… {MERGE}"));
         assert_eq!(line.chars().count(), 32);
     }
 

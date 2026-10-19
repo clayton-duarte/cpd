@@ -21,6 +21,9 @@
 use ratatui::buffer::{Buffer, CellDiffOption, CellWidth};
 use ratatui::layout::Rect;
 
+/// The link cue, drawn where a view links to a page (hs-d191, hs-d235): `nf-md-open_in_new` (U+F03CC).
+pub const CUE: &str = "\u{F03CC}";
+
 /// Makes the cells of `area` (one row, `area.y`) an OSC 8 link to `url`, in pieces of at most 2 cells.
 ///
 /// Call it after drawing the text. Cells outside the buffer are skipped. A `url` that is empty, or holds a control
@@ -64,6 +67,7 @@ mod tests {
 
     use ratatui::backend::CrosstermBackend;
     use ratatui::style::{Modifier, Style};
+    use ratatui::text::Span;
     use ratatui::{Terminal, TerminalOptions, Viewport};
 
     use super::*;
@@ -116,10 +120,14 @@ mod tests {
         terminal.sink.0.borrow()[before..].to_vec()
     }
 
+    /// The text the cue tests draw: the cue in the third cell.
+    fn cued() -> String {
+        format!("ab{CUE}cd")
+    }
+
     /// A minimal terminal: replays `bytes` into one row of `width` columns.
     /// Handles CUP (`ESC[r;cH`), ignores other CSI and all OSC sequences; a
-    /// printed symbol advances the cursor by its width (1, or 2 for non-ASCII
-    /// other than `↗`), as the tests' symbols have.
+    /// printed symbol advances the cursor by its `unicode-width`, as the tests' symbols have.
     fn replay(bytes: &[u8], width: usize) -> String {
         let text = std::str::from_utf8(bytes).unwrap();
         let mut row = vec![" ".to_string(); width];
@@ -146,8 +154,9 @@ mod tests {
                 },
                 c => {
                     row[col] = c.to_string();
-                    col += if c.is_ascii() || c == '↗' { 1 } else { 2 };
-                    if col <= width && !c.is_ascii() && c != '↗' {
+                    let cells = Span::raw(c.to_string()).width();
+                    col += cells;
+                    if col <= width && cells == 2 {
                         row[col - 1] = String::new(); // the wide symbol's second column
                     }
                 }
@@ -168,16 +177,21 @@ mod tests {
     }
 
     #[test]
+    fn the_cue_is_one_cell() {
+        assert_eq!(Span::raw(CUE).width(), 1);
+    }
+
+    #[test]
     fn one_cell_link_wraps_the_arrow_and_moves_nothing() {
         let mut terminal = terminal(5);
-        let bytes = draw(&mut terminal, "ab↗cd", Rect::new(2, 0, 1, 1), URL);
+        let bytes = draw(&mut terminal, &cued(), Rect::new(2, 0, 1, 1), URL);
 
-        let link = position(&bytes, &format!("{OPEN}↗{CLOSE}"));
+        let link = position(&bytes, &format!("{OPEN}{CUE}{CLOSE}"));
         assert!(position(&bytes, "ab") < link);
         assert!(link < position(&bytes, "c"), "c is written after the link closes");
         assert!(position(&bytes, "c") < position(&bytes, "d"));
         assert_eq!(count(&bytes, "\x1b]8;;"), 2, "one open, one close");
-        assert_eq!(replay(&bytes, 5), "ab↗cd");
+        assert_eq!(replay(&bytes, 5), cued());
     }
 
     #[test]
@@ -221,11 +235,11 @@ mod tests {
     #[test]
     fn redraw_without_change_writes_nothing_for_the_link() {
         let mut terminal = terminal(5);
-        draw(&mut terminal, "ab↗cd", Rect::new(2, 0, 1, 1), URL);
-        let again = draw(&mut terminal, "ab↗cd", Rect::new(2, 0, 1, 1), URL);
+        draw(&mut terminal, &cued(), Rect::new(2, 0, 1, 1), URL);
+        let again = draw(&mut terminal, &cued(), Rect::new(2, 0, 1, 1), URL);
         let text = String::from_utf8(again).unwrap();
         assert!(!text.contains("]8;;"), "{text:?}");
-        assert!(!text.contains('↗') && !text.contains('c') && !text.contains('d'), "{text:?}");
+        assert!(!text.contains(CUE) && !text.contains('c') && !text.contains('d'), "{text:?}");
 
         // A longer link, too.
         let mut terminal = self::terminal(7);
@@ -239,10 +253,10 @@ mod tests {
     fn a_url_with_a_control_character_or_non_ascii_byte_is_not_linked() {
         for url in ["https://x/\x1b[31m", "https://x/\x07", "https://x/\n", "https://x/é", "https://x/\x7f", ""] {
             let mut terminal = terminal(5);
-            let bytes = draw(&mut terminal, "ab↗cd", Rect::new(2, 0, 1, 1), url);
+            let bytes = draw(&mut terminal, &cued(), Rect::new(2, 0, 1, 1), url);
             let text = String::from_utf8(bytes.clone()).unwrap();
             assert!(!text.contains("]8;;"), "{url:?}: {text:?}");
-            assert_eq!(replay(&bytes, 5), "ab↗cd", "{url:?}");
+            assert_eq!(replay(&bytes, 5), cued(), "{url:?}");
         }
     }
 

@@ -80,7 +80,7 @@ struct Opener<'a> {
 }
 
 /// Draws and follows until `q`. Reading failures end the view with their error. The wheel over the PRs section scrolls it by one
-/// pull request per notch. A left click on an owned PR row (not on its `↗` or its merge icon) opens its Lead in the chat slot;
+/// pull request per notch. A left click on an owned PR row (not on its `󰏌` or its merge icon) opens its Lead in the chat slot;
 /// a left click on a merge icon opens the merge popup; a refusal or a failure is the `note` in the column's last row until the
 /// next click.
 fn show(
