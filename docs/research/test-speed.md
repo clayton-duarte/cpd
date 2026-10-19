@@ -142,7 +142,7 @@ The 103 tests whose median over runs 4-6 is over 2 s: 607 s of run 5's 1,408 s (
 |---|---|---|---|
 | 68.5, 66.9 | `session_watchdog` `a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone`, `a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_error_event` | `ADAPTER_WATCHDOG` = 60 s and `WATCHDOG_POLL` = 2 s (`core/src/session/run.rs:48,51`); the tests sleep the limit out and check every 100 ms | inject the limit and the poll (a test-only override, like `CPD_TEST_DEADLINE_<TOOL>` of `core/src/host/deadline.rs`, or config keys); then ~1-2 s each |
 | 7.2 | `session_watchdog a_pi_that_exits_is_handled_as_before_with_no_error_event` | a fixed 5 s sleep to show the wrapper waits for Enter (absence), and the 2 s poll | the same injected poll; a shorter absence window |
-| 12.0 | `session_reload a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi` | `PI_STOP` = 10 s (`core/src/session/run.rs:46`) | inject `PI_STOP` |
+| 12.0 | `session_reload a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi` | `PI_STOP` = 10 s (`core/src/session/run.rs:46`) | inject `PI_STOP`: done on main by #104 (`timeouts.pi_stop_seconds`, 3 in the test) |
 | 10.6 | `doctor a_hung_catalog_probe_is_killed_at_10_seconds` | doctor's `DEADLINE` = 10 s (`core/src/doctor/mod.rs:23`; the test asserts `deadline_seconds = 10`); the other doctor deadlines already take `CPD_TEST_DEADLINE_<TOOL>` | let the catalog probe take the same override |
 | 10.1 | `watch e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off` | the spawn back-off 2^k s (`backoff_seconds`, cap `BACKOFF_CAP_SECONDS` = 300, `core/src/watch/schedule.rs`), waited out over 1 s ticks | inject the back-off unit |
 | 6.0 | `cpd-core host::deadline::tests::a_group_that_ignores_sigterm_is_killed_after_the_grace` | `GRACE` = 5 s between SIGTERM and SIGKILL (`core/src/host/deadline.rs:26`) | a grace parameter in the unit under test |
@@ -151,9 +151,9 @@ The 103 tests whose median over runs 4-6 is over 2 s: 607 s of run 5's 1,408 s (
 | 2.3 | `git a_hook_is_killed_with_its_process_group_at_the_timeout` | the hooks' `GRACE` = 2 s (`core/src/git/hooks/exec.rs:75`) and a fixed 1.5 s sleep | inject the grace; wait for the survivor's absence positively |
 | 2.8 | `watch e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout` | the poll child's deadline, already shortened to 2 s by `CPD_TEST_DEADLINE_CPD=2` (whole seconds), and 1 s ticks | sub-second deadlines in the override; sub-second tick (§6.2) |
 
-### 6.2 Engine ticks (`watch.tick_seconds = 1`, an integer ≥ 1 on main) and the "several ticks" sleeps around them
+### 6.2 Engine ticks (`watch.tick_seconds = 1`, an integer ≥ 1 on the base; a decimal ≥ 0.1 on main since #104) and the "several ticks" sleeps around them
 
-Each test waits for one to three 1 s ticks, and most also sleep a fixed 1.5-3.5 s ("two ticks", "several ticks": absence checks); `pr_poll_seconds` is also whole seconds. Change: fractional ticks and poll periods (PR timing, #104, not on main yet), a 0.1 s tick in the tests, absence windows of a few ticks.
+Each test waits for one to three 1 s ticks, and most also sleep a fixed 1.5-3.5 s ("two ticks", "several ticks": absence checks); `pr_poll_seconds` is also whole seconds. Change: fractional ticks and poll periods (PR timing, #104: on main since `3944b57`, after this base; it put the slowest of these tests on a 0.2 s tick, §2.1), a 0.1 s tick in the tests, absence windows of a few ticks.
 
 | median (s) | sleep (s) | tests |
 |---|---|---|
@@ -247,8 +247,8 @@ A test in the suite takes ~1.3× its time alone (the floor test: 0.50-0.55 s alo
 | C5 | Keep one `Store` open per test instead of a new one per query and poll | sp-fixed | ~20-25 ms per avoided open; test processes open 1.3-11.9 times per test (§4) ≈ 60 s | computed |
 | C6 | `config_refuses_each_bad_file_with_its_key_path` with one env (rewrite `config.toml` per case), and one env per test in the other tests of §6.5 where the cases allow it | sp-fixed | 22 → ~1 s; §6.5 98 s → ~25 s with C1-C3 | computed |
 | C7 | Real limits injectable (§6.1): the adapter watchdog and its poll, `PI_STOP`, doctor's catalog deadline, the spawn back-off unit, the kill graces; sub-second `CPD_TEST_DEADLINE_<TOOL>` | sp-limits | §6.1 194 s → ≤ 1.5 s each ≈ 175 s | computed |
-| C8 | 0.1 s engine ticks and poll periods (§6.2, after PR timing), absence windows of a few ticks | sp-engine | §6.2 144 s → ≤ 1 s each (e2e ≤ 5 s) ≈ 115 s | computed |
-| C9 | Injectable wrapper and driver polls (§6.3) and view refresh periods (§6.4) | sp-limits / sp-engine (in neither draft yet) | §6.3 + §6.4 144 s → ≤ 1 s each ≈ 110 s | computed |
+| C8 | 0.1 s engine ticks and poll periods (§6.2, on #104's fractional ticks), absence windows of a few ticks | sp-engine | §6.2 144 s → ≤ 1 s each (e2e ≤ 5 s) ≈ 115 s | computed |
+| C9 | Injectable wrapper and driver polls (§6.3) and view refresh periods (§6.4) | sp-limits (§6.3) / sp-engine (§6.4), §8 | §6.3 + §6.4 144 s → ≤ 1 s each ≈ 110 s | computed |
 | C10 | store::schema and store::verdict fixtures built once per binary (§6.6) | sp-schema | 27 s → ≤ 1 s each ≈ 21 s | computed |
 | C11 | **nextest `priority` for the tests that stay over a few seconds** | sp-guard | 0 on the sum; **~30 s on the clock** now, ~2 s after the others | measured (§3) |
 
