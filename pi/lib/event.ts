@@ -16,28 +16,41 @@ export const KINDS = [
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed",
-  "context-renamed", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-message",
+  "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-message",
   "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-opened", "pr-merged",
   "watch-started", "watch-stopped", "error",
 ] as const;
 export type Kind = (typeof KINDS)[number];
 
-export type CpdEvent = {
+/** The `data` fields the adapter reads, per kind: `parseLine` rejects a line without them, so a handler reads them typed, with no cast. */
+type Needed = {
+  escalation: { escalation: string };
+  "escalation-answered": { escalation: string };
+  "escalation-expired": { escalation: string };
+  "plan-review": { review: string; status: string };
+  "session-renamed": { name: string };
+  "attempt-nudge": { prompt: string };
+  "session-message": { text: string; from: string | null };
+};
+
+type Base = {
   id: number;
   at: string;
-  kind: Kind;
   context: string | null;
   plan: string | null;
   job: string | null;
   attempt: string | null;
   session: string | null;
   text: string;
-  data: Record<string, unknown>;
 };
 
-/** The `data` fields the adapter reads, per kind: a line without them is invalid, so no handler checks again. */
-const NEEDED: Partial<Record<Kind, readonly string[]>> = {
+/** An Event, per kind: `ev.kind === "session-renamed"` narrows `ev.data.name` to a string. */
+export type CpdEvent = { [K in Kind]: Base & { kind: K; data: Record<string, unknown> & (K extends keyof Needed ? Needed[K] : unknown) } }[Kind];
+export type EventOf<K extends Kind> = Extract<CpdEvent, { kind: K }>;
+
+/** The checked fields, one list per kind, pinned to {@link Needed}: a field added to the type and not here (or the reverse) does not compile. */
+const NEEDED: { [K in keyof Needed]: readonly (keyof Needed[K] & string)[] } = {
   escalation: ["escalation"],
   "escalation-answered": ["escalation"],
   "escalation-expired": ["escalation"],
@@ -75,7 +88,7 @@ export function parseLine(text: string): Line {
   if (!isObject(json.data)) return bad("`data` is not an object");
   if (!(KINDS as readonly string[]).includes(json.kind)) return { type: "unknown-kind", id }; // well-formed, but not a kind this adapter acts on
   const kind = json.kind as Kind;
-  for (const f of NEEDED[kind] ?? []) if (typeof json.data[f] !== "string") return bad(`${kind}: \`data.${f}\` is not a string`);
+  for (const f of (NEEDED as Partial<Record<string, readonly string[]>>)[kind] ?? []) if (typeof json.data[f] !== "string") return bad(`${kind}: \`data.${f}\` is not a string`);
   if (kind === "session-message" && json.data.from !== null && typeof json.data.from !== "string") return bad("session-message: `data.from` is neither a string nor null");
   return { type: "event", event: json as unknown as CpdEvent };
 }

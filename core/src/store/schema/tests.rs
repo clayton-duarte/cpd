@@ -940,12 +940,15 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
         // The history triggers list the rebuilt table's columns; every other keeps its text.
-        if name != "prs_hist_ins" && name != "prs_hist_upd" {
+        // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started`.
+        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" {
             assert_eq!(new, old, "{name}");
         }
     }
     let locked = &after.iter().find(|(name, _)| name == "prs_locked").unwrap().1;
     assert!(locked.contains("OLD.status = 'merged'"), "migration 5's prs_locked: {locked}");
+    let status = &after.iter().find(|(name, _)| name == "prs_status").unwrap().1;
+    assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled'"), "prs_status: {status}");
 }
 
 #[test]
@@ -1395,7 +1398,7 @@ fn prs_status_refuses_a_transition_outside_3_8() {
     for sql in [
         "UPDATE prs SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'gr'",
         "UPDATE prs SET status = 'waiting', lead_worktree = NULL, started_at = NULL WHERE plan = 'di'",
-        "UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'di'",
+        "UPDATE prs SET status = 'cancelled' WHERE plan = 'dn'",
         "UPDATE prs SET status = 'open', merged_at = NULL WHERE plan = 'dn'",
     ] {
         let err = refused(&mut store, sql);
@@ -1403,6 +1406,7 @@ fn prs_status_refuses_a_transition_outside_3_8() {
     }
     write(&mut store, "UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'gr';
                        UPDATE prs SET status = 'cancelled' WHERE plan = 'pl';
+                       UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'gr';
                        INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                          VALUES ('acme/di', 11, 'u', 'D', 0, 'open', 'none', 'none', 't', 't');
                        UPDATE prs SET status = 'open', pr_number = 11, pr_url = 'u', pr_opened_at = 't',
@@ -1569,7 +1573,7 @@ fn the_rebuilt_tables_history_triggers_list_their_new_columns() {
     write(&mut store, "UPDATE jobs SET review = 1 WHERE plan = 'pl' AND key = 'a';
                        UPDATE plans SET title = 'G2' WHERE id = 'gr'")
         .unwrap();
-    let after = rows(&mut store, "SELECT tbl, after FROM history WHERE op = 'update' ORDER BY id");
+    let after = rows(&mut store, "SELECT tbl, after FROM history WHERE op = 'update' AND tbl IN ('jobs', 'plans') ORDER BY id");
     let job: Value = serde_json::from_str(after[0][1].as_str().unwrap()).unwrap();
     assert_eq!(job["review"], 1, "{job}");
     // An update row holds the changed columns only (§4.4 "History row shape"): `pr` is listed in the trigger.
@@ -1717,7 +1721,7 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             let mut rows_before = rows_before;
             assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
             // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(46));
+            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(47));
             assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
             assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
             let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
@@ -1727,6 +1731,18 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             for row in rows_before.get_mut("jobs").unwrap() {
                 *row = format!("{},0]", row.strip_suffix(']').unwrap());
             }
+            // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
+            // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
+            assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
+            for table in ["contexts", "prs"] {
+                for row in rows_after.get_mut(table).unwrap() {
+                    let at = row.rfind(',').unwrap();
+                    *row = format!("{}]", &row[..at]);
+                }
+            }
+            let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
+            assert_eq!(history_after[..history_before.len()], history_before[..]);
+            assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
             assert_eq!(rows_after, rows_before);
         }
 
@@ -1891,6 +1907,9 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
     assert_eq!((before, after.clone()), (json!({"id": "ctx", "title": "Ctx 2"}), json!({"id": "ctx", "title": "Ctx 3"})));
     let mut replayed = whole.as_object().unwrap().clone();
     replayed.extend(after.as_object().unwrap().clone());
+    // `policy-keys`, which sorts after `history-changed`, added `contexts.owner`: the old whole row predates it,
+    // and this Context has no pull request to fill it from.
+    replayed.insert("owner".into(), Value::Null);
     let conn = connection(&home.db());
     let columns = table_columns(&conn, "contexts").unwrap();
     let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();

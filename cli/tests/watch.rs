@@ -163,7 +163,7 @@ fn fx_bare(config_extra: &str) -> Fx {
         .collect();
     fx.fixture(&format!(
         "{catalog}
-         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');"
+         INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');"
     ));
     fx
 }
@@ -475,6 +475,148 @@ fn ensure_fails_when_the_engine_does_not_start() {
     assert_eq!(error["details"]["exit"], 7);
     assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
+}
+
+// ---------- @cpd_workers ----------
+
+const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3 · 0 waiting · 0 queued#[default]";
+const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3 · 0 waiting · 0 queued#[default]";
+
+impl Fx {
+    /// A tmux server with one session, `keepalive`.
+    fn tmux_server(&self) {
+        assert!(self.env.tmux(&["new-session", "-d", "-s", "keepalive", "sleep", "600"]).status.success());
+    }
+
+    fn workers(&self) -> String {
+        self.option("@cpd_workers")
+    }
+
+    fn option(&self, name: &str) -> String {
+        let out = self.env.tmux(&["show", "-gv", name]);
+        String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
+    }
+}
+
+#[test]
+fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
+    let fx = fx("");
+    fx.tmux_server();
+    let lock = fx.live_driver("api-a1");
+    fx.add_running("api", "running", &ago(1));
+
+    let engine = fx.start();
+    wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·0#[default]");
+    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+
+    // Unchanged, it is not set again: a value put there by hand survives the next ticks.
+    assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
+    // time-claim: the value is not set again over more than one engine tick; no per-poll signal from the engine, which
+    // sets nothing at a tick where the text did not change.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.workers(), "by hand");
+
+    // A change sets it.
+    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';");
+    wait_until("@cpd_workers to change", || fx.workers() == NO_WORKERS);
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn the_engine_counts_waiting_and_queued_jobs() {
+    let fx = fx("concurrency = 1");
+    fx.tmux_server();
+    let lock = fx.live_driver("run-a1");
+    fx.add_running("run", "running", &ago(1));
+    // Ready but the only slot is taken (E3 starts nothing); the other needs it, so it is queued and not waiting.
+    fx.add_job("free", &[], "");
+    fx.add_job("blocked", &["free"], "");
+
+    let engine = fx.start();
+    let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 2 queued#[default]";
+    wait_until("@cpd_workers", || fx.workers() == long);
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·2#[default]");
+    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+/// The Inbox counter: dim `inbox 0` with no item; two open, visible items, the most urgent red, make it red `inbox 2`,
+/// and the width the status line compares counts it.
+#[test]
+fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
+    let fx = fx("[inbox]\nstuck_job_minutes = 1");
+    fx.tmux_server();
+    let engine = fx.start();
+    wait_until("@cpd_inbox", || fx.option("@cpd_inbox") == "#[dim]inbox 0#[default]");
+
+    // Two failed Jobs whose `job-failed` Event is older than `stuck_job_minutes`: E8 opens two red `job-stuck` items.
+    for key in ["old", "older"] {
+        fx.fixture(&format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                               fingerprint, failed_cause, created_txn, created_at)
+             VALUES ('pay', 'repo', '{key}', 'Title', 'S2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'failed', 0,
+                     hex(zeroblob(32)), 'crashed', cpd_txn(), 't');
+             INSERT INTO events (txn, at, kind, context, plan, job, text, data)
+             VALUES (cpd_txn(), '{}', 'job-failed', 'ctx', 'pay', '{key}', 'x', '{{}}');",
+            ago(5)
+        ));
+    }
+    wait_until("@cpd_inbox red 2", || fx.option("@cpd_inbox") == "#[fg=red]inbox 2#[default]");
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'job-stuck'"), 2);
+    assert_eq!(fx.option("@cpd_workers_width"), "42");
+    engine.stop();
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn without_a_tmux_server_the_workers_step_does_nothing_and_sets_the_text_once_one_appears() {
+    let fx = fx("");
+    let engine = fx.start();
+    // time-claim: no error over more than one engine tick without a tmux server; no per-poll signal from the engine,
+    // which records nothing at a tick that does nothing.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+    assert!(!fx.env.tmux(&["has-session"]).status.success());
+
+    fx.tmux_server();
+    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
+    let out = engine.stop();
+    assert_eq!(out.exit, 0, "{out:?}");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn a_tmux_failure_of_the_workers_step_is_one_error_and_the_engine_goes_on() {
+    let fx = fx("");
+    fx.tmux_server();
+    // A tmux that fails `set` and is the real one otherwise, first on the engine's PATH.
+    let real = std::env::var("PATH")
+        .unwrap()
+        .split(':')
+        .map(|dir| Path::new(dir).join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH");
+    fx.env.fake("tmux", &format!("case \" $*\" in *\" set -g @cpd_workers\"*) echo boom >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+    let engine = fx.start();
+    let workers_errors = || fx.texts("error").into_iter().filter(|t| t.contains("@cpd_workers")).collect::<Vec<_>>();
+    wait_until("the error", || workers_errors().len() == 1);
+    // time-claim: the failed set is not reported again over more than one engine tick; no per-poll signal from the
+    // engine, which records nothing at a tick that sets nothing new.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(workers_errors().len(), 1, "{:?}", workers_errors());
+    assert!(workers_errors()[0].contains("tmux set failed: boom"), "{:?}", workers_errors());
+    assert_eq!(fx.workers(), "");
+
+    // It kept running, and sets the text once tmux works again.
+    fx.env.fake("tmux", &format!("exec '{}' \"$@\"", real.display()));
+    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
+    let out = engine.stop();
+    assert_eq!(out.exit, 0, "{out:?}");
 }
 
 #[test]
@@ -931,6 +1073,40 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     assert_eq!(started, [Some("hot1".to_owned())]);
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
+}
+
+/// A pending restart of the tmux server (contract §6.1, hs-d294) holds E3: no Attempt starts while it
+/// is pending, a running one is left alone, and the Job starts at the next tick once it is cleared.
+#[test]
+fn a_pending_tmux_restart_stops_e3_from_starting_attempts_and_running_ones_finish() {
+    let fx = fx("concurrency = 2\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    // One Attempt runs (its driver holds the lock); a slot is free and a Job is ready.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_job("next", &[], "");
+    let pending = fx.env.cpd_home().join("run/tmux-restart.pending");
+    fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    fs::write(&pending, r#"{"at":"2026-10-19T12:00:00.000Z","server":"3.4","installed":"3.8"}"#).unwrap();
+
+    let engine = fx.start();
+    // `doctor` shows the planned hold, which is not a failure.
+    let doctor = fx.env.cpd(&["doctor"]).json();
+    let checks = if doctor["ok"] == true { &doctor["checks"] } else { &doctor["error"]["details"]["checks"] };
+    let check = checks.as_array().unwrap().iter().find(|c| c["name"] == "tmux_restart").unwrap();
+    assert_eq!((check["ok"].as_bool(), check["message"].as_str()), (Some(true), Some("tmux restart pending")));
+    wait_until("E3's hold to be logged", || fs::read_to_string(fx.home().watch_log()).unwrap_or_default().contains("E3: holding"));
+    // time-claim: a pending restart holds E3, so no Attempt starts over several engine ticks; 2.5 s covers at least two ticks; no per-poll signal from the engine for a tick that held.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.count("attempt-started"), 0, "a pending restart holds E3");
+    assert_eq!((fx.job_status("next"), fx.attempt("busy-a1").0), ("queued".into(), "running".into()));
+    assert!(fx.events("error").is_empty(), "the hold is not an error: {:?}", fx.events("error"));
+
+    // Cleared (a restart that ran, or none needed): the Job starts at once.
+    fs::remove_file(&pending).unwrap();
+    wait_until("attempt-started", || fx.count("attempt-started") == 1);
+    engine.stop();
+    assert_eq!(fx.events("attempt-started")[0].1.as_deref(), Some("next"));
 }
 
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
@@ -1491,7 +1667,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
     let origin = fx.env.root().join("repos/origin.git");
     fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    fx.env.git(&fx.repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.env.local_origin(&fx.repo, &origin);
     fx.env.git(&fx.repo, &["push", "-q", "origin", "main"]);
     // `web` is in its own repo: git cannot hold `cpd/pay` beside `cpd/pay/web`.
     let web = fx.env.git_repo("web").canonicalize().unwrap();
@@ -1651,118 +1827,6 @@ fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
         assert!(out.status.success(), "{store}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(env.home().join(".local/bin/cpd").exists());
     }
-}
-
-// ---------- scripts/restart-tmux.sh ----------
-
-/// Runs `scripts/restart-tmux.sh` in `env`, whose private tmux server runs one
-/// session `cpd`. The fake `tmux` forwards everything to the real one but
-/// answers `-V` with `installed` (empty: the real one); the fake `cpd` answers `config`,
-/// `plan list` (one Plan `p1`), `attempt list` with `attempts` (a JSON array),
-/// `session list` (a Lead with a pane and one without), and `tui`, which
-/// records whether the server was gone by then. `tmux_env` is the script's `$TMUX`.
-fn restart(env: &TestEnv, installed: &str, attempts: &str, tmux_env: Option<&str>) -> std::process::Output {
-    let socket = env.tmux_socket();
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.exists()).expect("tmux on PATH");
-    // The server runs a copy of tmux at its own path: the binary the script must name.
-    let server = server_binary(env);
-    fs::create_dir_all(server.parent().unwrap()).unwrap();
-    copy_executable(real.to_str().expect("a UTF-8 path to tmux"), &server);
-    let out = env.command(&server).args(["-L", &socket, "new-session", "-d", "-s", "cpd", "sleep", "600"]).output().unwrap();
-    assert!(out.status.success());
-    env.fake(
-        "tmux",
-        &format!("[ \"$1\" = -V ] && [ -n '{installed}' ] && {{ echo 'tmux {installed}'; exit 0; }}\nexec '{}' \"$@\"", real.display()),
-    );
-    env.fake(
-        "cpd",
-        &format!(
-            r#"case "$1 $2" in
-"config ") echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
-"plan list") echo '{{"ok":true,"plans":[{{"id":"p1"}}]}}' ;;
-"attempt list") echo '{{"ok":true,"attempts":{attempts}}}' ;;
-"session list") echo '{{"ok":true,"sessions":[{{"id":"lead-in-pane","role":"lead","tmux_pane":"%1"}},{{"id":"lead-away","role":"lead","tmux_pane":null}}]}}' ;;
-"tui ") tmux -L '{socket}' display -p x >/dev/null 2>&1 && echo alive > '{state}' || echo gone > '{state}' ;;
-esac"#,
-            state = env.root().join("server-at-tui").display()
-        ),
-    );
-    let mut cmd = env.command(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("scripts/restart-tmux.sh"));
-    if let Some(value) = tmux_env {
-        cmd.env("TMUX", value);
-    }
-    cmd.output().unwrap()
-}
-
-fn server_binary(env: &TestEnv) -> std::path::PathBuf {
-    env.root().join("server-bin/tmux-server")
-}
-
-fn killed(env: &TestEnv) -> bool {
-    env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "kill-server"))
-}
-
-fn tui_ran(env: &TestEnv) -> bool {
-    env.calls("cpd").iter().any(|c| c.first().is_some_and(|a| a == "tui"))
-}
-
-#[test]
-fn restart_tmux_refuses_while_an_attempt_runs_and_touches_nothing() {
-    for status in ["starting", "running", "merging"] {
-        let env = TestEnv::new();
-        let attempts = format!(r#"[{{"id":"job-a1","status":"{status}"}}]"#);
-        let out = restart(&env, "99.0", &attempts, None);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "{status}: {stderr}");
-        assert!(stderr.contains("p1/job-a1"), "{stderr}");
-        // The plain tmux ("99.0") cannot attach: the line names the server's binary and why.
-        let attach = format!("{} -L {} attach -t cpd", server_binary(&env).display(), env.tmux_socket());
-        assert!(stderr.contains(&attach), "{stderr}");
-        assert!(stderr.contains("plain tmux, version 99.0, cannot attach"), "{stderr}");
-        assert!(!killed(&env) && !tui_ran(&env), "{status}");
-        assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success(), "{status}");
-    }
-}
-
-#[test]
-fn restart_tmux_with_the_same_version_does_not_kill() {
-    let env = TestEnv::new();
-    let out = restart(&env, "", "[]", None);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(stdout.contains("nothing to do"), "{stdout}");
-    assert!(!killed(&env) && !tui_ran(&env));
-    assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
-}
-
-#[test]
-fn restart_tmux_with_another_version_kills_the_server_then_runs_tui_and_prints_the_resume_lines() {
-    let env = TestEnv::new();
-    let out = restart(&env, "99.0", "[]", None);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(killed(&env));
-    assert!(tui_ran(&env));
-    // `tui` ran after the kill-server, not before.
-    assert_eq!(fs::read_to_string(env.root().join("server-at-tui")).unwrap().trim(), "gone");
-    assert!(stdout.contains("resume: cpd session open lead-in-pane"), "{stdout}");
-    assert!(!stdout.contains("lead-away"), "{stdout}");
-    assert!(stdout.contains(&format!("attach: tmux -L {} attach -t cpd", env.tmux_socket())), "{stdout}");
-}
-
-#[test]
-fn restart_tmux_refuses_inside_the_server() {
-    let env = TestEnv::new();
-    let inside = format!("/tmp/tmux-1000/{},1234,0", env.tmux_socket());
-    let out = restart(&env, "99.0", "[]", Some(&inside));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("inside the server"), "{stderr}");
-    let attach = format!("{} -L {} attach -t cpd", server_binary(&env).display(), env.tmux_socket());
-    assert!(stderr.contains(&attach), "{stderr}");
-    assert!(!killed(&env) && !tui_ran(&env));
-    assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
 }
 
 // ---------- the adapter swap of scripts/install-cpd.sh (pi-ci-W9) ----------

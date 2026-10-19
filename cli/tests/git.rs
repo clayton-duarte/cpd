@@ -10,12 +10,12 @@ use common::TestEnv;
 use cpd_core::error::ErrorCode;
 use cpd_core::git::hooks::{HookError, HookOutcome, load, run_hook};
 use cpd_core::git::{
-    Operation, Setup, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_lead_worktree,
-    discard_worktree, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
+    GateHooks, GateWorktree, Operation, Push, Setup, Synced, gate, gate_worktree_path, sweep_gate_worktrees, sync_lead, attempt_branch, attempt_worktree_path, create_attempt_worktree, create_lead_worktree,
+    discard_worktree, push_commit, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
     touched_protected,
 };
 use cpd_core::home::Hook;
-use cpd_core::ids::{AttemptId, PlanId};
+use cpd_core::ids::{AttemptId, PlanId, PrKey};
 
 fn plan() -> PlanId {
     PlanId::parse("pay-4521").unwrap()
@@ -74,7 +74,7 @@ fn lead_worktree_is_cut_from_a_freshly_fetched_origin_base() {
     let origin = env.root().join("origins").join("pay.git");
     fs::create_dir_all(&origin).unwrap();
     env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
     // Someone else advances origin/main; the repo's own refs are stale.
     let other = env.root().join("other");
@@ -232,6 +232,176 @@ fn discard_removes_whatever_state_and_is_idempotent() {
 
     assert!(!made.path.exists());
     assert_eq!(env.git(&repo, &["branch", "--list", &made.branch]), "");
+}
+
+// ------------------------------------------------- shared git state (hs-d243)
+
+/// `repo` gets a bare `origin` holding `main`; returns the origin's path.
+fn with_origin(env: &TestEnv, repo: &Path) -> PathBuf {
+    let origin = env.root().join("origins").join("pay.git");
+    fs::create_dir_all(&origin).unwrap();
+    env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
+    env.git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.git(repo, &["push", "-q", "origin", "main"]);
+    origin
+}
+
+/// The `branch.*` entries of `repo`'s `.git/config`, one per line.
+fn branch_config(env: &TestEnv, repo: &Path) -> String {
+    let out = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "config", "--get-regexp", r"^branch\."])).unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+#[test]
+fn a_lead_worktree_from_origin_has_no_upstream_and_its_push_writes_no_config() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    with_origin(&env, &repo);
+
+    let made = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+
+    assert!(made.push_failed.is_none());
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", &made.branch]), format!("{}\trefs/heads/{}", made.base_sha, made.branch));
+    assert_eq!(branch_config(&env, &repo), "", "no upstream: nothing in .git/config");
+}
+
+#[test]
+fn git_calls_wait_for_a_ref_lock_held_for_one_second() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    env.git(&repo, &["fetch", "-q", "origin"]);
+    // The remote moves; another git process holds the lock of the repo's tracking ref.
+    let other = env.root().join("other");
+    env.run_ok(env.root(), "git", &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    commit_file(&env, &other, "new.txt", "new\n");
+    env.git(&other, &["push", "-q", "origin", "main"]);
+    let moved = env.git(&other, &["rev-parse", "HEAD"]);
+    let lock = repo.join(".git/refs/remotes/origin/main.lock");
+    fs::write(&lock, "").unwrap();
+
+    let started = Instant::now();
+    let fetched = std::thread::scope(|s| {
+        s.spawn(|| {
+            // time-claim: git waits out a ref lock held for a second; no per-poll signal from git.
+            std::thread::sleep(Duration::from_secs(1));
+            fs::remove_file(&lock).unwrap();
+        });
+        cpd_core::git::run::ok(&repo, &["fetch", "origin", "main"])
+    });
+
+    fetched.unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(1), "it waited for the lock");
+    assert_eq!(env.git(&repo, &["rev-parse", "origin/main"]), moved);
+}
+
+#[test]
+fn a_fetch_outlasts_a_worktree_add_in_progress() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    let other = env.root().join("other");
+    env.run_ok(env.root(), "git", &["clone", "-q", origin.to_str().unwrap(), other.to_str().unwrap()]);
+    commit_file(&env, &other, "new.txt", "new\n");
+    env.git(&other, &["push", "-q", "origin", "main"]);
+    // What `git worktree add` leaves for a moment: an entry whose HEAD is the all-zero placeholder.
+    let adding = repo.join(".git/worktrees/adding");
+    fs::create_dir_all(&adding).unwrap();
+    fs::write(adding.join("HEAD"), format!("{}\n", "0".repeat(40))).unwrap();
+    fs::write(adding.join("commondir"), "../..\n").unwrap();
+    fs::write(adding.join("gitdir"), format!("{}\n", env.root().join("adding/.git").display())).unwrap();
+    let broken = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "fetch", "origin", "main"])).unwrap();
+    assert!(String::from_utf8_lossy(&broken.stderr).contains("bad object worktrees/adding/HEAD"), "{broken:?}");
+
+    let fetched = std::thread::scope(|s| {
+        s.spawn(|| {
+            // time-claim: the fetch outlasts an entry half-created for a second; no per-poll signal from git.
+            std::thread::sleep(Duration::from_secs(1));
+            fs::remove_dir_all(&adding).unwrap();
+        });
+        cpd_core::git::run::fetch(&repo, &["origin", "main"])
+    });
+
+    fetched.unwrap();
+    assert_eq!(env.git(&repo, &["rev-parse", "origin/main"]), env.git(&other, &["rev-parse", "HEAD"]));
+    // Any other failure is not retried.
+    let started = Instant::now();
+    let err = cpd_core::git::run::fetch(&repo, &["origin", "no-such-branch"]).unwrap_err();
+    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("fetch")));
+    // time-claim: a failure that is not the race returns at once (20 retries would take over 1.9 s); no per-poll signal from git.
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn rule_p_pushes_the_named_commit_not_the_branch_tip() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    commit_file(&env, &lead.path, "one.txt", "one\n");
+    let one = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    commit_file(&env, &lead.path, "two.txt", "two\n");
+    let two = env.git(&lead.path, &["rev-parse", "HEAD"]);
+
+    assert_eq!(push_commit(&lead.path, &lead.branch, &one).unwrap(), Push::Pushed { new: true });
+    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), one, "the named commit, not the tip");
+    assert_eq!(push_commit(&lead.path, &lead.branch, &one).unwrap(), Push::Pushed { new: false });
+    assert_eq!(push_commit(&lead.path, &lead.branch, &two).unwrap(), Push::Pushed { new: true });
+    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), two);
+    assert_eq!(branch_config(&env, &repo), "", "no -u");
+}
+
+#[test]
+fn rule_p_an_ancestor_pushed_after_its_descendant_is_a_success_that_pushed_nothing() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    commit_file(&env, &lead.path, "a.txt", "a\n");
+    let a = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    commit_file(&env, &lead.path, "b.txt", "b\n");
+    let b = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    // Merge B pushed first; merge A's push of its own `new` comes late.
+    assert_eq!(push_commit(&lead.path, &lead.branch, &b).unwrap(), Push::Pushed { new: true });
+
+    assert_eq!(push_commit(&lead.path, &lead.branch, &a).unwrap(), Push::Contained { remote: b.clone() });
+    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), b, "the remote is not moved back");
+}
+
+#[test]
+fn rule_p_a_rejection_whose_remote_tip_lacks_the_commit_stands() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let origin = with_origin(&env, &repo);
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    // A known commit that does not descend from ours, pushed to the remote branch.
+    commit_file(&env, &lead.path, "theirs.txt", "theirs\n");
+    let theirs = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    env.git(&lead.path, &["push", "-q", "origin", &format!("{theirs}:refs/heads/{}", lead.branch)]);
+    env.git(&lead.path, &["reset", "-q", "--hard", &lead.base_sha]);
+    commit_file(&env, &lead.path, "ours.txt", "ours\n");
+    let ours = env.git(&lead.path, &["rev-parse", "HEAD"]);
+
+    let Push::Rejected { stderr } = push_commit(&lead.path, &lead.branch, &ours).unwrap() else { panic!("not rejected") };
+    assert!(stderr.contains("rejected"), "{stderr}");
+    assert_eq!(env.git(&origin, &["rev-parse", &lead.branch]), theirs);
+
+    // A remote tip not in the local object store is a rejection too.
+    let other = env.root().join("other");
+    env.run_ok(env.root(), "git", &["clone", "-q", "-b", &lead.branch, origin.to_str().unwrap(), other.to_str().unwrap()]);
+    commit_file(&env, &other, "unknown.txt", "unknown\n");
+    env.git(&other, &["push", "-q", "origin", &lead.branch]);
+    assert!(matches!(push_commit(&lead.path, &lead.branch, &theirs).unwrap(), Push::Rejected { .. }));
+}
+
+#[test]
+fn rule_p_without_origin_is_git_failed() {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    let err = push_commit(&lead.path, &lead.branch, &lead.base_sha).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::GitFailed);
+    assert_eq!(err.details()["argv"][3], "push");
 }
 
 // ---------------------------------------------------------------- hooks
@@ -810,6 +980,324 @@ fn base_ref_is_origin_slash_base_only_with_an_origin() {
     assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "main");
     env.git(&repo, &["remote", "add", "origin", "https://example.invalid/pay.git"]);
     assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "origin/main");
+}
+
+// ---------------------------------------------------------------- rule S
+
+/// A Lead worktree on `cpd/pay-4521` and a scratch worktree that makes the
+/// commits a merge would fast-forward the Lead Branch to.
+struct Moving {
+    env: TestEnv,
+    repo: PathBuf,
+    lead: PathBuf,
+    branch: String,
+    scratch: PathBuf,
+}
+
+fn moving() -> Moving {
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let made = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    let scratch = env.root().join("scratch");
+    env.git(&repo, &["worktree", "add", "-q", "--detach", scratch.to_str().unwrap(), &made.branch]);
+    Moving { env, repo, lead: made.path, branch: made.branch, scratch }
+}
+
+impl Moving {
+    /// A merge's step 8: a commit that writes `path` on top of the Lead Branch,
+    /// then the compare-and-swap of the ref. The Lead worktree is not touched.
+    fn merge(&self, path: &str, content: &str) -> String {
+        let reference = format!("refs/heads/{}", self.branch);
+        let old = self.env.git(&self.repo, &["rev-parse", &reference]);
+        self.env.git(&self.scratch, &["checkout", "-q", "--detach", &old]);
+        commit_file(&self.env, &self.scratch, path, content);
+        let new = self.env.git(&self.scratch, &["rev-parse", "HEAD"]);
+        self.env.git(&self.repo, &["update-ref", "-m", "cpd: merge test", &reference, &new, &old]);
+        new
+    }
+
+    fn assert_at_tip_and_clean(&self, tip: &str) {
+        assert_eq!(self.env.git(&self.lead, &["rev-parse", "HEAD"]), tip);
+        assert_eq!(self.env.git(&self.lead, &["status", "--porcelain"]), "", "the Lead worktree holds the tip's tree");
+    }
+}
+
+#[test]
+fn rule_s_two_merges_synced_in_the_reverse_order_end_at_the_tip_and_clean() {
+    let m = moving();
+    let _first = m.merge("a.txt", "a\n");
+    let second = m.merge("b.txt", "b\n");
+
+    // The second merge's sync runs first, then the first merge's.
+    assert_eq!(sync_lead(&m.lead, &m.branch).unwrap(), Synced::Done);
+    assert_eq!(sync_lead(&m.lead, &m.branch).unwrap(), Synced::Done);
+
+    m.assert_at_tip_and_clean(&second);
+    assert_eq!(fs::read_to_string(m.lead.join("a.txt")).unwrap(), "a\n");
+    assert_eq!(fs::read_to_string(m.lead.join("b.txt")).unwrap(), "b\n");
+}
+
+#[test]
+fn rule_s_two_syncs_at_once_both_end_with_the_lead_worktree_at_the_tip() {
+    let m = moving();
+    m.merge("a.txt", "a\n");
+    let tip = m.merge("b.txt", "b\n");
+
+    let results = std::thread::scope(|s| {
+        let one = s.spawn(|| sync_lead(&m.lead, &m.branch));
+        let two = s.spawn(|| sync_lead(&m.lead, &m.branch));
+        [one.join().unwrap(), two.join().unwrap()]
+    });
+
+    for result in results {
+        assert_eq!(result.unwrap(), Synced::Done);
+    }
+    m.assert_at_tip_and_clean(&tip);
+}
+
+#[test]
+fn rule_s_keeps_a_staged_edit_and_reports_it_stale() {
+    let m = moving();
+    fs::write(m.lead.join("README.md"), "staged by the Lead\n").unwrap();
+    m.env.git(&m.lead, &["add", "README.md"]);
+    let tip = m.merge("a.txt", "a\n");
+
+    let err = sync_lead(&m.lead, &m.branch).unwrap_err();
+
+    assert_eq!(err.code(), ErrorCode::LeadWorktreeStale);
+    assert_eq!(err.details()["worktree"], m.lead.display().to_string());
+    // Nothing was overwritten: the edit is still staged and on disk, and the tip's file is not checked out.
+    assert_eq!(m.env.git(&m.lead, &["diff", "--cached", "--name-only"]), "README.md\na.txt");
+    assert_eq!(m.env.git(&m.lead, &["show", ":README.md"]), "staged by the Lead");
+    assert_eq!(fs::read_to_string(m.lead.join("README.md")).unwrap(), "staged by the Lead\n");
+    assert!(!m.lead.join("a.txt").exists());
+    assert_eq!(m.env.git(&m.lead, &["rev-parse", "HEAD"]), tip, "the ref move stands");
+}
+
+#[test]
+fn rule_s_keeps_an_unstaged_edit_and_reports_it_stale() {
+    let m = moving();
+    fs::write(m.lead.join("README.md"), "edited by the Lead\n").unwrap();
+    m.merge("a.txt", "a\n");
+
+    let err = sync_lead(&m.lead, &m.branch).unwrap_err();
+
+    assert_eq!(err.code(), ErrorCode::LeadWorktreeStale);
+    assert_eq!(fs::read_to_string(m.lead.join("README.md")).unwrap(), "edited by the Lead\n");
+    assert!(!m.lead.join("a.txt").exists());
+}
+
+#[test]
+fn rule_s_waits_out_an_index_lock_held_for_one_second() {
+    let m = moving();
+    let tip = m.merge("a.txt", "a\n");
+    let lock = PathBuf::from(m.env.git(&m.lead, &["rev-parse", "--path-format=absolute", "--git-path", "index.lock"]));
+    fs::write(&lock, "").unwrap();
+
+    let started = Instant::now();
+    let synced = std::thread::scope(|s| {
+        s.spawn(|| {
+            // time-claim: rule S waits out an index lock held for a second; no per-poll signal from git.
+            std::thread::sleep(Duration::from_secs(1));
+            fs::remove_file(&lock).unwrap();
+        });
+        sync_lead(&m.lead, &m.branch)
+    });
+
+    assert_eq!(synced.unwrap(), Synced::Done);
+    assert!(started.elapsed() >= Duration::from_secs(1), "it waited for the lock");
+    m.assert_at_tip_and_clean(&tip);
+}
+
+#[test]
+fn rule_s_on_an_up_to_date_lead_worktree_is_done_and_touches_nothing() {
+    let m = moving();
+    let tip = m.env.git(&m.lead, &["rev-parse", "HEAD"]);
+    assert_eq!(sync_lead(&m.lead, &m.branch).unwrap(), Synced::Done);
+    m.assert_at_tip_and_clean(&tip);
+}
+
+// ------------------------------------------------------- gate worktree
+
+fn key() -> PrKey {
+    PrKey::parse("api").unwrap()
+}
+
+fn gate_hooks<'a>(env: &TestEnv, lead_branch: &'a str) -> GateHooks<'a> {
+    GateHooks {
+        lead_branch,
+        base: "main",
+        pre_start: setup(env, "pr-api.pre-start.log"),
+        pre_merge: setup(env, "pr-api.pre-merge.log"),
+    }
+}
+
+/// A Lead worktree whose tip `G` carries `wt` as `.config/wt.toml`, and a later
+/// tip whose `.config/wt.toml` would fail every hook. Returns `(repo, lead, G)`.
+fn gated(env: &TestEnv, wt: &str) -> (PathBuf, cpd_core::git::Created, String) {
+    let repo = env.git_repo("pay");
+    let lead = create_lead_worktree(&repo, &plan(), "main", &setup(&env, "lead.log")).unwrap();
+    commit_file(env, &lead.path, ".config/wt.toml", wt);
+    let g = env.git(&lead.path, &["rev-parse", "HEAD"]);
+    commit_file(env, &lead.path, ".config/wt.toml", "pre-start = \"exit 9\"\npre-merge = \"exit 9\"\n");
+    (repo, lead, g)
+}
+
+fn worktrees(env: &TestEnv, repo: &Path) -> String {
+    env.git(repo, &["worktree", "list", "--porcelain"])
+}
+
+#[test]
+fn the_gate_runs_pre_start_then_pre_merge_in_a_detached_worktree_at_g_and_removes_it() {
+    let env = TestEnv::new();
+    let out = env.root().join("out");
+    fs::create_dir_all(&out).unwrap();
+    let wt = format!(
+        "pre-start = \"touch started; echo {{{{ branch }}}} {{{{ base }}}} {{{{ worktree_path }}}} $(git rev-parse HEAD) > {0}/start.txt\"\n\
+         pre-merge = \"test -f started && echo {{{{ branch }}}} {{{{ target }}}} $(git rev-parse HEAD) $(git symbolic-ref -q HEAD || echo detached) > {0}/merge.txt\"\n",
+        out.display()
+    );
+    let (repo, lead, g) = gated(&env, &wt);
+
+    let gated = gate(&repo, &plan(), &key(), &g, &gate_hooks(&env, &lead.branch)).unwrap();
+
+    assert_eq!(gated, Ok(()));
+    let w = gate_worktree_path(&repo, &plan(), &key(), std::process::id()).unwrap();
+    assert_eq!(w, repo.parent().unwrap().join(format!("pay.pay-4521.api.gate-{}", std::process::id())));
+    let w_real = repo.parent().unwrap().canonicalize().unwrap().join(w.file_name().unwrap());
+    assert_eq!(fs::read_to_string(out.join("start.txt")).unwrap(), format!("cpd/pay-4521 main {} {g}\n", w_real.display()));
+    assert_eq!(fs::read_to_string(out.join("merge.txt")).unwrap(), format!("cpd/pay-4521 main {g} detached\n"));
+    assert!(!w.exists(), "the gate worktree is removed");
+    assert!(!worktrees(&env, &repo).contains(".gate-"));
+    assert_eq!(branch_config(&env, &repo), "", "no .git/config write");
+}
+
+#[test]
+fn a_failing_pre_start_refuses_the_gate_without_pre_merge_and_removes_the_worktree() {
+    let env = TestEnv::new();
+    let marker = env.root().join("pre-merge-ran");
+    let wt = format!("pre-start = \"echo no setup; exit 4\"\npre-merge = \"touch {}\"\n", marker.display());
+    let (repo, lead, g) = gated(&env, &wt);
+    let hooks = gate_hooks(&env, &lead.branch);
+
+    let refused = gate(&repo, &plan(), &key(), &g, &hooks).unwrap().unwrap_err();
+
+    assert_eq!(refused.hook, Hook::PreStart);
+    assert_eq!(refused.outcome, HookOutcome::Failed { exit: 4 });
+    assert_eq!(refused.tail.as_deref(), Some("no setup"));
+    assert_eq!(refused.log, hooks.pre_start.log);
+    assert!(!marker.exists(), "pre-merge did not run");
+    assert!(!worktrees(&env, &repo).contains(".gate-"));
+}
+
+#[test]
+fn a_failing_pre_merge_refuses_the_gate_and_removes_the_worktree() {
+    let env = TestEnv::new();
+    let (repo, lead, g) = gated(&env, "pre-merge = \"echo red; exit 6\"\n");
+    let hooks = gate_hooks(&env, &lead.branch);
+
+    let refused = gate(&repo, &plan(), &key(), &g, &hooks).unwrap().unwrap_err();
+
+    assert_eq!(refused.hook, Hook::PreMerge);
+    assert_eq!(refused.outcome, HookOutcome::Failed { exit: 6 });
+    assert_eq!(refused.tail.as_deref(), Some("red"));
+    assert_eq!(fs::read_to_string(&hooks.pre_merge.log).unwrap(), "red\n");
+    assert!(!worktrees(&env, &repo).contains(".gate-"));
+}
+
+/// The pid of a process that has ended.
+fn dead_pid(env: &TestEnv) -> u32 {
+    let mut child = common::spawn(&mut env.command("true")).unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+#[test]
+fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
+    let env = TestEnv::new();
+    let (repo, _lead, g) = gated(&env, "");
+    // What a concurrent `git worktree add` leaves for a moment: an entry whose `commondir` is empty.
+    let adding = repo.join(".git/worktrees/adding");
+    fs::create_dir_all(&adding).unwrap();
+    fs::write(adding.join("gitdir"), format!("{}\n", env.root().join("adding/.git").display())).unwrap();
+    fs::write(adding.join("commondir"), "").unwrap();
+    let path = gate_worktree_path(&repo, &plan(), &key(), std::process::id()).unwrap();
+    let broken = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "worktree", "add", "--detach", path.to_str().unwrap(), &g])).unwrap();
+    assert!(String::from_utf8_lossy(&broken.stderr).contains("worktrees/adding/commondir: Success"), "{broken:?}");
+
+    let added = std::thread::scope(|s| {
+        s.spawn(|| {
+            // time-claim: the add outlasts an entry that stays half-created for a second; no per-poll signal from git.
+            std::thread::sleep(Duration::from_secs(1));
+            fs::remove_dir_all(&adding).unwrap();
+        });
+        GateWorktree::add(&repo, &plan(), &key(), &g)
+    });
+
+    let gate = added.unwrap();
+    assert!(gate.path().exists());
+    gate.remove().unwrap();
+    // Any other failure is not retried.
+    let err = GateWorktree::add(&repo, &plan(), &key(), "no-such-commit").unwrap_err();
+    assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("worktree")));
+}
+
+/// The reproduction of the Gate's race: `ROUNDS` rounds of `PARALLEL` `worktree add --detach --lock`
+/// into one repo at once (before the retry 5, 6 and 15 of 1600 adds failed in three runs).
+fn parallel_adds(env: &TestEnv, repo: &Path, sha: &str, parallel: usize, rounds: usize, add: impl Sync + Fn(&Path, &[&str], &Path) -> Result<String, cpd_core::error::CpdError>) -> usize {
+    let mut failed = 0;
+    let add = &add;
+    for round in 0..rounds {
+        let paths: Vec<PathBuf> = (0..parallel).map(|i| env.root().join(format!("race-{round}-{i}"))).collect();
+        failed += std::thread::scope(|s| {
+            let adds: Vec<_> = paths
+                .iter()
+                .map(|p| s.spawn(move || add(repo, &["--detach", "--lock", "--reason", "race", p.to_str().unwrap(), sha], p)))
+                .collect();
+            adds.into_iter().map(|a| a.join().unwrap()).filter(Result::is_err).count()
+        });
+        for p in &paths {
+            let _ = cpd_core::git::run::run(repo, &["worktree", "remove", "--force", "--force", p.to_str().unwrap()]); // a failed add left none
+        }
+    }
+    failed
+}
+
+#[test]
+fn parallel_worktree_adds_into_one_repo_all_succeed() {
+    let env = TestEnv::new();
+    let (repo, _lead, g) = gated(&env, "");
+    assert_eq!(parallel_adds(&env, &repo, &g, 16, 40, cpd_core::git::run::worktree_add), 0);
+}
+
+#[test]
+fn the_sweep_removes_the_prs_gate_worktrees_of_dead_pids_only() {
+    let env = TestEnv::new();
+    let (repo, _lead, g) = gated(&env, "");
+    let dead = dead_pid(&env);
+    let add = |key: &PrKey, pid: u32| {
+        let path = gate_worktree_path(&repo, &plan(), key, pid).unwrap();
+        env.git(&repo, &["worktree", "add", "-q", "--detach", "--lock", "--reason", "cpd gate", path.to_str().unwrap(), &g]);
+        path
+    };
+    let leftover = add(&key(), dead);
+    let other_pr = add(&PrKey::parse("web").unwrap(), dead);
+    let live = GateWorktree::add(&repo, &plan(), &key(), &g).unwrap();
+    assert!(worktrees(&env, &repo).contains("locked cpd gate"));
+
+    let removed = sweep_gate_worktrees(&repo, &plan(), &key()).unwrap();
+
+    assert_eq!(removed.len(), 1, "{removed:?}");
+    assert_eq!(removed[0].file_name(), leftover.file_name());
+    assert!(!leftover.exists());
+    assert!(other_pr.exists(), "another PR's leftover is its own sweep's");
+    assert!(live.path().exists(), "a live pid's gate worktree is left alone");
+    // A locked leftover whose directory is gone is swept too.
+    fs::remove_dir_all(&other_pr).unwrap();
+    assert_eq!(sweep_gate_worktrees(&repo, &plan(), &PrKey::parse("web").unwrap()).unwrap().len(), 1);
+    live.remove().unwrap();
+    assert!(!worktrees(&env, &repo).contains(".gate-"));
 }
 
 // ------------------------------------------------------------ deadline (contract §1.2, §7)

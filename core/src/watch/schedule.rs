@@ -6,6 +6,7 @@
 use super::SOURCE;
 use super::engine::Engine;
 use super::report::{About, Step};
+use super::restart;
 use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -49,7 +50,8 @@ fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTi
 
 /// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
 /// or `open`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
-const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN plans p ON p.id = j.plan
+/// The `workers` step counts these rows too (the StatusBar's `W waiting`).
+pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN plans p ON p.id = j.plan
   JOIN prs r ON r.plan = j.plan AND r.key = j.pr
   WHERE j.status = 'queued' AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open')
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
@@ -57,6 +59,12 @@ const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN plans p ON 
   ORDER BY j.urgent DESC, j.seq";
 
 pub(super) fn run(engine: &mut Engine) {
+    // A tmux restart is pending: no new Attempt until it has run; running ones finish (§3.7 E3).
+    match restart::holding(&engine.home) {
+        Ok(true) => return engine.log.line("E3: holding: a tmux restart is pending, no new Attempt starts until it has run"),
+        Ok(false) => {}
+        Err(e) => return engine.fail(Step::E3, About::Machine, &e),
+    }
     let ready = engine.store.read(|conn| {
         let mut stmt = conn.prepare(READY)?;
         let rows = stmt

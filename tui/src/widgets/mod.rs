@@ -8,7 +8,7 @@
 //!
 //! - [`column`]: the drawing of the machine, the PRs, git and Jira;
 //! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
-//!   the StatusBar's button open in a tmux popup (the columns are narrower than the legend);
+//!   the StatusBar's button (`cpd tui action legend`) open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::palette`]'s.
 
 mod column;
@@ -36,7 +36,7 @@ use cpd_core::output::Output;
 use cpd_core::store::Store;
 
 pub use column::{Drawn, Hit, Machine, MergeIcon, draw};
-pub(crate) use column::section_header;
+pub(crate) use column::{Window, dim, max_scroll, section_header, window};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);

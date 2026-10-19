@@ -1,8 +1,8 @@
-import type { CpdEvent, Kind } from "./event.ts";
+import type { CpdEvent, EventOf, Kind } from "./event.ts";
 import type { Message, SendOptions } from "./pi.ts";
 
 /**
- * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (hs-d276).
+ * commands.md §15.3, "Plan Lead" column: the kinds that become a message, whether they trigger a turn, and how a busy Lead gets them (steer or follow-up).
  * `steer`: pi injects the message after the current tool call. `followUp`: pi delivers it after the run, one per finished run.
  * `pr-feedback` (every reason) and a Worker's `escalation` are urgent, so steered; every other kind waits as a follow-up.
  */
@@ -36,7 +36,7 @@ export function errorMessage(what: string, code: string, message: string, extra:
 }
 
 /** §15.3 `session-message`: `Message from <name> (<id>): <text>`, or `Message from the User: <text>` when nobody sent it. */
-export function sessionMessage(event: CpdEvent, sessionId: string, sender: { id: string; name: string | null } | null): Message {
+export function sessionMessage(event: EventOf<"session-message">, sessionId: string, sender: { id: string; name: string | null } | null): Message {
   const from = sender === null ? "the User" : sender.name === null ? sender.id : `${sender.name} (${sender.id})`;
-  return eventMessage(event, sessionId, `Message from ${from}: ${event.data.text as string}`);
+  return eventMessage(event, sessionId, `Message from ${from}: ${event.data.text}`);
 }

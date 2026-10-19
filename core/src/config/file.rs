@@ -118,8 +118,6 @@ pub struct Timeouts {
     pub setup_minutes: u32,
     /// Pre-commit and pre-merge.
     pub gate_minutes: u32,
-    /// `pr rebase` waiting for the per-repo lock.
-    pub lock_wait_seconds: u32,
     /// SQLite busy timeout (§4.2).
     pub store_busy_ms: u32,
     /// Fork-when-idle (§6.7).
@@ -290,7 +288,6 @@ impl Config {
             ask_minutes: positive(&mut r, "timeouts.ask_minutes", 60)?,
             setup_minutes: positive(&mut r, "timeouts.setup_minutes", 15)?,
             gate_minutes: positive(&mut r, "timeouts.gate_minutes", 30)?,
-            lock_wait_seconds: positive(&mut r, "timeouts.lock_wait_seconds", 900)?,
             store_busy_ms: positive(&mut r, "timeouts.store_busy_ms", 5000)?,
             fork_quiet_seconds: positive(&mut r, "timeouts.fork_quiet_seconds", 5)?,
             distill_minutes: positive(&mut r, "timeouts.distill_minutes", 15)?,
