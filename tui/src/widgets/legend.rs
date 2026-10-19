@@ -171,7 +171,16 @@ fn sections() -> Vec<Section> {
                 .collect(),
         ],
     };
-    vec![meanings, jobs, dots, prs, checks]
+    let pulse = Section {
+        title: "Pulse",
+        header: None,
+        // two entries a row: the popup is at most 80 % of the client tall (one row an entry would not fit)
+        rows: crate::plan::pulse::legend()
+            .chunks(2)
+            .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
+            .collect(),
+    };
+    vec![meanings, jobs, dots, prs, pulse, checks]
 }
 
 /// The vertical constraints: the intro, then each section after a gap.
@@ -262,9 +271,27 @@ mod tests {
                 "Jobs: Plan pills and Context counters",
                 "Session dots",
                 "PRs (Dispatch)",
+                "Pulse",
                 "PR checks",
             ]
         );
+    }
+
+    #[test]
+    fn the_pulse_section_lists_its_five_glyphs_in_their_colours() {
+        let pulse = &sections()[4];
+        let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();
+        assert_eq!(
+            cells,
+            [
+                "▄", "activity per 5 minutes", "▄", "a Job merged",
+                crate::plan::pulse::merged_icon(), "a PR merged", "▁", "a Worker running",
+                "quiet 41m", "queued or running work with no activity for 30 min",
+            ]
+        );
+        let colours: Vec<_> = pulse.rows.iter().flatten().step_by(2).map(|l| l.spans[0].style.fg).collect();
+        let fg = |m| palette::fg(m).fg;
+        assert_eq!(colours, [None, fg(Meaning::Done), fg(Meaning::Done), fg(Meaning::Nothing), fg(Meaning::Review)]);
     }
 
     #[test]
