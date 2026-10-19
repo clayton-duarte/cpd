@@ -717,6 +717,82 @@ fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() 
     assert!(!details.iter().any(|d| d == "SCAN h"), "history must not be scanned as a table: {details:?}");
 }
 
+// ---------- §4.4 the read indexes (migration `read-indexes`: sql-F4, tui-F3, sql-F6, engine-F2) ----------
+
+/// The detail column of `EXPLAIN QUERY PLAN <sql>` on a fresh store, one line per step.
+fn query_plan(sql: &str) -> Vec<String> {
+    let env = TestEnv::new();
+    let _store = open(&env);
+    let conn = raw(&env);
+    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+}
+
+/// The statement under test is read by `index`, not by a table scan.
+#[track_caller]
+fn assert_uses(sql: &str, index: &str) {
+    let plan = query_plan(sql);
+    assert!(plan.iter().any(|step| step.contains(&format!("USING INDEX {index}"))), "{index} unused by {sql}: {plan:?}");
+}
+
+/// sql-F4, tui-F3: the job counts of `plan_heads` (`tui/src/read/shared.rs`), run by every cockpit
+/// refresh (tree, widgets, statusbar, plan flow), scanned `jobs` with its overflow pages.
+#[test]
+fn the_cockpits_job_counts_are_read_through_jobs_plan_status() {
+    assert_uses(
+        "SELECT j.plan, j.status, count(*),
+                j.status = 'running' AND EXISTS (SELECT 1 FROM attempts a
+                  WHERE a.plan = j.plan AND a.job = j.key AND a.status = 'merging')
+           FROM jobs j WHERE NULL IS NULL OR j.plan = NULL GROUP BY j.plan, j.status, 4",
+        "jobs_plan_status",
+    );
+}
+
+/// sql-F6: the engine read of every widgets refresh (`tui/src/read/widgets.rs`), `watch --ensure`
+/// (`core/src/watch/ensure.rs`) and `events follow --kind` (`core/src/events/select.rs`) selected
+/// Events by `kind` with no index on it.
+#[test]
+fn events_are_selected_by_kind_through_events_kind() {
+    assert_uses(
+        "SELECT kind, at, data FROM events WHERE kind IN ('watch-started', 'watch-stopped') ORDER BY id DESC LIMIT 1",
+        "events_kind",
+    );
+    assert_uses(
+        "SELECT EXISTS (SELECT 1 FROM events WHERE id > 5 AND kind = 'watch-started' AND json_extract(data, '$.pid') = 1)",
+        "events_kind",
+    );
+    assert_uses(
+        "SELECT id, at, kind, context, plan, job, attempt, session, text, data FROM events
+          WHERE id > 0 AND kind IN ('session-state') ORDER BY id LIMIT 500",
+        "events_kind",
+    );
+}
+
+/// engine-F2: E2's Session read (`core/src/watch/liveness.rs`, unit-tested there against its own
+/// statement) must not read every Session ever made. The index lists only the Sessions E2 can
+/// still see as live, so a `stopped` Session with no pane costs nothing.
+#[test]
+fn only_the_live_sessions_are_in_sessions_live() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, tmux_pane)
+                   VALUES ('gone', 'lead', 'ctx', 'Gone', '/', 'O3', 'stopped', 't', 't', NULL),
+                          ('parked', 'lead', 'ctx', 'Parked', '/', 'O3', 'stopped', 't', 't', '%7');",
+            )
+        })
+        .unwrap();
+    let conn = raw(&env);
+    let sql = "SELECT id FROM sessions INDEXED BY sessions_live WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
+    let mut stmt = conn.prepare(sql).unwrap();
+    let listed: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    // `lead1` is `idle`, `parked` is `stopped` with a pane; `gone` is `stopped` with none.
+    assert_eq!(listed, vec!["lead1".to_owned(), "parked".to_owned()]);
+}
+
 // ---------- §4.5 versions and migrations ----------
 
 #[test]
