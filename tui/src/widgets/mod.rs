@@ -14,6 +14,7 @@
 mod column;
 pub mod legend;
 
+use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -51,7 +52,7 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let home = CpdHome::from_env()?;
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let machine = Machine { name: hostname()?, load: load_average()? };
+            let machine = Machine { name: hostname(), load: load_average() };
             let (prs, cursor) = read::open_prs(&mut store)?;
             let follow = read::Follow::new(&mut store, KINDS, cursor)?;
             Ok((store, config, prs, machine, follow))
@@ -117,7 +118,7 @@ fn show(
             let read = (|| {
                 let moved = follow.poll_changes(store)?.any();
                 let prs = if moved || retry { Some(read::open_prs(store)?.0) } else { None };
-                let load = if load_at.elapsed() >= LOAD_EVERY || retry { Some(load_average()?) } else { None };
+                let load = if load_at.elapsed() >= LOAD_EVERY || retry { Some(load_average()) } else { None };
                 Ok((prs, load))
             })();
             match kept(read, &mut error) {
@@ -159,29 +160,36 @@ pub(crate) fn main_panes(tmux: &Tmux, cockpit: &str) -> Result<Vec<Pane>, CpdErr
     Ok(all.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect())
 }
 
-fn host_failed(what: &str, why: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::SpawnFailed, format!("Reading {what} for the Dispatch column failed: {why}."))
+/// What the column draws for a load it could not read.
+const UNKNOWN: &str = "?";
+
+/// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
+/// prints (macOS has no `/proc`), else `?`: the name is one decorative line, so no failure ends the view.
+fn hostname() -> String {
+    read_hostname(Path::new("/proc/sys/kernel/hostname"))
+        .or_else(|| std::env::var("HOSTNAME").ok().map(|n| n.trim().to_owned()).filter(|n| !n.is_empty()))
+        .or_else(|| {
+            let out = Command::new("hostname").output().ok().filter(|o| o.status.success())?;
+            Some(String::from_utf8_lossy(&out.stdout).trim().to_owned()).filter(|n| !n.is_empty())
+        })
+        .unwrap_or_else(|| UNKNOWN.to_owned())
 }
 
-/// The machine's name, as `hostname` prints it.
-fn hostname() -> Result<String, CpdError> {
-    let out = Command::new("hostname").output().map_err(|e| host_failed("the hostname", e))?;
-    let name = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    if !out.status.success() || name.is_empty() {
-        return Err(host_failed("the hostname", format!("`hostname` exited with {}", out.status)));
-    }
-    Ok(name)
+/// The first line of the file at `path`, when it has one.
+fn read_hostname(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    Some(text.lines().next()?.trim().to_owned()).filter(|n| !n.is_empty())
 }
 
-/// The first three fields of the load average: `/proc/loadavg` on Linux, `sysctl -n vm.loadavg` on macOS.
-fn load_average() -> Result<Vec<String>, CpdError> {
+/// The first three fields of the load average: `/proc/loadavg` on Linux, `sysctl -n vm.loadavg` on macOS; `?` when
+/// it cannot be read (the view keeps running and reads it again).
+fn load_average() -> Vec<String> {
     let text = if cfg!(target_os = "macos") {
-        let out = Command::new("sysctl").args(["-n", "vm.loadavg"]).output().map_err(|e| host_failed("the load", e))?;
-        String::from_utf8_lossy(&out.stdout).into_owned()
+        Command::new("sysctl").args(["-n", "vm.loadavg"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
     } else {
-        std::fs::read_to_string("/proc/loadavg").map_err(|e| host_failed("the load", e))?
+        std::fs::read_to_string("/proc/loadavg").ok()
     };
-    parse_load(&text).ok_or_else(|| host_failed("the load", format!("{:?} has no three numbers", text.trim())))
+    text.and_then(|text| parse_load(&text)).unwrap_or_else(|| vec![UNKNOWN.to_owned()])
 }
 
 /// The three numbers that open `text` (`16.89 24.21 25.00 6/3484 1221694`, or sysctl's `{ 0.52 0.58 0.59 }`).
@@ -221,6 +229,20 @@ mod tests {
         assert_eq!(newest_client("100 80 24\n300 215 62\n200 120 30\n"), Some((215, 62)));
         assert_eq!(newest_client(""), None);
         assert_eq!(newest_client("junk\n"), None);
+    }
+
+    /// tui-W10: a name or a load that cannot be read is no error of the view.
+    #[test]
+    fn a_missing_hostname_file_or_load_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("hostname");
+        assert_eq!(read_hostname(&file), None, "no file");
+        std::fs::write(&file, "\n").unwrap();
+        assert_eq!(read_hostname(&file), None, "an empty one");
+        std::fs::write(&file, "homeserver\n").unwrap();
+        assert_eq!(read_hostname(&file).as_deref(), Some("homeserver"));
+        assert!(!hostname().is_empty());
+        assert!(!load_average().is_empty(), "the numbers, or the `?`");
     }
 
     #[test]
