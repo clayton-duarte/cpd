@@ -37,7 +37,7 @@ The User's four pain points are tagged as in those files: **F** finding what nee
 
 The cockpit becomes **a calm screen that points**. The frame goes quiet and grey; colour and bold are spent only on things that need the User. The bottom line always says, by its colour, whether anything needs him, and lists what, numbered, one click each. Every Plan, PR and Worker shows **how far it is and what it is doing now** where it already sits: a gauge on the tree row, a stepper on the PR box, a two-line row per Worker. Anything named on screen is a click target with a right-click menu, and anything can be reached from one picker. It stays tmux panes with ratatui views and pi in the chat slot, mouse-first.
 
-The mockup is 215×62, today's geometry (Context column 43, centre 127, Deploy column 43, the Plan view's 12 rows, the status line on row 62; `docs/commands.md` §13.1), with all four phases applied. Colour is lost in ASCII, so shapes stand in for it, as in the theme files: `●` red, `◐` yellow, `◆` magenta, `○` white or idle, `⠹ ⠼ ⠴ ⠋` working spinners, `◖text◗` a rounded-cap segment (hs-d266), `⌂ ⎇ ⑂` the Context, Plan Lead and fork icons. Grey `─ │` lines are the quiet frame; heavy `━ ┃ ┣ ┫` stand for the blue edge of the focused pane (the chat). The scenario is invented: Context `api` with Plans `schema` (in the chat slot), `auth`, `search`; Context `web` with Plan `login`.
+The mockup is 215×62, today's geometry (Context column 43, centre 127, Deploy column 43, the Plan view's 12 rows, the status line on row 62; `docs/commands.md` §13.1), with Phases 1–3 applied and Phase 4's slow-Job estimate on the Workers board (the Overview, #17, is a toggle and is drawn in §3). Colour is lost in ASCII, so shapes stand in for it, as in the theme files: `●` red, `◐` yellow, `◆` magenta, `○` white or idle, `⠹ ⠼ ⠴ ⠋` working spinners, `◖text◗` a rounded-cap segment (hs-d266), `⌂ ⎇ ⑂` the Context, Plan Lead and fork icons. Grey `─ │` lines are the quiet frame; heavy `━ ┃ ┣ ┫` stand for the blue edge of the focused pane (the chat). The scenario is invented: Context `api` with Plans `schema` (in the chat slot), `auth`, `search`; Context `web` with Plan `login`.
 
 ```text
 ─◖ Context ◗──────────────◖ ●2 ◐1 ◆2 ◗─ ⋯ ─┬─◖ Plan ◗────────────────────────────────────────────────────────────────────────────◖ schema · 6/10 merged · dispatch ◗─ ⤢ ⋯ ─┬─◖ Deploy ◗──────────────◖ 1 ready ◗─ ⤢ ⋯ ─
@@ -472,7 +472,7 @@ What changes on the screen, against today:
 - **Pane headers:** `⤢ ⋯ ✕`, the chat breadcrumb and the badges (#12).
 - **Event log:** a floating, non-modal pane on tmux 3.8 (#16 M).
 
-The vision mockup (§1) is the cockpit at the end of Phase 3, plus Phase 4's `since you looked` strip and slow-Job estimate.
+The vision mockup (§1) is the cockpit at the end of Phase 3, plus Phase 4's slow-Job estimate on the Workers board.
 
 ### Phase 4 · The big picture
 
