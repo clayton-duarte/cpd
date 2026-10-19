@@ -14,6 +14,7 @@ import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYP
 import { parseOpened, parseResult, parseStatus, request } from "./plannotator.ts";
 import { DECISION_TYPE, decisionText, ENTRY_TYPE, lostText, highestReview, REVIEW_LABEL, reviewNumber, reviewsFromEntries, type ReviewEntry } from "./plan-review.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, type Poll, refusal, RELOAD_COMMAND, reloadLogPath, RELOAD_TRIGGER, validatePackage, type Validation } from "./reload.ts";
+import { POLICY_SECTION, policySection } from "./policy.ts";
 import { isTyped, startsReply } from "./reply.ts";
 import { Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
 import { CONTEXT_TYPE, contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecordEvents, parseRecords, PLAN_KINDS, summaryLine } from "./updates.ts";
@@ -68,6 +69,8 @@ type Run = {
   reload: Poll | undefined;
   /** §15.8: the last run ended on a message that spoke of further work and named no registered key; the next `before_agent_start` adds the reminder once. */
   reminderDue: boolean;
+  /** The text of the `cpd-policy` section (§15.9), or undefined: none, or `cpd policy show` failed. */
+  policy: string | undefined;
   /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
   log: (line: string) => void;
   unsubscribe: (() => void)[];
@@ -195,6 +198,15 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       return;
     }
 
+    // 1b. the policy text (§15.9): a failure is an error message and no section
+    let policy: string | undefined;
+    try {
+      policy = policySection(await call(["policy", "show"]));
+    } catch (e) {
+      deliver("policy show", e);
+    }
+    if (abort.signal.aborted) return;
+
     const facts = new Facts();
     let logFailed = false;
     const r: Run = {
@@ -216,6 +228,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       abort,
       reload: undefined,
       reminderDue: false,
+      policy,
       log: (line) => {
         try {
           appendLog(reloadLogPath(env.CPD_HOME || join(homedir(), ".cpd"), id), line);
@@ -706,6 +719,12 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   pi.on("before_agent_start", function markReply(event) {
     const r = run;
     if (r) r.facts.reply = startsReply(event);
+  });
+
+  // §15.9: the policy section of the run, for every role. Returns nothing: it only sets the section.
+  pi.on("before_agent_start", function policyHandler(event) {
+    const text = run?.policy;
+    if (text !== undefined && isObject(event?.systemPromptOptions?.sections)) event.systemPromptOptions.sections[POLICY_SECTION] = text;
   });
 
   pi.on("input", (event) => {
