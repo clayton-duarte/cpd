@@ -505,6 +505,24 @@ fn question_mark_opens_the_legend_popup() {
 }
 
 #[test]
+fn the_tree_keeps_drawing_and_reading_keys_while_a_command_runs() {
+    let env = env();
+    populate(&env);
+    env.fake("cpd", r#"sleep 4; echo '{"ok":false,"error":{"code":"slow","message":"Took a while.","details":{}}}'; exit 3"#);
+    let pane = Pane::start(&env, 80, 14);
+    pane.ready();
+    pane.down(1);
+    let start = Instant::now();
+    pane.keys(&["Enter"]);
+    pane.wait("the running note", |_| pane.footer_has("running: session open l-ship"));
+    pane.keys(&["n"]);
+    pane.wait("the prompt, while the command still runs", |_| pane.footer_has("into a new Plan, name:"));
+    assert!(start.elapsed() < Duration::from_secs(3), "the key was read at once, not after the command: {:?}", start.elapsed());
+    pane.keys(&["Escape"]);
+    pane.wait("the result", |_| pane.footer_has("slow: Took a while."));
+}
+
+#[test]
 fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     let env = env();
     populate(&env);
