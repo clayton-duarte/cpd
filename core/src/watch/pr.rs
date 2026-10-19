@@ -19,10 +19,14 @@ use super::engine::Engine;
 use super::report::{About, Failure, Step};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
+use crate::host::deadline::{self, Failed};
 use crate::host::exe::started_as;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
+/// The `cpd pr poll` child's deadline (contract §3.7): above `pr poll`'s own 15 s
+/// per `gh` call (§7.6), so a hung child cannot stop the one-thread tick.
+const POLL_DEADLINE: Duration = Duration::from_secs(120);
 
 pub(super) fn run(engine: &mut Engine) {
     let now = Instant::now();
@@ -83,19 +87,21 @@ fn rate_guard(out: &Value) -> Result<Option<(Instant, Failure)>, Failure> {
 fn poll(engine: &Engine) -> Result<Value, Failure> {
     let exe = started_as().map_err(|e| Failure::from(&e))?;
     let argv = [&*exe.to_string_lossy(), "pr", "poll"];
-    let out = Command::new(exe)
-        .args(&argv[1..])
+    let mut cmd = Command::new(&exe);
+    cmd.args(&argv[1..])
         .env("CPD_HOME", engine.home.root())
         // The engine's own selection is not the subprocess's.
         .env_remove("CPD_PLAN")
         .env_remove("CPD_SESSION")
         .env_remove("CPD_ATTEMPT")
         .current_dir(engine.home.root())
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| {
+        .stdin(Stdio::null());
+    let out = deadline::output(&mut cmd, "cpd", POLL_DEADLINE).map_err(|e| match e {
+        Failed::Io(e) => {
             Failure::from(&CpdError::new(ErrorCode::SpawnFailed, format!("Cannot run {}: {e}.", argv.join(" "))).with("argv", json!(argv)))
-        })?;
+        }
+        Failed::Timeout(e) => Failure::from(&e),
+    })?;
     let stdout = String::from_utf8_lossy(&out.stdout);
     let printed: Option<Value> = serde_json::from_str(stdout.trim()).ok();
     match printed {

@@ -233,7 +233,7 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        s.tmux_pane, s.state, s.state_label, s.state_at, s.created_at,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
-       EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
+       l.lead_session IS NOT NULL,
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
            AND json_extract(e.data, '$.to') = 'idle' AND json_extract(e.data, '$.from') IN ('working', 'blocked')
          ORDER BY e.id DESC LIMIT 1),
@@ -244,7 +244,8 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = s.plan AND v.status = 'pending'),
        EXISTS (SELECT 1 FROM prs r JOIN pull_requests q ON q.id = r.pull_request
                 WHERE r.plan = s.plan AND q.state = 'open' AND q.checks IN ('passed', 'failed'))
-  FROM sessions s";
+  FROM sessions s
+  LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
 /// The Sessions matching `filter` (SQL after `WHERE`, over `s`), oldest first.
 pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -> Result<Vec<SessionNode>, CpdError> {
@@ -423,4 +424,40 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
         });
     }
     Ok(heads)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cpd_core::home::CpdHome;
+    use cpd_core::store::Store;
+
+    /// sql-F5: no table is scanned once per Session. Every `SCAN` of the plan of
+    /// `SESSION_SELECT` hangs off the top level, never off a correlated subquery.
+    #[test]
+    fn session_select_scans_no_table_per_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let plan: Vec<(i64, i64, String)> = store
+            .read(|conn| {
+                let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {SESSION_SELECT} WHERE 1 ORDER BY s.created_at, s.id"))?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(3)?)))?;
+                Ok(rows.collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap();
+        let per_session = |mut parent: i64| loop {
+            match plan.iter().find(|(id, ..)| *id == parent) {
+                Some((_, _, detail)) if detail.starts_with("CORRELATED") => return true,
+                Some((_, up, _)) => parent = *up,
+                None => return false,
+            }
+        };
+        let scans: Vec<&str> = plan
+            .iter()
+            .filter(|(_, parent, detail)| detail.starts_with("SCAN") && per_session(*parent))
+            .map(|(.., detail)| detail.as_str())
+            .collect();
+        assert!(scans.is_empty(), "scanned once per Session: {scans:?}\n{plan:#?}");
+    }
 }
