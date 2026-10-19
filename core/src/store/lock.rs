@@ -189,7 +189,7 @@ mod tests {
 
     fn home() -> (tempfile::TempDir, CpdHome) {
         let dir = tempfile::tempdir().unwrap();
-        let home = CpdHome::resolve(Some(dir.path().to_path_buf()), None).unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
         (dir, home)
     }
 
