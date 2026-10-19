@@ -343,3 +343,18 @@ fn server_tmux(tmux: &Tmux) -> Result<Option<PathBuf>, CpdError> {
     eprintln!("cpd: the tmux server runs tmux {server}, the installed tmux is {installed}: attaching with the server's own tmux.");
     Ok(Some(exe))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::names_socket;
+
+    #[test]
+    fn tmux_names_the_socket_of_its_server() {
+        assert!(names_socket("/tmp/tmux-1000/cpd,4242,0", "cpd"));
+        assert!(names_socket("/tmp/tmux-1000/cpd,4242,12", "cpd"));
+        assert!(!names_socket("/tmp/tmux-1000/default,4242,0", "cpd"));
+        assert!(!names_socket("/tmp/tmux-1000/cpd-work,4242,0", "cpd"));
+        assert!(!names_socket("", "cpd"));
+        assert!(!names_socket("cpd", "cpd"));
+    }
+}
