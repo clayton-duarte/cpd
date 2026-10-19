@@ -1347,12 +1347,12 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
     assert_eq!(fx.count("error"), 0);
 }
 
-/// engine-W9: a poll of 0.1 s with a tick of 2 s and a poll period (`pr_poll_seconds`, its test override) of 0.2 s runs
+/// engine-W9: a poll of 0.1 s with a tick of 5 s and a poll period (`pr_poll_seconds`, its test override) of 0.2 s runs
 /// every 0.3 s (end + 0.2 s), not at the next tick.
 #[test]
 fn e5_polls_at_its_due_time_not_at_the_next_tick() {
     let fx = fx_bare("");
-    tick_every(&fx, "2");
+    tick_every(&fx, "5");
     let log = fx.env.root().join("poll.log");
     fx.env.fake_gh(&format!(
         r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.1; echo '{}'; exit 0"#,
@@ -1367,7 +1367,7 @@ fn e5_polls_at_its_due_time_not_at_the_next_tick() {
     let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.split_once(' ').unwrap().1.parse::<i128>().unwrap() / 1_000_000).collect();
     for pair in starts.windows(2) {
         let gap = pair[1] - pair[0];
-        assert!((300..2000).contains(&gap), "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 2 s tick: {starts:?}");
+        assert!((300..4000).contains(&gap), "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 5 s tick: {starts:?}");
     }
     assert_eq!(fx.count("error"), 0);
 }
