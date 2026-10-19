@@ -12,10 +12,13 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::driver::{self, StartCtx};
 use crate::error::{CpdError, ErrorCode};
+use crate::host::limit::limit;
 use crate::ids::{JobKey, PlanId};
 
 /// The longest back-off after Attempts whose driver never started (§3.7 E3).
 const BACKOFF_CAP_SECONDS: u64 = 300;
+/// The back-off's unit: `2^k` of it (tests shorten it with `CPD_TEST_BACKOFF_UNIT`, [`limit`]).
+const BACKOFF_UNIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// How long E3 waits after the last of `k` Attempts in a row whose driver never
 /// started: `min(2^k, 300)` seconds.
@@ -43,7 +46,8 @@ fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTi
     let ended = OffsetDateTime::parse(&ended_at, &Rfc3339).map_err(|e| {
         CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: ended_at {ended_at:?} of an Attempt of Job {key}: {e}."))
     })?;
-    let wait = time::Duration::seconds(i64::try_from(backoff_seconds(k)).expect("at most 300"));
+    let unit = limit("BACKOFF_UNIT", BACKOFF_UNIT);
+    let wait = time::Duration::try_from(unit * u32::try_from(backoff_seconds(k)).expect("at most 300")).expect("at most 300 units");
     Ok(now < ended + wait)
 }
 

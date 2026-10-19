@@ -998,13 +998,17 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
 
 /// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt
 /// ends `failed` / `crashed` with `driver_pid` null. No Tier is climbed, no try is used up (`retry_cap = 0`
-/// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure.
+/// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure: `2^k` units, the unit a
+/// tenth of a second here (`CPD_TEST_BACKOFF_UNIT`, contract §1.2 "Test overrides"), over 0.1 s ticks.
 #[test]
 fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() {
     let fx = fx("concurrency = 1\nretry_cap = 0");
+    let config = fx.env.cpd_home().join("config.toml");
+    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 0.1\n")).unwrap();
+    let unit = Duration::from_millis(100);
     let installed = fx.env.root().join("cpd-installed");
     copy_executable(CPD, &installed);
-    let engine = fx.start_from(&installed);
+    let engine = fx.start_with(&installed, &[("CPD_TEST_BACKOFF_UNIT", "0.1")]);
     fs::remove_file(&installed).unwrap();
     fx.add_job("api", &[], "");
 
@@ -1031,11 +1035,11 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
         let retry = &fx.events("attempt-retry")[i];
         assert_eq!((&retry.3["cause"], &retry.3["next_tier"]), (&json!("crashed"), &json!("S2")));
     }
-    // After the k-th failure the next start waits 2^k seconds.
+    // After the k-th failure the next start waits 2^k units.
     for (k, pair) in attempts.windows(2).enumerate() {
         let waited = parse_time(&pair[1].4) - parse_time(&pair[0].5);
         let k = (k + 1) as u32;
-        assert!(waited >= time::Duration::seconds(2i64.pow(k)), "after failure {k}: waited {waited}");
+        assert!(waited >= unit * 2u32.pow(k), "after failure {k}: waited {waited}");
     }
 }
 
@@ -1419,15 +1423,15 @@ fn running(pid: i32) -> bool {
 
 /// engine-W4: a `cpd pr poll` child that hangs (its `gh` sleeps, and so does a child of
 /// that `gh`) is killed at its deadline with its whole process group, and E5 reports
-/// `tool_timeout`. The deadline is shortened to 2 s by `CPD_TEST_DEADLINE_CPD`, which a
-/// debug build reads.
+/// `tool_timeout`. The deadline is shortened to 0.5 s by `CPD_TEST_DEADLINE_CPD`, which a
+/// debug build reads (contract §1.2 "Test overrides").
 #[test]
 fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() {
     let fx = fx_bare("");
     let pids = fx.env.root().join("gh.pids");
     fx.env.fake_gh(&format!("sleep {SLEEP_SECONDS} & echo \"$$ $!\" >> '{}'; wait", pids.display()));
 
-    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "2")]);
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "0.5")]);
     wait_until("E5's tool_timeout", || fx.count("error") >= 1);
     engine.stop();
 
@@ -1435,7 +1439,7 @@ fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() 
     let data = &errors[0].3;
     assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tool_timeout")), "{errors:?}");
     let details = &data["details"];
-    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(2)), "{details}");
+    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(0.5)), "{details}");
     assert_eq!(details["argv"], json!([CPD, "pr", "poll"]));
     for pid in fs::read_to_string(&pids).unwrap().split_whitespace() {
         let pid: i32 = pid.parse().unwrap();
