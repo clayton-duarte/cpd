@@ -21,7 +21,8 @@ use crate::store::Store;
 
 // The merge's causes are the shared `Cause`; `Failure` is the name its callers know.
 pub use crate::attempt::ledger::{Attempt, Cause as Failure, End, Ladder, load};
-pub use lock::{DriverLock, RepoLock, take_free_driver_lock};
+pub use crate::driver::lock::{Free as DriverLock, take_free_driver_lock};
+pub use lock::RepoLock;
 pub use recover::{Recovered, recover};
 
 /// How many times step 8 goes back to step 2 when the Lead Branch moved,

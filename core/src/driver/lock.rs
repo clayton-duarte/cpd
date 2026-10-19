@@ -102,16 +102,30 @@ pub struct Free {
 /// only after the end is committed). `Some` when the lock was free or missing,
 /// `None` when a live driver holds it.
 pub fn probe(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Option<Free>, CpdError> {
+    try_take(&home.attempt_lock(plan, attempt), false)
+}
+
+/// [`probe`] for a caller that means to hold the lock: it **creates** the file
+/// when it is missing, as a starter does. Not for E2, R or `pr open`: a file
+/// created for an Attempt that has none is never removed.
+pub fn take_free_driver_lock(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Option<Free>, CpdError> {
     let path = home.attempt_lock(plan, attempt);
-    let file = match OpenOptions::new().read(true).write(true).create(false).open(&path) {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| lock_failed(&path, e))?;
+    }
+    try_take(&path, true)
+}
+
+fn try_take(path: &Path, create: bool) -> Result<Option<Free>, CpdError> {
+    let file = match OpenOptions::new().read(true).write(true).create(create).truncate(false).open(path) {
         Ok(file) => file,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Free { _file: None })),
-        Err(e) => return Err(lock_failed(&path, e)),
+        Err(e) => return Err(lock_failed(path, e)),
     };
     match file.try_lock() {
         Ok(()) => Ok(Some(Free { _file: Some(file) })),
         Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(e)) => Err(lock_failed(&path, e)),
+        Err(TryLockError::Error(e)) => Err(lock_failed(path, e)),
     }
 }
 
@@ -196,4 +210,37 @@ pub fn inherited(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<I
     }
     fcntl(&file, FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC)).map_err(|e| missing(format!("cannot set close-on-exec ({e})")))?;
     Ok(Inherited { _file: file })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn home() -> (tempfile::TempDir, CpdHome, PlanId, AttemptId) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        (dir, home, PlanId::parse("pl").unwrap(), AttemptId::parse("api-a1").unwrap())
+    }
+
+    /// engine-G1: E2, R and `pr open` probe the driver lock of an Attempt that
+    /// has none (its file is gone): that must not leave a lock file behind.
+    #[test]
+    fn probing_a_missing_driver_lock_creates_no_file() {
+        let (_dir, home, plan, attempt) = home();
+
+        assert!(probe(&home, &plan, &attempt).unwrap().is_some());
+
+        assert!(!home.attempt_lock(&plan, &attempt).exists());
+    }
+
+    #[test]
+    fn taking_a_missing_driver_lock_holds_it_until_dropped() {
+        let (_dir, home, plan, attempt) = home();
+
+        let held = take_free_driver_lock(&home, &plan, &attempt).unwrap().expect("free");
+
+        assert!(probe(&home, &plan, &attempt).unwrap().is_none());
+        drop(held);
+        assert!(probe(&home, &plan, &attempt).unwrap().is_some());
+    }
 }

@@ -256,7 +256,7 @@ fn lock(env: &mut Env, pr: &PrRow, source: &str) -> Result<RepoLock, CpdError> {
     let mut orphans = false;
     for (plan, attempt) in merging {
         let (plan, attempt) = (PlanId::parse(&plan)?, AttemptId::parse(&attempt)?);
-        orphans |= merge::take_free_driver_lock(&env.home, &plan, &attempt)?.is_some();
+        orphans |= crate::driver::lock::probe(&env.home, &plan, &attempt)?.is_some();
     }
     // R needs pi's catalog only to pick the next Tier of an Attempt it ends `crashed`.
     if orphans {

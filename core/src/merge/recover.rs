@@ -6,7 +6,8 @@ use std::path::Path;
 
 use super::Ctx;
 use crate::attempt::ledger::{self, Attempt, Cause, End, Ladder, Stage};
-use super::lock::{RepoLock, take_free_driver_lock};
+use super::lock::RepoLock;
+use crate::driver::lock::probe;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
 use crate::host::layout::attempt_window;
@@ -46,7 +47,7 @@ pub(super) fn recover_except(
             continue;
         }
         // Held: its driver is alive and will finish the merge itself.
-        let Some(_driver) = take_free_driver_lock(ctx.home, &plan, &id)? else { continue };
+        let Some(_driver) = probe(ctx.home, &plan, &id)? else { continue };
         let attempt = store.read(|conn| ledger::load(conn, &plan, &id))?;
         // Ended between the query and the lock.
         if attempt.status != "merging" {

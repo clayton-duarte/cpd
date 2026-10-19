@@ -1,6 +1,6 @@
-//! The per-repo lock (contract §1.4, §7.4) and probing an Attempt's driver
-//! lock (§3.4). Both are `flock(2)` locks: the kernel releases them when the
-//! holder dies, so a free lock always means a dead holder.
+//! The per-repo lock (contract §1.4, §7.4): a `flock(2)` lock, which the kernel
+//! releases when the holder dies. Probing an Attempt's driver lock (§3.4) is
+//! `crate::driver::lock::probe`.
 
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,6 @@ use nix::fcntl::{Flock, FlockArg};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::run::ok;
 use crate::home::CpdHome;
-use crate::ids::{AttemptId, PlanId};
 
 /// How often [`RepoLock::wait_for`] tries again.
 const RETRY: Duration = Duration::from_millis(100);
@@ -97,20 +96,6 @@ impl RepoLock {
     pub fn file(&self) -> &Path {
         &self.path
     }
-}
-
-/// The driver lock of an Attempt, taken because it was free: its driver is
-/// dead (§3.4). Held while R ends that Attempt; released on drop.
-pub struct DriverLock {
-    _flock: Flock<File>,
-}
-
-/// Probes the driver lock as E2 does (§3.4): opens the file afresh and tries
-/// `flock(LOCK_EX | LOCK_NB)`. `Some` when it was free (the driver died),
-/// `None` when a live driver holds it.
-pub fn take_free_driver_lock(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<Option<DriverLock>, CpdError> {
-    let (file, path) = open(&home.attempt_lock(plan, attempt))?;
-    Ok(lock(file, &path, FlockArg::LockExclusiveNonblock)?.map(|flock| DriverLock { _flock: flock }))
 }
 
 fn open(path: &Path) -> Result<(File, PathBuf), CpdError> {
