@@ -118,6 +118,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `cas_lost` | 3 | a compare-and-swap found the state changed since it was read (§4.2); rerun the command |
 | `illegal_transition` | 3 | a transition not in §3, refused by the command or by a trigger |
 | `locked_job_tampered` | 3 | a Locked Job's fingerprint does not match (§2.3) |
+| `pr_title_required` | 3 | `pr open` found a PR with no stored title, one that existed before migration `pr-title` (contract §7.6, hs-d285); the message says to run `cpd pr edit <key> --title "<text>"` |
 | `git_failed`, `tmux_failed`, `gh_failed` | 1 | the tool exited non-zero where the command did not expect it; `details` has `argv`, `exit` and the last 60 lines of stderr. `pr poll` also returns `gh_failed` for an empty or non-JSON body, a search response with `errors`, and a lookup with no `data` (contract §7.6, hs-d96) |
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
@@ -137,7 +138,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write five files the cont
 
 ### 1.5 Text arguments
 
-Free text (Job `--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2).
+Free text (Job `--title`, `--reason`, Context record text, questions and answers) is one argument, 1 to 20 000 characters, with no NUL; else `usage`. Context and Plan titles (`--title` of `context new`, `context rename`, `plan new`, `plan rename`) are 1–200 characters with no control characters, else `usage` (exit 2). Names (`--name`, `session rename`) are 1–80 characters with no control characters, else `invalid_name` (exit 2) (cpd 1 §11 `session rename`, kept). Files given by path (`--spec`, `--brief-file`, `--feedback-file`, `--message-file`) must be readable UTF-8, else `file_unreadable` (exit 2). A PR's title (`--title` of `pr add` and `pr edit`, hs-d285) is 1–72 characters on one line, with no control character; else `usage`.
 
 ## 2. Command index
 
@@ -1124,6 +1125,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 |---|---|---|
 | the PR is `dispatch` (`open` or `merged`: `already`; `waiting` or `cancelled`) | `illegal_transition` | 3 |
 | every Job of the PR `merged` or `cancelled`, at least one `merged` | `jobs_not_done` | 3 |
+| the PR has a stored title (hs-d285): a PR that existed before migration `pr-title` has none, and there is no fallback to the Plan's title. The message says to run `cpd pr edit <key> --title "<text>"`. Checked before the lock and the Gate | `pr_title_required` | 3 |
 | the per-repo lock within `lock_wait_seconds` | `lock_timeout` | 5 |
 | the newest pull request of the Lead Branch is not closed without a merge (a merged one is adopted, below); `details.number`, `details.url` | `pr_closed` | 3 |
 | the Lead worktree is clean | `dirty_target` | 3 |
@@ -1131,6 +1133,7 @@ cpd pr open [--pr <key>] [--plan <id>]
 | the Gate ran (not killed, not `hook_invalid`); `details.tail`, `details.log` as above | `gate_error` | 1 |
 
 Effects:
+- **Title** (hs-d285): the pull request is titled with the PR's stored title, passed through the one seam in `core/src/pr/` that turns it into the GitHub title (unchanged today; hs-d277 may change it later). The PR body's `# <title>` line uses the same title. The title no longer comes from the Plan's title, and a Plan with several PRs no longer gets ` (<key>)` appended.
 - **Lock:** the per-repo lock of the PR's repo (§7.4), then R for orphaned merges; held until the push has finished.
 - **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
 - **Hooks:** the Gate, `pre-merge` from `<lead worktree>/.config/wt.toml`, in the PR's Lead worktree on its Lead Branch, before anything is pushed (R19); output to `run/<plan>/logs/pr-<key>.pre-merge.log`. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
@@ -1229,7 +1232,7 @@ Idempotent: yes; a base that has not moved gives `"rebased": false`, and only th
 ### 9.4 `pr add`
 
 ```
-cpd pr add <key> --repo <path> [--base <branch>] [--needs <k1,k2> | --no-needs] [--plan <id>]
+cpd pr add <key> --repo <path> --title <text> [--base <branch>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
 
 Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
@@ -1238,6 +1241,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 |---|---|
 | `<key>` | PR key (§2.1), chosen by the Lead, e.g. `schema`, `web` |
 | `--repo <path>` | required: the PR's repo; stored as the realpath of its main worktree. Several PRs of one Plan may share a repo |
+| `--title <text>` | required (hs-d285): the PR's own title, which names its change and becomes the pull request's title and then the squash commit's subject on `main`. 1–72 characters, one line, no control characters, else `usage` (§1.5). `pr add` is the only place a PR is created |
 | `--base <branch>` | the branch the pull request targets; default the repo's `origin` HEAD branch, else `main` (cpd 1 §11 `workflow init`, kept) |
 | `--needs <k1,k2>` | keys of other PRs of the Plan that must be `merged` before this one starts, comma-separated, no duplicates (`usage`). Default: in phase `deploy` or `done` (the reopen, hs-d118), **every `merged` PR of the Plan**; in other phases none |
 | `--no-needs` | no needs, also in phase `deploy` or `done`; exclusive with `--needs` (`usage`) |
@@ -1247,7 +1251,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | the Plan is not archived | `archived` | 3 |
 | `--repo` is inside a git repository (`git -C <path> rev-parse --git-common-dir`) | `not_a_git_repo` | 3 |
 | `<base>` exists: `refs/remotes/origin/<base>`, or `refs/heads/<base>` when the repo has no `origin` | `base_not_found` | 4 |
-| no PR of the Plan has this key, `cancelled` ones included, unless its repo, base and needs equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
+| no PR of the Plan has this key, `cancelled` ones included, unless its repo, base, title and needs equal the resolved flags, the default needs included (then `already`) | `pr_exists` | 3 |
 | every need is a PR of the Plan; `details.needs` lists the unknown keys | `needs_unknown` | 3 |
 | no need is `cancelled`; `details.needs` lists them | `needs_unavailable` | 3 |
 | `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a PR of the Plan that is `merged` (moved below); `details.branch` names it | `branch_exists` | 3 |
@@ -1262,10 +1266,10 @@ Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so n
 
 A legacy branch of a PR that is not `merged` still refuses `branch_exists`.
 
-Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `base`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; and the legacy PR's `lead_branch` update (step 3). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, needs, appended}`, `appended` true in phases `dispatch`, `deploy` and `done`. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
+Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `base`, `title`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need; and the legacy PR's `lead_branch` update (step 3). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, title, needs, appended}`, `appended` true in phases `dispatch`, `deploy` and `done`. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
 
 ```json
-{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "base": "main", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "appended": false}}
+{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "base": "main", "title": "Add the web client", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "appended": false}}
 ```
 
 Idempotent: yes, as stated; every step of the legacy move is too (A3): a rerun after a crash between the local rename and the transaction finds `cpd/<plan>/<k>` and no `cpd/<plan>`, skips what is done and completes. The comparison uses the resolved repo and base, so a rerun without `--base` matches a PR whose base was defaulted to the same branch.
@@ -1273,24 +1277,28 @@ Idempotent: yes, as stated; every step of the legacy move is too (A3): a rerun a
 ### 9.5 `pr edit`
 
 ```
-cpd pr edit <key> [--repo <path>] [--base <branch>] [--needs <k1,k2> | --no-needs] [--plan <id>]
+cpd pr edit <key> [--repo <path>] [--base <branch>] [--needs <k1,k2> | --no-needs] [--title <text>] [--plan <id>]
 ```
 
-Changes a `waiting` PR before the lock (A13). `--needs` replaces the whole list; `--no-needs` removes every need. The PR's Jobs stay with it. A changed `--repo` keeps the stored base unless `--base` is given, and that base must exist in the new repo.
+Changes a `waiting` PR before the lock (A13), and, with `--title`, a PR's title in any phase (below). `--needs` replaces the whole list; `--no-needs` removes every need. The PR's Jobs stay with it. A changed `--repo` keeps the stored base unless `--base` is given, and that base must exist in the new repo.
+
+`--title <text>` (hs-d285) works in **every phase and every PR status but `merged` and `cancelled`** (a PR that is over; `cancelled` is the PR status that stands for a closed PR, §3.8): 1–72 characters, one line, no control characters, else `usage` (§1.5). The title is **not a Locked field**: it is outside the plan fingerprint (§2.3) and `prs_locked`'s columns (§4.4), so editing it never invalidates a review or a lock, and the phase and status rules below (`pr_locked`, `illegal_transition`) apply to the other flags only. A `merged` or `cancelled` PR's title is history: `pr_ended`. When the PR has an **open** pull request, the command also retitles it on GitHub, through the seam of §9.1, with `gh api -X PATCH repos/<owner>/<repo>/pulls/<n> -f title=<text>`. It must **not** use `gh pr edit`: on 2026-10-19 that fails on this repo with "Projects (classic) is being deprecated … (repository.pullRequest.projectCards)", while the `gh api` PATCH works (both verified on #99). A failing GitHub update is `gh_failed` and leaves the stored title unchanged.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | at least one field flag | `nothing_to_edit` | 2 |
-| the phase is `grounding` or `plan`; after the lock a PR is Locked (§4.4 `prs_locked`) | `pr_locked` | 3 |
-| the PR is `waiting` (a `cancelled` one is terminal) | `illegal_transition` | 3 |
+| with `--title`, the PR is not `merged` or `cancelled` | `pr_ended` | 3 |
+| for the flags other than `--title`: the phase is `grounding` or `plan`; after the lock a PR is Locked (§4.4 `prs_locked`) | `pr_locked` | 3 |
+| for the flags other than `--title`: the PR is `waiting` (a `cancelled` one is terminal) | `illegal_transition` | 3 |
 | `--repo` is inside a git repository | `not_a_git_repo` | 3 |
 | the base exists in the PR's repo (the new one with `--repo`), as for `pr add` | `base_not_found` | 4 |
 | every need is a PR of the Plan, other than this one | `needs_unknown` | 3 |
 | no need is `cancelled` | `needs_unavailable` | 3 |
 | the needs graph stays acyclic; `details.cycle` lists it | `dependency_cycle` | 3 |
 | with `--repo`: neither `refs/heads/cpd/<plan>/<key>` nor `refs/heads/cpd/<plan>` exists in the new repo | `branch_exists` | 3 |
+| with `--title` and an open pull request: the `gh api -X PATCH` succeeds; `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
 
-Effects: **rows**, one transaction: the changed `prs` columns; `pr_needs` rows deleted and inserted to match (§4.4 allows deletion only in `grounding` and `plan`). **Event** `pr-edited` `{pr, fields: [name]}`, listing only the fields whose value changed (`repo`, `base`, `needs`). The plan fingerprint changes with them (§2.3).
+Effects: **rows**, one transaction: the changed `prs` columns; `pr_needs` rows deleted and inserted to match (§4.4 allows deletion only in `grounding` and `plan`). **Event** `pr-edited` `{pr, fields: [name]}`, listing only the fields whose value changed (`repo`, `base`, `needs`, `title`). The plan fingerprint changes with `repo`, `base` and `needs`, never with `title` (§2.3). With `--title` and an open pull request, the GitHub update runs before the transaction, and a failure writes nothing.
 
 ```json
 {"ok": true, "pr": {"key": "web", "status": "waiting"}, "fields": ["base", "needs"]}
