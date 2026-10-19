@@ -456,11 +456,17 @@ const GIST_MAX: usize = 100;
 
 /// The distiller's `records.md`: a checklist of the decisions and open questions in force (the records the
 /// digest must cite, [`digest::Expect`]), one line each in file order, `[<id>] <kind>: <first line of the text>`,
-/// then every record as [`records_md`] gives it. The prompt asks the model to copy each checklist id into
-/// the statement it writes for the id's topic: covering the list is copying, not recall.
+/// with the bytes the model's text may take (the limit less cpd's index), then every record as [`records_md`]
+/// gives it. The prompt asks the model to copy each checklist id into a bullet of its topic: covering the list is
+/// copying, not recall.
 fn distiller_records_md(in_force: &[&Indexed]) -> String {
-    let required = digest::validate(b"", &digest::Expect::of(in_force), digest::LIMIT).err().map(|i| i.missing).unwrap_or_default();
-    let mut out = format!("# Checklist: {} decisions and open questions in force\n\n", required.len());
+    // Validating nothing shows what is required and how big the file is without any topic section: cpd's index.
+    let empty = digest::validate(b"", &digest::Expect::of(in_force), digest::LIMIT).err();
+    let (required, room) = empty.map_or((Vec::new(), digest::LIMIT), |i| (i.missing, digest::LIMIT.saturating_sub(i.bytes)));
+    let mut out = format!(
+        "# Checklist: {} decisions and open questions in force\n\nYour digest may take at most {room} bytes: the program adds its index to it.\n\n",
+        required.len()
+    );
     for (_, record) in in_force.iter().filter(|(_, r)| required.contains(&r.id)) {
         let first = record.text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
         let gist = match first.char_indices().nth(GIST_MAX) {
@@ -689,10 +695,11 @@ mod tests {
         let in_force = [&q1, &q2, &a, &n, &d];
         let text = distiller_records_md(&in_force);
         let (checklist, records) = text.split_once("\n# Records\n\n").unwrap();
+        // 32768 less the 173 bytes of cpd's index for these five records (a 19-byte heading and a line each).
         assert_eq!(
             checklist,
             format!(
-                "# Checklist: 2 decisions and open questions in force\n\n[hs-q2] question: Which host?\n[hs-d2] decision: {}…\n",
+                "# Checklist: 2 decisions and open questions in force\n\nYour digest may take at most 32595 bytes: the program adds its index to it.\n\n[hs-q2] question: Which host?\n[hs-d2] decision: {}…\n",
                 "x".repeat(GIST_MAX)
             )
         );
