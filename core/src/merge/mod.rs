@@ -98,11 +98,11 @@ type Stepped = (End, Option<CpdError>, Option<CpdError>);
 /// or worktree sync, because the Attempt has no commits and the Lead Branch does
 /// not move; then the Attempt ends `merged` with `merged_sha = old`.
 fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
-    if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+    if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
         return Ok((End::Cancelled, None, None));
     }
     let old = git::run::rev_parse(&target.repo, &format!("refs/heads/{}", target.lead_branch))?;
-    if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+    if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
         return Ok((End::Cancelled, None, None));
     }
     Ok((End::Merged { sha: old }, None, None))
@@ -116,7 +116,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
     let mut retries = 0;
     loop {
         // 1. Cancel check.
-        if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             return Ok((End::Cancelled, None, None));
         }
         // 2. Snapshot.
@@ -156,7 +156,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
         }
         // 6. Removed by R19: no Gate at the merge.
         // 7. Cancel check again: the last safe point.
-        if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             return Ok((End::Cancelled, None, None));
         }
         // 8. Fast-forward with a compare-and-swap.

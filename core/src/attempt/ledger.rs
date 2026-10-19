@@ -1,7 +1,7 @@
-//! What the driver reads from and writes to the Ledger (contract §3.2, §3.4,
-//! §5.2): the Attempt it drives, with its Plan, and the transactions that end
-//! an Attempt before it is `merging`. A `merging` Attempt is ended by the
-//! merge (`crate::merge`), never here.
+//! What the driver and the merge read from and write to the Ledger (contract
+//! §3.2, §3.4, §5.2): the Attempt, with its Job's PR and its Plan, and the
+//! transactions that end it. The driver ends an Attempt before it is
+//! `merging`; the merge (`crate::merge`) ends a `merging` one.
 
 use std::path::PathBuf;
 
@@ -17,9 +17,9 @@ use crate::store::WriteTxn;
 /// The `txns.command` and the `source` of the driver's `error` Events.
 pub const SOURCE: &str = "attempt run";
 
-/// An Attempt with what the driver needs of its Plan.
+/// An Attempt with what the driver and the merge need of its Job, PR and Plan.
 #[derive(Clone, Debug)]
-pub struct Target {
+pub struct Attempt {
     pub plan: PlanId,
     pub context: ContextId,
     /// The repo of the Job's PR: the realpath of its main worktree.
@@ -31,6 +31,7 @@ pub struct Target {
     pub job: JobKey,
     pub tier: Tier,
     pub status: String,
+    /// `cpd/<plan>--<attempt>`.
     pub branch: String,
     pub worktree: PathBuf,
     pub worker_session: Option<SessionId>,
@@ -38,12 +39,12 @@ pub struct Target {
     pub stop_request: Option<String>,
 }
 
-fn corrupt(what: String) -> CpdError {
+pub(crate) fn corrupt(what: String) -> CpdError {
     CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: {what}."))
 }
 
 /// Attempt `id` of `plan`: `plan_not_found`, else `attempt_not_found` (exit 4).
-pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Target, CpdError> {
+pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt, CpdError> {
     let found: Option<String> =
         conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
     let context = found.ok_or_else(|| CpdError::plan_not_found(plan))?;
@@ -78,7 +79,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Target, 
         })?;
     let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch)) = row;
     let lead_worktree = lead_worktree.ok_or_else(|| corrupt(format!("Plan {plan} has an Attempt but no Lead worktree")))?;
-    Ok(Target {
+    Ok(Attempt {
         plan: plan.clone(),
         context: ContextId::parse(&context).map_err(|_| corrupt(format!("context id {context:?}")))?,
         repo: PathBuf::from(repo),
@@ -96,6 +97,26 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Target, 
         nudged,
         stop_request,
     })
+}
+
+/// Every Attempt in `merging` whose Job's PR is on `repo`, in id order.
+pub fn merging_on_repo(conn: &Connection, repo: &str) -> Result<Vec<(PlanId, AttemptId)>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+           JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+         WHERE a.status = 'merging' AND r.repo = ?1 ORDER BY a.plan, a.id",
+    )?;
+    let rows = stmt
+        .query_map([repo], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(plan, id)| {
+            Ok((
+                PlanId::parse(&plan).map_err(|_| corrupt(format!("plan id {plan:?}")))?,
+                AttemptId::parse(&id).map_err(|_| corrupt(format!("attempt id {id:?}")))?,
+            ))
+        })
+        .collect()
 }
 
 /// The Job's cancel reason when a cancel was requested (§3.2 "Cancel").
@@ -174,7 +195,7 @@ pub struct Ladder<'a> {
 /// caller's transaction (§3.2, §3.4): `cas_lost` when either changed. Records
 /// `metrics` (A9) and appends the Event of §3.4's table: `job-cancelled`,
 /// `attempt-retry` or `job-failed`.
-pub fn end(tx: &WriteTxn<'_>, target: &Target, end: &End, metrics: Option<&Value>, ladder: &Ladder<'_>) -> Result<(), CpdError> {
+pub fn end(tx: &WriteTxn<'_>, target: &Attempt, end: &End, metrics: Option<&Value>, ladder: &Ladder<'_>) -> Result<(), CpdError> {
     let (plan, job, id) = (target.plan.as_str(), target.job.as_str(), target.id.to_string());
     let cas_lost = |what: &str| {
         CpdError::new(ErrorCode::CasLost, format!("{what} changed while the driver ran; nothing was written."))
@@ -248,7 +269,7 @@ pub(crate) fn automatic_attempts(tx: &WriteTxn<'_>, plan: &str, job: &str) -> Re
 /// ladder has one and the automatic Attempts since the last `job retry` are
 /// fewer than `1 + retry_cap`. An Attempt whose driver never started
 /// (`driver_pid` null, §3.4) does not raise the Tier: its own Tier again.
-fn next_tier(tx: &WriteTxn<'_>, target: &Target, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
+fn next_tier(tx: &WriteTxn<'_>, target: &Attempt, cause: Cause, ladder: &Ladder<'_>) -> Result<Option<Tier>, CpdError> {
     if !cause.is_ladder() {
         return Ok(None);
     }
@@ -268,7 +289,7 @@ fn next_tier(tx: &WriteTxn<'_>, target: &Target, cause: Cause, ladder: &Ladder<'
 
 /// Appends an `error` Event about `target` (§5.2): an unexpected failure of
 /// the driver (commands.md §6.4).
-pub fn append_error(tx: &WriteTxn<'_>, target: &Target, error: &CpdError) -> Result<(), CpdError> {
+pub fn append_error(tx: &WriteTxn<'_>, target: &Attempt, error: &CpdError) -> Result<(), CpdError> {
     let text = format!(
         "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
         target.id,
@@ -281,4 +302,19 @@ pub fn append_error(tx: &WriteTxn<'_>, target: &Target, error: &CpdError) -> Res
         NewEvent::error(text, SOURCE, error.code().as_str(), error.message(), error.details()).plan(target.plan.clone()).job(target.job.clone()).attempt(target.id.clone()),
     )?;
     Ok(())
+}
+
+/// Whether an `error` Event with `code` was already appended for `attempt`.
+pub fn has_error(conn: &Connection, attempt: &Attempt, code: ErrorCode) -> Result<bool, CpdError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM events WHERE kind = 'error' AND plan = ?1 AND attempt = ?2
+                        AND json_extract(data, '$.code') = ?3)",
+        params![attempt.plan.as_str(), attempt.id.to_string(), code.as_str()],
+        |r| r.get(0),
+    )?)
+}
+
+/// The first 12 characters of a SHA, for texts.
+pub fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(12)]
 }

@@ -10,7 +10,7 @@ use std::time::Duration;
 use rusqlite::params;
 use serde_json::{Value, json};
 
-use crate::attempt::ledger::{self, Cause, End, Ladder, SOURCE, Target};
+use crate::attempt::ledger::{self, Attempt as Target, Cause, End, Ladder, SOURCE};
 use super::lock;
 use super::stall;
 use super::worker;

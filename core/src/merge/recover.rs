@@ -94,7 +94,7 @@ fn recover_one(store: &mut Store, ctx: &Ctx<'_>, attempt: &Attempt) -> Result<Op
         }
         // R3: no merge.
         Ok(None) => {
-            let cancel = store.read(|conn| ledger::cancel_request(conn, attempt))?;
+            let cancel = store.read(|conn| ledger::cancel_request(conn, &attempt.plan, &attempt.job))?;
             let end = match cancel {
                 Some(_) => End::Cancelled,
                 None => End::Failed {

@@ -2,117 +2,16 @@
 //! and the one transaction that ends a `merging` Attempt (contract §3.2,
 //! §3.4, §5.2).
 
-use std::path::PathBuf;
-
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::params;
 use serde_json::Value;
 
+// Until `end_merging` joins `attempt::ledger::end`, the merge reaches the shared
+// Ledger reads through here.
+pub use crate::attempt::ledger::{Attempt, cancel_request, has_error, load, merging_on_repo, short};
 use crate::config::{Catalog, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
-use crate::ids::{AttemptId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
-
-/// An Attempt with what the merge needs of its Job and Plan.
-#[derive(Clone, Debug)]
-pub struct Attempt {
-    pub plan: PlanId,
-    pub id: AttemptId,
-    pub job: JobKey,
-    pub tier: Tier,
-    pub status: String,
-    /// `cpd/<plan>--<attempt>`.
-    pub branch: String,
-    pub worktree: PathBuf,
-    pub worker_session: Option<SessionId>,
-    /// The repo of the Job's PR: the realpath of its main worktree.
-    pub repo: PathBuf,
-    /// The Lead Branch of the Job's PR.
-    pub lead_branch: String,
-    pub lead_worktree: PathBuf,
-}
-
-fn corrupt(what: String) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The Ledger holds an invalid value: {what}."))
-}
-
-/// Loads Attempt `id` of `plan`; `attempt_not_found` (exit 4) when it does not exist.
-pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt, CpdError> {
-    let row = conn
-        .query_row(
-            "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, r.repo, r.lead_branch, r.lead_worktree
-             FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
-             WHERE a.plan = ?1 AND a.id = ?2",
-            params![plan.as_str(), id.to_string()],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, Option<String>>(5)?,
-                    r.get::<_, String>(6)?,
-                    r.get::<_, String>(7)?,
-                    r.get::<_, Option<String>>(8)?,
-                ))
-            },
-        )
-        .optional()?
-        .ok_or_else(|| {
-            CpdError::new(ErrorCode::AttemptNotFound, format!("No Attempt {id} in Plan {plan}."))
-                .with("plan", plan.as_str())
-                .with("attempt", id.to_string())
-        })?;
-    let (job, tier, status, branch, worktree, worker_session, repo, lead_branch, lead_worktree) = row;
-    let lead_worktree = lead_worktree.ok_or_else(|| corrupt(format!("Plan {plan} has an Attempt but no Lead worktree")))?;
-    Ok(Attempt {
-        plan: plan.clone(),
-        id: id.clone(),
-        job: JobKey::parse(&job).map_err(|_| corrupt(format!("job key {job:?}")))?,
-        tier: Tier::parse(&tier).map_err(|_| corrupt(format!("tier {tier:?} of Attempt {id}")))?,
-        status,
-        branch,
-        worktree: PathBuf::from(worktree),
-        worker_session: worker_session
-            .map(|s| SessionId::parse(&s).map_err(|_| corrupt(format!("session id {s:?}"))))
-            .transpose()?,
-        repo: PathBuf::from(repo),
-        lead_branch,
-        lead_worktree: PathBuf::from(lead_worktree),
-    })
-}
-
-/// Every Attempt in `merging` whose Job's PR is on `repo`, in id order.
-pub fn merging_on_repo(conn: &Connection, repo: &str) -> Result<Vec<(PlanId, AttemptId)>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-           JOIN prs r ON r.plan = j.plan AND r.key = j.pr
-         WHERE a.status = 'merging' AND r.repo = ?1 ORDER BY a.plan, a.id",
-    )?;
-    let rows = stmt
-        .query_map([repo], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
-        .map(|(plan, id)| {
-            Ok((
-                PlanId::parse(&plan).map_err(|_| corrupt(format!("plan id {plan:?}")))?,
-                AttemptId::parse(&id).map_err(|_| corrupt(format!("attempt id {id:?}")))?,
-            ))
-        })
-        .collect()
-}
-
-/// The Job's cancel reason when a cancel was requested (§3.2 "Cancel").
-pub fn cancel_request(conn: &Connection, attempt: &Attempt) -> Result<Option<String>, CpdError> {
-    Ok(conn
-        .query_row(
-            "SELECT cancel_reason FROM jobs WHERE plan = ?1 AND key = ?2 AND cancel_requested_at IS NOT NULL",
-            params![attempt.plan.as_str(), attempt.job.as_str()],
-            |r| r.get::<_, String>(0),
-        )
-        .optional()?)
-}
 
 /// The causes the merge and R end an Attempt with when it fails (§3.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,7 +111,7 @@ pub fn end_merging(
     if changed == 0 {
         return Err(cas_lost("The Attempt's status"));
     }
-    let cancel = cancel_request(tx, attempt)?;
+    let cancel = cancel_request(tx, &attempt.plan, &attempt.job)?;
     let tier = attempt.tier.to_string();
     let show = format!("cpd job show {job} --plan {plan}");
 
@@ -290,19 +189,4 @@ pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &
             .attempt(attempt.id.clone()),
     )?;
     Ok(())
-}
-
-/// Whether an `error` Event with `code` was already appended for `attempt`.
-pub fn has_error(conn: &Connection, attempt: &Attempt, code: ErrorCode) -> Result<bool, CpdError> {
-    Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM events WHERE kind = 'error' AND plan = ?1 AND attempt = ?2
-                        AND json_extract(data, '$.code') = ?3)",
-        params![attempt.plan.as_str(), attempt.id.to_string(), code.as_str()],
-        |r| r.get(0),
-    )?)
-}
-
-/// The first 12 characters of a SHA, for texts.
-pub fn short(sha: &str) -> &str {
-    &sha[..sha.len().min(12)]
 }
