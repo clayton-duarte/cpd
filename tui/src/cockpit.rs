@@ -1,7 +1,7 @@
 //! `cpd tui [--attach] [--respawn]` (commands.md §13.1; contract §6.1, §6.2,
 //! §6.4 with amendment 9): builds the cockpit's `main` window when it is
-//! missing, respawns a dead pane of its layout, sets §6.1's server options
-//! again, with `--respawn` restarts every live view, starts the engine, and
+//! missing, respawns a dead pane of its layout and adds each pane of it that
+//! is gone, sets §6.1's server options again, with `--respawn` restarts every live view, starts the engine, and
 //! with `--attach` replaces itself with `tmux attach`.
 //!
 //! The layout, from the spike's `cockpit.sh` (branch `cpd/cpd-ui`):
@@ -17,8 +17,8 @@
 //! ```
 //!
 //! A new `main` is reset to these sizes once it is built (A3); an existing one
-//! is not, unless it had no StatusBar: the one added is followed by the reset
-//! (amendment 15).
+//! is not, unless it lacked a pane of the layout: the panes added are followed
+//! by the reset (amendment 15).
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -31,7 +31,7 @@ use super::{RunCommand, not_a_terminal, on_a_terminal, statusbar};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
-use cpd_core::host::layout::MAIN_WINDOW;
+use cpd_core::host::layout::{MAIN_WINDOW, chat_slot, view_pane};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View};
 use cpd_core::ids::SessionId;
 use cpd_core::output::Output;
@@ -56,6 +56,7 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
         tmux.list_panes()?.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect();
     let built = main.is_empty();
     let mut respawned = Vec::new();
+    let mut chat_added = built;
     if built {
         build(&tmux, &home, cockpit)?;
     } else {
@@ -63,10 +64,10 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
         if respawn {
             respawned = respawn_live_views(&tmux, &home, &main)?;
         }
-        add_missing_statusbar(&tmux, &home, cockpit, &main)?;
+        chat_added = add_missing_panes(&tmux, &home, cockpit, &main)?.contains(&View::Chat);
     }
     tmux.apply_server_options()?;
-    if built {
+    if chat_added {
         if let Some(lead) = store.read(last_chat_lead)? {
             open_lead(run_command, &lead)?;
         }
@@ -133,20 +134,76 @@ fn add_statusbar(tmux: &Tmux, home: &CpdHome, target: &PaneId) -> Result<(), Cpd
     tmux.set_pane_view(&bar, View::Statusbar)
 }
 
-/// An existing `main` without a StatusBar gets one (A7), then reset-layout,
-/// so the added row is taken from the layout and the other panes get their
-/// sizes back (amendment 15).
-fn add_missing_statusbar(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) -> Result<(), CpdError> {
-    if main.iter().any(|p| p.cpd_view == Some(View::Statusbar)) {
-        return Ok(());
-    }
-    match main.first() {
-        Some(any) => {
-            add_statusbar(tmux, home, &any.pane)?;
-            statusbar::layout::reset(tmux, cockpit)
+/// Adds each pane of the layout that `main` lacks (the User killed it, or a
+/// build stopped half-way), each where it goes, then reset-layout once so the
+/// panes added are taken from the layout and the others get their sizes back
+/// (amendment 15). The chat slot counts as present when it holds a Lead. Adds
+/// nothing to a layout that is whole. Returns the views added.
+fn add_missing_panes(tmux: &Tmux, home: &CpdHome, cockpit: &str, main: &[Pane]) -> Result<Vec<View>, CpdError> {
+    let Some(any) = main.first() else { return Ok(Vec::new()) };
+    let found = |view| view_pane(main, cockpit, view).map(|p| p.pane.clone());
+    let mut added = Vec::new();
+    let mut add = |view: View, target: &PaneId, flags: &[&str], size: Option<&str>| -> Result<PaneId, CpdError> {
+        let pane = split(tmux, home, view, target, flags, size)?;
+        added.push(view);
+        Ok(pane)
+    };
+    // The tree and the widgets span the window's height: `-f` puts them at its edges.
+    let tree = match found(View::Tree) {
+        Some(tree) => tree,
+        None => add(View::Tree, &any.pane, &["-h", "-b", "-f"], Some("20%"))?,
+    };
+    let widgets = match found(View::Widgets) {
+        Some(widgets) => widgets,
+        None => add(View::Widgets, &any.pane, &["-h", "-f"], Some("20%"))?,
+    };
+    let (plan, slot) = (found(View::Plan), chat_slot(main, cockpit).map(|p| p.pane.clone()));
+    match (plan, slot) {
+        (Some(_), Some(_)) => {}
+        (None, Some(slot)) => drop(add(View::Plan, &slot, &["-v", "-b"], Some("20%"))?),
+        (Some(plan), None) => drop(add(View::Chat, &plan, &["-v"], Some("80%"))?),
+        (None, None) => {
+            let plan = add(View::Plan, &tree, &["-h"], None)?;
+            add(View::Chat, &plan, &["-v"], Some("80%"))?;
         }
-        None => Ok(()),
     }
+    match found(View::Statusbar) {
+        None => drop(add(View::Statusbar, &any.pane, &["-v", "-f"], Some("1"))?),
+        // A tree or widgets added across the whole height has cut the row short: it spans the width again.
+        Some(bar) if added.iter().any(|v| matches!(v, View::Tree | View::Widgets)) => {
+            let anchor = if added.contains(&View::Tree) { tree } else { widgets };
+            let args = ["join-pane", "-d", "-f", "-v", "-l", "1", "-s", bar.as_str(), "-t", anchor.as_str()];
+            tmux.run(&args.map(str::to_owned))?;
+        }
+        Some(_) => {}
+    }
+    if !added.is_empty() {
+        statusbar::layout::reset(tmux, cockpit)?;
+    }
+    Ok(added)
+}
+
+/// `split-window` with the flags the layout needs, which [`Tmux::split_window`] has no [`Split`] for, running
+/// `cpd tui view <view>` as [`view_spawn`] does, with `@cpd_view` set. Returns the new pane.
+fn split(tmux: &Tmux, home: &CpdHome, view: View, target: &PaneId, flags: &[&str], size: Option<&str>) -> Result<PaneId, CpdError> {
+    let spawn = view_spawn(home, view);
+    let mut args: Vec<String> = ["split-window", "-d", "-t", target.as_str()].map(str::to_owned).into();
+    args.extend(flags.iter().map(|f| (*f).to_owned()));
+    if let Some(size) = size {
+        args.extend(["-l".to_owned(), size.to_owned()]);
+    }
+    args.extend(["-c".to_owned(), home.root().display().to_string()]);
+    for (key, value) in &spawn.env {
+        args.extend(["-e".to_owned(), format!("{key}={value}")]);
+    }
+    args.extend(["-P", "-F", "#{pane_id}", "--"].map(str::to_owned));
+    args.extend(spawn.argv);
+    let out = tmux.run(&args)?;
+    let pane = PaneId::parse(out.trim_end_matches('\n')).ok_or_else(|| {
+        CpdError::new(ErrorCode::TmuxFailed, format!("tmux split-window printed {out:?}, not a pane id."))
+    })?;
+    tmux.set_pane_view(&pane, view)?;
+    Ok(pane)
 }
 
 /// `--respawn`: restarts every live pane of `main` that has `@cpd_view` (the
