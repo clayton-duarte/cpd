@@ -392,7 +392,9 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   assert.equal(failures().length, 1, "once per run, not once per line");
   install(f);
   await waitFor("the reload", () => f.pi.reloads > 0);
-  await settle(200);
+  // `reloads` counts the call to `ctx.reload()`: the old run's shutdown and the new run's start (each a `cpd` child) come after it.
+  await waitFor("the new run's notice", () => failures().length > 1);
+  await settle(200); // and it is only one
   assert.equal(failures().length, 2, "the new run notifies again");
   assert.deepEqual(f.pi.errors(), [], "no message, so no turn");
 });
