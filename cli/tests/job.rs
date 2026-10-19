@@ -1287,7 +1287,8 @@ fn urgent_marks_a_queued_job_once_with_one_job_edited_and_changes_no_fingerprint
     let edited = events(&env, "job-edited").len();
 
     let out = job(&env, &["urgent", "a"], "pl").ok();
-    assert_eq!(out, json!({"job": {"key": "a", "status": "queued", "urgent": true}, "fields": ["urgent"]}));
+    assert_eq!((&out["job"], &out["fields"]), (&json!({"key": "a", "status": "queued", "urgent": true}), &json!(["urgent"])));
+    assert!(out.get("already").is_none());
     assert_eq!(job_row(&env, "pl", "a", "urgent"), 1);
     assert_eq!((job_row(&env, "pl", "a", "status"), job_row(&env, "pl", "a", "fingerprint")), (json!("queued"), fingerprint));
     assert_eq!(job_row(&env, "pl", "b", "urgent"), 0, "only the named Job");
