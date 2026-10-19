@@ -10,10 +10,13 @@
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon;
+//! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
+mod background;
 mod chat;
 mod cockpit;
+pub mod dialog;
 mod history;
 pub mod link;
 pub mod logs;
@@ -21,9 +24,13 @@ pub mod merge;
 pub mod palette;
 mod plan;
 pub mod read;
+mod runner;
+mod scroll;
 mod tree;
 pub mod widgets;
 mod worker;
+
+pub use runner::{Capture, ViewError, run_view};
 
 use std::ffi::OsString;
 
@@ -88,6 +95,8 @@ pub enum View {
     Logs(logs::Args),
     /// The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup)
     Merge(merge::Args),
+    /// A dialog of the kit: `confirm`, `input` or `text` (opened by the cockpit's actions, in a tmux popup)
+    Dialog(dialog::Args),
     /// The chat slot's placeholder
     Chat,
 }
@@ -95,7 +104,7 @@ pub enum View {
 pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
     match args.command {
         None => cockpit::run(args.attach, args.respawn, run_command),
-        Some(Command::View(view)) => match view {
+        Some(Command::View(view)) => backed_off(match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),
             View::Widgets => widgets::run(run_command),
@@ -104,10 +113,27 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
             View::Legend => widgets::legend::run(),
             View::Logs(args) => logs::run(args),
             View::Merge(args) => merge::run(args, run_command),
+            View::Dialog(args) => dialog::run(args),
             View::Chat => chat::run(),
-        },
+        }),
         Some(Command::Action(a)) => Ok(cockpit::action(a.action.as_deref(), &a.client)),
     }
+}
+
+/// How long a view in a pane that failed waits before it exits.
+const BACKOFF: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A view that fails exits, and the cockpit's `pane-died` hook starts it again at once (contract §6.1), so a
+/// persistent failure would be a tight loop. In a pane the failure is shown, and the view waits [`BACKOFF`] before
+/// it exits. Without a terminal no hook is involved: the error is returned at once.
+fn backed_off(result: Result<Output, CpdError>) -> Result<Output, CpdError> {
+    if let Err(e) = &result {
+        if on_a_terminal() {
+            eprintln!("{}\nStarting again in {} s.", e.message(), BACKOFF.as_secs());
+            std::thread::sleep(BACKOFF);
+        }
+    }
+    result
 }
 
 /// `cpd` with no arguments, in a terminal (commands.md §13.3): the follow-ups of an update, then attach.

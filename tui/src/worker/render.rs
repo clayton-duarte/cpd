@@ -15,10 +15,7 @@ const RESULT: &str = "\u{F060C}";
 
 use crate::palette::{self, Ui};
 
-/// The columns the body of a message is indented by.
-const INDENT: usize = 6;
-
-/// The text of a session file, as lines. Continuation rows of a long line are made by [`wrap`].
+/// The text of a session file, as lines. Continuation rows of a long line are made by [`crate::scroll::wrap`].
 pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for raw in text.lines() {
@@ -60,38 +57,6 @@ pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
         }
     }
     lines
-}
-
-/// `lines` broken into rows of at most `width` characters, a continuation row
-/// indented by [`INDENT`] (nothing when the pane is narrower than twice that).
-pub(crate) fn wrap(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
-    let width = width.max(1);
-    let indent = if width >= 2 * INDENT { INDENT } else { 0 };
-    let mut rows = Vec::new();
-    for line in lines {
-        let cells: Vec<(char, Style)> =
-            line.spans.iter().flat_map(|s| s.content.chars().map(|c| (c, line.style.patch(s.style)))).collect();
-        if cells.len() <= width {
-            rows.push(line.clone());
-            continue;
-        }
-        let (first, rest) = cells.split_at(width);
-        rows.push(row(0, first));
-        rows.extend(rest.chunks(width - indent).map(|chunk| row(indent, chunk)));
-    }
-    rows
-}
-
-/// One row of styled characters after `indent` blanks, neighbours of one style merged into one span.
-fn row(indent: usize, cells: &[(char, Style)]) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> = if indent > 0 { vec![Span::raw(" ".repeat(indent))] } else { Vec::new() };
-    for &(c, style) in cells {
-        match spans.last_mut() {
-            Some(last) if last.style == style => last.content.to_mut().push(c),
-            _ => spans.push(Span::styled(c.to_string(), style)),
-        }
-    }
-    Line::from(spans)
 }
 
 #[cfg(test)]
@@ -222,17 +187,5 @@ mod tests {
         let ours = render(file);
         assert_eq!(ours.len(), 23, "the fixture reaches every branch: {ours:#?}");
         assert_eq!(ours, reference_render_session(file));
-    }
-
-    #[test]
-    fn long_lines_wrap_with_the_body_indent() {
-        let lines = vec![Line::from(vec!["ab".bold(), "cdefghijklmnopqrstuvwxyz".into()])];
-        let rows: Vec<String> = wrap(&lines, 16).iter().map(text).collect();
-        assert_eq!(rows, ["abcdefghijklmnop", "      qrstuvwxyz"]);
-        let wrapped = wrap(&lines, 16);
-        assert!(wrapped[0].spans[0].style.add_modifier.contains(ratatui::style::Modifier::BOLD), "styles survive");
-        assert_eq!(wrap(&lines, 40).iter().map(text).collect::<Vec<_>>(), ["abcdefghijklmnopqrstuvwxyz"]);
-        let narrow: Vec<String> = wrap(&lines, 8).iter().map(text).collect();
-        assert_eq!(narrow, ["abcdefgh", "ijklmnop", "qrstuvwx", "yz"], "no indent in a narrow pane");
     }
 }
