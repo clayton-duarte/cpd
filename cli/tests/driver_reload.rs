@@ -30,8 +30,8 @@ const LONG: Duration = Duration::from_secs(60);
 
 /// The driver's polls as these tests set them (contract §1.2 "Test overrides"): A4's look at the Worker
 /// (`DRIVER_POLL`, 0.5 s) and A9's pause between `kill-window` tries (`KILL_PAUSE`, 1 s).
-const POLL: Duration = Duration::from_millis(100);
-const DRIVER_ENV: [(&str, &str); 2] = [("CPD_TEST_DRIVER_POLL", "0.1"), ("CPD_TEST_KILL_PAUSE", "0.1")];
+const POLL: Duration = Duration::from_millis(50);
+const DRIVER_ENV: [(&str, &str); 2] = [("CPD_TEST_DRIVER_POLL", "0.05"), ("CPD_TEST_KILL_PAUSE", "0.05")];
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
