@@ -4,10 +4,10 @@
 
 use std::collections::BTreeMap;
 
-use serde_json::{Value, json};
 
 use super::gh::View;
 use super::pulls::{PullRequest, Reason};
+use crate::events::NewEvent;
 
 /// The PR's current checks: name (a CheckRun's `name`, a StatusContext's `context`) → conclusion (else state).
 pub(super) fn current_checks(view: &View) -> BTreeMap<String, String> {
@@ -38,20 +38,29 @@ pub(super) fn text(plan: &str, key: &str, number: i64, reasons: &[Reason]) -> St
     )
 }
 
-/// The Event's `data` (§5.2): `{pr, number, url, state, checks, review_decision, mergeable, merge_state, conflict, reasons}`;
-/// `conflict` is true exactly when `conflict` is in `reasons`.
-pub(super) fn data(key: &str, pull: &PullRequest, reasons: &[Reason]) -> Value {
-    json!({
-        "pr": key, "number": pull.number, "url": pull.url, "state": pull.state, "checks": pull.checks,
-        "review_decision": pull.review_decision, "mergeable": pull.mergeable, "merge_state": pull.merge_state,
-        "conflict": reasons.contains(&Reason::Conflict), "reasons": reasons.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
-    })
+/// The Event (§5.2 `pr-feedback`): `conflict` is true exactly when `conflict` is in `reasons`.
+pub(super) fn event(text: String, key: &str, pull: &PullRequest, reasons: &[Reason]) -> NewEvent {
+    let reasons: Vec<&str> = reasons.iter().map(|r| r.as_str()).collect();
+    NewEvent::pr_feedback(
+        text,
+        key,
+        pull.number,
+        &pull.url,
+        &pull.state,
+        &pull.checks,
+        &pull.review_decision,
+        &pull.mergeable,
+        &pull.merge_state,
+        reasons.contains(&Reason::Conflict.as_str()),
+        &reasons,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::gh::Check;
     use super::super::status::ChecksSummary;
+    use serde_json::{Value, json};
     use super::*;
 
     fn view(checks: Vec<(&str, &str)>) -> View {
@@ -96,6 +105,11 @@ mod tests {
         );
         assert!(text("pay", "api", 7, &all[..1]).contains("needs attention: checks failed. Read"));
         assert!(text("pay", "api", 7, &all[3..]).contains("needs attention: merge conflict. Read"));
+    }
+
+    /// The `data` of the Event.
+    fn data(key: &str, pull: &PullRequest, reasons: &[Reason]) -> Value {
+        event("text".into(), key, pull, reasons).data().clone()
     }
 
     fn pull(mergeable: &str, merge_state: &str) -> PullRequest {

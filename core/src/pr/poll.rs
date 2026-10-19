@@ -17,7 +17,7 @@ use super::row::PlanRow;
 use super::status::PrState;
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
@@ -184,8 +184,7 @@ fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change) -> Resul
         return Ok(false);
     }
     let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons);
-    let data = feedback::data(key.as_str(), &change.after, &reasons);
-    append(tx, NewEvent::new(Kind::PrFeedback, text, data).plan(plan.clone()))?;
+    append(tx, feedback::event(text, key.as_str(), &change.after, &reasons).plan(plan.clone()))?;
     Ok(true)
 }
 
@@ -202,8 +201,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
         return Err(cas_lost(id, key));
     }
     let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
-    let data = json!({"pr": key, "number": pull.number, "url": pull.url, "merged_at": pull.merged_at});
-    append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
+    append(tx, NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref()).plan(id.clone()))?;
     // The last PR to merge ends the Plan (§3.1).
     let unmerged: i64 =
         tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
@@ -220,7 +218,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     }
     let merged = merged_prs(tx, id, key, pull.merged_at.as_deref())?;
     let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
-    append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged})).plan(id.clone()))?;
+    append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
     Ok(true)
 }
 
@@ -317,8 +315,8 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
             let message = format!("The clean-up of the merged PR {pr} of Plan {plan} did not remove {path}: {reason}");
             let text = format!("{message} It is retried by every later poll, except a dirty or unpushed Lead worktree, which stays until you deal with it.");
             let details = json!({"plan": plan, "pr": pr, "path": path, "reason": reason});
-            let data = json!({"source": COMMAND, "code": ErrorCode::CleanupFailed.as_str(), "message": message, "details": details});
-            append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+            let event = NewEvent::error(text, COMMAND, ErrorCode::CleanupFailed.as_str(), &message, details);
+            append(tx, event.plan(plan.clone()))?;
         }
         Ok(())
     })

@@ -9,7 +9,7 @@ use serde_json::json;
 use super::add::{main_worktree, no_branch_clash, resolve_base};
 use super::{EditArgs, Env, check_needs, find_pr, plan_phase, pr_locked, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -64,7 +64,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
                 Decision::Update { before, after, fields } => {
                     update(tx, &plan, &before, &after)?;
                     let text = format!("PR {key} of Plan {plan} edited ({}). Next: cpd plan render --plan {plan}", fields.join(", "));
-                    append(tx, NewEvent::new(Kind::PrEdited, text, json!({"pr": key, "fields": fields})).plan(plan.clone()))?;
+                    append(tx, NewEvent::pr_edited(text, &key, &fields).plan(plan.clone()))?;
                     Ok((after, fields, false))
                 }
             })?

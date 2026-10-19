@@ -9,7 +9,7 @@ use super::pulls;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use super::{Args, Env, gate, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git;
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
@@ -81,8 +81,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
             return Err(cas_lost(&id, &key));
         }
         let text = format!("PR {key} of Plan {id} opened as #{}: {}. The engine polls it; to follow it by hand: cpd pr poll --plan {id}", found.number, found.url);
-        let data = json!({"pr": key, "number": found.number, "url": found.url});
-        append(tx, NewEvent::new(Kind::PrOpened, text, data).plan(id.clone()))?;
+        append(tx, NewEvent::pr_opened(text, &key, found.number, &found.url).plan(id.clone()))?;
 
         // The last PR to open moves the Plan on (§3.1, A10).
         let waiting: i64 = tx.query_row(
@@ -99,7 +98,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         }
         let opened = opened_prs(tx, &id)?;
         let text = format!("Every PR of Plan {id} is open. The engine polls them; to follow them by hand: cpd pr poll --plan {id}");
-        append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "deploy", "prs": opened})).plan(id.clone()))?;
+        append(tx, NewEvent::plan_phase_deployed(text, &opened).plan(id.clone()))?;
         Ok(Phase::Deploy)
     })?;
 

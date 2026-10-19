@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use super::{Env, StartArgs, plan_phase, wrong_phase};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git::{self, Setup, Step};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{PlanId, PrKey};
@@ -209,12 +209,9 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
         "PR {} of Plan {plan} started: Lead Branch {} in {worktree}. Its Jobs are scheduled. Next: cpd plan show --plan {plan}",
         pr.key, lead.branch
     );
-    let data = json!({
-        "pr": pr.key, "repo": pr.repo.display().to_string(), "base": pr.base, "lead_branch": lead.branch,
-        "lead_worktree": worktree, "base_sha": lead.base_sha, "reused": lead.reused(), "pushed": pushed.pushed,
-        "by": by.as_str(),
-    });
-    append(tx, NewEvent::new(Kind::PrStarted, text, data).plan(plan.clone()))?;
+    let repo = pr.repo.display().to_string();
+    let event = NewEvent::pr_started(text, &pr.key, &repo, &pr.base, &lead.branch, &worktree, &lead.base_sha, lead.reused(), pushed.pushed, by.as_str());
+    append(tx, event.plan(plan.clone()))?;
     if let Some(error) = &pushed.failed {
         let text = format!(
             "The Lead Branch {} of PR {} of Plan {plan} was not pushed to origin: {}. The next merge or cpd pr open pushes it again.",
@@ -222,8 +219,8 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
             pr.key,
             error.message()
         );
-        let data = json!({"source": by.source(), "code": error.code().as_str(), "message": error.message(), "details": error.details()});
-        append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+        let event = NewEvent::error(text, by.source(), error.code().as_str(), error.message(), error.details());
+        append(tx, event.plan(plan.clone()))?;
     }
     Ok(())
 }
@@ -264,8 +261,8 @@ pub fn record_failure(store: &mut Store, source: &str, plan: &PlanId, key: &PrKe
         }
         let message = format!("PR {key} of Plan {plan} could not be started ({}): {}", step.as_str(), error.message());
         let text = format!("{message} The engine does not try again. Fix the cause, then: cpd pr start {key} --plan {plan}");
-        let data = json!({"source": source, "code": ErrorCode::PrStartFailed.as_str(), "message": message, "details": details});
-        append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+        let event = NewEvent::error(text, source, ErrorCode::PrStartFailed.as_str(), &message, details);
+        append(tx, event.plan(plan.clone()))?;
         Ok(true)
     })
 }

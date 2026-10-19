@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::{AddArgs, Env, check_needs, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
 use crate::git::worktree::list as worktrees;
 use crate::ids::{PlanId, PrKey};
@@ -82,8 +82,8 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         "PR {key} added to Plan {plan} (repo {}, base {}{with}), waiting. Next: cpd plan show --plan {plan}",
                         wanted.repo, wanted.base
                     );
-                    let data = json!({"pr": key, "repo": wanted.repo, "base": wanted.base, "needs": wanted.needs, "appended": appended});
-                    append(tx, NewEvent::new(Kind::PrAdded, text, data).plan(plan.clone()))?;
+                    let event = NewEvent::pr_added(text, key, &wanted.repo, &wanted.base, &wanted.needs, appended);
+                    append(tx, event.plan(plan.clone()))?;
                     Ok(("waiting".to_owned(), lead_branch, appended, false))
                 }
             })?
@@ -162,7 +162,7 @@ fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<
             .with("plan", plan.as_str()));
     }
     let text = format!("Plan {plan} is back in dispatch: PR {key} was added.");
-    append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": from.as_str(), "to": "dispatch"})).plan(plan.clone()))?;
+    append(tx, NewEvent::plan_phase(text, from.as_str(), "dispatch").plan(plan.clone()))?;
     Ok(())
 }
 

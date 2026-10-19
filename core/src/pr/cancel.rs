@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::{CancelArgs, Env, find_pr, plan_phase, pr_locked};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -40,7 +40,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                         .with("pr", key.as_str()));
                 }
                 let text = format!("PR {key} of Plan {plan} was cancelled. Next: cpd plan show --plan {plan}");
-                append(tx, NewEvent::new(Kind::PrCancelled, text, json!({"pr": key})).plan(plan.clone()))?;
+                append(tx, NewEvent::pr_cancelled(text, &key).plan(plan.clone()))?;
                 Ok(false)
             }
         })?,
