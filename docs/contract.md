@@ -1736,6 +1736,7 @@ Every message in the table that is not marked steered is a follow-up. The turn c
 | `mouse` | `on` | clicks in the ratatui panes |
 | `default-terminal` | `tmux-256color` | |
 | `extended-keys` | `on` | pi's keys (verified by the User) |
+| `extended-keys-format` | `csi-u` | pi's keys under tmux >= 3.5 or so: the default `xterm` makes pi warn `extended-keys-format is xterm, pi works best with csi-u`. Set with `set -gq`, so an older tmux that does not know the option starts without an error |
 | `terminal-features` | append `xterm*:extkeys,xterm-ghostty:extkeys,xterm-ghostty:hyperlinks` | `hyperlinks`: inside tmux, pi emits clickable OSC 8 links only when the client lists it (pi-tui `terminal-image.js`), and tmux forwards them only then |
 | `escape-time` | `10` | |
 | `status` | `off` | the server default: `cpd-work` has no status row. The cockpit session turns it on for itself (below) |
@@ -1744,6 +1745,9 @@ Every message in the table that is not marked steered is a follow-up. The turn c
 | `remain-on-exit` | `on` | a dead pane stays, so cpd can read `#{pane_dead_status}` |
 | `focus-events` | `on` | the views are told when their pane gains or loses focus |
 | `pane-active-border-style` | `fg=blue` | the focused pane's border |
+| `set-titles` | `on` | the terminal window attached to the cockpit is titled (User, hs-d300) |
+| `set-titles-string` | `cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}` | the window reads `cpd · <machine>` (`cpd · hs`, `cpd · pro`), the config's `machine` name (§8.2), not the OS hostname; tmux's own option, no pane format, so it never changes per pane (hs-d300) |
+| `@cpd_machine` (user option) | the config's `machine` | set by the cockpit's build or repair (`cpd tui`, bare `cpd`), which has the config; `SERVER_OPTIONS` is static. A server another command started shows the host's short name until the cockpit is built |
 | `pane-border-format` | the format below | the column titles |
 
 **Every server start sets every option, key binding and hook of this section**, whichever command starts the server (`plan new`, `watch --ensure`, `tui`), so the cockpit looks and behaves the same whatever started it. Rerunning is safe (each is a plain `set -g`, `bind` or `set-hook -g`), so `cpd tui` also applies them to a server that is already running. Cockpit parity (User, 2026-10-15): the cockpit matches the running cpd 1 cockpit, whose `tui/scripts/tmux.conf` these are, renamed (`@cpd_view`, `@cpd_job`).
