@@ -6,9 +6,10 @@
 
 use std::collections::BTreeMap;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::json;
 
+use super::gh;
 use super::add::{main_worktree, no_branch_clash, resolve_base};
 use super::{EditArgs, Env, check_needs, find_pr, plan_phase, pr_locked, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
@@ -68,9 +69,12 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
     let (pr, fields, already) = match decision {
         Decision::Already(pr) => (pr, Vec::new(), true),
-        Decision::Update { before, after, .. } => {
+        Decision::Update { before, after, fields } => {
             if after.repo != before.repo {
                 no_branch_clash(repo.as_deref().expect("the repo changed, so it was given"), &plan, &key)?;
+            }
+            if let Some(title) = edits.title.as_deref().filter(|_| fields.contains(&"title")) {
+                retitle_open_pull_request(&mut env, &plan, &key, title)?;
             }
             env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, &edits)? {
                 Decision::Already(pr) => Ok((pr, Vec::new(), true)),
@@ -88,6 +92,21 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         out["already"] = json!(true);
     }
     Ok(Output::success(out))
+}
+
+/// When the PR has an open pull request, retitles it on GitHub, before the title is stored: a failure stores nothing (§9.5).
+fn retitle_open_pull_request(env: &mut Env, plan: &PlanId, key: &PrKey, title: &str) -> Result<(), CpdError> {
+    let open: Option<(String, i64)> = env.store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT p.repo, p.number FROM prs r JOIN pull_requests p ON p.id = r.pull_request
+              WHERE r.plan = ?1 AND r.key = ?2 AND r.status = 'open' AND p.state = 'open'",
+        )?;
+        Ok(stmt.query_row([plan.as_str(), key.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?)
+    })?;
+    match open {
+        Some((repo, number)) => gh::retitle_pr(env.home.root(), &repo, number, title),
+        None => Ok(()),
+    }
 }
 
 /// The PR `key` and its stored title, which must be editable. With `title`, the PR is not

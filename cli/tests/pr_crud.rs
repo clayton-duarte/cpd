@@ -555,6 +555,66 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
     assert_eq!(fx.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "First title");
 }
 
+/// PR `api` is `open` with pull request #7, and `gh` is a fake that runs `gh`.
+fn open_pr(fx: &Fx, gh: &str) {
+    fx.sql(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+           VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Change api', 0, 'open', 'none', 'none', 't', NULL, 't');
+         UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't';
+         UPDATE prs SET status = 'open', pr_number = 7, pr_opened_at = 't',
+                        pr_url = 'https://github.com/acme/pay/pull/7', pull_request = (SELECT id FROM pull_requests);",
+    );
+    fx.env.fake_gh(gh);
+}
+
+#[test]
+fn edit_title_of_an_open_pull_request_retitles_it_on_github_first() {
+    let fx = fx("dispatch");
+    fx.add("api", &fx.pay, &[]).ok();
+    open_pr(&fx, "echo '{}'");
+
+    let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
+
+    assert_eq!(out["fields"], json!(["title"]));
+    assert_eq!(fx.env.calls("gh"), [["api", "-X", "PATCH", "repos/acme/pay/pulls/7", "-f", "title=Charge the card"]]);
+    assert_eq!(fx.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "Charge the card");
+    assert_eq!(fx.events("pr-edited").last().unwrap()["data"], json!({"pr": "api", "fields": ["title"]}));
+
+    // The same title again: already, and gh is not called.
+    let out = fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
+    assert_eq!(out["already"], true);
+    assert_eq!(fx.env.calls("gh").len(), 1);
+}
+
+#[test]
+fn edit_title_of_an_open_pull_request_stores_nothing_when_github_fails() {
+    let fx = fx("dispatch");
+    fx.add("api", &fx.pay, &[]).ok();
+    open_pr(&fx, "echo 'HTTP 422: nope' >&2; exit 1");
+    let writes = fx.writes();
+
+    let error = fx.refused(&fx.pr(&["edit", "api", "--title", "Charge the card"]), "gh_failed", 1, writes);
+
+    assert_eq!(error["details"]["argv"], json!(["gh", "api", "-X", "PATCH", "repos/acme/pay/pulls/7", "-f", "title=Charge the card"]));
+    assert!(error["details"]["stderr"].as_str().unwrap().contains("HTTP 422"), "{error}");
+    assert_eq!(fx.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "Change api");
+}
+
+#[test]
+fn edit_title_of_a_pr_without_an_open_pull_request_calls_no_gh() {
+    let fx = fx("plan");
+    fx.add("api", &fx.pay, &[]).ok();
+    fx.env.fake_gh("echo unexpected >&2; exit 1");
+
+    fx.pr(&["edit", "api", "--title", "Charge the card"]).ok();
+    assert_eq!(fx.query::<String>("SELECT title FROM prs WHERE key = 'api'"), "Charge the card");
+
+    // A dispatch PR has no pull request yet either.
+    fx.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't'");
+    fx.pr(&["edit", "api", "--title", "Charge it"]).ok();
+    assert!(fx.env.calls("gh").is_empty());
+}
+
 #[test]
 fn edit_title_of_a_merged_or_cancelled_pr_is_pr_ended() {
     let Legacy { fx, .. } = legacy("merged");

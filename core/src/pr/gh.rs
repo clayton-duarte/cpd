@@ -258,6 +258,14 @@ pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
     }
 }
 
+/// Retitles the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> -f title=<title>`.
+/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (commands.md §9.5, hs-d285).
+pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<(), CpdError> {
+    let endpoint = format!("repos/{repo}/pulls/{number}");
+    let field = format!("title={title}");
+    run(cwd, &["api", "-X", "PATCH", &endpoint, "-f", &field]).map(drop)
+}
+
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`
 /// are filled in by `gh` from `cwd`'s repo. Every page is read: `gh` 2.45 has no
 /// `--slurp`, so `--paginate` prints the pages as consecutive JSON arrays.

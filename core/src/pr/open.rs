@@ -30,6 +30,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         Step::Go(key) => key,
     };
     require_jobs_done(&mut env, &plan, &key)?;
+    stored_title(&mut env, &id, &key)?;
 
     // Under the per-repo lock, after R: R may have recorded a merge, and
     // another `pr open` may have finished while this one waited.
@@ -39,6 +40,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         return Ok(done);
     }
     let list = require_jobs_done(&mut env, &plan, &key)?;
+    let stored = stored_title(&mut env, &id, &key)?;
     let pr = pr_of(&plan, &key);
     let lead = pr.lead(&id)?.clone();
     // The newest pull request of the Lead Branch, in any state, before the Gate: a merged one is adopted as it is.
@@ -69,7 +71,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     drop(lock);
 
     // An earlier run that died before its transaction already created the PR: adopt it.
-    let title = title(&plan, &key);
+    let title = github_title(&stored);
     let found = match existing {
         Some(found) => found,
         None => gh::create_pr(&lead, &pr.base, &pr.lead_branch, &title, &summary(&title, &list))?,
@@ -308,9 +310,25 @@ fn require_jobs_done(env: &mut Env, plan: &PlanRow, key: &PrKey) -> Result<Vec<j
     Ok(all)
 }
 
-/// The Plan's title when it has one PR that is not `cancelled`, else `<title> (<key>)` (§7.6).
-fn title(plan: &PlanRow, key: &PrKey) -> String {
-    if plan.live().count() == 1 { plan.title.clone() } else { format!("{} ({key})", plan.title) }
+/// The PR's stored title (hs-d285), which it must have: a PR that existed before migration `pr-title` has none, and
+/// there is no fallback to the Plan's title (`pr_title_required`).
+fn stored_title(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<String, CpdError> {
+    let stored: Option<String> =
+        env.store.read(|conn| Ok(conn.query_row("SELECT title FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?))?;
+    stored.ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::PrTitleRequired,
+            format!("PR {key} of Plan {plan} has no title: run cpd pr edit {key} --title \"<text>\" (1-72 characters), then open it again."),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", key.as_str())
+    })
+}
+
+/// The seam from a PR's stored title to the title of its pull request on GitHub: the one place a per-owner format
+/// (hs-d277, repo-policy) would change it. Today it is unchanged. `gh pr create` and the body's `# <title>` both use it.
+fn github_title(stored: &str) -> String {
+    stored.to_owned()
 }
 
 /// A table cell: one line, no `|`.
