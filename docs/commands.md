@@ -2435,6 +2435,10 @@ It is added **at most once per run**, and once it has been added the reminder is
 
 **Not done** (R3, *decided*): `pr open` does not ask for a checked statement; the reminder is the whole enforcement of this heuristic. The skills carry the rule (R4).
 
+### 15.9 Policy text
+
+At `session_start` the adapter runs `cpd policy show` with no flag (§22.1) and, at each run, adds one system prompt section, `cpd-policy`, with the `text` of every domain whose `audience` holds the output's `role`, labelled by domain and `source`. contract §8.3 "Delivery to agents" is the rule, including a failed `policy show` (an error message, no policy text).
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
