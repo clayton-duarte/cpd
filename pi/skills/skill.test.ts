@@ -506,3 +506,25 @@ for (const { skill } of skills) test(`${skill}: asks the User only with ask_user
   assert.ok(ask, "the context ask line exists");
   assert.match(ask, /\(a record, not a question to the User\)/);
 });
+
+test("cpd-lead resolves a PR conflict inline and pushes through the Gate, never a plain git push or a sync Job (hs-d305)", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.ok(!/(?<!never a )plain `git push`/.test(text));
+  assert.ok(!/run no local tests/i.test(text));
+  assert.ok(!/hs-d220/.test(text));
+  const row = text.split("\n").find((l) => l.startsWith("| `pr-feedback`"))!;
+  const step = text.split("\n").find((l) => l.startsWith("2. After those Jobs are Merged"))!;
+  const rule = text.split("\n").find((l) => /`git` and `gh` are allowed/.test(l))!;
+  for (const [name, place] of [["pr-feedback row", row], ["Addressing step 2", step]] as const) {
+    assert.match(place, /hs-d305/, name);
+    assert.match(place, /cpd pr push --pr <key>/, name);
+    assert.match(place, /never a plain `git push`/, name);
+    assert.match(place, /never with a sync (or merge )?Job/, name);
+    assert.match(place, /code the merge needs/, name);
+  }
+  assert.match(row, /cpd pr rebase --pr <key>/);
+  assert.match(step, /cpd pr rebase --pr <key>/);
+  assert.match(rule, /hs-d305/);
+  assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
+  assert.match(rule, /never with `git push`/);
+});
