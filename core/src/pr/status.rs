@@ -42,7 +42,6 @@ impl ChecksSummary {
     /// From GraphQL's `statusCheckRollup.state` (`StatusState`); `None` when the
     /// commit or its rollup is null. `FAILURE` and `ERROR` are `failed` (it can
     /// show while other checks still run: accepted); an unknown state is `none`.
-    #[allow(dead_code)] // Job `pr-poll2` calls the poller's gateway.
     pub fn of_rollup(state: Option<&str>) -> ChecksSummary {
         match state {
             Some("SUCCESS") => ChecksSummary::Passed,
@@ -101,7 +100,6 @@ pub(super) enum PrState {
 
 impl PrState {
     /// From GraphQL's `PullRequestState`; any other value is `gh_failed`.
-    #[allow(dead_code)] // Job `pr-poll2` calls the poller's gateway.
     pub fn of_graphql(state: &str) -> Result<PrState, CpdError> {
         match state {
             "OPEN" => Ok(PrState::Open),
@@ -113,7 +111,6 @@ impl PrState {
     }
 
     /// As stored and printed.
-    #[allow(dead_code)] // Job `pr-poll2` stores it.
     pub fn as_str(self) -> &'static str {
         match self {
             PrState::Open => "open",
