@@ -175,6 +175,36 @@ fn a_running_engine_adds_no_engine_down() {
     assert_eq!(subjects(&list), ["stuck", "review", "question", "unread", "dialog"]);
 }
 
+/// A Manager Session of `ctx1` (`archived`: archived, so not live).
+fn manager(fx: &mut Fixture, id: &str, archived: bool) {
+    let archived = if archived { "'2026-01-02T00:00:00.000Z'" } else { "NULL" };
+    fx.store
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at)
+                 VALUES ('{id}', 'manager', 'ctx1', NULL, NULL, 'ctx1-manager-{id}', '/sessions/{id}.jsonl', '/repo', 'O5', NULL, 'idle', NULL,
+                         '2026-01-02T00:00:00.000Z', '2026-01-02T00:00:00.000Z', {archived});"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn engine_down_shows_only_when_no_live_manager_exists() {
+    let mut fx = Fixture::new();
+    assert_eq!(subjects(&fx.ok(&["list"]))[0], "engine", "no Manager: the User is the one to act");
+    // an archived Manager is not live
+    manager(&mut fx, "m-old", true);
+    assert_eq!(subjects(&fx.ok(&["list"]))[0], "engine");
+    // a live one handles the engine (the tree restarts it, a failure goes to the Manager): no item, and `engine` still says it is down
+    manager(&mut fx, "m-live", false);
+    let list = fx.ok(&["list"]);
+    assert_eq!(list["engine"], json!({"running": false}));
+    assert_eq!(subjects(&list), ["stuck", "review", "question", "unread", "dialog"]);
+    assert_eq!(subjects(&fx.ok(&["list", "--all"]))[0], "stuck");
+}
+
 #[test]
 fn hidden_items_leave_the_list_and_are_counted() {
     let fx = Fixture::new();

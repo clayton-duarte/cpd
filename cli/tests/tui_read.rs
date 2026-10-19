@@ -1223,6 +1223,18 @@ fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
 }
 
 #[test]
+fn with_a_live_manager_the_snapshot_has_no_engine_down_though_the_engine_is_down() {
+    let (_env, mut store) = fixture();
+    sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
+    let tree = read::tree(&mut store).unwrap();
+    assert!(!tree.engine_running, "the lock is still free");
+    assert!(tree.inbox.is_empty(), "a Manager handles it: {:?}", tree.inbox);
+    sql(&mut store, "UPDATE sessions SET archived_at = '2026-01-04T00:00:00.000Z' WHERE id = 'm-alpha'");
+    let tree = read::tree(&mut store).unwrap();
+    assert_eq!(tree.inbox.iter().map(|i| i.kind).collect::<Vec<_>>(), [Kind::EngineDown], "an archived Manager is not live");
+}
+
+#[test]
 fn with_no_engine_the_snapshot_leads_with_engine_down_and_while_a_process_holds_the_lock_it_does_not() {
     let (env, mut store) = fixture();
     let tree = read::tree(&mut store).unwrap();
