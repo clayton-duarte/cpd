@@ -45,9 +45,8 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 
     let mut retries = 0;
     let (old, new, lease, worktree) = loop {
-        // 2. The snapshot: S, and the lease X0, what cpd last saw of the remote branch.
+        // 2. The snapshot S.
         let old = git::run::rev_parse(repo, &lead_ref)?;
-        let lease = last_seen(repo, branch)?;
         // 3. A conflict refuses before anything changes.
         if let Some(files) = conflicts(repo, &onto, &old)? {
             return Err(conflict(&id, &key, branch, &onto, files));
@@ -63,9 +62,12 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
             Err(e) => return Err(removing(worktree, e)),
         };
         // 5. Guard U: no merge in S that the Ledger has not recorded.
-        if let Err(e) = guard_u(&mut env, &id, &key, repo, &old) {
-            return Err(removing(worktree, e));
-        }
+        // The lease X0, what cpd last saw of the remote branch: read after guard U,
+        // so that the pushes of the merges in S, which it waited for or ran R for, are seen.
+        let lease = match guard_u(&mut env, &id, &key, repo, &old).and_then(|()| last_seen(repo, branch)) {
+            Ok(lease) => lease,
+            Err(e) => return Err(removing(worktree, e)),
+        };
         // 6. The compare-and-swap of the Lead Branch, S to R'.
         let message = format!("cpd: pr rebase {id}/{key}");
         let out = match git::run::run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old]) {
@@ -131,6 +133,8 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 /// rule P's included, updates it. A push cpd has not seen (another machine,
 /// GitHub's "Update branch") makes the lease fail instead of being overwritten.
 /// The empty string when cpd has never seen the branch: as a lease, "must not exist".
+/// A push of what the remote already has is "up to date" whatever the lease (run
+/// with git 2.43), so a second `pr rebase` pushing the same R' succeeds.
 fn last_seen(repo: &Path, branch: &str) -> Result<String, CpdError> {
     let tracking = format!("refs/remotes/origin/{branch}");
     let out = git::run::run(repo, &["rev-parse", "--verify", "--quiet", &tracking])?;
