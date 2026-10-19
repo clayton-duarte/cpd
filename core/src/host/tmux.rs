@@ -494,6 +494,25 @@ impl Tmux {
         self.run(&strings(&["kill-pane", "-t", pane.as_str()])).map(drop)
     }
 
+    /// `kill-server`: the server and everything in it end. Returns once no server runs; a server that
+    /// exits before it answers makes the call fail, which is not an error here.
+    pub fn kill_server(&self) -> Result<(), CpdError> {
+        let args = strings(&["kill-server"]);
+        let out = self.output(&args)?;
+        if !out.status.success() && self.server_running()? {
+            return Err(self.failed(&args, &out));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while self.server_running()? {
+            if std::time::Instant::now() >= deadline {
+                return Err(CpdError::new(ErrorCode::TmuxFailed, "The tmux server did not exit within 10 s of kill-server.")
+                    .with("argv", self.argv(&args)));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        Ok(())
+    }
+
     /// `kill-window -t <window>`.
     pub fn kill_window(&self, window: &WindowId) -> Result<(), CpdError> {
         self.run(&strings(&["kill-window", "-t", window.as_str()])).map(drop)
@@ -533,6 +552,23 @@ impl Tmux {
             .with("exit", 0)
             .with("stdout", output.to_owned())
     }
+}
+
+/// A tmux version as `#{version}` and `tmux -V` print it (`3.4`, `3.3a`, `next-3.7`), for the order of
+/// two versions: major, minor, and the letter of a patch release (none before `a`). `None` when it
+/// does not start with `<major>.<minor>` (after an optional `next-`).
+fn version_key(version: &str) -> Option<(u32, u32, u8)> {
+    let v = version.strip_prefix("next-").unwrap_or(version);
+    let (major, rest) = v.split_once('.')?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let minor = rest[..digits].parse().ok()?;
+    let letter = rest[digits..].bytes().next().filter(u8::is_ascii_lowercase).map_or(0, |b| b - b'a' + 1);
+    Some((major.parse().ok()?, minor, letter))
+}
+
+/// Whether tmux `server` is an older version than tmux `installed`. False when either does not parse.
+pub fn older_version(server: &str, installed: &str) -> bool {
+    matches!((version_key(server), version_key(installed)), (Some(s), Some(i)) if s < i)
 }
 
 /// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
@@ -648,6 +684,18 @@ mod tests {
         assert_eq!(Split::Right.flags(), ["-h"]);
         assert_eq!(Split::Below.flags(), ["-v"]);
         assert_eq!(Split::Bottom.flags(), ["-v", "-f"]);
+    }
+
+    #[test]
+    fn versions_are_ordered_by_major_minor_and_patch_letter() {
+        for (server, installed) in [("3.4", "3.8"), ("3.3a", "3.4"), ("3.3", "3.3a"), ("2.9", "3.0"), ("next-3.5", "3.6"), ("3.6", "3.10")] {
+            assert!(older_version(server, installed), "{server} < {installed}");
+            assert!(!older_version(installed, server), "{installed} !< {server}");
+        }
+        for same in ["3.4", "3.3a", "next-3.7"] {
+            assert!(!older_version(same, same));
+        }
+        assert!(!older_version("master", "3.8") && !older_version("3.4", "unknown"));
     }
 
     #[test]
