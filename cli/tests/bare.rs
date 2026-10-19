@@ -285,32 +285,60 @@ fn when_the_server_runs_another_tmux_the_servers_own_binary_attaches() {
 
 // ---------- the tmux restart (contract §6.1, hs-d294) ----------
 
-/// The `cpd` of the panes: a Lead's `session run` just sleeps; everything else is the built binary.
+/// The `cpd` of the panes: a Lead's `session run` reports `idle` as its pi's adapter does at start-up
+/// (commands.md §15.2), once `arm` has said the server is the old one (the panes of the cockpit's first
+/// build report nothing, so a test's own states are not overwritten), then sleeps; everything else is
+/// the built binary.
 fn fake_cpd_with_sleeping_sessions(env: &TestEnv) {
-    env.fake("cpd", &format!("case \"$1 $2\" in \"session run\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
+    env.fake(
+        "cpd",
+        &format!(
+            "case \"$1 $2\" in \"session run\") [ -e '{root}/adapter-reports' ] && '{CPD}' session state idle --session \"$3\" >/dev/null 2>&1; exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\"",
+            root = env.root().display()
+        ),
+    );
 }
 
-/// What marks the cockpit's server as older than the installed tmux: while this file exists,
-/// the fake `tmux` says its server runs tmux 1.0; its `kill-server` removes the file, so the
-/// server that comes next is as new as the installed one.
+/// The server of the tests below is the *old* one: `older_server` copies the installed tmux to its own
+/// path and, until `arm`, the fake `tmux` on `PATH` runs that copy for every call, so the server the
+/// cockpit is built on has the copy as its own binary (`/proc/<pid>/exe`), as an older tmux has on hs.
+/// Once armed, the fake says that server runs tmux 1.0 (and no other), and runs the installed tmux for
+/// everything else: a call of the installed tmux to the old server is a call the restart must not make.
 fn older_server(env: &TestEnv) -> PathBuf {
     let flag = env.root().join("older-server");
+    let old = env.root().join("old-tmux");
+    fs::create_dir_all(&old).unwrap();
+    copy_executable(real_tmux().to_str().unwrap(), &old.join("tmux"));
+    fs::write(format!("{}.build", flag.display()), "").unwrap();
     fake_tmux(
         env,
         &format!(
-            "if [ -e '{flag}' ]; then\n\
+            "if [ -e '{flag}.build' ]; then exec '{old}/tmux' \"$@\"; fi\n\
+             if [ -e '{flag}' ]; then\n\
                case \" $* \" in\n\
-                 *\" display -p #{{version}} \"*) echo 1.0; exit 0;;\n\
-                 *\" kill-server \"*) rm -f '{flag}';;\n\
+                 *\" display -p #{{version}} \"*)\n\
+                   pid=$('{real}' -L '{socket}' -f /dev/null display -p '#{{pid}}' 2>/dev/null)\n\
+                   [ \"$pid\" = \"$(cat '{flag}')\" ] && {{ echo 1.0; exit 0; }};;\n\
                esac\n\
              fi\n\
              if [ -e '{flag}.no-park-other' ]; then\n\
                case \" $* \" in *\" new-window \"*\" -n park-other \"*) echo 'no window for you' >&2; exit 1;; esac\n\
              fi",
-            flag = flag.display()
+            flag = flag.display(),
+            old = old.display(),
+            real = real_tmux().display(),
+            socket = env.tmux_socket(),
         ),
     );
     flag
+}
+
+/// The server that runs now is the one that is older than the installed tmux.
+fn arm(env: &TestEnv, flag: &Path) {
+    let pid = server_pid(env);
+    fs::write(flag, pid).unwrap();
+    fs::write(env.root().join("adapter-reports"), "").unwrap();
+    fs::remove_file(format!("{}.build", flag.display())).unwrap();
 }
 
 fn home_of(env: &TestEnv) -> CpdHome {
@@ -441,11 +469,11 @@ fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_
     assert_eq!(session_windows(&env), places());
     let before = server_pid(&env);
     let lead1_pane = tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]).lines().find(|l| l.ends_with(" lead1")).unwrap().to_owned();
-    fs::write(&flag, "").unwrap();
+    arm(&env, &flag);
 
     let t = run_in_terminal(&env, "restart", false, "");
     assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    assert_eq!(kill_server_calls(&env), 1);
+    assert_eq!(kill_server_calls(&env), 0, "the old server is killed by its own binary, not by the installed tmux on PATH");
     assert_ne!(server_pid(&env), before, "the server was not restarted");
     assert_eq!(session_windows(&env), places());
     let slot = tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}"]);
@@ -491,7 +519,7 @@ fn when_it_is_not_safe_nothing_is_killed_the_restart_is_marked_pending_and_the_s
         // The engine stops a Session that has no pane: the state is set once they have panes.
         store_of(&env).write("test", |tx| exec(tx, &format!("UPDATE sessions SET state = '{lead_state}', state_label = iif('{lead_state}' = 'blocked', 'a dialog', NULL) WHERE id = 'lead1'"))).unwrap();
         let (before, panes) = (server_pid(&env), tmux_out(&env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]));
-        fs::write(&flag, "").unwrap();
+        arm(&env, &flag);
 
         let t = run_in_terminal(&env, "hold", false, "");
         wait_until(&format!("the attach ({what})"), || {
@@ -556,7 +584,7 @@ fn pending_restart_in_the_way(env: &TestEnv) -> (PathBuf, Flock<fs::File>) {
     let driver = fixture(env, Some("running")).unwrap();
     cockpit_with_sessions(env);
     set_lead_state(env, "blocked");
-    fs::write(&flag, "").unwrap();
+    arm(&env, &flag);
     env.cpd(&["tui"]).ok();
     assert!(pending_file(env).exists(), "cpd tui marks the restart pending");
     (flag, driver)
@@ -583,7 +611,7 @@ fn once_nothing_runs_the_engine_restarts_the_server_detached_and_every_session_i
     set_lead_state(&env, "idle");
     wait_until("the restart to finish", || !pending_file(&env).exists());
     assert_ne!(server_pid(&env), before, "the server was not restarted");
-    assert_eq!(kill_server_calls(&env), 1);
+    assert_eq!(kill_server_calls(&env), 0, "the old server is killed by its own binary, not by the installed tmux on PATH");
     assert_eq!(session_windows(&env), places());
     assert!(tmux_out(&env, &["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_session}"]).lines().any(|l| l == "lead1"));
     assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["plan", "tree", "widgets"]);

@@ -294,8 +294,13 @@ impl Tmux {
 
     /// This server, with every call run by the server's own tmux program ([`Tmux::server_exe`]): a
     /// client of another version cannot be trusted to talk to it, least of all while it dies (hs-n285).
+    ///
+    /// The program is the file `/proc/<pid>/exe` points to, which outlives the server; a file an upgrade
+    /// has replaced is only reachable as `/proc/<pid>/exe`, which lasts as long as the server does.
     pub fn on_server_binary(&self) -> Result<Tmux, CpdError> {
-        Ok(self.clone().with_program(self.server_exe()?))
+        let exe = self.server_exe()?;
+        let program = std::fs::read_link(&exe).ok().filter(|file| file.is_file()).unwrap_or(exe);
+        Ok(self.clone().with_program(program))
     }
 
     /// The full argv of a call: `tmux -L <socket> -f /dev/null <args>`.
@@ -561,11 +566,14 @@ impl Tmux {
     pub fn kill_server(&self) -> Result<(), CpdError> {
         let args = strings(&["kill-server"]);
         let out = self.output(&args)?;
-        if !out.status.success() && self.liveness()? == Liveness::Answering {
+        if !out.status.success() && !self.program_gone() && self.liveness()? == Liveness::Answering {
             return Err(self.failed(&args, &out));
         }
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
+            if self.program_gone() {
+                return Ok(());
+            }
             match self.liveness()? {
                 Liveness::Gone => return Ok(()),
                 Liveness::Answering | Liveness::Dying if std::time::Instant::now() < deadline => {
@@ -579,6 +587,11 @@ impl Tmux {
                 }
             }
         }
+    }
+
+    /// The program is the server's own `/proc/<pid>/exe` and it is gone: the server went, and took it.
+    fn program_gone(&self) -> bool {
+        self.program.as_deref().is_some_and(|p| p.starts_with("/proc/") && !p.exists())
     }
 
     /// `list-sessions`, read as the answer of a server that may be on its way out.
