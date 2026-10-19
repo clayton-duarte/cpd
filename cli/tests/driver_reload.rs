@@ -386,3 +386,40 @@ fn after_a_reload_fd_3_is_the_lock_and_the_drivers_children_do_not_hold_it() {
     fs::write(fx.path("go"), "").unwrap();
     fx.finish(pid);
 }
+
+/// engine-W6: the nudge baseline survives a reload. The Worker is nudged, the
+/// driver reloads, the Worker ends another turn without submitting: `no_submit`,
+/// not `timed_out` after the Attempt's whole active time.
+#[test]
+fn a_nudged_worker_that_idles_again_after_a_reload_ends_no_submit() {
+    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
+    let fx = fx();
+    let reloaded = fx.path("reloaded");
+    fx.env.fake_pi(&format!(
+        r#"sid=""; prev=""
+for a in "$@"; do [ "$prev" = "--session-id" ] && sid="$a"; prev="$a"; done
+mkdir -p "$HOME/.pi/agent/sessions/w"
+f="$HOME/.pi/agent/sessions/w/2026_$sid.jsonl"
+msg='{{"type":"message","timestamp":"2026-10-14T21:00:05.000Z","message":{{"role":"assistant","usage":{{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{{"total":0}}}},"stopReason":"stop"}}}}'
+printf '%s\n' '{{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}}' "$msg" > "$f"
+"{CPD}" session state idle > /dev/null
+until [ -e '{reloaded}' ]; do sleep 0.1; done
+"{CPD}" session state working > /dev/null
+printf '%s\n' "$msg" >> "$f"
+"{CPD}" session state idle > /dev/null
+sleep 120"#,
+        reloaded = reloaded.display()
+    ));
+    let pid = fx.dispatch();
+    wait_until("the Worker to be nudged", || fx.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-nudge'") == 1);
+
+    fx.install();
+    wait_until("the driver to reload", || !fx.runs().is_empty());
+    fs::write(&reloaded, "").unwrap();
+    fx.finish(pid);
+
+    let log = fx.log();
+    let last: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap_or_else(|e| panic!("{e}: {log}"));
+    assert_eq!((&last["outcome"], &last["cause"]), (&Value::from("failed"), &Value::from("no_submit")), "{log}");
+    assert_eq!(log.matches(RELOAD).count(), 1, "{log}");
+}

@@ -1025,10 +1025,6 @@ impl KillOnDrop {
     fn new(child: Child) -> Self {
         KillOnDrop(Some(child))
     }
-
-    fn into_inner(mut self) -> Child {
-        self.0.take().unwrap()
-    }
 }
 
 impl std::ops::Deref for KillOnDrop {
@@ -1175,7 +1171,7 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     let env = TestEnv::new();
     let out = env.cpd(&["--version"]).ok();
     assert!(out["store"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 3, "{out}");
+    assert_eq!(out["protocol"], 4, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

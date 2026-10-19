@@ -46,7 +46,7 @@ mod tests {
 
     use ratatui::{Terminal, backend::TestBackend, style::Modifier};
 
-    use super::super::{items, workers::Workers};
+    use super::super::{inbox::Inbox, items, workers::Workers};
 
     fn row(width: u16, left: &[Item], right: &[Item]) -> (String, Vec<(Rect, Action)>) {
         let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
@@ -80,13 +80,13 @@ mod tests {
         let mut hits = Vec::new();
         terminal
             .draw(|f| {
-                let (left, right) = items(&Workers { running: 1, limit: 4 }, "", f.area().width);
+                let (left, right) = items(&Inbox { count: 0, urgency: None }, &Workers { running: 1, limit: 4 }, "", f.area().width);
                 hits = draw(f, f.area(), &left, &right);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
         let text: String = (0..40).map(|x| buf[(x, 0)].symbol()).collect();
-        assert_eq!(text, format!("⧉ ? ▤{}workers 1/4", " ".repeat(24)));
+        assert_eq!(text, format!("⧉ ? ▤{}inbox 0 workers 1/4", " ".repeat(16)));
         assert_eq!(
             hits,
             [
