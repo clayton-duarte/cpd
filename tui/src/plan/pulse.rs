@@ -131,7 +131,7 @@ pub fn quiet_sample() -> Span<'static> {
 pub fn legend() -> Vec<(Span<'static>, String)> {
     let sample = |kind| bar(4, kind);
     vec![
-        (Span::raw("▂▄▆"), "activity per 5 minutes; a slot takes the first colour below".to_owned()),
+        (Span::raw("▂▄▆"), "activity per 5 min, first colour wins".to_owned()),
         (sample(Kind::Error), "an error, or a Job failed".to_owned()),
         (sample(Kind::Plan), "a Plan or ask Event".to_owned()),
         (sample(Kind::PrOpened), "a PR opened".to_owned()),

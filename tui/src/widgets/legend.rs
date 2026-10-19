@@ -174,9 +174,9 @@ fn sections() -> Vec<Section> {
     let pulse = Section {
         title: "Pulse",
         header: None,
-        // two entries a row: the popup is at most 80 % of the client tall (one row an entry would not fit)
+        // three entries a row: the popup is at most 80 % of the client tall (fewer an entry would not fit)
         rows: crate::plan::pulse::legend()
-            .chunks(2)
+            .chunks(3)
             .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
             .collect(),
     };
@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(
             cells,
             [
-                "▂▄▆", "activity per 5 minutes; a slot takes the first colour below",
+                "▂▄▆", "activity per 5 min, first colour wins",
                 "▄", "an error, or a Job failed",
                 "▄", "a Plan or ask Event",
                 "▄", "a PR opened",
