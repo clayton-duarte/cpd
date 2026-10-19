@@ -553,7 +553,7 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     assert_eq!(screen[1], "  ┌ repo · repo 󱦰 main · dispatch ┐");
     assert!(screen[2].starts_with(&format!("  │  {QUEUED} a │S3")), "{:?}", screen[2]);
     assert!(screen[3].starts_with("  └─"), "{:?}", screen[3]);
-    assert!(screen.iter().all(|l| !l.contains('▸') && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));
+    assert!(screen.iter().all(|l| !l.contains('\u{F0142}' /* md-chevron_right */) && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));
 }
 
 #[test]
