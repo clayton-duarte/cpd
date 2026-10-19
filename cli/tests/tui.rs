@@ -189,11 +189,11 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     assert!(!border.contains("statusbar"), "{border}");
     // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
     assert_status_line(&env);
-    let binding = tmux_out(&env, &["list-keys", "-T", "root", "MouseDown1Pane"]);
-    assert_eq!(binding.trim(), "bind-key -T root MouseDown1Pane select-pane -t = \\; send-keys -M");
-    let binding = tmux_out(&env, &["list-keys", "-T", "root", "MouseDown1Status"]);
+    // Words only: tmux 3.8 pads `bind-key` with a blank `-r` column (two spaces).
+    let binding = |key: &str| tmux_out(&env, &["list-keys", "-T", "root", key]).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(binding("MouseDown1Pane"), "bind-key -T root MouseDown1Pane select-pane -t = \\; send-keys -M");
     assert_eq!(
-        binding.trim(),
+        binding("MouseDown1Status"),
         "bind-key -T root MouseDown1Status run-shell -b \"cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null\""
     );
 
@@ -523,7 +523,8 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     outer.click(2, 29);
     wait_until("the legend popup", || outer.screen().contains(" legend "));
     assert_eq!(actions(), [["tui", "action", "legend", "--client", &client]]);
-    assert!(views_started(&env).contains(&vec!["tui".into(), "view".into(), "legend".into()]));
+    // The popup's title can show before its command has started.
+    wait_until("the legend view", || views_started(&env).contains(&vec!["tui".into(), "view".into(), "legend".into()]));
     // The click went to no pane: the chat keeps the focus and is not put into a mode.
     let active = tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{pane_id} #{pane_in_mode}"]);
     assert_eq!(active.trim(), format!("{} 0", chat.id));
