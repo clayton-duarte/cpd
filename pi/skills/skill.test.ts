@@ -255,3 +255,23 @@ test("urgent Jobs: both skills state the flag, the command and the explicit-requ
   }
   assert.ok(synopses().get("job urgent")!.has("--plan"), "commands.md documents job urgent");
 });
+
+/** Contract §8.3 "Delivery to agents": the shared skills and the adapter carry cpd mechanics only. No owner's choice and no Context record id. */
+test("policy-neutral: no record id, owner or machine fact in the skills, pi/lib or the extension", () => {
+  const root = new URL("../../", import.meta.url);
+  const files: { name: string; text: string }[] = [];
+  for (const skill of skills) for (const f of skillFiles(skill.skill)) files.push({ name: `pi/skills/${f.name}`, text: f.text });
+  for (const f of readdirSync(new URL("lib/", new URL("../", here))).sort()) {
+    if (f.endsWith(".ts") && !f.endsWith(".test.ts")) files.push({ name: `pi/lib/${f}`, text: readFileSync(new URL(`pi/lib/${f}`, root), "utf8") });
+  }
+  files.push({ name: "pi/extension.ts", text: readFileSync(new URL("pi/extension.ts", root), "utf8") });
+  assert.ok(files.length > 10, "the guard must find the files it guards");
+  const forbidden = [/\bhs-[dnqap][0-9]+/, /clayton-duarte/, /missionlane/, /homeserver/, /User's machines/];
+  const hits: string[] = [];
+  for (const { name, text } of files) {
+    text.split("\n").forEach((line, i) => {
+      for (const re of forbidden) if (re.test(line)) hits.push(`${name}:${i + 1}: ${re} in: ${line.trim().slice(0, 100)}`);
+    });
+  }
+  assert.deepEqual(hits, []);
+});
