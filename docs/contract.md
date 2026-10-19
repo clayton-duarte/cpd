@@ -1742,7 +1742,7 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 
 | Role | argv (after `pi`) | Environment added |
 |---|---|---|
-| Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- @<first message file>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0`, `PLANNOTATOR_PORT=<the Plan's port>` (below) and `PLANNOTATOR_REMOTE` from cpd's own environment when set (passed with `-e`, so several Plan reviews can be open at once), `PI_SKIP_VERSION_CHECK=1` |
+| Lead (fresh) | `--model <tiers[L]>:<level of lead_tier> [-e …] --session-id <id> -n <name> -- @<first message file>` | `CPD_HOME`, `CPD_SESSION=<id>`, `CPD_PLAN=<plan>`, `PLANNOTATOR_DATA_DIR=$CPD_HOME/run/<plan>/plannotator`, `PLANNOTATOR_UPDATE_CHECK=0`, `PLANNOTATOR_PORT=<the Plan's port>` (below), `PLANNOTATOR_REMOTE=1` and `PLANNOTATOR_URL_HOST=<the review host>` ("The review host" below), passed with `-e` so several Plan reviews can be open at once, `PI_SKIP_VERSION_CHECK=1` |
 | Manager | as a fresh Lead (or, resumed, `--session <file>` and the `[-e …]` arguments, no first message). Model: `manager_tier` (§8.2). First message: `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.` then the Context as §4.6 "Consumers" renders it (its digest and the records after it, or every record) | `CPD_HOME`, `CPD_SESSION=<id>`, `PLANNOTATOR_UPDATE_CHECK=0`, `PI_SKIP_VERSION_CHECK=1`; no `CPD_PLAN` and no other `PLANNOTATOR_*`, so no port (it has no Plan). `session run` removes every `PLANNOTATOR_*` variable of its own environment (the tmux server's, the caller's) from pi's, so a Manager never inherits a Plan Lead's `PLANNOTATOR_DATA_DIR`. Name `<context>-manager` |
 | Lead (resume) | `--session <file>` and the `[-e …]` arguments, no first message | same |
 | A side fork with a Plan (`session fork --plan`) | `--fork <source file>` added to the Lead (fresh) row (§6.7) | a Lead's: it gets the Plan's port |
@@ -1776,7 +1776,13 @@ One `cpd watch` per machine, in `cpd-work:watch`. It is not tied to any Lead's p
 2. Else the Plan gets the lowest port of the range that no other Plan holds, and the file is written. A Plan **holds** its port unless its phase is `done` or it is archived (`archived_at` set; E1, hs-d203). An archived Plan's `plannotator-port` file stays, but its port is free: rule 1 keeps a Plan's port only while no other holder has it, else the Plan is assigned afresh by this rule. `plan archive` and `plan cancel` (commands.md §4.10, §4.12) therefore free the port, and `plan unarchive` takes none (the next `session run` assigns one).
 3. Else none is free: `no_port` (exit 3; `details`: the range and the holders `[{plan, port}]`), the Lead does not start, and the pane names the Plans that hold the range and offers Enter to retry (§10.8 of `commands.md`).
 
-`PLANNOTATOR_REMOTE` still comes from cpd's own environment. `core/src/plan/lead.rs` keeps passing `PLANNOTATOR_PORT` from cpd's environment to a Lead pane; `session run` overrides it with the Plan's port when it starts pi (A7), and `cpd doctor` no longer checks it (`commands.md` §14.1).
+**The review host** (User, 2026-10-19; hs-n228, hs-n229). Plan review links said `http://localhost:<port>` and worked from the Macs only through ssh `LocalForward`s that short-lived `ssh homeserver <cmd>` sessions grab and drop; direct LAN links work. So every Lead pane gets `PLANNOTATOR_REMOTE=1` (plannotator binds all interfaces and opens no browser; cpd no longer copies it from its own environment) and `PLANNOTATOR_URL_HOST=<the review host>` (plannotator's own setting: the host shown in the links it prints, display-only; the environment variable beats its config). One function in core decides the review host, and the cockpit's review link uses it too (`commands.md` §13.2):
+
+1. `PLANNOTATOR_URL_HOST` in cpd's own environment, when set: an override (e.g. a Tailscale name), so there is one place to change it.
+2. Else the machine's primary IPv4 address, detected when cpd starts the Lead's pi: the source address the OS would use toward an outside address (a UDP socket `connect`ed to `192.0.2.1:9`, then its local address; no packet is sent; standard library only, Linux and macOS).
+3. Else `localhost`, with one stderr line, when detection fails or gives a loopback address.
+
+No IP is written in any config file. `core/src/plan/lead.rs` keeps passing `PLANNOTATOR_PORT` from cpd's environment to a Lead pane; `session run` overrides it with the Plan's port when it starts pi (A7), and `cpd doctor` no longer checks it (`commands.md` §14.1).
 
 ### 6.7 `session fork`: fork when idle
 
