@@ -438,3 +438,53 @@ fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
     assert_eq!(pane(&panes, &first).cpd_view, Some(View::Statusbar));
     assert!(panes.iter().all(|p| p.pane != other), "{panes:?}");
 }
+
+/// Puts `bin/tmux` = `body` first on this process's `PATH` until dropped.
+/// Only while holding [`TMUX_ENV`] (a [`Server`]), like `TMUX_TMPDIR`.
+struct FakeTmux(Option<std::ffi::OsString>);
+
+impl FakeTmux {
+    fn new(s: &Server, body: &str) -> FakeTmux {
+        s.env.fake("tmux", body);
+        let old = std::env::var_os("PATH");
+        let mut path = std::ffi::OsString::from(s.env.bin());
+        if let Some(old) = &old {
+            path.push(":");
+            path.push(old);
+        }
+        // SAFETY: serialised by TMUX_ENV, which `s` holds.
+        unsafe { std::env::set_var("PATH", path) };
+        FakeTmux(old)
+    }
+}
+
+impl Drop for FakeTmux {
+    fn drop(&mut self) {
+        // SAFETY: as in `FakeTmux::new`.
+        match self.0.take() {
+            Some(old) => unsafe { std::env::set_var("PATH", old) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+    }
+}
+
+/// engine-W8 (§6.3 liveness): only tmux saying that no server runs means "no panes".
+/// Any other failure of `list-panes` and `list-sessions` is `tmux_failed`, so E2 and the
+/// driver never read a tmux hiccup as every pane gone.
+#[test]
+fn list_panes_is_empty_only_when_tmux_says_no_server_runs() {
+    let s = server();
+    {
+        let _fake = FakeTmux::new(&s, "echo 'lost server' >&2; exit 1");
+        assert_eq!(s.tmux.list_panes().unwrap_err().code(), ErrorCode::TmuxFailed);
+        assert_eq!(s.tmux.server_running().unwrap_err().code(), ErrorCode::TmuxFailed);
+    }
+    {
+        let _fake = FakeTmux::new(&s, "echo 'no server running on /tmp/tmux-1000/x' >&2; exit 1");
+        assert!(s.tmux.list_panes().unwrap().is_empty());
+        assert!(!s.tmux.server_running().unwrap());
+    }
+    // The real tmux with no socket file: "error connecting to <socket> (No such file or directory)".
+    assert!(s.tmux.list_panes().unwrap().is_empty());
+    assert!(!s.tmux.server_running().unwrap());
+}
