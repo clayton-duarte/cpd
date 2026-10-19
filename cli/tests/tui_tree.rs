@@ -1005,3 +1005,74 @@ fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
     }
     assert!(calls(&env).is_empty(), "Copy id runs no cpd command: {:?}", calls(&env));
 }
+
+// ---------- the folds survive a restart of the view (hs-d260) ----------
+
+fn folds_file(env: &TestEnv) -> std::path::PathBuf {
+    env.cpd_home().join("run").join("tui").join("tree-folds.json")
+}
+
+/// Waits until `tree-folds.json` holds `want` (it is written at most once a second).
+fn wait_for_folds(env: &TestEnv, want: &str) {
+    let start = Instant::now();
+    loop {
+        let text = std::fs::read_to_string(folds_file(env)).unwrap_or_default();
+        if text == want {
+            return;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "waiting for the folds file to hold {want}; it holds {text:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_collapsed_context_and_an_expanded_more_row_survive_a_restart_of_the_view() {
+    let env = env();
+    populate(&env);
+    archive(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 16);
+    pane.ready();
+    assert!(!folds_file(&env).exists(), "a start with no fold writes nothing");
+    pane.click(1, 1); // the fold glyph of alpha
+    pane.wait("alpha folded", |s| s.get(1).is_some_and(|r| r.starts_with(" ▸ ")));
+    let screen = pane.wait("beta's `…` below alpha", |s| s.iter().any(|r| r == "   └ …"));
+    let more = screen.iter().position(|r| r == "   └ …").unwrap() as u16;
+    pane.click(4, more); // beta's `…`
+    let before = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
+    assert_eq!(before[1], format!(" ▸ {IDLE} alpha 2"));
+    wait_for_folds(&env, r#"{"collapsed":["alpha"],"expanded":[["beta","…"]]}"#);
+
+    // respawn the pane: the same screen comes back (frames can arrive in two writes, hs-n206: poll for all of it)
+    let out = env.tmux(&["respawn-pane", "-k", "-t", SESSION, &format!("{CPD} tui view tree")]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let after = pane.wait("the folds restored", |s| s == before.as_slice());
+    assert_eq!(after, before);
+    assert_eq!(calls(&env), Vec::<Vec<String>>::new(), "no command ran");
+    let leftovers: Vec<_> = std::fs::read_dir(folds_file(&env).parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(leftovers, ["tree-folds.json"], "no temporary file is left");
+}
+
+#[test]
+fn an_invalid_folds_file_starts_the_tree_with_the_defaults_and_a_note_and_the_next_fold_replaces_it() {
+    let env = env();
+    populate(&env);
+    std::fs::create_dir_all(folds_file(&env).parent().unwrap()).unwrap();
+    std::fs::write(folds_file(&env), "{not json").unwrap();
+    let pane = Pane::start(&env, 46, 16);
+    let screen = pane.wait("the note", |s| s.iter().any(|r| r.contains("fold state reset")));
+    assert!(screen[1].starts_with(" ▾ "), "every Context is open: {screen:?}");
+    assert_eq!(std::fs::read_to_string(folds_file(&env)).unwrap(), "{not json", "nothing is written until a fold changes");
+    pane.click(1, 1);
+    pane.wait("alpha folded", |s| s.get(1).is_some_and(|r| r.starts_with(" ▸ ")));
+    wait_for_folds(&env, r#"{"collapsed":["alpha"],"expanded":[]}"#);
+}
+
+#[test]
+fn a_missing_folds_file_is_every_context_open() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 46, 16);
+    let screen = pane.ready();
+    assert!(screen[1].starts_with(" ▾ ") && screen.iter().all(|r| !r.contains("fold state")), "{screen:?}");
+}
