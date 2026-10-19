@@ -1613,17 +1613,17 @@ The pi adapter (TypeScript in `pi/`, loaded in every pi session cpd starts, §6.
 - for the Session that is Plan P's `lead_session` (Context C): Events with `plan = P`; Events with `plan IS NULL AND context = C`; Events with `session` = itself. A Plan has one Lead for all its PRs (R34): every PR Event (`pr-*`, `all-merged`, `pr-feedback`), and an `error` about a PR such as `pr_start_failed`, sets `plan = P` and goes to that Lead;
 - for any other Session (a Worker, a side fork of a Lead, a Manager): Events with `session` = itself (for a Worker only `attempt-nudge` and `session-renamed` are ever addressed so). A Manager (`plan` null) therefore follows only Events addressed to it, `session-message` (`cpd session send`, hs-d86), and is never woken by the Events of its Plans. Its Plan Events reach it only as the turn-start digest, which the adapter builds, for a Manager only (hs-d209, D1), when the User talks to it: after the Context records, a section `Plans:` with one line per Event since the cursor of kinds `plan-created`, `plan-phase`, `pr-opened`, `pr-merged`, `job-failed`, `escalation` and `plan-done` of the Context (`- <at> <plan>: <event text>`), at most 20, then `and <K> more: cpd events list --context <c> --since <id>`; one cursor (Event ids) serves both sections, and nothing is added when nothing is new (B3-A5; `commands.md` §15.7). Turn-start updates show a `brief` record short (§2.2). **A Lead gets no turn-start update** (hs-d209, D1, D2): nothing from the Context is pushed into a Lead's turn; it reads the Context on demand with `cpd context show --since <seq>`. `cpd session send` starts no turn unless `--wake` (D3).
 
-It delivers a message with `pi.sendMessage({customType: "cpd", content: text, display: true, details: event}, {triggerTurn, deliverAs: "followUp"})` (cpd 1 §15, kept). It never types into a pane.
+It delivers a message with `pi.sendMessage({customType: "cpd", content: text, display: true, details: event}, {triggerTurn, deliverAs})` (cpd 1 §15, kept, except `deliverAs`). **`deliverAs` is `"steer"` for the urgent kinds, `pr-feedback` (every `reason`) and `escalation`, and `"followUp"` for every other message** (User, hs-d276; evidence hs-n241: with every message a follow-up and pi's `followUpMode` `"one-at-a-time"`, a busy Lead got a conflict notice 19 minutes late and a `job-merged` 56 minutes late). A steered message is injected after the current tool call; an idle Session starts a turn as before. The other queued messages are delivered as the User's pi settings say (`followUpMode`, `steeringMode`; §6.5); cpd does not set them. It never types into a pane.
 
 | Kind | Lead | Worker |
 |---|---|---|
 | `job-merged` | message, **turn** | |
 | `attempt-retry` | message, no turn | |
 | `job-failed` | message, **turn** | |
-| `escalation` | message, **turn**; opens a blocking reason (`cpd: Worker question`) | |
+| `escalation` | message, **turn**, **steered**; opens a blocking reason (`cpd: Worker question`) | |
 | `escalation-answered`, `escalation-expired` | no message; closes that blocking reason | |
 | `all-merged` | message, **turn** | |
-| `pr-feedback` | message, **turn** | |
+| `pr-feedback` (every reason) | message, **turn**, **steered** | |
 | `pr-started` | message, no turn (R34: the PR's Jobs are now scheduled) | |
 | `pr-merged` | message, no turn | |
 | `plan-done` | message, **turn** | |
@@ -1637,7 +1637,7 @@ It delivers a message with `pi.sendMessage({customType: "cpd", content: text, di
 | `inbox-opened`, `inbox-closed`, `inbox-snoozed`, `inbox-dismissed` | ignored: delivered to no Session, they are for the views that follow Events (the adapter only learns the kinds) | ignored |
 | every other kind | ignored | ignored |
 
-The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-done` → `plan-done` and `rename` → `session-renamed`.
+Every message in the table that is not marked steered is a follow-up. The turn column is cpd 1 §10's table, kept; the renamed kinds are `workflow-done` → `plan-done` and `rename` → `session-renamed`.
 
 **No loss, no duplicates.** The adapter's cursor is the highest Event id it has delivered, which it reads back at `session_start` from its own session file (the `details.id` of the last `cpd` custom message whose `details.delivered_to` is this Session), else the `id` of the Session's `session-registered` Event, whichever is greater. The adapter adds `delivered_to` (the Session's id) to the `details` of every message it delivers, so the cursor counts only messages delivered to this Session and never one at or below its `session-registered` Event: a fork's session file starts with its source's messages, whose Event ids belong to the source's stream. It runs `cpd events follow --session <id> --since <cursor>` and restarts it with the latest cursor if it exits. The exact protocol (activation, errors, the Plan review through plannotator) is in `commands.md`.
 
@@ -1767,6 +1767,7 @@ A Lead's or a Manager's first message is passed as the absolute path of its file
 
 - **cwd** (R34, A12): a Plan's Lead runs in the cwd of `plan new` (stored as its Session's `cwd`; a side fork by `session fork` takes its source's cwd); a Worker in its Attempt worktree, in the repo of its Job's PR. The project settings read below (`<cwd>/.pi/settings.json`) are therefore those of that directory.
 - The excluded tools and `--approve` are kept from cpd 1 §12 step 5 and requirements §5.
+- **Queue modes are the User's.** cpd does not set pi's `followUpMode` or `steeringMode` (default `"one-at-a-time"`, pi `docs/settings.md`): pi offers an extension no way to set them without writing the User's global settings (`dist/core/agent-session.js:2169-2172` `setFollowUpMode`, called only by `interactive-mode.js:4127` and `rpc-mode.js:411`, writes `globalSettings`, `settings-manager.js:561-565`). The User sets them in the global pi settings.
 - `<adapter>` is the `pi/` package installed beside the binary (§8 `pi_adapter`).
 - **`[-e …]`, the extension arguments.** The candidates are `<adapter>` for every role, plus each `lead_pi_packages` entry for a Lead. cpd passes `-e <candidate>` only for a candidate that the pi settings do not already declare. It reads the `packages` of the global settings `<agent dir>/settings.json` (`PI_CODING_AGENT_DIR`, default `~/.pi/agent`) and of the project settings `<cwd>/.pi/settings.json`; an entry is a source string or an object with `source`. Candidates and entries are compared by package identity, the way pi identifies packages (docs: pi `packages.md`, "Understand scope and identity"):
   - an npm spec by its package name without the version (`npm:@plannotator/pi-extension@0.28.17` is `@plannotator/pi-extension`);
