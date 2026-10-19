@@ -6,12 +6,12 @@ Every number here was measured on hs unless it says "computed" (arithmetic on me
 
 ## Summary
 
-- **Before** (3 runs with no other test run beside them): **120.5-123.6 s on the clock, 1,408-1,487 s added up, 1,728 tests**. With another test run beside it the same suite takes 125-149 s and 1,525-2,018 s (§2).
-- **The clock is the sum divided by 16, plus a 30 s tail.** For the first 90 s all 16 test threads are busy; then only the two `session_watchdog` tests (67-69 s, started at 52 s) run. With a nextest `priority` on the slow tests (config only, measured) the tail is gone: clock = sum / 16 + 1.8 s (§3). So the clock target follows from the sum target once the long tests start first and none is near 30 s: 300 s / 16 + 2 s ≈ 21 s.
-- **The test threads mostly wait.** The run used 5.5-5.8 of 16 CPUs (user + sys / wall).
-- **The fixed cost of an integration test is about 0.5 s of its 0.8 s average** (§4): the teardown (0.29-0.38 s, a third of it killing the env's own reaper and then a 0.1 s grace and a second `/proc` scan), and creating and migrating a fresh store (0.17-0.23 s). 1,126 `TestEnv`s run per suite (§5).
-- **Over 2 s: 103 tests** (median of the 3 runs), 1,000 s of the 1,408 s. By cause (§6): real product limits that tests cannot shorten (the 60 s adapter watchdog, the 10 s pi stop, the 10 s doctor deadline, the 2^k s spawn back-off, the 5 s kill grace), 1 s engine ticks and the "several ticks" sleeps written around them, the wrapper's and driver's 2 s polls, the cockpit's 2 s refresh, fixture cost (a test that builds 72 envs), and real work (the store::schema unit tests building every version's database).
-- **The plan reaches 300 s only with sp-fixed doing more than its draft says** (§7): the drafted Jobs remove about 1,000 s and leave about 420-460 s (computed). The rest is the per-open schema check (every `Store::open`, 17-30 ms, about 6-14 per test), the cockpit's and engine's poll granularity, and many tests' 100 ms poll sleeps. Recommended additions: optimise dependencies in the dev profile (measured, §7), keep one store open per test, and nextest priorities (measured). 30 s on the clock follows once the sum is under about 450 s with priorities set.
+- **Before** (3 runs with no other test run beside them): **120.5-123.6 s on the clock, 1,408-1,487 s added up, 1,728 tests** (§2). With another test run beside it the same suite takes 125-149 s and 1,525-2,018 s.
+- **The clock is the sum divided by 16, plus a 30 s tail.** For the first 90 s all 16 test threads are busy; then only the two `session_watchdog` tests (67-69 s, started at 52 s) run. With a nextest `priority` on the slow tests (config only, measured) the tail is gone: clock = sum / 16 + 1.8 s (§3). So the clock follows the sum: 30 s on the clock needs a sum under about 450 s at 16 threads, with the long tests started first.
+- **The test threads mostly wait**: the run uses 5.5-5.8 of the 16 CPUs (§3).
+- **About 0.5 s of an integration test is fixed cost** (§4), against an average of 0.80 s for the 908 integration tests under 2 s: the teardown (0.29-0.38 s; 0.19 s of it is killing the env's own reaper, then a 0.1 s grace and a second `/proc` scan) and creating and migrating a fresh store (0.17-0.23 s). A run has 1,126 `TestEnv`s (§5).
+- **103 tests are over 2 s** (median of the 3 runs), 607 s of the 1,408 s. By cause (§6): real product limits the tests cannot shorten (the 60 s adapter watchdog, the 10 s pi stop, the 10 s doctor deadline, the 2^k s spawn back-off, the 5 s kill grace) 194 s; 1 s engine ticks and the "several ticks" sleeps around them 144 s; the wrapper's and driver's 0.5-2 s polls 123 s; the cockpit's 2 s refresh 21 s; fixture cost (one test builds 72 envs) 98 s; real work (store::schema building every version's database) 27 s.
+- **The drafted Jobs do not reach 300 s** (§7, computed): they leave about **525 s** (clock ~35 s). Adding dependencies at `opt-level = 3` (measured per test, new Job sp-build) gives about 465 s; long tests at 0.5 s instead of 1 s about 420 s. **300 s needs more than these**: the average short integration test must fall from 0.80 s to about 0.18 s, and the cost left after the fixes is each `cpd` command's and each `Store::open`'s schema check (17-30 ms each, several per test) and the tests' 100 ms poll sleeps. The cheapest measured gain is C1 (the teardown leaves the reaper alone): **0.17-0.31 s per test**, measured on 5 tests (§7).
 
 ## 1. The tool: `scripts/test-time.sh`
 
@@ -133,7 +133,7 @@ One full run under `strace --seccomp-bpf -f -ttt -T -e trace=process,clock_nanos
 
 ## 6. Every test over 2 s, by cause
 
-The 103 tests whose median over runs 4-6 is over 2 s; 1,000 s of run 5's 1,408 s. "sleep" is the time the test process spent in `thread::sleep` and "envs" the number of `TestEnv`s (both from the traced run of §5). The change named is the one that removes the cause; the Job is §8's.
+The 103 tests whose median over runs 4-6 is over 2 s: 607 s of run 5's 1,408 s (§6.1 194 s, §6.2 144 s, §6.3 123 s, §6.4 21 s, §6.5 98 s, §6.6 27 s). "sleep" is the time the test process spent in `thread::sleep` and "envs" the number of `TestEnv`s (both from the traced run of §5). The change named is the one that removes the cause; the Job is §8's.
 
 ### 6.1 A real product limit (a constant the test cannot shorten)
 
@@ -161,7 +161,7 @@ Each test waits for one to three 1 s ticks, and most also sleep a fixed 1.5-3.5 
 | 7.8 | 7.4 | `watch e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_plans` (several `pr_poll_seconds` periods) |
 | 7.5, 5.8 | 4.9, 4.0 | `pr_start e7_starts_a_dependent_pr_from_a_fresh_fetch_once_its_prerequisite_is_merged`, `a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries` |
 | 5.4 | 3.2 | `e2e a_whole_plan_runs_from_context_new_to_pr_poll` |
-| 5.0, 4.9, 4.8, 4.8, 4.6, 4.4, 3.6, 3.6, 3.5, 3.5, 3.4, 3.4, 3.1, 3.0, 2.7, 2.6, 2.0, 1.9 | 1.0-4.2 | `watch`: `e5_reports_a_failing_poll_once`, `e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited`, `e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_poll_seconds`, `e3_never_starts_a_draft_and_e4_waits_while_one_remains`, `e3_does_not_start_a_job_in_its_backoff`, `e4_sends_all_merged_again_after_a_job_is_appended_and_merged`, `e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it`, `e2_skips_a_pane_with_an_unknown_view_and_reports_no_error`, `e3_reports_a_tampered_job_once_and_does_not_start_it`, `e4_appends_all_merged_once_when_no_job_is_left_to_run`, `e4_waits_while_a_job_is_queued`, `the_engine_neither_imports_nor_syncs_a_context_store`, `e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_the_clock`, `r2_removes_the_worktree_though_every_kill_window_fails`, `e2_stops_sessions_whose_pane_is_dead_or_gone`, `e3_starts_the_driver_after_the_engines_binary_is_replaced`, `e2_kills_the_window_of_a_dead_driver_it_ends_though_the_first_kill_window_fails` (§4 b), `r3_kills_the_window_of_a_merge_that_did_not_happen_though_the_first_kill_window_fails` |
+| 5.0, 4.9, 4.8, 4.8, 4.6, 4.4, 3.6, 3.6, 3.5, 3.5, 3.4, 3.4, 3.1, 3.0, 2.7, 2.6 | 1.3-4.2 | `watch`: `e5_reports_a_failing_poll_once`, `e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited`, `e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_poll_seconds`, `e3_never_starts_a_draft_and_e4_waits_while_one_remains`, `e3_does_not_start_a_job_in_its_backoff`, `e4_sends_all_merged_again_after_a_job_is_appended_and_merged`, `e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it`, `e2_skips_a_pane_with_an_unknown_view_and_reports_no_error`, `e3_reports_a_tampered_job_once_and_does_not_start_it`, `e4_appends_all_merged_once_when_no_job_is_left_to_run`, `e4_waits_while_a_job_is_queued`, `the_engine_neither_imports_nor_syncs_a_context_store`, `e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_the_clock`, `r2_removes_the_worktree_though_every_kill_window_fails`, `e2_stops_sessions_whose_pane_is_dead_or_gone`, `e3_starts_the_driver_after_the_engines_binary_is_replaced` (the typical engine test of §4 b, 1.9 s, has the same cause) |
 | 4.7, 4.4, 2.8 | 3.9, 3.8, 1.2 | `watch_inbox a_failed_job_is_stuck_only_after_stuck_job_minutes` (backdated minutes, then a fixed 3.5 s), `a_tick_with_no_change_writes_no_transaction` (fixed 3.5 s), `a_blocked_lead_in_dispatch_is_a_red_dialog_until_it_works_again` |
 
 ### 6.3 The wrapper's and the driver's polls
@@ -197,10 +197,10 @@ No wait: the time is §4's fixed costs, repeated. Change: sp-fixed's cuts (each 
 | 7.0, 2.3 | 12, 4 | 12 / 12, 4 / 3 | `doctor each_tool_must_be_at_or_above_its_minimum`, `a_tool_that_is_not_on_path_fails` |
 | 5.2, 3.6 | 9, 6 | 9, 6 | `config tiers_catalog_failures_are_catalog_failed`, `tiers_with_a_broken_pi_install_is_pi_not_found` |
 | 5.2, 4.1 | 5, 4 | 25, 12 | `plan archive_refused_by_any_one_blocker_changes_nothing`, `context archive_refused_by_any_one_blocker_changes_nothing` |
-| 2.0, 2.0, 2.0, 2.1, 1.9 | 1 | 21-26 / 30-40 | `plan plans_moving_to_phase_plan_at_once_all_move`, `a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_them`, `lock_refusals_change_nothing`; `plan_cancel cancels_jobs_closes_open_prs_and_the_lead_and_archives_the_plan`, `a_failing_job_cancel_halfway_is_finished_by_a_rerun` |
+| 2.0, 2.0, 2.1 | 1 | 12-26 / 29-40 | `plan plans_moving_to_phase_plan_at_once_all_move`, `a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_them`; `plan_cancel cancels_jobs_closes_open_prs_and_the_lead_and_archives_the_plan` |
 | 4.0 | 1 | 32 / 0 | `context_distill nothing_the_audit_lists_is_lost` |
 | 3.1, 2.9, 2.7 | 3, 2, 2 | 19-20 | `job add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancellable`, `add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null`, `edit_completes_a_stub_draft_with_its_tier_and_its_spec` |
-| 3.5, 2.2, 2.0 | 7, 6, 4 | 0 / 245, 132, 152 | `git each_protected_path_is_refused`, `a_bad_list_file_is_config_invalid`, `a_protected_path_the_attempt_has_as_the_base_has_it_is_allowed` |
+| 3.5, 2.2 | 7, 6 | 0 / 245, 132 | `git each_protected_path_is_refused`, `a_bad_list_file_is_config_invalid` |
 | 3.4, 2.3, 2.3 | 3, 2, 2 | 0 / 246, 185, 152 | `merge an_attempt_that_merges_a_base_with_changed_protected_files_is_merged`, `a_protected_file_deleted_on_the_base_and_in_the_attempt_is_merged`, `an_attempt_that_changes_a_protected_file_to_anything_but_the_bases_is_tampered` |
 | 2.5 | 3 | 4 / 95 | `attempt submit_refuses_an_attempt_that_is_not_running` |
 | 2.8, 2.7 | 3, 2 | 4 / 144, 2 / 198 | `pr pr_add_no_needs_and_needs_override_the_reopen_default`, `open_and_rebase_run_r_for_the_repos_orphaned_merges_first` |
@@ -217,40 +217,63 @@ Change: build each version's database once per test binary (a `OnceLock`), in me
 
 ## 7. Changes, their savings, and the totals after them
 
-"Per env" savings multiply by the 1,126 `TestEnv`s of a run (§5). Savings on the clock assume priorities (§3): clock ≈ sum / 16 + 2 s.
+### 7.1 Measured: C1 (the teardown leaves the reaper alone) and C4 (dependencies optimised)
+
+Two scratch builds, outside this repo's diff: **proto** = this commit with `cli/tests/common/mod.rs`'s teardown changed so the reaper writes its pid to `<dir>/reaper.pid` and the teardown adds it to the protected pids (4 lines; the reaper still ends by itself within 1 s once the directory is gone); **opt** = this commit built with `--config 'profile.dev.package."*".opt-level=3'` (dependencies optimised, the workspace's crates not). Five tests, each run alone with the test binary and `--exact`, the three builds interleaved, 7 times each (10:38-10:40; the machine was loaded, 1-min load 30-53, two other Workers' test runs beside it). Median ms (min-max):
+
+| test | base | C1 (proto) | C4 (opt) |
+|---|---|---|---|
+| `plan new_refuses_an_empty_brief_file_and_writes_nothing` (a) | 783 (602-1,066) | **559** (467-663) | **574** (504-725) |
+| `pr poll_with_a_done_plan_reruns_its_clean_up` (the median `pr` test) | 1,063 (811-1,306) | **831** (675-1,413) | **938** (696-1,475) |
+| `tui_tree enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open` (c) | 857 (670-985) | **587** (476-776) | **678** (589-810) |
+| `config tiers_reads_efforts_from_pi_with_pis_node` (d) | 631 (518-753) | **460** (326-499) | **587** (431-654) |
+| `watch e2_kills_the_window_of_a_dead_driver_it_ends_though_the_first_kill_window_fails` (b) | 2,270 (1,844-3,211) | **1,962** (1,771-3,620) | **2,001** (1,831-2,212) |
+
+**C1 saves 171-308 ms per test (median 232 ms); C4 saves 44-269 ms (median 179 ms).** The traced proto floor test does one scan and no grace (teardown 174 ms under load 20). Under this load both savings are larger than on a calm machine (C1 calm: 0.19 s, §4; C4 calm per command: 29-35 → 18-22 ms). Whole-suite A/B runs on a subset (240 tests) were tried and abandoned: back to back, the same build's sum moved from 411 to 785 s with the load, so a suite-level difference of a few percent cannot be seen on hs at these hours; per-test interleaving can.
+
+A test in the suite takes ~1.3× its time alone (the floor test: 0.50-0.55 s alone, 0.68-0.69 s in runs 4-6), so savings measured alone understate the suite's.
+
+### 7.2 Every change
+
+"Per env" savings multiply by the 1,126 `TestEnv`s of a run (§5).
 
 | # | change | Job | saving on the sum | how known |
 |---|---|---|---|---|
-| C1 | **The teardown does not target the env's own reaper** (it records its pid; the reaper ends by itself once the directory is gone): no 0.1 s grace, no second scan | sp-fixed | **~0.19 s per env ≈ 215 s** | measured per env (§4: 101 ms grace + 89-93 ms second scan); A/B on a subset: see below |
+| C1 | **The teardown does not target the env's own reaper** (it records its pid; the reaper ends by itself once the directory is gone): no 0.1 s grace, no second scan | sp-fixed | **0.19 s per env ≈ 215 s** (calm) | measured: per env §4, per test §7.1 |
 | C2 | Replace the two-process `/proc` scan (`grep` + `find`) by one in-process scan, or by `PR_SET_CHILD_SUBREAPER` on the test process and a walk of its own descendants | sp-fixed | ~0.06-0.09 s per env ≈ 70-100 s | computed from §4 (scan ~100 ms; a one-process scan 30-44 ms); the subreaper walk is unverified |
-| C3 | **A migrated template store** made once per test binary and copied into each env's `cpd-home` (or created by the first `TestEnv` and reused) | sp-fixed | ~0.17-0.19 s per env that creates a store; ≤ 1,126 envs ≈ 150-200 s | measured per env (§4: 207-266 → 32-35 ms); the number of envs that create a store is unverified (≤ 1,126) |
-| C4 | **Dependencies at `opt-level = 3` in the dev profile** (`[profile.dev.package."*"] opt-level = 3`: SQLite's C, `sha2`, `serde_json`; the workspace's own crates stay at 0) | new (sp-build, below) | per `cpd` command and per `Store::open` 29-35 → 18-22 ms; store creation 207-266 → 129-143 ms; suite: see the A/B below | measured per command; suite A/B below |
-| C5 | Keep one `Store` open per test (the helpers open a new one for every query and poll) | sp-fixed | ~20-25 ms per avoided open × 3-14 per test ≈ 60-200 s | computed (§4 counts and per-open cost) |
-| C6 | `config_refuses_each_bad_file_with_its_key_path` with one env (rewrite `config.toml` per case) and the other multi-env tests of §6.5 | sp-fixed | 22 → ~1 s, ≈ 30 s for §6.5 beyond C1-C3 | computed |
-| C7 | Real limits injectable (§6.1): adapter watchdog and its poll, `PI_STOP`, doctor's catalog deadline, spawn back-off, kill grace; sub-second test deadlines | sp-limits | §6.1 is 230 s; to ≤ 2 s each ≈ 205 s | computed |
-| C8 | 0.1 s engine ticks and poll periods (§6.2), shorter "several ticks" windows | sp-engine | §6.2 is ~180 s; to ≤ 1 s each (e2e ≤ 5 s) ≈ 140 s | computed |
-| C9 | Injectable wrapper/driver polls (§6.3) and view refresh (§6.4) | sp-limits / sp-engine (not in either draft yet) | §6.3 + §6.4 ≈ 150 s; to ≤ 1 s each ≈ 120 s | computed |
-| C10 | store::schema fixtures built once (§6.6) | sp-schema | ~20 s (to ≤ 1 s each) | computed |
-| C11 | **nextest `priority` for the long tests** (or no long tests) | sp-guard | 0 on the sum; **~30 s on the clock** | measured (§3) |
+| C3 | **A migrated template store** made once per test binary and copied into each env's `cpd-home` before the first command (tests that need no store, e.g. `store version_on_an_empty_home_reports_no_store_and_creates_nothing`, opt out) | sp-fixed | ~0.17-0.19 s per env that creates a store; ≤ 1,126 envs ≈ 150-200 s | measured per env (§4: 207-266 → 32-35 ms); the number of envs that create a store is unverified (≤ 1,126) |
+| C4 | **Dependencies at `opt-level = 3` in the dev profile** (`[profile.dev.package."*"] opt-level = 3`: SQLite's C, `sha2`, `serde_json`, …; the workspace's own crates stay at 0, so their rebuilds stay fast) | new: sp-build | per test 44-269 ms (§7.1); per command and per `Store::open` ~11 ms; store creation ~90 ms; the store unit tests (§6.6 and the 79 others, 81 s) are SQLite-bound (size unverified) | measured per test and per command |
+| C5 | Keep one `Store` open per test instead of a new one per query and poll | sp-fixed | ~20-25 ms per avoided open; test processes open 1.3-11.9 times per test (§4) ≈ 60 s | computed |
+| C6 | `config_refuses_each_bad_file_with_its_key_path` with one env (rewrite `config.toml` per case), and one env per test in the other tests of §6.5 where the cases allow it | sp-fixed | 22 → ~1 s; §6.5 98 s → ~25 s with C1-C3 | computed |
+| C7 | Real limits injectable (§6.1): the adapter watchdog and its poll, `PI_STOP`, doctor's catalog deadline, the spawn back-off unit, the kill graces; sub-second `CPD_TEST_DEADLINE_<TOOL>` | sp-limits | §6.1 194 s → ≤ 1.5 s each ≈ 175 s | computed |
+| C8 | 0.1 s engine ticks and poll periods (§6.2, after PR timing), absence windows of a few ticks | sp-engine | §6.2 144 s → ≤ 1 s each (e2e ≤ 5 s) ≈ 115 s | computed |
+| C9 | Injectable wrapper and driver polls (§6.3) and view refresh periods (§6.4) | sp-limits / sp-engine (in neither draft yet) | §6.3 + §6.4 144 s → ≤ 1 s each ≈ 110 s | computed |
+| C10 | store::schema and store::verdict fixtures built once per binary (§6.6) | sp-schema | 27 s → ≤ 1 s each ≈ 21 s | computed |
+| C11 | **nextest `priority` for the tests that stay over a few seconds** | sp-guard | 0 on the sum; **~30 s on the clock** now, ~2 s after the others | measured (§3) |
 
-**A/B on a subset** (`plan`, `pr`, `tui_tree`, `config`, `watch`: 240 tests), interleaved base / C1 / C4, three times each, with at most one other test run beside: AB_RESULTS
+### 7.3 The totals after them (computed)
 
-**The totals after all of them (computed):** from run 5's 1,408 s: C1-C3 and C5 take ~0.45-0.55 s off each of the 908 integration tests under 2 s (0.80 s on average → ~0.30 s) and off every env of the slow ones; C6-C10 bring the 103 tests over 2 s to ~1 s each (~110-130 s together). That leaves **~270 s for the 908 short integration tests + ~120 s for the long ones + ~40 s of unit tests ≈ 430-460 s**, and a clock of ~29-31 s with priorities: **the drafted Jobs alone do not reach 300 s.** What closes the gap, in order of size:
+A model over run 5's 1,728 test times: each integration test loses its envs × the per-env savings (C1 0.19 + C2 0.07 + C3 0.17 s) and C5's 0.066 s, never below 0.1 s per env; the tests of §6.1 end at 1.5 s, those of §6.2-6.4 and §6.6 at 1 s; C4 takes a further ~0.07 s off each integration test (~6 store opens or commands × 11 ms) and a third off the store unit tests (a guess: unverified).
 
-1. C4 (optimised dependencies): every remaining `cpd` command and `Store::open` ~35-40 % cheaper (measured per command); with ~3,000 `cpd` commands and several thousand opens per run this is of the order of 50-100 s (computed, unverified on the suite until the A/B above).
-2. The minimal integration test after C1-C3 is ~0.15-0.2 s, not 0.1 s (computed: ~85 ms of non-fixed work in §4 a, plus one scan ~30-100 ms): sp-fixed's "at most 0.1 s" needs C2 and C5 too.
-3. The 100 ms poll sleeps of the tests' `wait_until` helpers (10+ copies, docs/research/quality-tests-build.md G2): every wait costs half a period on average; 503 s of the traced sum is in `thread::sleep`. A 10-20 ms period (cheap once a poll no longer reopens the store, C5) takes ~40 ms off each wait (unverified count of waits).
-4. More test threads than CPUs: the threads use 5.5-5.8 CPUs of 16 (§3); unverified.
+| after | integration tests under 2 s (908) | tests over 2 s | unit tests | **sum** | clock with priorities (sum / 16 + 2 s) |
+|---|---|---|---|---|---|
+| now (run 5) | 724 | 607 | 78 | **1,408** | 90 s (now 121 s without priorities) |
+| the drafted Jobs: C1-C3, C5-C10 | 317 | 130 | 78 | **~525** | ~35 s |
+| + C4 (sp-build) | 278 | 128 | 58 | **~465** | ~31 s |
+| + the long tests at 0.5 s, not 1 s | 278 | 83 | 58 | **~420** | ~28 s |
+
+So **30 s on the clock is within reach with C4 and priorities; 300 s added up needs more than these changes.** After them the 908 integration tests under 2 s still average ~0.31 s; 300 s needs ~0.17 s. What is left in them, by size (unverified split): each `cpd` command and each `Store::open` (the schema check of contract §4.3 at every open, 17-22 ms optimised, several per test: making it cheaper, e.g. keyed on SQLite's `schema_version`, is a contract question); the tests' `wait_until` helpers polling every 100 ms (10+ copies, docs/research/quality-tests-build.md G2; half a period per wait on average; 503 s of the traced sum of §5 is in `thread::sleep`, most of it the long tests'); git and tmux fixtures (~15-100 ms per test). More test threads than CPUs shorten the clock but not the sum (§3; unverified).
 
 ## 8. Recommended Job split
 
 The Lead's drafts in PR `speed` (sp-fixed, sp-limits, sp-engine, sp-schema, sp-guard) cover the causes; proposed changes:
 
-- **sp-fixed** (keep; widen): C1 (first: largest, smallest change), C2, C3, C5, C6. Its acceptance "a minimal TestEnv test at most 0.1 s" needs C1 + C2 + C3 + C5 together (§7 item 2). Measure each with `scripts/test-time.sh -E 'binary_id(cpd::plan)'` before/after, paired.
-- **sp-build** (new, S2, touches `Cargo.toml`): C4, dependencies at `opt-level = 3` in the dev profile. One line plus its reason; it costs a slower clean build of the dependencies (once per worktree with sccache; not measured here) and must say so. Can run first: independent of the others.
-- **sp-limits** (keep): §6.1, plus the wrapper and driver polls of §6.3 (the same mechanism: an injected constant), which its draft does not name.
-- **sp-engine** (keep, after PR timing): §6.2 and the cockpit refresh of §6.4 (not in its draft).
-- **sp-schema** (keep): §6.6, the store::schema and store::verdict tests.
-- **sp-guard** (keep, last): C11 priorities for whatever stays over a few seconds, and the per-test limit; its "30 s / 300 s" check uses `scripts/test-time.sh`, paired with a baseline run in the same conditions (§2: the sum moves 10-30 % with one other run beside it).
+- **sp-build** (new, S2, touches `Cargo.toml`; needs none; can go first): C4, dependencies at `opt-level = 3` in the dev profile, with its reason beside it. Cost to state in the commit: the dependencies compile optimised (with sccache, once per machine and toolchain). This Job's scratch builds with it, with other builds beside them: `cpd` and its dependencies from nothing 94 s, then the workspace's tests 46 s; not compared with a plain build in the same conditions.
+- **sp-fixed** (keep, first; widen): C1 first (the largest measured gain, a few lines of `teardown.sh`), then C3, C2, C5, C6. Its acceptance "a minimal TestEnv test at most 0.1 s" needs C1 + C2 + C3 + C5 together (computed floor after them: ~0.1-0.15 s; the floor test's non-fixed work is ~85 ms, §4 a); measure with `scripts/test-time.sh -E 'binary_id(cpd::plan)'` and single tests interleaved before/after (§7.1), since whole runs on a loaded hs move 10-30 %.
+- **sp-limits** (keep): §6.1, and the wrapper's and driver's polls of §6.3 (the same mechanism, an injected constant), which its draft does not name.
+- **sp-engine** (keep, after PR timing): §6.2, and the cockpit's refresh of §6.4 (not in its draft).
+- **sp-schema** (keep): §6.6, the store::schema and store::verdict tests; with C4 first, measure what is left.
+- **sp-poll** (new, O3, touches `cli/tests/`; after sp-fixed): one shared `wait_until` (with the harness) polling every 10-20 ms on an open `Store`, replacing the 10+ copies at 100 ms; and the remaining per-test cost of §7.3, measured with `scripts/test-time.sh`. This is the Job that has to find the last ~120 s.
+- **sp-guard** (keep, last): C11 priorities for whatever stays over a few seconds, the per-test limit, and the 30 s / 300 s check with `scripts/test-time.sh` paired with a baseline in the same conditions.
 
-Order: sp-build and sp-fixed first (largest, independent), sp-schema in parallel, then sp-limits, sp-engine, sp-guard.
+If the per-open schema check turns out to be the floor (sp-poll's measurement), a cheaper check is a contract change (§4.3) for the Manager, not a test Job.
