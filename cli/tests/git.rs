@@ -315,6 +315,27 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 }
 
 #[test]
+fn the_log_has_a_hooks_line_before_the_hook_ends() {
+    let h = hooks("pre-merge = \"echo first; sleep 3; echo last\"\n");
+    let (repo, log) = (h.repo.clone(), h.log.clone());
+    let runner = std::thread::spawn(move || {
+        let op = Operation { branch: "main" };
+        run_hook(Hook::PreMerge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while fs::read_to_string(&h.log).unwrap_or_default() != "first\n" && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let seen = fs::read_to_string(&h.log).unwrap_or_default();
+    let ended = runner.is_finished();
+    let result = runner.join().unwrap();
+    assert_eq!(seen, "first\n", "the log before the hook ended");
+    assert!(!ended, "the hook ended before the log was read");
+    assert_eq!(result.tail.as_deref(), Some("first\nlast"));
+    assert_eq!(fs::read_to_string(&h.log).unwrap(), "first\nlast\n");
+}
+
+#[test]
 fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() {
     // Keys are not in alphabetical order: file order decides, not the table's sort.
     let h = hooks("[pre-merge]\nzeta = \"exit 5\"\nalpha = \"exit 3\"\nslow = \"sleep 0.3; echo slow-done\"\n");

@@ -71,8 +71,8 @@ pub enum View {
     History(history::Args),
     /// The key legend (opened by `?` in the Dispatch column, in a tmux popup)
     Legend,
-    /// The Event log (opened by the StatusBar's logs button, in a tmux popup)
-    Logs,
+    /// The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup)
+    Logs(logs::Args),
     /// The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup)
     Merge(merge::Args),
     /// The chat slot's placeholder
@@ -90,7 +90,7 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
             View::Worker(args) => worker::run(args),
             View::History(args) => history::run(args),
             View::Legend => widgets::legend::run(),
-            View::Logs => logs::run(),
+            View::Logs(args) => logs::run(args),
             View::Merge(args) => merge::run(args, run_command),
             View::Chat => chat::run(),
         },

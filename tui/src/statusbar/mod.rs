@@ -1,16 +1,18 @@
 //! The `statusbar` view (commands.md §13.2, §17): one row across the full width at the bottom of the cockpit.
-//! Left, the ⧉ reset-layout, ? legend and ▤ logs buttons, then the note of a failed click; right, the workers
-//! indicator `workers N/M`. It has no keys and never takes keyboard focus (the root mouse binding passes a click on
+//! Left, the ⧉ reset-layout, ? legend and ▤ logs buttons, then the note of a failed click; right, the Inbox counter
+//! `inbox <n>` and the workers indicator `workers N/M`. It has no keys and never takes keyboard focus (the root mouse binding passes a click on
 //! with `send-keys -M`, §6.3).
 //!
 //! It refreshes like the `widgets` view: it looks at the store's highest Event id every [`TICK`] and re-reads the
 //! slots when it moved, at most once per [`COALESCE`], and at least every [`REFRESH`]. No subprocess, no `gh`.
 //!
 //! - [`bar`]: the row's drawing and its clickable items;
+//! - [`inbox`]: the Inbox counter;
 //! - [`workers`]: the indicator;
 //! - [`layout`]: reset-layout, which the ⧉ button runs and `cpd tui` runs after building a new `main`.
 
 mod bar;
+mod inbox;
 pub(crate) mod layout;
 mod workers;
 
@@ -24,6 +26,7 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 
 use self::bar::{Action, Item};
+use self::inbox::Inbox;
 use self::workers::Workers;
 use super::logs;
 use super::palette::{self, Meaning};
@@ -50,9 +53,10 @@ const RESET_BUTTON: &str = "⧉";
 const LEGEND_BUTTON: &str = "?";
 const LOGS_BUTTON: &str = "▤";
 
-/// The bar's items: the three buttons, then the failure note if any (left), and the workers indicator (right), which
-/// gets the full `width` as in the reference (`main.rs` `statusbar_items`).
-fn items(workers: &Workers, note: &str, width: u16) -> (Vec<Item>, Vec<Item>) {
+/// The bar's items: the three buttons, then the failure note if any (left), and the Inbox counter and the workers
+/// indicator (right). The workers indicator gets the full `width` as in the reference (`main.rs` `statusbar_items`);
+/// the counter is dropped before it, when the row cannot hold both and the left items.
+fn items(inbox: &Inbox, workers: &Workers, note: &str, width: u16) -> (Vec<Item>, Vec<Item>) {
     let button = |text: &'static str, action| Item {
         line: Line::from(text).style(palette::fg(Meaning::Nothing).add_modifier(Modifier::REVERSED)),
         action: Some(action),
@@ -65,7 +69,14 @@ fn items(workers: &Workers, note: &str, width: u16) -> (Vec<Item>, Vec<Item>) {
     if !note.is_empty() {
         left.push(Item { line: Line::from(note.to_owned()), action: None });
     }
-    let right = workers.line(width).map(|line| Item { line, action: None }).into_iter().collect();
+    let mut right: Vec<Item> = workers.line(width).map(|line| Item { line, action: None }).into_iter().collect();
+    let used = |items: &[Item]| items.iter().map(|i| i.line.width()).sum::<usize>();
+    let counter = inbox.line();
+    // each item is followed by one column of spacing, the expanding middle included
+    let needed = used(&left) + used(&right) + counter.width() + left.len() + right.len() + 1;
+    if !right.is_empty() && needed <= usize::from(width) {
+        right.insert(0, Item { line: counter, action: None });
+    }
     (left, right)
 }
 
@@ -78,11 +89,12 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     let tmux = Tmux::new(config.tmux.socket.clone());
     let first = read::widgets(&mut store, config.concurrency, 0)?;
+    let inbox = Inbox::read(&mut store)?;
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
     let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
     let result = mouse.map_err(terminal_failed).and_then(|()| {
-        show(&mut terminal, &mut store, &config, &tmux, Workers::of(&first.slots), first.events_cursor)
+        show(&mut terminal, &mut store, &config, &tmux, (inbox, Workers::of(&first.slots)), first.events_cursor)
     });
     let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
@@ -100,7 +112,7 @@ fn show(
     store: &mut Store,
     config: &Config,
     tmux: &Tmux,
-    mut workers: Workers,
+    (mut inbox, mut workers): (Inbox, Workers),
     mut cursor: i64,
 ) -> Result<(), CpdError> {
     let mut clickable: Vec<(Rect, Action)> = Vec::new();
@@ -109,7 +121,7 @@ fn show(
     loop {
         terminal
             .draw(|f| {
-                let (left, right) = items(&workers, &note, f.area().width);
+                let (left, right) = items(&inbox, &workers, &note, f.area().width);
                 clickable = bar::draw(f, f.area(), &left, &right);
             })
             .map_err(terminal_failed)?;
@@ -134,7 +146,7 @@ fn show(
             let moved = store.read(highest_id)? != cursor;
             if moved || read_at.elapsed() >= REFRESH {
                 let next = read::widgets(store, config.concurrency, 0)?;
-                (workers, cursor) = (Workers::of(&next.slots), next.events_cursor);
+                (inbox, workers, cursor) = (Inbox::read(store)?, Workers::of(&next.slots), next.events_cursor);
                 read_at = Instant::now();
             }
         }
@@ -146,6 +158,9 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use crate::read::Dot;
+
+    use cpd_core::inbox::model::Urgency;
 
     use super::*;
 
@@ -153,19 +168,24 @@ mod tests {
         (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string()
     }
 
-    /// Each button is one grey reversed cell, one space apart; the workers end at the right edge.
+    const CALM: Inbox = Inbox { count: 0, urgency: None };
+
+    /// Each button is one grey reversed cell, one space apart; the workers end at the right edge, the Inbox counter
+    /// before them.
     #[test]
-    fn the_statusbar_has_the_glyph_buttons_left_and_the_workers_right() {
+    fn the_statusbar_has_the_glyph_buttons_left_and_the_inbox_and_workers_right() {
         let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
         let mut hits = Vec::new();
+        let inbox = Inbox { count: 3, urgency: Some(Urgency::Red) };
         terminal
             .draw(|f| {
-                let (left, right) = items(&Workers { running: 1, limit: 4 }, "", f.area().width);
+                let (left, right) = items(&inbox, &Workers { running: 1, limit: 4 }, "", f.area().width);
                 hits = bar::draw(f, f.area(), &left, &right);
             })
             .unwrap();
         let buf = terminal.backend().buffer();
-        assert_eq!(text(buf, 0), format!("⧉ ? ▤{}workers 1/4", " ".repeat(40 - 5 - "workers 1/4".len())));
+        let tail = "inbox 3 workers 1/4";
+        assert_eq!(text(buf, 0), format!("⧉ ? ▤{}{tail}", " ".repeat(40 - 5 - tail.len())));
         assert_eq!(Line::from("⧉").width(), 1);
         assert_eq!(
             hits,
@@ -183,16 +203,47 @@ mod tests {
         for x in [1, 3, 5] {
             assert!(!buf[(x, 0)].modifier.contains(Modifier::REVERSED), "x={x}");
         }
+        let at = 40 - tail.len() as u16;
+        for x in at..at + "inbox 3".len() as u16 {
+            assert_eq!(buf[(x, 0)].fg, palette::dot_span(Dot::Red, 0, false).style.fg.unwrap(), "x={x}: the counter is red");
+        }
+    }
+
+    /// With no visible item the counter is a dim `inbox 0`, and no colour.
+    #[test]
+    fn no_item_is_a_dim_inbox_zero() {
+        let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                let (left, right) = items(&CALM, &Workers { running: 1, limit: 4 }, "", f.area().width);
+                bar::draw(f, f.area(), &left, &right);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        assert!(text(buf, 0).ends_with("inbox 0 workers 1/4"), "{:?}", text(buf, 0));
+        let x = 40 - "inbox 0 workers 1/4".len() as u16;
+        assert!(buf[(x, 0)].modifier.contains(Modifier::DIM));
+        assert_eq!(buf[(x, 0)].fg, buf[(10, 0)].fg, "no colour: that of the blank middle");
     }
 
     /// The workers get the whole width, not what the buttons leave: the long form is chosen whenever it fits the row.
     #[test]
     fn the_workers_indicator_is_given_the_full_width() {
         let workers = Workers { running: 0, limit: 4 };
-        let right = |width| items(&workers, "", width).1.first().map(|i| i.line.width());
+        let right = |width| items(&CALM, &workers, "", width).1.last().map(|i| i.line.width());
         assert_eq!(right(20), Some("workers 0/4".len()));
         assert_eq!(right(11), Some("workers 0/4".len()));
         assert_eq!(right(10), Some("0/4".len()));
         assert_eq!(right(2), None);
+    }
+
+    /// The counter is dropped before the workers: only when the row holds the buttons, both and the spacing.
+    #[test]
+    fn the_inbox_counter_is_dropped_before_the_workers_indicator() {
+        let workers = Workers { running: 0, limit: 4 };
+        let n = |width| items(&CALM, &workers, "", width).1.len();
+        // 3 (buttons) + 7 (`inbox 0`) + 11 (`workers 0/4`) + 5 spacing
+        assert_eq!((n(26), n(25), n(11)), (2, 1, 1));
+        assert_eq!(n(2), 0, "no workers, no counter");
     }
 }
