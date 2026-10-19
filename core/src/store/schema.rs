@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "1ee8139a5bb66c61a28ed8edf439e417ee124f183ea95cb830a1b73e6c0e979b";
+pub const SCHEMA_HASH: &str = "6b989e2f42e99b80049fcccd072f3b0c0a2dfd05885fe8ca8bcedd2a99522c91";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -2498,6 +2498,10 @@ mod tests {
                 let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
                 assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
                 assert_eq!(txns_after.len(), txns_before.len() + 1);
+                // `pr-title` (additive) gave every PR a last column, `title`, null (§4.5): the rest is as it was.
+                for row in rows_after.get_mut("prs").unwrap() {
+                    *row = row.strip_suffix(",null]").map(|r| format!("{r}]")).expect("every PR has a null title after `pr-title`");
+                }
                 assert_eq!(rows_after, rows_before);
             }
 
