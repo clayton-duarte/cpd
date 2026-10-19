@@ -1051,7 +1051,7 @@ fn in_pr(fx: &Fx) {
 
 /// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
 fn search_reply(remaining: u32, reset_at: &str) -> String {
-    format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
+    format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
 }
 
 /// The fake `gh` calls that are a poll's search: one per `cpd pr poll`.

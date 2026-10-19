@@ -260,7 +260,7 @@ fn append_one(store: &mut Store, e: NewEvent) -> Result<i64, CpdError> {
 
 fn refused_append(store: &mut Store, e: NewEvent, why: &str) {
     let err = append_one(store, e).expect_err(why);
-    assert_eq!(err.code(), ErrorCode::StoreFailed, "{why}: {err:?}");
+    assert_eq!(err.code(), ErrorCode::Internal, "{why}: {err:?}");
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn a_missing_field_is_refused() {
         for missing in *data {
             let rest: Vec<&str> = data.iter().filter(|k| *k != missing).copied().collect();
             let err = append_one(&mut store, event(kind, always, &rest)).expect_err(&format!("{name} without {missing}"));
-            assert_eq!(err.code(), ErrorCode::StoreFailed);
+            assert_eq!(err.code(), ErrorCode::Internal);
             assert_eq!(err.details()["field"], *missing, "{name}");
         }
     }

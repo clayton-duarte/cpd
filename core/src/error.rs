@@ -71,6 +71,7 @@ error_codes! {
     MigrationFailed = "migration_failed" => Failure,
     StoreTampered = "store_tampered" => Failure,
     StoreFailed = "store_failed" => Failure,
+    Internal = "internal" => Failure,
     GitFailed = "git_failed" => Failure,
     TmuxFailed = "tmux_failed" => Failure,
     GhFailed = "gh_failed" => Failure,
@@ -92,6 +93,8 @@ error_codes! {
     MergeCheckFailed = "merge_check_failed" => Failure,
     PushFailed = "push_failed" => Failure,
     CleanupFailed = "cleanup_failed" => Failure,
+    DistillInvalid = "distill_invalid" => Failure,
+    DistillFailed = "distill_failed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,
@@ -114,6 +117,7 @@ error_codes! {
 
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
+    DistillRunning = "distill_running" => Refused,
     IllegalTransition = "illegal_transition" => Refused,
     LockedJobTampered = "locked_job_tampered" => Refused,
     RecordNotFound = "record_not_found" => Refused,
@@ -316,6 +320,7 @@ mod tests {
             (ErrorCode::ConfigInvalid, 1),
             (ErrorCode::ConfigMissing, 1),
             (ErrorCode::StoreTooNew, 1),
+            (ErrorCode::Internal, 1),
             (ErrorCode::MigrationFailed, 1),
             (ErrorCode::Usage, 2),
             (ErrorCode::PlanRequired, 2),

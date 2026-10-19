@@ -40,6 +40,8 @@ pub struct Config {
     pub lead_tier: Tier,
     /// The Tier of a Context's Manager (§3.1, hs-d133).
     pub manager_tier: Tier,
+    /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
+    pub context_distill_tier: Tier,
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
@@ -121,6 +123,8 @@ pub struct Timeouts {
     pub store_busy_ms: u32,
     /// Fork-when-idle (§6.7).
     pub fork_quiet_seconds: u32,
+    /// A distill run kills its pi after this (§4.6).
+    pub distill_minutes: u32,
     /// A Worker's tool call idle this long has its processes killed (§3.4 A4); 0 = off.
     pub stall_seconds: u32,
 }
@@ -205,6 +209,9 @@ impl Config {
         let manager_tier = r.get("manager_tier", Tier::parse("O5").expect("a valid Tier"), |v| {
             Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
         })?;
+        let context_distill_tier = r.get("context_distill_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
+            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
             DEFAULT_LEAD_PI_PACKAGES.map(str::to_owned).to_vec(),
@@ -239,6 +246,7 @@ impl Config {
             lock_wait_seconds: positive(&mut r, "timeouts.lock_wait_seconds", 900)?,
             store_busy_ms: positive(&mut r, "timeouts.store_busy_ms", 5000)?,
             fork_quiet_seconds: positive(&mut r, "timeouts.fork_quiet_seconds", 5)?,
+            distill_minutes: positive(&mut r, "timeouts.distill_minutes", 15)?,
             stall_seconds: r.get("timeouts.stall_seconds", 1200, |v| int(v, 0, u32::MAX))?,
         };
         let watch = Watch {
@@ -268,6 +276,7 @@ impl Config {
             retry_cap,
             lead_tier,
             manager_tier,
+            context_distill_tier,
             lead_pi_packages,
             pi_adapter,
             plannotator_ports,
