@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cursorFrom } from "../lib/cursor.ts";
-import { ev, Fixture, ID, OTHER, planShow, sessionShow, type Sent, stateCalls, waitFor } from "./fake.ts";
+import { ev, FakePi, Fixture, ID, OTHER, planShow, sessionShow, type Sent, stateCalls, waitFor } from "./fake.ts";
 
 const cpdMessage = (id: number | undefined, deliveredTo: string | undefined) => ({
   type: "custom_message",
@@ -141,13 +141,25 @@ test("session_shutdown ends the retry of a failing session show", async (t) => {
   t.after(() => f.close());
   f.respond("session-show", { ok: false, error: { code: "store_busy", message: "Store busy.", details: {} } }, { exit: 5 });
   f.load();
-  await f.pi.fire("session_start");
-  await waitFor("a retry", () => f.argvs().length >= 2);
-  await f.pi.fire("session_shutdown");
-  await settle(100);
-  const n = f.argvs().length;
-  await settle(300);
-  assert.equal(f.argvs().length, n, "no call after the shutdown");
+  // The clock: a second adapter on the same fake `cpd`, retrying the same failing show with the same back-off and never shut down.
+  // Each of its retries after the shutdown is a retry interval in which the first would have made a call.
+  const witness = new FakePi();
+  f.load({}, witness);
+  try {
+    await f.pi.fire("session_start");
+    await witness.fire("session_start");
+    await waitFor("a retry", () => f.pi.execOptions.length >= 2);
+    await f.pi.fire("session_shutdown");
+    await f.quiet();
+    const n = f.pi.execOptions.length;
+    const at = witness.execOptions.length;
+    await waitFor("three more retries of the witness", () => witness.execOptions.length >= at + 3);
+    await f.quiet();
+    assert.equal(f.pi.execOptions.length, n, "no call after the shutdown");
+  } finally {
+    await witness.fire("session_shutdown");
+    await waitFor("every witness cpd process to close", () => witness.childrenRunning.size === 0, 10_000);
+  }
 });
 
 test("stdout that is not JSON is an error with a code", async (t) => {

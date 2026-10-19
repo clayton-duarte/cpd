@@ -64,10 +64,14 @@ test("a permanent failure line is reported once and the follower is not restarte
   for (const code of ["session_not_found", "usage"]) {
     const f = new Fixture();
     try {
-      await started(f);
+      // The restarts the follower asks for: a restart is scheduled when the follower's end is handled, so none once it has exited is none at all.
+      const restarts: number[] = [];
+      await started(f, { schedule: (run: () => void, ms: number) => (restarts.push(ms), setTimeout(run, ms)) });
       f.file("follow-failure.json", JSON.stringify({ line: failure(code), exit: 4 }));
       await waitFor("the error", () => errorsOf(f, code).length === 1);
-      await settle(500); // restarts would come after 30, 60 and 120 ms
+      await f.exited();
+      await f.quiet();
+      assert.deepEqual(restarts, [], `${code}: no restart scheduled`);
       assert.equal(f.follows().length, 1, `${code}: no restart`);
       assert.equal(errorsOf(f, code).length, 1, `${code}: reported once`);
     } finally {

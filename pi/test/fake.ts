@@ -203,12 +203,12 @@ export class Fixture {
     return existsSync(join(this.dir, `killed-${pid}`));
   }
 
-  /** Start the adapter under test with fast timing. */
-  load(options: Options = {}): void {
+  /** Start the adapter under test with fast timing; into `pi` (default the fixture's) to run a second adapter on the same fake `cpd`. */
+  load(options: Options = {}, pi: FakePi = this.pi): void {
     const start = options.spawn ?? spawn;
-    adapter(this.pi, {
+    adapter(pi, {
       ...options,
-      spawn: ((...args: Parameters<typeof spawn>) => this.pi.track(start(...args))) as typeof spawn,
+      spawn: ((...args: Parameters<typeof spawn>) => pi.track(start(...args))) as typeof spawn,
       timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
       reload: { dir: this.adapterDir, intervalMs: 20, ...options.reload },
     });
