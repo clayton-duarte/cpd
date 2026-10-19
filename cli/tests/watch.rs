@@ -624,6 +624,7 @@ fn an_engine_that_cannot_start_is_tried_once_every_few_seconds_not_in_a_loop() {
     // The engine itself exits 7 at once; `watch --ensure` is the real one, as the hooks call it.
     fx.env.fake("cpd", &format!("case \"$2\" in --ensure) exec '{CPD}' \"$@\";; esac\nexit 7"));
     assert_eq!(fx.env.cpd(&["watch", "--ensure"]).error()["code"], "watch_start_failed");
+    // time-claim: the back-off is a rate, so the bound is a duration; no signal says "no more starts will come".
     std::thread::sleep(Duration::from_secs(5));
     // Each failed start waits 2 s while it holds the one-at-a-time lock: a few starts in 5 s, not a loop of hundreds.
     let calls = fx.env.calls("cpd").len();
@@ -650,7 +651,6 @@ fn the_first_engine_tells_nobody_and_the_next_one_tells_each_manager_how_long_it
     let _ = first.stop();
     assert_eq!(fx.messages(), []);
 
-    std::thread::sleep(Duration::from_millis(1500));
     let second = fx.start();
     let messages = fx.messages();
     assert_eq!(messages.len(), 1, "one message, to the one Manager that is not archived: {messages:?}");
@@ -661,8 +661,11 @@ fn the_first_engine_tells_nobody_and_the_next_one_tells_each_manager_how_long_it
     let text = data["text"].as_str().unwrap();
     let stopped_at = fx.query::<String>("SELECT at FROM events WHERE kind = 'watch-stopped'");
     assert!(text.contains(&format!("it stopped at {stopped_at}")), "{text}");
+    // The downtime is the time between the stop and the second start.
+    let started_at = fx.query::<String>("SELECT at FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1");
     let secs: f64 = text.split("down for ").nth(1).unwrap().split(" s").next().unwrap().parse().unwrap();
-    assert!((1.4..10.0).contains(&secs), "{text}");
+    let between = (parse_time(&started_at) - parse_time(&stopped_at)).as_seconds_f64();
+    assert!((secs - between).abs() < 0.5, "{secs} s said, {between} s between {stopped_at} and {started_at}: {text}");
     // Without a Manager the same sentence is in the Event, which is enough.
     assert!(fx.texts("watch-started")[1].contains(&format!("down for {secs:.1} s")), "{:?}", fx.texts("watch-started"));
     let _ = second.stop();
@@ -674,12 +677,16 @@ fn an_engine_that_died_without_a_watch_stopped_is_told_from_the_last_time_it_was
     fx.manager("mgr1");
     let first = fx.start();
     // Its ticks mark the lock file: the time it was last seen alive is its newest tick, not its start.
-    std::thread::sleep(Duration::from_millis(2500));
+    let started_at = fx.query::<String>("SELECT at FROM events WHERE kind = 'watch-started'");
+    let lock = fx.env.cpd_home().join("locks/watch.lock");
+    wait_until("a tick after its start marked the lock", || {
+        let marked = OffsetDateTime::from(fs::metadata(&lock).unwrap().modified().unwrap());
+        marked - parse_time(&started_at) > time::Duration::milliseconds(500)
+    });
     first.signal(Signal::SIGKILL);
     let mut first = first;
     let _ = first.child.take().unwrap().wait();
     assert_eq!(fx.count("watch-stopped"), 0);
-    let started_at = fx.query::<String>("SELECT at FROM events WHERE kind = 'watch-started'");
 
     let second = fx.start();
     let messages = fx.messages();

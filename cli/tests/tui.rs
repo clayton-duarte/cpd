@@ -269,9 +269,12 @@ fn assert_server_options(env: &TestEnv) {
                     assert_eq!(shown.lines().filter(|l| *l == feature).count(), 1, "{feature} in {shown}");
                 }
             }
+            ["set", "-s", name, value] => assert_eq!(tmux_out(env, &["show", "-sv", name]).trim_end_matches('\n'), *value, "{name}"),
+            // The hooks' exact text is pinned in `tests/host.rs`; here, that the server has each, and that it starts the engine again.
             ["set-hook", "-g", hook, _] => {
                 let shown = tmux_out(env, &["show-hooks", "-g", hook]);
-                assert_eq!(shown, format!("{hook}[0] if-shell -F \"#{{@cpd_view}}\" respawn-pane\n"));
+                assert!(shown.starts_with(&format!("{hook}[0] if-shell -F ")), "{shown}");
+                assert!(shown.contains("cpd watch --ensure --wait"), "{shown}");
             }
             ["bind", "-T", table, key, .., command] => {
                 // tmux shows a `;` inside a binding escaped
@@ -299,7 +302,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
 }
 
 #[test]
-fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
+fn a_killed_view_respawns_at_once_and_the_engine_is_started_again() {
     let env = env();
     let out = env.cpd(&["tui"]).ok();
     let engine = out["watch"]["pane"].as_str().unwrap();
@@ -307,7 +310,7 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let before = main_panes(&env);
     let tree = view(&before, "tree").clone();
     let (_, engine_pid) = pane_state(&env, engine);
-    // The engine first: once dead, it makes no tmux calls of its own.
+    // The engine first, so that its hook runs before the tree's.
     let engine_tty = kill(&env, engine, engine_pid);
     wait_until("the engine pane to die", || pane_state(&env, engine).0);
     drop(engine_tty);
@@ -317,8 +320,12 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
         !p.dead && p.pid.is_some() && p.pid != tree.pid
     });
     drop(tree_tty);
-    // tmux runs the `pane-died` hooks in the order the panes died: the tree's has run, so the engine's has.
-    assert!(pane_state(&env, engine).0, "the engine pane stays dead for E2");
+    // tmux runs the `pane-died` hooks in the order the panes died: the tree's has run, so the engine's has. The engine is supervised
+    // (contract §6.6, hs-d328): its hook runs `watch --ensure --wait`, which starts it again in its own pane.
+    wait_until("the engine to be started again", || {
+        let (dead, pid) = pane_state(&env, engine);
+        !dead && pid.is_some() && pid != engine_pid
+    });
     let after = main_panes(&env);
     assert_layout(&after);
     assert_eq!(view(&after, "tree").id, tree.id);
