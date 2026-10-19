@@ -11,8 +11,8 @@
 //! [`COALESCE`] after an Event that concerns the view.
 //! The User's keys and clicks run commands ([`actions`]); nothing else starts a process.
 //!
-//! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
-//! dies stays dead (contract §6.1).
+//! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a view pane that
+//! dies is respawned by the `pane-died` hook (commands.md §10.9).
 
 mod actions;
 mod boxes;
@@ -44,6 +44,7 @@ use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::{self, Event, highest_id};
 use cpd_core::home::CpdHome;
+use cpd_core::host::addr::review_host;
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::output::Output;
 use cpd_core::store::Store;
@@ -82,18 +83,19 @@ const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 #[derive(Debug, PartialEq, Eq)]
 struct ReviewRow {
     number: u32,
-    /// `http://localhost:<port>`, the port of `run/<plan>/plannotator-port`; `None` when that file is missing or holds
+    /// `http://<host>:<port>`, the port of `run/<plan>/plannotator-port`; `None` when that file is missing or holds
     /// no port: the row shows without the `↗`.
     url: Option<String>,
 }
 
 impl ReviewRow {
-    /// The row of `plan`, if its latest review is pending; reads the port file.
-    fn of(plan: &PlanBoxes, home: &CpdHome) -> Option<ReviewRow> {
+    /// The row of `plan`, if its latest review is pending; reads the port file. `host` is the review host (contract
+    /// §6.5), asked for only when there is a port to link.
+    fn of(plan: &PlanBoxes, home: &CpdHome, host: impl FnOnce() -> String) -> Option<ReviewRow> {
         let review = plan.review.as_ref().filter(|r| r.status == ReviewStatus::Pending)?;
         let port: Option<u16> =
             fs::read_to_string(home.plannotator_port(&plan.plan)).ok().and_then(|text| text.trim().parse().ok());
-        Some(ReviewRow { number: review.number, url: port.map(|port| format!("http://localhost:{port}")) })
+        Some(ReviewRow { number: review.number, url: port.map(|port| format!("http://{}:{port}", host())) })
     }
 
     fn line(&self) -> Line<'static> {
@@ -162,7 +164,7 @@ fn snapshot(store: &mut Store, home: &CpdHome, width: u16, now_ms: i64) -> Resul
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
     let boxes = boxes::layout(&plan.prs, &plan.jobs, frame).with_margin(MARGIN);
-    let review = ReviewRow::of(&plan, home);
+    let review = ReviewRow::of(&plan, home, || review_host(&mut std::io::sink()));
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, review, boxes, frame }), pulse: None })
 }
 
@@ -497,8 +499,12 @@ mod tests {
         assert!(due(false, Duration::from_secs(60)));
     }
 
-    const URL: &str = "http://localhost:19433";
-    const OPEN: &str = "\x1b]8;;http://localhost:19433\x07";
+    const URL: &str = "http://review.test:19433";
+    const OPEN: &str = "\x1b]8;;http://review.test:19433\x07";
+
+    fn test_host() -> String {
+        "review.test".to_owned()
+    }
 
     fn review(status: ReviewStatus) -> Review {
         Review {
@@ -628,13 +634,13 @@ mod tests {
     fn no_review_row_while_the_review_is_not_pending() {
         let home = CpdHome::resolve(Some(std::env::temp_dir().join("cpd-plan-view-no-home").into()), None).unwrap();
         let mut plan = centre(None).plan;
-        assert_eq!(ReviewRow::of(&plan, &home), None, "no review");
+        assert_eq!(ReviewRow::of(&plan, &home, test_host), None, "no review");
         for status in [ReviewStatus::Approved, ReviewStatus::Rejected] {
             plan.review = Some(review(status));
-            assert_eq!(ReviewRow::of(&plan, &home), None, "{status:?}");
+            assert_eq!(ReviewRow::of(&plan, &home, test_host), None, "{status:?}");
         }
         plan.review = Some(review(ReviewStatus::Pending));
-        assert_eq!(ReviewRow::of(&plan, &home), Some(ReviewRow { number: 2, url: None }), "no port file");
+        assert_eq!(ReviewRow::of(&plan, &home, test_host), Some(ReviewRow { number: 2, url: None }), "no port file");
     }
 
     #[test]
@@ -654,7 +660,7 @@ mod tests {
             ("19433\n19434\n", None),
         ] {
             fs::write(&file, text).unwrap();
-            assert_eq!(ReviewRow::of(&plan, &home).unwrap().url.as_deref(), url, "{text:?}");
+            assert_eq!(ReviewRow::of(&plan, &home, test_host).unwrap().url.as_deref(), url, "{text:?}");
         }
         fs::remove_dir_all(dir).unwrap();
     }

@@ -69,6 +69,8 @@ error_codes! {
     ConfigInvalid = "config_invalid" => Failure,
     StoreTooNew = "store_too_new" => Failure,
     MigrationFailed = "migration_failed" => Failure,
+    MigrationChanged = "migration_changed" => Failure,
+    MigrationOrder = "migration_order" => Failure,
     StoreTampered = "store_tampered" => Failure,
     StoreFailed = "store_failed" => Failure,
     Internal = "internal" => Failure,
@@ -198,6 +200,7 @@ error_codes! {
     PrLocked = "pr_locked" => Refused,
     PrNotReady = "pr_not_ready" => Refused,
     PrEnded = "pr_ended" => Refused,
+    PrClosed = "pr_closed" => Refused,
     NeedsOtherPr = "needs_other_pr" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
@@ -324,6 +327,8 @@ mod tests {
             (ErrorCode::StoreTooNew, 1),
             (ErrorCode::Internal, 1),
             (ErrorCode::MigrationFailed, 1),
+            (ErrorCode::MigrationChanged, 1),
+            (ErrorCode::MigrationOrder, 1),
             (ErrorCode::Usage, 2),
             (ErrorCode::PlanRequired, 2),
             (ErrorCode::ContextRequired, 2),
@@ -358,6 +363,7 @@ mod tests {
             (ErrorCode::PrLocked, 3),
             (ErrorCode::PrNotReady, 3),
             (ErrorCode::PrEnded, 3),
+            (ErrorCode::PrClosed, 3),
             (ErrorCode::NeedsOtherPr, 3),
             (ErrorCode::PrNotFound, 4),
         ];
