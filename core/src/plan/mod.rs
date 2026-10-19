@@ -18,6 +18,7 @@ mod lock;
 mod new;
 mod overlap;
 mod phase;
+mod prs;
 mod render;
 mod rename;
 mod review;
@@ -35,6 +36,7 @@ use crate::output::Output;
 
 pub use fingerprint::plan_fingerprint;
 pub use jobs::locked_fingerprint;
+pub use prs::{PrRow, Pull};
 pub use row::{Phase, PlanRow};
 
 #[derive(clap::Subcommand, Debug)]

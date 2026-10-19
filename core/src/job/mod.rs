@@ -33,7 +33,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId, PrKey};
 use crate::output::Output;
-use crate::plan::fingerprint::PrSpec;
+use crate::plan::PrRow;
 use crate::plan::jobs::{Job, STATUSES};
 
 #[derive(clap::Subcommand, Debug)]
@@ -247,8 +247,8 @@ fn check_needs_same_pr(jobs: &[Job], plan: &PlanId, pr: &str, needs: &[String]) 
 }
 
 /// The PR `pr` of the Plan is not `merged` or `cancelled` (`pr_ended`) (§3.2).
-fn check_pr_live(prs: &[PrSpec], plan: &PlanId, pr: &str) -> Result<(), CpdError> {
-    match prs.iter().find(|p| p.key == pr) {
+fn check_pr_live(prs: &[PrRow], plan: &PlanId, pr: &str) -> Result<(), CpdError> {
+    match prs.iter().find(|p| p.key.as_str() == pr) {
         Some(p) if matches!(p.status.as_str(), "merged" | "cancelled") => Err(CpdError::new(
             ErrorCode::PrEnded,
             format!("PR {pr} of Plan {plan} is {}: Jobs are not added to or moved into it.", p.status),

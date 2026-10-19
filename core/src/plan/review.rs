@@ -4,7 +4,8 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use super::fingerprint::{PrSpec, load_prs, plan_fingerprint};
+use super::fingerprint::{load_prs, plan_fingerprint};
+use super::prs::PrRow;
 use super::jobs::{self, Job};
 use super::overlap::{self, Overlap};
 use super::row::{self, Phase, PlanRow};
@@ -67,7 +68,7 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
 /// What `plan render` and `plan review` read, in one read transaction.
 struct Snapshot {
     plan: PlanRow,
-    prs: Vec<PrSpec>,
+    prs: Vec<PrRow>,
     jobs: Vec<Job>,
     overlaps: Vec<Overlap>,
     review: Option<Review>,

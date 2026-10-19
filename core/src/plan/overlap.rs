@@ -5,7 +5,7 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::fingerprint::PrSpec;
+use super::prs::PrRow;
 use super::jobs::Job;
 use crate::error::CpdError;
 use crate::ids::PlanId;
@@ -80,10 +80,10 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
 /// Every overlap of this Plan's PRs (not `cancelled`) and Jobs (not
 /// `cancelled`) with `others`, in the order of this Plan's Jobs, each Job's
 /// paths, then `others`. Pure.
-pub fn find(prs: &[PrSpec], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
+pub fn find(prs: &[PrRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
     let mut out = Vec::new();
     for job in jobs.iter().filter(|j| j.status != "cancelled") {
-        let Some(pr) = prs.iter().find(|p| p.key == job.pr && p.status != "cancelled") else { continue };
+        let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr && p.status != "cancelled") else { continue };
         let paths = job.touches.as_array().into_iter().flatten().filter_map(Value::as_str);
         for path in paths {
             for other in others.iter().filter(|o| o.repo == pr.repo) {

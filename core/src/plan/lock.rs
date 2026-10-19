@@ -7,8 +7,9 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value, json};
 
-use super::fingerprint::plan_fingerprint;
+use super::fingerprint::{load_prs, plan_fingerprint};
 use super::jobs::{self, Job};
+use super::prs::PrRow;
 use super::review::{latest_approved_for, latest_json, no_draft_jobs};
 use super::row::{self, Phase};
 use super::{Env, LockArgs};
@@ -17,7 +18,7 @@ use crate::events::{NewEvent, append};
 use crate::git::{TAIL_LINES, tail};
 use crate::ids::PlanId;
 use crate::output::Output;
-use crate::pr::start::{self, By, Pr, Pushed};
+use crate::pr::start::{self, By, Pushed};
 use crate::session::PROGRAM;
 
 const COMMAND: &str = "plan lock";
@@ -25,7 +26,7 @@ const COMMAND: &str = "plan lock";
 pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs, prs) = env.store.read(|conn| Ok((row::load(conn, &id)?, jobs::load(conn, &id)?, start::load(conn, &id)?)))?;
+    let (plan, jobs, prs) = env.store.read(|conn| Ok((row::load(conn, &id)?, jobs::load(conn, &id)?, load_prs(conn, &id)?)))?;
     match plan.phase {
         Phase::Plan => {}
         Phase::Dispatch => {
@@ -60,7 +61,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("review", latest)
         .with("next", format!("cpd plan review --plan {id}")));
     };
-    let live: Vec<&Pr> = prs.iter().filter(|p| p.status != "cancelled").collect();
+    let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let empty: Vec<&str> =
         live.iter().filter(|p| !drafts.iter().any(|j| j.pr == p.key.as_str())).map(|p| p.key.as_str()).collect();
     if live.is_empty() || !empty.is_empty() {
@@ -140,7 +141,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
 /// `prs` of the result (commands.md §4.8): every PR that is not `cancelled`, in
 /// key order. A PR started by this lock has its worktree and R35's outcome;
 /// every other has null for those.
-fn listed(prs: &[Pr], started: &[Pushed]) -> Vec<Value> {
+fn listed(prs: &[PrRow], started: &[Pushed]) -> Vec<Value> {
     prs.iter()
         .filter(|p| p.status != "cancelled")
         .map(|pr| match started.iter().find(|s| s.key() == pr.key.as_str()) {

@@ -73,7 +73,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<Decision, Cpd
     let live_jobs: Vec<String> =
         jobs::load(conn, plan)?.into_iter().filter(|j| j.pr == key.as_str() && j.status != "cancelled").map(|j| j.key).collect();
     let needing: Vec<String> =
-        prs.iter().filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str())).map(|p| p.key.clone()).collect();
+        prs.iter().filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str())).map(|p| p.key.to_string()).collect();
     if !live_jobs.is_empty() || !needing.is_empty() {
         return Err(CpdError::new(
             ErrorCode::PrInUse,

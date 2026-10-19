@@ -5,7 +5,8 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::row::{PlanRow, PrRow};
+use super::row::PlanRow;
+use crate::plan::PrRow;
 use super::{Args, Env, gate, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, TAIL_LINES, tail};

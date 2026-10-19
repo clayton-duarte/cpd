@@ -82,7 +82,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         .with("phase", phase));
     }
     let prs = load_prs(conn, plan)?;
-    let pr = wanted.pr.select(plan, &prs)?.key.clone();
+    let pr = wanted.pr.select(plan, &prs)?.key.to_string();
     check_pr_live(&prs, plan, &pr)?;
     let all = jobs::load(conn, plan)?;
     let needs = if wanted.review { review_needs(&all, plan, &pr, wanted.key.as_str())? } else { wanted.needs.clone() };

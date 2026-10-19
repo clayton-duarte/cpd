@@ -40,8 +40,8 @@ use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::{self, RepoLock};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::PrSpec;
-use row::{PlanRow, PrRow};
+use crate::plan::PrRow;
+use row::PlanRow;
 
 pub use gh::close_pr;
 
@@ -198,8 +198,8 @@ fn plan_phase(conn: &rusqlite::Connection, plan: &PlanId) -> Result<Phase, CpdEr
 }
 
 /// The PR `key` among `prs`, else `pr_not_found` (exit 4).
-fn find_pr<'a>(prs: &'a [PrSpec], plan: &PlanId, key: &PrKey) -> Result<&'a PrSpec, CpdError> {
-    prs.iter().find(|p| p.key == key.as_str()).ok_or_else(|| {
+fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow, CpdError> {
+    prs.iter().find(|p| p.key == *key).ok_or_else(|| {
         CpdError::new(ErrorCode::PrNotFound, format!("No PR {key} in Plan {plan}."))
             .with("plan", plan.as_str())
             .with("pr", key.as_str())
@@ -218,15 +218,15 @@ fn sorted_needs(needs: &[PrKey]) -> Result<Vec<String>, CpdError> {
 
 /// Every key of `needs` is a PR of the Plan other than `own` (`needs_unknown`)
 /// and none is `cancelled` (`needs_unavailable`) (§9.4, §9.5).
-fn check_needs(prs: &[PrSpec], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
+fn check_needs(prs: &[PrRow], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
     let unknown: Vec<String> =
-        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key == **n)).cloned().collect();
+        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key.as_str() == n.as_str())).cloned().collect();
     if !unknown.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no PR {} to need.", unknown.join(", ")))
             .with("plan", plan.as_str())
             .with("needs", unknown));
     }
-    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key == **n && p.status == "cancelled")).cloned().collect();
+    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key.as_str() == n.as_str() && p.status == "cancelled")).cloned().collect();
     if !unavailable.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A PR cannot need the cancelled PR {}.", unavailable.join(", ")))
             .with("plan", plan.as_str())
@@ -241,8 +241,8 @@ fn check_needs(prs: &[PrSpec], plan: &PlanId, own: Option<&PrKey>, needs: &[Stri
 /// `source` is the command, for what R writes.
 fn lock(env: &mut Env, pr: &PrRow, source: &str) -> Result<RepoLock, CpdError> {
     let limit = Duration::from_secs(u64::from(env.config.timeouts.lock_wait_seconds));
-    let lock = RepoLock::wait_for(&env.home, &pr.repo, limit)?;
-    let repo = pr.repo.to_string_lossy().into_owned();
+    let lock = RepoLock::wait_for(&env.home, Path::new(&pr.repo), limit)?;
+    let repo = pr.repo.clone();
     let merging = env.store.read(|conn| {
         let mut stmt = conn.prepare(
             "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job

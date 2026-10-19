@@ -15,7 +15,8 @@ use crate::git::worktree::list as worktrees;
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::{PrSpec, load_prs};
+use crate::plan::PrRow;
+use crate::plan::fingerprint::load_prs;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr add";
@@ -114,7 +115,7 @@ fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
 fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let phase = check_plan(conn, plan)?;
     let prs = load_prs(conn, plan)?;
-    if let Some(existing) = prs.iter().find(|p| p.key == wanted.key.as_str()) {
+    if let Some(existing) = prs.iter().find(|p| p.key == wanted.key) {
         if same(existing, wanted) {
             // `appended`: the PR came after the lock.
             let (lead_branch, appended) = conn.query_row(
@@ -137,7 +138,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     Ok(Decision::Insert { phase })
 }
 
-fn same(existing: &PrSpec, wanted: &Wanted) -> bool {
+fn same(existing: &PrRow, wanted: &Wanted) -> bool {
     (&existing.repo, &existing.base, &existing.needs) == (&wanted.repo, &wanted.base, &wanted.needs)
 }
 

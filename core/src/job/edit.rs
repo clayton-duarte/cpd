@@ -102,7 +102,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     }
     if let Some(pr) = &edits.pr {
         let prs = load_prs(conn, plan)?;
-        if !prs.iter().any(|p| p.key == *pr) {
+        if !prs.iter().any(|p| p.key.as_str() == pr.as_str()) {
             return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {pr} in Plan {plan}."))
                 .with("plan", plan.as_str())
                 .with("pr", pr.as_str()));

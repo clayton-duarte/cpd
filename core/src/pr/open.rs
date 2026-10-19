@@ -3,7 +3,8 @@
 
 use serde_json::json;
 
-use super::row::{PlanRow, PrRow};
+use super::row::PlanRow;
+use crate::plan::PrRow;
 use super::gh::{self, PolledPr};
 use super::pulls;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
