@@ -569,7 +569,7 @@ fn the_tree_starts_no_subprocess() {
 }
 
 /// A follow that fails is shown in the footer, not swallowed (tui-W2): the cursor is from another database (the highest
-/// Event id fell below it), which `events follow --since` refuses as `cursor_ahead`.
+/// Event id fell below it), which the follow refuses as `cursor_ahead`.
 #[test]
 fn a_follow_that_fails_is_shown_in_the_footer() {
     let env = env();
@@ -579,7 +579,7 @@ fn a_follow_that_fails_is_shown_in_the_footer() {
     // not through `Store`, which keeps the Events append-only
     let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
     raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
-    let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("the cursor is from another database")));
+    let screen = pane.wait("the error in the footer", |s| s.iter().any(|r| r.contains("is above the highest Event id")));
     assert!(screen.iter().any(|r| r.starts_with(" ▾ ● alpha")), "the tree stays: {screen:?}");
 }
 

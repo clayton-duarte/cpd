@@ -14,7 +14,7 @@
 //! lock, waits for no writer, writes nothing, spawns nothing, and runs a fixed
 //! number of queries whatever the size of the Ledger (§17 refreshes a view about
 //! every second). Each snapshot returns `events_cursor`, the highest Event id of
-//! its own transaction, from which the view follows (`cpd events follow --since`).
+//! its own transaction, from which the view follows ([`Follow`], in process).
 //! Rows are parsed once here: a value the schema forbids is `store_failed`.
 //!
 //! The functions take the opened [`Store`] and no `CpdHome`: the one thing
@@ -25,6 +25,7 @@
 
 mod dot;
 mod flow;
+mod follow;
 mod logs;
 mod shared;
 mod tree;
@@ -40,6 +41,7 @@ pub use shared::{
     PrState, ReviewStatus, SessionNode,
 };
 pub use dot::{Dot, DotInputs};
+pub use follow::Follow;
 pub use logs::{Logs, logs, logs_after};
 pub use tree::{ContextNode, PlanNode, Tree, tree};
 pub use widgets::{

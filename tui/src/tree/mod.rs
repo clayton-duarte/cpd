@@ -8,7 +8,7 @@
 //! - [`view`]: the state, keys and drawing; [`cursor`], [`prompt`], [`menu`]: its parts (the right-click menu);
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
-//! - [`follow`]: `cpd events follow`, which tells it when to take a new snapshot.
+//! - [`kinds`]: the Events it follows, in process ([`read::Follow`]), which tell it when to take a new snapshot.
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
@@ -18,7 +18,7 @@
 
 mod actions;
 mod cursor;
-mod follow;
+mod kinds;
 mod menu;
 mod prompt;
 mod rows;
@@ -42,7 +42,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 use actions::Runner;
-use follow::{Follower, Message};
+use kinds::KINDS;
 use view::{Effect, View};
 
 /// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
@@ -68,40 +68,43 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let view = View::new(read::tree(&mut store)?, false);
-            Ok((store, view, Runner::new(&config)))
+            let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
+            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+            Ok((store, view, follow, poll, Runner::new(&config)))
         },
-        |terminal, (mut store, view, runner)| Ok(event_loop(terminal, &mut store, view, &runner)?),
+        |terminal, (mut store, view, follow, poll, runner)| {
+            Ok(event_loop(terminal, &mut store, view, follow, poll, &runner)?)
+        },
     )
 }
 
-fn event_loop(terminal: &mut DefaultTerminal, store: &mut Store, mut view: View, runner: &Runner) -> std::io::Result<()> {
-    let mut follower = Follower::start(view.tree.events_cursor).ok();
+fn event_loop(
+    terminal: &mut DefaultTerminal,
+    store: &mut Store,
+    mut view: View,
+    mut follow: read::Follow,
+    poll: Duration,
+    runner: &Runner,
+) -> std::io::Result<()> {
     let mut dirty = false;
     let mut last_snapshot = Instant::now();
+    let mut last_poll = Instant::now();
+    // a failed snapshot is retried at the next refresh, with no Event needed; a failed poll at the next poll. Both are
+    // shown (runner::kept): the footer says the snapshot's error, else the follow's.
+    let (mut snapshot_error, mut follow_error) = (None, None);
     loop {
-        if let Some(f) = &follower {
-            while let Ok(message) = f.messages.try_recv() {
-                match message {
-                    Message::Event => dirty = true,
-                    Message::Ended => {
-                        // take a new snapshot and follow again from its cursor
-                        follower = None;
-                        dirty = true;
-                        break;
-                    }
-                }
-            }
+        if last_poll.elapsed() >= poll {
+            last_poll = Instant::now();
+            dirty |= kept(follow.poll(store), &mut follow_error).is_some_and(|events| !events.is_empty());
+            view.error = snapshot_error.clone().or_else(|| follow_error.clone());
         }
-        // a failed snapshot is retried at the next refresh, with no Event needed (runner::kept)
-        if snapshot_due(dirty || view.error.is_some(), last_snapshot.elapsed()) {
-            if let Some(tree) = kept(read::tree(store), &mut view.error) {
+        if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) {
+            if let Some(tree) = kept(read::tree(store), &mut snapshot_error) {
                 view.refresh(tree);
             }
             dirty = false;
             last_snapshot = Instant::now();
-            if follower.is_none() {
-                follower = Follower::start(view.tree.events_cursor).ok();
-            }
+            view.error = snapshot_error.clone().or_else(|| follow_error.clone());
         }
         let frame = palette::frame(SystemTime::now());
         terminal.draw(|f| view.draw(f, frame))?;
