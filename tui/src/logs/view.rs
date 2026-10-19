@@ -98,11 +98,28 @@ fn clock(at: &str) -> &str {
     at.get(11..19).unwrap_or(at)
 }
 
+/// The `error` codes of a failure the engine hit for a Lead, whose source is still `watch`: the Lead handles them
+/// (contract §2.2: not Inbox items).
+const LEAD_CODES: [&str; 2] = ["pr_start_failed", "push_failed"];
+
+/// Whether an `error` Event is addressed to a Lead, who handles it (audit Q5): it names a Plan and its source is not the
+/// engine's own `watch` (`pr poll`'s `cleanup_failed`, the drivers' errors), or its code is one of [`LEAD_CODES`]. The
+/// engine's own step errors (`source` `watch`, contract §5.2) and those that name no Plan are the User's.
+fn addressed_to_lead(e: &Event) -> bool {
+    let field = |name: &str| e.data.get(name).and_then(|v| v.as_str());
+    e.plan.is_some() && (field("source") != Some("watch") || field("code").is_some_and(|c| LEAD_CODES.contains(&c)))
+}
+
 /// The Event's line, as the Dispatch column showed it: its time of day (dim), then its `text`, or its kind when
-/// the `text` is empty; an `error` Event in the failed colour. Cut to `width` columns with `…`.
+/// the `text` is empty; an `error` Event in the failed colour, in the waiting colour when it is addressed to a Lead (who
+/// handles it). Cut to `width` columns with `…`.
 fn line(e: &Event, width: usize) -> Line<'static> {
     let text = if e.text.is_empty() { &e.kind } else { &e.text };
-    let style = if e.kind == "error" { palette::fg(Meaning::Failed) } else { Style::new() };
+    let style = match (e.kind.as_str(), addressed_to_lead(e)) {
+        ("error", true) => palette::fg(Meaning::Waiting),
+        ("error", false) => palette::fg(Meaning::Failed),
+        _ => Style::new(),
+    };
     let room = width.saturating_sub(" 00:00:00 ".len());
     let text = if text.chars().count() <= room {
         text.clone()
@@ -124,5 +141,61 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     if let Some(i) = log.visible().iter().position(|e| log.selected == Some(e.id)) {
         let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
         f.buffer_mut().set_style(row.intersection(area), Modifier::REVERSED);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::style::Color;
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn event(kind: &str, plan: Option<&str>, data: Value) -> Event {
+        Event {
+            id: 1,
+            at: "2026-01-01T10:20:30.000Z".into(),
+            kind: kind.into(),
+            context: None,
+            plan: plan.map(Into::into),
+            job: None,
+            attempt: None,
+            session: None,
+            text: "something happened".into(),
+            data,
+        }
+    }
+
+    fn error(plan: Option<&str>, source: &str, code: &str) -> Event {
+        event("error", plan, json!({"source": source, "code": code, "message": "m", "details": {}}))
+    }
+
+    /// The colour of the Event's text in its line (the line is ` 10:20:30 something happened`).
+    fn colour(e: &Event) -> Option<Color> {
+        line(e, 60).spans.last().unwrap().style.fg
+    }
+
+    #[test]
+    fn an_error_the_engine_reports_for_itself_is_red() {
+        let red = Some(palette::color(Meaning::Failed));
+        assert_eq!(colour(&error(None, "watch", "tmux_failed")), red, "the machine");
+        assert_eq!(colour(&error(Some("pay"), "watch", "store_failed")), red, "a step of the engine, about a Plan");
+        assert_eq!(colour(&error(None, "pr poll", "gh_rate_limited")), red, "no Plan to address: the User's");
+    }
+
+    #[test]
+    fn an_error_addressed_to_a_lead_is_waiting() {
+        let waiting = Some(palette::color(Meaning::Waiting));
+        assert_eq!(colour(&error(Some("pay"), "attempt run", "git_failed")), waiting, "a driver's error");
+        assert_eq!(colour(&error(Some("pay"), "pr poll", "cleanup_failed")), waiting);
+        assert_eq!(colour(&error(Some("pay"), "plan lock", "push_failed")), waiting);
+        // the engine's own start of a PR (source `watch`) is for the Lead too
+        assert_eq!(colour(&error(Some("pay"), "watch", "pr_start_failed")), waiting);
+        assert_eq!(colour(&error(Some("pay"), "watch", "push_failed")), waiting);
+    }
+
+    #[test]
+    fn other_events_have_no_colour() {
+        assert_eq!(colour(&event("job-failed", Some("pay"), json!({}))), None);
     }
 }

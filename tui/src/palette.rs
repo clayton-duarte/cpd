@@ -29,7 +29,8 @@ pub enum Meaning {
     Review,
     /// A merged Job; a merged PR; phase `done`; checks passed.
     Done,
-    /// A failed Job; a closed PR; checks failed.
+    /// What needs the User: a stuck Job (`job-stuck`), a closed PR its Lead asked about, a conflict or failed checks on a PR
+    /// no Plan owns. A failure an agent handles is [`Meaning::Waiting`] instead (hs-d303).
     Failed,
     /// Phase `plan`.
     Planning,
@@ -155,11 +156,16 @@ pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
         (JobStatus::Running, false) => (SPINNER[0], Meaning::InProgress),
         (JobStatus::Running, true) => (MERGING, Meaning::Review),
         (JobStatus::Merged, _) => (MERGED, Meaning::Done),
-        (JobStatus::Failed, _) => (FAILED, Meaning::Failed),
+        // an agent handles a failed Job (its Lead retries or cancels it): waiting; it is red only once `job-stuck` is open
+        (JobStatus::Failed, _) => (FAILED, Meaning::Waiting),
         (JobStatus::Draft, _) => (DRAFT, Meaning::Nothing),
         (JobStatus::Cancelled, _) => (CANCELLED, Meaning::Nothing),
     }
 }
+
+/// A failed Job that needs the User: its `job-stuck` item is open (audit Q3). Red, where [`job_status`] gives `failed` the
+/// waiting colour.
+pub const JOB_STUCK: (&str, Meaning) = (FAILED, Meaning::Failed);
 
 /// The Job statuses the legend lists: the name shown, the status and whether it is `merging`.
 pub const JOB_LEGEND: [(&str, JobStatus, bool); 6] = [
@@ -244,14 +250,25 @@ pub fn count_style(status: JobStatus, merging: bool, n: usize) -> Style {
     fg(if n == 0 { Meaning::Nothing } else { job_status(status, merging).1 })
 }
 
+/// Style of the failed counter: [`count_style`]'s waiting colour while an agent handles the failed Jobs, red when one of
+/// them is `stuck` (a `job-stuck` item is open, audit Q3), nothing when the count is zero.
+pub fn failed_count_style(n: usize, stuck: bool) -> Style {
+    if stuck && n > 0 { fg(JOB_STUCK.1) } else { count_style(JobStatus::Failed, false, n) }
+}
+
 /// Meaning of a PR's state.
 pub fn pr_state(state: PrState) -> Meaning {
     match state {
         PrState::Open => Meaning::Review,
         PrState::Merged => Meaning::Done,
-        PrState::Closed => Meaning::Failed,
+        // its Lead handles a closed pull request (asks the User only if it must): waiting, see `PR_CLOSED_ASKED`
+        PrState::Closed => Meaning::Waiting,
     }
 }
+
+/// A closed-unmerged pull request whose Plan's Lead has an open `dialog` item (it asks the User about it), or that no Plan
+/// owns: red (audit Q4), where [`pr_state`] gives `closed` the waiting colour.
+pub const PR_CLOSED_ASKED: (&str, Meaning) = ("closed", Meaning::Failed);
 
 /// The PR states the legend lists, with the name shown.
 pub const PR_LEGEND: [(&str, PrState); 3] = [("open", PrState::Open), ("merged", PrState::Merged), ("closed", PrState::Closed)];
@@ -317,7 +334,7 @@ mod tests {
             (JobStatus::Running, false, SPINNER[0], Meaning::InProgress),
             (JobStatus::Running, true, MERGING, Meaning::Review),
             (JobStatus::Merged, false, MERGED, Meaning::Done),
-            (JobStatus::Failed, false, FAILED, Meaning::Failed),
+            (JobStatus::Failed, false, FAILED, Meaning::Waiting),
             (JobStatus::Draft, false, DRAFT, Meaning::Nothing),
             (JobStatus::Cancelled, false, CANCELLED, Meaning::Nothing),
         ];
@@ -440,13 +457,24 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_job_and_its_counter_are_waiting_until_it_is_stuck() {
+        assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
+        assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
+        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::Blue));
+        assert_eq!(failed_count_style(2, true), Style::new().fg(Color::Red));
+        assert_eq!(failed_count_style(0, true), Style::new().fg(Color::DarkGray), "nothing failed: nothing to show");
+        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::Blue));
+    }
+
+    #[test]
     fn every_pr_state_and_check_has_its_icon_and_meaning() {
-        let states = [(PrState::Open, Meaning::Review), (PrState::Merged, Meaning::Done), (PrState::Closed, Meaning::Failed)];
+        let states = [(PrState::Open, Meaning::Review), (PrState::Merged, Meaning::Done), (PrState::Closed, Meaning::Waiting)];
         for (s, m) in states {
             assert_eq!(pr_state(s), m, "{s:?}");
         }
         assert_eq!(PR_LEGEND.map(|(_, s)| s), states.map(|(s, _)| s));
-        assert_eq!(PR_CONFLICT, ("conflict", pr_state(PrState::Closed)));
+        assert_eq!(PR_CONFLICT, ("conflict", Meaning::Failed));
+        assert_eq!(PR_CLOSED_ASKED, ("closed", Meaning::Failed));
         assert_eq!(PR_CONFLICT_OWNED, ("conflict", Meaning::Waiting));
         assert_eq!(checks_of(Checks::Failed, true), (CHECKS_FAILED, Meaning::Waiting));
         assert_eq!(checks_of(Checks::Failed, false), checks(Checks::Failed));

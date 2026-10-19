@@ -35,7 +35,7 @@ mod widgets;
 mod worker;
 
 pub use flow::{
-    AttemptNode, ChatSlot, Flow, JobNode, OpenEscalation, PlanBoxes, PrNode, PrStatus, Pull, Review, WorkerRef, chat_slot, flow,
+    AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, PrNode, PrStatus, Pull, Review, WorkerRef, chat_slot, flow,
     plan_boxes,
 };
 pub use shared::{

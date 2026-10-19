@@ -23,9 +23,11 @@ use ratatui::{
 use crate::palette::{self, Meaning};
 use cpd_core::config::Tier;
 use crate::read::{AttemptStatus, JobNode, JobStatus};
+use cpd_core::ids::JobKey;
 
 /// A Job's status as the chart draws it. A cancelled Job is not drawn, so it has none; a `running` Job whose Attempt is
-/// `merging` is `Merging` (the cockpit's `in_review`).
+/// `merging` is `Merging` (the cockpit's `in_review`); a `failed` Job is `Failed` while its Lead handles it (the waiting
+/// colour) and `Stuck` once `job-stuck` is open (red: it needs the User, audit Q3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Live {
     Draft,
@@ -34,6 +36,7 @@ pub enum Live {
     Merging,
     Merged,
     Failed,
+    Stuck,
 }
 
 impl Live {
@@ -46,17 +49,19 @@ impl Live {
             Live::Merging => palette::job_status(JobStatus::Running, true),
             Live::Merged => palette::job_status(JobStatus::Merged, false),
             Live::Failed => palette::job_status(JobStatus::Failed, false),
+            Live::Stuck => palette::JOB_STUCK,
         }
     }
 
-    /// `None` for a cancelled Job.
-    pub fn of(job: &JobNode) -> Option<Live> {
+    /// `None` for a cancelled Job. `stuck`: the Job has an open `job-stuck` item.
+    pub fn of(job: &JobNode, stuck: bool) -> Option<Live> {
         Some(match job.status {
             JobStatus::Draft => Live::Draft,
             JobStatus::Queued => Live::Queued,
             JobStatus::Running if job.active_attempt().is_some_and(|a| a.status == AttemptStatus::Merging) => Live::Merging,
             JobStatus::Running => Live::Running,
             JobStatus::Merged => Live::Merged,
+            JobStatus::Failed if stuck => Live::Stuck,
             JobStatus::Failed => Live::Failed,
             JobStatus::Cancelled => return None,
         })
@@ -81,9 +86,10 @@ pub struct Pill {
     pub column: usize,
 }
 
-/// Jobs (one PR's) as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them.
-pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>) -> Vec<FlowJob> {
-    let live: Vec<(&JobNode, Live)> = jobs.into_iter().filter_map(|j| Some((j, Live::of(j)?))).collect();
+/// Jobs (one PR's) as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them. `stuck`
+/// are the keys of the Jobs with an open `job-stuck` item.
+pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, stuck: &[JobKey]) -> Vec<FlowJob> {
+    let live: Vec<(&JobNode, Live)> = jobs.into_iter().filter_map(|j| Some((j, Live::of(j, stuck.contains(&j.key))?))).collect();
     live.iter()
         .map(|&(j, status)| FlowJob {
             key: j.key.to_string(),
@@ -553,7 +559,7 @@ mod tests {
 
     #[test]
     fn a_pill_has_the_icon_and_colour_of_its_status() {
-        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed];
+        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed, Live::Stuck];
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: *s, ..job(&format!("{s:?}"), &[]) }).collect();
         let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
@@ -562,6 +568,16 @@ mod tests {
             let cell = &c.buf[(p.rect.x, p.rect.y)];
             assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status:?}");
         }
+    }
+
+    #[test]
+    fn a_failed_pill_is_waiting_and_red_only_once_its_job_is_stuck() {
+        assert_eq!(Live::Failed.icon(0).1, Meaning::Waiting, "its Lead handles it");
+        assert_eq!(Live::Stuck.icon(0).1, Meaning::Failed, "job-stuck: it needs the User");
+        assert_eq!(Live::Stuck.icon(0).0, Live::Failed.icon(0).0, "the same glyph");
+        let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
+        let bg = |i: usize| c.buf[(c.pills[i].rect.x, c.pills[i].rect.y)].bg;
+        assert_eq!((bg(0), bg(1)), (palette::color(Meaning::Waiting), palette::color(Meaning::Failed)));
     }
 
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.

@@ -45,6 +45,7 @@ use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 use crate::palette::{self, Meaning};
 use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, PlanNode, SessionNode, Tree};
+use cpd_core::inbox::model::Kind;
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id, or [`MORE`].
 pub type Id = String;
@@ -200,28 +201,35 @@ pub fn session_label(s: &SessionNode) -> String {
     if name.is_empty() { s.id.as_str().chars().take(8).collect() } else { name.to_owned() }
 }
 
+/// Whether a Plan has a Job with an open `job-stuck` item among the tree's visible items: its failed Jobs need the User.
+fn has_stuck_job(tree: &Tree, plan: &PlanNode) -> bool {
+    tree.inbox.iter().any(|i| i.kind == Kind::JobStuck && i.plan.as_ref() == Some(&plan.head.id))
+}
+
 /// `36⋅0⋅0⋅1⋅5`: each count in its status colour (nothing when zero; the drafts of phase `plan` always), `⋅` between.
-pub fn counters(plan: &PlanNode) -> Line<'static> {
+/// The failed count is in the waiting colour while the Lead handles the failed Jobs, red when `stuck`: one of them has an
+/// open `job-stuck` item (audit Q3).
+pub fn counters(plan: &PlanNode, stuck: bool) -> Line<'static> {
     let phase = plan.head.phase;
     let mut spans = Vec::new();
     for (i, n) in plan.head.counts.counters(phase).into_iter().enumerate() {
         if i > 0 {
             spans.push(palette::separator());
         }
-        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n)));
+        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n, stuck)));
     }
     Line::from(spans)
 }
 
 /// Style of the `index`th counter of `JobCounts::counters`: its status colour, or nothing when the count is zero. The
-/// first counter is the queued Jobs, in phase `plan` the drafts.
-fn counter_style(index: usize, phase: Phase, n: usize) -> Style {
+/// first counter is the queued Jobs, in phase `plan` the drafts. The failed one is red only when `stuck`.
+fn counter_style(index: usize, phase: Phase, n: usize, stuck: bool) -> Style {
     let (status, merging) = match index {
         0 if phase == Phase::Plan => (JobStatus::Draft, false),
         0 => (JobStatus::Queued, false),
         1 => (JobStatus::Running, false),
         2 => (JobStatus::Running, true),
-        3 => (JobStatus::Failed, false),
+        3 => return palette::failed_count_style(n, stuck),
         _ => (JobStatus::Merged, false),
     };
     palette::count_style(status, merging, n)
@@ -299,7 +307,7 @@ fn more_text(in_context: bool, expanded: bool) -> Line<'static> {
 fn plan_item(c: &ContextNode, p: &PlanNode, last: bool, width: u16, frame: usize) -> TreeItem<'static, Id> {
     let muted = c.is_archived() || p.head.is_archived();
     let text = row_text(
-        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, last, frame, counters_width: counters(p).width(), muted },
+        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, last, frame, counters_width: counters(p, false).width() /* the width is the same in any colour */, muted },
         width,
     );
     TreeItem::new_leaf(p.head.id.to_string(), text)
@@ -388,7 +396,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         let muted = row.archived() || matches!(row, Row::More);
         match row {
             Row::Plan(_, plan) => {
-                counters(plan).right_aligned().render(rect, buf);
+                counters(plan, has_stuck_job(tree, plan)).right_aligned().render(rect, buf);
                 if plan.lead().is_some_and(SessionNode::is_active) && !muted {
                     Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
                 }
@@ -793,10 +801,31 @@ mod tests {
         let colours: Vec<Color> = (0..5).map(|i| fg(&buf, at(i), 1)).collect();
         assert_eq!(
             colours,
-            [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Failed), color(Meaning::Done)]
+            [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Waiting), color(Meaning::Done)]
         );
         assert!((0..4).all(|i| fg(&buf, at(i) + 1, 1) == color(Meaning::Nothing)));
         assert!((0..5).all(|i| fg(&buf, at(i), 2) == color(Meaning::Nothing)));
+    }
+
+    #[test]
+    fn the_failed_counter_is_waiting_and_red_only_while_the_plan_has_a_stuck_job() {
+        use super::super::inbox::item;
+        use cpd_core::ids::PlanId;
+        use cpd_core::inbox::model::Urgency;
+        let counters = || vec![context("cc", vec![lone("aa", "x", Phase::Dispatch, [0, 1, 0, 2, 2, 5]), lone("bb", "y", Phase::Dispatch, [0, 1, 0, 2, 2, 5])])];
+        // counters "1⋅0⋅2⋅2⋅5": the failed one is the 4th, in column 11 + 2 * 3
+        let failed = |t: &Tree, row: u16| fg(&render(t, &mut state_for(t, &[], &[]), 20, 3, false), 17, row);
+        let handled = tree(counters());
+        assert_eq!((failed(&handled, 1), failed(&handled, 2)), (color(Meaning::Waiting), color(Meaning::Waiting)), "its Lead handles it");
+        let stuck_for = |plan: &str, kind: Kind| {
+            let mut t = tree(counters());
+            t.inbox = vec![cpd_core::inbox::model::Item { plan: Some(PlanId::parse(plan).unwrap()), ..item(1, kind, Urgency::Red, "x", WHEN) }];
+            t
+        };
+        let stuck = stuck_for("aa", Kind::JobStuck);
+        assert_eq!((failed(&stuck, 1), failed(&stuck, 2)), (color(Meaning::Failed), color(Meaning::Waiting)), "red for the Plan with the open job-stuck only");
+        let other = stuck_for("aa", Kind::Dialog);
+        assert_eq!(failed(&other, 1), color(Meaning::Waiting), "another item is not job-stuck");
     }
 
     #[test]
