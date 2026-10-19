@@ -750,7 +750,7 @@ fn the_merge_waits_for_the_per_repo_lock_and_holds_it_until_step_10() {
 
     std::thread::scope(|s| {
         let merging = s.spawn(|| fx.merge(&attempt));
-        std::thread::sleep(Duration::from_millis(500));
+        common::wait_for_flock_waiter(held.file());
         // Still waiting: nothing happened.
         assert_eq!(fx.attempt_row(&attempt).0, "merging");
         assert!(!merging.is_finished());
@@ -1016,7 +1016,7 @@ fn a_merge_takes_the_lock_of_its_prs_repo_only() {
         // The other repo's merge is not held up by schema's lock.
         let result = fx.merge(&ui);
         assert!(matches!(result.end, End::Merged { .. }), "{result:?}");
-        std::thread::sleep(Duration::from_millis(500));
+        common::wait_for_flock_waiter(held.file());
         assert_eq!(fx.attempt_row(&api).0, "merging");
         assert!(!waiting.is_finished());
         drop(held);
@@ -1038,7 +1038,7 @@ fn two_prs_in_one_repo_share_its_lock() {
 
     std::thread::scope(|s| {
         let waiting = s.spawn(|| fx.merge(&ui));
-        std::thread::sleep(Duration::from_millis(500));
+        common::wait_for_flock_waiter(held.file());
         assert_eq!(fx.attempt_row(&ui).0, "merging");
         assert!(!waiting.is_finished());
         drop(held);

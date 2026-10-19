@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv, refused};
+use common::{CPD, Run, TestEnv, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -399,7 +399,10 @@ fn the_worker_starts_only_once_the_lead_is_idle() {
     fx.add("final", &["--review"]).ok();
 
     let out = fx.dispatch("final").ok();
-    std::thread::sleep(Duration::from_secs(5));
+    wait_until("the driver to wait for the Lead", || fx.log("final-a1").contains("A3: waiting for the Lead to be idle"));
+    // time-claim: the driver forks nothing while the Lead works, over a whole 2 s poll of the Lead (LEAD_POLL); no
+    // per-poll signal from the driver (its log says only that it waits).
+    std::thread::sleep(Duration::from_millis(2500));
 
     // Still waiting: `starting`, no Worker, no Session, nothing forked.
     assert_eq!(fx.attempt("final-a1")["status"], "starting");
@@ -419,7 +422,7 @@ fn a_cancel_while_the_driver_waits_for_the_lead_ends_the_attempt_cancelled() {
     fx.fixture("UPDATE sessions SET state = 'working' WHERE id = 'lead1';");
     fx.add("final", &["--review"]).ok();
     let out = fx.dispatch("final").ok();
-    std::thread::sleep(Duration::from_secs(1));
+    wait_until("the driver to wait for the Lead", || fx.log("final-a1").contains("A3: waiting for the Lead to be idle"));
 
     fx.env.cpd(&["job", "cancel", "final", "--reason", "not needed", "--plan", PLAN]).ok();
     let attempt = fx.wait_end("final-a1", &out["pid"]);

@@ -1058,7 +1058,17 @@ fn child_writer() {
             if let Some(started) = &started {
                 fs::write(started, "").unwrap();
             }
-            std::thread::sleep(hold);
+            match std::env::var_os("STORE_CHILD_RELEASE").map(PathBuf::from) {
+                // Holds the lock until the test says so, not for a time.
+                Some(release) => {
+                    let deadline = Instant::now() + Duration::from_secs(60);
+                    while !release.exists() {
+                        assert!(Instant::now() < deadline, "{} never appeared", release.display());
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                None => std::thread::sleep(hold),
+            }
             Ok(json!({"txn": tx.id(), "entered": entered, "left": now_ms()}))
         })
     });
@@ -1128,6 +1138,15 @@ struct Writer {
 
 impl Writer {
     fn spawn(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>) -> Writer {
+        Writer::spawn_with(env, name, busy_ms, hold_ms, started, None)
+    }
+
+    /// A writer that holds the write lock until the file `release` exists.
+    fn spawn_holding(env: &TestEnv, name: &str, busy_ms: u64, started: &Path, release: &Path) -> Writer {
+        Writer::spawn_with(env, name, busy_ms, 0, Some(started), Some(release))
+    }
+
+    fn spawn_with(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>, release: Option<&Path>) -> Writer {
         let out = env.root().join(format!("{name}.json"));
         let mut cmd = env.command(std::env::current_exe().unwrap());
         cmd.args(["child_writer", "--exact", "--test-threads=1", "--quiet"])
@@ -1138,6 +1157,9 @@ impl Writer {
             .stdout(std::process::Stdio::null());
         if let Some(started) = started {
             cmd.env("STORE_CHILD_STARTED", started);
+        }
+        if let Some(release) = release {
+            cmd.env("STORE_CHILD_RELEASE", release);
         }
         Writer { child: KillOnDrop::new(cmd.spawn().unwrap()), out }
     }
@@ -1167,15 +1189,16 @@ fn a_second_writer_waits_for_the_first_and_reads_do_not() {
     let env = TestEnv::new();
     drop(open(&env));
     let started = env.root().join("a.started");
-    let mut a = Writer::spawn(&env, "a", 5000, 1500, Some(&started));
+    let release = env.root().join("a.release");
+    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
     a.wait_started(&started);
     let b = Writer::spawn(&env, "b", 20_000, 0, None);
-    // While A holds the write lock, a reader opens and reads at once.
-    let t = Instant::now();
+    // While A holds the write lock (until this test lets go of it), a reader opens and reads: had it to wait for A,
+    // it would wait for ever.
     let mut reader = open(&env);
     let txns: i64 = reader.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
     assert_eq!(txns, 1, "A has not committed yet");
-    assert!(t.elapsed() < Duration::from_millis(1000), "the reader waited {:?}", t.elapsed());
+    fs::write(&release, "").unwrap();
     let (a, b) = (a.wait(), b.wait());
     assert_eq!(a["ok"], true, "{a}");
     assert_eq!(b["ok"], true, "{b}");
@@ -1189,7 +1212,8 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
     let env = TestEnv::new();
     drop(open(&env));
     let started = env.root().join("a.started");
-    let mut a = Writer::spawn(&env, "a", 5000, 3000, Some(&started));
+    let release = env.root().join("a.release");
+    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
     a.wait_started(&started);
     let b = Writer::spawn(&env, "b", 200, 0, None).wait();
     assert_eq!(b["ok"], false, "{b}");
@@ -1197,6 +1221,7 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
     assert_eq!(b["error"]["details"]["busy_ms"], 200);
     let waited = b["ended"].as_u64().unwrap() - b["begun"].as_u64().unwrap();
     assert!(waited >= 200, "gave up after {waited} ms");
+    fs::write(&release, "").unwrap();
     assert_eq!(a.wait()["ok"], true);
     let mut store = open(&env);
     let txns: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();

@@ -721,19 +721,13 @@ fn follow_streams_new_events_in_commit_order_and_exits_zero_when_stdout_closes()
 #[test]
 fn follow_exits_zero_when_stdout_closes_with_no_event_to_write() {
     let env = seeded();
-    let mut follower = Follower::start(&env, &["--session", "lead1"]);
-    // Let it start and settle into its poll loop, then close its stdout; append nothing.
-    std::thread::sleep(Duration::from_millis(500));
+    let mut store = open(&env);
+    let mut follower = Follower::start(&env, &["--session", "lead1", "--since", "11"]);
+    // It is in its poll loop once it prints an Event committed after it started; then close its stdout and append nothing.
+    append_one(&mut store, NewEvent::new(Kind::SessionRenamed, "Session lead1 renamed.", json!({"name": "L"})).session(session("lead1"))).unwrap();
+    assert_eq!(follower.next().unwrap()["kind"], "session-renamed");
     follower.close_stdout();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let code = loop {
-        if let Some(status) = follower.child.try_wait().unwrap() {
-            break status.code().expect("not killed");
-        }
-        assert!(Instant::now() < deadline, "the follower did not exit within 2 s of its reader going away");
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert_eq!(code, 0);
+    assert_eq!(follower.exit(), 0, "the follower exits when its reader goes away");
 }
 
 #[test]
@@ -806,8 +800,11 @@ fn follow_exits_on_a_store_too_new_before_it_has_printed_anything() {
 #[test]
 fn follow_exits_non_zero_when_the_store_becomes_newer_while_it_is_idle() {
     let env = seeded();
-    let mut follower = Follower::start(&env, &["--plan", "pay"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let mut store = open(&env);
+    let mut follower = Follower::start(&env, &["--plan", "pay", "--since", "11"]);
+    // It is idle, in its poll loop, once it has printed an Event committed after it started.
+    append_edit(&mut store, "goal");
+    assert_eq!(follower.next().unwrap()["kind"], "job-edited");
     let conn = Connection::open(home(&env).db()).unwrap();
     conn.pragma_update(None, "user_version", 99).unwrap();
     let last = follower.next().unwrap();

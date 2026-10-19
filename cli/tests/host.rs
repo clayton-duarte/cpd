@@ -142,19 +142,21 @@ fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
     t.set_pane_session(&lead, &SessionId::new_v4()).unwrap();
     let view_pid = pane(&t.list_panes().unwrap(), &view).pid;
 
-    for id in [&engine, &view, &lead] {
+    // The Lead and the engine first, and until they are dead: tmux runs the `pane-died` hooks in the order the panes
+    // died, so once the view (killed last) is respawned, the hooks of the other two have run and left them dead.
+    for id in [&engine, &lead] {
         kill_program(t, id);
     }
     wait_until("the Lead and the engine to die", || {
         let panes = t.list_panes().unwrap();
         pane(&panes, &lead).dead && pane(&panes, &engine).dead
     });
+    kill_program(t, &view);
     wait_until("the view to respawn", || {
         let panes = t.list_panes().unwrap();
         let p = pane(&panes, &view);
         !p.dead && p.pid.is_some() && p.pid != view_pid
     });
-    sleep(Duration::from_millis(300));
     let panes = t.list_panes().unwrap();
     assert!(pane(&panes, &lead).dead && pane(&panes, &engine).dead, "{panes:?}");
     assert_eq!(pane(&panes, &view).cpd_view, Some(View::Tree), "the view keeps its option");
