@@ -160,11 +160,8 @@ fn follow(args: FollowArgs) -> Result<Output, CpdError> {
                 let Some(last) = batch.last() else { break };
                 let next = last.id;
                 let lines: String = batch.iter().map(to_line).collect();
-                if let Err(e) = stdout.write_all(lines.as_bytes()).and_then(|()| stdout.flush()) {
-                    return match e.kind() {
-                        std::io::ErrorKind::BrokenPipe => Ok(Output::Owned),
-                        _ => Err(CpdError::new(ErrorCode::StoreFailed, format!("Cannot write to stdout: {e}."))),
-                    };
+                if let Err(e) = print(&mut stdout, &lines) {
+                    return e.map(|()| Output::Owned);
                 }
                 cursor = next;
                 if (batch.len() as i64) < BATCH {
@@ -203,6 +200,15 @@ fn restart_args(args: impl Iterator<Item = OsString>, cursor: i64) -> Vec<OsStri
     out
 }
 
+/// Writes `lines` and flushes. `Err(Ok(()))` when the reader is gone (EPIPE: the normal end of a follower);
+/// `Err(Err(_))` for any other write error: `internal`, as no I/O error code exists and the database is not at fault.
+fn print(out: &mut impl Write, lines: &str) -> Result<(), Result<(), CpdError>> {
+    out.write_all(lines.as_bytes()).and_then(|()| out.flush()).map_err(|e| match e.kind() {
+        std::io::ErrorKind::BrokenPipe => Ok(()),
+        _ => Err(CpdError::new(ErrorCode::Internal, format!("Cannot write to stdout: {e}."))),
+    })
+}
+
 /// Whether the reader of `stdout` is gone, checked without writing (G1): a follower with no Event to
 /// write would otherwise never meet EPIPE. A pipe whose read end closed reports `POLLERR` on Linux; the
 /// hangup flag `POLLHUP` is handled too, as macOS reports it (unverified: not run on macOS).
@@ -220,6 +226,29 @@ fn reader_gone(stdout: &impl std::os::fd::AsFd) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A writer whose every write fails with `kind`.
+    struct Failing(std::io::ErrorKind);
+
+    impl Write for Failing {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(self.0.into())
+        }
+    }
+
+    #[test]
+    fn a_stdout_write_error_is_internal_not_store_failed() {
+        let err = print(&mut Failing(std::io::ErrorKind::StorageFull), "x\n").unwrap_err().unwrap_err();
+        assert_eq!(err.code(), ErrorCode::Internal, "{err:?}");
+    }
+
+    #[test]
+    fn a_closed_reader_ends_the_follower_without_an_error() {
+        assert!(matches!(print(&mut Failing(std::io::ErrorKind::BrokenPipe), "x\n"), Err(Ok(()))));
+    }
 
     fn restarted(args: &[&str], cursor: i64) -> Vec<String> {
         restart_args(args.iter().map(OsString::from), cursor).into_iter().map(|a| a.into_string().unwrap()).collect()

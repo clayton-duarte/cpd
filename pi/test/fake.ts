@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
 import { PROTOCOL } from "../lib/event.ts";
-import type { CommandCtx, Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
+import type { CommandCtx, Ctx, Message, MessageRenderer, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
 
@@ -299,6 +299,12 @@ export class FakePi implements PiApi {
 
   getSessionName(): string | undefined {
     return this.sessionName;
+  }
+
+  readonly renderers = new Map<string, MessageRenderer>();
+
+  registerMessageRenderer(customType: string, renderer: MessageRenderer): void {
+    this.renderers.set(customType, renderer);
   }
 
   registerTool(tool: ToolDefinition): void {

@@ -76,21 +76,9 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
     }
 }
 
-/// The dot of a Context, as the read model takes it: the most urgent of its live (not archived) Sessions.
-fn live_dot(plans: &[PlanNode]) -> Dot {
-    plans.iter().flat_map(|p| &p.sessions).filter(|s| !s.is_archived()).map(|s| s.dot).max().unwrap_or(Dot::Stopped)
-}
-
-/// Take every Context's dot again, after a test archived some of its Sessions.
-pub fn refresh_dots(t: &mut Tree) {
-    for c in &mut t.contexts {
-        c.dot = live_dot(&c.plans);
-    }
-}
-
 pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
     ContextNode {
-        dot: live_dot(&plans),
+        dot: Dot::Stopped, // no Manager; `managed` gives it one
         id: ContextId::parse(id).unwrap(),
         title: titled(id),
         jira: None,
@@ -99,6 +87,12 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
         archived_at: None,
         plans,
     }
+}
+
+/// `c` with a Manager whose own dot is `dot`: the dot of the Context row (commands.md §17, hs-d215).
+pub fn managed(mut c: ContextNode, dot: Dot) -> ContextNode {
+    c.dot = dot;
+    c
 }
 
 pub fn tree(contexts: Vec<ContextNode>) -> Tree {
@@ -110,11 +104,14 @@ pub fn tree(contexts: Vec<ContextNode>) -> Tree {
 /// - `alpha`: `ship` (dispatch; its Lead is working and in the chat slot; two forks, one idle, one blocked),
 ///   `sketch` (plan; idle), `old` (done; stopped);
 /// - `beta`: `rel` (pr; its Lead is blocked on a Worker question);
-/// - `gamma`: no Plan.
+/// - `gamma`: no Plan, no Manager.
+///
+/// A Context row shows its Manager's dot (hs-d215): `alpha`'s has an unread turn (white), `beta`'s is blocked (magenta),
+/// `gamma` has none (stopped).
 pub fn sample() -> Tree {
     use State::*;
     tree(vec![
-        context(
+        managed(context(
             "alpha",
             vec![
                 plan(
@@ -131,11 +128,11 @@ pub fn sample() -> Tree {
                 plan("sketch", "alpha", Phase::Plan, [4, 0, 0, 0, 0, 0], session("l-sketch", "sketch", Idle, None, Place::Parked), vec![]),
                 plan("old", "alpha", Phase::Done, [0, 0, 0, 0, 1, 36], session("l-old", "  ", Stopped, None, Place::None), vec![]),
             ],
-        ),
-        context(
+        ), Dot::White),
+        managed(context(
             "beta",
             vec![plan("rel", "beta", Phase::Deploy, [0, 0, 0, 0, 0, 3], session("l-rel", "rel lead", Blocked, Some("cpd: Plan review"), Place::Parked), vec![])],
-        ),
+        ), Dot::Magenta),
         context("gamma", vec![]),
     ])
 }
@@ -149,7 +146,6 @@ pub fn archived() -> Tree {
         t.contexts[0].plans[0].sessions[2].archived_at = Some(WHEN.into());
         t.contexts[0].plans[2].head.archived_at = Some(WHEN.into());
         t.contexts[0].plans[2].sessions[0].archived_at = Some(WHEN.into()); // archiving a Plan archives its Sessions
-        refresh_dots(&mut t);
         let mut zp = plan("zp", "zeta", Phase::Dispatch, [0, 0, 0, 0, 0, 2], session("l-zp", "zp lead", State::Stopped, None, Place::None), vec![session("f-zp", "zp fork", State::Stopped, None, Place::None)]);
         zp.head.archived_at = Some(WHEN.into());
         for s in &mut zp.sessions {

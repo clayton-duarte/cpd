@@ -235,7 +235,8 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        EXISTS (SELECT 1 FROM plans p WHERE p.lead_session = s.id),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
-           AND json_extract(e.data, '$.to') = 'idle' ORDER BY e.id DESC LIMIT 1),
+           AND json_extract(e.data, '$.to') = 'idle' AND json_extract(e.data, '$.from') IN ('working', 'blocked')
+         ORDER BY e.id DESC LIMIT 1),
        (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
            AND json_extract(e.data, '$.place') = 'chat' ORDER BY e.id DESC LIMIT 1),
        s.archived_at,
