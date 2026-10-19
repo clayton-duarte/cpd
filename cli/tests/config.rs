@@ -539,6 +539,7 @@ fn config_does_not_wait_for_a_migration() {
     let run = env.cpd(&["config"]);
     let waited = start.elapsed();
     run.ok();
+    // time-claim: `cpd config` does not wait for a 3 s migration; no per-poll signal from a command that never polls.
     assert!(waited < Duration::from_millis(2500), "waited {waited:?}");
     assert_eq!(run.stderr, "");
     release.join().unwrap();

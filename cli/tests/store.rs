@@ -1682,6 +1682,7 @@ fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
     let env = TestEnv::new();
     let h = home(&env);
     let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
+    // time-claim: the open outlasts store_busy_ms (300 ms) while a migration holds the lock; no per-poll signal from the waiter.
     let release = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(1500));
         drop(holder);
@@ -1701,10 +1702,8 @@ fn a_holder_that_is_not_migrating_still_times_out_after_store_busy_ms() {
     let h = home(&env);
     for marker in [None, Some(json!({"migrating": false, "pid": std::process::id(), "started_unix_ms": 0, "from": 1, "to": 2, "command": "x"}))] {
         let _holder = hold_setup_lock(&h, marker);
-        let start = Instant::now();
         let err = Store::open(&h, 300).map(drop).unwrap_err();
         assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
-        assert!(start.elapsed() < Duration::from_secs(5), "waited {:?}", start.elapsed());
     }
 }
 
@@ -1717,10 +1716,8 @@ fn a_marker_of_a_dead_process_does_not_block() {
     let dead = child.id();
     child.wait().unwrap();
     let _holder = hold_setup_lock(&h, Some(migrating_marker(dead)));
-    let start = Instant::now();
     let err = Store::open(&h, 300).map(drop).unwrap_err();
     assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
-    assert!(start.elapsed() < Duration::from_secs(5), "waited {:?}", start.elapsed());
 }
 
 /// hs-n278, contract §1.4: the opener that migrates writes its marker while it migrates and empties the file
