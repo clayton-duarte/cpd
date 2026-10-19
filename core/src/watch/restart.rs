@@ -22,8 +22,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
@@ -35,7 +33,8 @@ use super::report::{About, Step};
 use super::SOURCE;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::env::Env;
+use crate::events::{self, NewEvent};
 use crate::home::CpdHome;
 use crate::host::tmux::{installed_version, older_version};
 use crate::host::{Tmux, exe};
@@ -178,18 +177,16 @@ pub enum Outcome {
     Restarted { reopened: usize },
 }
 
-/// The lock of the one run of the restart: `flock`, so a run that dies frees it.
-fn take_lock(home: &CpdHome) -> Result<Option<Flock<File>>, CpdError> {
+/// The lock of the one run of the restart: `flock` (through `crate::lock`), so a run that dies
+/// frees it. The open file holds the lock while it lives.
+fn take_lock(home: &CpdHome) -> Result<Option<File>, CpdError> {
     let path = home.tmux_restart_lock();
     fs::create_dir_all(home.locks_dir()).map_err(|e| file_failed(&path, e))?;
-    let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| file_failed(&path, e))?;
-    loop {
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(flock) => return Ok(Some(flock)),
-            Err((_, Errno::EWOULDBLOCK)) => return Ok(None),
-            Err((back, Errno::EINTR)) => file = back,
-            Err((_, errno)) => return Err(file_failed(&path, format!("flock failed: {errno}"))),
-        }
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| file_failed(&path, e))?;
+    match crate::lock::try_lock(&file) {
+        Ok(true) => Ok(Some(file)),
+        Ok(false) => Ok(None),
+        Err(e) => Err(file_failed(&path, format!("flock failed: {e}"))),
     }
 }
 
@@ -280,9 +277,7 @@ fn wait_engine_gone(home: &CpdHome) -> Result<(), CpdError> {
 /// `cpd watch --restart-tmux` (internal): the restart, started detached by the engine; its output
 /// is `run/tmux-restart.log`. Exits 0 when it did nothing (not needed, not safe, another run).
 pub(super) fn detached() -> Result<crate::output::Output, CpdError> {
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let Env { home, config, mut store } = Env::open()?;
     let mut log = |line: &str| {
         let _ = writeln!(std::io::stderr(), "{} cpd tmux restart: {line}", now());
     };
@@ -330,8 +325,9 @@ pub(super) fn drain(engine: &mut Engine) {
 /// One `error` Event for a failed restart, then the file says it was raised.
 fn report(engine: &mut Engine, pending: &Pending, failed: &Failed) {
     let text = format!("The tmux restart failed: {} See: cpd doctor", failed.reason);
-    let data = json!({"source": SOURCE, "code": failed.code, "message": failed.reason, "details": {"at": failed.at, "server": pending.server, "installed": pending.installed, "log": "run/tmux-restart.log"}});
-    let appended = engine.store.write(SOURCE, |tx| events::append(tx, NewEvent::new(Kind::Error, text, data)));
+    let details = json!({"at": failed.at, "server": pending.server, "installed": pending.installed, "log": "run/tmux-restart.log"});
+    let event = NewEvent::error(text, SOURCE, &failed.code, &failed.reason, details);
+    let appended = engine.store.write(SOURCE, |tx| events::append(tx, event));
     match appended {
         Ok(_) => {
             let mut done = pending.clone();

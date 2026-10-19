@@ -477,6 +477,148 @@ fn ensure_fails_when_the_engine_does_not_start() {
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
 }
 
+// ---------- @cpd_workers ----------
+
+const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3 · 0 waiting · 0 queued#[default]";
+const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3 · 0 waiting · 0 queued#[default]";
+
+impl Fx {
+    /// A tmux server with one session, `keepalive`.
+    fn tmux_server(&self) {
+        assert!(self.env.tmux(&["new-session", "-d", "-s", "keepalive", "sleep", "600"]).status.success());
+    }
+
+    fn workers(&self) -> String {
+        self.option("@cpd_workers")
+    }
+
+    fn option(&self, name: &str) -> String {
+        let out = self.env.tmux(&["show", "-gv", name]);
+        String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
+    }
+}
+
+#[test]
+fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
+    let fx = fx("");
+    fx.tmux_server();
+    let lock = fx.live_driver("api-a1");
+    fx.add_running("api", "running", &ago(1));
+
+    let engine = fx.start();
+    wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·0#[default]");
+    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+
+    // Unchanged, it is not set again: a value put there by hand survives the next ticks.
+    assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
+    // time-claim: the value is not set again over more than one engine tick; no per-poll signal from the engine, which
+    // sets nothing at a tick where the text did not change.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.workers(), "by hand");
+
+    // A change sets it.
+    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';");
+    wait_until("@cpd_workers to change", || fx.workers() == NO_WORKERS);
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn the_engine_counts_waiting_and_queued_jobs() {
+    let fx = fx("concurrency = 1");
+    fx.tmux_server();
+    let lock = fx.live_driver("run-a1");
+    fx.add_running("run", "running", &ago(1));
+    // Ready but the only slot is taken (E3 starts nothing); the other needs it, so it is queued and not waiting.
+    fx.add_job("free", &[], "");
+    fx.add_job("blocked", &["free"], "");
+
+    let engine = fx.start();
+    let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 2 queued#[default]";
+    wait_until("@cpd_workers", || fx.workers() == long);
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·2#[default]");
+    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+/// The Inbox counter: dim `inbox 0` with no item; two open, visible items, the most urgent red, make it red `inbox 2`,
+/// and the width the status line compares counts it.
+#[test]
+fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
+    let fx = fx("[inbox]\nstuck_job_minutes = 1");
+    fx.tmux_server();
+    let engine = fx.start();
+    wait_until("@cpd_inbox", || fx.option("@cpd_inbox") == "#[dim]inbox 0#[default]");
+
+    // Two failed Jobs whose `job-failed` Event is older than `stuck_job_minutes`: E8 opens two red `job-stuck` items.
+    for key in ["old", "older"] {
+        fx.fixture(&format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                               fingerprint, failed_cause, created_txn, created_at)
+             VALUES ('pay', 'repo', '{key}', 'Title', 'S2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'failed', 0,
+                     hex(zeroblob(32)), 'crashed', cpd_txn(), 't');
+             INSERT INTO events (txn, at, kind, context, plan, job, text, data)
+             VALUES (cpd_txn(), '{}', 'job-failed', 'ctx', 'pay', '{key}', 'x', '{{}}');",
+            ago(5)
+        ));
+    }
+    wait_until("@cpd_inbox red 2", || fx.option("@cpd_inbox") == "#[fg=red]inbox 2#[default]");
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'job-stuck'"), 2);
+    assert_eq!(fx.option("@cpd_workers_width"), "42");
+    engine.stop();
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn without_a_tmux_server_the_workers_step_does_nothing_and_sets_the_text_once_one_appears() {
+    let fx = fx("");
+    let engine = fx.start();
+    // time-claim: no error over more than one engine tick without a tmux server; no per-poll signal from the engine,
+    // which records nothing at a tick that does nothing.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+    assert!(!fx.env.tmux(&["has-session"]).status.success());
+
+    fx.tmux_server();
+    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
+    let out = engine.stop();
+    assert_eq!(out.exit, 0, "{out:?}");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn a_tmux_failure_of_the_workers_step_is_one_error_and_the_engine_goes_on() {
+    let fx = fx("");
+    fx.tmux_server();
+    // A tmux that fails `set` and is the real one otherwise, first on the engine's PATH.
+    let real = std::env::var("PATH")
+        .unwrap()
+        .split(':')
+        .map(|dir| Path::new(dir).join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH");
+    fx.env.fake("tmux", &format!("case \" $*\" in *\" set -g @cpd_workers\"*) echo boom >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+    let engine = fx.start();
+    let workers_errors = || fx.texts("error").into_iter().filter(|t| t.contains("@cpd_workers")).collect::<Vec<_>>();
+    wait_until("the error", || workers_errors().len() == 1);
+    // time-claim: the failed set is not reported again over more than one engine tick; no per-poll signal from the
+    // engine, which records nothing at a tick that sets nothing new.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(workers_errors().len(), 1, "{:?}", workers_errors());
+    assert!(workers_errors()[0].contains("tmux set failed: boom"), "{:?}", workers_errors());
+    assert_eq!(fx.workers(), "");
+
+    // It kept running, and sets the text once tmux works again.
+    fx.env.fake("tmux", &format!("exec '{}' \"$@\"", real.display()));
+    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
+    let out = engine.stop();
+    assert_eq!(out.exit, 0, "{out:?}");
+}
+
 #[test]
 fn ensure_says_the_exit_status_is_unknown_when_tmux_has_none() {
     let fx = fx("");
