@@ -2734,11 +2734,11 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
 
 ```json
 {"ok": true, "key": {"owner": "clayton-duarte", "repo": "cpd"}, "role": "worker",
- "files": ["/home/clayton/dotfiles/cpd/policy/owners/clayton-duarte.toml"],
+ "files": ["/home/clayton/.cpd/policy/owners/clayton-duarte.toml"],
  "policy": {
-   "pr": {"source": "owner:/home/clayton/dotfiles/cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
-          "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/dotfiles/cpd/policy/owners/clayton-duarte.toml"},
-                   "feedback.checks": {"value": "none", "source": "owner:/home/clayton/dotfiles/cpd/policy/owners/clayton-duarte.toml"}},
+   "pr": {"source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml", "audience": ["lead", "worker"],
+          "keys": {"gate": {"value": "local", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"},
+                   "feedback.checks": {"value": "none", "source": "owner:/home/clayton/.cpd/policy/owners/clayton-duarte.toml"}},
           "text": "These repos run no GitHub Actions: …"},
    "deploy": {"source": "default", "audience": ["lead"], "keys": {}, "text": ""},
    "code": {"source": "default", "audience": ["lead", "worker"], "keys": {}, "text": ""},
