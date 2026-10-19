@@ -301,6 +301,26 @@ impl<'a> Pane<'a> {
         }
     }
 
+    /// Waits until `rows` are the screen's rows from `first` on: tmux answers `capture-pane` between the writes of a
+    /// frame, so a screen with the row a test looks for can still lack the rows drawn after it. Panics with `what`, the
+    /// rows wanted and the last screen.
+    fn wait_rows(&self, what: &str, first: usize, rows: &[String]) -> Vec<String> {
+        let start = Instant::now();
+        loop {
+            let screen = self.screen();
+            if screen.len() >= first + rows.len() && screen[first..first + rows.len()] == *rows {
+                return screen;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "waiting for {what}: rows {first}.. should be\n{}\nthe screen is:\n{}",
+                rows.join("\n"),
+                screen.join("\n")
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
     /// Waits until the tree has been drawn.
     fn ready(&self) -> Vec<String> {
         self.wait("the tree", |s| s.iter().any(|r| r.contains("alpha")))
@@ -668,7 +688,7 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     archive(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 20);
-    let screen = pane.ready();
+    pane.ready();
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let mut expected = vec![
         String::new(),
@@ -684,25 +704,22 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
     ];
     expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
     expected.extend(inbox_section(46));
-    assert_eq!(
-        screen,
-        expected,
-        "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
-    );
+    // `ready` may catch the first frame half drawn: wait for all of it
+    let what = "the archived Plan `old` behind beta's `…`, the archived Context `gamma` behind the last";
+    let screen = pane.wait_rows(what, 0, &expected);
+    assert_eq!(screen, expected, "{what}");
     // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
     pane.click(4, 8);
-    let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
-    assert_eq!(screen[7..11], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
+    let expanded = [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned()];
+    pane.wait_rows("the archived Plan", 7, &expanded);
     // a click on the archived Plan shows its history (below); then the other `…` shows the archived Context
     pane.click(10, 9);
     wait_for_calls(&env, 1);
     pane.click(1, 10);
-    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == &format!(" ▾ {STOPPED} gamma")));
-    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma")]);
+    pane.wait_rows("the archived Context", 9, &[row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma")]);
     // a click on beta's `…` collapses its group again
     pane.click(4, 8);
-    let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
-    assert_eq!(screen[7..9], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
+    pane.wait_rows("the group collapsed", 7, &[row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
