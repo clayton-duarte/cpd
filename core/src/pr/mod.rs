@@ -7,6 +7,7 @@
 //! - `view`: a PR's checks, reviews and comments, read-only (`pr view`);
 //! - `rebase`: the Lead Branch onto the base, the Gate and the push (`pr rebase`);
 //! - `push`: the Gate and a plain push of the Lead Branch (`pr push`);
+//! - `merge`: a clean pull request squash-merged on GitHub (`pr merge`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
 //! `pr open`, `pr rebase` and `pr push` take no lock (hs-d243): each runs its Gate on one
@@ -18,6 +19,7 @@ mod cancel;
 mod edit;
 mod feedback;
 mod gh;
+mod merge;
 mod open;
 mod poll;
 pub mod pulls;
@@ -65,6 +67,8 @@ pub enum Command {
     Push(Args),
     /// Show the PR's checks, reviews and comments (§9.8)
     View(Args),
+    /// Squash-merge a clean pull request on GitHub and delete its branch (§9.10)
+    Merge(merge::MergeArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -152,6 +156,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Rebase(args) => rebase::rebase(args),
         Command::Push(args) => push::push(args),
         Command::View(args) => view::view(args),
+        Command::Merge(args) => merge::merge(args),
     }
 }
 
