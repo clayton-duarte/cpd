@@ -94,7 +94,7 @@ A domain a scope does not set is **inherited** from the next less specific scope
 
 | Domain | cpd default |
 |---|---|
-| `pr` | `update` = today's (`rebase`, `core/src/pr/rebase.rs:60`; whether the default should change is Q8); `feedback.checks = "any"`, `feedback.comments = false` (`core/src/pr/pulls.rs:317-328`); `title = "plan"` (`core/src/pr/open.rs:190`); `body = "cpd"`; `draft = false` (ready, `core/src/pr/open.rs:44-51` per repo-policy B4); `text` = neutral (no conflict procedure beyond what the commands say) |
+| `pr` | `update` = today's (`rebase`, `core/src/pr/rebase.rs:60`; whether the default should change is Q8); `feedback.checks = "any"`, `feedback.comments = false` (`core/src/pr/pulls.rs:317-328`); `title = "plan"` (`core/src/pr/open.rs:190`); `body = "cpd"`; `draft = false` (ready: `gh pr create` without `--draft`, `core/src/pr/gh.rs:205`); `text` = neutral (no conflict procedure beyond what the commands say) |
 | `hooks` | none: the repo's `.config/wt.toml` or nothing, as today (`docs/contract.md:1865`) |
 | `mcp` | no servers |
 | `deploy`, `code`, `tests`, `monitor`, `instructions` | empty `text` |
@@ -194,7 +194,7 @@ Every scope file is parsed once, at the first resolve of a command or at `cpd po
 | A file is not TOML, names an unknown domain, an unknown key, a wrong type or an enum value outside its set | `policy_invalid` (exit 1), `details.file`, `details.key` | any resolve; `cpd policy show` |
 | A key's owner has no `owners/<owner>.toml` | `owner_unknown` (exit 1), `details.owner` | `context new --owner`, `pr add`, any resolve. An empty file is the explicit "default in every domain" declaration. |
 | `repos/<owner>/<name>.toml` exists but its owner file does not | `owner_unknown` | any resolve |
-| A repo cpd cannot key: no `origin` (allowed today, `docs/contract.md` §7.2), a non-`github.com` URL, an SSH host alias such as `git@github-work:<work-owner>/x.git` | `repo_unkeyed` (exit 1), `details.url` | `pr add`, before any row is written; the fix is Q3 |
+| A repo cpd cannot key: no `origin` (allowed today, `docs/contract.md:1844`), a non-`github.com` URL, an SSH host alias such as `git@github-work:<work-owner>/x.git` | `repo_unkeyed` (exit 1), `details.url` | `pr add`, before any row is written; the fix is Q3 |
 | A PR's owner differs from its Context's (if Q4 chooses (c)) | `owner_mismatch` (exit 1) | `pr add`, and a DB trigger as the backstop |
 | A typed key that references something absent (an `mcp` name the Session asks for and its key does not list) | `mcp_unknown` | the attach request (section 5.5) |
 
@@ -233,7 +233,7 @@ Read path: the **adapter**, once per pi session, at `session_start` (`pi/lib/ada
 
 The adapter never chooses a key and never reads a scope file; it has the Session id only (`CPD_SESSION`, `core/src/host/pi.rs:172`). A failed `policy show` is delivered as an error message (as `contextUpdates` does, `pi/lib/adapter.ts:432-451`) and the Session gets no policy text: loud, not defaulted.
 
-Alternative channel, same key: cpd passes `--append-system-prompt <run/…/policy.md>` in `core/src/host/pi.rs` (`lead()` `:178`, `worker()` `:225`). Simpler and adapter-free, but it suppresses any discovered `APPEND_SYSTEM.md` (`$PI/dist/core/resource-loader.js:480-484`, repo-policy §3.4). Choice: Q7.
+Alternative channel, same key: cpd passes `--append-system-prompt <run/…/policy.md>` in `core/src/host/pi.rs` (`lead()` `:179`, `worker()` `:225`). Simpler and adapter-free, but it suppresses any discovered `APPEND_SYSTEM.md` (`$PI/dist/core/resource-loader.js:480-484`, repo-policy §3.4). Choice: Q7.
 
 The first messages (`core/src/context/manager.rs:144-148`, `core/src/plan/new.rs:241-258`) and the Worker Spec template (`core/src/spec/worker.md`, rendered by `core/src/spec/mod.rs:174`) stay policy-free: their headers are cpd mechanics, their free text (brief, Spec fields) is the Lead's and the User's.
 
@@ -253,7 +253,7 @@ Per-owner skills are not proposed (YAGNI). If evidence asks for them, the adapte
 
 ### 5.6 Context records and digests
 
-Records are rows of `context_records` keyed by `context` (`docs/contract.md:846-848`); the digest and the first messages render a Context's records only (`core/src/context/digest.rs:175`, `first_message`). With one owner per Context (Q4 options (c), (e)), every record of a Context is single-owner by construction, and so is every digest and every Lead's first message. Without it, nothing can make them single-owner (section 4.3 (f)). No change to the distiller (`core/src/host/pi.rs:249-258`) is needed.
+Records are rows of `context_records` keyed by `context` (`docs/contract.md:846-848`); the digest and the first messages render a Context's records only (`core/src/context/digest.rs:175`, `first_message`). With one owner per Context (Q4 options (c), (e)), every record of a Context is single-owner by construction, and so is every digest and every Lead's first message. Without it, nothing can make them single-owner (section 4.3 (f)). No change to the distiller (`distiller()`, `core/src/host/pi.rs:248-259`) is needed.
 
 ## 6. Introspection
 
@@ -282,7 +282,7 @@ Agents use the same command; the skills name it where they defer to a policy. Th
 | "The User's reviewer bot or colleagues review each PR" | `pi/skills/cpd-lead/SKILL.md:269` | `pr` `text` of the owner whose PRs the bot reviews (guess: `clayton-duarte`). The skill keeps "reviews arrive on GitHub while CI runs". |
 | `attempt_minutes` "90 on the User's machines, hs-d11" | `pi/skills/cpd-lead/references/spec-files.md:37` | **Not a policy**: a machine config value (`core/src/config/file.rs:113`, built-in default 30 at `:242`). The skill says "the configured `timeouts.attempt_minutes` (`cpd config`)". |
 | `hs-*` ids sent to models | `pi/skills/cpd-lead/SKILL.md:38`, `:67`, `:179`, `:274`, `:277`; `pi/skills/cpd-manager/SKILL.md:84`; `pi/skills/cpd-lead/references/questions.md:5`; `references/spec-files.md:37`, `:44`; `pi/lib/reminder.ts:8` (`REMINDER_TEXT`); `core/src/context/distill_prompt.md:10` (example ids) | Rules stated without an id (an id resolves only on hs, hs-d262); examples use a neutral `<machine>-d43`. `pi/skills/skill.test.ts:237-243`, which today pins `(hs-d239)`, changes in the same Job. Code comments and metadata never sent to a model (`pi/lib/adapter.ts:498` `details.rule`, repo-policy §2.3) are left. |
-| `pr rebase`'s force-with-lease vs plain pushes | `core/src/pr/rebase.rs:60-61` vs `core/src/pr/push.rs:31`, `core/src/git/worktree.rs` (Lead Branch pushes) | `pr.update`: `rebase` (force-with-lease after a rebase) or `merge` (merge the base, plain push). cpd's default keeps today's code (`rebase`) so migration is behaviour-neutral; whether the default should change is Q8. |
+| `pr rebase`'s force-with-lease vs plain pushes | `core/src/pr/rebase.rs:60-61` vs `core/src/pr/push.rs:31`, `core/src/git/worktree.rs:175-186` (`push_lead_branch`, plain) | `pr.update`: `rebase` (force-with-lease after a rebase) or `merge` (merge the base, plain push). cpd's default keeps today's code (`rebase`) so migration is behaviour-neutral; whether the default should change is Q8. |
 
 Where hs-d220 belongs (Q2), the choices:
 
@@ -342,7 +342,7 @@ Owner text as `$CPD_HOME/owners/<owner>/AGENTS.md`, delivered by the adapter; be
 
 ### Option 3: directory convention, pi delivers text
 
-Repos are checked out under `~/projects/<owner>/<name>`, owner text in `~/projects/<owner>/AGENTS.md`; pi's cwd walk delivers it to every Worker (whose worktree is a sibling, `core/src/git/worktree.rs` per repo-policy §3.1), and cpd starts a Lead and Manager with cwd `~/projects/<owner>`. Behaviour keys in the repo's committed `.config/cpd.toml` plus an owner TOML next to that `AGENTS.md`.
+Repos are checked out under `~/projects/<owner>/<name>`, owner text in `~/projects/<owner>/AGENTS.md`; pi's cwd walk delivers it to every Worker (whose worktree is a sibling, `core/src/git/worktree.rs:55-58`), and cpd starts a Lead and Manager with cwd `~/projects/<owner>`. Behaviour keys in the repo's committed `.config/cpd.toml` plus an owner TOML next to that `AGENTS.md`.
 
 | | |
 |---|---|
