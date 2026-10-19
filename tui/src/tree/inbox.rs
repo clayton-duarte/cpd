@@ -26,7 +26,7 @@ use crate::widgets::{Window, dim, max_scroll, section_header, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 
-/// How many item rows the section shows before `+<n> more`.
+/// How many item rows the section shows before the `└ expand` row.
 pub const SHOWN: usize = 3;
 
 /// The dot and a space before the label.

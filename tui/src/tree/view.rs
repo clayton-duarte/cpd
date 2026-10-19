@@ -103,7 +103,7 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (header, items, `+<n> more`) are shown, not only the first three, in at most half the
+    /// The Inbox section's rows (header, items, `└ collapse`) are shown, not only the first three, in at most half the
     /// column ([`View::inbox_cap`]). View state only.
     inbox_expanded: bool,
     /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
@@ -324,7 +324,7 @@ impl View {
 
     pub fn mouse(&mut self, m: MouseEvent) -> Effect {
         let at = Position::new(m.column, m.row);
-        // a right click on the Inbox section: the menu of an item row; the header and `+<n> more` have none
+        // a right click on the Inbox section: the menu of an item row; the header and the toggle row have none
         if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
             self.note.clear();
             if let Some(Hit::Item(i)) = self.shape().hit(at.y - self.inbox_area.y) {

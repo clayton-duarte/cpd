@@ -1384,7 +1384,7 @@ fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
 // ---------- the Inbox section (commands.md §13.2) ----------
 
 #[test]
-fn the_inbox_sections_more_row_expands_the_list_inline_and_less_folds_it() {
+fn the_inbox_sections_toggle_row_expands_the_list_inline_and_folds_it_and_the_header_does_not() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
@@ -1392,13 +1392,18 @@ fn the_inbox_sections_more_row_expands_the_list_inline_and_less_folds_it() {
     pane.ready();
     // the section is pinned to the bottom, the Session rows above it
     assert_eq!(pane.rows_are(15, &inbox_section(46))[15..], inbox_section(46));
-    pane.click(10, 19); // `+1 more`
+    pane.click(10, 19); // `└ expand`
     let item = |label: &str| format!(" {NEEDS_YOU} {label}{}5m", " ".repeat(44 - 2 - label.len() - 2));
     let expanded = [inbox_section(46)[..4].to_vec(), vec![item("m-alpha label"), " └ collapse".to_owned()]].concat();
     assert_eq!(pane.rows_are(14, &expanded)[14..], expanded);
-    pane.click(3, 19); // `− less`
+    pane.click(3, 19); // `└ collapse`
     assert_eq!(pane.rows_are(15, &inbox_section(46))[15..], inbox_section(46));
     assert!(calls(&env).is_empty(), "expanding and folding are no commands");
+    pane.click(10, 15); // the header: the title line toggles nothing
+    pane.settled();
+    let without_note = |rows: Vec<String>| -> Vec<String> { rows.into_iter().filter(|r| !r.contains(NO_CLIENT)).collect() };
+    let rows = without_note(pane.screen());
+    assert_eq!(rows[rows.len() - 5..], inbox_section(46), "still folded");
 }
 
 /// `populate`'s items and one of each kind that jumps or links; the engine-error is caused by Event `event`.
