@@ -40,6 +40,9 @@ pub struct Args {
     /// Start the engine in cpd-work:watch when it is not running, and return at once
     #[arg(long)]
     ensure: bool,
+    /// With `--ensure`, as the supervising tmux hooks call it (contract §6.6): wait for a dying engine's lock, one start at a time, backing off after a failed start
+    #[arg(long, hide = true, requires = "ensure")]
+    wait: bool,
     /// Restart the tmux server onto the installed tmux (internal: the engine starts it, contract §6.1)
     #[arg(long, hide = true, conflicts_with = "ensure")]
     restart_tmux: bool,
@@ -48,7 +51,7 @@ pub struct Args {
 /// `cpd watch [--ensure]`.
 pub fn run(args: Args) -> Result<Output, CpdError> {
     if args.ensure {
-        ensure::ensure()
+        ensure::ensure(args.wait)
     } else if args.restart_tmux {
         restart::detached()
     } else {
