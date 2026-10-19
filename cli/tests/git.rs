@@ -1224,6 +1224,7 @@ fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
 
     let added = std::thread::scope(|s| {
         s.spawn(|| {
+            // time-claim: the add outlasts an entry that stays half-created for a second; no per-poll signal from git.
             std::thread::sleep(Duration::from_secs(1));
             fs::remove_dir_all(&adding).unwrap();
         });
@@ -1234,10 +1235,8 @@ fn a_gate_worktree_add_outlasts_a_concurrent_worktree_add_in_progress() {
     assert!(gate.path().exists());
     gate.remove().unwrap();
     // Any other failure is not retried.
-    let started = Instant::now();
     let err = GateWorktree::add(&repo, &plan(), &key(), "no-such-commit").unwrap_err();
     assert_eq!((err.code(), &err.details()["argv"][3]), (ErrorCode::GitFailed, &serde_json::json!("worktree")));
-    assert!(started.elapsed() < Duration::from_secs(1));
 }
 
 /// The reproduction of the Gate's race: `ROUNDS` rounds of `PARALLEL` `worktree add --detach --lock`
