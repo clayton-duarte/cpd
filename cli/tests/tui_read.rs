@@ -512,7 +512,7 @@ fn a_plans_items_fill_its_lead_and_not_its_forks() {
     }
     assert_eq!(dots(&tree.contexts[0].plans[0]), [("l-ship", Dot::Red), ("f-ship", Dot::Red)], "the Lead: job-stuck; the fork: its own dialog");
     assert_eq!(dots(&tree.contexts[0].plans[1]), [("l-sketch", Dot::Idle)], "another Plan of the Context: nothing");
-    assert_eq!(dots(&tree.contexts[1].plans[1]), [("l-rel", Dot::Red)], "pr-failing of its Plan");
+    assert_eq!(dots(&tree.contexts[1].plans[1]), [("l-rel", Dot::Idle)], "pr-failing of its Plan: its Lead fixes it, no dot (hs-d302)");
     assert_eq!(dots(&tree.contexts[1].plans[0]), [("l-old", Dot::Stopped)]);
 
     inbox(&mut store, &[condition(Kind::PlanReview, Urgency::Magenta, None, Some("ship"), "alpha", "review:ship/r2")], T0);

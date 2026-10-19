@@ -450,6 +450,15 @@ fn the_column_has_no_engine_slots_escalations_events_or_hint() {
     }
 }
 
+/// `acme/web#4` (failed checks) is owned by no Plan, `acme/repo#20` (pending) by `mine`: only the unowned one is red.
+#[test]
+fn failed_checks_are_red_on_an_unowned_pull_request() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let buf = render(46, 25, &w);
+    assert_eq!(buf[find(&buf, palette::CHECKS_FAILED)].fg, palette::color(Meaning::Failed));
+}
+
 #[test]
 fn the_column_takes_every_colour_from_the_palette() {
     let (_, buf) = column(29);
@@ -457,7 +466,7 @@ fn the_column_takes_every_colour_from_the_palette() {
     let c = palette::color;
     // The PRs: state and checks.
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
-    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Failed));
+    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Waiting), "`acme/repo#7` is a Plan's: its Lead fixes failed checks (hs-d302)");
     assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
     // The headers: grey, the title a reversed block, not bold.
     for title in ["PRs", "git", "Jira"] {
