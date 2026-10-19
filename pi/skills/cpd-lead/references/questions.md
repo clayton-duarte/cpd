@@ -2,7 +2,7 @@
 
 Rules for every `ask_user_question` call (trial t5). The tool opens a dialog in the editor area; the User answers there.
 
-- **A dialog holds one short question.** Tables, lists and long text go in the chat first; then the dialog asks (hs-n48). A `preview` is a few lines at most.
+- **A dialog holds one short question.** Tables, lists and long text go in the chat first; then the dialog asks. A `preview` is a few lines at most.
 - **One call per interview round.** At most 4 questions, 2–4 options each. Header at most 16 characters. Each question ends with `?`.
 - **Every option has a `description`**: one line stating the trade-off. Never author the labels `Other`, `Type something.` or `Next` (reserved). The tool always adds a `Type something.` row, so the User can answer freely.
 - **`multiSelect: true` only when the picks are independent.** A `preview` goes on single-select options only, and stays to a few lines (the box is capped at 20 rows and does not scroll). It is not a place to read a table or a Plan; the Plan goes through `cpd_plan_review`.

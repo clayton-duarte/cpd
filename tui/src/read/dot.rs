@@ -37,7 +37,7 @@ impl Dot {
         match state {
             State::Working => Dot::Working,
             State::Stopped => Dot::Stopped,
-            State::Working | State::Idle | State::Blocked => Dot::Idle,
+            State::Idle | State::Blocked => Dot::Idle,
         }
     }
 
