@@ -12,6 +12,7 @@ use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
+use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
@@ -61,10 +62,10 @@ fn setup(env: &TestEnv) {
                 &format!(
                     "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                      INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
-                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', 't1', 't1'),
+                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', '2020-01-01T00:00:01Z', 't1'),
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't2'),
                        ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'stopped', '2020-01-01T00:00:00Z', 't0'),
-                       ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', 't3', 't3');
+                       ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', '2020-01-01T00:00:03Z', 't3');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
                        ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
@@ -166,14 +167,19 @@ fn fake_pi(env: &TestEnv, then: &str) {
 }
 
 /// The cockpit: session `cpd`, window `main` with a tree pane and the
-/// placeholder in the chat slot.
+/// placeholder in the chat slot, on a server started with cpd's
+/// [`SERVER_OPTIONS`] (contract §6.1), as cpd starts it: with `remain-on-exit`,
+/// a pane whose program exits stays, dead, instead of taking the chat slot with it.
 fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
         let out = env.tmux(args);
         assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    let sleep = format!("sleep {SLEEP_SECONDS}");
+    let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().copied().chain([";"])).collect();
+    args.extend(["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &sleep]);
+    let tree = ok(&args);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
     let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
@@ -225,6 +231,37 @@ fn window_names(env: &TestEnv) -> Vec<String> {
     names
 }
 
+/// Every pane of the server, dead ones with their screen (where a dead `cpd
+/// session run` printed its error): the evidence of what the chat slot held.
+fn panes_report(env: &TestEnv) -> String {
+    let format = "#{pane_id} #{session_name}:#{window_name} dead=#{pane_dead} status=#{pane_dead_status} view=#{@cpd_view} session=#{@cpd_session}";
+    let listed = String::from_utf8_lossy(&env.tmux(&["list-panes", "-a", "-F", format]).stdout).into_owned();
+    let mut report = String::new();
+    for line in listed.lines() {
+        report.push_str(&format!("{line}\n"));
+        if line.contains(" dead=1 ") {
+            let pane = line.split(' ').next().unwrap();
+            let screen = String::from_utf8_lossy(&env.tmux(&["capture-pane", "-p", "-J", "-t", pane]).stdout).into_owned();
+            for text in screen.lines().filter(|text| !text.trim().is_empty()) {
+                report.push_str(&format!("  | {text}\n"));
+            }
+        }
+    }
+    report
+}
+
+/// `cpd <args>`'s success fields, where no pane may die: it panics with
+/// [`panes_report`] when a pane is dead before the command, or the command fails.
+fn ok_with_panes(env: &TestEnv, args: &[&str]) -> Value {
+    let before = panes_report(env);
+    assert!(!before.contains(" dead=1 "), "a pane died before cpd {args:?}:\n{before}");
+    let run = env.cpd(args);
+    if run.exit != 0 {
+        panic!("cpd {args:?} failed: {run:?}\npanes:\n{}", panes_report(env));
+    }
+    run.ok()
+}
+
 fn pi_calls_with(env: &TestEnv, flag: &str) -> Vec<Vec<String>> {
     env.calls("pi").into_iter().filter(|c| c.iter().any(|a| a == flag)).collect()
 }
@@ -247,7 +284,7 @@ fn list_filters_and_derives_place_and_leads() {
     assert_eq!(
         *lead1,
         json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
-               "state": "idle", "state_label": null, "state_at": "t1", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
+               "state": "idle", "state_label": null, "state_at": "2020-01-01T00:00:01Z", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
                "forked_from": null, "plan_lead": true, "tier": "O3",
                "cwd": env.root().display().to_string()})
     );
@@ -364,6 +401,39 @@ fn state_follows_section_3_6() {
     refused(&state(&["asleep"]), "usage", 2);
     refused(&env.cpd(&["session", "state", "idle"]), "session_required", 2);
     refused(&env.cpd(&["session", "state", "idle", "--session", "nobody"]), "session_not_found", 4);
+}
+
+#[test]
+fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
+    let env = TestEnv::new();
+    setup(&env);
+    let state = |args: &[&str]| {
+        let mut argv = vec!["session", "state"];
+        argv.extend(args);
+        argv.extend(["--session", LEAD1]);
+        env.cpd(&argv)
+    };
+
+    // Only `idle` takes `--reply`; a refusal writes nothing.
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    for other in [&["working", "--reply"][..], &["blocked", "--label", "x", "--reply"], &["stopped", "--reply"]] {
+        refused(&state(other), "usage", 2);
+    }
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+
+    state(&["working"]).ok();
+    state(&["idle", "--reply"]).ok();
+    let all = events(&env, "session-state");
+    assert_eq!(all.last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null, "reply": true}));
+
+    // Without `--reply` the Event has no `reply`; an unchanged state writes nothing whatever `--reply`.
+    state(&["working"]).ok();
+    state(&["idle"]).ok();
+    assert_eq!(events(&env, "session-state").last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null}));
+    let (events_before, txns) = (events(&env, "session-state").len(), query::<i64>(&env, "SELECT count(*) FROM txns"));
+    assert_eq!(state(&["idle", "--reply"]).ok()["already"], true);
+    assert_eq!(events(&env, "session-state").len(), events_before);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
 }
 
 #[test]
@@ -743,7 +813,7 @@ fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     fs::write(&message, "You are the Manager.").unwrap();
 
     // A stopped Manager with no pane is resumed in a new window and swapped in.
-    let out = env.cpd(&["session", "open", MANAGER]).ok();
+    let out = ok_with_panes(&env, &["session", "open", MANAGER]);
     assert_eq!(out["displaced"], Value::Null);
     assert_eq!(slot(&env).session, MANAGER);
     assert_placeholders(&env, 0);
@@ -752,17 +822,17 @@ fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     assert_eq!(show(&env, MANAGER)["place"], "chat");
 
     // A Lead displaces it into `ctx-<context>`.
-    assert_eq!(env.cpd(&["session", "open", LEAD1]).ok()["displaced"], MANAGER);
+    assert_eq!(ok_with_panes(&env, &["session", "open", LEAD1])["displaced"], MANAGER);
     let manager = panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap();
     assert_eq!(manager.window_name, "ctx-ctx");
     assert_eq!(window_names(&env), ["ctx-ctx", "main"]);
     assert_eq!(show(&env, MANAGER)["place"], "parked");
 
     // Parking the Lead, then opening the Manager again uses its live pane.
-    env.cpd(&["session", "park"]).ok();
-    let out = env.cpd(&["session", "open", MANAGER]).ok();
+    ok_with_panes(&env, &["session", "park"]);
+    let out = ok_with_panes(&env, &["session", "open", MANAGER]);
     assert_eq!(out["pane"], json!(manager.pane));
-    env.cpd(&["session", "park", MANAGER]).ok();
+    ok_with_panes(&env, &["session", "park", MANAGER]);
     assert_eq!(panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap().window_name, "ctx-ctx");
 }
 
@@ -1105,7 +1175,7 @@ fn archive_of_a_lead_with_no_pane_closes_nothing() {
         &env,
         &format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
-               VALUES ('{fork}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', 't', 't', 'lead1')"
+               VALUES ('{fork}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't', 'lead1')"
         ),
     );
     let out = env.cpd(&["session", "archive", fork]).ok();
@@ -1234,7 +1304,6 @@ fn dying_leads(env: &TestEnv) {
         ),
     );
     cockpit(env);
-    assert!(env.tmux(&["set", "-g", "remain-on-exit", "on"]).status.success());
 }
 
 /// Lets every Lead's pi but `lead2`'s exit, so its pane dies.
@@ -1247,7 +1316,7 @@ fn is_dead(env: &TestEnv, pane: &str) -> bool {
     String::from_utf8(out.stdout).unwrap().lines().any(|l| l == format!("{pane} 1"))
 }
 
-/// `cpd watch` with a one-second tick, killed when dropped.
+/// `cpd watch` with a tick of 0.2 s, killed when dropped.
 struct Engine(std::process::Child);
 
 impl Drop for Engine {
@@ -1261,7 +1330,7 @@ fn engine(env: &TestEnv) -> Engine {
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     let path = env.cpd_home().join("config.toml");
     let config = fs::read_to_string(&path).unwrap();
-    fs::write(&path, format!("{config}[watch]\ntick_seconds = 1\n")).unwrap();
+    fs::write(&path, format!("{config}[watch]\ntick_seconds = 0.2\n")).unwrap();
     let child = env.command(CPD).arg("watch").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     Engine(child)
 }
@@ -1523,8 +1592,8 @@ fn quit_fixture(env: &TestEnv) {
     exec_sql(
         env,
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
-           ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', 't', 't', 'lead1'),
-           ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', 't', 't', 'lead2')",
+           ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead1'),
+           ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead2')",
     );
     for id in ["side", "side2", LEAD1, LEAD2] {
         pi_file(env, id, false);
@@ -1681,10 +1750,10 @@ fn setup_short(env: &TestEnv) {
         &format!(
             "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('cafe', 'ctx', 'Cafe', 'grounding', '{CAFE_LEAD}', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
-               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', 't', 't4'),
-               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', 't', 't5'),
-               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', 't', 't6'),
-               ('{CAFE_PREFIXED}', 'lead', 'ctx', 'cafe', 'Cafe prefixed', '/', 'O3', 'stopped', 't', 't7')"
+               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't4'),
+               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't5'),
+               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't6'),
+               ('{CAFE_PREFIXED}', 'lead', 'ctx', 'cafe', 'Cafe prefixed', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7')"
         ),
     );
 }

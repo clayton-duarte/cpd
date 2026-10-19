@@ -1,6 +1,7 @@
 //! E9, Context digests (contract §3.7; hs-d194 D4): starts `cpd context distill`
 //! for each Context whose digest is behind its records once its newest record is
-//! quiet. It only decides and spawns, as E3 does: the run takes its own lock,
+//! quiet, or at once when 20 or more records are newer than the digest (hs-d252).
+//! It only decides and spawns, as E3 does: the run takes its own lock,
 //! does its own work and appends its own `error` Event.
 
 use std::fs::{self, OpenOptions};
@@ -20,6 +21,10 @@ use crate::ids::ContextId;
 
 /// How old a Context's newest record must be before its digest is rebuilt (§3.7 E9).
 const QUIET: time::Duration = time::Duration::minutes(10);
+
+/// How many records newer than the latest digest start a rebuild without the quiet period (§3.7 E9; a first
+/// message carries the digest plus at most this many newer records, §4.6 "Consumers").
+const BACKLOG: i64 = 20;
 
 /// Whether the newest record, written at `newest`, is quiet at `now`.
 fn quiet(newest: &str, now: OffsetDateTime) -> Result<bool, CpdError> {
@@ -62,17 +67,30 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// Starts the run of `context` when it is due: its digest is behind `seq`, its newest record is quiet, a record
-/// is in force, no run is alive, and no run was started for this `seq` in this engine's life.
+/// Starts the run of `context` when it is due: its digest is behind `seq`, its newest record is quiet or
+/// `BACKLOG` records are newer than the digest, a record is in force, no run is alive, and no run was started for this `seq` in this engine's life.
 fn start_if_due(engine: &mut Engine, context: &ContextId, seq: i64, at: &str, now: OffsetDateTime) -> Result<(), CpdError> {
     if engine.distill_started.get(context).is_some_and(|started| *started >= seq) {
         return Ok(());
     }
-    if digest::latest(&engine.home, context)?.is_some_and(|d| i64::try_from(d.upto_seq).is_ok_and(|upto| upto >= seq)) {
+    let upto = match digest::latest(&engine.home, context)? {
+        Some(d) => i64::try_from(d.upto_seq).unwrap_or(i64::MAX),
+        None => 0,
+    };
+    if upto >= seq {
         return Ok(());
     }
     if !quiet(at, now)? {
-        return Ok(());
+        let newer = engine.store.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT count(*) FROM context_records WHERE context = ?1 AND seq > ?2",
+                rusqlite::params![context.as_str(), upto],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })?;
+        if newer < BACKLOG {
+            return Ok(());
+        }
     }
     let records = engine.store.read(|conn| {
         let mut stmt =

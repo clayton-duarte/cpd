@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
 import { PROTOCOL } from "../lib/event.ts";
-import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, MessageRenderer, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
+import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
 
@@ -91,6 +91,7 @@ export class Fixture {
   readonly cpdHome = join(this.dir, "cpd-home");
   /** Stands for the adapter's installed directory (`options.reload.dir`). */
   readonly adapterDir = join(this.dir, "adapter");
+  readonly agentDir = join(this.dir, "agent");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
 
@@ -103,11 +104,12 @@ export class Fixture {
     chmodSync(join(this.dir, "bin", "pi"), 0o755);
     writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
-    for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
+    for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME", "PI_CODING_AGENT_DIR"]) this.saved[k] = process.env[k];
     process.env.PATH = `${join(this.dir, "bin")}:${process.env.PATH}`;
     process.env.FAKE_CPD_DIR = this.dir;
     process.env.CPD_SESSION = ID;
     process.env.CPD_HOME = this.cpdHome;
+    process.env.PI_CODING_AGENT_DIR = this.agentDir; // pi's agent directory: where the adapter reads `compact-tools.json` (commands.md §15.9)
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
     this.respond("session-show", sessionShow());
@@ -253,7 +255,7 @@ export class FakePi implements PiApi {
   readonly sent: Sent[] = [];
   /** The session's entries, as pi's `getEntries()` returns them: messages and custom entries appended so far. */
   entries: unknown[] = [];
-  readonly tools: ToolDefinition[] = [];
+  readonly tools: ToolDefinition<any, any, any>[] = [];
   readonly notices: string[] = [];
   /** The notices shown with level `error`. */
   readonly errorNotices: string[] = [];
@@ -271,7 +273,7 @@ export class FakePi implements PiApi {
   /** Commands started by `sendUserMessage` and not finished. */
   readonly commandsRunning = new Set<Promise<void>>();
   readonly userMessages: { content: string; options: { expandPromptTemplates: boolean } }[] = [];
-  mode = "tui";
+  mode: Ctx["mode"] = "tui";
   sessionId = ID;
 
   readonly events = {
@@ -285,10 +287,11 @@ export class FakePi implements PiApi {
     },
   };
 
-  on(event: string, handler: (event: any, ctx: Ctx) => unknown): () => void {
+  /** pi types `on` as one overload per event; the fake keeps every handler by name and fires it with a `Ctx`. */
+  readonly on = ((event: string, handler: (event: any, ctx: Ctx) => unknown): (() => void) => {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
     return () => {};
-  }
+  }) as PiApi["on"];
 
   /** The `exec` calls (argv, without the command) started and not yet finished: a call is in flight from the moment the adapter makes it, however long the process takes to start. */
   readonly execsRunning = new Set<string[]>();
@@ -318,10 +321,11 @@ export class FakePi implements PiApi {
   /** What `exec` was called with, in order. */
   readonly execOptions: { command: string; args: string[]; options: ExecOptions }[] = [];
 
-  sendMessage(message: Message, options: SendOptions): void {
-    this.sent.push({ message, options });
+  readonly sendMessage: PiApi["sendMessage"] = (message, options) => {
+    if (!options || typeof message.content !== "string") throw new Error("the adapter always passes send options and a string content");
+    this.sent.push({ message: { ...message, content: message.content }, options });
     this.entries.push({ type: "custom_message", customType: message.customType, content: message.content, display: message.display, details: message.details });
-  }
+  };
 
   appendEntry(customType: string, data: unknown): void {
     this.entries.push({ type: "custom", customType, data });
@@ -335,14 +339,21 @@ export class FakePi implements PiApi {
     return this.sessionName;
   }
 
-  readonly renderers = new Map<string, MessageRenderer>();
+  /** The renderers registered, by custom type, with pi's own renderer type. */
+  readonly renderers = new Map<string, Parameters<PiApi["registerMessageRenderer"]>[1]>();
 
-  registerMessageRenderer(customType: string, renderer: MessageRenderer): void {
-    this.renderers.set(customType, renderer);
-  }
+  readonly registerMessageRenderer: PiApi["registerMessageRenderer"] = (customType, renderer) => {
+    this.renderers.set(customType, renderer as Parameters<PiApi["registerMessageRenderer"]>[1]);
+  };
 
-  registerTool(tool: ToolDefinition): void {
+  readonly registerTool: PiApi["registerTool"] = (tool) => {
     this.tools.push(tool);
+  };
+
+  /** Runs a registered tool like pi does. The adapter's tool reads nothing of the tool context, so the fake passes none of pi's. */
+  async runTool(tool: ToolDefinition<any, any, any>): Promise<{ text: string; details: unknown }> {
+    const out = await tool.execute("call-1", {}, undefined, undefined, undefined as never);
+    return { text: out.content.map((c) => (c.type === "text" ? c.text : "")).join(""), details: out.details };
   }
 
   registerCommand(name: string, options: { handler: (args: string, ctx: CommandCtx) => Promise<void> }): void {
@@ -360,14 +371,19 @@ export class FakePi implements PiApi {
     this.commandsRunning.add(running);
   }
 
+  /** What `ctx.isProjectTrusted()` answers. */
+  trusted = false;
+
   ctx(): Ctx {
     return {
       mode: this.mode,
+      cwd: join(tmpdir(), "pi-test-no-such-project"),
+      isProjectTrusted: () => this.trusted,
       ui: { notify: (m, level) => {
           this.notices.push(m);
           if (level === "error") this.errorNotices.push(m);
         }, getEditorText: () => this.editorText },
-      sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries },
+      sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]> },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
     };
@@ -396,11 +412,21 @@ export class FakePi implements PiApi {
     for (const h of this.handlers.get(event) ?? []) await h({ type: event, ...payload }, this.ctx());
   }
 
-  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). */
+  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). The adapter's `markReply` observer (reply.ts) adds nothing and is left out, so the list stays what the handlers that add a message returned. */
   async fireWith(event: string, payload: Record<string, unknown> = {}): Promise<unknown[]> {
     const out: unknown[] = [];
-    for (const h of this.handlers.get(event) ?? []) out.push(await h({ type: event, ...payload }, this.ctx()));
+    for (const h of this.handlers.get(event) ?? []) {
+      const result = await h({ type: event, ...payload }, this.ctx());
+      if (h.name !== "markReply") out.push(result);
+    }
     return out;
+  }
+
+  /** A run is active and a tool call is in progress: what a busy Lead looks like to the adapter. */
+  async busy(): Promise<void> {
+    this.idle = false;
+    await this.fire("agent_start");
+    await this.fire("tool_execution_start", { toolCallId: "t1", toolName: "bash", args: {} });
   }
 
   /** `cpd` messages delivered (not the adapter's own errors). */

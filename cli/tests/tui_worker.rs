@@ -171,7 +171,7 @@ fn the_session_file_of_the_worker_is_rendered_read_only() {
             "16:33:44 agent",
             "      On it.",
             "16:33:44 → bash cargo test",
-            "        ← test result: ok",
+            "        󰘌 test result: ok",
             "",
             "",
             "",

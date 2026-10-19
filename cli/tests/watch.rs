@@ -879,6 +879,62 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     }
 }
 
+/// SQL that marks Job `key` urgent, for `add_job`'s `then`.
+fn urgent(key: &str) -> String {
+    format!("UPDATE jobs SET urgent = 1 WHERE plan = 'pay' AND key = '{key}';")
+}
+
+/// The work session as tui leaves it, with remain-on-exit (§6.1), and a Worker that stays alive.
+fn work_session_with_a_worker_that_stays(fx: &Fx) {
+    fx.env.fake_pi(&format!("sleep {SLEEP_SECONDS}"));
+    for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", &SLEEP_SECONDS.to_string()][..], &["set", "-g", "remain-on-exit", "on"]] {
+        assert!(fx.env.tmux(args).status.success(), "tmux {args:?}");
+    }
+}
+
+/// E3 starts urgent Ready Jobs first (§3.7): with every slot free, the urgent Job goes before an older non-urgent one.
+#[test]
+fn e3_starts_an_urgent_job_before_an_older_one() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    fx.add_job("old", &[], "");
+    fx.add_job("hot", &[], &urgent("hot"));
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") >= 1);
+    // Two more ticks: the one slot is taken, so the older Job still waits.
+    std::thread::sleep(Duration::from_millis(2500));
+    engine.stop();
+
+    let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
+    assert_eq!(started, [Some("hot".to_owned())]);
+    assert_eq!((fx.job_status("hot"), fx.job_status("old")), ("running".into(), "queued".into()));
+}
+
+/// An urgent Job may start one Attempt beyond `concurrency`, and no more; the extra slot is never a non-urgent Job's.
+#[test]
+fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
+    let fx = fx("concurrency = 1\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    // One Attempt is running: the only slot is taken.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_job("old", &[], "");
+    fx.add_job("hot1", &[], &urgent("hot1"));
+    fx.add_job("hot2", &[], &urgent("hot2"));
+
+    let engine = fx.start();
+    wait_until("attempt-started", || fx.count("attempt-started") >= 1);
+    std::thread::sleep(Duration::from_millis(2500));
+    engine.stop();
+
+    // The first urgent Job by `seq` started (running Attempts: 2 = concurrency + 1); the second urgent one and the older Job wait.
+    let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
+    assert_eq!(started, [Some("hot1".to_owned())]);
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
+    assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
+}
+
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
 /// E3 starts an Attempt. The driver starts from the path recorded at start
 /// (`cannot run <path> (deleted)` before).
@@ -1036,6 +1092,94 @@ fn e2_counts_only_attempts_whose_driver_started() {
     assert_eq!(fx.job_status("api"), "failed");
     let failed = fx.events("job-failed");
     assert_eq!((failed.len(), failed[0].1.as_deref(), &failed[0].3["cause"]), (1, Some("api"), &json!("crashed")));
+}
+
+// ---------- a busy store (contract §3.7, §4.2) ----------
+
+/// A connection that is not cpd's holding the write lock until [`Held::release`] or its drop.
+struct Held(rusqlite::Connection);
+
+fn hold_write_lock(fx: &Fx) -> Held {
+    let conn = rusqlite::Connection::open(fx.home().db()).unwrap();
+    conn.busy_timeout(Duration::from_secs(10)).unwrap();
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    Held(conn)
+}
+
+impl Held {
+    fn release(self) {
+        self.0.execute_batch("ROLLBACK").unwrap();
+    }
+}
+
+fn watch_log(fx: &Fx) -> String {
+    fs::read_to_string(fx.env.cpd_home().join("run/watch.log")).unwrap_or_default()
+}
+
+/// `store_busy_ms` of 200 ms: far shorter than the locks these tests hold.
+const SHORT_BUSY: &str = "[timeouts]\nstore_busy_ms = 200\n";
+
+/// `cpd watch` started and not waited for.
+fn spawn_engine(fx: &Fx) -> Engine {
+    let child = fx.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    Engine { child: Some(child) }
+}
+
+/// A store that stays busy for longer than `store_busy_ms` does not end the engine, at its start or in a
+/// step, and no Event is lost: it waits, logs, and goes on when the lock is released.
+#[test]
+fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_event() {
+    let fx = fx(SHORT_BUSY);
+    // E5's poll is slow, and says when it runs: the engine is then in its first tick, past E4.
+    let marker = fx.env.root().join("gh-ran");
+    fx.env.fake_gh(&format!("touch '{}'; sleep 1.5; echo '{EMPTY_SEARCH}'", marker.display()));
+    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api';");
+
+    // The start: `watch-started` waits for the lock.
+    let held = hold_write_lock(&fx);
+    let mut engine = spawn_engine(&fx);
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited");
+    assert_eq!(fx.count("watch-started"), 0, "{}", watch_log(&fx));
+    held.release();
+    wait_until("watch-started", || fx.count("watch-started") == 1);
+    wait_until("E5's poll", || marker.exists());
+
+    // A step: the second tick's E4 meets the lock, taken while E5 of the first tick is still running.
+    fx.fixture("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    let held = hold_write_lock(&fx);
+    wait_until("the engine to meet the lock", || watch_log(&fx).matches("store_busy: ").count() >= 1);
+    assert_eq!(fx.count("all-merged"), 0);
+    held.release();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited");
+    engine.stop();
+
+    let log = watch_log(&fx);
+    assert!(log.contains("store_busy: "), "{log}");
+    assert!(log.contains("the store is clear again after "), "{log}");
+    assert_eq!(fx.count("error"), 0, "{log}");
+    assert_eq!(fx.count("all-merged"), 1);
+}
+
+/// `watch-stopped` is appended when the engine stops while the store is busy, however long that lasts.
+#[test]
+fn watch_stopped_waits_for_a_busy_store() {
+    let fx = fx(SHORT_BUSY);
+    let mut engine = fx.start();
+    let pid = engine.pid();
+
+    let held = hold_write_lock(&fx);
+    engine.signal(Signal::SIGTERM);
+    std::thread::sleep(Duration::from_millis(2000));
+    assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited without watch-stopped");
+    assert_eq!(fx.count("watch-stopped"), 0);
+    held.release();
+    let out = engine.child.take().unwrap().wait_with_output().unwrap();
+
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(fx.events("watch-stopped"), [(None, None, None, json!({"pid": pid}))]);
+    assert!(!watch_log(&fx).contains("cannot append watch-stopped"), "{}", watch_log(&fx));
 }
 
 // ---------- E4 ----------
@@ -1199,6 +1343,32 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
             (1, "end", "start") => assert!(pair[1].1 - pair[0].1 >= 2000, "the next poll starts 2 s after the end of the last: {notes:?}"),
             _ => panic!("polls overlap or are out of order: {notes:?}"),
         }
+    }
+    assert_eq!(fx.count("error"), 0);
+}
+
+/// engine-W9: a poll of 1 s with a tick of 5 s and `pr_poll_seconds = 2` runs every 3 s (end + 2 s), not at every other tick.
+#[test]
+fn e5_polls_at_its_due_time_not_at_the_next_tick() {
+    let fx = fx_bare("");
+    poll_every(&fx, 2);
+    let config = fx.env.cpd_home().join("config.toml");
+    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 5\n")).unwrap();
+    let log = fx.env.root().join("poll.log");
+    fx.env.fake_gh(&format!(
+        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo '{}'; exit 0"#,
+        search_reply(4987, "2099-01-01T00:00:00Z"),
+        log = log.display()
+    ));
+
+    let engine = fx.start();
+    wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("start").count()) >= 3);
+    engine.stop();
+
+    let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.split_once(' ').unwrap().1.parse::<i128>().unwrap() / 1_000_000).collect();
+    for pair in starts.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!((2900..4000).contains(&gap), "a poll every 3 s (1 s poll + 2 s), not every 5 s tick: {starts:?}");
     }
     assert_eq!(fx.count("error"), 0);
 }
@@ -1412,7 +1582,7 @@ fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<St
         "cpd-built",
         &format!(
             r#"case "$1" in
---version) echo '{{"ok":true,"version":"0.0.0","schema":1000,"store_schema":1000,"store":{store}}}' ;;
+--version) echo '{{"ok":true,"version":"0.0.0","store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
 watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
@@ -1489,4 +1659,195 @@ fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
         assert!(out.status.success(), "{store}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(env.home().join(".local/bin/cpd").exists());
     }
+}
+
+// ---------- scripts/restart-tmux.sh ----------
+
+/// Runs `scripts/restart-tmux.sh` in `env`, whose private tmux server runs one
+/// session `cpd`. The fake `tmux` forwards everything to the real one but
+/// answers `-V` with `installed` (empty: the real one); the fake `cpd` answers `config`,
+/// `plan list` (one Plan `p1`), `attempt list` with `attempts` (a JSON array),
+/// `session list` (a Lead with a pane and one without), and `tui`, which
+/// records whether the server was gone by then. `tmux_env` is the script's `$TMUX`.
+fn restart(env: &TestEnv, installed: &str, attempts: &str, tmux_env: Option<&str>) -> std::process::Output {
+    let socket = env.tmux_socket();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.exists()).expect("tmux on PATH");
+    // The server runs a copy of tmux at its own path: the binary the script must name.
+    let server = server_binary(env);
+    fs::create_dir_all(server.parent().unwrap()).unwrap();
+    // `cp`, not `fs::copy`: a write fd held here would leak into parallel forks (ETXTBSY on exec).
+    assert!(std::process::Command::new("cp").arg("--").arg(&real).arg(&server).status().unwrap().success());
+    let out = env.command(&server).args(["-L", &socket, "new-session", "-d", "-s", "cpd", "sleep", "600"]).output().unwrap();
+    assert!(out.status.success());
+    env.fake(
+        "tmux",
+        &format!("[ \"$1\" = -V ] && [ -n '{installed}' ] && {{ echo 'tmux {installed}'; exit 0; }}\nexec '{}' \"$@\"", real.display()),
+    );
+    env.fake(
+        "cpd",
+        &format!(
+            r#"case "$1 $2" in
+"config ") echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
+"plan list") echo '{{"ok":true,"plans":[{{"id":"p1"}}]}}' ;;
+"attempt list") echo '{{"ok":true,"attempts":{attempts}}}' ;;
+"session list") echo '{{"ok":true,"sessions":[{{"id":"lead-in-pane","role":"lead","tmux_pane":"%1"}},{{"id":"lead-away","role":"lead","tmux_pane":null}}]}}' ;;
+"tui ") tmux -L '{socket}' display -p x >/dev/null 2>&1 && echo alive > '{state}' || echo gone > '{state}' ;;
+esac"#,
+            state = env.root().join("server-at-tui").display()
+        ),
+    );
+    let mut cmd = env.command(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("scripts/restart-tmux.sh"));
+    if let Some(value) = tmux_env {
+        cmd.env("TMUX", value);
+    }
+    cmd.output().unwrap()
+}
+
+fn server_binary(env: &TestEnv) -> std::path::PathBuf {
+    env.root().join("server-bin/tmux-server")
+}
+
+fn killed(env: &TestEnv) -> bool {
+    env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "kill-server"))
+}
+
+fn tui_ran(env: &TestEnv) -> bool {
+    env.calls("cpd").iter().any(|c| c.first().is_some_and(|a| a == "tui"))
+}
+
+#[test]
+fn restart_tmux_refuses_while_an_attempt_runs_and_touches_nothing() {
+    for status in ["starting", "running", "merging"] {
+        let env = TestEnv::new();
+        let attempts = format!(r#"[{{"id":"job-a1","status":"{status}"}}]"#);
+        let out = restart(&env, "99.0", &attempts, None);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{status}: {stderr}");
+        assert!(stderr.contains("p1/job-a1"), "{stderr}");
+        // The plain tmux ("99.0") cannot attach: the line names the server's binary and why.
+        let attach = format!("{} -L {} attach -t cpd", server_binary(&env).display(), env.tmux_socket());
+        assert!(stderr.contains(&attach), "{stderr}");
+        assert!(stderr.contains("plain tmux, version 99.0, cannot attach"), "{stderr}");
+        assert!(!killed(&env) && !tui_ran(&env), "{status}");
+        assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success(), "{status}");
+    }
+}
+
+#[test]
+fn restart_tmux_with_the_same_version_does_not_kill() {
+    let env = TestEnv::new();
+    let out = restart(&env, "", "[]", None);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(stdout.contains("nothing to do"), "{stdout}");
+    assert!(!killed(&env) && !tui_ran(&env));
+    assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
+}
+
+#[test]
+fn restart_tmux_with_another_version_kills_the_server_then_runs_tui_and_prints_the_resume_lines() {
+    let env = TestEnv::new();
+    let out = restart(&env, "99.0", "[]", None);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(killed(&env));
+    assert!(tui_ran(&env));
+    // `tui` ran after the kill-server, not before.
+    assert_eq!(fs::read_to_string(env.root().join("server-at-tui")).unwrap().trim(), "gone");
+    assert!(stdout.contains("resume: cpd session open lead-in-pane"), "{stdout}");
+    assert!(!stdout.contains("lead-away"), "{stdout}");
+    assert!(stdout.contains(&format!("attach: tmux -L {} attach -t cpd", env.tmux_socket())), "{stdout}");
+}
+
+#[test]
+fn restart_tmux_refuses_inside_the_server() {
+    let env = TestEnv::new();
+    let inside = format!("/tmp/tmux-1000/{},1234,0", env.tmux_socket());
+    let out = restart(&env, "99.0", "[]", Some(&inside));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("inside the server"), "{stderr}");
+    let attach = format!("{} -L {} attach -t cpd", server_binary(&env).display(), env.tmux_socket());
+    assert!(stderr.contains(&attach), "{stderr}");
+    assert!(!killed(&env) && !tui_ran(&env));
+    assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
+}
+
+// ---------- the adapter swap of scripts/install-cpd.sh (pi-ci-W9) ----------
+
+/// The names under `dir`, recursively, relative to it, sorted.
+fn tree(dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            out.push(path.strip_prefix(base).unwrap().display().to_string());
+            if path.is_dir() {
+                walk(base, &path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// The entries directly in `dir`, sorted.
+fn names(dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn install_puts_the_adapter_at_share_cpd_pi_without_its_tests() {
+    let env = TestEnv::new();
+    install(&env);
+
+    // `install` runs the script from the fake checkout (`Checkout::new`): compare with its `pi/`.
+    let checkout = env.root().join("repos/install-clone");
+    let adapter = env.home().join(".local/share/cpd/pi");
+    let expected: Vec<String> = tree(&checkout.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
+    assert!(expected.contains(&"extension.ts".to_string()) && expected.contains(&"lib/cpd.ts".to_string()), "{expected:?}");
+    assert!(tree(&checkout.join("pi")).contains(&"test/cpd.test.ts".to_string()));
+    assert_eq!(tree(&adapter), expected);
+    // No temporary directory is left beside it.
+    assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
+}
+
+#[test]
+fn install_replaces_an_installed_adapter_as_a_whole_and_it_is_never_missing() {
+    let env = TestEnv::new();
+    let adapter = env.home().join(".local/share/cpd/pi");
+    fs::create_dir_all(adapter.join("old")).unwrap();
+    fs::write(adapter.join("package.json"), "{}").unwrap();
+    fs::write(adapter.join("stale.ts"), "").unwrap();
+    // A big old adapter, so that removing it in place takes a while.
+    for i in 0..5000 {
+        fs::write(adapter.join("old").join(format!("f{i}.ts")), "").unwrap();
+    }
+
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let (stop, manifest) = (stop.clone(), adapter.join("package.json"));
+        std::thread::spawn(move || {
+            let mut missing = 0u32;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if !manifest.exists() {
+                    missing += 1;
+                }
+            }
+            missing
+        })
+    };
+    let (out, _) = install_with(&env, OPENS);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let missing = watcher.join().unwrap();
+
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(missing, 0, "the adapter's package.json was missing {missing} times during the install");
+    assert!(!adapter.join("stale.ts").exists() && !adapter.join("old").exists(), "the old adapter was not replaced as a whole");
+    assert!(adapter.join("package.json").exists());
+    assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
 }
