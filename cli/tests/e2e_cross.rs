@@ -64,6 +64,17 @@ else
 fi
 "##;
 
+/// The poll periods of the engine (E5 every tick) and of its children (the drivers, the Workers' `session run`), as
+/// test overrides (contract §1.2): what this test waits for is the next look of each, so each looks every tick or 50 ms.
+const POLLS: [(&str, &str); 6] = [
+    common::PR_POLL_EVERY_TICK,
+    ("CPD_TEST_DRIVER_POLL", "0.05"),
+    ("CPD_TEST_LEAD_POLL", "0.05"),
+    ("CPD_TEST_KILL_PAUSE", "0.05"),
+    ("CPD_TEST_FILE_POLL", "0.05"),
+    ("CPD_TEST_SOURCE_POLL", "0.05"),
+];
+
 /// pi's catalog as the embedded module prints it (§9).
 const CATALOG: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium","high"]}"#;
 
@@ -155,8 +166,9 @@ impl Fx {
                 "version = 1\nmachine = \"m1\"\n\
                  [tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
                  [timeouts]\nfork_quiet_seconds = 1\n\
-                 [watch]\ntick_seconds = 0.2\npr_poll_seconds = 1\n\
+                 [watch]\ntick_seconds = {}\n\
                  [tmux]\nsocket = \"{}\"\n",
+                common::TICK_SECONDS,
                 env.tmux_socket()
             ),
         )
@@ -183,13 +195,22 @@ impl Fx {
                 return value;
             }
             assert!(Instant::now() < deadline, "timed out waiting for {what}\n{}", self.diagnostics());
-            std::thread::sleep(Duration::from_millis(200));
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 
-    /// The first Event of `kind` matching `filter`.
+    /// The first Event of `kind` matching `filter`, as `events list` gives it; listed again only once the store has a
+    /// new Event.
     fn wait_event(&self, kind: &str, filter: impl Fn(&Value) -> bool) -> Value {
-        self.wait(&format!("an Event {kind}"), 90, || self.events().into_iter().find(|e| e["kind"] == kind && filter(e)))
+        let mut listed_to = -1;
+        self.wait(&format!("an Event {kind}"), 90, || {
+            let last: i64 = self.env.query("SELECT coalesce(max(id), 0) FROM events");
+            if last == listed_to {
+                return None;
+            }
+            listed_to = last;
+            self.events().into_iter().find(|e| e["kind"] == kind && filter(e))
+        })
     }
 
     /// What to look at when a wait times out: the engine's log, each driver's
@@ -215,6 +236,12 @@ impl Fx {
 
     fn pr(&self, key: &str) -> Value {
         self.prs().into_iter().find(|p| p["key"] == key).unwrap_or_else(|| panic!("no PR {key}"))
+    }
+
+    /// The status of each PR of `keys`, from one `plan show`.
+    fn pr_statuses<const N: usize>(&self, keys: [&str; N]) -> [String; N] {
+        let prs = self.prs();
+        keys.map(|key| prs.iter().find(|p| p["key"] == key).unwrap_or_else(|| panic!("no PR {key}"))["status"].as_str().unwrap().to_owned())
     }
 
     fn pr_status(&self, key: &str) -> String {
@@ -322,7 +349,13 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     // ---------- 1. plan new from a directory that is no repo (A12)
     fx.ok(&["context", "new", CONTEXT, "--title", "Chain"]);
     assert!(!fx.env.root().join(".git").exists());
-    let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--title", "Change A, then B, then A again"]);
+    // `plan new` starts the tmux server, for the Lead, with its own environment: every pane after it (the Lead's
+    // wrapper, the engine, the Workers) and the engine's drivers look every tick or 50 ms (`POLLS`).
+    let out = fx.env.cpd_with(fx.env.root(), &["plan", "new", PLAN, "--context", CONTEXT, "--title", "Change A, then B, then A again"], &POLLS).ok();
+    for (name, seconds) in POLLS {
+        let out = fx.env.tmux(&["show-environment", "-g", name]);
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("{name}={seconds}"), "the server's environment");
+    }
     let lead_session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(out["plan"]["prs"], json!([]));
     let created = fx.events().into_iter().find(|e| e["kind"] == "plan-created").unwrap();
@@ -376,8 +409,8 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(out["prs"][0]["lead_worktree"], a1_lead.to_str().unwrap());
     assert_eq!((&out["prs"][1]["lead_worktree"], &out["prs"][2]["lead_worktree"]), (&Value::Null, &Value::Null));
     assert_eq!(
-        (fx.pr_status("a1"), fx.pr_status("b"), fx.pr_status("a2")),
-        ("dispatch".to_owned(), "waiting".to_owned(), "waiting".to_owned())
+        fx.pr_statuses(["a1", "b", "a2"]),
+        ["dispatch", "waiting", "waiting"]
     );
     assert!(a1_lead.is_dir());
     assert!(!fx.lead(&fx.web, "b").exists() && !fx.lead(&fx.shared, "a2").exists());
@@ -419,7 +452,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(create[..6], ["pr", "create", "--base", "main", "--head", "cpd/chain/a1"]);
     // E5 polls whatever the phase, and a1 is not merged: nothing starts. Two whole ticks after the PR was created.
     fx.env.wait_whole_ticks(2);
-    assert_eq!((fx.pr_status("b"), fx.pr_status("a2")), ("waiting".to_owned(), "waiting".to_owned()));
+    assert_eq!(fx.pr_statuses(["b", "a2"]), ["waiting", "waiting"]);
     assert!(of_kind(&fx.events(), "attempt-started").iter().all(|e| e["job"] == "schema"));
 
     // ---------- 7. GitHub merges a1: E7 starts b, from a fresh fetch of its base
@@ -434,8 +467,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
                "base_sha": base_b, "reused": false, "pushed": true, "by": "engine"})
     );
     assert_eq!(hooks(&fx, "web").lines().next(), Some("pre-start cpd/chain/b"));
-    assert_eq!(fx.pr_status("a1"), "merged");
-    assert_eq!(fx.pr_status("a2"), "waiting");
+    assert_eq!(fx.pr_statuses(["a1", "a2"]), ["merged", "waiting"]);
     assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "dispatch");
 
     // ---------- 8. b's Job runs in the other repo, merges; pr open --pr b
@@ -521,7 +553,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let keys: Vec<(&str, i64)> = done["data"]["prs"].as_array().unwrap().iter().map(|p| (p["key"].as_str().unwrap(), p["number"].as_i64().unwrap())).collect();
     assert_eq!(keys, [("a1", 11), ("a2", 13), ("b", 12)]);
     assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "done");
-    assert!(["a1", "b", "a2"].iter().all(|k| fx.pr_status(k) == "merged"));
+    assert_eq!(fx.pr_statuses(["a1", "b", "a2"]), ["merged", "merged", "merged"]);
     // Three more whole ticks (each with its poll): still one `plan-done`, nothing new started.
     fx.env.wait_whole_ticks(3);
     let events = fx.events();

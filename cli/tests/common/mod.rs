@@ -571,7 +571,12 @@ impl TestEnv {
 
     /// Runs `cpd <args>` from `cwd`.
     pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
-        let out = output(self.command(CPD).args(args).current_dir(cwd)).expect("run cpd");
+        self.cpd_with(cwd, args, &[])
+    }
+
+    /// Runs `cpd <args>` from `cwd` with the variables `vars` added to its environment.
+    pub fn cpd_with(&self, cwd: &Path, args: &[&str], vars: &[(&str, &str)]) -> Run {
+        let out = output(self.command(CPD).args(args).envs(vars.iter().copied()).current_dir(cwd)).expect("run cpd");
         Run {
             exit: out.status.code().expect("cpd was killed by a signal"),
             stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
