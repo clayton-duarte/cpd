@@ -115,6 +115,7 @@ The `$CPD_HOME` layout is §1.4. Commands in this file write five files the cont
 | `run/<plan>/feedback-<review>.md` | the pi adapter: plannotator's feedback on a Plan review (§15.5), overwritten on a retry | `plan decide --feedback-file` |
 | `run/<plan>/messages/<session>.md` | `session fork --message-file` copies the file here | that Session's `session run` |
 | `run/<plan>/reviews/<job>.md` | a review Job's Worker (B2, contract §1.4) | the Lead (and the User) |
+| `run/titles/<session>.log` | engine E10: the output of the `session retitle` runs it starts (hs-d257, contract §1.4); `locks/title-<session>.lock` is the run's own lock (§10.14) | the User |
 
 ### 1.5 Text arguments
 
@@ -161,6 +162,7 @@ Free text (Job `--title`, `--reason`, Context record text, questions and answers
 | `session fork`, `open`, `park`, `close`, `rename` | User (TUI), Lead | yes | §6.4, §6.7 |
 | `session history` | User (TUI) | only the park's Event | §6.2, §6.4 |
 | `session archive`, `unarchive` | User (TUI) | yes | §2.2 |
+| `session retitle` (internal) | engine (E10) | yes (one Event; nothing when it skips) | §3.7, §10.14 |
 | `session send` | Lead (the Manager), User | yes | §10.13, §15.3 |
 | `session state` | pi adapter | yes | §3.6 |
 | `session run` (internal) | cockpit panes | yes | §6.7 |
@@ -717,7 +719,7 @@ Changes the Plan's title, the label the tree shows (contract §2.2). `--title` i
 |---|---|---|
 | the Plan exists | `plan_not_found` | 4 |
 
-Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `plans.title`; **Event** `plan-renamed` `{title}`; **tmux**: sets `@cpd_title` on the Session's pane (the Plan's Lead) when it has one (§6.2 of contract.md). The Context store's `plan` record keeps the old title. Archived Plans can be renamed.
+Effects: an unchanged title: `"already": true`, nothing written. Otherwise **rows**, one transaction: `plans.title`; **Event** `plan-renamed` `{title}`; **tmux**: sets `@cpd_title` to the new title on the Session's pane (the Plan's Lead) when it has one **and the Lead has no dynamic `title`** (hs-d257, contract §6.1: the dynamic title wins; the rename still writes `plans.title` and appends its Event) (§6.2 of contract.md). The Context store's `plan` record keeps the old title. Archived Plans can be renamed.
 
 ```json
 {"ok": true, "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust, done"}}
@@ -1428,11 +1430,11 @@ Effects: none; one read transaction.
 ```json
 {"ok": true, "sessions": [
   {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "blocked", "state_label": "cpd: Worker question", "state_at": "…", "archived_at": null,
-   "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd"}],
+   "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "title": "Dynamic session titles contract", "titled_at": "…"}],
  "events_cursor": 48213}
 ```
 
-`role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. Read-only.
+`role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. Read-only.
 
 ### 10.2 `session show`
 
@@ -1443,7 +1445,7 @@ cpd session show [<id>]
 `<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
 
 ```json
-{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "created_at": "…", "registered_event": 40117},
+{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
  "open_escalations": ["contract-commands-a1-q1"]}
 ```
 
@@ -1498,7 +1500,7 @@ Brings a Lead, or a Context's Manager, into the chat slot (§6.4). `<id>` accept
 
 Effects:
 - In the chat slot already: nothing; `"already": true`.
-- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded. Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder or a history pane (`@cpd_view` `chat` or `history`, §10.12), `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders and history panes never pile up in park windows.
+- **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded; the pane's `@cpd_title` is set by the precedence of contract §6.1 (the dynamic `title`, else the Plan's title or the name). Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder or a history pane (`@cpd_view` `chat` or `history`, §10.12), `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders and history panes never pile up in park windows.
 - If a step after the new window is created fails (`set-option -p @cpd_session`, the swap, the row or the `session-moved` write), that new window is killed (`kill-window`) before the error is returned (teardown G11).
 - **Rows**, one transaction: **Events** `session-moved` `{place: "chat"}` for this Session and `{place: "parked"}` for the displaced one.
 
@@ -1560,7 +1562,7 @@ cpd session rename <name> [--session <id>]
 
 cpd 1 §11 `session rename`, kept; the queue file becomes an Event. `--session` accepts the short forms of §1.3.
 
-Effects: unchanged name: `"already": true`, nothing written. Otherwise **rows**, one transaction: `sessions.name`. **Event** `session-renamed` `{name}`, addressed to the Session (`session` set), which its adapter applies with `pi.setSessionName` (§15.4). **tmux**: sets `@cpd_title` on the Session's pane when it has one; nothing else.
+Effects: unchanged name: `"already": true`, nothing written. Otherwise **rows**, one transaction: `sessions.name`. **Event** `session-renamed` `{name}`, addressed to the Session (`session` set), which its adapter applies with `pi.setSessionName` (§15.4). **tmux**: sets `@cpd_title` to the new name on the Session's pane when it has one **and the Session has no dynamic `title`** (hs-d257, contract §6.1: the title wins; the rename still writes `sessions.name` and appends its Event); nothing else.
 
 ```json
 {"ok": true, "session": "596d007f-…", "name": "cpd rust lead"}
@@ -1738,6 +1740,42 @@ Effects:
 
 `from` is null when neither variable is set. `wake` echoes the flag. Idempotent: no; each call is one message.
 
+### 10.14 `session retitle` (internal)
+
+```
+cpd session retitle <session>
+```
+
+Writes the Session's **dynamic title** (contract §2.2, hs-d257): a 3–7 word title of what its conversation is about now, written by an auxiliary agent (hs-n95: cpd never calls an LLM API itself, only pi, here as a one-shot run, `pi --print`, docs: pi `cli.md`). **Internal:** engine E10 starts it (contract §3.7) for each Lead or Manager Session after its turns end, at most once every 10 minutes; anyone may run it. `<session>` accepts the short forms of §1.3.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` or a `manager`; a Worker is refused | `not_a_lead` | 3 |
+| it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
+| `locks/title-<session>.lock` is free (step 1; held: `details.reason` is `running`, nothing written, and the other run is the one that counts) | `title_failed` | 1 |
+
+**Steps.**
+1. Take `locks/title-<session>.lock` without waiting and hold it for the run's whole life, so a Session never has two runs at once; the kernel frees it when the run dies, so a crashed run leaves no stale lock (contract §1.4).
+2. **The conversation text.** Read the Session's pi session file (`sessions.file`, JSONL) and take the text of the **last 30** messages of role `user` or `assistant` (tool calls, tool results and other entries are not messages here), in order; if their text exceeds **8 000 characters**, cut it so the **newest** characters are kept. With no such message (no `file` yet, or none in it), **skip**: print the JSON below with `"skipped": "no_messages"`, run no pi, append no Event, write nothing and set nothing. A skip is not an error.
+3. **Run pi** once, in `run/titles/` (created when missing): `pi --print --no-session --no-extensions --model <tiers.H model>:<level> -- "<prompt>"`, with the conversation text on **stdin**, where `<tiers.H model>` is the model of Tier `H` from pi's catalog (`cpd tiers`, §14.3) and `<level>` is pi's level of **the lowest effort `cpd tiers` lists for `H`** (`tiers.H.efforts[0]`; contract §9), a small Tier: the run needs no thinking. The prompt asks for a title of 3–7 words for the conversation's **current subject**, plain text, one line, no quotes. pi's environment is `PI_SKIP_VERSION_CHECK=1` only, no `CPD_*` (contract §6.5, "Title writer"). Its stderr is kept (its last lines are the `tail` below).
+4. **Sanitise the answer:** take its first line, trim it, strip surrounding quotes, and cut it to at most **60 characters**, ending with `…` when it was cut. It must then pass the Title type (`core/src/args.rs`: 1–200 characters, no control characters).
+5. **Write**, in one transaction: `sessions.title` and `sessions.titled_at` (now); **Event** `session-titled` `{title}` (context, plan if any, session). Then **tmux**: sets `@cpd_title` to the title on the Session's live pane, when it has one (a tmux failure does not undo the write: it is reported on stderr, and the header is made right by the next start or move of the pane, which apply contract §6.1's precedence).
+
+pi failing to start or exiting non-zero, or an answer that is empty or does not pass step 4, is a refusal `title_failed` (exit 1), with `details: {session, reason: "running" | "spawn" | "exit" | "empty" | "invalid", exit?, tail?}` (`tail`: the last lines of pi's stderr), and **writes nothing**: `titled_at` stays, so the engine retries no sooner than 10 minutes later and reports the failure once per Session (contract §3.7 E10). It appends no `error` Event itself: the engine's `report` does.
+
+```json
+{"ok": true, "session": "596d007f-…", "title": "Dynamic session titles contract", "titled_at": "2026-10-20T09:12:41Z", "event": 4821, "pane": "%12"}
+```
+
+`pane` is the pane whose header was set, null when the Session has no live pane. A skip prints:
+
+```json
+{"ok": true, "session": "596d007f-…", "title": null, "skipped": "no_messages"}
+```
+
+(`"already"` is not used here: it means the same value was already stored, and a retitle never compares.) Idempotent: yes: rerunning is safe and writes a new title each time (it never answers `"already"`).
+
 ## 11. `events`
 
 §5. Selection: `--plan <id>`, `--context <id>` or `--session <id>`, at most one (`usage`), or none for every Event; `--kind <kind>` may repeat (a kind not in §5.2 is `usage`). These flags are filters: they do not fall back to `CPD_PLAN` or `CPD_SESSION`.
@@ -1793,13 +1831,13 @@ cpd watch [--ensure]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs E1–E5 and E7–E9 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs E1–E5 and E7–E10 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194; E10, the Session titles, since hs-d257) every `tick_seconds` in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E9 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E10 (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12; a retitle run E10 starts (§10.14) appends its own `session-titled` when it succeeds, and when it fails E10 reports one `error` with code `title_failed` for the Session). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once.
 
@@ -1868,6 +1906,8 @@ The ratatui programs in the cockpit's panes (§6.2). They own their terminal (§
 | `logs` | the Event log, in a popup | ↑↓, j/k, PgUp/PgDn scroll; `q` or Esc closes it |
 
 **Design rule** (User, Plan tui-visuals, 2026-10-17; hs-d124). Top-level layout separators (the tmux pane borders) are white; separators inside a slot are grey. A header is one line with its title inverted: the pane headers (tmux, reversed, contract §6.1) and the section headers inside a slot alike. Inside a slot the header is a light `─` line in grey (the palette's Nothing colour, colour 8) with the title as a grey inverted block, not bold: two `─` cells, then ` <title> ` reversed (grey background, text in the terminal's background colour), then `─` to the right edge, e.g. `──[ PRs ]──────────` (`[ … ]` is the reversed block). A slot's first section has no header, so no two titles stack: the pane header is the slot's title.
+
+**The chat slot's header** (hs-d257, contract §6.1). The border header of a Lead's or a Manager's pane is tmux's, from the pane option `@cpd_title`, not a view's: it shows the Session's **dynamic title** (`sessions.title`, written by `session retitle`, §10.14, started by engine E10 after the Session's turns end, at most every 10 minutes) when it has one, else what it showed before: the Plan's title for a Plan's Lead, the Session's name for a side fork or a Manager. It changes when a new title is written, not on a timer; a pane that gets no title yet shows the fallback. **The tree keeps showing ids** (hs-d101, "Labels" below): a title is never drawn in it.
 
 **`tree`.**
 - **Top row and side margins.** The view keeps one blank row at its top and one blank column on each side; its content starts one row lower, inside the inner area (the pane minus one column left and right), so the tree never touches the pane's edges. Everything the view draws sits inside it: the cursor's inverted row, the footer and prompt row, and the right-click menu's clamping.
@@ -2080,6 +2120,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
 | `session-message` (`session` = itself) | message, `deliverAs: "followUp"`, **turn only when `data.wake` is true** (`triggerTurn: false` otherwise, hs-d209 D3); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. With `data.wake`, an idle Lead starts a turn at once; a working or blocked one gets it after its running turn, never interrupted. Without it, the message is in the Lead's context at its next turn and starts none | |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
+| `session-titled` | ignored: **no message, no turn** (hs-d257): the pane header is set by `session retitle` itself, through tmux (§10.14), so the adapter has nothing to do; it only **learns the kind** (the list of kinds in `pi/lib/event.ts`, with delivery `none`), because an unknown kind costs an error turn (hs-n122). Adding the kind raises `protocol` (contract §5.2, "The protocol number") | ignored |
 | every other kind | ignored | ignored |
 
 **The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (plannotator, the tool `cpd_plan_review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.7), which only a Manager gets.
@@ -2279,11 +2320,13 @@ Removed by R19 (no Job-level Reviewer).
 
 Outline §8 and D4: the views take one **snapshot** with a read command, then **follow Events**; there is no timer polling of the CLI, no cache directory and no tmux option carrying state. A view reads the database **in process**, through the read model (`tui/src/read/`): the same queries as the snapshot commands named below, one read transaction per snapshot, no subprocess and no `gh`. (An earlier draft had each view run `cpd` as a subprocess; the implementation does not, and one source of truth is the store.) Reads take no lock and never wait for writers (§4.2); cpd 1's `workflow show` took 58 s under load (research.md), which is why the spike needed a cache.
 
+**Titles** (hs-d257). No view follows `session-titled`: the one place a Session's dynamic title is shown is the chat slot's pane header, which tmux draws from `@cpd_title` (§13.2, contract §6.1), set by `session retitle` itself. A view that wants the title reads `sessions.title` from `session list` or `session show` (§10.1, §10.2). `session-titled` is in the Event log (`logs`) like every Event, and in no view's follow list.
+
 **Gap-free start.** Every snapshot command returns `events_cursor`, the highest Event id in the same read transaction. The view then runs `cpd events follow --since <events_cursor>`, so no Event between the snapshot and the follow is lost or seen twice.
 
 | View (`@cpd_view`) | Snapshot (the read of the command named) | Events it acts on | What it updates |
 |---|---|---|---|
-| `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed`, `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its title or name, state, place, `archived_at` (archived objects are in the read model), Job counters (Plan Leads only) and **dot** (rule below). The snapshot also reads what the dots need: each Session's state and place, its Plan's phase, the Plan's pending review, and the Plan's pull requests' state and checks. A pull request's checks can change without an Event, so the tree re-reads at least every 2 s as well as on Events, and redraws every 100 ms for the spinner |
+| `tree` (Context column) | `cpd context list`, `cpd session list` | `context-created`, `context-grounded`, `plan-created`, `plan-phase`, `plan-done`, `session-registered`, `session-state`, `session-moved`, `session-renamed`, `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | Contexts, their Plans' Lead Sessions, then the Sessions forked by `session fork` as siblings under their Context (B1), each with its label (an id, §13.2 "Labels"; the dynamic `title` of a Session is never drawn in the tree, hs-d257), state, place, `archived_at` (archived objects are in the read model), Job counters (Plan Leads only) and **dot** (rule below). The snapshot also reads what the dots need: each Session's state and place, its Plan's phase, the Plan's pending review, and the Plan's pull requests' state and checks. A pull request's checks can change without an Event, so the tree re-reads at least every 2 s as well as on Events, and redraws every 100 ms for the spinner |
 | `plan` (centre top) | `cpd plan show --plan <p>` for the Plan of the Lead in the chat slot (its `prs`, each PR's key, repo, base, needs, status, `pr`, `pull_request` (its `state`, for a closed pull request) and `jobs`, for the PR boxes, §13.2) | every Event with `plan = p` (the `pr-*` kinds and `pr-feedback` included: they change a box's title or add a box); `session-moved` with `place: "chat"` (the slot changed: switch Plan and take a new snapshot) | one box per PR that is not `cancelled`, top to bottom by needs and linked by them, each with the flowchart of its Jobs, Attempts and Tiers (R34, A15). Also read: the Plan's latest Plan review (its status and number) and `run/<plan>/plannotator-port`, for the pending-review row, and each pull request's `url`, for the `↗` links (§13.2). Also read: each pull request's `mergeable`, for the `conflict` title (§13.2). A conflict clears with no Event (only becoming `conflicting` appends `pr-feedback`), so the view also re-reads its snapshot at least every 2 s, as the `widgets` view does, with the same coalescing. Not drawn, so not read: open Escalations |
 | `widgets` (Deploy column) | the `open` rows of `pull_requests` with `authored` 1 (contract §4.4), with their `mergeable` (the ` conflict` flag, §13.2) and the PRs of the chat slot's Plan (`prs.pull_request`; the Lead Session's place is `session-moved` `chat`); each open pull request's `url` and its owner's Lead (`prs.pull_request` → `plans.lead_session`); and the host's load average (`/proc/loadavg`; on macOS `sysctl -n vm.loadavg`), re-read every 2 s with no Event | any Event whose id moved, and at least every 2 s: pull requests no Plan owns append no Event (hs-d96), so the poll's changes reach the column by the timer (`pr-opened`, `pr-feedback`, `pr-merged`, `plan-phase`, `plan-done` and `session-moved` move the Event id as before) | the machine's name and load, and the open pull requests with their links and owners. No engine, slots, Escalations or Events |
 | `statusbar` (bottom row) | the slots and config `concurrency`: the Attempts not ended, and `concurrency` | any (re-read when the store's highest Event id moved, coalesced to 500 ms, at least every 2 s); no subprocess, no `gh` | `workers N/M` |
