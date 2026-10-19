@@ -7,7 +7,7 @@ CPD (Context → Plan → Deploy) turns one human ticket into a reviewed pull re
 A Plan moves through the phases **grounding → plan → dispatch → deploy → done** (contract §3.1). A Plan in **deploy** or **done** returns to **dispatch** when a PR is added (`cpd pr add`).
 
 **Grounding** (phase, new name):
-The first phase of every Plan, in which the Lead grounds itself on the Plan's Context: it reads the Context's records and the material the User provides, receives Requirements, and interviews the User until unknowns are minimised. A Lead always starts fresh, from its Plan's Brief and the Context's records (B3). Replaces cpd 1's "Context" phase name, so that "Context" names only the entity.
+The first phase of every Plan, in which the Lead grounds itself on the Plan's Context: it reads the Context's records and the material the User provides, receives Requirements, and interviews the User until unknowns are minimised. A Lead always starts fresh, from its Plan's Brief and the Context's records (B3), given as the Context's digest and the records after it once the Context has one (Distilled Context). Replaces cpd 1's "Context" phase name, so that "Context" names only the entity.
 _Avoid_: discovery, intake, context phase
 
 **Plan** (phase):
@@ -84,6 +84,10 @@ _Avoid_: wiki page, memory
 A Context's records, held only in the machine's database (tables `contexts` and `context_records`). Contexts are machine-local (hs-d23, hs-a1); an earlier git store was imported and archived by migration 0007. Rendered as markdown for Leads on demand.
 _Avoid_: wiki, notes folder
 
+**Distilled Context** (new, hs-d194; the pilot of Epic B, auxiliary agents):
+A compressed rendering of a Context's **records in force** (every decision, note, question and answer no decision supersedes), kept so that a Lead's or Manager's first message stays small. Stored as a **Context digest**, a file per Context under `run/context-digests/`, written by a one-shot pi run (the **distiller**, Tier `context_distill_tier`) and accepted only if it cites every record in force by its id, cites nothing else and is at most 32 KB. It is derived, never a Context record: the records stay the truth and the digest can be rebuilt at any time. The engine rebuilds it in the background once a Context's newest record is 10 minutes old; `cpd context distill` does it on demand, and `cpd context show --digest` prints it. A first message holds the digest plus the records written after it. Not the Manager's turn-start digest of Plan Events (below).
+_Avoid_: summary, memory, compaction
+
 **Grounded Lead** (retired, hs-d129):
 No longer created (B3): the Manager replaced it, and migration 0010 archived every existing one. Formerly, the Lead session that holds a Context's grounding on one machine, forked once from the first Plan's Lead when it leaves the grounding phase. It is never typed into again; every new Plan of the Context starts as a fork of it.
 _Avoid_: master session, template session
@@ -151,7 +155,7 @@ The User's interface: one tmux window with global side bars and a centre bound t
 _Avoid_: dashboard, TUI session
 
 **Engine** (new):
-The one `cpd watch` per machine that schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, polls Pull Requests, and starts a PR once the PRs it needs are merged.
+The one `cpd watch` per machine that schedules every Plan's Jobs under one concurrency limit, watches liveness and timeouts, polls Pull Requests, starts a PR once the PRs it needs are merged, and rebuilds stale Context digests.
 _Avoid_: daemon, scheduler, watcher per workflow
 
 **PR poll** (new):

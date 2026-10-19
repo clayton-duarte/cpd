@@ -1968,3 +1968,58 @@ fn rebase_touches_only_its_pr() {
     assert_eq!(fx.remote_branch("cpd/pay"), Some(repo_before));
     assert!(fx.events("plan-phase").len() == 1 && fx.gh_calls().iter().filter(|c| c[1] == "create").count() == 1);
 }
+
+/// The `needs` of PR `key` in Plan `pay`, sorted.
+fn needs_of(fx: &Fx, key: &str) -> Vec<String> {
+    fx.store()
+        .read(|c| {
+            let mut q = c.prepare("SELECT needs FROM pr_needs WHERE plan = 'pay' AND pr = ?1 ORDER BY needs")?;
+            let rows = q.query_map([key], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+}
+
+fn add_fix(fx: &Fx, extra: &[&str]) -> Run {
+    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--plan", "pay"];
+    args.extend(extra);
+    fx.env.cpd(&args)
+}
+
+#[test]
+fn pr_add_on_a_reopened_plan_needs_its_merged_prs_by_default() {
+    let f = fx("done");
+    let out = add_fix(&f, &[]).ok();
+    assert_eq!(out["pr"]["needs"], json!(["repo"]));
+    assert_eq!(needs_of(&f, "fix"), ["repo"]);
+    assert_eq!(f.events("pr-added")[0].1["needs"], json!(["repo"]));
+    // A rerun (the Plan is in dispatch now) is `already`, not `pr_exists`.
+    assert_eq!(add_fix(&f, &[]).ok()["already"], true);
+}
+
+#[test]
+fn pr_add_no_needs_and_needs_override_the_reopen_default() {
+    let a = fx("done");
+    assert_eq!(add_fix(&a, &["--no-needs"]).ok()["pr"]["needs"], json!([]));
+    assert!(needs_of(&a, "fix").is_empty());
+
+    let b = fx("done");
+    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--plan", "pay", "--no-needs"]).ok();
+    // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
+    assert_eq!(add_fix(&b, &["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
+    assert_eq!(needs_of(&b, "fix"), ["x"]);
+
+    let c = fx("done");
+    assert_eq!(code(&add_fix(&c, &["--needs", "repo", "--no-needs"])), ("usage".into(), 2));
+    assert_eq!(c.phase(), "done");
+}
+
+#[test]
+fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
+    let f = fx("dispatch");
+    // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
+    let other = f.env.git_repo("other").canonicalize().unwrap();
+    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
+    assert_eq!(out["pr"]["needs"], json!([]));
+    assert!(needs_of(&f, "fix").is_empty());
+}
