@@ -3,13 +3,15 @@
 //! closes them. The commands only hide items (commands.md §21).
 
 use std::collections::BTreeSet;
+use std::fs::File;
 
 use rusqlite::{Connection, Row, params};
-use serde_json::json;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
+use crate::home::CpdHome;
 use crate::ids::{ContextId, JobKey, PlanId, RecordId, SessionId};
+use crate::lock;
 use crate::store::Store;
 
 /// What an item is about (§2.2's kinds). `EngineDown` is never stored, and the
@@ -209,6 +211,28 @@ pub struct Filter {
     pub state: State,
 }
 
+/// The label of `engine-down` (§2.2), the one item that is never stored.
+pub const ENGINE_DOWN_LABEL: &str = "engine is down";
+
+/// Whether an engine holds `locks/watch.lock` (§1.4): a non-blocking shared
+/// lock, which never fails because another reader holds one. A missing file
+/// means no engine ever ran; this takes no lock and writes nothing.
+pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
+    let path = home.watch_lock();
+    let failed = |what: &dyn std::fmt::Display| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the engine's lock {}: {what}.", path.display()))
+            .with("lock", path.display().to_string())
+    };
+    let file = match File::open(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(failed(&e)),
+    };
+    // The probe's shared lock is let go when `file` drops.
+    let shared = lock::shared(&file).map_err(|e| failed(&format!("flock failed: {e}")))?;
+    Ok(!shared)
+}
+
 /// The items of `filter`. Open ones come in §2.2's order: red, yellow,
 /// magenta, white, then the oldest `opened_at` first. A plain read.
 pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
@@ -279,11 +303,7 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
         let mut changes = Changes::default();
         for item in gone {
             tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, now])?;
-            let event = NewEvent::new(
-                events::Kind::InboxClosed,
-                format!("Inbox item {} closed: {}.", item.id, item.label),
-                json!({"item": item.id, "kind": item.kind.as_str()}),
-            );
+            let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
             events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
             changes.closed.push(item.id);
         }
@@ -307,10 +327,12 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
                 ],
             )?;
             let id = tx.last_insert_rowid();
-            let event = NewEvent::new(
-                events::Kind::InboxOpened,
+            let event = NewEvent::inbox_opened(
                 format!("Inbox item {id} opened: {}.", c.label),
-                json!({"item": id, "kind": c.kind.as_str(), "urgency": c.urgency.as_str(), "label": c.label}),
+                id,
+                c.kind.as_str(),
+                c.urgency.as_str(),
+                &c.label,
             );
             events::append(tx, scope(event, &c.context, &c.plan, &c.job, &c.session))?;
             changes.opened.push(id);
@@ -345,6 +367,7 @@ fn scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use crate::home::CpdHome;
 
     fn store() -> (tempfile::TempDir, Store) {

@@ -5,8 +5,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::path::Path;
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use rusqlite::params;
 use serde_json::json;
 
@@ -14,9 +12,10 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::PlanId;
+use crate::lock;
 use crate::store::Store;
 
-/// The Plan's port: the one in its file when that is inside the range, else
+/// The Plan's port: the one in its file when that is inside the range and no other live Plan holds it, else
 /// the lowest port of the range no other Plan holds (a `done` or archived Plan holds none),
 /// written to the file. `no_port` when none is free. Idempotent. Waits for
 /// the lock without a limit: the holder only reads and writes a few small files.
@@ -24,10 +23,14 @@ pub fn assign(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId)
     let range = config.plannotator_ports;
     let _lock = lock(&home.plannotator_ports_lock())?;
     let file = home.plannotator_port(plan);
-    if let Some(port) = read_port(&file)?.filter(|p| range.contains(*p)) {
-        return Ok(port);
-    }
     let holders = holders(home, store, config, plan)?;
+    let recorded = read_port(&file)?.filter(|p| range.contains(*p));
+    if let Some(port) = recorded {
+        match holders.iter().find(|(_, held)| *held == port) {
+            None => return Ok(port),
+            Some((other, _)) => eprintln!("cpd: plannotator port {port} of Plan {plan} is held by Plan {other}; assigning another."),
+        }
+    }
     let Some(port) = range.ports().find(|p| !holders.iter().any(|(_, held)| held == p)) else {
         let names = holders.iter().map(|(plan, port)| format!("{plan} ({port})")).collect::<Vec<_>>().join(", ");
         return Err(CpdError::new(
@@ -82,17 +85,12 @@ fn write_port(path: &Path, port: u16) -> Result<(), CpdError> {
     })
 }
 
-fn lock(path: &Path) -> Result<Flock<File>, CpdError> {
+fn lock(path: &Path) -> Result<File, CpdError> {
     let dir = path.parent().expect("a lock file has a directory");
     fs::create_dir_all(dir).map_err(|e| io_error("create", dir, &e))?;
-    let mut file = OpenOptions::new().create(true).append(true).open(path).map_err(|e| io_error("open", path, &e))?;
-    loop {
-        match Flock::lock(file, FlockArg::LockExclusive) {
-            Ok(lock) => return Ok(lock),
-            Err((f, Errno::EINTR)) => file = f,
-            Err((_, errno)) => return Err(io_error("lock", path, &std::io::Error::from(errno))),
-        }
-    }
+    let file = OpenOptions::new().create(true).append(true).open(path).map_err(|e| io_error("open", path, &e))?;
+    lock::blocking(&file).map_err(|e| io_error("lock", path, &e))?;
+    Ok(file)
 }
 
 fn io_error(what: &str, path: &Path, e: &std::io::Error) -> CpdError {
@@ -169,6 +167,27 @@ mod tests {
     fn a_done_plans_port_is_reused() {
         let mut f = fixture(&[("aa", "done"), ("bb", "grounding")]);
         assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
+        assert_eq!(assign_to(&mut f, "19432-19441", "bb").unwrap(), 19432);
+    }
+
+    #[test]
+    fn a_colliding_plan_moves_and_the_other_keeps_its_port() {
+        let mut f = fixture(&[("aa", "grounding"), ("bb", "grounding")]);
+        for id in ["aa", "bb"] {
+            write_port(&f.home.plannotator_port(&plan(id)), 19432).unwrap();
+        }
+        assert_eq!(assign_to(&mut f, "19432-19441", "bb").unwrap(), 19433);
+        assert_eq!(fs::read_to_string(f.home.plannotator_port(&plan("bb"))).unwrap(), "19433\n");
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
+        assert_eq!(assign_to(&mut f, "19432-19441", "bb").unwrap(), 19433);
+    }
+
+    #[test]
+    fn a_done_plans_leftover_file_does_not_block() {
+        let mut f = fixture(&[("aa", "done"), ("bb", "grounding")]);
+        for id in ["aa", "bb"] {
+            write_port(&f.home.plannotator_port(&plan(id)), 19432).unwrap();
+        }
         assert_eq!(assign_to(&mut f, "19432-19441", "bb").unwrap(), 19432);
     }
 

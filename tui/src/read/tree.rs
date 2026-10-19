@@ -8,9 +8,11 @@ use std::collections::BTreeMap;
 use cpd_core::error::CpdError;
 use cpd_core::events::highest_id;
 use cpd_core::ids::ContextId;
+use cpd_core::home::CpdHome;
+use cpd_core::inbox::model::{self, Filter, Item, Kind, State, Urgency};
 use cpd_core::store::Store;
 
-use super::dot::Dot;
+use super::dot::{self, Dot};
 use super::shared::{PlanHead, SessionNode, id, plan_heads, sessions};
 
 /// Every Context of the machine, by id.
@@ -19,6 +21,12 @@ pub struct Tree {
     pub contexts: Vec<ContextNode>,
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
+    /// The Inbox's open, visible items (not snoozed, not dismissed) in the order of `cpd inbox list`, as of this
+    /// snapshot (§17), `engine-down` first when no engine runs. Every dot of the tree comes from the stored ones.
+    pub inbox: Vec<Item>,
+    /// Whether an engine holds `locks/watch.lock` (§1.4). `engine-down` is never stored: with none, `inbox` starts
+    /// with it (id 0, which no stored item has), as `cpd inbox list` does.
+    pub engine_running: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,7 +41,8 @@ pub struct ContextNode {
     pub archived_at: Option<String>,
     /// Its Plans, oldest first.
     pub plans: Vec<PlanNode>,
-    /// The dot of its row: its live (not archived) Manager Session's own dot, `Stopped` with none (§17, hs-d215).
+    /// The dot of its row: its live (not archived) Manager Session's own dot, `Stopped` with none (§17, hs-d215):
+    /// a `●` only from the Manager's own Inbox items (hs-d217), else the glyph of its state.
     pub dot: Dot,
 }
 
@@ -45,10 +54,6 @@ pub struct PlanNode {
 }
 
 impl PlanNode {
-    pub fn needs_you(&self) -> bool {
-        self.head.needs_you(&self.sessions)
-    }
-
     /// The Lead of the Plan, which is in the list unless the database lost it.
     pub fn lead(&self) -> Option<&SessionNode> {
         self.sessions.iter().find(|s| s.plan_lead)
@@ -69,14 +74,53 @@ impl ContextNode {
         forks.sort_by(|a, b| a.1.created_at.cmp(&b.1.created_at)); // stable
         forks
     }
+}
 
-    pub fn needs_you(&self) -> bool {
-        self.plans.iter().any(PlanNode::needs_you)
+/// The home the store lives in: the store file is `<home>/cpd.db`.
+fn store_home(store: &Store) -> Result<CpdHome, CpdError> {
+    let root = store.path().parent().map(|p| p.as_os_str().to_owned());
+    CpdHome::resolve(root, None)
+}
+
+/// The item `engine-down` (§2.2), opened `now`: never stored, so it has no id (0) and no links.
+fn engine_down(now: String) -> Item {
+    Item {
+        id: 0,
+        kind: Kind::EngineDown,
+        urgency: Urgency::Red,
+        subject: "engine".to_owned(),
+        label: model::ENGINE_DOWN_LABEL.to_owned(),
+        url: None,
+        context: None,
+        plan: None,
+        job: None,
+        session: None,
+        record: None,
+        event: None,
+        opened_at: now,
+        closed_at: None,
+        snoozed_until: None,
+        dismissed_at: None,
     }
 }
 
 /// The tree's snapshot: one read transaction, a fixed set of queries whatever the number of Contexts and Plans.
+/// The Inbox's open, visible items (not snoozed, not dismissed) at `now`, in the order of `cpd inbox list` (§17).
+pub(super) fn visible_items(conn: &rusqlite::Connection, now: &str) -> Result<Vec<Item>, CpdError> {
+    model::list(conn, &Filter { context: None, state: State::Visible { now: now.to_owned() } })
+}
+
+/// Each live Lead or fork's dot from the `visible` items (§17, "Which items fill which row"); an archived row keeps
+/// its glyph and takes no item. Every view that draws a Lead's dot (the tree, Pulse) uses this one rule.
+pub(super) fn fill_dots(visible: &[Item], sessions: &mut [SessionNode]) {
+    for s in sessions.iter_mut().filter(|s| !s.is_archived()) {
+        s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, s.plan.as_ref().filter(|_| s.plan_lead)));
+    }
+}
+
 pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
+    let home = store_home(store)?;
+    let engine_running = model::engine_running(&home)?;
     store.read(|conn| {
         let mut records: BTreeMap<String, usize> = BTreeMap::new();
         let mut stmt = conn.prepare("SELECT context, count(*) FROM context_records GROUP BY context")?;
@@ -96,12 +140,21 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
             questions.insert(context, n);
         }
 
-        let leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
+        // Read first: the read transaction is one snapshot, so the items and the Sessions agree.
+        let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
+        let mut inbox = visible_items(conn, &now)?;
+
+        let mut leads: Vec<SessionNode> = sessions(conn, "s.role = 'lead'", &[])?;
+        fill_dots(&inbox, &mut leads);
         let mut heads = plan_heads(conn, None)?;
-        // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot.
+        // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot, a `●` only from
+        // the Manager's own items (hs-d215, hs-d217).
         let managers: BTreeMap<ContextId, Dot> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
             .into_iter()
-            .map(|s| (s.context, s.dot))
+            .map(|s| {
+                let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None));
+                (s.context, dot)
+            })
             .collect();
 
         let mut stmt = conn
@@ -121,17 +174,21 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                     PlanNode { head, sessions: own }
                 })
                 .collect::<Vec<PlanNode>>();
+            let archived_at: Option<String> = r.get(3)?;
             contexts.push(ContextNode {
                 dot: managers.get(&context).copied().unwrap_or(Dot::Stopped),
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),
                 open_questions: questions.remove(&cid).unwrap_or(0),
-                archived_at: r.get(3)?,
+                archived_at,
                 plans,
                 id: context,
             });
         }
-        Ok(Tree { contexts, events_cursor: highest_id(conn)? })
+        if !engine_running {
+            inbox.insert(0, engine_down(now));
+        }
+        Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox, engine_running })
     })
 }

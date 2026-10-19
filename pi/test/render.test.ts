@@ -1,22 +1,119 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { renderContext } from "../lib/adapter.ts";
-import type { RenderedMessage, Theme } from "../lib/pi.ts";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test, mock } from "node:test";
+import { type Component, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { errorMessage, eventMessage, sessionMessage } from "../lib/delivery.ts";
+import type { CpdEvent, EventOf } from "../lib/event.ts";
+import type { Message, MessageRenderer, RenderedMessage, Theme } from "../lib/pi.ts";
+import { loadStyle, RENDERED_TYPES, Rendering, type Style } from "../lib/render.ts";
 import { contextUpdate, type ContextRecord, type PendingPlan, type PlanEvent } from "../lib/updates.ts";
-import { Fixture, ID, OTHER } from "./fake.ts";
+import { ev, Fixture, ID, OTHER } from "./fake.ts";
 
-/** commands.md §15.7 "Display" (hs-d221): one dim line of counts collapsed, the full text expanded, the model's `content` untouched. */
+/** commands.md §15.9 (hs-d286): every cpd message is a collapsed row like pi-compact-tools' tool rows; the model's `content` is untouched. */
 
-const theme: Theme = { fg: (color, text) => `<${color}>${text}</${color}>`, bg: (_color, text) => text };
+// A fake theme that paints real SGR codes, so widths and wrapping behave, and that `tagged` reads back as `<colour>…</>` and `<b>…</b>`.
+const COLORS: string[] = [];
+const theme: Theme = {
+  fg: (color, text) => {
+    if (!COLORS.includes(color)) COLORS.push(color);
+    return `\x1b[38;5;${COLORS.indexOf(color)}m${text}\x1b[39m`;
+  },
+  bg: (_color, text) => `\x1b[48;5;0m${text}\x1b[49m`,
+  bold: (text) => `\x1b[1m${text}\x1b[22m`,
+};
+const tagged = (line: string): string =>
+  line
+    .replace(/\x1b\[48;5;0m|\x1b\[49m/g, "")
+    .replace(/\x1b\[38;5;(\d+)m/g, (_m, n) => `<${COLORS[Number(n)]}>`)
+    .replace(/\x1b\[39m/g, "</>")
+    .replace(/\x1b\[1m/g, "<b>")
+    .replace(/\x1b\[22m/g, "</b>")
+    .trimEnd();
+
 const WIDTH = 200;
-const render = (message: RenderedMessage, expanded: boolean) => renderContext(message, { expanded, outputPad: 1 }, theme)!.render(WIDTH).map((l) => stripTerminalSequences(l).trimEnd());
+const draw = (c: Component | undefined, width = WIDTH): string[] => c!.render(width).map(tagged);
+const rendering = (style: Style = "compact") => Object.assign(new Rendering(), { style });
+const show = (message: RenderedMessage, expanded: boolean, opts: { style?: Style; width?: number; outputPad?: number } = {}) =>
+  draw(rendering(opts.style).render(message, { expanded, outputPad: opts.outputPad ?? 1 }, theme), opts.width);
+const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z]*>/g, ""));
+
+const HEAD = (summary: string) => ` <customMessageLabel>⦁</> <toolTitle><b>cpd</b></> <toolOutput>${summary}</>`;
+const rail = (line: string) => `<dim> │ </><toolOutput>${line}</>`;
+const closing = (word: string) => `<dim> └ </><dim>${word}</>`;
+
+const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
+const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev(7, kind, over) as unknown as CpdEvent;
+const deep = <T>(m: T): T => structuredClone(m);
+
+// ---- Event ----
+
+test("an Event, collapsed: the magenta dot, `cpd` bold, its text, the └ line", () => {
+  const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
+  assert.deepEqual(show(m, false), [HEAD("Job api-1 merged."), closing("Click to expand")]);
+});
+
+test("an Event, expanded: the head stays, the full content behind the rail, then the closing row", () => {
+  const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
+  assert.deepEqual(show(m, true), [HEAD("Job api-1 merged."), rail("Job api-1 merged."), rail("second line"), closing("Click to collapse")]);
+});
+
+test("a long summary is cut to 160 characters, 159 and `…`", () => {
+  const m = eventMessage(event("escalation", { text: `${"word ".repeat(60)}` }), ID);
+  const summary = plain(show(m, false))[0]!.slice(" ⦁ cpd ".length);
+  assert.equal(summary.length, 160);
+  assert.ok(summary.endsWith("…"));
+});
+
+test("a head wider than the pane wraps behind ` │ `, it is never cut", () => {
+  const m = eventMessage(event("job-merged", { text: "alpha beta gamma delta epsilon zeta" }), ID);
+  const lines = plain(show(m, false, { width: 24 }));
+  assert.equal(lines[0], " ⦁ cpd alpha beta gamm");
+  assert.equal(lines[1], " │ a delta epsilon zeta");
+  assert.equal(lines.at(-1), " └ Click to expand");
+});
+
+test("an empty content shows no body", () => {
+  const m = eventMessage(event("job-merged", { text: "x" }), ID, "");
+  assert.deepEqual(show(m, true), [HEAD("x"), closing("Click to collapse")]);
+});
+
+// ---- Session messages ----
+
+test("a message from the User: `Message from the User`", () => {
+  const m = sessionMessage(sessionEvent({ data: { from: null, text: "hi there", wake: false } }), ID, null);
+  assert.deepEqual(show(m, false), [HEAD("Message from the User"), closing("Click to expand")]);
+  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User: hi there"), closing("Click to collapse")]);
+});
+
+test("a message from a Session: its name, or its id when it has none", () => {
+  const named = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
+  assert.deepEqual(show(named, false), [HEAD("Message from cross-repo"), closing("Click to expand")]);
+  assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}): hello`)]);
+  const unnamed = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
+  assert.deepEqual(show(unnamed, false)[0], HEAD(`Message from ${OTHER}`));
+});
+
+// ---- the adapter's errors ----
+
+test("an adapter error: `adapter: <what>`", () => {
+  const { message } = errorMessage("session show", "bad_output", "cpd session show: the session object lacks role", { x: 1 });
+  assert.deepEqual(show(message, false), [HEAD("adapter: session show"), closing("Click to expand")]);
+  assert.deepEqual(show(message, true)[1], rail("cpd adapter: session show: bad_output: cpd session show: the session object lacks role"));
+});
+
+test("an `error` Event (it has an id) is an Event: its text", () => {
+  const m = eventMessage(event("error", { text: "Something broke." }), ID);
+  assert.equal(show(m, false)[0], HEAD("Something broke."));
+});
+
+// ---- cpd-context ----
 
 const record = (n: number): ContextRecord => ({ seq: 40 + n, id: `hs-n${n}`, kind: "note", at: "2026-10-17T09:00:00.000Z", by: OTHER, text: `note ${n}` });
 const planEvent = (n: number): PlanEvent => ({ event: 300 + n, at: "2026-10-18T09:00:00Z", plan: "pay-4521", text: `Plan phase ${n}.` });
 const pending: PendingPlan[] = [{ id: "pay-4521", phase: "dispatch", prs: [{ key: "api", status: "dispatch", number: 212, jobs: [{ key: "j1", status: "queued", title: "T" }] }] }];
-
-const message = () => contextUpdate("ctx", ID, [1, 2].map((n) => ({ event: 200 + n, record: `hs-n${n}`, seq: 40 + n })), [record(1), record(2)], [planEvent(1), planEvent(2), planEvent(3)], pending)!;
+const context = () => contextUpdate("ctx", ID, [1, 2].map((n) => ({ event: 200 + n, record: `hs-n${n}`, seq: 40 + n })), [record(1), record(2)], [planEvent(1), planEvent(2), planEvent(3)], pending)!;
 const FULL = [
   "Context ctx: 2 new records since your last turn.",
   "- hs-n1 note (2026-10-17): note 1",
@@ -30,35 +127,191 @@ const FULL = [
   "  - j1 queued: T",
 ];
 
-test("collapsed: one dim line of counts, not the full text", () => {
-  assert.deepEqual(render(message(), false), [" <dim>cpd-context: 2 records · 3 Plan Events · 1 Plan pending</dim>"]);
+test("cpd-context, collapsed: its counts line is the summary", () => {
+  assert.deepEqual(show(context(), false), [HEAD("cpd-context: 2 records · 3 Plan Events · 1 Plan pending"), closing("Click to expand")]);
 });
 
-test("expanded: the full text", () => {
-  assert.deepEqual(render(message(), true), FULL.map((l) => ` ${l}`));
+test("cpd-context, expanded: the full text", () => {
+  assert.deepEqual(show(context(), true), [HEAD("cpd-context: 2 records · 3 Plan Events · 1 Plan pending"), ...FULL.map((l) => rail(l)), closing("Click to collapse")]);
 });
 
-test("a message whose details lack the counts (an older adapter's) is shown in full, collapsed too", () => {
-  const old = { ...message(), details: { event: 1, delivered_to: ID, records: ["hs-n1"] } };
-  assert.deepEqual(render(old, false), FULL.map((l) => ` ${l}`));
+test("cpd-context whose details lack the counts (an older adapter's): always open, no closing row", () => {
+  const old = { ...context(), details: { event: 1, delivered_to: ID, records: ["hs-n1"] } };
+  const expected = [HEAD("cpd-context"), ...FULL.map((l) => rail(l))];
+  assert.deepEqual(show(old, false), expected);
+  assert.deepEqual(show(old, true), expected);
+  const component = rendering().render(old, { expanded: false, outputPad: 1 }, theme) as Component & { handleMouse?: unknown };
+  assert.equal(component.handleMouse, undefined, "no toggle");
 });
 
-test("the message's content is the full text, whatever the display", () => {
-  const m = message();
-  assert.equal(m.content, FULL.join("\n"));
-  render(m, false);
-  render(m, true);
-  assert.equal(m.content, FULL.join("\n"));
-  assert.equal(m.display, true);
+// ---- cpd-plan-decision ----
+
+const decision = (approved: boolean): Message => ({
+  customType: "cpd-plan-decision",
+  content: `Plan review rv-3 was ${approved ? "APPROVED" : "REJECTED"}.\nNext: cpd plan lock`,
+  display: true,
+  details: { plan: "p1", review: "rv-3", plannotator_id: "x", approved, current: true },
 });
 
-test("the adapter registers the renderer for cpd-context once at load, for every role", () => {
+test("cpd-plan-decision: `Plan review <id> approved|rejected`", () => {
+  assert.deepEqual(show(decision(true), false), [HEAD("Plan review rv-3 approved"), closing("Click to expand")]);
+  assert.deepEqual(show(decision(false), false)[0], HEAD("Plan review rv-3 rejected"));
+  assert.deepEqual(show(decision(true), true), [HEAD("Plan review rv-3 approved"), rail("Plan review rv-3 was APPROVED."), rail("Next: cpd plan lock"), closing("Click to collapse")]);
+});
+
+test("a review that is gone (no verdict) shows the first line of its content", () => {
+  const lost: Message = { customType: "cpd-plan-decision", content: "Plan review rv-3 is gone (plannotator no longer knows it).\nCall cpd_plan_review again.", display: true, details: { review: "rv-3", lost: true } };
+  assert.equal(show(lost, false)[0], HEAD("Plan review rv-3 is gone (plannotator no longer knows it)."));
+});
+
+test("a customType the adapter starts to display later: the first line of its content", () => {
+  const m: Message = { customType: "cpd-later", content: "first\nsecond", display: true, details: undefined };
+  assert.equal(show(m, false)[0], HEAD("first"));
+});
+
+// ---- display only ----
+
+test("the message handed to the model is unchanged, whatever the display", () => {
+  const messages = [eventMessage(event("job-merged"), ID), context(), decision(true), errorMessage("x", "c", "m").message];
+  for (const m of messages) {
+    const before = deep(m);
+    Object.freeze(m);
+    show(m, false);
+    show(m, true);
+    assert.deepEqual(m, before);
+    assert.equal(m.display, true);
+  }
+  assert.equal(messages[1]!.content, FULL.join("\n"));
+});
+
+// ---- expanding ----
+
+const click = (component: Component | undefined, button = "left") => (component as unknown as { handleMouse(e: unknown): unknown }).handleMouse({ type: "click", button, x: 0, y: 0, screenX: 0, screenY: 0, width: 80, height: 2, shift: false, alt: false, ctrl: false });
+
+test("a left click toggles that one message; another button or event does nothing", () => {
+  const r = rendering();
+  const a = eventMessage(event("job-merged", { text: "A" }), ID);
+  const b = eventMessage(event("job-merged", { text: "B" }), ID);
+  const ca = r.render(a, { expanded: false, outputPad: 1 }, theme);
+  const cb = r.render(b, { expanded: false, outputPad: 1 }, theme);
+  assert.equal(click(ca, "right"), undefined);
+  assert.deepEqual(click(ca), { handled: true });
+  assert.deepEqual(draw(ca), [HEAD("A"), rail("A"), closing("Click to collapse")]);
+  assert.deepEqual(draw(cb), [HEAD("B"), closing("Click to expand")]);
+  click(ca);
+  assert.deepEqual(draw(ca), [HEAD("A"), closing("Click to expand")]);
+});
+
+test("Ctrl+O (options.expanded) opens and closes the message both ways, a click in between included", () => {
+  const r = rendering();
+  const m = eventMessage(event("job-merged", { text: "A" }), ID);
+  const render = (expanded: boolean) => draw(r.render(m, { expanded, outputPad: 1 }, theme));
+  assert.deepEqual(render(false), [HEAD("A"), closing("Click to expand")]);
+  click(r.render(m, { expanded: false, outputPad: 1 }, theme)); // a click opens this one
+  assert.equal(render(false).length, 3, "a rebuild with the host still collapsed keeps the click");
+  assert.equal(render(true).length, 3);
+  assert.deepEqual(render(false), [HEAD("A"), closing("Click to expand")], "Ctrl+O again closes it");
+});
+
+// ---- the other styles and the pane ----
+
+test("style claude: `⦁ cpd(<summary>)`, `⎿  Click to expand`, expanded from the prefix on", () => {
+  const m = eventMessage(event("job-merged", { text: "Job done.\nmore" }), ID);
+  const head = ` <customMessageLabel>⦁</> <toolTitle><b>cpd</b></><toolOutput>(Job done.)</>`;
+  assert.deepEqual(show(m, false, { style: "claude" }), [head, "<dim>   ⎿  </><dim>Click to expand</>"]);
+  assert.deepEqual(show(m, true, { style: "claude" }), [head, "<dim>   ⎿  </><toolOutput>Job done.</>", "      <toolOutput>more</>"]);
+});
+
+test("style codex: ` • cpd <summary>`, `+ Show details`, expanded dim from `└` on, `− Show less`", () => {
+  const m = eventMessage(event("job-merged", { text: "Job done.\nmore" }), ID);
+  const head = ` <b><customMessageLabel>•</></b> <b>cpd</b> Job done.`;
+  assert.deepEqual(show(m, false, { style: "codex" }), [head, "<dim>     + Show details</>"]);
+  assert.deepEqual(show(m, true, { style: "codex" }), [head, "<dim>   └ </><dim>Job done.</>", "     <dim>more</>", "<dim>     − Show less</>"]);
+  assert.equal(stripTerminalSequences(plain(show(m, false, { style: "codex", width: 12 })).at(-1)!), "    + Show …", "the disclosure indent is min(width/4, 4) after the margin, and a row never passes the pane");
+});
+
+test("outputPad 0 gives the margin column back", () => {
+  const m = eventMessage(event("job-merged", { text: "A" }), ID);
+  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), ["⦁ cpd A", "└ Click to expand"]);
+});
+
+test("style off: no component, so pi draws its own box", () => {
+  assert.equal(rendering("off").render(eventMessage(event("job-merged"), ID), { expanded: false, outputPad: 1 }, theme), undefined);
+});
+
+// ---- reading the extension's config, once ----
+
+function scratch<T>(fn: (dirs: { agent: string; cwd: string; env: Record<string, string>; config: (dir: string, text: string) => string }) => T): T {
+  const root = mkdtempSync(join(tmpdir(), "render-test-"));
+  try {
+    const agent = join(root, "agent");
+    const cwd = join(root, "project");
+    mkdirSync(agent);
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    const config = (dir: string, text: string) => {
+      writeFileSync(join(dir, "compact-tools.json"), text);
+      return join(dir, "compact-tools.json");
+    };
+    return fn({ agent, cwd, env: { PI_CODING_AGENT_DIR: agent }, config });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("no compact-tools.json: the extension's default, compact", () => {
+  scratch(({ cwd, env }) => assert.equal(loadStyle(env, { cwd, trusted: true }), "compact"));
+});
+
+test("the agent directory's style, then a trusted project's over it; an untrusted project's is not read", () => {
+  scratch(({ agent, cwd, env, config }) => {
+    config(agent, '{"style": "claude", "mode": "silent"}');
+    assert.equal(loadStyle(env, { cwd, trusted: false }), "claude");
+    config(join(cwd, ".pi"), '{"style": "codex"}');
+    assert.equal(loadStyle(env, { cwd, trusted: false }), "claude");
+    assert.equal(loadStyle(env, { cwd, trusted: true }), "codex");
+    config(join(cwd, ".pi"), '{"tools": []}');
+    assert.equal(loadStyle(env, { cwd, trusted: true }), "claude", "a file without `style` keeps the one before it");
+  });
+});
+
+test("a file that does not parse, and a style that is not one of the four, are reported as the extension reports them and the value before kept", () => {
+  scratch(({ agent, cwd, env, config }) => {
+    const errors = mock.method(console, "error", () => {});
+    try {
+      const bad = config(agent, "{nope");
+      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(errors.mock.callCount(), 1);
+      assert.match(String(errors.mock.calls[0]!.arguments[0]), new RegExp(`^\\[compact-tools\\] ${bad.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: `));
+      config(agent, '{"style": "fancy"}');
+      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(errors.mock.calls[1]!.arguments[0], `[compact-tools] ${join(agent, "compact-tools.json")}: style must be one of compact, claude, codex, off; using previous value`);
+      config(agent, "[1]");
+      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(errors.mock.calls[2]!.arguments[0], `[compact-tools] ${join(agent, "compact-tools.json")}: expected a JSON object; using previous values`);
+    } finally {
+      errors.mock.restore();
+    }
+  });
+});
+
+// ---- registered by the adapter ----
+
+test("the adapter registers one renderer per displayed customType once at load, for every role, and reads the style at session_start", async () => {
   const f = new Fixture();
   try {
     f.load();
-    assert.deepEqual([...f.pi.renderers.keys()], ["cpd-context"]);
-    assert.equal(f.pi.renderers.get("cpd-context"), renderContext);
+    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision"]);
+    assert.deepEqual([...f.pi.renderers.keys()], [...RENDERED_TYPES]);
+    mkdirSync(f.agentDir);
+    f.file("agent/compact-tools.json", '{"style": "codex"}');
+    const m = eventMessage(event("job-merged", { text: "Job done." }), ID);
+    // The fake stores pi's own renderer type; call it as the adapter's narrow MessageRenderer, which it is.
+    const renderer = f.pi.renderers.get("cpd") as unknown as MessageRenderer;
+    const render = () => draw(renderer(m, { expanded: false, outputPad: 1 }, theme));
+    assert.equal(render()[0], HEAD("Job done."), "compact until session_start reads the file");
+    await f.pi.fire("session_start", { reason: "startup" });
+    assert.deepEqual(render(), [` <b><customMessageLabel>•</></b> <b>cpd</b> Job done.`, "<dim>     + Show details</>"]);
   } finally {
-    f.close();
+    await f.close();
   }
 });

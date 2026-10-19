@@ -3,12 +3,12 @@
 //! session, and its session file.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-use super::ledger::{self, Target};
+use crate::attempt::ledger::{self, Attempt as Target};
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::git;
@@ -16,7 +16,7 @@ use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::pi::{self, PiDirs, WorkerLaunch, extensions_to_pass, worker_candidates};
 use crate::host::{PaneId, Tmux, WindowId};
-use crate::ids::{EscalationId, PlanId, SessionId};
+use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
 use crate::metrics;
 use crate::plan::jobs::Job;
 use crate::session::run::{quiet_since, turn_finished};
@@ -25,6 +25,30 @@ use crate::store::Store;
 
 /// How often a review Job's driver looks at the Lead while it waits for it to be idle (§6.7 step 1).
 const LEAD_POLL: Duration = Duration::from_secs(2);
+
+/// A3's wait for the Lead logs one line this often (§3.4 A4).
+const WAIT_LOG: Duration = Duration::from_secs(10 * 60);
+
+/// When the next "still waiting" line is due: every `every` after `since`.
+struct WaitLog {
+    every: Duration,
+    last: Instant,
+}
+
+impl WaitLog {
+    fn new(every: Duration, since: Instant) -> Self {
+        Self { every, last: since }
+    }
+
+    /// Whether a line is due at `now`; true at most once per `every`.
+    fn due(&mut self, now: Instant) -> bool {
+        let due = now.duration_since(self.last) >= self.every;
+        if due {
+            self.last = now;
+        }
+        due
+    }
+}
 
 /// How the merge words a conflict's detail (`crate::merge`, §7.4 step 5):
 /// the file list follows it, comma-separated, ending with a full stop.
@@ -220,9 +244,18 @@ pub struct Fork {
 /// message is a finished assistant turn, and the file has been quiet for
 /// `fork_quiet_seconds`), checking every 2 seconds without a limit, and returns
 /// what to fork. `None` when a cancel request was seen first (the safe point).
-/// The Lead is never interrupted.
-pub fn wait_for_lead(store: &mut Store, config: &Config, dirs: &PiDirs, target: &Target) -> Result<Option<Fork>, CpdError> {
+/// The Lead is never interrupted. The wait does not count as active time
+/// (§3.4 A4): `log` gets one line every 10 minutes of it.
+pub fn wait_for_lead(
+    store: &mut Store,
+    config: &Config,
+    dirs: &PiDirs,
+    target: &Target,
+    log: &dyn Fn(&str),
+) -> Result<Option<Fork>, CpdError> {
     let quiet = Duration::from_secs(u64::from(config.timeouts.fork_quiet_seconds));
+    let began = Instant::now();
+    let mut waits = WaitLog::new(WAIT_LOG, began);
     loop {
         if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             return Ok(None);
@@ -235,6 +268,9 @@ pub fn wait_for_lead(store: &mut Store, config: &Config, dirs: &PiDirs, target: 
             && std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text))
         {
             return Ok(Some(Fork { session, file }));
+        }
+        if waits.due(Instant::now()) {
+            log(&format!("A3: still waiting for the Lead to be idle ({} minutes so far)", began.elapsed().as_secs() / 60));
         }
         std::thread::sleep(LEAD_POLL);
     }
@@ -323,7 +359,13 @@ fn retry_kill(
 /// failed `kill-window` is retried (see [`KILL_TRIES`]); a window already
 /// gone counts as killed.
 pub fn kill_window(config: &Config, tmux: &Tmux, target: &Target) -> Result<(), CpdError> {
-    let name = attempt_window(&target.plan, &target.id);
+    kill_attempt_window(config, tmux, &target.plan, &target.id)
+}
+
+/// [`kill_window`] for Attempt `id` of `plan`: the one A9 kill, shared by the
+/// driver, E2 and R.
+pub fn kill_attempt_window(config: &Config, tmux: &Tmux, plan: &PlanId, id: &AttemptId) -> Result<(), CpdError> {
+    let name = attempt_window(plan, id);
     let windows: Vec<WindowId> = tmux
         .list_panes()?
         .into_iter()
@@ -344,7 +386,7 @@ pub fn metrics(dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
     match metrics::parse_file(&file) {
         Ok(m) => Some(m.to_json()),
         Err(e) => {
-            eprintln!("cpd attempt run: no metrics from {}: {}", file.display(), e.message());
+            super::run::log(&format!("no metrics from {}: {}", file.display(), e.message()));
             None
         }
     }
@@ -386,6 +428,18 @@ mod tests {
         let result = retry_kill(3, Duration::ZERO, || { calls += 1; Err(failure()) }, || true);
         assert_eq!(calls, 1);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn the_wait_log_is_due_every_period_and_not_before() {
+        let start = Instant::now();
+        let mut waits = WaitLog::new(WAIT_LOG, start);
+        assert!(!waits.due(start));
+        assert!(!waits.due(start + WAIT_LOG - Duration::from_secs(1)));
+        assert!(waits.due(start + WAIT_LOG));
+        assert!(!waits.due(start + WAIT_LOG + Duration::from_secs(1)));
+        assert!(waits.due(start + WAIT_LOG * 2));
+        assert_eq!(WAIT_LOG, Duration::from_secs(600));
     }
 
     #[test]

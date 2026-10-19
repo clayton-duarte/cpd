@@ -8,17 +8,14 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
 
-const WATCH_OK: &str = "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"}'; exit 0";
 
 struct Fx {
     env: TestEnv,
@@ -38,7 +35,7 @@ const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rev
 fn fx() -> Fx {
     let env = TestEnv::new();
     let config = format!(
-        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\npr_poll_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
         env.tmux_socket()
     );
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
@@ -46,8 +43,8 @@ fn fx() -> Fx {
     // E5 polls on every engine: a `gh` that finds no pull requests, so that no test reaches the real one.
     env.fake_gh(&format!("echo '{EMPTY_SEARCH}'"));
     let fx = Fx { env };
-    fx.sql(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+    fx.env.sql(
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
@@ -61,10 +58,6 @@ impl Fx {
         Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
     }
 
-    fn sql(&self, sql: &str) {
-        self.store().write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
-    }
-
     fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
         self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
@@ -75,11 +68,11 @@ impl Fx {
 
     /// A repo `name` on `main` with a bare `origin` holding `main`.
     fn repo(&self, name: &str) -> Repo {
-        let path = self.env.git_repo(name).canonicalize().unwrap();
+        let path = self.env.keyed_repo(name).canonicalize().unwrap();
         let origin = self.env.root().join("origins").join(format!("{name}.git"));
         fs::create_dir_all(&origin).unwrap();
         self.env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-        self.env.git(&path, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        self.env.local_origin(&path, &origin);
         self.env.git(&path, &["push", "-q", "origin", "main"]);
         Repo { path, origin }
     }
@@ -96,7 +89,7 @@ impl Fx {
 
     /// A draft Job of PR `pr`.
     fn job(&self, key: &str, pr: &str) {
-        self.sql(&format!(
+        self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
              VALUES ('pay', '{pr}', '{key}', 'Job {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         ));
@@ -115,12 +108,12 @@ impl Fx {
 
     /// The Plan locked, as `plan lock` leaves it, without starting any PR.
     fn dispatch(&self) {
-        self.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
+        self.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
     }
 
     /// PR `key` `open`, one allowed step at a time.
     fn open(&self, key: &str) {
-        self.sql(&format!(
+        self.env.sql(&format!(
             "UPDATE prs SET status = 'dispatch', lead_worktree = '/x/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';
              INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                VALUES ('acme/{key}', 1, 'https://github.com/acme/{key}/pull/1', 'T', 0, 'open', 'none', 'none', 't', 't');
@@ -131,7 +124,7 @@ impl Fx {
 
     /// An `open` PR `key` merged.
     fn merge(&self, key: &str) {
-        self.sql(&format!(
+        self.env.sql(&format!(
             "UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = '{key}';
              UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{key}';"
         ));
@@ -209,27 +202,18 @@ impl Drop for Engine {
     }
 }
 
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
-}
-
 fn head(fx: &Fx, repo: &Path, rev: &str) -> String {
     fx.env.git(repo, &["rev-parse", rev])
 }
 
 fn remote_branch(fx: &Fx, repo: &Path, branch: &str) -> String {
     fx.env.git(repo, &["ls-remote", "--heads", "origin", branch])
+}
+
+/// The `branch.*` entries of `repo`'s `.git/config` (upstreams), one per line.
+fn branch_config(fx: &Fx, repo: &Path) -> String {
+    let out = common::output(fx.env.command("git").args(["-C", repo.to_str().unwrap(), "config", "--get-regexp", r"^branch\."])).unwrap();
+    String::from_utf8(out.stdout).unwrap()
 }
 
 // ---------- plan lock ----------
@@ -261,7 +245,7 @@ fn lock_starts_only_the_prs_without_needs() {
     // The started PR: branch, worktree, remote and row.
     assert_eq!(fx.env.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/api");
     assert_eq!(remote_branch(&fx, &api.path, "cpd/pay/api"), format!("{base}\trefs/heads/cpd/pay/api"));
-    assert_eq!(fx.env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/api");
+    assert_eq!(branch_config(&fx, &api.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("api"), "dispatch");
     assert_eq!(fx.query::<String>("SELECT lead_worktree FROM prs WHERE key = 'api'"), worktree.display().to_string());
     // The waiting one: nothing created anywhere.
@@ -412,7 +396,7 @@ fn pr_start_creates_pushes_and_records_the_start() {
     );
     assert_eq!(fx.env.git(&worktree, &["rev-parse", "HEAD"]), tip, "cut from a fresh fetch of origin/main");
     assert_eq!(remote_branch(&fx, &repo.path, "cpd/pay/a2"), format!("{tip}\trefs/heads/cpd/pay/a2"));
-    assert_eq!(fx.env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/a2");
+    assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("a2"), "dispatch");
     assert!(fx.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
     let started = fx.events("pr-started");
@@ -423,6 +407,33 @@ fn pr_start_creates_pushes_and_records_the_start() {
     let again = fx.start("a2").ok();
     assert_eq!((&again["already"], &again["pr"]["status"]), (&json!(true), &json!("dispatch")));
     assert_eq!(fx.events("pr-started").len(), 1);
+}
+
+#[test]
+fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let keys: Vec<String> = (1..=8).map(|i| format!("p{i}")).collect();
+    for key in &keys {
+        fx.add(key, &repo.path, &[]);
+    }
+    fx.dispatch();
+
+    let runs: Vec<Run> = std::thread::scope(|s| {
+        let started: Vec<_> = keys.iter().map(|key| s.spawn(|| fx.start(key))).collect();
+        started.into_iter().map(|t| t.join().unwrap()).collect()
+    });
+
+    for (key, run) in keys.iter().zip(&runs) {
+        let out = run.ok();
+        assert_eq!((&out["pr"]["status"], &out["pr"]["pushed"]), (&json!("dispatch"), &json!(true)), "{key}");
+        let branch = format!("cpd/pay/{key}");
+        assert_eq!(fx.env.git(&fx.lead_path(&repo.path, key), &["symbolic-ref", "--short", "HEAD"]), branch);
+        assert_ne!(remote_branch(&fx, &repo.path, &branch), "", "{key} pushed");
+    }
+    assert_eq!(branch_config(&fx, &repo.path), "", "no branch.* entry in .git/config");
+    assert_eq!(fx.events("pr-started").len(), 8);
+    assert!(fx.events("error").is_empty());
 }
 
 #[test]
@@ -470,8 +481,7 @@ fn a_push_failure_at_pr_start_still_starts_it_and_appends_one_push_failed_error(
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
     let hook = repo.origin.join("hooks").join("pre-receive");
-    fs::write(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n");
 
     let out = fx.start("a2").ok();
 
@@ -488,8 +498,9 @@ fn a_push_failure_at_pr_start_still_starts_it_and_appends_one_push_failed_error(
 #[test]
 fn a_repo_without_origin_starts_a_pr_as_before() {
     let fx = fx();
-    let repo = fx.env.git_repo("pay").canonicalize().unwrap();
+    let repo = fx.env.keyed_repo("pay").canonicalize().unwrap();
     fx.a2_ready(&repo);
+    fx.env.drop_unreachable_origin(&repo);
     let base = head(&fx, &repo, "HEAD");
 
     let out = fx.start("a2").ok();
@@ -505,7 +516,7 @@ fn a_pr_made_before_r34_keeps_its_branch_and_worktree_name() {
     let fx = fx();
     let repo = fx.repo("pay");
     // As migration 4 leaves it: the Lead Branch is `cpd/<plan>`.
-    fx.sql(&format!(
+    fx.env.sql(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
          VALUES ('pay', 'pay', '{}', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');",
         repo.path.display()
@@ -544,8 +555,8 @@ esac"#,
     ));
     let engine = fx.engine();
 
-    // a1 is not merged: nothing starts, however many ticks pass.
-    std::thread::sleep(Duration::from_millis(2500));
+    // a1 is not merged: nothing starts, however many ticks pass (two whole ticks of the engine).
+    fx.env.wait_whole_ticks(2);
     assert_eq!((fx.pr_status("a2"), fx.pr_status("a3")), ("waiting".to_owned(), "waiting".to_owned()));
 
     // a1 merges on GitHub: what it brought is on the remote, which this repo has not fetched.
@@ -596,7 +607,7 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     assert!(!fx.lead_path(&repo.path, "a2").exists(), "the worktree is removed");
 
     // The engine does not try again.
-    std::thread::sleep(Duration::from_millis(3500));
+    fx.env.wait_whole_ticks(3);
     assert_eq!(fx.events("error").len(), 1);
     assert!(fx.events("pr-started").is_empty());
 

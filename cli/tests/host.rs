@@ -5,36 +5,25 @@
 mod common;
 
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{SLEEP_SECONDS, TestEnv};
+use common::{SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::ErrorCode;
 use cpd_core::host::layout::{self, View};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux};
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 
-/// The wrapper runs `tmux` with this process's environment, so each test
-/// points `TMUX_TMPDIR` at its own `TestEnv` while holding this lock. Rust's
-/// `Command` reads the environment under std's own lock, so this is the only
-/// cross-test interference to prevent.
-static TMUX_ENV: Mutex<()> = Mutex::new(());
-
 struct Server {
     env: TestEnv,
     tmux: Tmux,
-    _lock: MutexGuard<'static, ()>,
 }
 
+/// The wrapper gets its own `TMUX_TMPDIR` (`Tmux::with_tmpdir`): the process environment is never touched.
 fn server() -> Server {
-    let lock = TMUX_ENV.lock().unwrap_or_else(|e| e.into_inner());
     let env = TestEnv::new();
-    // SAFETY: serialised by TMUX_ENV; no other thread of this test binary
-    // spawns tmux or reads TMUX_TMPDIR without holding it.
-    unsafe { std::env::set_var("TMUX_TMPDIR", env.root().join("tmux")) };
-    let tmux = Tmux::new(env.tmux_socket());
-    Server { env, tmux, _lock: lock }
+    let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.root().join("tmux"));
+    Server { env, tmux }
 }
 
 fn sleeper(cwd: &Path) -> Spawn {
@@ -47,14 +36,6 @@ fn sh(script: &str) -> Spawn {
 
 fn pane<'a>(panes: &'a [Pane], id: &PaneId) -> &'a Pane {
     panes.iter().find(|p| &p.pane == id).unwrap_or_else(|| panic!("no pane {id} in {panes:?}"))
-}
-
-fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
-    let start = Instant::now();
-    while !ok() {
-        assert!(start.elapsed() < Duration::from_secs(10), "timed out waiting for {what}");
-        sleep(Duration::from_millis(50));
-    }
 }
 
 #[test]
@@ -97,8 +78,8 @@ fn a_right_click_is_tmuxs_default_binding_that_passes_it_to_a_pane_that_captures
     assert!(binding.starts_with(default_start), "{binding}");
     assert!(binding.contains("{ select-pane -t = ; send-keys -M } { display-menu "), "{binding}");
     // and cpd's own binding is on the same server, so the list is of this server's keys
-    let own = s.env.tmux(&["list-keys", "-T", "root", "MouseDown1Pane"]);
-    assert!(String::from_utf8_lossy(&own.stdout).contains("@cpd_view"));
+    let own = s.env.tmux(&["list-keys", "-T", "root", "MouseDown1Status"]);
+    assert!(String::from_utf8_lossy(&own.stdout).contains("cpd tui action"));
 }
 
 /// Every option, binding and hook of contract §6.1: the reference's
@@ -115,9 +96,9 @@ fn assert_server_options(s: &Server) {
         ("pane-border-lines", "heavy"),
         (
             "pane-border-format",
-            "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,#{?#{==:#{@cpd_view},statusbar},,\
+            "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
              #[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}}",
+             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}",
         ),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
@@ -131,11 +112,15 @@ fn assert_server_options(s: &Server) {
     }
     let hook = s.env.tmux(&["show-hooks", "-g", "pane-died"]);
     assert_eq!(String::from_utf8_lossy(&hook.stdout), "pane-died[0] if-shell -F \"#{@cpd_view}\" respawn-pane\n", "{hook:?}");
-    let binding = s.env.tmux(&["list-keys", "-T", "root", "MouseDown1Pane"]);
+    let binding = |key| {
+        let out = s.env.tmux(&["list-keys", "-T", "root", key]);
+        String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    // tmux's own default: a click selects the pane, then passes the click on
+    assert_eq!(binding("MouseDown1Pane"), "bind-key -T root MouseDown1Pane select-pane -t = \\; send-keys -M");
     assert_eq!(
-        String::from_utf8_lossy(&binding.stdout).split_whitespace().collect::<Vec<_>>().join(" "),
-        "bind-key -T root MouseDown1Pane if-shell -F \"#{==:#{@cpd_view},statusbar}\" \"send-keys -M\" \"select-pane -t = ; send-keys -M\"",
-        "{binding:?}"
+        binding("MouseDown1Status"),
+        "bind-key -T root MouseDown1Status run-shell -b \"cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null\""
     );
 }
 
@@ -161,19 +146,21 @@ fn a_killed_view_pane_respawns_and_a_killed_lead_or_engine_pane_stays_dead() {
     t.set_pane_session(&lead, &SessionId::new_v4()).unwrap();
     let view_pid = pane(&t.list_panes().unwrap(), &view).pid;
 
-    for id in [&engine, &view, &lead] {
+    // The Lead and the engine first, and until they are dead: tmux runs the `pane-died` hooks in the order the panes
+    // died, so once the view (killed last) is respawned, the hooks of the other two have run and left them dead.
+    for id in [&engine, &lead] {
         kill_program(t, id);
     }
-    wait_for("the Lead and the engine to die", || {
+    wait_until("the Lead and the engine to die", || {
         let panes = t.list_panes().unwrap();
         pane(&panes, &lead).dead && pane(&panes, &engine).dead
     });
-    wait_for("the view to respawn", || {
+    kill_program(t, &view);
+    wait_until("the view to respawn", || {
         let panes = t.list_panes().unwrap();
         let p = pane(&panes, &view);
         !p.dead && p.pid.is_some() && p.pid != view_pid
     });
-    sleep(Duration::from_millis(300));
     let panes = t.list_panes().unwrap();
     assert!(pane(&panes, &lead).dead && pane(&panes, &engine).dead, "{panes:?}");
     assert_eq!(pane(&panes, &view).cpd_view, Some(View::Tree), "the view keeps its option");
@@ -197,7 +184,7 @@ fn respawn_killing_restarts_a_live_pane_in_place() {
     let mut rerun = Spawn::default();
     rerun.env.insert("CPD_HOST_TEST_VAR".into(), "again".into());
     t.respawn_pane_killing(&id, &rerun).unwrap();
-    wait_for("the rerun to write", || std::fs::read_to_string(&out).is_ok_and(|s| s == "again\n"));
+    wait_until("the rerun to write", || std::fs::read_to_string(&out).is_ok_and(|s| s == "again\n"));
     assert_ne!(pane(&t.list_panes().unwrap(), &id).pid, after.pid);
 }
 
@@ -211,7 +198,7 @@ fn create_session_returns_the_first_window_and_pane_once() {
     let session_env = s.env.tmux(&["show-environment", "-t", "=cpd"]);
     assert!(!String::from_utf8_lossy(&session_env.stdout).contains("CPD_HOST_TEST_VAR"), "{session_env:?}");
     let later = s.tmux.new_window("cpd", "later", &sh(&format!("echo \"plan=$CPD_HOST_TEST_VAR\"; sleep {SLEEP_SECONDS}"))).unwrap().1;
-    wait_for("the later window's output", || {
+    wait_until("the later window's output", || {
         let out = s.env.tmux(&["capture-pane", "-p", "-t", later.as_str()]);
         String::from_utf8_lossy(&out.stdout).contains("plan=")
     });
@@ -330,7 +317,7 @@ fn a_worker_window_gets_its_cwd_environment_and_argv() {
     let session = SessionId::new_v4();
     t.set_pane_session(&worker, &session).unwrap();
 
-    wait_for("the worker to write", || std::fs::read_to_string(&out).is_ok_and(|s| !s.is_empty()));
+    wait_until("the worker to write", || std::fs::read_to_string(&out).is_ok_and(|s| !s.is_empty()));
     // tmux sets TMUX_PANE in its panes itself; the argument arrives verbatim, no shell.
     assert_eq!(
         std::fs::read_to_string(&out).unwrap(),
@@ -347,7 +334,7 @@ fn a_dead_pane_stays_and_is_respawned() {
     let t = &s.tmux;
     t.ensure_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap();
     let (_, dying) = t.new_window("cpd", "x", &sh("exit 3")).unwrap();
-    wait_for("the pane to die", || pane(&t.list_panes().unwrap(), &dying).dead);
+    wait_until("the pane to die", || pane(&t.list_panes().unwrap(), &dying).dead);
     let dead = pane(&t.list_panes().unwrap(), &dying).clone();
     assert_eq!(dead.dead_status, Some(3));
 
@@ -411,15 +398,15 @@ fn a_leads_border_shows_its_title_reversed_and_a_titleless_lead_shows_nothing() 
 }
 
 #[test]
-fn the_statusbar_is_a_view_and_a_pane_marked_so_parses() {
-    assert_eq!(View::parse("statusbar"), Some(View::Statusbar));
-    assert_eq!(View::Statusbar.as_str(), "statusbar");
-    assert!(View::ALL.contains(&View::Statusbar));
+fn the_statusbar_is_no_view() {
+    assert_eq!(View::parse("statusbar"), None);
+    assert!(View::ALL.iter().all(|v| v.as_str() != "statusbar"));
     assert_eq!(View::parse("nope"), None);
 }
 
 /// Finding 4: a pane made by a newer cpd (a view this binary does not know)
-/// is skipped, and the rest of the listing is intact.
+/// is skipped, and the rest of the listing is intact; so is an older cpd's
+/// StatusBar pane, which `cpd tui` removes.
 #[test]
 fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
     let s = server();
@@ -427,6 +414,7 @@ fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
     t.ensure_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap();
     let first = t.list_panes().unwrap().remove(0).pane;
     let (_, other) = t.new_window("cpd", "x", &sleeper(s.env.root())).unwrap();
+    let (_, kept) = t.new_window("cpd", "y", &sleeper(s.env.root())).unwrap();
     let set = |pane: &PaneId, view: &str| {
         let out = s.env.tmux(&["set", "-p", "-t", pane.as_str(), "@cpd_view", view]);
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
@@ -435,8 +423,20 @@ fn a_pane_with_an_unknown_view_is_skipped_not_a_failed_listing() {
     set(&other, "hologram");
 
     let panes = t.list_panes().unwrap();
-    assert_eq!(pane(&panes, &first).cpd_view, Some(View::Statusbar));
-    assert!(panes.iter().all(|p| p.pane != other), "{panes:?}");
+    assert!(panes.iter().all(|p| p.pane != first && p.pane != other), "{panes:?}");
+    assert_eq!(pane(&panes, &kept).cpd_view, None);
+}
+
+/// Runs the test `name` of this binary again in a child process born with `env`'s `bin/` first on `PATH` and `vars`,
+/// so the wrapper finds `env`'s fake `tmux` and no other test sees either; panics unless it passed.
+fn rerun_with_fake_tmux(env: &TestEnv, name: &str, vars: &[(&str, &str)]) {
+    let mut path = vec![env.bin()];
+    path.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+    child.args(["--exact", name, "--nocapture"]).env("PATH", std::env::join_paths(path).unwrap()).envs(vars.iter().copied());
+    let out = common::output(&mut child).unwrap();
+    let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success() && printed.contains("1 passed"), "{printed}");
 }
 
 /// Whether process `pid` is running (a zombie is not).
@@ -444,49 +444,69 @@ fn running(pid: i32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
 }
 
-/// Restores `PATH` and drops the tmux deadline override when the test ends, even on a panic.
-struct Restore(Option<std::ffi::OsString>);
-
-impl Drop for Restore {
-    fn drop(&mut self) {
-        // SAFETY: still under TMUX_ENV (the Server is dropped after this guard).
-        unsafe {
-            match self.0.take() {
-                Some(path) => std::env::set_var("PATH", path),
-                None => std::env::remove_var("PATH"),
-            }
-            std::env::remove_var("CPD_TEST_DEADLINE_TMUX");
+/// engine-W8 (§6.3 liveness): only tmux saying that no server runs means "no panes".
+/// Any other failure of `list-panes` and `list-sessions` is `tmux_failed`, so E2 and the
+/// driver never read a tmux hiccup as every pane gone.
+#[test]
+fn list_panes_is_empty_only_when_tmux_says_no_server_runs() {
+    const NAME: &str = "list_panes_is_empty_only_when_tmux_says_no_server_runs";
+    const CASE: &str = "CPD_TEST_FAKE_TMUX_CASE";
+    // In the child: the fake `tmux` first on `PATH`, which ignores the socket and the tmpdir.
+    let fake = || Tmux::with_tmpdir("cpd-test-fake", std::env::temp_dir().join("cpd-test-fake-unused"));
+    match std::env::var(CASE).as_deref() {
+        Ok("failure") => {
+            assert_eq!(fake().list_panes().unwrap_err().code(), ErrorCode::TmuxFailed);
+            assert_eq!(fake().server_running().unwrap_err().code(), ErrorCode::TmuxFailed);
+            return;
         }
+        Ok("no-server") => {
+            assert!(fake().list_panes().unwrap().is_empty());
+            assert!(!fake().server_running().unwrap());
+            return;
+        }
+        _ => {}
     }
+    let s = server();
+    for (case, body) in [("failure", "echo 'lost server' >&2; exit 1"), ("no-server", "echo 'no server running on /tmp/tmux-1000/x' >&2; exit 1")] {
+        let before = s.env.calls("tmux").len();
+        s.env.fake("tmux", body);
+        rerun_with_fake_tmux(&s.env, NAME, &[(CASE, case)]);
+        assert!(s.env.calls("tmux").len() > before, "the child of {case} ran the fake tmux");
+    }
+    // The real tmux with no socket file: "error connecting to <socket> (No such file or directory)".
+    assert!(s.tmux.list_panes().unwrap().is_empty());
+    assert!(!s.tmux.server_running().unwrap());
 }
 
 /// engine-W4: a tmux call that hangs (a fake `tmux` first on `PATH` that sleeps) is
 /// killed at its deadline with its whole process group, and fails `tool_timeout`. The
-/// deadline is shortened to 1 s by `CPD_TEST_DEADLINE_TMUX` (read by a debug build only).
+/// deadline is shortened to 1 s by `CPD_TEST_DEADLINE_TMUX`, which a debug build reads
+/// from its environment, and the wrapper finds `tmux` on `PATH`: this test runs itself
+/// again in a child process born with both, so no other test sees them.
 #[test]
 fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
-    let s = server();
-    let pidfile = s.env.root().join("sleep.pid");
-    s.env.fake("tmux", &format!("sleep {SLEEP_SECONDS} & echo $! > '{}'; wait", pidfile.display()));
-    let old = std::env::var_os("PATH");
-    let mut path = vec![s.env.bin()];
-    path.extend(std::env::split_paths(old.as_deref().unwrap_or_default()));
-    // SAFETY: serialised by TMUX_ENV, held by `s` for the whole test.
-    unsafe {
-        std::env::set_var("PATH", std::env::join_paths(path).unwrap());
-        std::env::set_var("CPD_TEST_DEADLINE_TMUX", "1");
+    const NAME: &str = "a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout";
+    if std::env::var_os("CPD_TEST_DEADLINE_TMUX").is_none() {
+        let env = TestEnv::new();
+        let pidfile = env.root().join("sleep.pid");
+        env.fake("tmux", &format!("sleep {SLEEP_SECONDS} & echo $! > '{}'; wait", pidfile.display()));
+        rerun_with_fake_tmux(&env, NAME, &[("CPD_TEST_DEADLINE_TMUX", "1")]);
+        // The sleeper would run SLEEP_SECONDS: its death is the group kill, not its own end.
+        let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+        wait_until("the fake tmux's child to die", || !running(pid));
+        return;
     }
-    let _restore = Restore(old);
+    // No TestEnv here: its teardown would run the hanging fake `tmux` first on this process's `PATH`. The fake
+    // ignores the socket and the tmpdir, and no real tmux runs.
+    let tmux = Tmux::with_tmpdir("cpd-test-deadline", std::env::temp_dir().join("cpd-test-deadline-unused"));
+    let started = std::time::Instant::now();
+    let err = tmux.server_running().unwrap_err();
 
-    let started = Instant::now();
-    let err = s.tmux.server_running().unwrap_err();
-
+    // time-claim: the call returns at its 1 s deadline, not when the sleeper ends; no per-poll signal from the deadline.
     assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
     assert_eq!(err.code(), ErrorCode::ToolTimeout, "{err:?}");
     let d = err.details();
     assert_eq!(d["tool"], "tmux");
     assert_eq!(d["deadline_seconds"], 1);
-    assert_eq!(d["argv"], serde_json::json!(s.tmux.argv(&["list-sessions".into(), "-F".into(), "#{session_id}".into()])));
-    let pid: i32 = std::fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
-    wait_for("the fake tmux's child to die", || !running(pid));
+    assert_eq!(d["argv"], serde_json::json!(tmux.argv(&["list-sessions".into(), "-F".into(), "#{session_id}".into()])));
 }

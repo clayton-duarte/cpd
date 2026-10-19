@@ -158,6 +158,106 @@ fn no_fake_sleeps_longer_than_sleep_seconds() {
     assert!(found.is_empty(), "fakes must sleep at most SLEEP_SECONDS ({SLEEP_SECONDS}):\n{}", found.join("\n"));
 }
 
+/// The text of every test file of this crate but this one, as (path, line number, line).
+fn test_source_lines() -> Vec<(String, usize, String)> {
+    let mut lines = Vec::new();
+    for entry in std::fs::read_dir(env!("CARGO_MANIFEST_DIR").to_owned() + "/tests").unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "rs") || path.file_name().is_some_and(|n| n == "harness.rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            lines.push((path.display().to_string(), n + 1, line.to_owned()));
+        }
+    }
+    lines
+}
+
+/// The lines of the test files containing any of `needles`, as `path:line: text`.
+fn test_lines_with(needles: &[&str]) -> Vec<String> {
+    test_source_lines()
+        .into_iter()
+        .filter(|(_, _, line)| needles.iter().any(|n| line.contains(n)))
+        .map(|(path, n, line)| format!("{path}:{n}: {}", line.trim()))
+        .collect()
+}
+
+#[test]
+fn no_test_mutates_the_process_environment() {
+    // Test threads share one environment: `set_var` there races every `getenv` (tests-build-G3).
+    // A test sets a variable on the `Command` it spawns.
+    let found = test_lines_with(&["set_var(", "remove_var("]);
+    assert!(found.is_empty(), "use Command::env, not the process environment:\n{}", found.join("\n"));
+}
+
+/// The milliseconds of the literal duration a `sleep(` on `line` waits (`from_millis(n)`, `from_secs(n)`), if it has one.
+fn literal_sleep_ms(line: &str) -> Option<u64> {
+    let after = &line[line.find("sleep(")? + 6..];
+    let number = |prefix: &str| -> Option<u64> {
+        let rest = &after[after.find(prefix)? + prefix.len()..];
+        rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
+    };
+    number("from_millis(").or_else(|| number("from_secs(").map(|s| s * 1000))
+}
+
+#[test]
+fn no_test_sleeps_for_a_result_or_bounds_the_time_a_result_takes() {
+    // A fixed sleep before an assertion proves nothing on a loaded machine, and an upper bound on elapsed time fails on
+    // one (tests-build-W4): wait for the result (`wait_until`, a whole engine tick, a rendezvous). A sleep of 250 ms or
+    // more, or an upper bound, stands only for a claim about time itself, and says so in a `// time-claim: <what it
+    // asserts>; no per-poll signal from <X>` comment on its line or the five above it.
+    let lines = test_source_lines();
+    let mut found = Vec::new();
+    for (i, (path, n, line)) in lines.iter().enumerate() {
+        let code = line.trim();
+        if code.starts_with("//") {
+            continue;
+        }
+        let long_sleep = literal_sleep_ms(code).is_some_and(|ms| ms >= 250);
+        let upper_bound = code.contains("assert") && code.contains("elapsed()") && code.contains(" < ");
+        if !(long_sleep || upper_bound) {
+            continue;
+        }
+        let claimed = lines[i.saturating_sub(5)..=i].iter().any(|(p, _, l)| p == path && l.contains("time-claim:"));
+        if !claimed {
+            found.push(format!("{path}:{n}: {code}"));
+        }
+    }
+    assert!(found.is_empty(), "wait for the result, or give the `// time-claim:` it asserts:\n{}", found.join("\n"));
+}
+
+#[test]
+fn executables_are_written_and_copied_only_through_the_harness() {
+    // ETXTBSY is handled once, in `common` (`write_executable`, `copy_executable`, `spawn`, `output`;
+    // tests-build-W5): no file keeps its own lock, copy helper or chmod after a write.
+    let found = test_lines_with(&[
+        "from_mode(0o755)",
+        "fs::copy(CPD",
+        "ONE_AT_A_TIME",
+        "fn copy_executable",
+        "fn executable(",
+        "ETXTBSY",
+        "Text file busy",
+    ]);
+    assert!(found.is_empty(), "write executables with common::write_executable and copy_executable:\n{}", found.join("\n"));
+}
+
+#[test]
+fn the_shared_helpers_are_defined_only_in_the_harness() {
+    // One wait policy, one refusal check, one fixture writer (tests-build-G2, commands-G4): a file
+    // that needs another shape calls the harness's and wraps it, it does not copy it.
+    let found = test_lines_with(&[
+        "fn wait_until(",
+        "fn wait_until_for(",
+        "fn refused(run: &Run, code: &str, exit: i32)",
+        "fn sql(&self",
+        "fn sql(env: &TestEnv",
+        "fn sql(store: &mut Store",
+    ]);
+    assert!(found.is_empty(), "use common::wait_until, wait_until_for, refused and sql:\n{}", found.join("\n"));
+}
+
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
 
 const HELPER_GATE: &str = "CPD_HARNESS_KILLED_TEST_HELPER";
@@ -305,4 +405,71 @@ fn teardown_is_idempotent_and_spares_the_test_process() {
     env.teardown();
     assert!(!env.root().exists());
     assert!(alive(std::process::id()));
+}
+
+// ---------- refused ----------
+
+fn refusal(next: Option<&str>) -> common::Run {
+    let details = next.map_or(serde_json::json!({}), |n| serde_json::json!({"next": n}));
+    let json = serde_json::json!({"ok": false, "error": {"code": "archived", "message": "No.", "details": details}});
+    common::Run { exit: 3, stdout: format!("{json}\n"), stderr: String::new() }
+}
+
+#[test]
+fn refused_returns_the_error_of_a_refusal_whose_next_parses() {
+    let error = common::refused(&refusal(Some("cpd plan unarchive --plan pay-1")), "archived", 3);
+    assert_eq!(error["details"]["next"], "cpd plan unarchive --plan pay-1");
+    common::refused(&refusal(None), "archived", 3);
+}
+
+#[test]
+#[should_panic(expected = "does not parse")]
+fn refused_fails_on_a_next_that_does_not_parse() {
+    common::refused(&refusal(Some("cpd plan unarchive pay-1")), "archived", 3);
+}
+
+#[test]
+#[should_panic(expected = "is not a cpd command")]
+fn refused_fails_on_a_next_that_is_not_a_cpd_command() {
+    common::refused(&refusal(Some("unarchive the plan")), "archived", 3);
+}
+
+#[test]
+#[should_panic(expected = "assertion")]
+fn refused_fails_on_another_code_or_exit() {
+    common::refused(&refusal(None), "usage", 3);
+}
+
+// ---------- waits ----------
+
+#[test]
+fn wait_until_returns_once_ready_and_names_what_it_waited_for_on_timeout() {
+    let mut n = 0;
+    common::wait_until("three polls", || {
+        n += 1;
+        n == 3
+    });
+    let caught = std::panic::catch_unwind(|| common::wait_until_for("never", std::time::Duration::from_millis(150), || false)).unwrap_err();
+    assert!(caught.downcast_ref::<String>().is_some_and(|m| m.contains("timed out waiting for never")));
+}
+
+#[test]
+fn wait_some_says_the_last_state_on_timeout() {
+    let mut n = 0;
+    let got = common::wait_some("a value", std::time::Duration::from_secs(5), || {
+        n += 1;
+        if n < 3 { Err(format!("poll {n}")) } else { Ok(n) }
+    });
+    assert_eq!(got, 3);
+    let caught = std::panic::catch_unwind(|| common::wait_some::<()>("x", std::time::Duration::from_millis(150), || Err("stuck".into()))).unwrap_err();
+    assert!(caught.downcast_ref::<String>().is_some_and(|m| m.contains("timed out waiting for x: stuck")));
+}
+
+#[test]
+fn sql_writes_the_envs_store() {
+    let env = TestEnv::new();
+    env.write_tmux_config("");
+    env.cpd(&["context", "new", "c1", "--title", "Before", "--owner", "acme"]).ok();
+    env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
 }

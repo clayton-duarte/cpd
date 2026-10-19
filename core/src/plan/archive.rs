@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::{ArchiveArgs, Env, UnarchiveArgs, row};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::host::{Tmux, chat_slot};
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
@@ -69,19 +69,16 @@ impl Object {
     /// The Event of this object's change: `archived` is the new value.
     fn event(&self, conn: &Connection, archived: bool) -> Result<NewEvent, CpdError> {
         let verb = if archived { "archived" } else { "unarchived" };
-        let data = json!({"archived": archived});
         Ok(match self {
-            Object::Context(id) => {
-                NewEvent::new(Kind::ContextArchived, format!("Context {id} {verb}."), data).context(id.clone())
-            }
-            Object::Plan(id) => NewEvent::new(Kind::PlanArchived, format!("Plan {id} {verb}."), data).plan(id.clone()),
+            Object::Context(id) => NewEvent::context_archived(format!("Context {id} {verb}."), archived).context(id.clone()),
+            Object::Plan(id) => NewEvent::plan_archived(format!("Plan {id} {verb}."), archived).plan(id.clone()),
             Object::Session(id) => {
                 let (name, context, plan): (String, String, Option<String>) = conn.query_row(
                     "SELECT name, context, plan FROM sessions WHERE id = ?1",
                     [id.as_str()],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )?;
-                let event = NewEvent::new(Kind::SessionArchived, format!("Session {name} {verb}."), data)
+                let event = NewEvent::session_archived(format!("Session {name} {verb}."), archived)
                     .session(id.clone())
                     .context(ContextId::parse(&context)?);
                 match plan {

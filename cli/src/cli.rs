@@ -10,15 +10,16 @@ use clap::{CommandFactory, Parser, Subcommand};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
-use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, pr, session, watch};
+use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, policy, pr, session, watch};
 
 
-/// cpd 2: every command prints exactly one JSON value on stdout.
+/// cpd 2: every command prints exactly one JSON value on stdout. Without a
+/// command, in a terminal, it opens the cockpit (commands.md §13.3).
 #[derive(Parser, Debug)]
 #[command(name = "cpd", version, color = clap::ColorChoice::Never)]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -42,6 +43,9 @@ pub enum Command {
     /// Pull requests (commands.md §9)
     #[command(subcommand)]
     Pr(pr::Command),
+    /// Policies (commands.md §22)
+    #[command(subcommand)]
+    Policy(policy::Command),
     /// Sessions and their tmux panes (commands.md §10)
     #[command(subcommand)]
     Session(session::Command),
@@ -65,10 +69,24 @@ pub enum Command {
 
 /// Parses `argv` and runs the command.
 pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
+    run_with(argv, cpd_tui::on_a_terminal())
+}
+
+/// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
+/// without a command open the cockpit; otherwise it is the usage error (A1).
+fn run_with(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
-        Ok(cli) => dispatch(cli.command),
+        Ok(Cli { command: Some(command) }) => dispatch(command),
+        Ok(Cli { command: None }) if terminal => cpd_tui::bare(run_command),
+        Ok(Cli { command: None }) => {
+            let required = Cli::command().subcommand_required(true).arg_required_else_help(true);
+            match required.try_get_matches_from(&argv) {
+                Err(err) => clap_result(err),
+                Ok(_) => unreachable!("a missing command is an error when one is required"),
+            }
+        }
         Err(err) if root_help && err.kind() == ErrorKind::DisplayHelp => {
             let text = err.render().to_string();
             Ok(Output::success(serde_json::json!({ "help": text, "tree": crate::interface::tree(&Cli::command()) })))
@@ -86,6 +104,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Pr(c) => pr::run(c),
+        Command::Policy(c) => policy::run(c),
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),
         Command::Inbox(c) => inbox::cmd::run(c),
@@ -112,13 +131,8 @@ pub fn clap_result(err: clap::Error) -> Result<Output, CpdError> {
         ErrorKind::DisplayHelp => Ok(Output::success(serde_json::json!({ "help": text }))),
         ErrorKind::DisplayVersion => {
             let store = store_verdict(&CpdHome::from_env()?)?;
-            // `schema` and `store_schema` are a projection of the verdict for the integer-era guards that
-            // still run: they refuse when `store_schema` is above `schema` (commands.md §1.2; hs-d178 D1).
-            let store_schema = store.as_ref().map(|s| if s["opens"] == true { 1000 } else { 1001 });
             Ok(Output::success(serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
-                "schema": cpd_core::store::VERSION,
-                "store_schema": store_schema,
                 "protocol": cpd_core::events::PROTOCOL,
                 "store": store,
             })))
@@ -176,7 +190,7 @@ mod tests {
     }
 
     fn fails(words: &[&str]) -> CpdError {
-        run(argv(words)).expect_err("expected a failure")
+        run_with(argv(words), false).expect_err("expected a failure")
     }
 
     #[test]
@@ -207,10 +221,11 @@ mod tests {
         }
         let Ok(Output::Success(fields)) = run(argv(&["--version"])) else { panic!("version is a success") };
         assert_eq!(fields["version"], env!("CARGO_PKG_VERSION"));
-        assert_eq!(fields["schema"], cpd_core::store::VERSION);
-        assert!(fields.contains_key("store_schema"));
+        let mut keys: Vec<_> = fields.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, ["protocol", "store", "version"]);
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 3);
+        assert_eq!(fields["protocol"], 4);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors

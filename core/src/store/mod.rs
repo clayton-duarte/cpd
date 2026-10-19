@@ -14,19 +14,19 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
 use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, ErrorCode as SqliteCode, OpenFlags, Transaction, TransactionBehavior};
 use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::macros::format_description;
 
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::lock;
 
 use schema::{LEGACY, Named};
 pub use schema::{SCHEMA_HASH, VERSION, canonical_hash};
@@ -54,6 +54,86 @@ pub struct Store {
     /// What `cpd_txn()` returns: the open write transaction's id, 0 when none.
     txn: Arc<AtomicI64>,
     schema: Option<SchemaMismatch>,
+    /// Set by [`Store::persist`]: wait out a transient busy instead of failing.
+    persist: Option<Persist>,
+}
+
+/// How a long-lived process (an Attempt driver, the engine) meets a transient
+/// store error (§3.4, §3.7, §4.2): it waits and tries again, 0.5 s doubling to
+/// 5 s, for as long as the error lasts, and never gives the error to its
+/// caller. Only the waiting for a lock is retried, never a closure that ran.
+pub struct Persist {
+    log: Box<dyn FnMut(&str)>,
+    give_up: fn() -> bool,
+}
+
+impl Persist {
+    /// `log` gets one line per error code and one when the store clears;
+    /// `give_up` is asked while waiting: when it says so, the error is returned
+    /// (the engine's shutdown).
+    pub fn new(log: impl FnMut(&str) + 'static, give_up: fn() -> bool) -> Persist {
+        Persist { log: Box::new(log), give_up }
+    }
+}
+
+const BACKOFF_FIRST: Duration = Duration::from_millis(500);
+const BACKOFF_MAX: Duration = Duration::from_secs(5);
+
+/// One episode of waiting: from the first transient error to the next success.
+struct Wait {
+    delay: Duration,
+    since: Option<Instant>,
+    codes: Vec<String>,
+}
+
+impl Wait {
+    fn new() -> Wait {
+        Wait { delay: BACKOFF_FIRST, since: None, codes: Vec::new() }
+    }
+}
+
+/// A transient store error: `store_busy`, or `store_failed` for SQLite's
+/// `SQLITE_BUSY` or `SQLITE_LOCKED` (primary codes 5 and 6, whatever the
+/// extended code; `SQLITE_LOCKED` is not `store_busy`, store-W7).
+pub fn is_transient(e: &CpdError) -> bool {
+    match e.code() {
+        ErrorCode::StoreBusy => true,
+        ErrorCode::StoreFailed => {
+            e.details().get("sqlite_code").and_then(Value::as_i64).is_some_and(|c| matches!(c & 0xff, 5 | 6))
+        }
+        _ => false,
+    }
+}
+
+/// Settles one attempt of a step that may meet a transient error. `Ok(Some)`:
+/// it worked. `Ok(None)`: it met a transient error, which was logged and
+/// waited out; try again. `Err`: not transient, or not persisting, or told to give up.
+fn settle<T>(persist: &mut Option<Persist>, wait: &mut Wait, result: Result<T, CpdError>) -> Result<Option<T>, CpdError> {
+    let Some(p) = persist else { return result.map(Some) };
+    match result {
+        Ok(value) => {
+            if let Some(since) = wait.since.take() {
+                (p.log)(&format!("the store is clear again after {:.1} s", since.elapsed().as_secs_f64()));
+                *wait = Wait::new();
+            }
+            Ok(Some(value))
+        }
+        Err(e) if is_transient(&e) && !(p.give_up)() => {
+            let code = e.code().as_str().to_owned();
+            wait.since.get_or_insert_with(Instant::now);
+            if !wait.codes.contains(&code) {
+                (p.log)(&format!("{code}: {} Waiting and trying again until it clears.", e.message()));
+                wait.codes.push(code);
+            }
+            let until = Instant::now() + wait.delay;
+            while Instant::now() < until && !(p.give_up)() {
+                std::thread::sleep(Duration::from_millis(50).min(until.saturating_duration_since(Instant::now())));
+            }
+            wait.delay = (wait.delay * 2).min(BACKOFF_MAX);
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// The schema check failed (§4.3): the canonical hash of `sqlite_schema` is not
@@ -126,6 +206,26 @@ impl Store {
         Ok(store)
     }
 
+    /// [`Store::open`] for a process that persists (see [`Persist`]): a
+    /// transient error while opening is waited out, and the store it returns
+    /// persists too.
+    pub fn open_persistent(home: &CpdHome, busy_ms: u64, persist: Persist) -> Result<Store, CpdError> {
+        let mut wait = Wait::new();
+        let mut persist = Some(persist);
+        loop {
+            if let Some(mut store) = settle(&mut persist, &mut wait, Store::open(home, busy_ms))? {
+                store.persist = persist;
+                return Ok(store);
+            }
+        }
+    }
+
+    /// From now on, every [`Store::read`] and [`Store::write`] of this store
+    /// persists (see [`Persist`]); replaces the earlier one.
+    pub fn persist(&mut self, persist: Persist) {
+        self.persist = Some(persist);
+    }
+
     fn connect(path: &Path, busy_ms: u64) -> Result<Store, CpdError> {
         let conn = Connection::open(path)?;
         let txn = Arc::new(AtomicI64::new(0));
@@ -141,7 +241,7 @@ impl Store {
         })?;
         conn.busy_timeout(Duration::from_millis(busy_ms))?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
 
         let application_id: i32 = conn.pragma_query_value(None, "application_id", |r| r.get(0))?;
         if application_id != 0 && application_id != APPLICATION_ID {
@@ -163,7 +263,7 @@ impl Store {
                 .with("journal_mode", mode));
             }
         }
-        Ok(Store { conn, path: path.to_owned(), busy_ms, txn, schema: None })
+        Ok(Store { conn, path: path.to_owned(), busy_ms, txn, schema: None, persist: None })
     }
 
     /// §4.5: runs what [`plan`] says, in one `BEGIN IMMEDIATE` transaction.
@@ -202,7 +302,9 @@ impl Store {
         let caller = Caller::current();
         let path = self.path.display().to_string();
         let _guard = TxnGuard(&self.txn);
+        let mut holder = Holder::default();
         let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        holder.record(&self.path, MIGRATE_COMMAND);
         // Another process may have migrated since the read in `migrate`.
         let Some(plan) = verdict_with(&tx, catalog)?.into_plan()? else { return Ok(false) };
         let failed = |name: &str, e: &dyn std::fmt::Display| {
@@ -321,13 +423,38 @@ impl Store {
 
     /// Runs `f` in a deferred read transaction on the WAL snapshot (§4.2): it
     /// never waits for a writer. Keep it short: one query or one command's reads.
-    /// Writes inside it fail: `cpd_txn()` refuses outside [`Store::write`].
+    /// Nothing inside it writes: `PRAGMA query_only` is on for its duration, so
+    /// DML, DDL and `TEMP` tables fail with SQLite's `attempt to write a
+    /// readonly database` (store-G3), triggers or not.
     pub fn read<T>(&mut self, f: impl FnOnce(&Connection) -> Result<T, CpdError>) -> Result<T, CpdError> {
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
+        let mut wait = Wait::new();
         let result = (|| {
-            let tx = self.conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-            let value = f(&tx)?;
-            tx.commit()?;
+            self.conn.pragma_update(None, "query_only", true)?;
+            let read: Result<T, CpdError> = (|| {
+                let tx = loop {
+                    let begun = Transaction::new(&mut self.conn, TransactionBehavior::Deferred).map_err(CpdError::from).and_then(|tx| {
+                        // A persisting reader takes its snapshot here, where a busy store is waited out.
+                        if self.persist.is_some() {
+                            tx.query_row("SELECT 1 FROM sqlite_schema LIMIT 1", [], |_| Ok(())).or_else(|e| match e {
+                                rusqlite::Error::QueryReturnedNoRows => Ok(()),
+                                e => Err(e),
+                            })?;
+                        }
+                        Ok(tx)
+                    });
+                    if let Some(tx) = settle(&mut self.persist, &mut wait, begun.map_err(|e| enrich(e, &path, busy_ms)))? {
+                        break tx;
+                    }
+                };
+                let value = f(&tx)?;
+                tx.commit()?;
+                Ok(value)
+            })();
+            // Off again however the read ended: the next `write` needs it.
+            let off = self.conn.pragma_update(None, "query_only", false);
+            let value = read?;
+            off?;
             Ok(value)
         })();
         result.map_err(|e| enrich(e, &path, busy_ms))
@@ -359,14 +486,37 @@ impl Store {
         let caller = Caller::current();
         let (path, busy_ms) = (self.path.clone(), self.busy_ms);
         let _guard = TxnGuard(&self.txn);
+        let mut wait = Wait::new();
+        // Declared before the transaction: dropped, so the record removed, after its commit or rollback.
+        let mut holder = Holder::default();
+        let asked = Instant::now();
         let result = (|| {
-            let tx = self.conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let tx = loop {
+                let begun = Transaction::new(&mut self.conn, TransactionBehavior::Immediate)
+                    .map_err(|e| enrich(CpdError::from(e), &path, busy_ms));
+                if let Some(tx) = settle(&mut self.persist, &mut wait, begun)? {
+                    break tx;
+                }
+            };
+            let begun = Instant::now();
+            holder.record(&path, command);
             // Another process may have migrated since this process opened.
             refuse_user_version(user_version(&tx)?)?;
             let id = begin_txn(&tx, &self.txn, command, &caller)?;
             let write = WriteTxn { tx, id };
+            let ran = Instant::now();
             let value = f(&write)?;
+            let committing = Instant::now();
             write.tx.commit()?;
+            let held = begun.elapsed();
+            if held >= SLOW_HOLD {
+                let ms = |d: Duration| d.as_millis() as u64;
+                let phases = json!({
+                    "waited_ms": ms(begun - asked), "begin_ms": ms(ran - begun),
+                    "closure_ms": ms(committing - ran), "commit_ms": ms(committing.elapsed()), "held_ms": ms(held),
+                });
+                Holder::report_slow(&path, command, phases);
+            }
             Ok(value)
         })();
         result.map_err(|e| enrich(e, &path, busy_ms))
@@ -453,7 +603,7 @@ fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
 /// `lock_timeout` (exit 5) naming the lock file and the time waited (§4.3). A
 /// holder that hangs does not hang every other cpd command. Dropping the
 /// result releases it.
-fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<Flock<File>, CpdError> {
+fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<File, CpdError> {
     let failed = |what: &str, path: &Path, e: std::io::Error| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display()))
             .with("path", path.display().to_string())
@@ -462,14 +612,11 @@ fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<Flock<File>, CpdError> {
     fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
     // `home.rs` has no method for this lock; it is the store's alone.
     let path = dir.join("store.lock");
-    let mut file =
-        OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
+    let file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
     let deadline = Instant::now() + Duration::from_millis(busy_ms);
     loop {
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(lock) => return Ok(lock),
-            Err((f, Errno::EWOULDBLOCK | Errno::EINTR)) => file = f,
-            Err((_, errno)) => return Err(failed("lock", &path, errno.into())),
+        if lock::try_lock(&file).map_err(|e| failed("lock", &path, e))? {
+            return Ok(file);
         }
         if Instant::now() >= deadline {
             return Err(CpdError::new(
@@ -577,27 +724,181 @@ fn begin_txn(conn: &Connection, current: &AtomicI64, command: &str, caller: &Cal
     current.store(id, Ordering::SeqCst);
     conn.execute(
         "INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, now(), command, caller.pid, caller.session, caller.cwd],
+        rusqlite::params![id, crate::clock::now(), command, caller.pid, caller.session, caller.cwd],
     )?;
     Ok(id)
 }
 
-/// Now, as §1.3 writes times: RFC 3339 UTC with milliseconds.
-fn now() -> String {
-    OffsetDateTime::now_utc()
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .expect("a UTC time always formats")
-}
-
-/// Adds the database's path, and `busy_ms` to `store_busy`, to errors made
-/// from a `rusqlite::Error`, which cannot know them.
+/// Adds the database's path, and to `store_busy` its `busy_ms` and the
+/// `holder` of the write lock (§4.2), to errors made from a `rusqlite::Error`,
+/// which cannot know them.
 fn enrich(e: CpdError, path: &Path, busy_ms: u64) -> CpdError {
     match e.code() {
         ErrorCode::StoreFailed | ErrorCode::StoreBusy if !e.details().contains_key("path") => {
             let e = e.with("path", path.display().to_string());
-            if e.code() == ErrorCode::StoreBusy { e.with("busy_ms", busy_ms) } else { e }
+            if e.code() != ErrorCode::StoreBusy {
+                return e;
+            }
+            let holder = Holder::find(path);
+            let message = match &holder {
+                Some(h) => format!("{} Held by {}.", e.message(), h.describe()),
+                None => format!("{} Its holder is unknown: no process has recorded that it holds the lock.", e.message()),
+            };
+            let mut busy = CpdError::new(ErrorCode::StoreBusy, message);
+            for (key, value) in e.details() {
+                busy = busy.with(key, value.clone());
+            }
+            busy.with("busy_ms", busy_ms).with("holder", holder.map_or(Value::Null, |h| h.to_json()))
         }
         _ => e,
+    }
+}
+
+/// The messages the triggers raise with `RAISE(ABORT, '…')` that are a typed
+/// refusal (§4.4), with the code and the text of each. A new typed trigger
+/// error is one more row here. The others (`append_only: …`, `… must be
+/// cpd_txn()`) stay `store_failed` by design.
+const TRIGGER_ERRORS: [(&str, ErrorCode, &str); 4] = [
+    ("job_locked", ErrorCode::JobLocked, "The Job is Locked: its Spec and Dependencies cannot change."),
+    ("illegal_transition", ErrorCode::IllegalTransition, "The state change is not a legal transition (§3)."),
+    (
+        "pr_locked",
+        ErrorCode::PrLocked,
+        "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
+    ),
+    ("needs_other_pr", ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR."),
+];
+
+/// Who holds the write lock (§4.2). A process that holds it records itself in
+/// `locks/store-writer-<pid>.json` (one file per process, so none removes
+/// another's): written right after `BEGIN IMMEDIATE`, replaced atomically,
+/// removed when the transaction ends. A `store_busy` reads it, to name the
+/// holder. The record is evidence, not state: a write that cannot be made is
+/// skipped, never a reason to fail the transaction.
+#[derive(Default)]
+struct Holder {
+    file: Option<PathBuf>,
+}
+
+/// A record read back: the process that held the write lock, and since when.
+struct Holding {
+    pid: u32,
+    command: String,
+    argv: String,
+    session: Option<String>,
+    attempt: Option<String>,
+    since_ms: u64,
+}
+
+impl Holding {
+    fn describe(&self) -> String {
+        let who = self.session.as_deref().map(|s| format!(", session {s}")).unwrap_or_default();
+        let which = self.attempt.as_deref().map(|a| format!(", attempt {a}")).unwrap_or_default();
+        format!(
+            "pid {} (`{}`; {}{who}{which}) for {:.1} s",
+            self.pid,
+            self.command,
+            self.argv,
+            self.since_ms as f64 / 1000.0
+        )
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "pid": self.pid, "command": self.command, "argv": self.argv,
+            "session": self.session, "attempt": self.attempt, "since_ms": self.since_ms,
+        })
+    }
+}
+
+fn unix_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+fn locks_of(db: &Path) -> PathBuf {
+    db.parent().unwrap_or(Path::new(".")).join("locks")
+}
+
+impl Holder {
+    fn record(&mut self, db: &Path, command: &str) {
+        let pid = std::process::id();
+        let dir = locks_of(db);
+        let session = ["CPD_SESSION", "PI_SESSION_ID"].iter().find_map(|n| std::env::var(n).ok().filter(|v| !v.is_empty()));
+        let record = json!({
+            "pid": pid,
+            "command": command,
+            "argv": std::env::args().collect::<Vec<_>>().join(" "),
+            "session": session,
+            "attempt": std::env::var("CPD_ATTEMPT").ok().filter(|v| !v.is_empty()),
+            "since_unix_ms": unix_ms(),
+        });
+        let (tmp, file) = (dir.join(format!("store-writer-{pid}.tmp")), dir.join(format!("store-writer-{pid}.json")));
+        if fs::write(&tmp, record.to_string()).and_then(|()| fs::rename(&tmp, &file)).is_ok() {
+            self.file = Some(file);
+        }
+    }
+
+    /// The newest record of a process that is still alive: a killed holder
+    /// leaves its file behind, and SQLite released its lock with it.
+    fn find(db: &Path) -> Option<Holding> {
+        let entries = fs::read_dir(locks_of(db)).ok()?;
+        let now = unix_ms();
+        entries
+            .filter_map(Result::ok)
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("store-writer-") && name.ends_with(".json")
+            })
+            .filter_map(|e| serde_json::from_str::<Value>(&fs::read_to_string(e.path()).ok()?).ok())
+            .filter_map(|v| {
+                let pid = u32::try_from(v["pid"].as_u64()?).ok()?;
+                let alive = match kill(Pid::from_raw(i32::try_from(pid).ok()?), None) {
+                    Ok(()) | Err(Errno::EPERM) => true,
+                    Err(_) => false,
+                };
+                let since = v["since_unix_ms"].as_u64()?;
+                let text = |k: &str| v[k].as_str().map(str::to_owned);
+                let command = text("command")?;
+                alive.then(|| Holding {
+                    pid,
+                    command,
+                    argv: text("argv").unwrap_or_default(),
+                    session: text("session"),
+                    attempt: text("attempt"),
+                    since_ms: now.saturating_sub(since),
+                })
+            })
+            .min_by_key(|h| h.since_ms)
+    }
+}
+
+/// A write transaction that held the lock this long is written to `run/store-slow.log`.
+const SLOW_HOLD: Duration = Duration::from_millis(1000);
+
+impl Holder {
+    /// One JSON line in `run/store-slow.log`: who held the write lock for [`SLOW_HOLD`] or more, and where
+    /// the time went (`begin_ms`: the `txns` row; `closure_ms`: the work; `commit_ms`: the commit, which syncs).
+    /// Evidence for §4.2's `store_busy`; best effort like the record.
+    fn report_slow(db: &Path, command: &str, phases: Value) {
+        use std::io::Write;
+        let dir = db.parent().unwrap_or(Path::new(".")).join("run");
+        let line = json!({
+            "at": crate::clock::now(), "pid": std::process::id(), "command": command,
+            "argv": std::env::args().collect::<Vec<_>>().join(" "), "phases": phases,
+        });
+        let _ = fs::create_dir_all(&dir).and_then(|()| {
+            let mut file = OpenOptions::new().create(true).append(true).open(dir.join("store-slow.log"))?;
+            writeln!(file, "{line}")
+        });
+    }
+}
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            let _ = fs::remove_file(file);
+        }
     }
 }
 
@@ -619,33 +920,48 @@ impl From<rusqlite::Error> for CpdError {
                 "Another cpd process held the database's write lock for longer than store_busy_ms.",
             )
             .with("sqlite_message", message),
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "job_locked" => {
-                CpdError::new(ErrorCode::JobLocked, "The Job is Locked: its Spec and Dependencies cannot change.")
-                    .with("sqlite_message", message)
+            Some(f) if f.code == SqliteCode::ConstraintViolation => {
+                match TRIGGER_ERRORS.iter().find(|(raised, ..)| *raised == message) {
+                    Some(&(_, code, text)) => CpdError::new(code, text).with("sqlite_message", message),
+                    None => store_failed(sqlite, message),
+                }
             }
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "illegal_transition" => {
-                CpdError::new(ErrorCode::IllegalTransition, "The state change is not a legal transition (§3).")
-                    .with("sqlite_message", message)
-            }
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "pr_locked" => CpdError::new(
-                ErrorCode::PrLocked,
-                "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
-            )
-            .with("sqlite_message", message),
-            Some(f) if f.code == SqliteCode::ConstraintViolation && message == "needs_other_pr" => {
-                CpdError::new(ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR.")
-                    .with("sqlite_message", message)
-            }
-            _ => CpdError::new(ErrorCode::StoreFailed, format!("The database failed: {message}."))
-                .with("sqlite_code", sqlite.map_or(Value::Null, |f| Value::from(f.extended_code)))
-                .with("sqlite_message", message),
+            _ => store_failed(sqlite, message),
         }
     }
+}
+
+fn store_failed(sqlite: Option<rusqlite::ffi::Error>, message: String) -> CpdError {
+    CpdError::new(ErrorCode::StoreFailed, format!("The database failed: {message}."))
+        .with("sqlite_code", sqlite.map_or(Value::Null, |f| Value::from(f.extended_code)))
+        .with("sqlite_message", message)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// store-G4: every message a trigger raises is a typed refusal or one of the
+    /// two untyped families, so a new `RAISE` cannot fall to `store_failed` by accident.
+    #[test]
+    fn every_message_a_trigger_raises_is_typed_or_untyped_by_design() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/store/migrations");
+        let mut seen = std::collections::BTreeSet::new();
+        for file in fs::read_dir(dir).unwrap() {
+            let sql = fs::read_to_string(file.unwrap().path()).unwrap();
+            for part in sql.split("RAISE(ABORT, '").skip(1) {
+                seen.insert(part.split('\'').next().unwrap().to_owned());
+            }
+        }
+        assert!(seen.len() >= 8, "{seen:?}");
+        for message in seen {
+            let failure = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER);
+            let err = CpdError::from(rusqlite::Error::SqliteFailure(failure, Some(message.clone())));
+            let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()");
+            assert_eq!(err.code() == ErrorCode::StoreFailed, untyped, "{message}: {err:?}");
+            assert_eq!(err.details()["sqlite_message"], message);
+        }
+    }
 
     #[test]
     fn a_failed_migration_leaves_foreign_keys_on_and_legacy_alter_table_off() {
@@ -884,7 +1200,8 @@ mod tests {
         assert_eq!(err.details()["unknown"], serde_json::json!([ADD_A.name, ADD_B.name]));
         // An additive one is inside the window (§4.5): the binary opens it (verdict.rs tests).
         let (_dir, home) = tmp_home();
-        drop(open_named(&home, &with_kind_tables(&[ADD_A])).unwrap());
+        let built_in_and_a: Vec<Named> = schema::NAMED.iter().copied().chain([ADD_A]).collect();
+        drop(open_named(&home, &built_in_and_a).unwrap());
         assert!(Store::open(&home, 5000).is_ok());
     }
 

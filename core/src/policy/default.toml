@@ -1,0 +1,24 @@
+# cpd's compiled default policy (contract §8.3): every domain, parsed by the
+# same loader as every scope file. Every `text` is empty.
+
+[pr]
+gate = "ci"
+text = ""
+
+[pr.feedback]
+checks = "any"
+
+[deploy]
+text = ""
+
+[code]
+text = ""
+
+[tests]
+text = ""
+
+[monitor]
+text = ""
+
+[instructions]
+text = ""

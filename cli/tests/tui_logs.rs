@@ -1,14 +1,12 @@
 //! The `logs` view and the StatusBar's `▤` button (commands.md §13.2, §17; R36): the Event log's snapshot,
-//! following and scrolling with ratatui's `TestBackend`, the view itself and the button's click on a private tmux
-//! server (the click is raw mouse bytes sent to the StatusBar's pane; `tmux` on `PATH` is a fake that answers
-//! `list-clients` and records `display-popup`, and runs the real one for the rest).
+//! following and scrolling with ratatui's `TestBackend`, the view itself on a private tmux server, and the button's
+//! `cpd tui action logs` (`tmux` on `PATH` is a fake that answers the client's size and records `display-popup`).
 
 mod common;
 
 use std::fs;
-use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
+use common::{CPD, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
@@ -192,15 +190,6 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// Waits until `done` holds, at most 30 s.
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 fn start(env: &TestEnv, view: &[&str], width: u16, height: u16) -> String {
     let mut args = vec!["new-session", "-d", "-s", "view", "-x", "", "-y", "", "-P", "-F", "#{pane_id}", CPD, "tui", "view"];
     let (w, h) = (width.to_string(), height.to_string());
@@ -214,13 +203,8 @@ fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
     tmux_out(env, &["capture-pane", "-p", "-t", pane]).lines().map(|l| l.trim_end().to_owned()).collect()
 }
 
-fn wait_screen(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-    let mut rows = Vec::new();
-    wait_until(what, || {
-        rows = screen(env, pane);
-        done(&rows)
-    });
-    rows
+fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]) -> bool) -> Vec<String> {
+    common::wait_screen(what, || screen(env, pane), done)
 }
 
 #[test]
@@ -240,8 +224,11 @@ fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
     tmux_out(&env, &["send-keys", "-t", &pane, "k", "k"]);
     wait_screen(&env, &pane, "scrolled up", |r| r.first().is_some_and(|l| l == " 00:00:05 event 5"));
     append_numbered(&mut store, 11, 1);
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(screen(&env, &pane)[0], " 00:00:05 event 5");
+    // The view reads the store after each key it handles, so once `k` has scrolled it one more row, it has read
+    // Event 11: it did not follow it.
+    tmux_out(&env, &["send-keys", "-t", &pane, "k"]);
+    let rows = wait_screen(&env, &pane, "scrolled up once more", |r| r.first().is_some_and(|l| l == " 00:00:04 event 4"));
+    assert_eq!(rows[3], " 00:00:07 event 7", "the new Event did not move it: {rows:?}");
     tmux_out(&env, &["send-keys", "-t", &pane, "PageDown"]);
     wait_screen(&env, &pane, "following again", |r| r.get(3).is_some_and(|l| l == " 00:00:11 event 11"));
     tmux_out(&env, &["send-keys", "-t", &pane, "Up", "PageUp", "PageUp", "PageUp"]);
@@ -270,62 +257,143 @@ fn the_logs_view_needs_a_terminal() {
 #[test]
 fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
     let (w, h) = cpd_tui::widgets::legend::size();
-    let big = logs::popup_args((1000, 1000));
+    let big = logs::popup_args((1000, 1000), None);
     assert_eq!(
         big,
         ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view logs"]
     );
-    let small = logs::popup_args((80, 40));
+    let small = logs::popup_args((80, 40), None);
     assert_eq!((small[5].as_str(), small[7].as_str()), ("64", "32"));
     assert_eq!(small[3], " logs ");
 }
 
-/// The StatusBar in a one-row window, with a fake `tmux` on `PATH`: `list-clients` says one client of 200x60,
-/// `display-popup` does nothing, and the rest is the real tmux.
-fn statusbar_with_fake_tmux(env: &TestEnv) -> String {
-    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
-    let pane = start(env, &["statusbar"], 80, 1);
+/// A fake `tmux` on `PATH`: client `/dev/pts/9` is 200x60, `display-popup` does nothing.
+fn fake_tmux(env: &TestEnv) {
     env.fake(
         "tmux",
-        &format!(
-            "case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac",
-            real.trim()
-        ),
+        "case \"$*\" in\n *'display -p -c /dev/pts/9 '*) echo '200 60';;\n *display-popup*) ;;\n *) exit 1;;\nesac",
     );
-    pane
 }
 
 fn popups(env: &TestEnv) -> Vec<Vec<String>> {
     env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
 }
 
-/// A left click at 1-based `column` of the pane's one row, as the terminal sends it (SGR mouse reporting).
-fn click(env: &TestEnv, pane: &str, column: u16) {
-    for end in ['M', 'm'] {
-        tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<0;{column};1{end}")]);
-    }
-}
-
 #[test]
-fn a_click_on_the_logs_button_opens_the_popup_and_the_others_do_not() {
+fn the_logs_action_opens_the_popup_on_the_clicking_client() {
     let env = env();
-    let pane = statusbar_with_fake_tmux(&env);
-    wait_screen(&env, &pane, "the buttons", |r| r.first().is_some_and(|l| l.starts_with("⧉ ? ▤")));
-    // `▤` is column 4 (0-based)
-    click(&env, &pane, 5);
-    wait_until("the popup", || !popups(&env).is_empty());
+    fake_tmux(&env);
+    let run = env.cpd(&["tui", "action", "logs", "--client", "/dev/pts/9"]);
+    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
     let popup = popups(&env).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
-    // `tmux -L <socket> -f /dev/null display-popup -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
+    // `tmux -L <socket> -f /dev/null display-popup -c <client> -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
     let (w, h) = cpd_tui::widgets::legend::size();
     assert_eq!(
         popup[at..],
-        ["display-popup", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view logs"]
+        [
+            "display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(),
+            "cpd tui view logs"
+        ]
     );
     assert!(popup[..at].starts_with(&["-L".to_owned(), env.tmux_socket().to_owned()]), "{popup:?}");
 
-    // a click on the legend button opens the legend, not the log
-    click(&env, &pane, 3);
-    wait_until("the legend popup", || popups(&env).len() == 2);
+    // the legend action opens the legend, not the log
+    let run = env.cpd(&["tui", "action", "legend", "--client", "/dev/pts/9"]);
+    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(popups(&env).len(), 2);
     assert!(popups(&env)[1].contains(&" legend ".to_owned()));
+}
+
+// ---------- opening at an Event (`--event <id>`, the Inbox click of an engine-error or engine-down item) ----------
+
+/// The row indexes of `buf` whose first and last cell are reversed.
+fn reversed_rows(buf: &Buffer) -> Vec<u16> {
+    let width = buf.area.width;
+    (0..buf.area.height)
+        .filter(|&y| buf[(0, y)].modifier.contains(Modifier::REVERSED) && buf[(width - 1, y)].modifier.contains(Modifier::REVERSED))
+        .collect()
+}
+
+#[test]
+fn opened_at_an_event_its_line_is_reversed_in_the_middle_of_the_view_and_the_view_does_not_follow() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    append_numbered(&mut store, 0, 30);
+    let events = read::logs(&mut store, 500).unwrap().events;
+    let id = events.iter().find(|e| e.text == "event 10").unwrap().id;
+    let mut log = Log::at(events, id);
+    let buf = render(20, 5, &mut log);
+    assert_eq!(
+        rows(&buf),
+        [" 00:00:08 event 8", " 00:00:09 event 9", " 00:00:10 event 10", " 00:00:11 event 11", " 00:00:12 event 12"]
+    );
+    assert_eq!(reversed_rows(&buf), [2], "its whole line, and only it");
+    assert!(!log.follows());
+    // new Events do not move what is shown; scrolling to the bottom follows again
+    append_numbered(&mut store, 30, 2);
+    log.push(read::logs_after(&mut store, 30).unwrap().events);
+    assert_eq!(rows(&render(20, 5, &mut log))[2], " 00:00:10 event 10");
+    log.scroll_down(1000);
+    assert!(log.follows());
+    assert_eq!(rows(&render(20, 5, &mut log))[4], " 00:00:31 event 31");
+}
+
+#[test]
+fn an_event_at_either_end_fills_the_view_and_one_that_does_not_exist_opens_at_the_bottom() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    append_numbered(&mut store, 0, 30);
+    let events = read::logs(&mut store, 500).unwrap().events;
+    let (first, last) = (events[0].id, events[29].id);
+    let mut log = Log::at(events.clone(), first);
+    let buf = render(20, 5, &mut log);
+    assert_eq!((rows(&buf)[0].as_str(), rows(&buf)[4].as_str()), (" 00:00:00 event 0", " 00:00:04 event 4"));
+    assert_eq!(reversed_rows(&buf), [0]);
+    let mut log = Log::at(events.clone(), last);
+    let buf = render(20, 5, &mut log);
+    assert_eq!(rows(&buf)[4], " 00:00:29 event 29");
+    assert_eq!(reversed_rows(&buf), [4]);
+    assert!(log.follows(), "its line is the bottom one");
+    let mut log = Log::at(events, 9999);
+    let buf = render(20, 5, &mut log);
+    assert_eq!(rows(&buf)[4], " 00:00:29 event 29");
+    assert!(reversed_rows(&buf).is_empty() && log.follows());
+}
+
+#[test]
+fn the_popup_runs_the_view_at_the_event_of_the_item() {
+    let at = logs::popup_args((1000, 1000), Some(42));
+    assert_eq!(at.last().unwrap(), "cpd tui view logs --event 42");
+    assert_eq!(at[..at.len() - 1], logs::popup_args((1000, 1000), None)[..at.len() - 1], "sized as the button's");
+}
+
+#[test]
+fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_does_not_follow() {
+    let env = env();
+    let mut store = open(&env);
+    append_numbered(&mut store, 0, 600);
+    // `event 2` is Event 3: older than the 500 the view starts with, so it is read on its own and shown first
+    let pane = start(&env, &["logs", "--event", "3"], 30, 5);
+    let rows = wait_screen(&env, &pane, "the Event", |r| r.first().is_some_and(|l| l == " 00:00:02 event 2"));
+    assert_eq!(rows[1], " 00:01:40 event 100", "then the latest 500");
+    append_numbered(&mut store, 600, 1);
+    // The view reads the store after each key it handles, so once `j` has scrolled it one row, it has read Event 600:
+    // it did not follow it.
+    tmux_out(&env, &["send-keys", "-t", &pane, "j"]);
+    let rows = wait_screen(&env, &pane, "scrolled down once", |r| r.first().is_some_and(|l| l != " 00:00:02 event 2"));
+    assert_eq!(rows[0], " 00:01:40 event 100", "it does not follow: {rows:?}");
+    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
+    wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+
+    // an Event among the latest 500 is in the middle of the view
+    let pane = start(&env, &["logs", "--event", "301"], 30, 5);
+    let rows = wait_screen(&env, &pane, "the Event", |r| r.get(2).is_some_and(|l| l == " 00:05:00 event 300"));
+    assert_eq!((rows[0].as_str(), rows[4].as_str()), (" 00:04:58 event 298", " 00:05:02 event 302"));
+    tmux_out(&env, &["send-keys", "-t", &pane, "Escape"]);
+    wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
+
+    // an Event that does not exist: the bottom, as without the option
+    let pane = start(&env, &["logs", "--event", "99999"], 30, 5);
+    wait_screen(&env, &pane, "the bottom", |r| r.get(4).is_some_and(|l| l == " 00:10:00 event 600"));
 }

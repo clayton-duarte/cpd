@@ -9,6 +9,8 @@
 //! New session… succeed, the new Lead is opened in the chat slot (`session open`, then the focus, as Open does). Two flows run more than one: an Archive of the chat slot's Lead frees the slot first
 //! ([`Free`], F3), and a click on an archived Session runs `session history` and focuses the chat (F5).
 //!
+//! The Inbox's menu and keys (`s`, `d`) run `inbox snooze <id> <15m|1h|tomorrow>` and `inbox dismiss <id>`.
+//!
 //! Text the User typed is passed as `--flag=value`, or after `--` when it is a positional, so a value that starts
 //! with `-` is still a value.
 
@@ -43,6 +45,27 @@ impl Subject {
     }
 }
 
+/// How long an Inbox item is snoozed: the words of `inbox snooze` (§21.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Until {
+    /// `15m`.
+    Minutes15,
+    /// `1h`.
+    Hour1,
+    /// `tomorrow`: the next 09:00.
+    Tomorrow,
+}
+
+impl Until {
+    fn arg(self) -> &'static str {
+        match self {
+            Until::Minutes15 => "15m",
+            Until::Hour1 => "1h",
+            Until::Tomorrow => "tomorrow",
+        }
+    }
+}
+
 /// How the tree frees the chat slot before it archives the Lead that holds it (F3, §13.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Free {
@@ -65,8 +88,8 @@ pub enum Action {
     /// `plan new <id> --context=<c> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
     /// The Lead forks the Context's grounded Lead (R15).
     NewPlan { context: ContextId, id: PlanId, title: String },
-    /// `context new <id> --title=<title>` (§3.1): New Context….
-    NewContext { id: ContextId, title: String },
+    /// `context new <id> --title=<title> --owner=<login>` (§3.1): New Context….
+    NewContext { id: ContextId, title: String, owner: String },
     /// `context rename <id> --title=<title>` (§3.7).
     RenameContext { id: ContextId, title: String },
     /// `plan rename --plan=<id> --title=<title>` (§4.9).
@@ -85,6 +108,13 @@ pub enum Action {
     /// `tmux set-buffer -w -- <id>` (hs-d102): the menu's Copy id; the id is the one the row shows. The only action
     /// that is no `cpd` command.
     CopyId(String),
+    /// `tmux set-buffer -w -- <url>`: a click on an Inbox item that only has a link (no Plan to open). The note says
+    /// the modifier-click opens it.
+    CopyUrl(String),
+    /// `inbox snooze <id> <15m|1h|tomorrow>` (§21.3): the Inbox menu's and `s`'s Snooze entries.
+    Snooze { item: i64, until: Until },
+    /// `inbox dismiss <id>` (§21.4): the Inbox menu's Dismiss and `d`.
+    Dismiss(i64),
 }
 
 /// The refusal of `x` on the Session in the chat slot (the reference's), also when `session close` refuses it
@@ -105,7 +135,9 @@ impl Action {
                 argv.extend([format!("--context={context}"), format!("--title={title}")]);
                 argv
             }
-            Action::NewContext { id, title } => vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}")],
+            Action::NewContext { id, title, owner } => {
+                vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")]
+            }
             Action::RenameContext { id, title } => vec!["context".into(), "rename".into(), id.to_string(), format!("--title={title}")],
             Action::RenamePlan { id, title } => vec!["plan".into(), "rename".into(), format!("--plan={id}"), format!("--title={title}")],
             Action::RenameSession { id, name } => {
@@ -115,7 +147,9 @@ impl Action {
             Action::Close(id) => words(&["session", "close", id.as_str()]),
             Action::Archive { subject, .. } => subject.command("archive"),
             Action::Unarchive(subject) => subject.command("unarchive"),
-            Action::CopyId(id) => words(&["set-buffer", "-w", "--", id.as_str()]),
+            Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
+            Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
+            Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
         }
     }
 
@@ -167,6 +201,9 @@ impl Action {
             Action::Unarchive(_) if reply["already"] == true => "already unarchived".into(),
             Action::Unarchive(_) => "unarchived".into(),
             Action::CopyId(id) => format!("copied {id}"),
+            Action::CopyUrl(url) => format!("copied {url}: Cmd-click the row to open it"),
+            Action::Snooze { .. } => "snoozed".into(),
+            Action::Dismiss(_) => "dismissed".into(),
         }
     }
 
@@ -195,7 +232,7 @@ impl Runner {
         let mut note = String::new();
         for step in action.steps() {
             let reply = match step {
-                Action::CopyId(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
+                Action::CopyId(_) | Action::CopyUrl(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
                 _ => command(&step)?,
             };
             note = step.done(&reply);
@@ -219,6 +256,12 @@ impl Runner {
             self.tmux.run(&["select-pane", "-t", chat.pane.as_str()].map(str::to_owned))?;
         }
         Ok(())
+    }
+
+    /// A click on an `engine-error` or `engine-down` Inbox item: the logs popup at the Event (the bottom with none);
+    /// returns when it closes.
+    pub fn logs(&self, event: Option<i64>) -> Result<(), String> {
+        crate::logs::open_at(&self.tmux, event).map_err(|e| e.message().to_owned())
     }
 
     /// `?`: the legend popup; returns when it closes.
@@ -299,8 +342,12 @@ mod tests {
                 vec!["plan", "new", "pay-4521", "--context=alpha", "--title=Pay 4521"],
             ),
             (
-                Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into() },
-                vec!["context", "new", "building-cpd", "--title=Building cpd!"],
+                Action::NewContext {
+                    id: ContextId::parse("building-cpd").unwrap(),
+                    title: "Building cpd!".into(),
+                    owner: "clayton-duarte".into(),
+                },
+                vec!["context", "new", "building-cpd", "--title=Building cpd!", "--owner=clayton-duarte"],
             ),
             (
                 Action::RenameContext { id: ContextId::parse("alpha").unwrap(), title: "-Dash".into() },
@@ -312,6 +359,10 @@ mod tests {
                 vec!["session", "rename", "--session=f-idle", "--", "-x y"],
             ),
             (Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() }, vec!["session", "fork", "l-ship", "--name=ship (fork)"]),
+            (Action::Snooze { item: 12, until: Until::Minutes15 }, vec!["inbox", "snooze", "12", "15m"]),
+            (Action::Snooze { item: 12, until: Until::Hour1 }, vec!["inbox", "snooze", "12", "1h"]),
+            (Action::Snooze { item: 7, until: Until::Tomorrow }, vec!["inbox", "snooze", "7", "tomorrow"]),
+            (Action::Dismiss(12), vec!["inbox", "dismiss", "12"]),
         ];
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");
@@ -337,6 +388,13 @@ mod tests {
         }
         let argv = Tmux::new("sock").argv(&Action::CopyId("ship".into()).argv());
         assert_eq!(argv, ["tmux", "-L", "sock", "-f", "/dev/null", "set-buffer", "-w", "--", "ship"]);
+    }
+
+    #[test]
+    fn copy_url_is_the_same_tmux_command_and_its_note_says_how_to_open_the_link() {
+        let copy = Action::CopyUrl("https://x.io/1".into());
+        assert_eq!(sequence(&copy), [vec!["set-buffer", "-w", "--", "https://x.io/1"]]);
+        assert_eq!(copy.done(&json!(null)), "copied https://x.io/1: Cmd-click the row to open it");
     }
 
     #[test]
@@ -372,7 +430,7 @@ mod tests {
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
         let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
-        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into() };
+        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into(), owner: "o".into() };
         assert_eq!(context.done(&json!({"ok": true})), "created alpha");
         let rename = Action::RenameSession { id: sid("f-idle"), name: "x".into() };
         assert_eq!(rename.done(&json!({"ok": true, "name": "x"})), "renamed");
@@ -385,6 +443,9 @@ mod tests {
         let unarchive = Action::Unarchive(Subject::Session(sid("f-idle")));
         assert_eq!(unarchive.done(&json!({"ok": true, "archived": [], "closed": []})), "unarchived");
         assert_eq!(unarchive.done(&json!({"ok": true, "already": true})), "already unarchived");
+        assert_eq!(Action::Snooze { item: 1, until: Until::Hour1 }.done(&json!({"ok": true})), "snoozed");
+        assert_eq!(Action::Dismiss(1).done(&json!({"ok": true})), "dismissed");
+        assert_eq!(Action::Dismiss(1).failed("item_closed", "Item 1 is closed."), "item_closed: Item 1 is closed.");
     }
 
     #[test]

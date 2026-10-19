@@ -3,12 +3,12 @@
 //! model ([`read::widgets`]), then follows the Events: it looks at the highest
 //! Event id every [`TICK`] and re-reads when it moved, at most once per
 //! [`COALESCE`]; the load average is re-read at least every [`REFRESH`], since
-//! it is no Event. It makes no write of its own, but for what a click on an owned PR row asks of `cpd session open`. Its one
-//! key is `q`; mouse capture is on.
+//! it is no Event. It makes no write of its own, but for what a click on an owned PR row asks of `cpd session open`, and the merge popup a click on a merge icon opens. Its one
+//! key is `q`; mouse capture is on, for the clicks and the wheel over the PRs section.
 //!
 //! - [`column`]: the drawing of the machine, the PRs, git and Jira;
 //! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
-//!   the StatusBar's button open in a tmux popup (the columns are narrower than the legend);
+//!   the StatusBar's button (`cpd tui action legend`) open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::palette`]'s.
 
 mod column;
@@ -35,7 +35,8 @@ use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
-pub use column::{Hit, Machine, draw};
+pub use column::{Drawn, Hit, Machine, MergeIcon, draw};
+pub(crate) use column::{Window, dim, max_scroll, section_header, window};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);
@@ -78,8 +79,10 @@ struct Opener<'a> {
     cockpit: &'a str,
 }
 
-/// Draws and follows until `q`. Reading failures end the view with their error. A left click on an owned PR row (not on its
-/// `↗`) opens its Lead in the chat slot; a refusal is the `note` in the column's last row until the next click.
+/// Draws and follows until `q`. Reading failures end the view with their error. The wheel over the PRs section scrolls it by one
+/// pull request per notch. A left click on an owned PR row (not on its `󰏌` or its merge icon) opens its Lead in the chat slot;
+/// a left click on a merge icon opens the merge popup; a refusal or a failure is the `note` in the column's last row until the
+/// next click.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
@@ -89,22 +92,34 @@ fn show(
     opener: &Opener,
 ) -> Result<(), CpdError> {
     let mut read_at = Instant::now();
-    let mut hits = Vec::new();
+    let mut last = None::<Drawn>;
     let mut note = String::new();
+    // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
+    let mut scroll = 0usize;
     loop {
-        terminal.draw(|f| hits = draw(f, f.area(), &widgets, &machine, &note)).map_err(terminal_failed)?;
+        terminal.draw(|f| last = Some(draw(f, f.area(), &widgets, &machine, &note, scroll))).map_err(terminal_failed)?;
+        let drawn = last.as_ref().expect("the terminal drew");
+        scroll = scroll.min(drawn.max_scroll);
         if event::poll(TICK).map_err(terminal_failed)? {
             match event::read().map_err(terminal_failed)? {
                 Event::Key(key) if quits(&key) => return Ok(()),
                 Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
                     note.clear();
                     let at = Position::new(m.column, m.row);
-                    if let Some(hit) = hits.iter().find(|h| h.contains(at)) {
-                        if let Err(e) = open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead) {
-                            note = e.message().to_owned();
-                        }
+                    let result = if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
+                        Some(crate::merge::open(opener.tmux, &icon.pull))
+                    } else {
+                        drawn.hits.iter().find(|h| h.contains(at)).map(|hit| open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead))
+                    };
+                    if let Some(Err(e)) = result {
+                        note = e.message().to_owned();
                     }
                 }
+                Event::Mouse(m) if drawn.prs.contains(Position::new(m.column, m.row)) => match m.kind {
+                    MouseEventKind::ScrollDown => scroll = (scroll + 1).min(drawn.max_scroll),
+                    MouseEventKind::ScrollUp => scroll = scroll.saturating_sub(1),
+                    _ => {}
+                },
                 _ => {}
             }
         }
