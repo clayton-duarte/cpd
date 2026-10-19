@@ -2,7 +2,7 @@
 //! (`tag <version>`), against a temporary bare origin with `cargo` (for `cargo release`),
 //! `git-cliff`, `gh` and `npm` mocked on `PATH` (hs-d27).
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::os::unix::fs::symlink;
