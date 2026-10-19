@@ -13,41 +13,31 @@ use nix::errno::Errno;
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
-use serde_json::{Value, json};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use super::archive::archive_on_quit;
+use super::fork_wait::wait_for_source;
 use super::moves::first_message;
 use super::port;
+use super::reload::{adapter_missing, may_exec, reload, reload_due, stop_pi};
 use super::row::{self, Role, Row, State};
-use super::state::scoped;
-use super::{Env, RunArgs, bad_row, not_a_lead, state};
+use super::{Env, RunArgs, not_a_lead, state};
 use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::host::exe::{Exe, Refusal, Watched};
 use crate::host::addr::review_host;
+use crate::host::exe::{Exe, Watched};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
-use crate::events::{Kind, NewEvent, append};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
 use crate::store;
 
-/// How often the fork waits for its source to be idle (§6.7 step 1).
-const SOURCE_POLL: Duration = Duration::from_secs(2);
+// Shared with the review Worker's fork wait (`driver::worker`), which reads them here.
+pub(crate) use super::fork_wait::{quiet_since, turn_finished};
+
 /// How often it looks for pi's session file while pi runs.
 const FILE_POLL: Duration = Duration::from_millis(500);
-/// How often a reload looks whether pi exited after `SIGTERM`.
-const STOP_POLL: Duration = Duration::from_millis(50);
-/// How long the Lead in the chat slot must have been idle before a reload
-/// restarts its pi without it being parked (hs-d49).
-const CHAT_IDLE: Duration = Duration::from_secs(10 * 60);
 /// How often the adapter watchdog reads the Session's state while pi runs (commands.md §10.8).
 const WATCHDOG_POLL: Duration = Duration::from_secs(2);
-/// How long a Session may stay `stopped` while its pi runs before the wrapper
-/// restarts pi: the adapter is missing (contract §6.7 "Adapter watchdog", hs-d141).
-const ADAPTER_WATCHDOG: Duration = Duration::from_secs(60);
 /// How long it waits for `new-window`'s caller to set `@cpd_session` on its pane.
 const PANE_WAIT: Duration = Duration::from_secs(5);
 /// The first wait after a transient store error before pi runs; each next one doubles, up to [`RETRY_MAX`].
@@ -213,7 +203,7 @@ fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, 
 /// the pid stays this process's child). Offers what the loop needs of
 /// `std::process::Child`, by pid.
 #[derive(Debug)]
-struct PiProc {
+pub(super) struct PiProc {
     pid: Pid,
     /// How pi exited, once it was waited for: the pid is no longer pi's and is never signalled.
     status: Option<ExitStatus>,
@@ -226,12 +216,12 @@ impl PiProc {
         PiProc { pid, status: None }
     }
 
-    fn id(&self) -> i32 {
+    pub(super) fn id(&self) -> i32 {
         self.pid.as_raw()
     }
 
     /// `Child::try_wait`: how pi exited, or `None` while it runs.
-    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+    pub(super) fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
         if self.status.is_some() {
             return Ok(self.status);
         }
@@ -247,7 +237,7 @@ impl PiProc {
     }
 
     /// Sends `signal` to pi if it was not waited for yet.
-    fn signal(&self, signal: Signal) {
+    pub(super) fn signal(&self, signal: Signal) {
         if self.status.is_none() {
             let _ = kill(self.pid, signal);
         }
@@ -280,7 +270,7 @@ impl Logged {
 /// the wait for the store's setup lock in `Env::open`): waits 0.5 s,
 /// doubling to 5 s. The pane says once what it waits for and why; the wrapper
 /// never ends for it. Any other result, error or not, is returned as it is.
-fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, CpdError>) -> Result<T, CpdError> {
+pub(super) fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, CpdError>) -> Result<T, CpdError> {
     let mut wait = RETRY_FIRST;
     let mut said = false;
     loop {
@@ -297,113 +287,6 @@ fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, CpdError>) -> 
             other => return other,
         }
     }
-}
-
-/// Whether the wrapper may `exec` the cpd at its path: nothing replaced it (a
-/// reload for pi's sake), or what replaced it can open the store. A refused install is reported once per
-/// installed file and the wrapper carries on as if nothing was installed (hs-d151).
-fn may_exec(exe: &Exe) -> bool {
-    if !exe.replaced() {
-        return true;
-    }
-    match exe.check_store() {
-        Ok(()) => true,
-        Err(Refusal::New(reason)) => {
-            eprintln!("cpd: reload skipped: {} {reason}", exe.path().display());
-            false
-        }
-        Err(Refusal::Known) => false,
-    }
-}
-
-/// Sends pi `SIGTERM` and waits for it to exit; if it has not exited after
-/// `grace`, sends `SIGKILL` and waits again (§6.7 "Reload on install").
-fn stop_pi(pi: &mut PiProc, grace: Duration) {
-    pi.signal(Signal::SIGTERM);
-    let deadline = Instant::now() + grace;
-    while Instant::now() < deadline {
-        if !matches!(pi.try_wait(), Ok(None)) {
-            return;
-        }
-        std::thread::sleep(STOP_POLL);
-    }
-    pi.signal(Signal::SIGKILL);
-    while matches!(pi.try_wait(), Ok(None)) {
-        std::thread::sleep(STOP_POLL);
-    }
-}
-
-/// The adapter watchdog (contract §6.7 "Adapter watchdog"): whether the
-/// Session has been `stopped` for more than [`ADAPTER_WATCHDOG`] while the pi
-/// started `running` ago runs. If so, appends the one `error` Event, in the
-/// transaction that re-checks the state, and returns true.
-fn adapter_missing(env: &mut Env, id: &SessionId, running: Duration) -> Result<bool, CpdError> {
-    let row = env.store.read(|conn| row::load(conn, id))?;
-    if row.state != State::Stopped {
-        return Ok(false);
-    }
-    let since = OffsetDateTime::parse(&row.state_at, &Rfc3339)
-        .map_err(|e| bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
-    // A `stopped` the wrapper set when the previous pi exited does not count while no pi ran.
-    let stopped_for = Duration::try_from(OffsetDateTime::now_utc() - since).unwrap_or_default().min(running);
-    if stopped_for <= ADAPTER_WATCHDOG {
-        return Ok(false);
-    }
-    let seconds = stopped_for.as_secs();
-    env.store.write("session run", |tx| {
-        let now = row::load(tx, id)?;
-        if now.state != State::Stopped || now.state_at != row.state_at {
-            return Ok(false);
-        }
-        let message = format!(
-            "Session {}: pi has run for {seconds} s with the adapter reporting stopped; the wrapper restarts pi.",
-            row.name
-        );
-        let details = json!({"session": row.id, "state_since": row.state_at, "seconds": seconds});
-        let data = json!({"source": "session run", "code": ErrorCode::AdapterMissing.as_str(), "message": message, "details": details});
-        append(tx, scoped(NewEvent::new(Kind::Error, message.clone(), data), &row))?;
-        Ok(true)
-    })
-}
-
-/// Replaces this process with the cpd at its path (§10.8). With `adopt` (pi,
-/// and whether its install already changed) pi keeps running and the new
-/// process adopts it by pid; without, no pi runs and the new process starts
-/// one. Returns only the error of failing to.
-fn reload(exe: &Exe, id: &SessionId, adopt: Option<(&PiProc, bool)>) -> CpdError {
-    let mut args = vec!["session".to_owned(), "run".to_owned(), id.to_string()];
-    if let Some((pi, stale)) = adopt {
-        args.extend(["--adopt".to_owned(), pi.id().to_string()]);
-        if stale {
-            args.push("--pi-stale".to_owned());
-        }
-    }
-    exe.exec(args)
-}
-
-/// A new pi is installed and the Lead is at a safe point (§6.7 "Reload on
-/// install"): reads the Session and its file, and decides with [`reload_now`].
-fn reload_due(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, CpdError> {
-    let row = env.store.read(|conn| row::load(conn, id))?;
-    // Cheap first: only an idle Lead can be at a safe point.
-    if row.state != State::Idle {
-        return Ok(false);
-    }
-    let Some(file) = existing_file(dirs, &row) else { return Ok(false) };
-    let quiet = Duration::from_secs(u64::from(env.config.timeouts.fork_quiet_seconds));
-    let since = OffsetDateTime::parse(&row.state_at, &Rfc3339)
-        .map_err(|e| bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
-    let idle_for = Duration::try_from(OffsetDateTime::now_utc() - since).unwrap_or_default();
-    let finished = std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text));
-    Ok(reload_now(row.state, &row.place, idle_for, finished, quiet_since(&file, quiet)))
-}
-
-/// Whether a Lead whose pi runs reloads it now (hs-d49): it is idle, its last
-/// turn is finished and its session file is quiet (the rule of `session fork`),
-/// and it is parked, or in the chat slot and has been idle for [`CHAT_IDLE`] (so
-/// unsent typing is not lost). A `blocked` or `working` Lead never reloads.
-fn reload_now(state: State, place: &str, idle_for: Duration, turn_finished: bool, file_quiet: bool) -> bool {
-    state == State::Idle && turn_finished && file_quiet && (place != "chat" || idle_for >= CHAT_IDLE)
 }
 
 /// The Plan's plannotator port. When the range is full the pane says so, names the
@@ -463,7 +346,7 @@ fn check_pane(tmux: &Tmux, id: &SessionId) -> Result<(), CpdError> {
 
 /// The Session's pi file: the recorded one if it exists, else the one pi
 /// created (contract §6.5).
-fn existing_file(dirs: &PiDirs, row: &Row) -> Option<PathBuf> {
+pub(super) fn existing_file(dirs: &PiDirs, row: &Row) -> Option<PathBuf> {
     row.file.as_ref().map(PathBuf::from).filter(|p| p.is_file()).or_else(|| pi::session_file(dirs, &row.id))
 }
 
@@ -489,7 +372,7 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
         }
         return Ok(Some(LeadStart::Resume { file }));
     }
-    let tier = Tier::parse(&row.tier).map_err(|_| bad_row(format!("{} has tier {:?}", row.id, row.tier)))?;
+    let tier = Tier::parse(&row.tier).map_err(|_| CpdError::bad_row(format!("{} has tier {:?}", row.id, row.tier)))?;
     let models = &env.config.tiers;
     let model = match tier.letter() {
         Letter::O => &models.o,
@@ -518,75 +401,11 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
     }
 }
 
-/// Waits until the source is idle (§6.7 step 1) and returns its file: the file
-/// exists, its state is `idle` or `stopped`, its last `message` entry is an
-/// assistant message with `stopReason` `stop`, and it has not been modified
-/// for `fork_quiet_seconds`. Checks every 2 s, showing the waiting line. A source
-/// that is `stopped` with no file can never become idle (hs-d196): the pane says so
-/// and waits for Enter to try again; `None` at the end of input. A source that is
-/// working is waited for without a time bound.
-fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, name: &str) -> Result<Option<PathBuf>, CpdError> {
-    let quiet = Duration::from_secs(u64::from(env.config.timeouts.fork_quiet_seconds));
-    let mut shown = false;
-    loop {
-        let src = patiently("reading the source Lead", || env.store.read(|conn| row::load(conn, source)))?;
-        if let Some(file) = existing_file(dirs, &src)
-            && matches!(src.state, State::Idle | State::Stopped)
-            && quiet_since(&file, quiet)
-            && std::fs::read_to_string(&file).is_ok_and(|text| turn_finished(&text))
-        {
-            return Ok(Some(file));
-        }
-        if src.state == State::Stopped && existing_file(dirs, &src).is_none() {
-            print!("\n  The source Lead {source} is stopped and has no session file, so it will never finish a turn.\n  Press Enter to retry.\n");
-            let _ = std::io::stdout().flush();
-            let mut line = String::new();
-            match std::io::stdin().lock().read_line(&mut line) {
-                Ok(0) | Err(_) => return Ok(None),
-                Ok(_) => {}
-            }
-            shown = false;
-            continue;
-        }
-        if !shown {
-            print!("\n  Waiting for the source Lead to finish its turn, then forking it as \"{name}\"…\n");
-            let _ = std::io::stdout().flush();
-            shown = true;
-        }
-        std::thread::sleep(SOURCE_POLL);
-    }
-}
-
-/// The file has not been modified for `quiet`.
-pub(crate) fn quiet_since(file: &Path, quiet: Duration) -> bool {
-    std::fs::metadata(file)
-        .and_then(|m| m.modified())
-        .is_ok_and(|modified| SystemTime::now().duration_since(modified).is_ok_and(|age| age >= quiet))
-}
-
-/// The last `message` entry of a pi session file is a finished assistant
-/// turn (`stopReason` `stop`). A line that is not JSON after it means pi is
-/// writing: not finished.
-pub(crate) fn turn_finished(text: &str) -> bool {
-    for line in text.lines().rev().filter(|l| !l.trim().is_empty()) {
-        let Ok(entry) = serde_json::from_str::<Value>(line) else { return false };
-        if entry["type"] == "message" {
-            let message = &entry["message"];
-            return message["role"] == "assistant" && message["stopReason"] == "stop";
-        }
-    }
-    false
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::os::unix::process::ExitStatusExt;
 
-    const USER: &str = r#"{"type":"message","id":"a","message":{"role":"user","content":"hi"}}"#;
-    const DONE: &str = r#"{"type":"message","id":"b","message":{"role":"assistant","stopReason":"stop"}}"#;
-    const TOOL: &str = r#"{"type":"message","id":"c","message":{"role":"assistant","stopReason":"toolUse"}}"#;
-    const MINUTE: Duration = Duration::from_secs(60);
-    const NAME: &str = r#"{"type":"session_info","name":"x"}"#;
+    use super::*;
 
     /// A child of the test process, adopted by pid as the new `session run` adopts pi
     /// (the `Child` handle is dropped: a pid is all that survives an `exec`).
@@ -701,47 +520,5 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!((err.code(), calls), (ErrorCode::SessionNotFound, 1), "not transient: no retry");
-    }
-
-    #[test]
-    fn a_turn_is_finished_when_the_last_message_is_an_assistant_stop() {
-        assert!(turn_finished(&[USER, DONE].join("\n")));
-        assert!(turn_finished(&[USER, DONE, NAME, ""].join("\n")), "other entries after it do not count");
-        assert!(!turn_finished(&[USER, TOOL].join("\n")));
-        assert!(!turn_finished(&[DONE, USER].join("\n")));
-        assert!(!turn_finished(&[USER, DONE, "{\"type\":\"mess"].join("\n")), "a half-written line is not finished");
-        assert!(!turn_finished(NAME));
-        assert!(!turn_finished(""));
-    }
-
-    #[test]
-    fn a_parked_idle_lead_with_a_finished_quiet_turn_reloads_at_once() {
-        assert!(reload_now(State::Idle, "parked", Duration::ZERO, true, true));
-        assert!(reload_now(State::Idle, "none", Duration::ZERO, true, true));
-    }
-
-    #[test]
-    fn a_lead_that_is_not_idle_never_reloads() {
-        for state in [State::Working, State::Blocked, State::Stopped] {
-            for place in ["parked", "chat", "none"] {
-                assert!(!reload_now(state, place, 60 * MINUTE, true, true), "{state:?} in {place}");
-            }
-        }
-    }
-
-    #[test]
-    fn an_idle_lead_waits_for_a_finished_turn_and_a_quiet_file() {
-        assert!(!reload_now(State::Idle, "parked", 60 * MINUTE, false, true));
-        assert!(!reload_now(State::Idle, "parked", 60 * MINUTE, true, false));
-        assert!(!reload_now(State::Idle, "chat", 60 * MINUTE, false, false));
-    }
-
-    #[test]
-    fn the_lead_in_the_chat_slot_waits_ten_minutes() {
-        assert!(!reload_now(State::Idle, "chat", Duration::ZERO, true, true));
-        assert!(!reload_now(State::Idle, "chat", 10 * MINUTE - Duration::from_secs(1), true, true));
-        assert!(reload_now(State::Idle, "chat", 10 * MINUTE, true, true));
-        assert!(reload_now(State::Idle, "chat", 11 * MINUTE, true, true));
-        assert!(!reload_now(State::Idle, "chat", 11 * MINUTE, false, true), "ten minutes do not skip the turn rule");
     }
 }

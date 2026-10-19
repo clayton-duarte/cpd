@@ -9,13 +9,14 @@ use serde_json::json;
 
 use super::{AddArgs, Env, check_needs, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
 use crate::git::worktree::list as worktrees;
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
-use crate::plan::fingerprint::{PrSpec, load_prs};
+use crate::plan::PrRow;
+use crate::plan::fingerprint::load_prs;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr add";
@@ -89,8 +90,8 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         "PR {key} added to Plan {plan} (repo {}, base {}{with}), waiting. Next: cpd plan show --plan {plan}",
                         wanted.repo, wanted.base
                     );
-                    let data = json!({"pr": key, "repo": wanted.repo, "base": wanted.base, "needs": needs, "appended": appended});
-                    append(tx, NewEvent::new(Kind::PrAdded, text, data).plan(plan.clone()))?;
+                    let event = NewEvent::pr_added(text, key, &wanted.repo, &wanted.base, &needs, appended);
+                    append(tx, event.plan(plan.clone()))?;
                     Ok(("waiting".to_owned(), lead_branch, appended, needs, false))
                 }
             })?
@@ -121,7 +122,7 @@ fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
 fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
     let phase = check_plan(conn, plan)?;
     let prs = load_prs(conn, plan)?;
-    if let Some(existing) = prs.iter().find(|p| p.key == wanted.key.as_str()) {
+    if let Some(existing) = prs.iter().find(|p| p.key == wanted.key) {
         if same(existing, wanted, &prs) {
             // `appended`: the PR came after the lock.
             let (lead_branch, appended) = conn.query_row(
@@ -150,15 +151,15 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
 }
 
 /// The keys of the `merged` PRs, in key order (A3).
-fn merged_keys(prs: &[PrSpec]) -> Vec<String> {
-    let mut keys: Vec<String> = prs.iter().filter(|p| p.status == "merged").map(|p| p.key.clone()).collect();
+fn merged_keys(prs: &[PrRow]) -> Vec<String> {
+    let mut keys: Vec<String> = prs.iter().filter(|p| p.status == "merged").map(|p| p.key.as_str().to_owned()).collect();
     keys.sort();
     keys
 }
 
 /// Without `--needs` or `--no-needs` the needs match when none, or when all merged: a rerun
 /// after the reopen sees the Plan in `dispatch`, where the default is none.
-fn same(existing: &PrSpec, wanted: &Wanted, prs: &[PrSpec]) -> bool {
+fn same(existing: &PrRow, wanted: &Wanted, prs: &[PrRow]) -> bool {
     let needs_match = match &wanted.needs {
         Some(needs) => &existing.needs == needs,
         None => existing.needs.iter().all(|n| merged_keys(prs).contains(n)),
@@ -187,7 +188,7 @@ fn reopen(tx: &WriteTxn<'_>, plan: &PlanId, from: Phase, key: &PrKey) -> Result<
             .with("plan", plan.as_str()));
     }
     let text = format!("Plan {plan} is back in dispatch: PR {key} was added.");
-    append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": from.as_str(), "to": "dispatch"})).plan(plan.clone()))?;
+    append(tx, NewEvent::plan_phase(text, from.as_str(), "dispatch").plan(plan.clone()))?;
     Ok(())
 }
 

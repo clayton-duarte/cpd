@@ -9,7 +9,7 @@ use serde_json::json;
 use super::open::{merged_prs, opened_prs};
 use super::{CancelArgs, Env, find_pr, plan_phase};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -48,7 +48,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                         .with("pr", key.as_str()));
                 }
                 let text = format!("PR {key} of Plan {plan} was cancelled. Next: cpd plan show --plan {plan}");
-                append(tx, NewEvent::new(Kind::PrCancelled, text, json!({"pr": key})).plan(plan.clone()))?;
+                append(tx, NewEvent::pr_cancelled(text, &key).plan(plan.clone()))?;
                 moved_to = advance(tx, &plan, &key)?;
                 Ok(false)
             }
@@ -86,7 +86,7 @@ fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase
         return Err(lost());
     }
     let text = format!("Every PR of Plan {plan} that is not cancelled is open or merged. The engine polls them; to follow them by hand: cpd pr poll --plan {plan}");
-    append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "dispatch", "to": "deploy", "prs": opened_prs(tx, plan)?})).plan(plan.clone()))?;
+    append(tx, NewEvent::plan_phase_deployed(text, opened_prs(tx, plan)?).plan(plan.clone()))?;
     if count("NOT IN ('merged', 'cancelled')")? > 0 {
         return Ok(Some(Phase::Deploy));
     }
@@ -98,7 +98,7 @@ fn advance(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase
         return Err(lost());
     }
     let text = format!("Every PR of Plan {plan} is merged: the Plan is done. See cpd plan show --plan {plan}");
-    append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged_prs(tx, plan)?})).plan(plan.clone()))?;
+    append(tx, NewEvent::plan_done(text, merged_prs(tx, plan)?).plan(plan.clone()))?;
     Ok(Some(Phase::Done))
 }
 
@@ -121,7 +121,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<Decision, Cpd
     let live_jobs: Vec<String> =
         jobs::load(conn, plan)?.into_iter().filter(|j| j.pr == key.as_str() && j.status != "cancelled").map(|j| j.key).collect();
     let needing: Vec<String> =
-        prs.iter().filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str())).map(|p| p.key.clone()).collect();
+        prs.iter().filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str())).map(|p| p.key.to_string()).collect();
     if !live_jobs.is_empty() || !needing.is_empty() {
         return Err(CpdError::new(
             ErrorCode::PrInUse,

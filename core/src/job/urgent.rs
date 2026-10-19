@@ -8,7 +8,7 @@ use serde_json::json;
 
 use super::{Env, UrgentArgs, find, plan_phase};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::plan::jobs::{self, Job};
@@ -34,7 +34,7 @@ pub(super) fn urgent(args: UrgentArgs) -> Result<Output, CpdError> {
             Decision::Mark(job) => {
                 tx.execute("UPDATE jobs SET urgent = 1 WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()])?;
                 let text = format!("Job {key} of Plan {plan} is urgent. Next: cpd job show {key} --plan {plan}");
-                append(tx, NewEvent::new(Kind::JobEdited, text, json!({"fields": ["urgent"]})).plan(plan.clone()).job(key.clone()))?;
+                append(tx, NewEvent::job_edited(text, ["urgent"]).plan(plan.clone()).job(key.clone()))?;
                 Ok((job, false))
             }
         })?,

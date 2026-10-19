@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::{ListArgs, ShowArgs, Env, bad_row, find, plan_phase};
+use super::{ListArgs, ShowArgs, Env, find, plan_phase};
 use crate::error::CpdError;
 use crate::ids::PlanId;
 use crate::output::Output;
@@ -89,7 +89,7 @@ fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, C
     for (id, metrics, mut attempt) in rows {
         attempt["metrics"] = match metrics {
             None => Value::Null,
-            Some(text) => serde_json::from_str(&text).map_err(|_| bad_row(format!("Attempt {plan}/{id} has metrics {text:?}")))?,
+            Some(text) => serde_json::from_str(&text).map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{id} has metrics {text:?}")))?,
         };
         attempt["escalations"] = json!(escalations(conn, plan, &id)?);
         out.push(attempt);

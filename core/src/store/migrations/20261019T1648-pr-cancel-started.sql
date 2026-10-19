@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 16
+-- cpd-migration: breaking after 18
 -- A started PR (`dispatch`) may be cancelled after the lock (contract §3.8, commands.md §9.6): `prs_status` gains
 -- `dispatch>cancelled`. A trigger change that only relaxes is still breaking (§4.5 A1).
 

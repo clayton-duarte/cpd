@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ev, Fixture, planShow, settle, waitFor } from "./fake.ts";
+import { Fixture, planShow, ev, waitFor } from "./fake.ts";
 
 async function started(f: Fixture, options = {}) {
   f.respond("plan-show", planShow());
@@ -18,8 +18,7 @@ test("EOF restarts the follower with the in-memory cursor, also past Events hand
   t.after(() => f.close());
   await started(f);
   f.emit(ev(101, "job-added"), ev(102, "session-state"));
-  await settle(80);
-  f.file("exit-next", "0");
+  f.file("exit-next", "0"); // the fake prints every line of the file before it exits, so both are read first
   await waitFor("a restart", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 102]);
   assert.deepEqual(f.pi.sent, [], "a clean EOF is no error, and the ignored kinds are no message");
@@ -65,10 +64,14 @@ test("a permanent failure line is reported once and the follower is not restarte
   for (const code of ["session_not_found", "usage"]) {
     const f = new Fixture();
     try {
-      await started(f);
+      // The restarts the follower asks for: a restart is scheduled when the follower's end is handled, so none once it has exited is none at all.
+      const restarts: number[] = [];
+      await started(f, { schedule: (run: () => void, ms: number) => (restarts.push(ms), setTimeout(run, ms)) });
       f.file("follow-failure.json", JSON.stringify({ line: failure(code), exit: 4 }));
       await waitFor("the error", () => errorsOf(f, code).length === 1);
-      await settle(500); // restarts would come after 30, 60 and 120 ms
+      await f.exited();
+      await f.quiet();
+      assert.deepEqual(restarts, [], `${code}: no restart scheduled`);
       assert.equal(f.follows().length, 1, `${code}: no restart`);
       assert.equal(errorsOf(f, code).length, 1, `${code}: reported once`);
     } finally {
@@ -85,8 +88,7 @@ test("a non-zero exit without a failure line is delivered as an error, once per 
   await waitFor("the error", () => errorsOf(f, "follower_exit").length === 1);
   assert.match(errorsOf(f, "follower_exit")[0]!.message.content, /^cpd adapter: events follow: follower_exit: .*exit 2/);
   f.file("exit-next", "2");
-  await waitFor("a third start", () => f.follows().length >= 3);
-  await settle(100);
+  await waitFor("a third start", () => f.follows().length >= 3); // the second exit was reported (or not) before this start
   assert.equal(errorsOf(f, "follower_exit").length, 1);
 });
 
@@ -124,15 +126,14 @@ test("an Event of an unknown kind is skipped silently; the cursor moves past it 
   t.after(() => f.close());
   await started(f);
   f.emit(ev(101, "job-merged"), { ...ev(102, "job-merged"), kind: "from-the-future" }, ev(103, "job-merged"));
+  // Events are handled in order: 103 delivered means 102 was handled before it
   await waitFor("both known Events", () => f.pi.delivered().length === 2);
-  await settle();
   assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101, 103]);
   assert.equal(f.pi.errors().length, 0, "no message for the unknown kind");
 
   // the cursor is past the unknown Event: an unknown kind last still moves it
   f.emit({ ...ev(104, "job-merged"), kind: "from-the-future" });
-  await settle();
-  f.file("exit-next", "0");
+  f.file("exit-next", "0"); // the fake prints every line emitted before it, then exits: 104 is read before the restart
   await waitFor("restart", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 104]);
   assert.equal(f.pi.errors().length, 0);
@@ -161,7 +162,7 @@ test("session_shutdown kills the follower and it is not restarted", async (t) =>
   await waitFor("pid", () => f.pids().length === 1);
   await f.pi.fire("session_shutdown");
   await waitFor("killed", () => f.killed(f.pids()[0]!));
-  await settle(200);
+  await f.exited();
   assert.equal(f.follows().length, 1);
   assert.equal(f.pi.errors().length, 0, "a killed follower at shutdown is no error");
 });

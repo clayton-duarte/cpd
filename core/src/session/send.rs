@@ -4,13 +4,12 @@
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
-use super::moves::unreadable;
 use super::row::{self, Role, Row};
 use super::state::scoped;
 use super::{Env, SendArgs, archive};
 use crate::args::Text;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::SessionId;
 use crate::output::Output;
 
@@ -40,7 +39,7 @@ fn check(target: &Row) -> Result<(), CpdError> {
 pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
     let text = match (args.text, &args.file) {
         (Some(text), None) => text,
-        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| unreadable(path, e))?.parse::<Text>()?,
+        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| CpdError::file_unreadable(path, e))?.parse::<Text>()?,
         _ => unreachable!("clap requires exactly one of <text> and --file"),
     };
     let from = sender()?;
@@ -60,8 +59,8 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
         };
         let preview: String = text.as_str().chars().take(PREVIEW_CHARS).collect();
         let summary = format!("Message for {} from {who}: {preview}", target.name);
-        let data = json!({"from": from, "text": text.as_str(), "wake": args.wake});
-        let event = append(tx, scoped(NewEvent::new(Kind::SessionMessage, summary, data), &target))?;
+        let message = NewEvent::session_message(summary, &from, text.as_str(), args.wake);
+        let event = append(tx, scoped(message, &target))?;
         Ok((event, target))
     })?;
     Ok(Output::success(json!({"event": event, "session": target.id, "from": from, "wake": args.wake})))

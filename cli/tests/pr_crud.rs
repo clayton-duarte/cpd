@@ -8,9 +8,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use clap::Parser;
-use common::{Run, TestEnv};
-use cpd::cli::Cli;
+use common::{Run, TestEnv, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
 use cpd_core::plan::plan_fingerprint;
@@ -34,7 +32,7 @@ fn fx(phase: &str) -> Fx {
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
     let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
     let fx = Fx { env, pay, web };
-    fx.sql(&format!(
+    fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
@@ -47,10 +45,6 @@ fn fx(phase: &str) -> Fx {
 impl Fx {
     fn store(&self) -> Store {
         Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-    }
-
-    fn sql(&self, sql: &str) {
-        self.store().write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
     }
 
     fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
@@ -74,7 +68,7 @@ impl Fx {
 
     /// A draft Job of PR `pr`.
     fn job(&self, key: &str, pr: &str, status: &str) {
-        self.sql(&format!(
+        self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                cancel_reason, cancel_requested_at, created_txn, created_at)
              VALUES ('pay-1', '{pr}', '{key}', 'Job {key}', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', '{status}', 0, iif('{status}' IN ('draft', 'cancelled'), NULL, printf('%064d', 1)),
@@ -100,11 +94,9 @@ impl Fx {
         self.query(&format!("SELECT coalesce(group_concat(needs), '') FROM (SELECT needs FROM pr_needs WHERE pr = '{pr}' ORDER BY needs)"))
     }
 
-    /// A refusal: the code and exit, and nothing written.
+    /// [`common::refused`], and nothing written.
     fn refused(&self, run: &Run, code: &str, exit: i32, writes: (i64, i64)) -> Value {
-        let error = run.error();
-        assert_eq!(error["code"], code, "{run:?}");
-        assert_eq!(run.exit, exit, "{run:?}");
+        let error = common::refused(run, code, exit);
         assert_eq!(self.writes(), writes, "{code} wrote something");
         error
     }
@@ -260,16 +252,11 @@ fn add_in_deploy_or_done_reopens_the_plan_in_dispatch() {
 fn add_to_an_archived_plan_is_archived() {
     for phase in ["grounding", "dispatch", "done"] {
         let fx = fx(phase);
-        fx.sql("UPDATE plans SET archived_at = '2001-01-01T00:00:00.000Z' WHERE id = 'pay-1'");
+        fx.env.sql("UPDATE plans SET archived_at = '2001-01-01T00:00:00.000Z' WHERE id = 'pay-1'");
         let writes = fx.writes();
         let error = fx.refused(&fx.add("api", &fx.pay, &[]), "archived", 3, writes);
-        // `details.next` is a command to run: it parses with the real command tree, and names this Plan.
+        // `refused` parses `details.next` with the real command tree; it names this Plan.
         let next = error["details"]["next"].as_str().unwrap();
-        let words: Vec<&str> = next.split_whitespace().collect();
-        assert_eq!(words[0], "cpd", "{next}");
-        if let Err(e) = Cli::try_parse_from(&words) {
-            panic!("`{next}` does not parse: {e}");
-        }
         assert_eq!(next, "cpd plan unarchive --plan pay-1");
     }
 }
@@ -299,7 +286,7 @@ fn legacy(status: &str) -> Legacy {
     fx.env.git(&lead, &["commit", "-q", "-m", "api"]);
     fx.env.git(&lead, &["push", "-q", "-u", "origin", "cpd/pay-1"]);
     let sha = fx.env.git(&lead, &["rev-parse", "HEAD"]);
-    fx.sql(&format!(
+    fx.env.sql(&format!(
         "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
            VALUES ('acme/pay', 1, 'u', 'T', 0, '{status}', 'none', 'none', 't', iif('{status}' = 'merged', 't', NULL), 't');
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
@@ -347,8 +334,7 @@ fn add_completes_a_legacy_move_that_stopped_after_the_rename() {
 fn add_refuses_push_failed_when_origin_will_not_delete_and_writes_nothing() {
     let Legacy { fx, origin, .. } = legacy("merged");
     let hook = origin.join("hooks/pre-receive");
-    fs::write(&hook, "#!/bin/sh\necho no >&2\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho no >&2\nexit 1\n");
     let writes = fx.writes();
     let error = fx.refused(&fx.add("fix", &fx.pay, &[]), "push_failed", 1, writes);
     assert_eq!(error["details"]["branch"], "cpd/pay-1");
@@ -472,7 +458,7 @@ fn edit_refusals_write_nothing() {
 fn edit_and_cancel_of_a_pr_that_is_not_waiting_are_illegal_transitions() {
     let fx = fx("plan");
     fx.add("api", &fx.pay, &[]).ok();
-    fx.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE key = 'api'");
+    fx.env.sql("UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE key = 'api'");
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["edit", "api", "--no-needs"]), "illegal_transition", 3, writes);
     assert_eq!(error["details"]["from"], "dispatch");
@@ -483,7 +469,7 @@ fn edit_and_cancel_of_a_pr_that_is_not_waiting_are_illegal_transitions() {
 fn edit_and_cancel_are_refused_once_the_plan_is_locked() {
     let fx = fx("plan");
     fx.add("api", &fx.pay, &[]).ok();
-    fx.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
+    fx.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = '2000-01-01T00:00:00.000Z'");
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["edit", "api", "--base", "main"]), "pr_locked", 3, writes);
     assert_eq!(error["details"]["phase"], "dispatch");
@@ -525,7 +511,7 @@ fn cancel_is_refused_while_a_job_or_a_pr_holds_the_pr() {
 
     let error = fx.refused(&fx.pr(&["cancel", "api"]), "pr_in_use", 3, writes);
     assert_eq!((error["details"]["jobs"].clone(), error["details"]["prs"].clone()), (json!(["a"]), json!(["web"])));
-    fx.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'a'");
+    fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'a'");
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["cancel", "api"]), "pr_in_use", 3, writes);
     assert_eq!((error["details"]["jobs"].clone(), error["details"]["prs"].clone()), (json!([]), json!(["web"])));
@@ -543,12 +529,12 @@ impl Fx {
             _ => ("7", "'u'", "'t'", "(SELECT id FROM pull_requests WHERE number = 7)", if status == "merged" { "'t'" } else { "NULL" }),
         };
         if status != "dispatch" {
-            self.sql(&format!(
+            self.env.sql(&format!(
                 "INSERT OR IGNORE INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                    VALUES ('acme/pay', 7, 'u', 'T', 0, '{status}', 'none', 'none', 't', {merged}, 't');"
             ));
         }
-        self.sql(&format!(
+        self.env.sql(&format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pr_url, pr_opened_at,
                               pull_request, merged_at, created_txn, created_at)
                VALUES ('pay-1', '{key}', '{}', 'main', '{status}', 'cpd/pay-1/{key}', '/w/{key}', 't', {number}, {url}, {opened}, {pull}, {merged},
@@ -606,8 +592,8 @@ fn a_locked_pr_with_no_job_is_cancelled_and_the_plan_waits_for_the_others() {
     assert!(fx.events("plan-phase").is_empty());
 
     // A PR that is still `waiting` is cancelled too; the last one cancelled leaves the Plan in `dispatch`.
-    fx.sql("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE key = 'api'");
-    fx.sql(
+    fx.env.sql("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE key = 'api'");
+    fx.env.sql(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay-1', 'late', '/x', 'main', 'waiting', 'cpd/pay-1/late', cpd_txn(), 't')",
     );
@@ -624,7 +610,7 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_an
         fx.job(&format!("{key}-old"), key, "cancelled");
         fx.job(&format!("{key}-job"), key, "queued");
     }
-    fx.sql("UPDATE jobs SET status = 'running' WHERE key = 'running-job';
+    fx.env.sql("UPDATE jobs SET status = 'running' WHERE key = 'running-job';
             UPDATE jobs SET status = 'running' WHERE key = 'merged-job';
             UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'merged-job'");
     let writes = fx.writes();
@@ -636,7 +622,7 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_an
 
     // A live PR that needs it holds it (`pr_in_use`, `details.prs`).
     fx.locked_pr("base", &fx.pay, "dispatch");
-    fx.sql(&format!(
+    fx.env.sql(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay-1', 'dependent', '{}', 'main', 'waiting', 'cpd/pay-1/dependent', cpd_txn(), 't');
          INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', 'dependent', 'base')",
@@ -651,7 +637,7 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_an
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["cancel", "opened"]), "illegal_transition", 3, writes);
     assert_eq!(error["details"]["from"], "open");
-    fx.sql("UPDATE prs SET status = 'merged', merged_at = 't' WHERE key = 'opened'");
+    fx.env.sql("UPDATE prs SET status = 'merged', merged_at = 't' WHERE key = 'opened'");
     let writes = fx.writes();
     fx.refused(&fx.pr(&["cancel", "opened"]), "illegal_transition", 3, writes);
 }

@@ -6,17 +6,15 @@ use std::process::{Command as Process, Stdio};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
-use time::macros::format_description;
 use time::{Duration, OffsetDateTime, Time, UtcOffset};
 
 use super::model::{self, Filter, Item, Kind, State, Urgency};
-use crate::config::Config;
+use crate::clock::timestamp;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
-use crate::home::CpdHome;
 use crate::ids::ContextId;
 use crate::output::Output;
-use crate::store::Store;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -93,19 +91,6 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 /// `--limit`'s default with `--closed` (§21.1).
 const DEFAULT_LIMIT: u32 = 50;
 
-fn open() -> Result<(CpdHome, Store), CpdError> {
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    Ok((home, store))
-}
-
-/// §1.3's time: RFC 3339 UTC with milliseconds.
-fn stamp(time: OffsetDateTime) -> String {
-    time.to_offset(UtcOffset::UTC)
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .expect("a UTC time always formats")
-}
 
 fn parse_time(item: &Item, column: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| {
@@ -158,7 +143,7 @@ fn engine_down(now: OffsetDateTime) -> Value {
         "record": null,
         "event": null,
         "url": null,
-        "opened_at": stamp(now),
+        "opened_at": timestamp(now),
         "closed_at": null,
         "snoozed_until": null,
         "dismissed_at": null,
@@ -176,7 +161,7 @@ fn context_exists(conn: &Connection, context: &ContextId) -> Result<(), CpdError
 
 /// `inbox list` (§21.1).
 fn list(args: ListArgs) -> Result<Output, CpdError> {
-    let (home, mut store) = open()?;
+    let Env { home, mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
     let filter = |state| Filter { context: args.context.clone(), state };
     let (open, visible, closed, cursor) = store.read(|conn| {
@@ -184,7 +169,7 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
             context_exists(conn, context)?;
         }
         let open = model::list(conn, &filter(State::Open))?;
-        let visible = model::list(conn, &filter(State::Visible { now: stamp(now) }))?;
+        let visible = model::list(conn, &filter(State::Visible { now: timestamp(now) }))?;
         let closed = match args.closed {
             true => model::list(conn, &filter(State::Closed { limit: args.limit.unwrap_or(DEFAULT_LIMIT) }))?,
             false => Vec::new(),
@@ -244,7 +229,7 @@ fn open_item(conn: &Connection, id: i64) -> Result<Item, CpdError> {
 
 /// `inbox show` (§21.2).
 fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let (_, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
     let item = store.read(|conn| model::get(conn, args.id)?.ok_or_else(|| not_found(args.id)))?;
     Ok(Output::success(json!({"item": item_json(&item, now)?})))
@@ -295,17 +280,13 @@ fn snooze_until(until: Until, now: OffsetDateTime) -> Result<OffsetDateTime, Cpd
 
 /// `inbox snooze` (§21.3).
 fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
-    let (_, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
-    let until = stamp(snooze_until(args.until, now)?);
+    let until = timestamp(snooze_until(args.until, now)?);
     let item = store.write("inbox snooze", |tx| {
         let item = open_item(tx, args.id)?;
         tx.execute("UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1", params![item.id, until])?;
-        let event = NewEvent::new(
-            events::Kind::InboxSnoozed,
-            format!("Inbox item {} snoozed until {until}: {}.", item.id, item.label),
-            json!({"item": item.id, "until": until}),
-        );
+        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {until}: {}.", item.id, item.label), item.id, &until);
         events::append(tx, scoped(event, &item))?;
         model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
     })?;
@@ -314,7 +295,7 @@ fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
 
 /// `inbox dismiss` (§21.4).
 fn dismiss(args: DismissArgs) -> Result<Output, CpdError> {
-    let (_, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
     // Already dismissed writes nothing, not even a `txns` row.
     let before = store.read(|conn| open_item(conn, args.id))?;
@@ -326,12 +307,8 @@ fn dismiss(args: DismissArgs) -> Result<Output, CpdError> {
         if item.dismissed_at.is_some() {
             return Ok((item, true));
         }
-        tx.execute("UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1", params![item.id, stamp(now)])?;
-        let event = NewEvent::new(
-            events::Kind::InboxDismissed,
-            format!("Inbox item {} dismissed: {}.", item.id, item.label),
-            json!({"item": item.id}),
-        );
+        tx.execute("UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1", params![item.id, timestamp(now)])?;
+        let event = NewEvent::inbox_dismissed(format!("Inbox item {} dismissed: {}.", item.id, item.label), item.id);
         events::append(tx, scoped(event, &item))?;
         Ok((model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?, false))
     })?;
