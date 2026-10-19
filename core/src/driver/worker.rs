@@ -343,7 +343,7 @@ pub fn metrics(dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
     match metrics::parse_file(&file) {
         Ok(m) => Some(m.to_json()),
         Err(e) => {
-            eprintln!("cpd attempt run: no metrics from {}: {}", file.display(), e.message());
+            super::run::log(&format!("no metrics from {}: {}", file.display(), e.message()));
             None
         }
     }

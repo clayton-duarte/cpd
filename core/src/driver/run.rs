@@ -10,6 +10,7 @@ use std::time::Duration;
 use rusqlite::params;
 use serde_json::{Value, json};
 
+use crate::clock;
 use crate::attempt::ledger::{self, Attempt as Target, Cause, End, Ladder, Stage};
 use super::lock;
 use super::stall;
@@ -118,8 +119,9 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     }
 }
 
-fn log(line: &str) {
-    eprintln!("cpd attempt run: {line}");
+/// One line of the driver's log (`run/<plan>/logs/attempt-<id>.log`), prefixed with the time like `watch.log`'s.
+pub(super) fn log(line: &str) {
+    eprintln!("{} cpd attempt run: {line}", clock::now());
 }
 
 /// Appends an `error` Event about `target` (§5.2): an unexpected failure of
