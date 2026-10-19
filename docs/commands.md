@@ -319,7 +319,7 @@ Archives the Context with its Plans, all their Sessions and its Manager (contrac
 | Precondition | Code | Exit |
 |---|---|---|
 | the Context exists | `context_not_found` | 4 |
-| no object of the cascade is live: no Session `working` or `blocked`, no Job `queued` or `running`, no open Escalation, no pending Plan review; `details.blockers` lists each as `{kind, id, reason}` | `archive_blocked` | 3 |
+| no object of the cascade is live: no Session `working`, `waiting` or `blocked`, no Job `queued` or `running`, no open Escalation, no pending Plan review; `details.blockers` lists each as `{kind, id, reason}` | `archive_blocked` | 3 |
 | no Lead of the cascade is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
 
 Effects, in this order (all or nothing):
@@ -727,7 +727,7 @@ Archives the Plan with its Lead and its side forks (contract §2.2 "Archived").
 | Precondition | Code | Exit |
 |---|---|---|
 | the Plan exists | `plan_not_found` | 4 |
-| no object of the cascade is live: no Session `working` or `blocked`, no Job `queued` or `running`, no open Escalation, no pending Plan review; `details.blockers` lists each as `{kind, id, reason}`. The phase does not matter: a Plan in `deploy` is archivable, and the engine keeps polling its PR | `archive_blocked` | 3 |
+| no object of the cascade is live: no Session `working`, `waiting` or `blocked`, no Job `queued` or `running`, no open Escalation, no pending Plan review; `details.blockers` lists each as `{kind, id, reason}`. The phase does not matter: a Plan in `deploy` is archivable, and the engine keeps polling its PR | `archive_blocked` | 3 |
 | neither the Lead nor a side fork is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
 
 Effects, in this order (all or nothing):
@@ -778,11 +778,11 @@ Abandons a Plan (E1, hs-d203): cancels every Job that is not merged, closes the 
 | every running Attempt has ended within 60 s of its stop request (below); `details.attempts` lists those still running | `cancel_timeout` | 5 |
 | each `gh pr close` succeeds, or its pull request is already closed or merged; `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
 
-A Session `working` or `blocked` and a Job `running` do not block (unlike `plan archive`): the command stops them. The caller's own Lead is in that case.
+A Session `working`, `waiting` or `blocked` and a Job `running` do not block (unlike `plan archive`): the command stops them. The caller's own Lead is in that case.
 
 Effects, in this order; each step is idempotent, so a rerun after any failure continues where it stopped:
 1. **Check** the preconditions above that need no write.
-2. **Jobs**, as `job cancel` (§5.3) for every Job not `merged` and not `cancelled`, with the reason: `draft`, `queued` and `failed` become `cancelled` with **Event** `job-cancelled`; a `running` Job gets `job-cancel-requested`, and engine E2 or the driver ends its Attempt `cancelled` at the next safe point (contract §3.4). The command then waits, polling, up to 60 s until no Attempt of the Plan is not `ended`. Dependents stay blocked, as for `job cancel`; they are cancelled themselves by this step.
+2. **Jobs**, as `job cancel` (§5.3) for every Job not `merged` and not `cancelled`, with the reason: `draft`, `queued` and `failed` become `cancelled` with **Event** `job-cancelled`; a `running` Job gets `job-cancel-requested`, and engine E2 or the driver ends its Attempt `cancelled` at the next safe point (contract §3.4). The command then waits, polling, up to 60 s until no Attempt of the Plan is not `ended`. Dependents cannot start, as for `job cancel`; they are cancelled themselves by this step.
 3. **Escalations:** each `open` Escalation of the Plan becomes `expired`, **Event** `escalation-expired`.
 4. **Pull requests:** for each PR of the Plan with status `open` whose pull request is not `merged`, `gh pr close <number> --repo <owner/repo>`. The PR rows keep their status (`open`; PR statuses never end this way, contract §3.8); the next `pr poll` reads the closure and appends no `pr-feedback` for an archived Plan. A `waiting` PR has no pull request: nothing. A `merged` PR is never touched.
 5. **tmux:** close every live Lead pane as `session close` does (§10.9).
@@ -894,7 +894,7 @@ Effects (§3.2 "Cancel"):
 {"ok": true, "job": "worker", "status": "running", "cancel_requested": true}
 ```
 
-Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents stay blocked (cpd 1 §11, kept).
+Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a cancelled Job cannot start (cpd 1 §11, kept); they stay `queued`.
 
 ### 5.4 `job retry`
 
@@ -1102,7 +1102,7 @@ Run by the Worker; it blocks until the answer. `--timeout-minutes` defaults to `
 | answered before the timeout | `ask_timeout` | 5 |
 
 Effects:
-1. **Rows**, one transaction: `escalations` (`<attempt>-q<k>`, `open`, `asker_pid` = its own pid); the Worker Session `blocked` with label `cpd: question to the Lead`. **Events** `escalation` `{escalation, question}` (the Lead's adapter delivers it with a turn) and `session-state`.
+1. **Rows**, one transaction: `escalations` (`<attempt>-q<k>`, `open`, `asker_pid` = its own pid); the Worker Session `waiting` with label `cpd: question to the Lead` (it waits for its Lead, not for the User: hs-d303; contract §3.6). **Events** `escalation` `{escalation, question}` (the Lead's adapter delivers it with a turn) and `session-state`.
 2. It polls its row every 500 ms (a read; cpd 1 §11, kept).
 3. Answered: one transaction setting the Worker Session `working` (`session-state`); prints the answer. Timeout: one transaction, `status = expired`, `expired_at`, **Event** `escalation-expired` `{escalation, reason: "timeout"}`, Session `working`; prints `ask_timeout`. If the process dies, E1 expires it (`reason: "asker_dead"`).
 
@@ -1483,7 +1483,7 @@ Effects: none; one read transaction.
 
 ```json
 {"ok": true, "sessions": [
-  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "blocked", "state_label": "cpd: Worker question", "state_at": "…", "archived_at": null,
+  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "waiting", "state_label": "cpd: Worker question", "state_at": "…", "archived_at": null,
    "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd"}],
  "events_cursor": 48213}
 ```
@@ -1591,19 +1591,19 @@ Idempotent: yes.
 ### 10.6 `session state` (internal)
 
 ```
-cpd session state <working|blocked|idle|stopped> [--label <text>] [--reply] [--session <id>]
+cpd session state <working|waiting|blocked|idle|stopped> [--label <text>] [--reply] [--session <id>]
 ```
 
-How the pi adapter reports its agent state (§3.6, D4). `--label` is required with `blocked` and refused with any other state (`usage`); 1–80 characters. `--reply` (hs-d278) is allowed only with `idle`, else `usage`: it says the run that ended answered a message the User wrote to this Session (§15.4). Internal (§1.1): hidden in clap, run only by the pi adapter.
+How the pi adapter reports its agent state (§3.6, D4). `waiting` (an agent waits for another agent) and `blocked` (the User has to act) say why: `--label` is required with them and refused with any other state (`usage`); 1–80 characters. `waiting` is entered from `working`, `idle` and `blocked` and left for `working`, `idle`, `blocked` or `stopped` (§3.6). `--reply` (hs-d278) is allowed only with `idle`, else `usage`: it says the run that ended answered a message the User wrote to this Session (§15.4). Internal (§1.1): hidden in clap, run only by the pi adapter.
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the transition is in §3.6's table | `illegal_transition` | 3 |
 
-Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. No tmux.
+Effects: when the state and label are unchanged, nothing (`"already": true`, no Event, §3.6). Otherwise **rows**, one transaction: `state`, `state_label` (null unless `waiting` or `blocked`), `state_at`. **Event** `session-state` `{from, to, label}`, plus `reply: true` when `--reply` was given (contract §5.2); `reply` is written only on a real change, so a call that changes nothing (`"already": true`) records no reply. No tmux.
 
 ```json
-{"ok": true, "session": "596d007f-…", "state": "blocked", "label": "cpd: Worker question", "from": "working"}
+{"ok": true, "session": "596d007f-…", "state": "waiting", "label": "cpd: Worker question", "from": "working"}
 ```
 
 Idempotent: yes.
@@ -1641,7 +1641,7 @@ Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (
 
 **Transient store errors** (contract §6.7 "Reload on install"). The store accesses before pi starts (open, the Session's row, `sessions.file`, the port, a fork's source) and after it exits (`session state stopped`, the name for the resume prompt) are tried again while they fail with `store_busy`, `lock_timeout` (the store's setup lock), or SQLite's busy or locked as `store_failed`: 0.5 s, doubling to 5 s between tries; the pane says once `Waiting for the store (<what>): <code>: <message> Trying again.` A wrapper never ends for it. Any other error (`session_not_found`, `not_a_lead`, `wrong_pane`, a malformed row) ends it as in the table below.
 
-**Restart for a new pi** (hs-d49). A change of pi (the identity of `<pi agent dir>/install/current-version`, else of the resolved `pi` executable) is the only reload that restarts pi, and it waits for the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`): the wrapper sends pi `SIGTERM`, waits for it to exit (`SIGKILL` `timeouts.pi_stop_seconds` (default 10) after `SIGTERM`) and `exec`s the same path with the same argv (no `--adopt`); the new `session run` takes step 1. A parked Lead restarts at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `blocked` Lead is never idle. See contract §6.7 "Reload on install".
+**Restart for a new pi** (hs-d49). A change of pi (the identity of `<pi agent dir>/install/current-version`, else of the resolved `pi` executable) is the only reload that restarts pi, and it waits for the Lead's next idle (state `idle`, last turn finished, session file quiet `fork_quiet_seconds`): the wrapper sends pi `SIGTERM`, waits for it to exit (`SIGKILL` `timeouts.pi_stop_seconds` (default 10) after `SIGTERM`) and `exec`s the same path with the same argv (no `--adopt`); the new `session run` takes step 1. A parked Lead restarts at once. The Lead in the chat slot waits until it is idle **and** parked, or idle for 10 minutes, so unsent typing is not lost. A `waiting` or `blocked` Lead is never idle. See contract §6.7 "Reload on install".
 
 **Adapter watchdog** (hs-d141; contract §6.7 "Adapter watchdog"). While pi is alive, the wrapper checks the Session's state at every poll (2 s). When the state has been `stopped` for more than **60 s** (a constant of the wrapper, not a config key; measured from the `session-state` Event that set it, so a state the wrapper itself set after a pi exit does not count while pi is not running), it restarts pi on the session file: `SIGTERM`, wait (`SIGKILL` after `timeouts.pi_stop_seconds`, as for a reload), then step 1. In one transaction before the restart it appends one `error` Event `{source: "session run", code: "adapter_missing", message, details: {session, state_since, seconds}}` with `session` = this Session (and its `plan`, `context`), which the new adapter delivers once it follows (§15.3). It applies to every Lead and Manager, whatever the place and whatever the idle rules of the reload; a `stopped` that ends (`idle`) before 60 s is the adapter's own reload and is never touched. After the restart the 60 s start again; a broken install loops once per 60 s with one `error` Event per restart (no cap: each is a visible fact, and a repaired install ends it).
 
@@ -1699,7 +1699,7 @@ Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` (a Worker's Session is archived only by its Plan's cascade) | `not_a_lead` | 3 |
 | it is not its Plan's own Lead (`plans.lead_session`); `details.next` = `cpd plan archive --plan <p>` | `archive_blocked` | 3 |
-| its state is not `working` or `blocked`; `details.blockers` lists it | `archive_blocked` | 3 |
+| its state is not `working`, `waiting` or `blocked`; `details.blockers` lists it | `archive_blocked` | 3 |
 | it is not in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
 
 Effects, in this order:
@@ -1774,7 +1774,7 @@ Sends one message to a Lead or a Manager Session (hs-d92, hs-d133). It appends a
 | `<id>` | the target Session (the short forms of §1.3 are accepted) |
 | `<text>` | the message, a `Text` (1–20 000 characters) |
 | `--file <f>` | the message read from a file, same limits |
-| `--wake` | the message starts a turn when the target is idle (a working or blocked target gets it after its running turn, never interrupted). For a Manager waking a stalled Lead; use it sparingly. Default: off |
+| `--wake` | the message starts a turn when the target is idle (a working, waiting or blocked target gets it after its running turn, never interrupted). For a Manager waking a stalled Lead; use it sparingly. Default: off |
 
 Exactly one of `<text>` and `--file` (else `usage`).
 
@@ -2270,7 +2270,7 @@ Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first
 **The guard**, in this order, checked by the adapter before it triggers the command and again in the handler (the handler is authoritative; only it has `ctx`, and a User typing the command by hand is harmless):
 1. `ctx.isIdle()` (mid-turn pi's `ctx.reload()` silently does nothing yet resolves, so it cannot be left to pi);
 2. `ctx.hasPendingMessages()` is false;
-3. the adapter's own state (§15.4) is `idle`: not `working`, and not `blocked`, so no Worker question, Plan review or `herdr:blocked` signal is open (pi's `isIdle()` does not see dialogs, and a reload closes an open dialog and loses its answer);
+3. the adapter's own state (§15.4) is `idle`: not `working`, `waiting` or `blocked`, so no Worker question, Plan review or `herdr:blocked` signal is open (pi's `isIdle()` does not see dialogs, and a reload closes an open dialog and loses its answer);
 4. `ctx.ui.getEditorText() === ""` (no unsent typing).
 
 **Retries.** A refused reload (the guard fails at the trigger or in the handler) does nothing and is **not** handled: the recorded identity stays the old one, so the next tick checks the guard again and triggers again; there is no limit and no backoff beyond the poll interval. At most one trigger is in flight. **At settle:** a Lead that gets a message every few seconds is idle for gaps shorter than the 5 s interval, so no tick may ever see it idle (`docs/research/pi-reload.md` "Why a busy Lead did not reload"). So the adapter also decides at pi's `agent_settled` (pi has no automatic work left), after its own state is updated: for a package that **already passed pre-validation** and is still the directory's identity it runs the same guard and, when it passes, the same trigger. It adds no guard, does not shorten the stability or validation steps (a directory not yet validated waits for its ticks), and keeps one trigger in flight.
