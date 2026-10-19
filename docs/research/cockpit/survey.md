@@ -513,3 +513,81 @@ Each tool: **What**, **Layout**, **Status and alerts**, **Driven by**, **Standou
 - **cpd mapping:** the Pulse view already marks a **quiet** Plan (no activity for 30 min, a constant, `docs/commands.md` §13.2). A second kind of rule (an Attempt past its tier's usual time, a third Attempt of one Job) would open an Inbox item, which is the one place "needs you" lives. Serves **F**, **P**. Belongs to the Inbox owner; listed because Reeve's rules and the 30-minute constant are the same idea.
 - **Effort:** L. Engine rules, config, and Inbox kinds; crosses Plan inbox.
 
+## 4. All ideas in one list
+
+Cockpit area: **Tree** (Context column), **Plan** (Plan view), **Chat**, **Deploy** (right column), **Bar** (StatusBar, moving to tmux's status line), **Pop** (popups), **tmux** (layout and options).
+
+| Id | Idea | Area | Pain | Effort | Source | Depends on |
+|---|---|---|---|---|---|---|
+| I-01 | Context hint line | Bar | N | S | lazygit | |
+| I-02 | Panel jump numbers in headers | tmux | N | S | lazygit | |
+| I-03 | Zoom a pane (click header); narrow-window layout | tmux | N, L | S / M | lazygit | |
+| I-04 | Saved-question sections for PRs | Deploy | F, P | S | gh-dash | |
+| I-05 | Preview strip for the selected Job | Plan | P | M | gh-dash, yazi | |
+| I-06 | `:` jump palette (go to any Context/Plan/PR/Job) | Pop | N | M | k9s | |
+| I-07 | User-bound hotkeys file | Tree | N | M | k9s | not recommended now |
+| I-08 | Clickable status-line ranges with verbs | Bar | N, L | S | zellij, tmux | status-line move |
+| I-09 | Stacked Worker view (one expanded, rest titles) | Plan/Chat | P, N | M | zellij | |
+| I-10 | Layout presets from `⧉` | tmux | N, L | S | btop | |
+| I-11 | Braille sparkline for host load | Deploy | P, L | S | btop | CPU/memory widget |
+| I-12 | Expand selected view | tmux | N | S | bottom | |
+| I-13 | Layout as a data file | tmux | N | M | bottom | not recommended now |
+| I-14 | Workers popup (everything in flight, cancel) | Pop | P, F | M | yazi, Toad | |
+| I-15 | Collapsible Deploy column with a badge | tmux/Deploy | L, F | S | superfile | |
+| I-16 | Live filter and `needs me` scope in the Tree | Tree | F, N | S | taskwarrior-tui | Inbox owner decides |
+| I-17 | Jump mode (labels over panes and rows) | tmux/Tree | N | S / M | posting | |
+| I-18 | Agent pointing: a Lead highlights a row | all | F, N | M | posting | User decision |
+| I-19 | Palette with shortcuts and availability | Pop | N, L | M | harlequin, crush | shares I-06 |
+| I-20 | Keys panel for the focused pane | Pop | N | S | harlequin | |
+| I-21 | Event log: next problem, Plan filter, histogram | Pop | P, F | S / M | lnav | |
+| I-22 | Semantic colour for ids | all | P, N, L | S | lnav | User taste |
+| I-23 | Needs-you strip with click-to-jump | Bar | F, N | S | agent-deck | Inbox |
+| I-24 | Status chips filtering the Tree | Tree | F | S | agent-deck | overlaps I-16 |
+| I-25 | Push to phone on a new need | engine | F | M | agent-deck | Inbox; product decision |
+| I-26 | Group by Context / by status toggle | Tree | F, P | S | savras | |
+| I-27 | "The order holds still" rule | Tree/Deploy | N | S | savras | |
+| I-28 | Shaded panels and accent-bar dialogs | all views | L | M | bosun | conflicts with hs-d124; truecolor |
+| I-29 | Worst state on collapsed rows | Tree | F | S | bosun | check §17 dot rule |
+| I-30 | One screen of every agent's state | Pop | P, F | M | Toad | merge into I-14 |
+| I-31 | Notify when a need appears while unfocused | tmux/Bar | F | S / M | crush | Inbox |
+| I-32 | Theme chooser with live preview | palette | L | L | crush, posting, bosun | after the powerline look |
+| I-33 | Job right-click menu | Plan | N, P | M | flowrs | |
+| I-34 | Time (Gantt) view of Jobs | Plan | P | L | flowrs | |
+| I-35 | Jobs table mode | Plan | P, F | M | process-compose | |
+| I-36 | Delivery state of a command | Plan | P | M | Reeve | a steer action |
+| I-37 | Rules that open Inbox items (stuck, looping) | engine | F, P | L | Reeve | Inbox |
+
+## 5. Where this points (for the Plan's next Job to weigh, not a decision)
+
+- **Finding what needs him** is solved by *one place that is always visible*. The tools that do it best put it in the status line (agent-deck I-23), at the top of the list (savras I-26) or on a collapsed row (bosun I-29), never only in a tab. The Inbox owns the data; the visual claim here is that its first three items belong in the StatusBar, and that no fold of the tree may hide a need (I-29).
+- **Following progress** is solved by *a table you can sort and a preview that follows the cursor* (process-compose I-35, yazi I-14, gh-dash I-05), not by more charts. The Plan view's flow chart is already the strongest "dependency" picture in the survey (only flowrs has a DAG view, and only as a popup); what it lacks is the dense "what is every Job doing now" view.
+- **Getting around** is solved by *two doors to anywhere*: a typed one (k9s `:`, harlequin and crush palettes: I-06, I-19) and a labelled one (posting jump mode: I-17). Every mouse-first tool in the list (lazygit, btop, bosun, posting) *also* labels its keys on screen (I-01, I-20).
+- **Looks and polish**: btop and bosun are the two looks worth copying and they disagree (btop: boxes, graphs, rounded borders; bosun: borderless, shaded). The powerline Job (hs-d266) decides this first; I-28 is the alternative to look at.
+- **Small and independent** (S, no dependency): I-01, I-03 (zoom), I-04, I-10, I-11, I-12, I-15, I-21 (jump and filter), I-26, I-27. **Waiting on the Inbox**: I-23, I-25, I-31, I-37.
+
+## 6. The 20 and the four pain points
+
+● main fit, ○ secondary fit. Idea ids are from §4.
+
+| # | Tool | F: finding what needs him | P: following progress | N: getting around | L: looks and polish | Ideas |
+|---|---|:-:|:-:|:-:|:-:|---|
+| 1 | lazygit | | ○ | ● | ○ | I-01, I-02, I-03 |
+| 2 | gh-dash | ● | ● | ○ | | I-04, I-05 |
+| 3 | k9s | ○ | | ● | | I-06, I-07 |
+| 4 | zellij | | ○ | ● | ○ | I-08, I-09 |
+| 5 | btop | | ○ | ○ | ● | I-10, I-11 |
+| 6 | bottom | | | ● | ○ | I-12, I-13 |
+| 7 | yazi | ○ | ● | | | I-14 |
+| 8 | superfile | ○ | | ○ | ● | I-15 |
+| 9 | taskwarrior-tui | ● | | ○ | | I-16 |
+| 10 | posting | ○ | | ● | | I-17, I-18 |
+| 11 | harlequin | | | ● | ○ | I-19, I-20 |
+| 12 | lnav | ○ | ● | | ○ | I-21, I-22 |
+| 13 | agent-deck | ● | ○ | ○ | | I-23, I-24, I-25 |
+| 14 | savras | ● | ○ | ○ | | I-26, I-27 |
+| 15 | bosun | ○ | | ○ | ● | I-28, I-29 |
+| 16 | Toad | ○ | ● | | | I-30 |
+| 17 | crush | ● | | | ○ | I-31, I-32 |
+| 18 | flowrs | | ● | ○ | | I-33, I-34 |
+| 19 | process-compose | ○ | ● | | | I-35 |
+| 20 | Reeve | ○ | ● | | | I-36, I-37 |
