@@ -18,7 +18,7 @@ use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, JobCounts};
+use crate::read::{Dot, JobCounts, JobStatus, PrState};
 use crate::{not_a_terminal, on_a_terminal};
 
 const COLUMN_SPACING: u16 = 2;
@@ -115,6 +115,17 @@ fn sections() -> Vec<Section> {
             ]
         })
         .collect();
+    // a failed Job is waiting (its Lead handles it) until `job-stuck` opens (audit Q3): the stuck one is red, after `failed`
+    let (stuck_icon, stuck) = palette::JOB_STUCK;
+    let failed = palette::JOB_LEGEND.iter().position(|(_, status, _)| *status == JobStatus::Failed).expect("the legend lists failed");
+    jobs.insert(
+        failed + 1,
+        vec![
+            plain("failed, stuck"),
+            Line::from(Span::styled(format!(" {stuck_icon} key │S1 "), palette::pill(stuck))),
+            Line::from(Span::styled("3", palette::fg(stuck))),
+        ],
+    );
     // The counters' order is `JobCounts::counters`'s: queued, running, merging, failed, merged.
     let sample = JobCounts { queued: 1, running: 1, merging: 2, failed: 0, merged: 3, ..JobCounts::default() };
     let slots = [0, 1, 2, 4, 3].map(|i| palette::JOB_LEGEND[i]);
@@ -150,16 +161,18 @@ fn sections() -> Vec<Section> {
             vec![plain(""), plain(&precedence())],
         ],
     };
-    let prs = Section {
-        title: "PRs (Dispatch)",
-        header: None,
-        rows: palette::PR_LEGEND
-            .iter()
-            .map(|(name, state)| (*name, palette::pr_state(*state)))
-            .chain([palette::PR_CONFLICT])
-            .map(|(name, meaning)| vec![Line::from(Span::styled(format!("#2 {name}"), palette::fg(meaning)))])
-            .collect(),
-    };
+    let sample = |(name, meaning): (&str, Meaning)| Line::from(Span::styled(format!("#2 {name}"), palette::fg(meaning)));
+    let mut pr_rows: Vec<Vec<Line<'static>>> = palette::PR_LEGEND
+        .iter()
+        .map(|(name, state)| {
+            let row = vec![sample((name, palette::pr_state(*state)))];
+            // a closed pull request is waiting while its Lead handles it, red once it asks you (audit Q4)
+            if *state == PrState::Closed { [row, vec![plain("its Lead handles it")]].concat() } else { row }
+        })
+        .collect();
+    pr_rows.push(vec![sample(palette::PR_CLOSED_ASKED), plain("its Lead asks you")]);
+    pr_rows.push(vec![sample(palette::PR_CONFLICT)]);
+    let prs = Section { title: "PRs (Dispatch)", header: None, rows: pr_rows };
     let checks = Section {
         title: "PR checks",
         header: None,
@@ -342,16 +355,36 @@ mod tests {
     fn the_pr_states_list_conflict_in_the_failed_colour_after_the_others() {
         let prs = &sections()[3];
         let names: Vec<String> = prs.rows.iter().map(|r| text(&r[0])).collect();
-        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 conflict"]);
-        let conflict = &prs.rows[3][0].spans[0];
+        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 closed", "#2 conflict"]);
+        let conflict = &prs.rows[4][0].spans[0];
         assert_eq!(conflict.style, palette::fg(palette::Meaning::Failed));
+    }
+
+    #[test]
+    fn a_closed_pr_is_waiting_while_its_lead_handles_it_and_red_once_it_asks_you() {
+        let prs = &sections()[3];
+        let (handled, asked) = (&prs.rows[2], &prs.rows[3]);
+        assert_eq!(handled[0].spans[0].style, palette::fg(Meaning::Waiting));
+        assert_eq!(asked[0].spans[0].style, palette::fg(Meaning::Failed));
+        assert_eq!((text(&handled[1]), text(&asked[1])), ("its Lead handles it".to_owned(), "its Lead asks you".to_owned()));
+    }
+
+    #[test]
+    fn a_failed_job_is_waiting_and_a_stuck_one_is_red_in_the_pill_and_the_counter() {
+        let jobs = &sections()[1];
+        let (failed, stuck) = (&jobs.rows[4], &jobs.rows[5]);
+        assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
+        let bg = |row: &Vec<Line>| row[1].spans[0].style.bg;
+        assert_eq!((bg(failed), bg(stuck)), (palette::pill(Meaning::Waiting).bg, palette::pill(Meaning::Failed).bg));
+        let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
+        assert_eq!((fg(failed), fg(stuck)), (palette::fg(Meaning::Waiting).fg, palette::fg(Meaning::Failed).fg));
     }
 
     #[test]
     fn the_job_statuses_listed_are_those_the_chart_draws_and_not_cancelled() {
         let jobs = &sections()[1];
         let names: Vec<String> = jobs.rows.iter().map(|r| text(&r[0])).collect();
-        assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "draft", "counters row"]);
+        assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "failed, stuck", "draft", "counters row"]);
         let shown: String =
             sections().iter().flat_map(|s| s.rows.iter().flatten().map(text)).chain(sections().iter().map(|s| s.title.to_owned())).collect();
         assert!(!shown.contains("cancelled") && !shown.contains(palette::CANCELLED), "{shown}");
