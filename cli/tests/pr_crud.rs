@@ -189,6 +189,70 @@ fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
 }
 
 #[test]
+fn add_stores_the_name_parsed_from_origin_lowercased() {
+    let fx = fx("grounding");
+    fx.env.git(&fx.web, &["remote", "set-url", "origin", "git@github.com:ACME/Web.Site.git"]);
+    let out = fx.add("web", &fx.web, &[]).ok();
+    assert_eq!(out["pr"]["name"], "web.site");
+    assert_eq!(fx.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "web.site");
+}
+
+#[test]
+fn add_keys_the_repo_before_anything_is_written() {
+    let fx = fx("grounding");
+
+    // owner_unset: the Context has no owner (a Context made before the policy keys).
+    fx.sql("UPDATE contexts SET owner = NULL WHERE id = 'ctx'");
+    let writes = fx.writes();
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unset", 3, writes);
+    assert_eq!(error["details"]["context"], "ctx");
+    assert_eq!(error["details"]["next"], "cpd context owner <login> --context ctx");
+    fx.sql("UPDATE contexts SET owner = 'acme' WHERE id = 'ctx'");
+    let writes = fx.writes();
+
+    // repo_unkeyed (exit 1): no origin (url null), a local path, another host, an SSH alias.
+    fx.env.git(&fx.pay, &["remote", "remove", "origin"]);
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "repo_unkeyed", 1, writes);
+    assert_eq!(error["details"]["url"], Value::Null);
+    for url in ["/tmp/somewhere/pay.git", "https://gitlab.com/acme/pay.git", "git@github-work:acme/pay.git"] {
+        fx.env.git(&fx.pay, &["remote", "add", "origin", url]);
+        let error = fx.refused(&fx.add("api", &fx.pay, &[]), "repo_unkeyed", 1, writes);
+        assert_eq!(error["details"]["url"], url);
+        fx.env.git(&fx.pay, &["remote", "remove", "origin"]);
+    }
+
+    // owner_mismatch (exit 3): another owner's repo.
+    fx.env.git(&fx.pay, &["remote", "add", "origin", "https://github.com/other/pay.git"]);
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_mismatch", 3, writes);
+    assert_eq!((&error["details"]["owner"], &error["details"]["repo_owner"]), (&json!("acme"), &json!("other")));
+
+    // owner_unknown (exit 1): the Context's owner has no policy file.
+    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/pay.git"]);
+    fs::remove_file(fx.env.cpd_home().join("policy/owners/acme.toml")).unwrap();
+    let error = fx.refused(&fx.add("api", &fx.pay, &[]), "owner_unknown", 1, writes);
+    assert_eq!(error["details"]["owner"], "acme");
+    fs::write(fx.env.cpd_home().join("policy/owners/acme.toml"), "").unwrap();
+
+    // With every refusal cleared, the same add succeeds.
+    fx.add("api", &fx.pay, &[]).ok();
+}
+
+#[test]
+fn edit_repo_keys_the_new_repo_and_stores_its_name() {
+    let fx = fx("grounding");
+    fx.add("web", &fx.web, &[]).ok();
+    let writes = fx.writes();
+    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/other/pay.git"]);
+    let error = fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "owner_mismatch", 3, writes);
+    assert_eq!(error["details"]["repo_owner"], "other");
+    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "git@github-work:acme/pay.git"]);
+    fx.refused(&fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]), "repo_unkeyed", 1, writes);
+    fx.env.git(&fx.pay, &["remote", "set-url", "origin", "https://github.com/acme/Payments.git"]);
+    fx.pr(&["edit", "web", "--repo", fx.pay.to_str().unwrap()]).ok();
+    assert_eq!(fx.query::<String>("SELECT name FROM prs WHERE plan = 'pay-1' AND key = 'web'"), "payments");
+}
+
+#[test]
 fn add_refusals_write_nothing() {
     let fx = fx("grounding");
     fx.add("api", &fx.pay, &[]).ok();
