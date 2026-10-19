@@ -7,12 +7,8 @@
 mod common;
 
 use std::fs;
-use std::time::{Duration, Instant};
 
-use common::{CPD, TestEnv};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
+use common::{CPD, TestEnv, wait_until};
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -29,16 +25,6 @@ fn env() -> TestEnv {
     )
     .unwrap();
     env
-}
-
-fn sql(env: &TestEnv, text: &str) {
-    Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000)
-        .unwrap()
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 /// One Plan `ship` with one Job per entry of `attempts`, each with one Attempt in that status.
@@ -86,15 +72,6 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// Waits until `done` holds, at most 30 s.
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 /// Starts `cpd tui view statusbar` alone in a one-row window `width` columns wide; returns its pane.
 fn start_view(env: &TestEnv, width: u16) -> String {
     tmux_out(
@@ -118,7 +95,7 @@ fn row_ending(env: &TestEnv, pane: &str, tail: &str) -> String {
 #[test]
 fn the_row_has_the_three_buttons_left_and_the_workers_at_the_right_edge() {
     let env = env();
-    sql(&env, &plan_with_attempts(&["ended", "running", "starting"]));
+    env.sql(&plan_with_attempts(&["ended", "running", "starting"]));
     let pane = start_view(&env, 80);
     let row = row_ending(&env, &pane, "workers 2/4");
     assert!(row.starts_with("⧉ ? ▤"), "{row:?}");
@@ -128,13 +105,13 @@ fn the_row_has_the_three_buttons_left_and_the_workers_at_the_right_edge() {
 #[test]
 fn the_workers_follow_the_slots() {
     let env = env();
-    sql(&env, &plan_with_attempts(&[]));
+    env.sql(&plan_with_attempts(&[]));
     // the shortening to `0/4` on a row under 11 columns is `the_workers_indicator_is_given_the_full_width` (unit
     // test); this one uses a row wide enough for the long form
     let pane = start_view(&env, 40);
     row_ending(&env, &pane, "workers 0/4");
     // an Attempt takes a slot: the view re-reads when the store's Events move, or within 2 s
-    sql(&env, &attempt_row(1, "running"));
+    env.sql(&attempt_row(1, "running"));
     row_ending(&env, &pane, "workers 1/4");
 }
 
@@ -164,15 +141,14 @@ fn styled_row_ending(env: &TestEnv, pane: &str, tail: &str) -> String {
 #[test]
 fn the_inbox_counts_the_visible_open_items_in_the_colour_of_the_most_urgent() {
     let env = env();
-    sql(&env, &plan_with_attempts(&[]));
+    env.sql(&plan_with_attempts(&[]));
     let pane = start_view(&env, 60);
     // nothing open: a dim zero, with no colour (SGR 2 is dim; tmux writes colours 1 and 3 as `38;5;1`, `38;5;3`)
     let row = styled_row_ending(&env, &pane, "inbox 0 workers 0/4");
     assert!(row.contains("\x1b[2minbox 0\x1b[0m"), "{row:?}");
 
     // red, yellow and white are open; a snoozed, a dismissed and a closed red one are not counted
-    sql(
-        &env,
+    env.sql(
         &format!(
             "{}{}{}{}{}{}
              UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'snoozed';
@@ -190,7 +166,7 @@ fn the_inbox_counts_the_visible_open_items_in_the_colour_of_the_most_urgent() {
     assert!(row.contains("\x1b[38;5;1minbox 3"), "red: {row:?}");
 
     // the red one is dismissed: the most urgent left is yellow
-    sql(&env, "UPDATE inbox_items SET dismissed_at = '2026-01-04T00:00:00.000Z' WHERE subject = 'red';");
+    env.sql("UPDATE inbox_items SET dismissed_at = '2026-01-04T00:00:00.000Z' WHERE subject = 'red';");
     let row = styled_row_ending(&env, &pane, "inbox 2 workers 0/4");
     assert!(row.contains("\x1b[38;5;3minbox 2"), "yellow: {row:?}");
 }

@@ -26,9 +26,8 @@ fn open(env: &TestEnv) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
-fn write_config(env: &TestEnv) {
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 20\n").unwrap();
-}
+/// The machine's `config.toml`, with a short Events poll.
+const CONFIG: &str = "version = 1\nmachine = \"m1\"\n[events]\npoll_ms = 20\n";
 
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
@@ -148,7 +147,7 @@ fn seed(store: &mut Store) {
 /// A configured home with the fixture and the eleven Events.
 fn seeded() -> TestEnv {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     seed(&mut store);
@@ -178,10 +177,7 @@ fn follow_until_idle(env: &TestEnv, args: &[&str]) -> Vec<Value> {
 }
 
 fn refused(env: &TestEnv, args: &[&str], code: &str, exit: i32) -> Value {
-    let run = env.cpd(args);
-    let err = run.error();
-    assert_eq!((err["code"].as_str().unwrap(), run.exit), (code, exit), "{args:?}: {run:?}");
-    err
+    common::refused(&env.cpd(args), code, exit)
 }
 
 // ------------------------------------------------------------------ append
@@ -270,7 +266,7 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
 
     // The rows of `event_kinds` (§4.5: a kind exists when its row does) are the same kinds.
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     drop(open(&env));
     let conn = Connection::open(home(&env).db()).unwrap();
     let mut stmt = conn.prepare("SELECT name FROM event_kinds ORDER BY name").unwrap();
@@ -283,7 +279,7 @@ fn the_kinds_are_exactly_those_of_5_2_and_of_event_kinds() {
 #[test]
 fn every_kind_is_appended_with_its_fields() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, maybe, data, optional) in SPEC {
@@ -302,7 +298,7 @@ fn every_kind_is_appended_with_its_fields() {
 #[test]
 fn a_missing_field_is_refused() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, _, data, _) in SPEC {
@@ -319,7 +315,7 @@ fn a_missing_field_is_refused() {
 #[test]
 fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, _, data, _) in SPEC {
@@ -344,7 +340,7 @@ fn an_unknown_field_or_a_data_that_is_not_an_object_is_refused() {
 #[test]
 fn a_column_the_kind_does_not_set_is_refused_and_one_it_must_set_is_required() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     for (name, always, maybe, data, _) in SPEC {
@@ -415,7 +411,7 @@ fn append_takes_the_context_of_the_plan_else_of_the_session() {
 #[test]
 fn append_names_a_missing_plan_or_session() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     let e = NewEvent::new(Kind::JobRetried, "x", json!({"tier": 1})).plan(plan("nope")).job(job());
@@ -427,7 +423,7 @@ fn append_names_a_missing_plan_or_session() {
 #[test]
 fn an_event_belongs_to_its_transaction_and_rolls_back_with_it() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     fixture(&mut store);
     let (txn, id) = store
@@ -619,7 +615,7 @@ fn follow_refusals() {
 #[test]
 fn follow_since_zero_on_an_empty_store_is_fine_and_since_one_is_ahead() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     assert!(follow_until_idle(&env, &["--since", "0"]).is_empty());
     refused(&env, &["events", "follow", "--since", "1", "--until-idle"], "cursor_ahead", 3);
 }
@@ -627,7 +623,7 @@ fn follow_since_zero_on_an_empty_store_is_fine_and_since_one_is_ahead() {
 #[test]
 fn follow_reads_full_batches_until_it_has_everything() {
     let env = TestEnv::new();
-    write_config(&env);
+    env.write_config(CONFIG);
     let mut store = open(&env);
     store
         .write("bulk", |tx| {
@@ -722,19 +718,13 @@ fn follow_streams_new_events_in_commit_order_and_exits_zero_when_stdout_closes()
 #[test]
 fn follow_exits_zero_when_stdout_closes_with_no_event_to_write() {
     let env = seeded();
-    let mut follower = Follower::start(&env, &["--session", "lead1"]);
-    // Let it start and settle into its poll loop, then close its stdout; append nothing.
-    std::thread::sleep(Duration::from_millis(500));
+    let mut store = open(&env);
+    let mut follower = Follower::start(&env, &["--session", "lead1", "--since", "11"]);
+    // It is in its poll loop once it prints an Event committed after it started; then close its stdout and append nothing.
+    append_one(&mut store, NewEvent::new(Kind::SessionRenamed, "Session lead1 renamed.", json!({"name": "L"})).session(session("lead1"))).unwrap();
+    assert_eq!(follower.next().unwrap()["kind"], "session-renamed");
     follower.close_stdout();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let code = loop {
-        if let Some(status) = follower.child.try_wait().unwrap() {
-            break status.code().expect("not killed");
-        }
-        assert!(Instant::now() < deadline, "the follower did not exit within 2 s of its reader going away");
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    assert_eq!(code, 0);
+    assert_eq!(follower.exit(), 0, "the follower exits when its reader goes away");
 }
 
 #[test]
@@ -824,8 +814,11 @@ fn follow_exits_on_a_store_too_new_before_it_has_printed_anything() {
 #[test]
 fn follow_exits_non_zero_when_the_store_becomes_newer_while_it_is_idle() {
     let env = seeded();
-    let mut follower = Follower::start(&env, &["--plan", "pay"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let mut store = open(&env);
+    let mut follower = Follower::start(&env, &["--plan", "pay", "--since", "11"]);
+    // It is idle, in its poll loop, once it has printed an Event committed after it started.
+    append_edit(&mut store, "goal");
+    assert_eq!(follower.next().unwrap()["kind"], "job-edited");
     newer_cpd_migrates(&env, "breaking");
     let last = follower.next().unwrap();
     assert_eq!(last["error"]["code"], "store_too_new");
@@ -839,10 +832,13 @@ fn follow_goes_on_when_the_store_gains_only_an_additive_migration_this_binary_la
     assert_eq!(follower.next().unwrap()["id"], 11);
     // Inside the window (contract §4.5): the verdict is recomputed, still opens, nothing ends.
     newer_cpd_migrates(&env, "additive");
-    std::thread::sleep(Duration::from_millis(500));
     let mut store = open(&env);
-    let n = append_watch(&mut store, 1);
-    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
+    // The Event committed after the migration is printed by a poll that has read the migration; the next one shows
+    // that the follower went on past that poll.
+    for i in 1..=2 {
+        let n = append_watch(&mut store, i);
+        assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
+    }
 }
 
 #[test]
@@ -850,8 +846,10 @@ fn follow_ends_when_a_migration_leaves_the_verdict_refusing_even_if_user_version
     // `migration_order`-like and `store_too_new` refusals come from the verdict, not from a number:
     // the schema changes (so `schema_version` moves) and `user_version` stays what it was.
     let env = seeded();
-    let mut follower = Follower::start(&env, &["--plan", "pay"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let mut follower = Follower::start(&env, &["--plan", "pay", "--since", "11"]);
+    // It is idle, in its poll loop, once it has printed an Event committed after it started.
+    let n = append_edit(&mut open(&env), "goal");
+    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
     newer_cpd_migrates(&env, "breaking");
     let user_version: i64 = Connection::open(home(&env).db()).unwrap().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(user_version, cpd_core::store::VERSION);
