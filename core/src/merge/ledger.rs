@@ -5,11 +5,11 @@
 use std::path::PathBuf;
 
 use rusqlite::{Connection, OptionalExtension, params};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::config::{Catalog, Tier};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::ids::{AttemptId, JobKey, PlanId, SessionId};
 use crate::store::WriteTxn;
 
@@ -218,19 +218,17 @@ pub fn end_merging(
 
     let (status, failed_cause, event) = match end {
         End::Merged { sha } => {
-            let mut data = json!({"sha": sha, "tier": tier});
             let mut text = format!("Job {job} merged: Attempt {id} fast-forwarded {} to {}.", attempt.lead_branch, short(sha));
             if cancel.is_some() {
-                data["cancel_too_late"] = json!(true);
                 text.push_str(" Its cancel request came too late: the merge had already happened.");
             }
             text.push_str(&format!(" Next: {show}"));
-            ("merged", None, NewEvent::new(Kind::JobMerged, text, data).attempt(attempt.id.clone()))
+            ("merged", None, NewEvent::job_merged(text, sha, &tier, cancel.is_some()).attempt(attempt.id.clone()))
         }
         End::Cancelled => {
             let reason = cancel.ok_or_else(|| cas_lost("The Job's cancel request"))?;
             let text = format!("Job {job} cancelled ({reason}): Attempt {id} stopped before its merge. Next: cpd plan show --plan {plan}");
-            ("cancelled", None, NewEvent::new(Kind::JobCancelled, text, json!({"reason": reason})).attempt(attempt.id.clone()))
+            ("cancelled", None, NewEvent::job_cancelled(text, &reason).attempt(attempt.id.clone()))
         }
         End::Failed { cause, detail } => match next_tier(tx, attempt, *cause, ladder)? {
             Some(next) => {
@@ -238,8 +236,8 @@ pub fn end_merging(
                     "Attempt {id} of Job {job} failed ({}): {detail} The Job is queued again at Tier {next}. Next: {show}",
                     cause.as_str()
                 );
-                let data = json!({"outcome": "failed", "cause": cause.as_str(), "next_tier": next.to_string(), "feedback": detail});
-                ("queued", None, NewEvent::new(Kind::AttemptRetry, text, data).attempt(attempt.id.clone()))
+                let event = NewEvent::attempt_retry(text, "failed", cause.as_str(), &next.to_string(), detail);
+                ("queued", None, event.attempt(attempt.id.clone()))
             }
             None => {
                 let attempts: i64 = tx.query_row(
@@ -251,8 +249,8 @@ pub fn end_merging(
                     "Job {job} failed ({}): {detail} Decide: cpd job retry {job} --tier <T> --plan {plan}, or cpd job cancel {job} --reason <text> --plan {plan}",
                     cause.as_str()
                 );
-                let data = json!({"cause": cause.as_str(), "detail": detail, "tier": tier, "attempts": attempts});
-                ("failed", Some(cause.as_str()), NewEvent::new(Kind::JobFailed, text, data).attempt(attempt.id.clone()))
+                let event = NewEvent::job_failed(text, cause.as_str(), detail, &tier, attempts);
+                ("failed", Some(cause.as_str()), event.attempt(attempt.id.clone()))
             }
         },
     };
@@ -284,15 +282,9 @@ fn next_tier(tx: &WriteTxn<'_>, attempt: &Attempt, cause: Failure, ladder: &Ladd
 
 /// Appends an `error` Event about `attempt` (§5.2) for `error`, from `source`.
 pub fn append_error(tx: &WriteTxn<'_>, attempt: &Attempt, source: &str, error: &CpdError, text: String) -> Result<(), CpdError> {
-    let data = json!({
-        "source": source,
-        "code": error.code().as_str(),
-        "message": error.message(),
-        "details": error.details(),
-    });
     events::append(
         tx,
-        NewEvent::new(Kind::Error, text, data)
+        NewEvent::error(text, source, error.code().as_str(), error.message(), error.details())
             .plan(attempt.plan.clone())
             .job(attempt.job.clone())
             .attempt(attempt.id.clone()),
