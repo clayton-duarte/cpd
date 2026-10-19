@@ -97,6 +97,10 @@ error_codes! {
     CleanupFailed = "cleanup_failed" => Failure,
     DistillInvalid = "distill_invalid" => Failure,
     DistillFailed = "distill_failed" => Failure,
+    // Policies (contract §8.3, hs-d288).
+    PolicyInvalid = "policy_invalid" => Failure,
+    OwnerUnknown = "owner_unknown" => Failure,
+    RepoUnkeyed = "repo_unkeyed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,
@@ -171,6 +175,10 @@ error_codes! {
     ArchiveBlocked = "archive_blocked" => Refused,
     Archived = "archived" => Refused,
     ItemClosed = "item_closed" => Refused,
+    MergeNotClean = "merge_not_clean" => Refused,
+    OwnerMismatch = "owner_mismatch" => Refused,
+    OwnerUnset = "owner_unset" => Refused,
+    OwnerSet = "owner_set" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -200,6 +208,7 @@ error_codes! {
     PrLocked = "pr_locked" => Refused,
     PrNotReady = "pr_not_ready" => Refused,
     PrEnded = "pr_ended" => Refused,
+    PrClosed = "pr_closed" => Refused,
     NeedsOtherPr = "needs_other_pr" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
@@ -228,6 +237,23 @@ impl CpdError {
     /// An error with empty `details`.
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         CpdError { code, message: message.into(), details: Map::new() }
+    }
+
+    /// `plan_not_found` (exit 4): no Plan `plan`.
+    pub fn plan_not_found(plan: &crate::ids::PlanId) -> Self {
+        CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+    }
+
+    /// A row the database holds in a shape the binary does not accept: it was
+    /// changed outside cpd, or by a bug (`store_failed`).
+    pub fn bad_row(what: impl fmt::Display) -> Self {
+        CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
+    }
+
+    /// `file_unreadable` (exit 2): `path` cannot be read as UTF-8 text because of `cause`.
+    pub fn file_unreadable(path: &std::path::Path, cause: impl fmt::Display) -> Self {
+        CpdError::new(ErrorCode::FileUnreadable, format!("Cannot read {} as UTF-8 text: {cause}.", path.display()))
+            .with("path", path.display().to_string())
     }
 
     /// Adds one `details` field (replacing a field of the same name).
@@ -345,6 +371,7 @@ mod tests {
             (ErrorCode::PlanNotFound, 4),
             (ErrorCode::ItemNotFound, 4),
             (ErrorCode::ItemClosed, 3),
+            (ErrorCode::MergeNotClean, 3),
             (ErrorCode::JobNotFound, 4),
             (ErrorCode::SessionNotFound, 4),
             (ErrorCode::BaseNotFound, 4),
@@ -362,8 +389,15 @@ mod tests {
             (ErrorCode::PrLocked, 3),
             (ErrorCode::PrNotReady, 3),
             (ErrorCode::PrEnded, 3),
+            (ErrorCode::PrClosed, 3),
             (ErrorCode::NeedsOtherPr, 3),
             (ErrorCode::PrNotFound, 4),
+            (ErrorCode::PolicyInvalid, 1),
+            (ErrorCode::OwnerUnknown, 1),
+            (ErrorCode::RepoUnkeyed, 1),
+            (ErrorCode::OwnerMismatch, 3),
+            (ErrorCode::OwnerUnset, 3),
+            (ErrorCode::OwnerSet, 3),
         ];
         for (code, exit) in cases {
             assert_eq!(code.exit().code(), exit, "{code}");
@@ -392,5 +426,21 @@ mod tests {
     fn details_default_to_an_empty_object() {
         let value = serde_json::to_value(CpdError::new(ErrorCode::Usage, "Bad flag.")).unwrap();
         assert_eq!(value["error"]["details"], serde_json::json!({}));
+    }
+
+    /// commands-G2: the constructors every area used to copy.
+    #[test]
+    fn the_shared_constructors_build_the_documented_errors() {
+        let plan = crate::ids::PlanId::parse("api-schema").unwrap();
+        assert_eq!(
+            serde_json::to_value(CpdError::plan_not_found(&plan)).unwrap(),
+            serde_json::json!({"ok": false, "error": {"code": "plan_not_found", "message": "No Plan api-schema.", "details": {"plan": "api-schema"}}})
+        );
+        let bad = CpdError::bad_row("Plan x has phase \"y\"");
+        assert_eq!((bad.code(), bad.message()), (ErrorCode::StoreFailed, "The database holds an invalid row: Plan x has phase \"y\"."));
+        assert!(bad.details().is_empty());
+        let unreadable = CpdError::file_unreadable(std::path::Path::new("/tmp/brief.md"), "not UTF-8");
+        assert_eq!((unreadable.code(), unreadable.message()), (ErrorCode::FileUnreadable, "Cannot read /tmp/brief.md as UTF-8 text: not UTF-8."));
+        assert_eq!(unreadable.details()["path"], "/tmp/brief.md");
     }
 }

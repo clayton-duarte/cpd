@@ -4,27 +4,33 @@
 //! legend (commands.md §13.2). Everything it shows, icons and colours, comes
 //! from the palette and from the read model's own ordering of the counters, so
 //! it cannot disagree with them. Each section is a ratatui `Table` (aligned
-//! columns); the sections are stacked with a `Layout`.
+//! columns); the sections are stacked with a `Layout`. The title is a section header (the dialog kit's style); a legend
+//! taller than its popup scrolls with the kit's scrolling (↑↓, j/k, PgUp/PgDn, the wheel), and any other key closes it.
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Cell, Paragraph, Row, Table};
+use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::CpdError;
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
+use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, JobCounts};
-use crate::{not_a_terminal, on_a_terminal};
+use crate::widgets::section_header;
+use crate::{Capture, run_view};
 
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
 const POPUP_BORDER: u16 = 2;
 const DOTS_TITLE: &str = "Session dots";
+/// The rows above the body: the title, drawn as a section header (hs-d124, hs-d297).
+const HEADER_ROWS: u16 = 1;
 const INTRO: &str = "Legend: what the cockpit's colours and icons mean   (any key closes)";
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
@@ -60,12 +66,10 @@ impl Section {
         1 + u16::from(self.header.is_some()) + self.rows.len() as u16
     }
 
-    fn draw(&self, f: &mut Frame, area: Rect) {
+    fn draw(&self, buf: &mut Buffer, area: Rect) {
         let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
-        f.render_widget(
-            Paragraph::new(Span::styled(self.title, Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED))),
-            title,
-        );
+        Paragraph::new(Span::styled(self.title, Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)))
+            .render(title, buf);
         let mut table = Table::new(
             self.rows.iter().map(|r| Row::new(r.iter().cloned().map(Cell::from))),
             self.column_widths().into_iter().map(Constraint::Length),
@@ -75,7 +79,7 @@ impl Section {
             table = table
                 .header(Row::new(h.iter().map(|t| Cell::from(*t))).style(Style::new().add_modifier(Modifier::DIM)));
         }
-        f.render_widget(table, body);
+        table.render(body, buf);
     }
 }
 
@@ -183,28 +187,59 @@ fn sections() -> Vec<Section> {
     vec![meanings, jobs, dots, prs, pulse, checks]
 }
 
-/// The vertical constraints: the intro, then each section after a gap.
+/// The vertical constraints of the body: each section after a gap.
 fn rows(sections: &[Section]) -> Vec<Constraint> {
-    [Constraint::Length(1)]
-        .into_iter()
-        .chain(sections.iter().flat_map(|s| [Constraint::Length(1), Constraint::Length(s.height())]))
-        .collect()
+    sections.iter().flat_map(|s| [Constraint::Length(1), Constraint::Length(s.height())]).collect()
 }
 
-/// The size the legend needs: columns, rows (without a popup's border).
+/// The rows of the body, under the title's row.
+fn body_height(sections: &[Section]) -> u16 {
+    rows(sections).iter().map(|c| if let Constraint::Length(n) = c { *n } else { 0 }).sum()
+}
+
+/// The size the legend needs: columns, rows (without a popup's border). The title is a section header, which
+/// needs its own width: `──`, ` <title> ` and one `─`.
 pub fn size() -> (u16, u16) {
     let sections = sections();
-    let width = sections.iter().map(Section::width).max().unwrap_or(0).max(INTRO.chars().count() as u16);
-    let height = rows(&sections).iter().map(|c| if let Constraint::Length(n) = c { *n } else { 0 }).sum::<u16>();
-    (width + 2, height)
+    let width = sections.iter().map(Section::width).max().unwrap_or(0) + 2;
+    (width.max(INTRO.chars().count() as u16 + 5), HEADER_ROWS + body_height(&sections))
 }
 
+/// The whole body drawn off screen, `width` columns wide: the popup shows a window of it.
+fn body(sections: &[Section], width: u16) -> Buffer {
+    let mut buf = Buffer::empty(Rect::new(0, 0, width, body_height(sections)));
+    let areas = Layout::vertical(rows(sections)).split(buf.area.inner(Margin::new(1, 0)));
+    for (section, area) in sections.iter().zip(areas.iter().skip(1).step_by(2)) {
+        section.draw(&mut buf, *area);
+    }
+    buf
+}
+
+/// Draws the legend in `area`, from its first row.
 pub fn draw(f: &mut Frame, area: Rect) {
-    let sections = sections();
-    let areas = Layout::vertical(rows(&sections)).split(area.inner(Margin::new(1, 0)));
-    f.render_widget(Paragraph::new(Span::styled(INTRO, Style::new().add_modifier(Modifier::BOLD))), areas[0]);
-    for (section, area) in sections.iter().zip(areas.iter().skip(2).step_by(2)) {
-        section.draw(f, *area);
+    draw_scrolled(f, area, &mut Scroll::default());
+}
+
+/// Draws the title as a section header, then the window of the body that `scroll` shows: it is fitted to `area` here
+/// and, when the body is taller than the rest of `area`, a dim `first-last/total` closes the title's line.
+fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
+    let [head, window] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
+    f.render_widget(Paragraph::new(section_header(INTRO, usize::from(head.width))), head);
+    let buf = body(&sections(), window.width);
+    scroll.resize(usize::from(buf.area.height), usize::from(window.height));
+    for y in 0..window.height.min(buf.area.height.saturating_sub(scroll.offset() as u16)) {
+        for x in 0..window.width {
+            f.buffer_mut()[(window.x + x, window.y + y)] = buf[(x, y + scroll.offset() as u16)].clone();
+        }
+    }
+    if scroll.scrollable() {
+        let last = (scroll.offset() + scroll.page()).min(scroll.total());
+        let position = format!(" {}-{}/{} ", scroll.offset() + 1, last, scroll.total());
+        let width = position.chars().count() as u16;
+        if width < head.width {
+            let at = Rect::new(head.x + head.width - width, head.y, width, 1);
+            f.render_widget(Paragraph::new(position).style(palette::fg(Meaning::Nothing)), at);
+        }
     }
 }
 
@@ -226,29 +261,27 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
     .to_vec()
 }
 
-/// `cpd tui view legend`: draws the legend until any key or click.
+/// `cpd tui view legend`: draws the legend until a key that does not scroll, or a click.
 pub(crate) fn run() -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view legend"));
-    }
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let result = show(&mut terminal);
-    ratatui::restore();
-    match result {
-        Ok(()) => Ok(Output::Owned),
-        Err(e) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view legend failed: {e}."))
-            .with("command", "tui view legend")),
+    run_view("legend", Capture::Mouse, || Ok(()), |terminal, ()| Ok(show(terminal)?))
+}
+
+/// What `event` does: the kit's scrolling moves `scroll` (↑↓, j/k, PgUp/PgDn, the wheel); whether it closes the legend:
+/// any other key press, or a click.
+fn closes(event: &Event, scroll: &mut Scroll) -> bool {
+    match event {
+        Event::Key(k) => !scroll.key(*k) && k.kind == KeyEventKind::Press,
+        Event::Mouse(m) => !scroll.mouse(*m) && matches!(m.kind, MouseEventKind::Down(_)),
+        _ => false,
     }
 }
 
 fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
+    let mut scroll = Scroll::default();
     loop {
-        terminal.draw(|f| draw(f, f.area()))?;
-        match event::read()? {
-            Event::Key(k) if k.kind == KeyEventKind::Press => return Ok(()),
-            Event::Mouse(m) if matches!(m.kind, MouseEventKind::Down(_)) => return Ok(()),
-            _ => {}
+        terminal.draw(|f| draw_scrolled(f, f.area(), &mut scroll))?;
+        if closes(&event::read()?, &mut scroll) {
+            return Ok(());
         }
     }
 }
@@ -327,7 +360,7 @@ mod tests {
         assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "draft", "counters row"]);
         let shown: String =
             sections().iter().flat_map(|s| s.rows.iter().flatten().map(text)).chain(sections().iter().map(|s| s.title.to_owned())).collect();
-        assert!(!shown.contains("cancelled") && !shown.contains('⊘'), "{shown}");
+        assert!(!shown.contains("cancelled") && !shown.contains(palette::CANCELLED), "{shown}");
     }
 
     #[test]
@@ -340,5 +373,101 @@ mod tests {
         );
         let small = popup_args((40, 20));
         assert_eq!((small[5].as_str(), small[7].as_str()), ("40", "20"));
+    }
+
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent};
+
+    fn key(code: KeyCode) -> Event {
+        Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn mouse(kind: MouseEventKind) -> Event {
+        Event::Mouse(MouseEvent { kind, column: 4, row: 4, modifiers: KeyModifiers::NONE })
+    }
+
+    /// The legend drawn in a `width` x `height` area, with `scroll`.
+    fn render(width: u16, height: u16, scroll: &mut Scroll) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw_scrolled(f, f.area(), scroll)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn row(buf: &Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned()
+    }
+
+    #[test]
+    fn the_title_is_drawn_by_section_header() {
+        let (w, h) = size();
+        let buf = render(w, h, &mut Scroll::default());
+        let mut want = Terminal::new(TestBackend::new(w, 1)).unwrap();
+        want.draw(|f| f.render_widget(Paragraph::new(section_header(INTRO, usize::from(w))), f.area())).unwrap();
+        assert!((0..w).all(|x| buf[(x, 0)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 0));
+        assert!(row(&buf, 0).starts_with("── Legend: what") && row(&buf, 0).contains("(any key closes) ─"));
+    }
+
+    #[test]
+    fn a_legend_that_fits_does_not_scroll_and_shows_no_position() {
+        let (w, h) = size();
+        let mut scroll = Scroll::default();
+        let buf = render(w, h, &mut scroll);
+        assert!(!scroll.scrollable());
+        assert!(!row(&buf, 0).contains('/'), "{}", row(&buf, 0));
+        assert!(!closes(&key(KeyCode::Down), &mut scroll) && !closes(&mouse(MouseEventKind::ScrollDown), &mut scroll));
+        assert_eq!(render(w, h, &mut scroll), buf);
+    }
+
+    #[test]
+    fn a_legend_taller_than_its_popup_scrolls_with_keys_and_the_wheel() {
+        let (w, h) = size();
+        let full = render(w, h, &mut Scroll::default());
+        let mut scroll = Scroll::default();
+        let page = h - 1 - 6;
+        let top = render(w, h - 6, &mut scroll);
+        assert!(scroll.scrollable() && (scroll.total(), scroll.page()) == (usize::from(h - 1), usize::from(page)));
+        assert!(row(&top, 0).ends_with(&format!(" 1-{page}/{}", h - 1)), "{}", row(&top, 0));
+        for y in 1..=page {
+            assert_eq!(row(&top, y), row(&full, y), "unscrolled, row {y}");
+        }
+        // ↓ and j: one row each
+        assert!(!closes(&key(KeyCode::Down), &mut scroll) && !closes(&key(KeyCode::Char('j')), &mut scroll));
+        let moved = render(w, h - 6, &mut scroll);
+        for y in 1..=page {
+            assert_eq!(row(&moved, y), row(&full, y + 2), "two rows down, row {y}");
+        }
+        // the wheel: a notch is three rows; PgDn stops at the last row, which is the legend's
+        assert!(!closes(&mouse(MouseEventKind::ScrollUp), &mut scroll));
+        assert_eq!(scroll.offset(), 0);
+        assert!(!closes(&mouse(MouseEventKind::ScrollDown), &mut scroll));
+        assert_eq!(scroll.offset(), 3);
+        for _ in 0..3 {
+            assert!(!closes(&key(KeyCode::PageDown), &mut scroll));
+        }
+        let bottom = render(w, h - 6, &mut scroll);
+        assert_eq!(scroll.offset(), scroll.max_offset());
+        assert_eq!(row(&bottom, page), row(&full, h - 1));
+        assert!(row(&bottom, 0).ends_with(&format!(" {}-{}/{}", scroll.max_offset() + 1, h - 1, h - 1)), "{}", row(&bottom, 0));
+    }
+
+    #[test]
+    fn any_key_that_does_not_scroll_closes_the_legend_and_so_does_a_click() {
+        let mut scroll = Scroll::default();
+        scroll.resize(50, 10);
+        for code in [KeyCode::Char('q'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char(' '), KeyCode::Char('J'), KeyCode::Home] {
+            assert!(closes(&key(code), &mut scroll), "{code:?}");
+        }
+        for code in [KeyCode::Up, KeyCode::Down, KeyCode::Char('j'), KeyCode::Char('k'), KeyCode::PageUp, KeyCode::PageDown] {
+            assert!(!closes(&key(code), &mut scroll), "{code:?}");
+        }
+        let mut release = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        assert!(!closes(&Event::Key(release), &mut scroll));
+        assert!(closes(&mouse(MouseEventKind::Down(MouseButton::Left)), &mut scroll));
+        for kind in [MouseEventKind::ScrollUp, MouseEventKind::ScrollDown, MouseEventKind::Moved, MouseEventKind::Up(MouseButton::Left)] {
+            assert!(!closes(&mouse(kind), &mut scroll), "{kind:?}");
+        }
+        assert!(!closes(&Event::FocusGained, &mut scroll));
     }
 }

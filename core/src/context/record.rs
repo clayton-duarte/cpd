@@ -167,7 +167,7 @@ impl Record {
             id: PlanId,
             machine: MachineName,
             #[serde(default)]
-            #[allow(dead_code)]
+            #[allow(dead_code)] // Accepted so `deny_unknown_fields` takes a pre-R34 record; never read.
             repo: Option<String>,
             #[serde(default)]
             jira: Option<String>,

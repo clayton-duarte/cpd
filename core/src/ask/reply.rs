@@ -5,7 +5,7 @@ use serde_json::json;
 
 use super::{AnswerArgs, Env};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
 
@@ -49,7 +49,7 @@ pub(super) fn answer(args: AnswerArgs) -> Result<Output, CpdError> {
         let text = format!("Escalation {id} of Attempt {attempt} was answered. Next: cpd attempt show {attempt} --plan {plan}");
         append(
             tx,
-            NewEvent::new(Kind::EscalationAnswered, text, json!({"escalation": id.to_string()}))
+            NewEvent::escalation_answered(text, id.to_string())
                 .plan(plan.clone())
                 .job(job.clone())
                 .attempt(AttemptId::clone(&attempt)),

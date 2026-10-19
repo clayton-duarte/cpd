@@ -9,12 +9,16 @@
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
 //! - [`send`]: `session send`, one message to a Lead;
 //! - [`port`]: a Plan's plannotator port;
-//! - [`run`]: `session run`, the program in every Lead pane (§6.7).
+//! - [`run`]: `session run`, the program in every Lead pane (§6.7);
+//! - `reload`: when it restarts pi (reload on install, adapter watchdog);
+//! - `fork_wait`: a fork's wait for its source Lead to finish its turn.
 
 mod archive;
+mod fork_wait;
 mod history;
 mod moves;
 mod port;
+mod reload;
 mod resolve;
 mod row;
 pub(crate) mod run;
@@ -24,16 +28,14 @@ mod state;
 use std::path::PathBuf;
 
 use crate::args::{Name, SessionArg, SessionRef, Text};
-use crate::config::Config;
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
 use crate::host::Tmux;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
-use crate::store::Store;
 
 pub use archive::{Blocker, archive_blocked, blockers};
-pub use moves::{Closed, close_lead};
+pub use moves::{Closed, Place, Placed, close_lead, placed, reopen};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
@@ -191,6 +193,9 @@ pub struct StateArgs {
     /// Why it is blocked: required with `blocked`, refused otherwise
     #[arg(long, value_name = "text")]
     label: Option<Label>,
+    /// The run that ended answered a message the User wrote to this Session: allowed only with `idle`
+    #[arg(long)]
+    reply: bool,
     #[command(flatten)]
     session: SessionArg,
 }
@@ -227,21 +232,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
 impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
-    }
-
     /// The Session `reference` names (commands.md §1.3), resolved once at the boundary.
     fn resolve(&mut self, reference: &SessionRef) -> Result<SessionId, CpdError> {
         self.store.read(|conn| resolve::resolve(conn, reference))
@@ -269,10 +260,4 @@ pub(crate) fn no_cockpit(cockpit: &str) -> CpdError {
     )
     .with("cockpit_session", cockpit)
     .with("next", "cpd tui")
-}
-
-/// A row the database holds in a shape the binary does not accept: the
-/// database was changed outside cpd, or by a bug.
-fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid Session row: {what}."))
 }

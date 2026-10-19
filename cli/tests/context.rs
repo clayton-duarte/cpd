@@ -35,13 +35,12 @@ fn old_dir(env: &TestEnv) -> PathBuf {
 }
 
 fn new_context(env: &TestEnv) {
-    env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
+    env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
 }
 
+/// [`common::refused`], and nothing on stderr.
 fn refused(run: Run, exit: i32, expected: &str) -> Value {
-    let error = run.error();
-    assert_eq!(run.exit, exit, "{run:?}");
-    assert_eq!(error["code"], expected, "{error}");
+    let error = common::refused(&run, expected, exit);
     assert_eq!(run.stderr, "", "{run:?}");
     error
 }
@@ -86,7 +85,7 @@ fn fixture_plan(env: &TestEnv, plan: &str, context: &str) {
 #[test]
 fn new_writes_the_row_and_the_event_and_nothing_else() {
     let env = hs();
-    let out = env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--jira", "CPD-12"]).ok();
+    let out = env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme", "--jira", "CPD-12"]).ok();
     let context = &out["context"];
     assert_eq!(context["id"], CTX);
     assert_eq!(context["title"], "Building cpd");
@@ -107,8 +106,8 @@ fn new_writes_the_row_and_the_event_and_nothing_else() {
 #[test]
 fn new_is_idempotent_for_the_same_title_and_jira() {
     let env = hs();
-    env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
-    let again = env.cpd(&["context", "new", CTX, "--title", "Building cpd"]).ok();
+    env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
+    let again = env.cpd(&["context", "new", CTX, "--title", "Building cpd", "--owner", "acme"]).ok();
     assert_eq!(again["already"], true);
     assert_eq!(again["context"]["id"], CTX);
     assert_eq!(events(&env, "context-created").len(), 1);
@@ -119,8 +118,8 @@ fn new_refuses_an_existing_context_with_another_title_or_jira() {
     let env = hs();
     new_context(&env);
     for args in [
-        vec!["context", "new", CTX, "--title", "Another"],
-        vec!["context", "new", CTX, "--title", "Building cpd", "--jira", "CPD-1"],
+        vec!["context", "new", CTX, "--title", "Another", "--owner", "acme"],
+        vec!["context", "new", CTX, "--title", "Building cpd", "--owner", "acme", "--jira", "CPD-1"],
     ] {
         refused(env.cpd(&args), 3, "context_exists");
     }
@@ -129,14 +128,68 @@ fn new_refuses_an_existing_context_with_another_title_or_jira() {
 #[test]
 fn new_checks_its_arguments() {
     let env = hs();
-    refused(env.cpd(&["context", "new", "Bad_Id", "--title", "T"]), 2, "invalid_context_id");
-    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--jira", "cpd-1"]), 2, "usage");
-    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--jira", "C-1"]), 2, "usage");
-    refused(env.cpd(&["context", "new", CTX, "--title", ""]), 2, "usage");
+    refused(env.cpd(&["context", "new", "Bad_Id", "--title", "T", "--owner", "acme"]), 2, "invalid_context_id");
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "acme", "--jira", "cpd-1"]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "acme", "--jira", "C-1"]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX, "--title", "", "--owner", "acme"]), 2, "usage");
     refused(env.cpd(&["context", "new", CTX]), 2, "usage");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]));
     let no_config = TestEnv::new();
-    refused(no_config.cpd(&["context", "new", CTX, "--title", "T"]), 1, "config_missing");
+    refused(no_config.cpd(&["context", "new", CTX, "--title", "T", "--owner", "acme"]), 1, "config_missing");
+}
+
+#[test]
+fn new_requires_an_owner_with_a_policy_file_and_stores_it_lowercased() {
+    let env = hs();
+    // No `--owner`: a clap usage error.
+    refused(env.cpd(&["context", "new", CTX, "--title", "T"]), 2, "usage");
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "-bad-"]), 2, "usage");
+    // An owner without `policy/owners/<login>.toml`.
+    let error = refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "nobody"]), 1, "owner_unknown");
+    assert_eq!(error["details"]["owner"], "nobody");
+    assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]), "nothing written");
+    // The login is lowercased before the file is looked up.
+    let out = env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "ACME"]).ok();
+    assert_eq!(out["context"]["owner"], "acme");
+    // The same Context with another owner is `context_exists`.
+    fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+    refused(env.cpd(&["context", "new", CTX, "--title", "T", "--owner", "other"]), 3, "context_exists");
+}
+
+/// Makes a Context that has no owner, as one made before the policy keys.
+fn clear_owner(env: &TestEnv) {
+    let (_, _, mut store) = library(env);
+    store.write("test", |tx| Ok(tx.execute("UPDATE contexts SET owner = NULL", []).map(|_| ())?)).unwrap();
+}
+
+#[test]
+fn owner_sets_the_owner_once_and_appends_context_owner() {
+    let env = hs();
+    new_context(&env);
+    clear_owner(&env);
+    fs::write(env.cpd_home().join("policy/owners/other.toml"), "").unwrap();
+
+    let error = refused(env.cpd(&["context", "owner", "nobody", "--context", CTX]), 1, "owner_unknown");
+    assert_eq!(error["details"]["owner"], "nobody");
+    assert_eq!(events(&env, "context-owner").len(), 0);
+    refused(env.cpd(&["context", "owner", "acme", "--context", "no-such"]), 4, "context_not_found");
+    refused(env.cpd(&["context", "owner", "acme"]), 2, "context_required");
+
+    let out = env.cpd(&["context", "owner", "ACME", "--context", CTX]).ok();
+    assert_eq!(out["context"], json!({"id": CTX, "owner": "acme"}));
+    assert!(out.get("already").is_none());
+    let owner = events(&env, "context-owner");
+    assert_eq!(owner.len(), 1);
+    assert_eq!((owner[0]["context"].clone(), owner[0]["data"].clone()), (json!(CTX), json!({"owner": "acme"})));
+
+    // The same owner again writes nothing; another owner is `owner_set`.
+    let again = env.cpd(&["context", "owner", "acme", "--context", CTX]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(events(&env, "context-owner").len(), 1);
+    let error = refused(env.cpd(&["context", "owner", "other", "--context", CTX]), 3, "owner_set");
+    assert_eq!(error["details"]["context"], CTX);
+    assert_eq!(error["details"]["owner"], "acme");
+    assert_eq!(events(&env, "context-owner").len(), 1);
 }
 
 #[test]
@@ -338,7 +391,7 @@ fn list_summarises_every_context() {
     let env = hs();
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"], json!([]));
     new_context(&env);
-    env.cpd(&["context", "new", "home-lab", "--title", "Home lab", "--jira", "LAB-3"]).ok();
+    env.cpd(&["context", "new", "home-lab", "--title", "Home lab", "--owner", "acme", "--jira", "LAB-3"]).ok();
     env.cpd(&["context", "ask", "One?", "--context", CTX]).ok();
     env.cpd(&["context", "ask", "Two?", "--context", CTX]).ok();
     env.cpd(&["context", "answer", "hs-q1", "Yes.", "--context", CTX]).ok();
@@ -512,7 +565,7 @@ fn show_record_refusals() {
     refused(env.cpd(&["context", "show", "--context", CTX, "--record", "hs-b1", "--since", "0"]), 2, "usage");
     refused(env.cpd(&["context", "show", "--context", "nope-ctx", "--record", "hs-b1"]), 4, "context_not_found");
     // A record of another Context is not found.
-    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
+    env.cpd(&["context", "new", "other", "--title", "Other", "--owner", "acme"]).ok();
     refused(env.cpd(&["context", "show", "--context", "other", "--record", "hs-b1"]), 3, "record_not_found");
 }
 
@@ -599,9 +652,9 @@ fn titles_are_1_to_200_characters_with_no_control_characters() {
     let env = hs();
     let (long, ok) = ("a".repeat(201), "a".repeat(200));
     for title in [long.as_str(), "a\nb", "a\tb", "a\u{7f}b"] {
-        refused(env.cpd(&["context", "new", CTX, "--title", title]), 2, "usage");
+        refused(env.cpd(&["context", "new", CTX, "--title", title, "--owner", "acme"]), 2, "usage");
     }
-    env.cpd(&["context", "new", CTX, "--title", &ok]).ok();
+    env.cpd(&["context", "new", CTX, "--title", &ok, "--owner", "acme"]).ok();
     for title in [long.as_str(), "a\nb", "a\tb"] {
         refused(env.cpd(&["context", "rename", CTX, "--title", title]), 2, "usage");
         // Validated before the Context is looked up.
@@ -624,15 +677,6 @@ fn hs_tmux() -> TestEnv {
     env
 }
 
-fn sql(env: &TestEnv, sql: &str) {
-    let (_, _, mut store) = library(env);
-    store.write("fixture", |tx| {
-        tx.execute_batch(sql)?;
-        Ok(())
-    })
-    .unwrap();
-}
-
 fn count(env: &TestEnv, sql: &str) -> i64 {
     let (_, _, mut store) = library(env);
     store.read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
@@ -653,7 +697,7 @@ fn pane(env: &TestEnv, id: &str) -> String {
     assert!(started.status.success(), "{}", String::from_utf8_lossy(&started.stderr));
     let pane = String::from_utf8(started.stdout).unwrap().trim().to_owned();
     assert!(env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]).status.success());
-    sql(env, &format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
+    env.sql(&format!("UPDATE sessions SET tmux_pane = '{pane}' WHERE id = '{id}'"));
     pane
 }
 
@@ -679,12 +723,11 @@ fn event_count(env: &TestEnv) -> i64 {
 /// `side`. Live parked panes: `lead-pay`, `fork-pay` and `manager`.
 fn archivable(env: &TestEnv) {
     new_context(env);
-    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
+    env.cpd(&["context", "new", "other", "--title", "Other", "--owner", "acme"]).ok();
     fixture_plan(env, "pay", CTX);
     fixture_plan(env, "ship", CTX);
     fixture_plan(env, "side", "other");
-    sql(
-        env,
+    env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
            VALUES ('fork-pay', 'lead', 'building-cpd', 'pay', 'Fork', '/', 'O3', 'stopped', 't', 't1', 'lead-pay'),
                   ('manager', 'manager', 'building-cpd', NULL, 'Manager', '/', 'O5', 'idle', 't', 't0', NULL);
@@ -767,7 +810,7 @@ fn archive_refused_by_any_one_blocker_changes_nothing() {
     for (kind, apply) in blockers {
         let env = hs_tmux();
         archivable(&env);
-        sql(&env, &apply);
+        env.sql(&apply);
         let (events_before, panes_before) = (event_count(&env), live_panes(&env));
         let error = refused(env.cpd(&["context", "archive", CTX]), 3, "archive_blocked");
         let listed = error["details"]["blockers"].as_array().unwrap();
@@ -917,7 +960,7 @@ fn record_of(id: &RecordId) -> Record {
 }
 
 #[test]
-fn a_digest_missing_one_of_the_unplanned_records_is_rejected() {
+fn a_digest_missing_a_decision_or_open_question_of_the_unplanned_records_is_rejected() {
     let wanted = unplanned_ids();
     for known in ["hs-d62", "hs-d194", "hs-n127", "hs-n107", "hs-d163"] {
         assert!(wanted.contains(&known.parse().unwrap()), "{known} is in unplanned.md: {wanted:?}");
@@ -927,23 +970,39 @@ fn a_digest_missing_one_of_the_unplanned_records_is_rejected() {
     // The Context holds each of them, in force.
     let records: Vec<(i64, Record)> = wanted.iter().enumerate().map(|(i, id)| (i as i64 + 1, record_of(id))).collect();
     let as_of = records.len() as i64;
-    let in_force: Vec<RecordId> = inforce::in_force(&records, as_of).into_iter().map(|(_, r)| r.id.clone()).collect();
-    assert_eq!(in_force, wanted);
+    let in_force = inforce::in_force(&records, as_of);
+    assert_eq!(in_force.iter().map(|(_, r)| r.id.clone()).collect::<Vec<_>>(), wanted);
+    let expect = digest::Expect::of(&in_force);
+
+    // The topic sections must cite every decision and open question (D-a); a note, an answer and an answered
+    // question are listed by cpd's index, so a digest may leave them out.
+    let answered: Vec<&RecordId> = in_force.iter().filter_map(|(_, r)| r.question()).collect();
+    let required = |id: &RecordId| match id.kind() {
+        RecordKind::Decision => true,
+        RecordKind::Question => !answered.contains(&id),
+        _ => false,
+    };
+    assert!(wanted.iter().any(|id| required(id)) && wanted.iter().any(|id| !required(id)), "both kinds are exercised");
 
     let digest_of = |ids: &[&RecordId]| ids.iter().map(|id| format!("- Statement [{id}].\n")).collect::<String>();
     let all: Vec<&RecordId> = wanted.iter().collect();
-    assert_eq!(digest::validate(digest_of(&all).as_bytes(), &in_force, digest::LIMIT), Ok(()));
+    assert_eq!(digest::validate(digest_of(&all).as_bytes(), &expect, digest::LIMIT), Ok(()));
 
     for left_out in &wanted {
         let some: Vec<&RecordId> = wanted.iter().filter(|id| *id != left_out).collect();
-        let invalid = digest::validate(digest_of(&some).as_bytes(), &in_force, digest::LIMIT).unwrap_err();
-        assert_eq!(invalid.missing, [left_out.clone()], "leaving out {left_out}");
-        assert!(invalid.stray.is_empty());
+        let result = digest::validate(digest_of(&some).as_bytes(), &expect, digest::LIMIT);
+        if required(left_out) {
+            let invalid = result.unwrap_err();
+            assert_eq!(invalid.missing, [left_out.clone()], "leaving out {left_out}");
+            assert!(invalid.stray.is_empty());
+        } else {
+            assert_eq!(result, Ok(()), "leaving out {left_out}, which cpd's index lists");
+        }
     }
 
     // Citing a record that is no longer in force is refused too.
     let mut with_stray = digest_of(&all);
     with_stray.push_str("- Old [hs-d1].\n");
-    let invalid = digest::validate(with_stray.as_bytes(), &in_force, digest::LIMIT).unwrap_err();
+    let invalid = digest::validate(with_stray.as_bytes(), &expect, digest::LIMIT).unwrap_err();
     assert_eq!((invalid.missing.is_empty(), invalid.stray), (true, vec!["hs-d1".parse().unwrap()]));
 }

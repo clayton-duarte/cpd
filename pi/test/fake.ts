@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
 import { PROTOCOL } from "../lib/event.ts";
-import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, MessageRenderer, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
+import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
 
@@ -25,7 +25,7 @@ async function follow() {
   process.on("SIGTERM", () => { fs.writeFileSync(path.join(dir, "killed-" + process.pid), "1"); process.exit(143); });
   fs.appendFileSync(path.join(dir, "follower.pids"), process.pid + "\\n");
   let done = 0;
-  for (;;) {
+  const print = () => {
     const lines = (read("events.jsonl") || "").split("\\n").filter(Boolean);
     while (done < lines.length) {
       const line = lines[done++];
@@ -34,6 +34,9 @@ async function follow() {
       if (Number.isSafeInteger(id) && id <= since) continue;
       process.stdout.write(line + "\\n");
     }
+  };
+  for (;;) {
+    print();
     const failure = read("follow-failure.json");
     if (failure !== undefined) {
       const f = JSON.parse(failure);
@@ -41,7 +44,8 @@ async function follow() {
       process.exit(f.exit);
     }
     const exitNext = read("exit-next");
-    if (exitNext !== undefined) { fs.rmSync(path.join(dir, "exit-next")); process.exit(Number(exitNext)); }
+    // every line emitted before \`exit-next\` is printed before the exit: a test's Events reach the adapter before the restart
+    if (exitNext !== undefined) { print(); fs.rmSync(path.join(dir, "exit-next")); process.exit(Number(exitNext)); }
     await sleep(10);
   }
 }
@@ -91,6 +95,7 @@ export class Fixture {
   readonly cpdHome = join(this.dir, "cpd-home");
   /** Stands for the adapter's installed directory (`options.reload.dir`). */
   readonly adapterDir = join(this.dir, "adapter");
+  readonly agentDir = join(this.dir, "agent");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
 
@@ -103,15 +108,17 @@ export class Fixture {
     chmodSync(join(this.dir, "bin", "pi"), 0o755);
     writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
-    for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
+    for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME", "PI_CODING_AGENT_DIR"]) this.saved[k] = process.env[k];
     process.env.PATH = `${join(this.dir, "bin")}:${process.env.PATH}`;
     process.env.FAKE_CPD_DIR = this.dir;
     process.env.CPD_SESSION = ID;
     process.env.CPD_HOME = this.cpdHome;
+    process.env.PI_CODING_AGENT_DIR = this.agentDir; // pi's agent directory: where the adapter reads `compact-tools.json` (commands.md §15.9)
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
     this.respond("session-show", sessionShow());
     this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.7)
+    this.respond("policy-show", policyShow()); // no text anywhere: no section
     this.respond("--version", { ok: true, version: "0.0.0", schema: 6, store_schema: 6, protocol: PROTOCOL });
   }
 
@@ -131,8 +138,15 @@ export class Fixture {
 
   /** Appends Event lines (objects or raw strings) to what the fake follower prints. */
   emit(...lines: unknown[]): void {
-    for (const l of lines) appendFileSync(join(this.dir, "events.jsonl"), (typeof l === "string" ? l : JSON.stringify(l)) + "\n");
+    for (const l of lines) {
+      appendFileSync(join(this.dir, "events.jsonl"), (typeof l === "string" ? l : JSON.stringify(l)) + "\n");
+      const id = (l as { id?: unknown }).id;
+      if (typeof id === "number") this.lastId = Math.max(this.lastId, id);
+    }
   }
+
+  /** The highest Event id emitted so far (a `drain` marker follows it, and a restart's cursor passes it). */
+  private lastId = 0;
 
   file(name: string, content: string): void {
     this.write(name, content);
@@ -162,9 +176,14 @@ export class Fixture {
     return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   }
 
-  /** argv of the calls that started, in order, without `events follow`. */
+  /** argv of the calls that started, in order, without `events follow`, `--version` and `policy show` (see `policyCalls`). */
   argvs(): string[][] {
-    return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events" && c.argv[0] !== "--version").map((c) => c.argv);
+    return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events" && c.argv[0] !== "--version" && c.argv[0] !== "policy").map((c) => c.argv);
+  }
+
+  /** argv of the `cpd policy …` calls that started. */
+  policyCalls(): string[][] {
+    return this.calls().filter((c) => c.phase === "start" && c.argv[0] === "policy").map((c) => c.argv);
   }
 
   /** How often the adapter ran `cpd --version`. */
@@ -190,15 +209,43 @@ export class Fixture {
     return existsSync(join(this.dir, `killed-${pid}`));
   }
 
-  /** Start the adapter under test with fast timing. */
-  load(options: Options = {}): void {
+  /** Start the adapter under test with fast timing; into `pi` (default the fixture's) to run a second adapter on the same fake `cpd`. */
+  load(options: Options = {}, pi: FakePi = this.pi): void {
     const start = options.spawn ?? spawn;
-    adapter(this.pi, {
+    adapter(pi, {
       ...options,
-      spawn: ((...args: Parameters<typeof spawn>) => this.pi.track(start(...args))) as typeof spawn,
+      spawn: ((...args: Parameters<typeof spawn>) => pi.track(start(...args))) as typeof spawn,
       timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
       reload: { dir: this.adapterDir, intervalMs: 20, ...options.reload },
     });
+  }
+
+  /** Resolves when no `cpd` call is in flight and none can start from what already ran: calls start in the same macrotask as the work that wants them, so one macrotask boundary with none running is quiet. */
+  async quiet(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+    await waitFor("no cpd call in flight", () => this.pi.execsRunning.size === 0);
+  }
+
+  /** Resolves when every fake follower started so far is gone and node has seen it end. */
+  async exited(): Promise<void> {
+    await waitFor("every fake follower to exit", () => this.pids().every((pid) => !alive(pid)), 10_000);
+    await new Promise((resolve) => setImmediate(resolve)); // the `close` event of a child follows its exit
+  }
+
+  /**
+   * Resolves when every Event emitted so far was handled, and the calls it made are done. Events are handled in order, so an Event delivered after
+   * them proves it: `marker` (default a `job-merged`, delivered to a Plan Lead; a Worker needs its own kind) is emitted last, with the id after the highest so far
+   * (a test's next Event must have a higher one, as the cursor has passed it), waited for and taken out of what the pi received, so the test can assert what is left. Replaces waiting a fixed time for something that must not happen.
+   */
+  async drain(marker: (id: number) => unknown = (id) => ev(id, "job-merged")): Promise<void> {
+    const id = this.lastId + 1;
+    this.emit(marker(id));
+    const at = await waitFor(`the marker Event ${id}`, () => {
+      const i = this.pi.sent.findIndex((s) => (s.message.details as any)?.id === id);
+      return i >= 0 ? { i } : undefined;
+    });
+    this.pi.sent.splice(at.i, 1);
+    await this.quiet();
   }
 
   async close(): Promise<void> {
@@ -239,6 +286,15 @@ export const sessionShow = (over: Record<string, unknown> = {}) => ({
   open_escalations: [],
 });
 
+/** A `cpd policy show` output (commands.md §22.1): the domains of contract §8.3, each with its audience; `texts` sets a domain's text and `source`. */
+export const policyShow = (role = "lead", texts: Record<string, string> = {}, source = "owner:/p/o.toml") => {
+  const audience: Record<string, string[]> = {
+    pr: ["lead", "worker"], deploy: ["lead"], code: ["lead", "worker"], tests: ["lead", "worker"], monitor: ["lead", "worker"], instructions: ["manager", "lead", "worker"],
+  };
+  const policy = Object.fromEntries(Object.entries(audience).map(([d, a]) => [d, { source: d in texts ? source : "default", audience: a, keys: {}, text: texts[d] ?? "" }]));
+  return { ok: true, key: { owner: "o", repo: null }, role, files: [], policy };
+};
+
 export const planShow = (over: Record<string, unknown> = {}) => ({ ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null, ...over });
 
 export const ev = (id: number, kind: string, over: Record<string, unknown> = {}) => ({
@@ -253,7 +309,7 @@ export class FakePi implements PiApi {
   readonly sent: Sent[] = [];
   /** The session's entries, as pi's `getEntries()` returns them: messages and custom entries appended so far. */
   entries: unknown[] = [];
-  readonly tools: ToolDefinition[] = [];
+  readonly tools: ToolDefinition<any, any, any>[] = [];
   readonly notices: string[] = [];
   /** The notices shown with level `error`. */
   readonly errorNotices: string[] = [];
@@ -271,7 +327,7 @@ export class FakePi implements PiApi {
   /** Commands started by `sendUserMessage` and not finished. */
   readonly commandsRunning = new Set<Promise<void>>();
   readonly userMessages: { content: string; options: { expandPromptTemplates: boolean } }[] = [];
-  mode = "tui";
+  mode: Ctx["mode"] = "tui";
   sessionId = ID;
 
   readonly events = {
@@ -285,10 +341,11 @@ export class FakePi implements PiApi {
     },
   };
 
-  on(event: string, handler: (event: any, ctx: Ctx) => unknown): () => void {
+  /** pi types `on` as one overload per event; the fake keeps every handler by name and fires it with a `Ctx`. */
+  readonly on = ((event: string, handler: (event: any, ctx: Ctx) => unknown): (() => void) => {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
     return () => {};
-  }
+  }) as PiApi["on"];
 
   /** The `exec` calls (argv, without the command) started and not yet finished: a call is in flight from the moment the adapter makes it, however long the process takes to start. */
   readonly execsRunning = new Set<string[]>();
@@ -318,10 +375,11 @@ export class FakePi implements PiApi {
   /** What `exec` was called with, in order. */
   readonly execOptions: { command: string; args: string[]; options: ExecOptions }[] = [];
 
-  sendMessage(message: Message, options: SendOptions): void {
-    this.sent.push({ message, options });
+  readonly sendMessage: PiApi["sendMessage"] = (message, options) => {
+    if (!options || typeof message.content !== "string") throw new Error("the adapter always passes send options and a string content");
+    this.sent.push({ message: { ...message, content: message.content }, options });
     this.entries.push({ type: "custom_message", customType: message.customType, content: message.content, display: message.display, details: message.details });
-  }
+  };
 
   appendEntry(customType: string, data: unknown): void {
     this.entries.push({ type: "custom", customType, data });
@@ -335,14 +393,21 @@ export class FakePi implements PiApi {
     return this.sessionName;
   }
 
-  readonly renderers = new Map<string, MessageRenderer>();
+  /** The renderers registered, by custom type, with pi's own renderer type. */
+  readonly renderers = new Map<string, Parameters<PiApi["registerMessageRenderer"]>[1]>();
 
-  registerMessageRenderer(customType: string, renderer: MessageRenderer): void {
-    this.renderers.set(customType, renderer);
-  }
+  readonly registerMessageRenderer: PiApi["registerMessageRenderer"] = (customType, renderer) => {
+    this.renderers.set(customType, renderer as Parameters<PiApi["registerMessageRenderer"]>[1]);
+  };
 
-  registerTool(tool: ToolDefinition): void {
+  readonly registerTool: PiApi["registerTool"] = (tool) => {
     this.tools.push(tool);
+  };
+
+  /** Runs a registered tool like pi does. The adapter's tool reads nothing of the tool context, so the fake passes none of pi's. */
+  async runTool(tool: ToolDefinition<any, any, any>): Promise<{ text: string; details: unknown }> {
+    const out = await tool.execute("call-1", {}, undefined, undefined, undefined as never);
+    return { text: out.content.map((c) => (c.type === "text" ? c.text : "")).join(""), details: out.details };
   }
 
   registerCommand(name: string, options: { handler: (args: string, ctx: CommandCtx) => Promise<void> }): void {
@@ -360,14 +425,19 @@ export class FakePi implements PiApi {
     this.commandsRunning.add(running);
   }
 
+  /** What `ctx.isProjectTrusted()` answers. */
+  trusted = false;
+
   ctx(): Ctx {
     return {
       mode: this.mode,
+      cwd: join(tmpdir(), "pi-test-no-such-project"),
+      isProjectTrusted: () => this.trusted,
       ui: { notify: (m, level) => {
           this.notices.push(m);
           if (level === "error") this.errorNotices.push(m);
         }, getEditorText: () => this.editorText },
-      sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries },
+      sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]> },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
     };
@@ -396,11 +466,21 @@ export class FakePi implements PiApi {
     for (const h of this.handlers.get(event) ?? []) await h({ type: event, ...payload }, this.ctx());
   }
 
-  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). */
+  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). The adapter's `markReply` and `policyHandler` observers add no message and are left out, so the list stays what the handlers that add a message returned. */
   async fireWith(event: string, payload: Record<string, unknown> = {}): Promise<unknown[]> {
     const out: unknown[] = [];
-    for (const h of this.handlers.get(event) ?? []) out.push(await h({ type: event, ...payload }, this.ctx()));
+    for (const h of this.handlers.get(event) ?? []) {
+      const result = await h({ type: event, ...payload }, this.ctx());
+      if (h.name !== "markReply" && h.name !== "policyHandler") out.push(result);
+    }
     return out;
+  }
+
+  /** A run is active and a tool call is in progress: what a busy Lead looks like to the adapter. */
+  async busy(): Promise<void> {
+    this.idle = false;
+    await this.fire("agent_start");
+    await this.fire("tool_execution_start", { toolCallId: "t1", toolName: "bash", args: {} });
   }
 
   /** `cpd` messages delivered (not the adapter's own errors). */
@@ -422,9 +502,6 @@ export async function waitFor<T>(what: string, fn: () => T | undefined | null | 
     await sleep(10);
   }
 }
-
-/** Wait long enough for something that must NOT happen. */
-export const settle = (ms = 150) => sleep(ms);
 
 /** `session state` argvs, without the session id, as `idle` or `blocked:<label>`. */
 export const stateCalls = (f: Fixture): string[] =>

@@ -708,3 +708,75 @@ fn no_code_selects_star_or_inserts_without_a_column_list() {
         offences.join("\n")
     );
 }
+
+// ---------------------------------------------------------------------------
+// `policy-keys` (contract §4.5 "The policy keys"): the fill
+// ---------------------------------------------------------------------------
+
+/// A store before `policy-keys` with three Contexts: `one` (its PRs' pull requests are of `Acme`, mixed
+/// case, so lowercased), `two` (pull requests of `acme` and `other`) and `none` (PRs without a pull request).
+const BEFORE_POLICY_KEYS: &str = "
+BEGIN;
+INSERT INTO txns (id, at, command, pid, cwd) VALUES (1, 't', 'test', 1, '/');
+INSERT INTO contexts (id, title, created_at, created_on) VALUES ('one', 'One', 't', 'm'), ('two', 'Two', 't', 'm'), ('none', 'None', 't', 'm');
+INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
+  ('l-p1', 'lead', 'one', 'p1', 'lead', '/', 'O3', 'idle', 't', 't'),
+  ('l-p2', 'lead', 'two', 'p2', 'lead', '/', 'O3', 'idle', 't', 't'),
+  ('l-p3', 'lead', 'none', 'p3', 'lead', '/', 'O3', 'idle', 't', 't');
+INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
+  ('p1', 'one', 'P1', 'grounding', 'l-p1', 't'), ('p2', 'two', 'P2', 'grounding', 'l-p2', 't'), ('p3', 'none', 'P3', 'grounding', 'l-p3', 't');
+INSERT INTO pull_requests (id, repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at) VALUES
+  (1, 'Acme/Web', 1, 'u1', 'T', 0, 'open', 'none', 'none', 't', 't'),
+  (2, 'acme/pay', 2, 'u2', 'T', 0, 'open', 'none', 'none', 't', 't'),
+  (3, 'acme/x', 3, 'u3', 'T', 0, 'open', 'none', 'none', 't', 't'),
+  (4, 'other/y', 4, 'u4', 'T', 0, 'open', 'none', 'none', 't', 't');
+INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request, created_txn, created_at, started_at) VALUES
+  ('p1', 'web', 'web', 'main', 'open', 'cpd/p1/web', '/w', 1, 'u1', 't', 1, 1, 't', 't'),
+  ('p1', 'pay', 'pay', 'main', 'open', 'cpd/p1/pay', '/w', 2, 'u2', 't', 2, 1, 't', 't'),
+  ('p1', 'doc', 'doc', 'main', 'waiting', 'cpd/p1/doc', NULL, NULL, NULL, NULL, NULL, 1, 't', NULL),
+  ('p2', 'x', 'x', 'main', 'open', 'cpd/p2/x', '/w', 3, 'u3', 't', 3, 1, 't', 't'),
+  ('p2', 'y', 'y', 'main', 'open', 'cpd/p2/y', '/w', 4, 'u4', 't', 4, 1, 't', 't'),
+  ('p3', 'z', 'z', 'main', 'waiting', 'cpd/p3/z', NULL, NULL, NULL, NULL, NULL, 1, 't', NULL);
+COMMIT;";
+
+#[test]
+fn policy_keys_fills_the_owner_and_the_name_and_keeps_every_row() {
+    let list = named_migrations();
+    let index = list.iter().position(|(name, ..)| name.ends_with("-policy-keys")).expect("the migration exists");
+    assert_eq!(list[index].1, "breaking");
+    let dir = tempfile::tempdir().unwrap();
+    let conn = prefix_database(index, &home_in(&dir)).unwrap();
+    conn.execute_batch(BEFORE_POLICY_KEYS).unwrap();
+    let count = |sql: &str| conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
+    let before = (count("SELECT count(*) FROM contexts"), count("SELECT count(*) FROM prs"), count("SELECT count(*) FROM pull_requests"));
+    assert_eq!(before, (3, 6, 4));
+
+    conn.execute_batch(list[index].2).unwrap();
+
+    let after = (count("SELECT count(*) FROM contexts"), count("SELECT count(*) FROM prs"), count("SELECT count(*) FROM pull_requests"));
+    assert_eq!(after, before, "every row kept");
+    let strings = |sql: &str| -> Vec<(String, Option<String>)> {
+        conn.prepare(sql).unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().collect::<Result<_, _>>().unwrap()
+    };
+    let owner = |c: &str| (c.to_owned(), None::<String>);
+    assert_eq!(
+        strings("SELECT id, owner FROM contexts ORDER BY id"),
+        [owner("none"), ("one".to_owned(), Some("acme".to_owned())), owner("two")],
+        "one owner is filled lowercased; two owners and none stay NULL"
+    );
+    let name = |k: &str, n: Option<&str>| (k.to_owned(), n.map(str::to_owned));
+    assert_eq!(
+        strings("SELECT plan || '/' || key, name FROM prs ORDER BY plan, key"),
+        [
+            name("p1/doc", None),
+            name("p1/pay", Some("pay")),
+            name("p1/web", Some("web")),
+            name("p2/x", Some("x")),
+            name("p2/y", Some("y")),
+            name("p3/z", None),
+        ],
+        "a PR with a pull request gets its lowercased name; one without keeps NULL"
+    );
+    assert_eq!(count("SELECT count(*) FROM event_kinds WHERE name = 'context-owner'"), 1);
+    assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
+}

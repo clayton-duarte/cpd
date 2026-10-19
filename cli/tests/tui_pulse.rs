@@ -3,8 +3,7 @@
 
 mod common;
 
-use common::TestEnv;
-use cpd_core::error::CpdError;
+use common::{TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
 use cpd_core::store::Store;
@@ -16,15 +15,6 @@ const FP: &str = "00000000000000000000000000000000000000000000000000000000000000
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn ctx(id: &str) -> ContextId {
@@ -205,7 +195,7 @@ fn every_activity_kind_counts_and_the_others_do_not() {
     ];
     let ignored = [
         "session-moved", "session-registered", "session-renamed", "session-archived", "session-message", "context-created",
-        "context-record", "context-grounded", "context-renamed", "context-archived", "plan-created", "plan-renamed",
+        "context-record", "context-grounded", "context-renamed", "context-owner", "context-archived", "plan-created", "plan-renamed",
         "plan-archived", "watch-started", "watch-stopped",
     ];
     let mut s = String::new();
@@ -345,11 +335,22 @@ fn quiet_needs_work_no_attempt_no_recent_activity_and_a_lead_not_waiting_on_the_
     // Another Plan, still without activity: the Lead waiting on the User, then an Attempt not ended.
     sql(&mut store, &job("p2", "q", "queued"));
     assert!(quiet(&mut store, "p2"));
-    sql(&mut store, "UPDATE sessions SET state = 'blocked', state_label = 'cpd: PR feedback' WHERE id = 'l-p2';");
+    // The Lead waits on the User: blocked, with the open `dialog` item the engine's E8 gives it (the dots come from
+    // the Inbox, commands.md §17).
+    sql(
+        &mut store,
+        "UPDATE sessions SET state = 'blocked', state_label = 'cpd: PR feedback' WHERE id = 'l-p2';
+         INSERT INTO inbox_items (kind, urgency, subject, label, context, plan, session, opened_at)
+           VALUES ('dialog', 'red', 'session:l-p2', 'p2 asks you', 'ctx', 'p2', 'l-p2', '2026-10-18T15:00:00.000Z');",
+    );
     let p = read(&mut store, 12);
     assert!(row(&p, "p2").dot.needs_you());
     assert!(!row(&p, "p2").quiet, "waiting on the User");
-    sql(&mut store, "UPDATE sessions SET state = 'idle', state_label = NULL WHERE id = 'l-p2';");
+    sql(
+        &mut store,
+        "UPDATE sessions SET state = 'idle', state_label = NULL WHERE id = 'l-p2';
+         UPDATE inbox_items SET closed_at = '2026-10-18T15:01:00.000Z' WHERE subject = 'session:l-p2';",
+    );
     assert!(quiet(&mut store, "p2"));
     sql(&mut store, &attempt("p2", "q", "2026-10-18T12:00:00.000Z", None));
     assert!(!quiet(&mut store, "p2"), "an Attempt is not ended");

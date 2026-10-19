@@ -6,9 +6,8 @@ mod common;
 
 use std::fs;
 use std::process::Stdio;
-use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, WATCH_OK, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -35,36 +34,6 @@ fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
 
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
-}
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
-}
-
-/// A fake `cpd` on `PATH`: `session run <id>` records its environment and sleeps (the pane's
-/// program); `watch --ensure` succeeds; everything else is the built binary.
-fn fake_cpd(env: &TestEnv) {
-    env.fake(
-        "cpd",
-        &format!(
-            "case \"$1 $2\" in\n\
-             \"session run\") env > '{root}/pane-'\"$3\".env; exec sleep {SLEEP_SECONDS};;\n\
-             \"watch --ensure\") echo '{{\"ok\": true, \"started\": true, \"pane\": \"%9\"}}'; exit 0;;\n\
-             esac\nexec '{CPD}' \"$@\"",
-            root = env.root().display()
-        ),
-    );
 }
 
 /// The cockpit: session `cpd`, window `main` with a tree pane and the placeholder in the chat slot.
@@ -116,12 +85,12 @@ fn wait_for_pane(env: &TestEnv, session: &str) {
 fn setup(env: &TestEnv) -> (String, String) {
     let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\nplannotator_ports = \"19432-19432\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-    fake_cpd(env);
+    env.fake_cpd_panes(WATCH_OK);
     env.fake_gh("case \"$1 $2\" in\n\"pr view\") echo '{\"state\":\"OPEN\"}';;\nesac\nexit 0");
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     let lead = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok()["lead"]["session"].as_str().unwrap().to_owned();
     for key in ["api", "web", "ui"] {
-        let repo = env.git_repo(key);
+        let repo = env.keyed_repo(key);
         env.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--plan", "pay"]).ok();
     }
     wait_for_pane(env, &lead);

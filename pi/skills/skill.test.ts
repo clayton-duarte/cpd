@@ -234,13 +234,321 @@ test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry 
   }
 });
 
-test("hs-d239: cpd-lead registers planned work at once; cpd-manager checks it", () => {
+// --- the facts the skills state must be facts of the contract ---
+//
+// Sources (all read from the repo, so no Rust build is needed): docs/contract.md and docs/commands.md for Event kinds (§5.2 table), error
+// codes and their exit numbers (the refusal tables), causes (§3.4), config keys (§8.2), id formats (§2.1), phases (§3.1), hooks (§7.3) and
+// flags (the synopses); pi/lib/delivery.ts (`LEAD_MESSAGES`) for the kinds a Lead is sent. `--help` is not used: it needs the binary.
+
+const contractDoc = readFileSync(new URL("../../docs/contract.md", here), "utf8");
+const updatesSource = readFileSync(new URL("../lib/updates.ts", here), "utf8");
+
+/** The cells of a markdown table row, or null for any other line. */
+function cells(line: string): string[] | null {
+  return line.startsWith("|") ? line.split("|").slice(1, -1).map((c) => c.trim()) : null;
+}
+
+/** Every backticked token of `text` matching `re`. */
+function ticks(text: string, re: RegExp): string[] {
+  return [...text.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]!).filter((t) => re.test(t));
+}
+
+const SNAKE = /^[a-z]+(_[a-z0-9]+)+$/;
+const KEBAB = /^[a-z]+(-[a-z0-9]+)+$/;
+
+/** A cell that is only backticked words (`a`, `b` or `c`): those words. Null for prose. */
+function wordsOfCell(cell: string): string[] | null {
+  const found = [...cell.matchAll(/`([a-z][a-z_-]*)`/g)].map((m) => m[1]!);
+  return found.length > 0 && cell.replace(/`[a-z][a-z_-]*`/g, "").replace(/\b(and|or)\b|[,\s]/g, "") === "" ? found : null;
+}
+
+/** contract.md §5.2: kind → its table row. */
+function kindRows(): Map<string, string> {
+  const rows = new Map<string, string>();
+  for (const line of section(contractDoc, "### 5.2 Kinds").split("\n")) {
+    const c = cells(line);
+    const kinds = c && wordsOfCell(c[0]!);
+    if (kinds) for (const k of kinds) rows.set(k, line);
+  }
+  return rows;
+}
+
+/** Every error code of the docs → the exit numbers it is refused with. Rows are `| code | exit | when |` (§1.3) or `| condition | code | exit |` (per command). `error` Event codes have no exit. */
+function errorCodes(): Map<string, Set<number>> {
+  const codes = new Map<string, Set<number>>();
+  const add = (code: string, exit?: number) => {
+    const exits = codes.get(code) ?? new Set<number>();
+    if (exit !== undefined) exits.add(exit);
+    codes.set(code, exits);
+  };
+  for (const line of [...commandsDoc.split("\n"), ...contractDoc.split("\n")]) {
+    const c = cells(line);
+    if (!c || c.length < 3) continue;
+    const last = c[c.length - 1]!;
+    if (/^\d$/.test(last)) for (const w of wordsOfCell(c[c.length - 2]!) ?? []) add(w, Number(last));
+    if (/^\d$/.test(c[1]!)) for (const w of wordsOfCell(c[0]!) ?? []) add(w, Number(c[1]));
+  }
+  for (const m of commandsDoc.matchAll(/`([a-z]+(?:_[a-z]+)+)`[ ,(]+exit (\d)/g)) add(m[1]!, Number(m[2])); // prose: "(`spec_invalid`, exit 2"
+  for (const t of ticks(kindRows().get("error")!, SNAKE)) add(t);
+  return codes;
+}
+
+/** `[tiers]`-style `key = value` lines of the contract's §8.2 TOML block: key → value. */
+function configDefaults(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const m of section(contractDoc, "### 8.2 Keys").matchAll(/^([a-z_]+)\s*=\s*([^#\n]*?)\s*(?:#.*)?$/gm)) map.set(m[1]!, m[2]!);
+  return map;
+}
+
+/** Words the skills use that are not error codes: each from the contract table that defines it. */
+function vocabulary(): { causes: Set<string>; reasons: Set<string>; configKeys: Set<string>; fields: Set<string>; tools: Set<string> } {
+  const fields = new Set<string>();
+  for (const line of section(contractDoc, "### 2.2 Objects").split("\n")) for (const w of wordsOfCell(cells(line)?.[0] ?? "") ?? []) fields.add(w);
+  const reasons = /reasons` is a subset of `\[([^\]]+)\]`/.exec(kindRows().get("pr-feedback")!)![1]!.match(/[a-z_]+/g)!;
+  const tools = /--exclude-tools ([a-z_,]+)/.exec(contractDoc)![1]!.split(",");
+  return {
+    causes: new Set(ticks(section(contractDoc, "### 3.4 Attempt statuses, outcomes and causes"), /^[a-z]+(_[a-z]+)*$/)),
+    reasons: new Set(reasons),
+    configKeys: new Set(configDefaults().keys()),
+    fields,
+    tools: new Set(tools.filter((t) => !t.startsWith("plannotator"))),
+  };
+}
+
+/** Every flag of a `cpd` synopsis of commands.md (any command). */
+function knownFlags(): Set<string> {
+  return new Set([...synopses().values()].flatMap((f) => [...f]));
+}
+
+const planIdPattern = () => /\| Plan id \| (`[^`]+`)/.exec(section(contractDoc, "### 2.1 Identifiers"))![1]!.slice(1, -1);
+const idFormat = (thing: string) => new RegExp(`^\\| ${thing} \\| \`([^\`]+)\``, "m").exec(section(contractDoc, "### 2.1 Identifiers"))![1]!;
+
+/** Hooks, Event kinds and ids that look like kinds: `pre-*` hooks are defined in §7.3; `cpd-context` is the adapter's message type; `cpd-policy` its system prompt section (contract §8.3); `pay-4521` is the Plan id example. */
+const notKinds = (hooks: Set<string>) => new Set([...hooks, "cpd-context", "cpd-policy", "pay-4521"]);
+
+/** Every fact `files` state that the docs do not: an empty list means every code, kind, flag, number and id exists. */
+function factProblems(files: { name: string; text: string }[]): string[] {
+  const problems: string[] = [];
+  const kinds = kindRows();
+  const codes = errorCodes();
+  const vocab = vocabulary();
+  const flags = knownFlags();
+  const hooks = new Set(["pre-start", "pre-commit", "pre-merge"].filter((h) => section(contractDoc, "### 7.3 Hooks from `.config/wt.toml`").includes(`| \`${h}\` |`)));
+  const defaults = configDefaults();
+  const edges = new Map<string, string>(); // the first transition out of each phase
+  for (const m of section(contractDoc, "### 3.1 Plan phases").matchAll(/^\s+([a-z]+) --> ([a-z]+):/gm)) if (!edges.has(m[1]!)) edges.set(m[1]!, m[2]!);
+  const phasePath = ["grounding"]; // the forward path of the state diagram: grounding → plan → dispatch → deploy → done
+  while (edges.has(phasePath.at(-1)!) && phasePath.length < 10 && !phasePath.includes(edges.get(phasePath.at(-1)!)!)) phasePath.push(edges.get(phasePath.at(-1)!)!);
+  const recordLetters = /letter `d` decision, `n` note, `q` question, `a` answer, `p` plan/.test(section(contractDoc, "### 2.1 Identifiers")) ? "dnqap" : "";
+  assert.ok(recordLetters, "§2.1 record id letters not parsed");
+  assert.ok(kinds.size > 40 && codes.size > 60 && hooks.size === 3 && flags.size > 40, `docs not parsed: ${kinds.size} kinds, ${codes.size} codes, ${hooks.size} hooks, ${flags.size} flags`);
+
+  for (const { name, text } of files) {
+    const bad = (what: string) => problems.push(`${name}: ${what}`);
+    // Event kinds: every backticked kebab-case word that is not a hook or a known id is a kind of contract §5.2.
+    for (const t of ticks(text, KEBAB)) if (!notKinds(hooks).has(t) && !kinds.has(t)) bad(`\`${t}\` is not an Event kind (contract.md §5.2) nor a hook`);
+    // Error codes: every backticked snake_case word is an error code, a cause, a pr-feedback reason, a config key, a field or a tool, each from its own table.
+    for (const t of ticks(text, SNAKE)) {
+      if (!codes.has(t) && !vocab.causes.has(t) && !vocab.reasons.has(t) && !vocab.configKeys.has(t) && !vocab.fields.has(t) && !vocab.tools.has(t)) bad(`\`${t}\` is no error code, cause, reason, config key, field or tool of the docs`);
+    }
+    // In the positions that say "error code", the word must be an error code, with the exit number the skill states.
+    for (const m of text.matchAll(/(?:\bcode|refused with|refused:) `([a-z_]+)`/g)) if (!codes.has(m[1]!)) bad(`"${m[0]}": \`${m[1]}\` is not an error code`);
+    for (const m of text.matchAll(/`([a-z_]+)` \(exit (\d)\)/g)) {
+      const exits = codes.get(m[1]!);
+      if (!exits) bad(`"${m[0]}": \`${m[1]}\` is not an error code`);
+      else if (!exits.has(Number(m[2]))) bad(`"${m[0]}": commands.md gives \`${m[1]}\` exit ${[...exits].join(" or ")}`);
+    }
+    // Flags: every --flag the text names, in a command or in prose, is a flag of some cpd synopsis (a `gh` or `git` command is not cpd's).
+    for (const f of new Set(text.replace(/`(?:gh|git) [^`\n]*`/g, "").match(/(?<![\w-])--[a-z][a-z-]*/g))) if (!flags.has(f)) bad(`${f} is no flag of any cpd command (commands.md)`);
+    // `error.details.x`: a field of the details of some refusal (not the `details` of pi's ask_user_question result).
+    for (const m of text.matchAll(/\berror\.details\.([a-z_]+)/g)) if (!commandsDoc.includes(`details.${m[1]}`)) bad(`error.details.${m[1]} is in no commands.md refusal row`);
+    // Ids: record ids are <machine>-<letter><n>; the skill's patterns are the contract's.
+    for (const m of text.matchAll(/\bhs-([a-z])(\d+)\b/g)) if (!recordLetters.includes(m[1]!) || Number(m[2]) < 1) bad(`${m[0]} is not a Context record id (contract.md §2.1)`);
+    for (const m of text.matchAll(/`(\^[^`]+\$)`/g)) {
+      const formats = ["Context id", "Plan id", "PR key \\(R34\\)", "Job key"].map(idFormat);
+      if (!formats.includes(m[1]!)) bad(`id pattern \`${m[1]}\` is none of contract.md §2.1`);
+    }
+    for (const [re, format, thing] of [
+      [/\b[Ii]d `(\^[^`]+\$)`/, planIdPattern(), "Plan id"],
+      [/PR has a key \(`(\^[^`]+\$)`/, idFormat("PR key \\(R34\\)"), "PR key"],
+      [/id matches `(\^[^`]+\$)`/, planIdPattern(), "Plan id"],
+      [/Job key matches `(\^[^`]+\$)`/, idFormat("Job key"), "Job key"],
+    ] as const) {
+      for (const m of text.matchAll(new RegExp(re, "g"))) if (m[1] !== format) bad(`the ${thing} pattern is \`${m[1]}\`, contract.md §2.1 says \`${format}\``);
+    }
+    if (/<attempt-id>-q<k>/.test(text) && !/`<attempt>-q<k>`/.test(section(contractDoc, "### 2.1 Identifiers"))) bad("the Escalation id format is not `<attempt>-q<k>` (contract.md §2.1)");
+    // Phases: a chain that starts at `grounding` is the forward path of contract.md §3.1.
+    for (const m of text.matchAll(/\bgrounding(?: → [a-z]+)+/g)) if (m[0] !== phasePath.join(" → ")) bad(`"${m[0]}" is not the Plan phases of contract.md §3.1 (${phasePath.join(" → ")})`);
+    // Numbers: what the skill states about config defaults is the contract's default.
+    const stated = (re: RegExp, key: string) => {
+      for (const m of text.matchAll(new RegExp(re, "g"))) if (Number(m[1]) !== Number(defaults.get(key))) bad(`"${m[0]}": contract.md §8.2 sets ${key} = ${defaults.get(key)}`);
+    };
+    stated(/`retry_cap`, default (\d+),/, "retry_cap");
+    stated(/`ask_minutes`, default (\d+) min/, "ask_minutes");
+    stated(/every (\d+) s\b/, "pr_poll_seconds");
+    for (const m of text.matchAll(/so (\d+) Attempts\)/g)) if (Number(m[1]) !== 1 + Number(defaults.get("retry_cap"))) bad(`"${m[0]}": automatic Attempts are 1 + retry_cap (contract.md §9)`);
+    for (const m of text.matchAll(/last (\d+) lines/g)) if (!commandsDoc.includes(`\`details.tail\` is its last ${m[1]} lines`)) bad(`"${m[0]}": commands.md says \`details.tail\` is its last 60 lines`);
+    for (const m of text.matchAll(/(?:At most|up to) (\d+) (?:lines|Jobs)/g)) {
+      const mgr = section(commandsDoc, "### 15.7 Context updates at turn start");
+      if (!mgr.includes(`At most ${m[1]} lines`) && !mgr.includes(`up to ${m[1]} lines`)) bad(`"${m[0]}": commands.md §15.7 does not say ${m[1]}`);
+    }
+  }
+  return problems;
+}
+
+test("`cpd-context`, the turn-start message the Manager skill names, is the adapter's message type", () => {
+  assert.match(updatesSource, /CONTEXT_TYPE = "cpd-context"/, "`cpd-context` is the adapter's message type");
+});
+
+for (const { skill } of skills) test(`${skill}: every code, Event kind, flag, number and id it states exists in the docs`, () => {
+  assert.deepEqual(factProblems(skillFiles(skill)), []);
+});
+
+test("the fact check fails on a code, a kind, a flag, an exit number, a number, an id and a phase that do not exist", () => {
+  const good = skillFiles("cpd-lead")[0]!;
+  assert.deepEqual(factProblems([good]), []);
+  const problems = (line: string) => factProblems([{ name: "bad.md", text: `${good.text}\n${line}\n` }]).join("\n");
+  for (const [line, culprit] of [
+    ["The Gate ends with `gate_busted` (exit 3).", /gate_busted/], // an unknown error code
+    ["It is refused with `no_such_code`.", /no_such_code/], // an unknown code where a code is named
+    ["The Lead gets `job-exploded` messages.", /job-exploded/], // an unknown Event kind
+    ["Run `cpd job retry <k> --turbo`.", /--turbo/], // an unknown flag
+    ["Add `--turbo-mode` to go faster.", /--turbo-mode/], // a flag in prose, which the commands check does not see
+    ["`gate_failed` (exit 1)", /gate_failed.*exit 3/], // a wrong exit number
+    ["The engine polls every 7 s.", /pr_poll_seconds = 5/], // a wrong poll interval
+    ["The cap is `retry_cap`, default 5, retries.", /retry_cap = 2/], // a wrong default
+    ["Escalations expire after `ask_minutes`, default 15 min.", /ask_minutes = 60/], // a wrong default
+    ["See hs-x9.", /hs-x9/], // a record id with an unknown letter
+    ["A Plan has an id `^[a-z]+$`.", /\^\[a-z\]\+\$/], // an id pattern of no kind
+    ["The key is `^[a-z][a-z0-9-]{1,23}$`; each PR has a key (`^[a-z][a-z0-9-]{1,23}$`, for example `web`).", /PR key pattern/], // the Plan pattern for a PR key
+    ["Phases: grounding → plan → dispatch → pr → done.", /grounding → plan → dispatch → pr → done/], // a renamed phase
+    ["Read `error.details.nothing`.", /error\.details\.nothing/], // a detail no refusal carries
+  ] as const) assert.match(problems(line), culprit, line);
+});
+
+test("every Event kind of the Lead's Dispatching table is one the adapter delivers to a Lead, and each kind that wakes the Lead has a row", async () => {
+  const { LEAD_MESSAGES } = await import("../lib/delivery.ts");
+  const dispatching = section(skillFiles("cpd-lead")[0]!.text, "### Dispatching");
+  const table = dispatching.slice(0, dispatching.indexOf("#### "));
+  const rowKinds = table.split("\n").flatMap((l) => /^\| `([a-z-]+)` \|/.exec(l)?.slice(1) ?? []);
+  assert.ok(rowKinds.length >= 9, `expected the Events table, found ${rowKinds.length} rows`);
+  for (const k of rowKinds) assert.ok(k in LEAD_MESSAGES, `${k}: a row of the Events table, but the adapter delivers no such message to a Lead (pi/lib/delivery.ts LEAD_MESSAGES)`);
+  for (const [k, { turn }] of Object.entries(LEAD_MESSAGES)) if (turn) assert.ok(rowKinds.includes(k), `${k} starts a Lead's turn but the Events table has no row for it`);
+  const rows = kindRows();
+  for (const line of table.split("\n")) {
+    const kind = /^\| `([a-z-]+)` \|/.exec(line)?.[1];
+    if (!kind) continue;
+    for (const m of line.matchAll(/`data\.([a-z_]+)`/g)) assert.match(rows.get(kind)!, new RegExp(`\\b${m[1]}\\b`), `${kind}: data.${m[1]} is not in its contract.md §5.2 row`);
+  }
+});
+
+test("the skills' list of pr-feedback reasons and of ladder causes is the contract's", () => {
+  const reasons = vocabulary().reasons;
+  assert.ok(reasons.size === 4);
   const lead = skillFiles("cpd-lead")[0]!.text;
-  assert.match(lead, /Register planned work at once \(hs-d239\)/);
+  const stated = /`data\.reasons` lists ((?:`[a-z_]+`(?:, | or )?)+)/.exec(lead);
+  assert.ok(stated, "the pr-feedback row lists data.reasons");
+  assert.deepEqual(new Set(wordsOfCell(stated[1]!)), reasons);
+  const ladder = /Ladder causes\*\* are ((?:`[a-z_]+`(?:, | and )?)+)/.exec(contractDoc);
+  assert.ok(ladder, "contract.md names the ladder causes");
+  const spec = skillFiles("cpd-lead").find((f) => f.name.endsWith("spec-files.md"))!.text;
+  const retried = /ladder retries \(((?:`[a-z_]+`(?:, )?)+)\)/.exec(spec);
+  assert.ok(retried, "spec-files.md lists the causes the ladder retries");
+  assert.deepEqual(wordsOfCell(retried[1]!), wordsOfCell(ladder[1]!));
+  const failed = section(lead, "#### Failed Jobs").split("\n").flatMap((l) => (/^\| (`[^|]+`)(?: \([^)]*\))? \|/.exec(l)?.[1] ? [/^\| (`[^|]+`)/.exec(l)![1]!] : []));
+  assert.ok(failed.length >= 7, "the Failed Jobs table lists the causes");
+  for (const cause of failed.flatMap((c) => ticks(c, /./))) assert.ok(vocabulary().causes.has(cause), `Failed Jobs: ${cause} is no cause of contract.md §3.4`);
+});
+
+test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /Register planned work at once/);
   assert.match(lead, /cpd job add <k> --draft --title/);
   assert.match(lead, /cpd pr add <key> --repo <path> --needs/);
   const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Check hs-d239 for each Plan/);
+  assert.match(manager, /Check each Plan's registered work/);
   assert.match(manager, /cpd plan show --plan <p>/);
   assert.match(manager, /cpd session send <lead-session>[^\n]*register/);
+});
+
+test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
+  for (const skill of ["cpd-lead", "cpd-manager"]) {
+    const text = skillFiles(skill)[0]!.text;
+    assert.match(text, /cpd job urgent <k>/, `${skill}: cpd job urgent`);
+    assert.match(text, /--urgent/, `${skill}: --urgent`);
+    assert.match(text, /only when the User explicitly asks/, `${skill}: explicit-request rule`);
+    assert.match(text, /beyond `concurrency`/, `${skill}: may exceed concurrency`);
+  }
+  assert.ok(synopses().get("job urgent")!.has("--plan"), "commands.md documents job urgent");
+});
+
+/** Contract §8.3 "Delivery to agents": the shared skills and the adapter carry cpd mechanics only. No owner's choice and no Context record id. */
+test("policy-neutral: no record id, owner or machine fact in the skills, pi/lib or the extension", () => {
+  const root = new URL("../../", import.meta.url);
+  const files: { name: string; text: string }[] = [];
+  for (const skill of skills) for (const f of skillFiles(skill.skill)) files.push({ name: `pi/skills/${f.name}`, text: f.text });
+  for (const f of readdirSync(new URL("lib/", new URL("../", here))).sort()) {
+    if (f.endsWith(".ts") && !f.endsWith(".test.ts")) files.push({ name: `pi/lib/${f}`, text: readFileSync(new URL(`pi/lib/${f}`, root), "utf8") });
+  }
+  files.push({ name: "pi/extension.ts", text: readFileSync(new URL("pi/extension.ts", root), "utf8") });
+  assert.ok(files.length > 10, "the guard must find the files it guards");
+  const forbidden = [/\bhs-[dnqap][0-9]+/, /clayton-duarte/, /missionlane/, /homeserver/, /User's machines/];
+  const hits: string[] = [];
+  for (const { name, text } of files) {
+    text.split("\n").forEach((line, i) => {
+      for (const re of forbidden) if (re.test(line)) hits.push(`${name}:${i + 1}: ${re} in: ${line.trim().slice(0, 100)}`);
+    });
+  }
+  assert.deepEqual(hits, []);
+});
+
+/** Commands.md §9: pr open, push and rebase run the Gate only when the PR's `pr.gate` is `local`. */
+test("cpd-lead: every 'run(s) the Gate' sentence names pr.gate", () => {
+  const sentences = skillFiles("cpd-lead")[0]!.text.split(/(?<=[.;!?])\s+/).filter((s) => /\bruns? the Gate\b/i.test(s));
+  assert.ok(sentences.length >= 4, "the guard must find the sentences it guards");
+  const bad = sentences.filter((s) => !s.includes("pr.gate"));
+  assert.deepEqual(bad, []);
+});
+
+test("cpd-lead adds decided work queued and keeps drafts for undecided design (hs-d301)", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.match(text, /added queued/);
+  assert.match(text, /Spec that cites the decision/);
+  assert.match(text, /When unsure, a draft/);
+});
+
+test("cpd-manager names the decision of routed decided work and says it needs no review (hs-d301)", () => {
+  const text = skillFiles("cpd-manager")[0]!.text;
+  assert.match(text, /name the decision id/);
+  assert.match(text, /needs no Plan review/);
+});
+
+for (const { skill } of skills) test(`${skill}: asks the User only with ask_user_question, never a context ask record (hs-d306)`, () => {
+  const text = skillFiles(skill)[0]!.text;
+  assert.match(text, /To ask the User, use `ask_user_question`/);
+  assert.match(text, /Never use `cpd context ask`: it records an open question in the Context and asks nobody\./);
+  assert.match(text, /plannotator|too big for a dialog/);
+  const ask = text.split("\n").find((l) => l.trim().startsWith("cpd context ask "));
+  assert.ok(ask, "the context ask line exists");
+  assert.match(ask, /\(a record, not a question to the User\)/);
+});
+
+test("cpd-lead resolves a PR conflict inline and pushes through the Gate, never a plain git push or a sync Job (hs-d305)", () => {
+  const text = skillFiles("cpd-lead")[0]!.text;
+  assert.ok(!/(?<!never a )plain `git push`/.test(text));
+  assert.ok(!/run no local tests/i.test(text));
+  assert.ok(!/hs-d220/.test(text));
+  const row = text.split("\n").find((l) => l.startsWith("| `pr-feedback`"))!;
+  const step = text.split("\n").find((l) => l.startsWith("2. After those Jobs are Merged"))!;
+  const rule = text.split("\n").find((l) => /`git` and `gh` are allowed/.test(l))!;
+  for (const [name, place] of [["pr-feedback row", row], ["Addressing step 2", step]] as const) {
+    assert.match(place, /cpd pr push --pr <key>/, name);
+    assert.match(place, /never a plain `git push`/, name);
+    assert.match(place, /never with a sync (or merge )?Job/, name);
+    assert.match(place, /code the merge needs/, name);
+  }
+  assert.match(row, /cpd pr rebase --pr <key>/);
+  assert.match(step, /cpd pr rebase --pr <key>/);
+  assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
+  assert.match(rule, /never with `git push`/);
 });

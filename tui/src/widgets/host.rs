@@ -3,15 +3,12 @@
 
 use std::process::Command;
 
-use cpd_core::error::CpdError;
-
-use super::host_failed;
-
-/// CPU % and memory %, whole numbers. `cpu` is `None` until a second CPU sample exists.
+/// CPU % and memory %, whole numbers; `None` is drawn as `–`. `cpu` is `None` until a second CPU sample exists, and either is
+/// `None` when it cannot be read: like the hostname, that is no error of the view (tui-W10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Usage {
     pub cpu: Option<u8>,
-    pub mem: u8,
+    pub mem: Option<u8>,
 }
 
 /// The counters of `/proc/stat`'s `cpu` line: time not idle (idle + iowait) and all time, in clock ticks.
@@ -28,50 +25,38 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn sample(&mut self) -> Result<Usage, CpdError> {
+    pub fn sample(&mut self) -> Usage {
         if cfg!(target_os = "macos") {
-            Ok(Usage { cpu: Some(macos_cpu()?), mem: macos_mem()? })
+            Usage { cpu: macos_cpu(), mem: macos_mem() }
         } else {
-            let times = parse_proc_stat(&read_file("/proc/stat")?).ok_or_else(|| host_failed("the CPU", "/proc/stat has no cpu line"))?;
-            let cpu = self.previous.and_then(|before| cpu_share(before, times));
-            self.previous = Some(times);
-            let meminfo = read_file("/proc/meminfo")?;
-            let mem = parse_meminfo(&meminfo).ok_or_else(|| host_failed("the memory", "/proc/meminfo has no MemTotal and MemAvailable"))?;
-            Ok(Usage { cpu, mem })
+            let times = read_file("/proc/stat").and_then(|text| parse_proc_stat(&text));
+            let cpu = self.previous.zip(times).and_then(|(before, after)| cpu_share(before, after));
+            if times.is_some() {
+                self.previous = times;
+            }
+            Usage { cpu, mem: read_file("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
         }
     }
 }
 
-fn read_file(path: &str) -> Result<String, CpdError> {
-    std::fs::read_to_string(path).map_err(|e| host_failed(path, e))
+fn read_file(path: &str) -> Option<String> {
+    std::fs::read_to_string(path).ok()
 }
 
-fn run(what: &str, program: &str, args: &[&str]) -> Result<String, CpdError> {
-    let out = Command::new(program).args(args).output().map_err(|e| host_failed(what, e))?;
-    if !out.status.success() {
-        return Err(host_failed(what, format!("`{program}` exited with {}", out.status)));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+/// `program`'s stdout when it ran and exited 0.
+fn run(program: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(program).args(args).output().ok().filter(|o| o.status.success())?;
+    Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-fn macos_cpu() -> Result<u8, CpdError> {
-    let ncpu = run("the CPU count", "sysctl", &["-n", "hw.ncpu"])?;
-    let ps = run("the CPU", "ps", &["-A", "-o", "%cpu="])?;
-    ncpu.trim()
-        .parse()
-        .ok()
-        .and_then(|n| parse_ps(&ps, n))
-        .ok_or_else(|| host_failed("the CPU", format!("`ps` and hw.ncpu {:?} do not parse", ncpu.trim())))
+fn macos_cpu() -> Option<u8> {
+    let ncpu = run("sysctl", &["-n", "hw.ncpu"])?.trim().parse().ok()?;
+    parse_ps(&run("ps", &["-A", "-o", "%cpu="])?, ncpu)
 }
 
-fn macos_mem() -> Result<u8, CpdError> {
-    let size = run("the memory size", "sysctl", &["-n", "hw.memsize"])?;
-    let vm = run("the memory", "vm_stat", &[])?;
-    size.trim()
-        .parse()
-        .ok()
-        .and_then(|bytes| parse_vm_stat(&vm, bytes))
-        .ok_or_else(|| host_failed("the memory", format!("`vm_stat` and hw.memsize {:?} do not parse", size.trim())))
+fn macos_mem() -> Option<u8> {
+    let bytes = run("sysctl", &["-n", "hw.memsize"])?.trim().parse().ok()?;
+    parse_vm_stat(&run("vm_stat", &[])?, bytes)
 }
 
 /// `part` of `whole` as a whole percent, rounded, at most 100; `None` for an empty whole.

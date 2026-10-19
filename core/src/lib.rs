@@ -7,9 +7,12 @@
 
 // Shared foundations (Job rs-workspace).
 pub mod args;
+pub mod clock;
+pub mod env;
 pub mod error;
 pub mod home;
 pub mod ids;
+pub mod lock;
 pub mod output;
 
 // One module per area, each filled in by its own Job.
@@ -27,6 +30,7 @@ pub mod job;
 pub mod merge;
 pub mod metrics;
 pub mod plan;
+pub mod policy;
 pub mod pr;
 pub mod session;
 pub mod spec;

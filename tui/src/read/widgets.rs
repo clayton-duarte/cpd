@@ -78,7 +78,7 @@ pub struct OpenPr {
     /// GitHub's `owner/name`.
     pub repo: String,
     pub number: i64,
-    /// `pull_requests.url`: what the `↗` links to.
+    /// `pull_requests.url`: what the `󰏌` links to.
     pub url: String,
     pub title: String,
     pub draft: bool,
@@ -86,6 +86,8 @@ pub struct OpenPr {
     pub review_decision: ReviewDecision,
     /// `pull_requests.mergeable` is `'conflicting'` (`'unknown'` is not a conflict).
     pub conflicting: bool,
+    /// `pull_requests.merge_state` is `'clean'` (GitHub's mergeStateStatus CLEAN): the merge icon shows (commands.md §13.2).
+    pub clean: bool,
     /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
     pub active: bool,
     /// The Lead of the owner: `plans.lead_session` of the Plan of the `prs` row that points to this pull request (the most
@@ -145,15 +147,26 @@ pub struct MachineEscalation {
 pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widgets, CpdError> {
     store.read(|conn| {
         Ok(Widgets {
-            slots: slots(conn, concurrency)?,
+            slots: held_slots(conn, concurrency)?,
             engine: engine(conn)?,
             plans: plan_cards(conn)?,
-            prs: open_prs(conn)?,
+            prs: open_pr_rows(conn)?,
             escalations: escalations(conn)?,
             events: recent_events(conn, recent)?,
             events_cursor: highest_id(conn)?,
         })
     })
+}
+
+/// The machine-wide slots (§3.4), and the Event id of this read: the StatusBar's whole model (`widgets` reads far
+/// more: the Plans' `jobs` alone are most of its cost, tui-F1).
+pub fn slots(store: &mut Store, concurrency: u32) -> Result<(Slots, i64), CpdError> {
+    store.read(|conn| Ok((held_slots(conn, concurrency)?, highest_id(conn)?)))
+}
+
+/// The open pull requests of the User, and the Event id of this read: the Dispatch column's whole model.
+pub fn open_prs(store: &mut Store) -> Result<(Vec<OpenPr>, i64), CpdError> {
+    store.read(|conn| Ok((open_pr_rows(conn)?, highest_id(conn)?)))
 }
 
 fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
@@ -174,10 +187,10 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
 
 /// The `open` pull requests the User wrote (`authored` 1), oldest first. `lead`: the owner's (see [`OpenPr::lead`]). `active`: a PR of the Plan of the chat slot's Lead (the Plan Lead whose latest
 /// `session-moved` says `chat`, the newest when there are several: `chat_slot`'s rule) points to it.
-fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
+fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT q.repo, q.number, q.title, q.draft, q.checks, q.review_decision, q.url,
-                q.mergeable = 'conflicting',
+                q.mergeable = 'conflicting', q.merge_state = 'clean',
                 EXISTS (SELECT 1 FROM prs r WHERE r.pull_request = q.id AND r.plan =
                         (SELECT s.plan FROM sessions s
                            JOIN events m ON m.id = (SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved')
@@ -205,8 +218,9 @@ fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             },
             url: r.get(6)?,
             conflicting: r.get(7)?,
-            active: r.get(8)?,
-            lead: r.get::<_, Option<String>>(9)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
+            clean: r.get(8)?,
+            active: r.get(9)?,
+            lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
             repo,
             number,
         });
@@ -259,7 +273,7 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
     Ok(out)
 }
 
-fn slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {
+fn held_slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT plan, id, tier, status, started_at FROM attempts WHERE status <> 'ended' ORDER BY started_at, plan, id",
     )?;

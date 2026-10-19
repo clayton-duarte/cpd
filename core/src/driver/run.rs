@@ -7,17 +7,22 @@
 
 use std::time::Duration;
 
-use rusqlite::params;
+use nix::errno::Errno;
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
+use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
-use super::ledger::{self, Cause, End, Ladder, SOURCE, Target};
+use crate::clock;
+use crate::attempt::ledger::{self, Attempt as Target, Cause, End, Ladder, Stage};
 use super::lock;
 use super::stall;
 use super::worker;
 use super::RunArgs;
 use crate::config::{Catalog, Config, load_catalog};
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::host::exe::{Exe, Refusal};
@@ -28,10 +33,105 @@ use crate::merge;
 use crate::output::Output;
 use crate::plan::jobs;
 use crate::plan::locked_fingerprint;
-use crate::store::Store;
+use crate::store::{Persist, Store};
+
+/// The `txns.command` and the `source` of the driver's `error` Events.
+const SOURCE: &str = "attempt run";
 
 /// How often A4 looks at the Attempt, its Session and its pane.
 const POLL: Duration = Duration::from_millis(500);
+
+/// What A4 knows of the Worker's pane at a poll.
+enum Look {
+    /// Alive, with its process's pid when tmux gave one (hs-n102).
+    Alive(Option<u32>),
+    /// Dead or missing: the `crashed` detail.
+    Gone(String),
+    /// `list-panes` failed once: not known until the next poll (engine-W8).
+    Unknown,
+}
+
+/// A4's watch on the Worker's pane (engine-F1). The pane's pid is read from
+/// `list-panes` once and then tested with `kill(pid, 0)` and `/proc`, with no
+/// fork; `list-panes` runs again only when there is no live pid, to learn how
+/// the pane ended. A failed `list-panes` is retried at the next poll, once,
+/// before the pane is judged (contract §6.3 liveness, engine-W8).
+#[derive(Default)]
+struct PaneWatch {
+    pid: Option<u32>,
+    failed: bool,
+}
+
+impl PaneWatch {
+    fn look(&mut self, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
+        if let Some(pid) = self.pid.filter(|&pid| alive(pid)) {
+            return Ok(Look::Alive(Some(pid)));
+        }
+        let panes = match tmux.list_panes() {
+            Ok(panes) => panes,
+            Err(e) if !self.failed => {
+                log(&format!("A4: listing the panes failed, trying again at the next poll: {}", e.message()));
+                self.failed = true;
+                return Ok(Look::Unknown);
+            }
+            Err(e) => return Err(e),
+        };
+        self.failed = false;
+        Ok(match panes.iter().find(|p| p.pane == *pane) {
+            None => Look::Gone("The Worker's pane is gone.".to_owned()),
+            Some(p) if p.dead => {
+                let status = p.dead_status.map_or_else(String::new, |s| format!(" (exit status {s})"));
+                Look::Gone(format!("The Worker's pane died{status} before it submitted."))
+            }
+            Some(p) => {
+                self.pid = p.pid;
+                Look::Alive(p.pid)
+            }
+        })
+    }
+}
+
+/// Whether process `pid` runs: `kill(pid, 0)` finds it and, where `/proc`
+/// exists, it is not a zombie (ended, not yet reaped by tmux).
+fn alive(pid: u32) -> bool {
+    let Ok(raw) = i32::try_from(pid) else { return false };
+    if matches!(kill(Pid::from_raw(raw), None), Err(Errno::ESRCH)) {
+        return false;
+    }
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return true };
+    // `pid (comm) state …`; comm may hold spaces and parentheses.
+    stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next()) != Some("Z")
+}
+
+/// What A5 does at a poll of the Worker.
+#[derive(Debug, PartialEq, Eq)]
+enum Decision {
+    /// Nothing yet: not idle, mid-turn, or nudged and not idle again.
+    Wait,
+    /// Idle without a submit, not nudged yet: nudge it, once.
+    Nudge,
+    /// Idle again after the nudge: the Attempt ends `no_submit`.
+    NoSubmit,
+    /// pi stopped with this `stopReason`: the Attempt ends `crashed`.
+    Crashed(String),
+}
+
+/// A5's judgement, pure. `state` is the Session's state; `last_stop` the last
+/// assistant message's `stopReason` and `turns` the count of assistant messages
+/// (both read from the session file only when `state` is `idle`); `nudged` is
+/// the turn count when the Worker was nudged, None when it was not.
+fn judge(state: &str, last_stop: Option<&str>, turns: u64, nudged: Option<u64>) -> Decision {
+    if state != "idle" {
+        return Decision::Wait;
+    }
+    match (last_stop, nudged) {
+        (Some("stop"), None) => Decision::Nudge,
+        (Some("stop"), Some(at)) if turns > at => Decision::NoSubmit,
+        // Mid-turn, no assistant message yet, or nudged and no new turn since.
+        (Some("stop") | Some("toolUse") | None, _) => Decision::Wait,
+        (Some(other), _) => Decision::Crashed(other.to_owned()),
+    }
+}
 
 /// How the Attempt ended, as the driver prints it.
 struct Ended {
@@ -98,8 +198,9 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     // until this function returns, which is the driver's whole life.
     let lock = lock::inherited(&home, &plan, &id)?;
     let exe = Exe::current()?;
-    let config = Config::load(&home)?;
-    let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    // A transient store error never ends the Attempt: every read and write of
+    // this driver waits it out (§3.4), the open included.
+    let Env { home, config, store } = Env::open_home_persistent(home, Persist::new(|line| log(line), || false))?;
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
 
@@ -115,8 +216,22 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     }
 }
 
-fn log(line: &str) {
-    eprintln!("cpd attempt run: {line}");
+/// One line of the driver's log (`run/<plan>/logs/attempt-<id>.log`), prefixed with the time like `watch.log`'s.
+pub(super) fn log(line: &str) {
+    eprintln!("{} cpd attempt run: {line}", clock::now());
+}
+
+/// Appends an `error` Event about `target` (§5.2): an unexpected failure of
+/// the driver (commands.md §6.4).
+fn append_error(tx: &crate::store::WriteTxn<'_>, target: &Target, error: &CpdError) -> Result<(), CpdError> {
+    let text = format!(
+        "The driver of Attempt {} failed: {} See: cpd attempt show {} --plan {}",
+        target.id,
+        error.message(),
+        target.id,
+        target.plan
+    );
+    ledger::append_error(tx, target, SOURCE, error, text)
 }
 
 impl Driver {
@@ -198,7 +313,7 @@ impl Driver {
         let review = job.review;
         let fork = if review {
             log("A3: waiting for the Lead to be idle, to fork it");
-            match worker::wait_for_lead(&mut self.store, &self.config, dirs, target)? {
+            match worker::wait_for_lead(&mut self.store, &self.config, dirs, target, &log)? {
                 Some(fork) => Some(fork),
                 None => return self.end(target, End::Cancelled, dirs),
             }
@@ -303,10 +418,9 @@ impl Driver {
                 return Err(CpdError::new(ErrorCode::CasLost, format!("Attempt {} is no longer starting.", target.id)));
             }
             let text = format!("Worker {name} of Attempt {} registered.", target.id);
-            let data = json!({"role": "worker", "name": name, "forked_from": forked_from, "tier": tier});
             events::append(
                 tx,
-                NewEvent::new(Kind::SessionRegistered, text, data)
+                NewEvent::session_registered(text, "worker", &name, forked_from, &tier)
                     .context(target.context.clone())
                     .plan(target.plan.clone())
                     .session(session.clone()),
@@ -333,16 +447,15 @@ impl Driver {
             );
             events::append(
                 tx,
-                NewEvent::new(Kind::AttemptStatus, text, json!({"from": "starting", "to": "running"}))
+                NewEvent::attempt_status(text, "starting", "running")
                     .plan(target.plan.clone())
                     .job(target.job.clone())
                     .attempt(target.id.clone()),
             )?;
             let text = format!("Worker of Attempt {} is in its work window.", target.id);
-            let data = json!({"pane": pane.pane.as_str(), "window": pane.window.as_str(), "place": "work"});
             events::append(
                 tx,
-                NewEvent::new(Kind::SessionMoved, text, data)
+                NewEvent::session_moved(text, Some(pane.pane.as_str()), Some(pane.window.as_str()), "work")
                     .context(target.context.clone())
                     .plan(target.plan.clone())
                     .session(session.clone()),
@@ -357,13 +470,14 @@ impl Driver {
         log("A4: waiting for the Worker");
         // The Worker's session file, recorded once pi has created it.
         let mut file: Option<std::path::PathBuf> = None;
-        // The Worker's assistant messages when it was nudged.
-        let mut nudged_at: Option<u64> = None;
+        // The Worker's assistant messages when it was nudged: after a reload, from the Event.
+        let mut nudged_at: Option<u64> = self.nudge_baseline(session)?;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
+        let mut watch = PaneWatch::default();
         loop {
             std::thread::sleep(POLL);
-            // The panes before the row: a Worker that submits and exits is seen `merging`.
-            let panes = self.tmux.list_panes()?;
+            // The pane before the row: a Worker that submits and exits is seen `merging`.
+            let look = watch.look(&self.tmux, pane)?;
             if file.is_none() {
                 file = pi::session_file(dirs, session);
                 if let Some(found) = &file {
@@ -398,57 +512,74 @@ impl Driver {
                     return Err(CpdError::new(ErrorCode::StoreFailed, format!("Unknown stop_request {other:?}.")));
                 }
             }
-            let pi = match panes.iter().find(|p| p.pane == *pane) {
-                None => {
-                    let detail = "The Worker's pane is gone.".to_owned();
-                    return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
-                }
-                Some(p) if p.dead => {
-                    let status = p.dead_status.map_or_else(String::new, |s| format!(" (exit status {s})"));
-                    let detail = format!("The Worker's pane died{status} before it submitted.");
-                    return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
-                }
-                Some(p) => p.pid,
+            let pi = match look {
+                Look::Gone(detail) => return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs),
+                // `list-panes` failed: whether the pane is gone is decided at the next poll.
+                Look::Unknown => continue,
+                Look::Alive(pid) => pid,
             };
 
             let Some(file) = file.clone() else { continue };
             // The stall rule (§3.4 A4): pi is the pane's process, alive here. tmux
-            // gives a live pane's pid; it is empty only for a dead pane (hs-n102).
+            // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
             if let Some(line) = pi.and_then(|pi| stall.check(&file, pi)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).
             let state: String =
                 self.store.read(|conn| Ok(conn.query_row("SELECT state FROM sessions WHERE id = ?1", [session.as_str()], |r| r.get(0))?))?;
-            if state != "idle" {
-                continue;
+            let (stop, turns) = if state == "idle" {
+                let Some(read) = worker::last_stop(&file) else { continue };
+                read
+            } else {
+                (None, 0)
+            };
+            // An Attempt nudged by a driver that left (a reload) has its baseline in the Event;
+            // one nudged before the Event carried it takes the first idle count seen.
+            if state == "idle" && now.nudged {
+                nudged_at.get_or_insert(turns);
             }
-            let Some((stop, turns)) = worker::last_stop(&file) else { continue };
-            match stop.as_deref() {
-                Some("stop") if !now.nudged => {
-                    if self.nudge(&now, session)? {
+            match judge(&state, stop.as_deref(), turns, nudged_at.filter(|_| now.nudged)) {
+                Decision::Wait => {}
+                Decision::Nudge => {
+                    if self.nudge(&now, session, turns)? {
                         nudged_at = Some(turns);
                     }
                 }
-                Some("stop") => {
-                    if turns > *nudged_at.get_or_insert(turns) {
-                        let detail = "The Worker went idle twice without submitting, once after a nudge.".to_owned();
-                        return self.end(&now, End::Failed { cause: Cause::NoSubmit, detail }, dirs);
-                    }
+                Decision::NoSubmit => {
+                    let detail = "The Worker went idle twice without submitting, once after a nudge.".to_owned();
+                    return self.end(&now, End::Failed { cause: Cause::NoSubmit, detail }, dirs);
                 }
-                // Mid-turn, or no assistant message yet.
-                Some("toolUse") | None => {}
-                Some(other) => {
-                    let detail = format!("pi stopped with stopReason {other}.");
+                Decision::Crashed(reason) => {
+                    let detail = format!("pi stopped with stopReason {reason}.");
                     return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
                 }
             }
         }
     }
 
+    /// The Worker's assistant-turn count at its nudge, from the Attempt's
+    /// `attempt-nudge` Event: a resumed driver's baseline (§3.4 A5, §5.2).
+    fn nudge_baseline(&mut self, session: &SessionId) -> Result<Option<u64>, CpdError> {
+        let id = &self.id;
+        self.store.read(|conn| {
+            let turns: Option<i64> = conn
+                .query_row(
+                    "SELECT json_extract(data, '$.turns') FROM events
+                      WHERE kind = 'attempt-nudge' AND plan = ?1 AND attempt = ?2 AND session = ?3
+                      ORDER BY id DESC LIMIT 1",
+                    params![self.plan.as_str(), id.to_string(), session.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten();
+            Ok(turns.and_then(|t| u64::try_from(t).ok()))
+        })
+    }
+
     /// A5's nudge, once: `attempt-nudge` to the Worker's Session, and
     /// `nudged`. False when the Attempt left `running` meanwhile.
-    fn nudge(&mut self, target: &Target, session: &SessionId) -> Result<bool, CpdError> {
+    fn nudge(&mut self, target: &Target, session: &SessionId, turns: u64) -> Result<bool, CpdError> {
         log("A5: the Worker is idle without a submit; nudging it");
         let id = &target.id;
         let prompt = format!(
@@ -465,7 +596,7 @@ impl Driver {
             let text = format!("The Worker of Attempt {id} ended its turn without submitting; it was nudged once.");
             events::append(
                 tx,
-                NewEvent::new(Kind::AttemptNudge, text, json!({"prompt": prompt}))
+                NewEvent::attempt_nudge(text, &prompt, turns)
                     .plan(target.plan.clone())
                     .job(target.job.clone())
                     .attempt(id.clone())
@@ -488,7 +619,7 @@ impl Driver {
             if now.status == "merging" {
                 return Ok(true);
             }
-            ledger::end(tx, &now, &end, metrics.as_ref(), &ladder)?;
+            ledger::end(tx, &now, &end, metrics.as_ref(), &ladder, Stage::Driver)?;
             Ok(false)
         })?;
         if submitted {
@@ -503,6 +634,14 @@ impl Driver {
     /// `merging`: once this driver has exited, R (§7.4) ends it, `merged` if
     /// the compare-and-swap already happened.
     fn merge(&mut self, dirs: &PiDirs) -> Result<Ended, CpdError> {
+        // Engine-W1 (§7.4 step 0): the Worker's window goes first, before the merge's
+        // steps, so nothing can move the Attempt branch afterwards. A failure is
+        // reported as A9's is; the merge still runs, A9 tries the kill again.
+        let target = self.load()?;
+        if let Err(e) = worker::kill_window(&self.config, &self.tmux, &target) {
+            log(&format!("killing the Worker's window failed: {}", e.message()));
+            let _ = self.store.write(SOURCE, |tx| append_error(tx, &target, &e));
+        }
         // The safe point before A8's rebase.
         self.reload_if_installed()?;
         log("A8: merging");
@@ -534,7 +673,7 @@ impl Driver {
         result = result.and(removed);
         if let Err(e) = result {
             log(&format!("A9 failed: {}", e.message()));
-            let _ = self.store.write(SOURCE, |tx| ledger::append_error(tx, target, &e));
+            let _ = self.store.write(SOURCE, |tx| append_error(tx, target, &e));
         }
     }
 
@@ -546,7 +685,7 @@ impl Driver {
     fn fail(&mut self, error: &CpdError) {
         log(&format!("failed: {}: {}", error.code().as_str(), error.message()));
         let Ok(target) = self.load() else { return };
-        if let Err(e) = self.store.write(SOURCE, |tx| ledger::append_error(tx, &target, error)) {
+        if let Err(e) = self.store.write(SOURCE, |tx| append_error(tx, &target, error)) {
             log(&format!("cannot append the error Event: {}", e.message()));
         }
         if !matches!(target.status.as_str(), "starting" | "running") || self.catalog.is_none() {
@@ -556,7 +695,7 @@ impl Driver {
         let metrics = PiDirs::from_env().ok().and_then(|dirs| worker::metrics(&dirs, target.worker_session.as_ref()));
         let ladder = Ladder { catalog: self.catalog.as_ref().expect("A1 loads the catalog"), retry_cap: self.config.retry_cap };
         let ended = self.store.write(SOURCE, |tx| {
-            ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, metrics.as_ref(), &ladder)
+            ledger::end(tx, &target, &End::Failed { cause: Cause::Crashed, detail: detail.clone() }, metrics.as_ref(), &ladder, Stage::Driver)
         });
         if let Err(e) = ended {
             log(&format!("cannot end the Attempt: {}", e.message()));
@@ -576,6 +715,45 @@ mod tests {
         assert_eq!(entry(&id, "starting").unwrap(), Entry::Start);
         assert_eq!(entry(&id, "running").unwrap(), Entry::Resume);
         assert_eq!(entry(&id, "merging").unwrap(), Entry::Merge);
+    }
+
+    #[test]
+    fn a_zombie_or_reaped_process_is_not_alive() {
+        assert!(alive(std::process::id()));
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        // Not reaped yet: a zombie once it has exited.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while alive(pid) {
+            assert!(std::time::Instant::now() < deadline, "{pid} still alive");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        child.wait().unwrap();
+        assert!(!alive(pid));
+    }
+
+    #[test]
+    fn a5_judges_the_worker_by_state_stop_reason_turns_and_nudge() {
+        use Decision::*;
+        let table: &[(&str, Option<&str>, u64, Option<u64>, Decision)] = &[
+            ("working", Some("stop"), 3, None, Wait),
+            ("working", Some("stop"), 5, Some(3), Wait),
+            ("working", Some("error"), 3, None, Wait),
+            ("stopped", Some("stop"), 3, None, Wait),
+            ("idle", None, 0, None, Wait),
+            ("idle", Some("toolUse"), 3, None, Wait),
+            ("idle", Some("toolUse"), 5, Some(3), Wait),
+            ("idle", Some("stop"), 3, None, Nudge),
+            ("idle", Some("stop"), 0, None, Nudge),
+            ("idle", Some("stop"), 3, Some(3), Wait),
+            ("idle", Some("stop"), 2, Some(3), Wait),
+            ("idle", Some("stop"), 4, Some(3), NoSubmit),
+            ("idle", Some("error"), 3, None, Crashed("error".to_owned())),
+            ("idle", Some("aborted"), 3, Some(3), Crashed("aborted".to_owned())),
+        ];
+        for (state, stop, turns, nudged, want) in table {
+            assert_eq!(judge(state, *stop, *turns, *nudged), *want, "{state} {stop:?} turns {turns} nudged {nudged:?}");
+        }
     }
 
     #[test]

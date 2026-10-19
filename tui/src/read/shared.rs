@@ -13,7 +13,7 @@ use cpd_core::ids::{AttemptId, ContextId, PlanId, SessionId};
 use cpd_core::plan::Phase;
 use cpd_core::session::{Role, State};
 
-use super::dot::{Dot, DotInputs};
+use super::dot::Dot;
 
 /// A row the database holds in a shape the binary does not accept: it was
 /// changed outside cpd, or by a bug.
@@ -207,7 +207,8 @@ pub struct SessionNode {
     pub place: Place,
     /// It is its Plan's `lead_session`.
     pub plan_lead: bool,
-    /// The dot of the tree (§17), derived from the Session's state, its Events and its Plan.
+    /// The dot of the tree (§17): the glyph of its state as `sessions` reads it; the tree's snapshot fills the `●` from
+    /// the Inbox (`tree()`).
     pub dot: Dot,
     /// When it was archived (contract §4.5); archived Sessions are in the model.
     pub archived_at: Option<String>,
@@ -234,16 +235,7 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        l.lead_session IS NOT NULL,
-       (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
-           AND json_extract(e.data, '$.to') = 'idle' AND json_extract(e.data, '$.from') IN ('working', 'blocked')
-         ORDER BY e.id DESC LIMIT 1),
-       (SELECT e.id FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
-           AND json_extract(e.data, '$.place') = 'chat' ORDER BY e.id DESC LIMIT 1),
-       s.archived_at,
-       (SELECT p.phase FROM plans p WHERE p.id = s.plan),
-       EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = s.plan AND v.status = 'pending'),
-       EXISTS (SELECT 1 FROM prs r JOIN pull_requests q ON q.id = r.pull_request
-                WHERE r.plan = s.plan AND q.state = 'open' AND q.checks IN ('passed', 'failed'))
+       s.archived_at
   FROM sessions s
   LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
@@ -261,20 +253,9 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
         let (state, tier_text, place): (String, String, Option<String>) = (r.get(10)?, r.get(8)?, r.get(14)?);
         let state: State = value_enum("Session state", &state)?;
         let place = place.map_or(Ok(Place::None), |p| Place::parse("Session place", &p))?;
-        let phase: Option<String> = r.get(19)?;
-        let phase = phase.map(|p| value_enum::<Phase>(&format!("Plan of Session {session} has phase"), &p)).transpose()?;
         let plan_lead: bool = r.get(15)?;
         out.push(SessionNode {
-            dot: Dot::of(DotInputs {
-                state,
-                place,
-                settled: r.get(16)?,
-                seen: r.get(17)?,
-                plan_lead,
-                phase,
-                review_pending: r.get(20)?,
-                pr_checked: r.get(21)?,
-            }),
+            dot: Dot::glyph(state),
             role: value_enum("Session role", &role)?,
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             plan: plan.map(|p| PlanId::parse(&p).map_err(|_| field("plan", &p))).transpose()?,
@@ -290,7 +271,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             created_at: r.get(13)?,
             place,
             plan_lead,
-            archived_at: r.get(18)?,
+            archived_at: r.get(16)?,
             id: session,
         });
     }
@@ -323,11 +304,6 @@ pub struct PlanHead {
 impl PlanHead {
     pub fn is_archived(&self) -> bool {
         self.archived_at.is_some()
-    }
-
-    /// The Plan waits on the User: an open Escalation, a pending Plan review, or a Session with a ● (`SessionNode::needs_you`).
-    pub fn needs_you(&self, sessions: &[SessionNode]) -> bool {
-        self.open_escalations > 0 || self.review_pending || sessions.iter().any(SessionNode::needs_you)
     }
 }
 

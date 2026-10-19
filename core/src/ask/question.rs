@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::{AskArgs, Env};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
 use crate::output::Output;
 use crate::store::WriteTxn;
@@ -78,7 +78,7 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
                 .with("plan", plan.as_str())
                 .with("attempt", attempt.to_string())
         } else {
-            CpdError::new(ErrorCode::PlanNotFound, format!("No Plan {plan}.")).with("plan", plan.as_str())
+            CpdError::plan_not_found(plan)
         });
     };
     if status != "running" {
@@ -89,7 +89,7 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
     }
     let session = session
         .and_then(|s| SessionId::parse(&s).ok())
-        .ok_or_else(|| bad_row(format!("Attempt {attempt} is running with no valid Worker Session")))?;
+        .ok_or_else(|| CpdError::bad_row(format!("Attempt {attempt} is running with no valid Worker Session")))?;
     let asker = Asker { plan: plan.clone(), attempt: attempt.clone(), job: attempt.job().clone(), session };
 
     let number: u32 = tx.query_row(
@@ -110,7 +110,7 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
     );
     append(
         tx,
-        NewEvent::new(Kind::Escalation, text, json!({"escalation": id.to_string(), "question": question}))
+        NewEvent::escalation(text, id.to_string(), question)
             .plan(plan.clone())
             .job(asker.job.clone())
             .attempt(attempt.clone()),
@@ -166,7 +166,7 @@ fn set_state(tx: &WriteTxn<'_>, asker: &Asker, from: &str, to: &str, label: Opti
     };
     append(
         tx,
-        NewEvent::new(Kind::SessionState, text, json!({"from": from, "to": to, "label": label}))
+        NewEvent::session_state(text, from, to, label, false)
             .session(asker.session.clone())
             .plan(asker.plan.clone()),
     )?;
@@ -196,7 +196,7 @@ fn settle(env: &mut Env, asker: &Asker, id: &EscalationId, timed_out: bool) -> R
             let text = format!("Escalation {id} of Attempt {} expired: no answer in time.", asker.attempt);
             append(
                 tx,
-                NewEvent::new(Kind::EscalationExpired, text, json!({"escalation": id.to_string(), "reason": "timeout"}))
+                NewEvent::escalation_expired(text, id.to_string(), "timeout")
                     .plan(asker.plan.clone())
                     .job(asker.job.clone())
                     .attempt(asker.attempt.clone()),
@@ -207,11 +207,8 @@ fn settle(env: &mut Env, asker: &Asker, id: &EscalationId, timed_out: bool) -> R
         match (status.as_str(), answer) {
             ("answered", Some(answer)) => Ok(Settled::Answered(answer)),
             ("expired", _) => Ok(Settled::TimedOut),
-            _ => Err(bad_row(format!("Escalation {id} is {status} after the wait"))),
+            _ => Err(CpdError::bad_row(format!("Escalation {id} is {status} after the wait"))),
         }
     })
 }
 
-fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
-}

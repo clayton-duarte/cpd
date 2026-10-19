@@ -6,10 +6,7 @@
 //! (`config.json`, `leads/`, `slots/`, `workflows/`, `locks/merge-*.lock`).
 
 use std::ffi::OsString;
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-
-use sha1::{Digest, Sha1};
 
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{AttemptId, ContextId, PlanId, ReviewId, SessionId};
@@ -111,12 +108,9 @@ impl CpdHome {
         self.locks_dir().join("watch.lock")
     }
 
-    /// `locks/repo-<sha1>.lock`: the per-repo merge lock (contract §7.4).
-    /// `git_common_dir` must be the realpath of the repo's
-    /// `git rev-parse --git-common-dir`; its bytes are hashed as they are.
-    pub fn repo_lock(&self, git_common_dir: &Path) -> PathBuf {
-        let digest = Sha1::digest(git_common_dir.as_os_str().as_bytes());
-        self.locks_dir().join(format!("repo-{digest:x}.lock"))
+    /// `locks/tmux-restart.lock`: held by the one run of the tmux server's restart (contract §6.1).
+    pub fn tmux_restart_lock(&self) -> PathBuf {
+        self.locks_dir().join("tmux-restart.lock")
     }
 
     /// `locks/attempt-<plan>--<attempt>.lock`: the driver lock (contract §3.4).
@@ -147,6 +141,16 @@ impl CpdHome {
     /// `run/watch.log`: the engine's stderr.
     pub fn watch_log(&self) -> PathBuf {
         self.run_dir().join("watch.log")
+    }
+
+    /// `run/tmux-restart.pending`: a restart of the tmux server is pending (contract §6.1).
+    pub fn tmux_restart_pending(&self) -> PathBuf {
+        self.run_dir().join("tmux-restart.pending")
+    }
+
+    /// `run/tmux-restart.log`: the output of the detached tmux restart.
+    pub fn tmux_restart_log(&self) -> PathBuf {
+        self.run_dir().join("tmux-restart.log")
     }
 
     /// `run/context-digests/<context>/`: a Context's digest files (contract §1.4, §4.6).
@@ -310,6 +314,9 @@ mod tests {
         assert_eq!(h.pr_poll_lock(), p("/h/.cpd/locks/pr-poll.lock"));
         assert_eq!(h.plannotator_port(&plan()), p("/h/.cpd/run/pay-4521/plannotator-port"));
         assert_eq!(h.watch_log(), p("/h/.cpd/run/watch.log"));
+        assert_eq!(h.tmux_restart_lock(), p("/h/.cpd/locks/tmux-restart.lock"));
+        assert_eq!(h.tmux_restart_pending(), p("/h/.cpd/run/tmux-restart.pending"));
+        assert_eq!(h.tmux_restart_log(), p("/h/.cpd/run/tmux-restart.log"));
         assert_eq!(h.plan_md(&plan()), p("/h/.cpd/run/pay-4521/plan.md"));
         assert_eq!(h.worker_spec(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/specs/api-schema-a2.md"));
         assert_eq!(h.review_brief(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.md"));
@@ -362,22 +369,11 @@ mod tests {
     }
 
     #[test]
-    fn repo_lock_is_sha1_of_the_common_dir() {
-        // printf %s /home/clayton/projects/pay/.git | sha1sum
-        assert_eq!(
-            home().repo_lock(Path::new("/home/clayton/projects/pay/.git")),
-            p("/h/.cpd/locks/repo-bee53703285f3bbdf3470e5ee86fafecc344a392.lock")
-        );
-    }
-
-    #[test]
     fn no_name_collides_with_cpd_1() {
         let h = home();
         let ours = [h.config(), h.db(), h.old_contexts_dir(), h.archived_contexts_dir(), h.locks_dir(), h.run_dir()];
         for theirs in ["config.json", "leads", "slots", "workflows"] {
             assert!(!ours.contains(&h.root().join(theirs)), "{theirs}");
         }
-        let lock = h.repo_lock(Path::new("/r/.git"));
-        assert!(!lock.file_name().unwrap().to_str().unwrap().starts_with("merge-"));
     }
 }

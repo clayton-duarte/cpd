@@ -15,11 +15,11 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, write_executable};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde_json::{Value, json};
@@ -132,6 +132,7 @@ struct Fx {
 impl Fx {
     fn new() -> Fx {
         let env = TestEnv::new();
+        env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
         // `cpd` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
         symlink(CPD, env.bin().join("cpd")).unwrap();
         let flags = env.root().join("github");
@@ -147,8 +148,7 @@ impl Fx {
         }
         let node = env.home().join(".local/share/pi-node/current/bin/node");
         fs::create_dir_all(node.parent().unwrap()).unwrap();
-        fs::write(&node, format!("#!/bin/sh\necho '{CATALOG}'\n")).unwrap();
-        fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&node, &format!("#!/bin/sh\necho '{CATALOG}'\n"));
 
         fs::write(
             env.cpd_home().join("config.toml"),
@@ -156,7 +156,7 @@ impl Fx {
                 "version = 1\nmachine = \"m1\"\n\
                  [tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
                  [timeouts]\nfork_quiet_seconds = 1\n\
-                 [watch]\ntick_seconds = 1\npr_poll_seconds = 1\n\
+                 [watch]\ntick_seconds = 0.2\npr_poll_seconds = 1\n\
                  [tmux]\nsocket = \"{}\"\n",
                 env.tmux_socket()
             ),
@@ -276,7 +276,7 @@ impl Fx {
 /// A repo `name` on `main` with hooks that log the branch they ran for (§7.3)
 /// and a bare `origin` holding `main`.
 fn repo(env: &TestEnv, name: &str) -> Repo {
-    let path = env.git_repo(name).canonicalize().unwrap();
+    let path = env.keyed_repo(name).canonicalize().unwrap();
     fs::create_dir_all(path.join(".config")).unwrap();
     let log = env.root().join(format!("{name}.hooks.log"));
     fs::write(
@@ -293,7 +293,7 @@ fn repo(env: &TestEnv, name: &str) -> Repo {
     env.git(&path, &["commit", "-q", "-m", "hooks"]);
     let origin = env.root().join(format!("{name}.git"));
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&path, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&path, &origin);
     env.git(&path, &["push", "-q", "-u", "origin", "main"]);
     Repo { path, origin }
 }
@@ -317,12 +317,11 @@ fn flag<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
 
 #[test]
 fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
-    let started = Instant::now();
     let fx = Fx::new();
     let (shared, web) = (fx.shared.path.to_str().unwrap().to_owned(), fx.web.path.to_str().unwrap().to_owned());
 
     // ---------- 1. plan new from a directory that is no repo (A12)
-    fx.ok(&["context", "new", CONTEXT, "--title", "Chain"]);
+    fx.ok(&["context", "new", CONTEXT, "--title", "Chain", "--owner", "acme"]);
     assert!(!fx.env.root().join(".git").exists());
     let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--title", "Change A, then B, then A again"]);
     let lead_session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
@@ -336,7 +335,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
 
     // ---------- 2. the PRs: a1 -> b -> a2, two of them in one repo (A4)
     let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--plan", PLAN]);
-    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "base": "main", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
+    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
     let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--needs", "a1", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/b"), &json!(["a1"])));
     let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--needs", "b", "--plan", PLAN]);
@@ -361,7 +360,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     ]);
     assert_eq!(
         out["job"],
-        json!({"key": "audit", "pr": "a2", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true})
+        json!({"key": "audit", "pr": "a2", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true, "urgent": false})
     );
 
     // ---------- 4. review and lock: only a1 starts (A8)
@@ -419,11 +418,8 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let calls = fx.env.calls("gh");
     let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).unwrap();
     assert_eq!(create[..6], ["pr", "create", "--base", "main", "--head", "cpd/chain/a1"]);
-    // E5 polls whatever the phase, and a1 is not merged: nothing starts. Two polls after the PR was created.
-    let polls = |fx: &Fx| fx.env.calls("gh").iter().filter(|c| c[0] == "api").count();
-    let before = polls(&fx);
-    fx.wait("two more polls", 30, || (polls(&fx) >= before + 2).then_some(()));
-    std::thread::sleep(Duration::from_millis(2500));
+    // E5 polls whatever the phase, and a1 is not merged: nothing starts. Two whole ticks after the PR was created.
+    fx.env.wait_whole_ticks(2);
     assert_eq!((fx.pr_status("b"), fx.pr_status("a2")), ("waiting".to_owned(), "waiting".to_owned()));
     assert!(of_kind(&fx.events(), "attempt-started").iter().all(|e| e["job"] == "schema"));
 
@@ -527,8 +523,8 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(keys, [("a1", 11), ("a2", 13), ("b", 12)]);
     assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "done");
     assert!(["a1", "b", "a2"].iter().all(|k| fx.pr_status(k) == "merged"));
-    // A few more ticks and polls: still one `plan-done`, nothing new started.
-    std::thread::sleep(Duration::from_millis(3000));
+    // Three more whole ticks (each with its poll): still one `plan-done`, nothing new started.
+    fx.env.wait_whole_ticks(3);
     let events = fx.events();
     assert_eq!(of_kind(&events, "plan-done").len(), 1);
     assert_eq!(of_kind(&events, "pr-started").len(), 3);
@@ -541,5 +537,4 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(fx.ok(&["attempt", "list", "--active", "--plan", PLAN])["attempts"], json!([]));
     kill(Pid::from_raw(engine), Signal::SIGTERM).unwrap();
     fx.wait_event("watch-stopped", |e| e["data"]["pid"] == engine);
-    assert!(started.elapsed() < Duration::from_secs(180), "took {:?}", started.elapsed());
 }

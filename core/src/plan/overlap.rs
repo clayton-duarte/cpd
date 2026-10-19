@@ -7,8 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::bad_row;
-use super::fingerprint::PrSpec;
+use super::prs::PrRow;
 use super::jobs::Job;
 use crate::error::CpdError;
 use crate::ids::PlanId;
@@ -79,7 +78,10 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
         .map(|(plan, pr, repo, job, status, touches)| {
             // A stub draft has no Spec yet: no files to compare.
             let touches = touches
-                .map(|text| serde_json::from_str::<Vec<String>>(&text).map_err(|_| bad_row(format!("Job {plan}/{job} has touches {text:?}"))))
+                .map(|text| {
+                    serde_json::from_str::<Vec<String>>(&text)
+                        .map_err(|_| CpdError::bad_row(format!("Job {plan}/{job} has touches {text:?}")))
+                })
                 .transpose()?
                 .unwrap_or_default();
             Ok(Other { plan, pr, repo, job, status, touches })
@@ -89,7 +91,7 @@ pub fn load_others(conn: &Connection, plan: &PlanId) -> Result<Vec<Other>, CpdEr
 
 /// A PR of this Plan whose Jobs are not on their base yet: not `merged`, not
 /// `cancelled`.
-fn is_open(pr: &PrSpec) -> bool {
+fn is_open(pr: &PrRow) -> bool {
     !matches!(pr.status.as_str(), "merged" | "cancelled")
 }
 
@@ -98,12 +100,12 @@ fn is_open(pr: &PrSpec) -> bool {
 /// `merged` PR is on its base already). One overlap per (Job, other Plan,
 /// other PR) that has a Job overlapping it, ordered by this Job's key, then the
 /// other Plan, then the PR. Pure.
-pub fn find(prs: &[PrSpec], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
+pub fn find(prs: &[PrRow], jobs: &[Job], others: &[Other]) -> Vec<Overlap> {
     let mut open: Vec<&Job> = jobs.iter().filter(|j| j.status != "cancelled").collect();
     open.sort_by(|a, b| a.key.cmp(&b.key));
     let mut out = Vec::new();
     for job in open {
-        let Some(pr) = prs.iter().find(|p| p.key == job.pr && is_open(p)) else { continue };
+        let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr && is_open(p)) else { continue };
         let mut paths: Vec<&str> = Vec::new();
         // A stub draft has no Spec yet, so no files to compare.
         let touches = job.spec.as_ref().and_then(|s| s.touches.as_array());

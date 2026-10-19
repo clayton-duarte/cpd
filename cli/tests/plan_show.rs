@@ -8,7 +8,6 @@ use std::fs;
 
 use common::TestEnv;
 use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 struct Fx {
@@ -22,7 +21,7 @@ fn fx(phase: &str) -> Fx {
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
     let fx = Fx { env };
-    fx.sql(&format!(
+    fx.env.sql(&format!(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay-1', 'Lead', '/', 'O3', 'idle', 't', 't');
@@ -33,11 +32,6 @@ fn fx(phase: &str) -> Fx {
 }
 
 impl Fx {
-    fn sql(&self, sql: &str) {
-        let home = CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap();
-        Store::open(&home, 5000).unwrap().write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
-    }
-
     /// A PR of `pay-1` in `status`, with the columns that status requires.
     fn pr(&self, key: &str, status: &str, needs: &[&str]) {
         let (worktree, started, pull) = match status {
@@ -59,7 +53,7 @@ impl Fx {
             ""
         };
         let needs: String = needs.iter().map(|n| format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', '{key}', '{n}');")).collect();
-        self.sql(&format!(
+        self.env.sql(&format!(
             "{row}
              INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at)
@@ -71,7 +65,7 @@ impl Fx {
     /// A draft (or `cancelled`) Job of PR `pr`.
     fn job(&self, key: &str, pr: &str, status: &str, needs: &[&str]) {
         let needs: String = needs.iter().map(|n| format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay-1', '{key}', '{n}');")).collect();
-        self.sql(&format!(
+        self.env.sql(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
                                cancel_reason, cancel_requested_at, created_txn, created_at)
              VALUES ('pay-1', '{pr}', '{key}', 'Job {key}', 'S2', 'Goal of {key}.', 'Context of {key}.', '[\"src/{key}.rs\"]', '[\"cargo test\"]', '[]',
@@ -139,7 +133,7 @@ fn one_pr() -> Fx {
 #[test]
 fn show_with_one_pr_lists_its_fields_and_its_jobs() {
     let fx = one_pr();
-    fx.sql("UPDATE jobs SET review = 1 WHERE key = 'b'");
+    fx.env.sql("UPDATE jobs SET review = 1 WHERE key = 'b'");
     let show = fx.show();
     let plan = show["plan"].as_object().unwrap();
     assert_eq!(plan.keys().map(String::as_str).collect::<Vec<_>>(), ["archived_at", "context", "created_at", "done_at", "id", "jira", "lead_session", "locked_at", "phase", "title"]);
@@ -290,6 +284,6 @@ fn a_pr_without_jobs_says_so_and_the_fingerprint_covers_the_prs() {
     let (out, text) = fx.render();
     assert!(text.contains("\n## PR web\n\nRepo: `/r/web` · Base: `main` · Needs: `api`\n\nNo Jobs yet.\n"), "{text}");
     let before = out["fingerprint"].clone();
-    fx.sql("UPDATE prs SET base = 'develop' WHERE key = 'web'");
+    fx.env.sql("UPDATE prs SET base = 'develop' WHERE key = 'web'");
     assert_ne!(fx.render().0["fingerprint"], before);
 }

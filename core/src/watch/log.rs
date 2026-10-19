@@ -4,20 +4,12 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 
-use time::OffsetDateTime;
-use time::macros::format_description;
-
+use crate::clock;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
 pub(super) struct Log {
     file: File,
-}
-
-/// Now, as contract §1.3 writes times: RFC 3339 UTC with milliseconds.
-pub(super) fn timestamp(at: OffsetDateTime) -> String {
-    at.format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .expect("a UTC time always formats")
 }
 
 impl Log {
@@ -38,7 +30,7 @@ impl Log {
     /// One line, prefixed with the time. A line that cannot be written is
     /// dropped: the log must never stop the engine.
     pub(super) fn line(&mut self, message: &str) {
-        let line = format!("{} cpd watch: {message}\n", timestamp(OffsetDateTime::now_utc()));
+        let line = format!("{} cpd watch: {message}\n", clock::now());
         let _ = std::io::stderr().write_all(line.as_bytes());
         let _ = self.file.write_all(line.as_bytes());
     }

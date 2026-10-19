@@ -192,11 +192,30 @@ fn parse<T: for<'de> Deserialize<'de>>(args: &[&str], stdout: &str) -> Result<T,
     })
 }
 
-/// The open PR whose head is `head`, if any.
-pub fn open_pr(cwd: &Path, head: &str) -> Result<Option<PrRef>, CpdError> {
-    let args = ["pr", "list", "--head", head, "--state", "open", "--json", "number,url"];
-    let found: Vec<PrRef> = parse(&args, &run(cwd, &args)?)?;
-    Ok(found.into_iter().next())
+/// A pull request's state as `gh pr list --json state` names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum HeadState {
+    #[serde(rename = "OPEN")]
+    Open,
+    #[serde(rename = "CLOSED")]
+    Closed,
+    #[serde(rename = "MERGED")]
+    Merged,
+}
+
+/// A pull request of a head branch, in any state.
+#[derive(Debug, Deserialize)]
+pub struct HeadPr {
+    pub number: i64,
+    pub url: String,
+    pub state: HeadState,
+}
+
+/// The newest (highest number) pull request whose head is `head`, in any state, if any.
+pub fn head_pr(cwd: &Path, head: &str) -> Result<Option<HeadPr>, CpdError> {
+    let args = ["pr", "list", "--head", head, "--state", "all", "--json", "number,url,state"];
+    let found: Vec<HeadPr> = parse(&args, &run(cwd, &args)?)?;
+    Ok(found.into_iter().max_by_key(|f| f.number))
 }
 
 /// `gh pr create`. It has no `--json`: the URL is its last stdout line, and the
@@ -237,6 +256,33 @@ pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
         Ok(State { state }) if state == "CLOSED" || state == "MERGED" => Ok(()),
         _ => Err(failure),
     }
+}
+
+/// `gh pr view <n> --repo <repo> --json state,mergeStateStatus,headRefOid,title`: what `pr merge` re-checks (`title` is selected, as the docs say, and not kept).
+#[derive(Debug, Deserialize)]
+pub struct MergeView {
+    /// `OPEN`, `CLOSED` or `MERGED`.
+    pub state: String,
+    /// GitHub's word: `CLEAN`, `BLOCKED`, `DIRTY`…
+    #[serde(rename = "mergeStateStatus")]
+    pub merge_state: String,
+    #[serde(rename = "headRefOid")]
+    pub head: String,
+}
+
+/// The pull request `number` of `repo`, read fresh from GitHub.
+pub fn view_for_merge(cwd: &Path, repo: &str, number: i64) -> Result<MergeView, CpdError> {
+    let n = number.to_string();
+    let args = ["pr", "view", &n, "--repo", repo, "--json", "state,mergeStateStatus,headRefOid,title"];
+    parse(&args, &run(cwd, &args)?)
+}
+
+/// `gh pr merge <number> --repo <repo> --squash --delete-branch --match-head-commit <head>`: GitHub
+/// refuses when the branch is no longer at `head`.
+pub fn merge_pr(cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {
+    let n = number.to_string();
+    let args = ["pr", "merge", &n, "--repo", repo, "--squash", "--delete-branch", "--match-head-commit", head];
+    run(cwd, &args).map(drop)
 }
 
 /// Inline review comments, which `gh pr view` does not list. `{owner}/{repo}`

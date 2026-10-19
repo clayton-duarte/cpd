@@ -3,23 +3,23 @@
 //! - [`submit`]: `attempt submit`, the Worker's one write (§6.1);
 //! - [`read`]: `attempt read`, a transcript of the Worker's session (§6.2);
 //! - [`show`]: `attempt show` and `attempt list` (§6.3);
-//! - [`row`]: the `attempts` and `escalations` rows as read.
+//! - [`row`]: the `attempts` and `escalations` rows as read;
+//! - `ledger`: the Attempt as the driver and the merge read it, and the transactions that end one.
 //!
 //! `attempt run` belongs to the driver (`crate::driver`).
 
+pub(crate) mod ledger;
 mod read;
 mod row;
 mod show;
 mod submit;
 
 use crate::args::PlanArg;
-use crate::config::Config;
 use crate::driver;
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
+use crate::env::Env;
+use crate::error::CpdError;
 use crate::ids::{AttemptId, JobKey};
 use crate::output::Output;
-use crate::store::Store;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -88,24 +88,3 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
     }
 }
 
-/// What every command opens: `$CPD_HOME`, its config and the store.
-struct Env {
-    home: CpdHome,
-    config: Config,
-    store: Store,
-}
-
-impl Env {
-    fn open() -> Result<Env, CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = Config::load(&home)?;
-        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        Ok(Env { home, config, store })
-    }
-}
-
-/// A row the database holds in a shape the binary does not accept: it was
-/// changed outside cpd, or by a bug.
-fn bad_row(what: impl std::fmt::Display) -> CpdError {
-    CpdError::new(ErrorCode::StoreFailed, format!("The database holds an invalid row: {what}."))
-}
