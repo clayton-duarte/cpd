@@ -459,3 +459,14 @@ test("the skills' list of pr-feedback reasons and of ladder causes is the contra
   assert.ok(failed.length >= 7, "the Failed Jobs table lists the causes");
   for (const cause of failed.flatMap((c) => ticks(c, /./))) assert.ok(vocabulary().causes.has(cause), `Failed Jobs: ${cause} is no cause of contract.md §3.4`);
 });
+
+test("hs-d239: cpd-lead registers planned work at once; cpd-manager checks it", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /Register planned work at once \(hs-d239\)/);
+  assert.match(lead, /cpd job add <k> --draft --title/);
+  assert.match(lead, /cpd pr add <key> --repo <path> --needs/);
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(manager, /Check hs-d239 for each Plan/);
+  assert.match(manager, /cpd plan show --plan <p>/);
+  assert.match(manager, /cpd session send <lead-session>[^\n]*register/);
+});

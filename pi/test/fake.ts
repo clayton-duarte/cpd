@@ -1,11 +1,11 @@
-import { execFile } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
 import { PROTOCOL } from "../lib/event.ts";
-import type { CommandCtx, Ctx, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
+import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
 
@@ -60,8 +60,26 @@ async function follow() {
 })();
 `;
 
-/** Stands for pi's jiti in the throwaway load (the real one is pi's, not a dependency of this repo): loads the file natively, which node does for `.ts`. */
-const FAKE_JITI = `export const createJiti = () => ({ import: async (path) => (await import(path)).default });\n`;
+/**
+ * Stands for pi in the pre-validation (`pi --no-extensions --no-session -e <dir> --mode rpc`; the real one is pi's, not a dependency of this repo): loads
+ * `<dir>/extension.ts` natively, which node does for `.ts`, and exits 0, or 1 with pi's message on stderr when the load throws or the default export is not a function.
+ * Records its environment in `validate-calls.jsonl` (the scratch agent directory must exist while it runs).
+ */
+const FAKE_PI = `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const argv = process.argv.slice(2);
+const dir = argv[argv.indexOf("-e") + 1];
+const entry = path.join(dir, "extension.ts");
+fs.appendFileSync(path.join(process.env.FAKE_CPD_DIR, "validate-calls.jsonl"), JSON.stringify({ argv, cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR, offline: process.env.PI_OFFLINE, agentDirExists: fs.existsSync(process.env.PI_CODING_AGENT_DIR) }) + "\\n");
+import(entry).then((m) => {
+  if (typeof m.default !== "function") throw new Error("Extension does not export a valid factory function: " + entry);
+  process.exit(0);
+}).catch((e) => {
+  console.error('Error: Failed to load extension "' + entry + '": ' + (e instanceof Error ? e.message : String(e)) + "\\nHint: Start without extensions using \\"pi -ne\\".");
+  process.exit(1);
+});
+`;
 
 export const ID = "596d007f-6775-4134-b77a-b356cc523842";
 export const OTHER = "11111111-2222-4333-8444-555555555555";
@@ -73,8 +91,6 @@ export class Fixture {
   readonly cpdHome = join(this.dir, "cpd-home");
   /** Stands for the adapter's installed directory (`options.reload.dir`). */
   readonly adapterDir = join(this.dir, "adapter");
-  /** The loader the throwaway load of a new package uses (`reload.loader`). */
-  readonly loader = join(this.dir, "fake-jiti.mjs");
   readonly pi: FakePi;
   private readonly saved: Record<string, string | undefined> = {};
 
@@ -83,7 +99,8 @@ export class Fixture {
     mkdirSync(join(this.dir, "resp"));
     mkdirSync(this.cpdHome);
     mkdirSync(this.adapterDir);
-    writeFileSync(this.loader, FAKE_JITI);
+    writeFileSync(join(this.dir, "bin", "pi"), FAKE_PI);
+    chmodSync(join(this.dir, "bin", "pi"), 0o755);
     writeFileSync(join(this.dir, "bin", "cpd"), FAKE_CPD);
     chmodSync(join(this.dir, "bin", "cpd"), 0o755);
     for (const k of ["PATH", "FAKE_CPD_DIR", "CPD_SESSION", "CPD_PLAN", "CPD_HOME"]) this.saved[k] = process.env[k];
@@ -175,10 +192,12 @@ export class Fixture {
 
   /** Start the adapter under test with fast timing. */
   load(options: Options = {}): void {
+    const start = options.spawn ?? spawn;
     adapter(this.pi, {
-      timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200 },
       ...options,
-      reload: { dir: this.adapterDir, intervalMs: 20, loader: this.loader, ...options.reload },
+      spawn: ((...args: Parameters<typeof spawn>) => this.pi.track(start(...args))) as typeof spawn,
+      timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
+      reload: { dir: this.adapterDir, intervalMs: 20, ...options.reload },
     });
   }
 
@@ -191,8 +210,8 @@ export class Fixture {
     try {
       // `session_shutdown` SIGTERMs the followers without waiting, and the fake's handler still writes `killed-<pid>` into the dir: remove it only once every follower is gone.
       await waitFor("every fake follower to exit", () => this.pids().every((pid) => !alive(pid)), 10_000);
-      // A one-shot `cpd` call (for example a poll's `--version`) still running logs `end` into the dir when it finishes.
-      await waitFor("every fake cpd call to finish", () => this.pi.execsRunning.size === 0, 10_000);
+      // A `cpd` process (a one-shot call such as a poll's `--version`, or a follower not yet in `follower.pids`) logs into the dir until it is gone.
+      await waitFor("every fake cpd process to close", () => this.pi.childrenRunning.size === 0, 10_000);
     } finally {
       for (const [k, v] of Object.entries(this.saved)) {
         if (v === undefined) delete process.env[k];
@@ -275,15 +294,30 @@ export class FakePi implements PiApi {
   /** The `exec` calls (argv, without the command) started and not yet finished: a call is in flight from the moment the adapter makes it, however long the process takes to start. */
   readonly execsRunning = new Set<string[]>();
 
-  exec(command: string, args: string[]): ReturnType<PiApi["exec"]> {
+  /** Every process the adapter started (a call or a follower) that node has not yet seen close. `execFile` answers a call aborted or timed out at once, while its killed process may still be starting up, so `execsRunning` is not enough to know nothing more is written into the dir. */
+  readonly childrenRunning = new Set<ChildProcess>();
+
+  track<T extends ChildProcess>(child: T): T {
+    this.childrenRunning.add(child);
+    child.once("close", () => this.childrenRunning.delete(child));
+    return child;
+  }
+
+  /** Like pi's `execCommand`: `timeout` and `signal` SIGTERM the process, and the result says `killed` (its `code` is then not an exit code). */
+  exec(command: string, args: string[], options: ExecOptions = {}): Promise<ExecResult> {
     this.execsRunning.add(args);
+    this.execOptions.push({ command, args, options });
     return new Promise((resolve) => {
-      execFile(command, args, { encoding: "utf8" }, (err, stdout, stderr) => {
+      this.track(execFile(command, args, { ...options, encoding: "utf8" }, (err, stdout, stderr) => {
         this.execsRunning.delete(args);
-        resolve({ stdout, stderr, code: err ? (typeof err.code === "number" ? err.code : 1) : 0, killed: err?.killed ?? false });
-      });
+        const killed = err !== null && (err.killed === true || err.name === "AbortError");
+        resolve({ stdout, stderr, code: killed ? 0 : err ? (typeof err.code === "number" ? err.code : 1) : 0, killed });
+      }));
     });
   }
+
+  /** What `exec` was called with, in order. */
+  readonly execOptions: { command: string; args: string[]; options: ExecOptions }[] = [];
 
   readonly sendMessage: PiApi["sendMessage"] = (message, options) => {
     if (!options || typeof message.content !== "string") throw new Error("the adapter always passes send options and a string content");

@@ -16,6 +16,10 @@ export type PiApi = Pick<
 >;
 
 export type Exec = PiApi["exec"];
+/** pi's `ExecOptions` (`core/exec.d.ts`): `timeout` in ms; `timeout` and `signal` both end the process with SIGTERM. */
+export type ExecOptions = NonNullable<Parameters<Exec>[2]>;
+/** pi's `ExecResult`: `killed` is set when the timeout or the signal ended the process (its `code` is then not an exit code). */
+export type ExecResult = Awaited<ReturnType<Exec>>;
 /** What the adapter sends: always a string `content`. */
 export type Message = Parameters<PiApi["sendMessage"]>[0] & { content: string };
 export type SendOptions = NonNullable<Parameters<PiApi["sendMessage"]>[1]>;

@@ -198,3 +198,48 @@ test("a Manager reads no Plan, registers no plan-review tool, opens no plannotat
   assert.deepEqual(f.pi.emitted, [], "nothing is asked of plannotator");
   assert.deepEqual(f.pi.delivered(), []);
 });
+
+test("a hanging cpd call ends at the timeout and is reported as a failed call (pi-ci-W5)", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("session-show", sessionShow(), { delay: 10_000 });
+  f.load({ timing: { callTimeoutMs: 300 } });
+  const began = Date.now();
+  await f.pi.fire("session_start"); // returns when `session show` has failed
+  assert.ok(Date.now() - began < 5000, "session_start was not held by the hang");
+  const [e] = f.pi.errors();
+  assert.equal((e!.message.details as any).code, "tool_timeout");
+  assert.match(e!.message.content, /session show/);
+  assert.deepEqual(f.follows(), [], "a failed start follows nothing");
+});
+
+test("every cpd call carries pi's timeout and the abort signal of the run, aborted at session_shutdown (pi-ci-W5)", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", planShow());
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  const calls = f.pi.execOptions.filter((c) => c.args[0] !== "events");
+  assert.ok(calls.length >= 3);
+  for (const c of calls) assert.equal(c.options.timeout, 10_000, c.args.join(" "));
+  const show = calls.find((c) => c.args[0] === "session" && c.args[1] === "show")!;
+  assert.ok(show.options.signal instanceof AbortSignal);
+  assert.equal(show.options.signal.aborted, false);
+  await f.pi.fire("session_shutdown");
+  assert.equal(show.options.signal.aborted, true);
+});
+
+test("a call in flight at session_shutdown is aborted, not waited for, and reported as failed (pi-ci-W5)", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("session-show", sessionShow(), { delay: 10_000 });
+  f.load();
+  const starting = f.pi.fire("session_start");
+  await waitFor("session show running", () => f.pi.execsRunning.size > 0);
+  await f.pi.fire("session_shutdown");
+  const began = Date.now();
+  await starting;
+  assert.ok(Date.now() - began < 5000, "the call was aborted, not waited for");
+  assert.equal((f.pi.errors()[0]!.message.details as any).code, "aborted");
+});

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -250,7 +250,14 @@ impl Fx {
 
     /// `start` with the engine run from the binary at `exe`.
     fn start_from(&self, exe: &Path) -> Engine {
-        let child = self.env.command(exe).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        self.start_with(exe, &[])
+    }
+
+    /// `start_from` with the variables `vars` added to the engine's environment.
+    fn start_with(&self, exe: &Path, vars: &[(&str, &str)]) -> Engine {
+        let mut command = self.env.command(exe);
+        command.envs(vars.iter().copied());
+        let child = command.arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine { child: Some(child) };
         let pid = engine.pid();
         wait_until("watch-started", || {
@@ -1065,6 +1072,37 @@ fn e5_reports_a_failing_poll_once() {
     let (plan, job, attempt, data) = &errors[0];
     assert_eq!((plan, job, attempt), (&None, &None, &None));
     assert_eq!((&data["source"], &data["code"], &data["details"]["exit"]), (&json!("watch"), &json!("gh_failed"), &json!(1)));
+}
+
+/// Whether process `pid` is running (a zombie is not).
+fn running(pid: i32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
+}
+
+/// engine-W4: a `cpd pr poll` child that hangs (its `gh` sleeps, and so does a child of
+/// that `gh`) is killed at its deadline with its whole process group, and E5 reports
+/// `tool_timeout`. The deadline is shortened to 2 s by `CPD_TEST_DEADLINE_CPD`, which a
+/// debug build reads.
+#[test]
+fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() {
+    let fx = fx_bare("");
+    let pids = fx.env.root().join("gh.pids");
+    fx.env.fake_gh(&format!("sleep {SLEEP_SECONDS} & echo \"$$ $!\" >> '{}'; wait", pids.display()));
+
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "2")]);
+    wait_until("E5's tool_timeout", || fx.count("error") >= 1);
+    engine.stop();
+
+    let errors = fx.events("error");
+    let data = &errors[0].3;
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tool_timeout")), "{errors:?}");
+    let details = &data["details"];
+    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(2)), "{details}");
+    assert_eq!(details["argv"], json!([CPD, "pr", "poll"]));
+    for pid in fs::read_to_string(&pids).unwrap().split_whitespace() {
+        let pid: i32 = pid.parse().unwrap();
+        wait_until(&format!("gh's process {pid} to end"), || !running(pid));
+    }
 }
 
 #[test]

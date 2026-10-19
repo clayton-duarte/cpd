@@ -434,6 +434,41 @@ fn a_locked_job_and_its_dependencies_are_job_locked() {
 }
 
 #[test]
+fn a_stub_draft_has_a_title_only_and_a_job_that_is_not_a_draft_has_its_tier_and_its_spec() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    let insert = |key: &str, status: &str, fingerprint: &str| {
+        format!(
+            "INSERT INTO jobs (plan, pr, key, title, status, appended, fingerprint, created_txn, created_at)
+             VALUES ('pay', 'pay', '{key}', 'T', '{status}', 1, {fingerprint}, cpd_txn(), 't')"
+        )
+    };
+    // A stub draft is stored, and may be cancelled as such.
+    store.write("test", |tx| exec(tx, &insert("stub", "draft", "NULL"))).unwrap();
+    store
+        .write("test", |tx| exec(tx, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'stub'"))
+        .unwrap();
+    // No other status is, and a draft cannot be queued while it lacks its Tier or Spec.
+    store.write("test", |tx| exec(tx, &insert("stub2", "draft", "NULL"))).unwrap();
+    for sql in [insert("direct", "queued", &format!("'{FP}'")), format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'stub2'")] {
+        let err = refused(&mut store, &sql);
+        assert!(sqlite_message(&err).contains("CHECK constraint failed"), "{sql}: {err:?}");
+    }
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "UPDATE jobs SET tier = 'S2', goal = 'g', context = 'c', touches = '[\"a\"]', acceptance = '[\"b\"]', out_of_scope = '[]' WHERE key = 'stub2';
+                     UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'stub2'"
+                ),
+            )
+        })
+        .unwrap();
+}
+
+#[test]
 fn appending_a_job_inserts_its_dependencies_in_its_own_transaction() {
     // dependencies_locked: a non-draft Job created in this transaction (append) may get Dependencies.
     let env = TestEnv::new();
@@ -703,7 +738,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "7da9b792cadf9d12a54eb26ad99a78c48fdcbb2e4a220f767973a7760cd16c9a", "version 13 (the PR poll's Inbox kinds, migration 0013) on top of version 12 (the Inbox, migration 0012)");
+    assert_eq!(hash, "2d346012b74ad0cba8d2f1658e1b9178942c0f9b6dc0d1014c0a2b722d62c599", "version 14 (stub drafts, migration 0014) on top of version 13 (the PR poll's Inbox kinds, migration 0013)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -1296,6 +1331,39 @@ fn version_on_a_newer_database_succeeds_and_does_not_change_it() {
     assert_eq!(out["schema"], VERSION);
     assert_eq!(out["store_schema"], VERSION + 1);
     assert_eq!(fs::read(home(&env).db()).unwrap(), before);
+}
+
+/// store-W8: a held `locks/store.lock` is waited for at most `busy_ms`.
+#[test]
+fn a_held_setup_lock_gives_lock_timeout_after_store_busy_ms() {
+    use nix::fcntl::{Flock, FlockArg};
+    let env = TestEnv::new();
+    let h = home(&env);
+    fs::create_dir_all(h.locks_dir()).unwrap();
+    let path = h.locks_dir().join("store.lock");
+    let file = fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
+    let held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let opener = std::thread::spawn(move || {
+        let start = Instant::now();
+        let result = Store::open(&h, 300).map(drop);
+        tx.send((result, start.elapsed())).unwrap();
+    });
+    let received = rx.recv_timeout(Duration::from_secs(10));
+    drop(held); // lets a still-waiting opener finish
+    opener.join().unwrap();
+    let (result, waited) = received.expect("Store::open still waited for the lock after 10 s");
+
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
+    assert!(waited >= Duration::from_millis(300), "gave up after {waited:?}");
+    assert!(waited < Duration::from_secs(5), "waited {waited:?}");
+    assert!(err.message().contains("store.lock"), "{err}");
+    assert!(err.message().contains("300"), "{err}");
+    assert_eq!(err.details()["lock"], path.display().to_string());
+    assert_eq!(err.details()["waited_ms"], 300);
+    assert!(!home(&env).db().exists(), "a refused open created the database");
 }
 
 /// `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6) are both `store_busy` (contract §4.2).
