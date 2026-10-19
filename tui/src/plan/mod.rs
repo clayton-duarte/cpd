@@ -598,7 +598,7 @@ mod tests {
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,
-            tier: Tier::parse("S1").unwrap(),
+            tier: Some(Tier::parse("S1").unwrap()),
             needs: Vec::new(),
             appended: false,
             retry_tier: None,

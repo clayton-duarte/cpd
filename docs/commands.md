@@ -597,7 +597,7 @@ Idempotent: yes; in phase `plan` it returns `"already": true` and writes nothing
 cpd plan render [--plan <id>]
 ```
 
-Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then the section `## Overlaps` (below); then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs, the number of PRs that are not `cancelled` and the overlaps.
+Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then the section `## Overlaps` (below); then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. A **stub draft** (no Tier or no Spec, §5.1) is shown as it is, visibly incomplete: `Tier: —` in its table row and section when it has no Tier, and `Spec: not written yet` in place of its Spec subsection's goal, context, touches, acceptance and out of scope when it has none. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs, the number of PRs that are not `cancelled` and the overlaps.
 
 **Overlaps** (B4-A3, hs-d78, hs-d172, hs-n201): the warning that another Plan is working on the same files. It is made here and so in the Plan review (§4.6), and nowhere else: `job add` does not warn. It looks at **open work** only, on both sides: the Jobs that are not `cancelled` (`draft`, `queued`, `running`, `failed`, or `merged` on its Lead Branch) of PRs that are not `merged` and not `cancelled`. A Job of a `merged` PR is on its base already and cannot clash with anyone's work any more, so the Jobs of this Plan's `merged` PRs are not checked. For each PR of this Plan that is not `merged` and not `cancelled`, every **other** active Plan (any Context; its phase is not `done` and it is not archived) is looked at when it has a PR in the same repo (the same `prs.repo` realpath as stored) that is not `merged` and not `cancelled`. A Job of that PR overlaps a Job of this PR when a path in the `touches` of the one overlaps a path in the `touches` of the other. Two paths overlap when they are equal, or when one is a directory (ends with `/`) that contains the other. Nothing else is compared (no globs, no normalisation). A Plan's own Jobs are never listed. The warning is only that: nothing is refused and no state changes.
 
@@ -634,6 +634,7 @@ Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `pl
 |---|---|---|
 | the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed) | `no_draft_jobs` | 3 |
+| every `draft` Job has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
 
 Effects:
 - **Files:** renders the plan to `run/<plan>/plan.md` and copies it to `run/<plan>/plan-<review>.md`, so a later render cannot change what the User reviews. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other PR that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
@@ -643,6 +644,8 @@ Effects:
 {"ok": true, "review": {"id": "r3", "fingerprint": "9f86d081…", "status": "pending", "requested_at": "…"}, "path": "/home/clayton/.cpd/run/pay-4521/plan-r3.md",
  "next": "The User reviews the plan in plannotator. Stop and wait for the decision message."}
 ```
+
+**Stubs** (hs-d241, R1). A draft without its Tier or its Spec (a stub, §5.1) cannot be approved, so the review is **not requested**: it is refused `draft_incomplete` (exit 3) with `details.jobs` = `[{"key": "api-1", "missing": ["spec"]}, …]`, in key order, `missing` holding `"tier"` and/or `"spec"`. The same refusal applies through the tool `cpd_plan_review`. Nothing is rendered or written. The Lead completes each stub with `job edit --tier --spec` (§5.2) or cancels it, then asks again. The plan fingerprint covers a stub as it is (contract §2.3), so completing one changes it.
 
 Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` and writes nothing. When the Jobs or PRs changed since, it requests a new review; the older one stays `pending` and no longer matters, because `plan lock` reads only the latest (§2.3).
 
@@ -683,6 +686,7 @@ cpd plan lock [--plan <id>]
 |---|---|---|
 | the phase is `plan` (`dispatch`: `already`) | `illegal_transition` | 3 |
 | at least one Job is `draft` | `no_draft_jobs` | 3 |
+| every `draft` Job has its Tier and its Spec, as `plan review` requires (§4.6; `details.jobs` as there) | `draft_incomplete` | 3 |
 | the latest Plan review is `approved` for the current plan fingerprint (§2.3: Jobs and PRs) | `plan_not_approved` | 3 |
 | at least one PR is not `cancelled`, and each such PR has at least one `draft` Job; `details.prs` lists the empty PRs (none at all: `details.next` = `cpd pr add`) | `pr_empty` | 3 |
 | the Dependency graph of the draft Jobs is acyclic, and so is the needs graph of the PRs | `dependency_cycle` | 3 |
@@ -825,14 +829,17 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 
 ```
 cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--plan <id>]
+cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key>] [--needs <k1,k2>] [--plan <id>]
 ```
+
+`--tier` and `--spec` are required, except with `--draft`: a **stub draft** (hs-d241, R1) needs only `--title`; either or both of `--tier` and `--spec` may be given too. A Job that is not a draft, and a `--review` Job, still needs both (`usage`, exit 2). The Lead registers planned work with a stub the moment it is planned (hs-d239) and completes it later with `cpd job edit <key> --tier <T> --spec <file>` (§5.2). A follow-up PR is added the same way: `pr add <key> --repo … --needs …` (§9.4) plus stub drafts in it.
 
 | Flag | Meaning |
 |---|---|
 | `<key>` | Job key (§2.1). Change: positional, like every other `job` command (cpd 1 had `--key`) |
 | `--pr <key>` | the Job's PR (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one |
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
-| `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts |
+| `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts. Without `--tier` and `--spec` it is a stub (above); `--draft` is the only way to add a Job without them |
 | `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
 
 | Precondition | Code | Exit |
@@ -844,6 +851,8 @@ cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs 
 | every `needs` Job is in the same PR; `details.jobs` lists those that are not | `needs_other_pr` | 3 |
 | no `needs` Job is `cancelled` or `failed`; with `--review`, no Job of the PR is `failed` (retry or cancel it first; `details.jobs` lists them), because a Dependency on a `failed` Job is refused | `needs_unavailable` | 3 |
 | without `--draft`, in a phase after `plan`: no `needs` Job is a `draft`, and with `--review` no Job of the PR is a `draft` (`details.jobs` lists them; its message says to add this Job with `--draft`, or to approve the drafts first), because a `queued` Job could start before the draft it needs exists | `needs_unavailable` | 3 |
+
+**A stub draft** stores `tier` and the Spec fields `goal`, `context`, `touches`, `acceptance` and `out_of_scope` as null for what was not given (a given `--spec` sets all five; `--tier` sets the Tier), and its `job-added` Event has `tier: null` when it has none. A draft that lacks its Spec or its Tier is **incomplete**: it is never queued or run (contract §3.2), a Plan review of it is refused `draft_incomplete` (§4.6) and so is `plan lock` (§4.8). `needs` and `pr` work as for any draft.
 
 Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
 
@@ -858,6 +867,8 @@ Idempotent: yes, as stated (`--draft` is not a Locked field: the call that found
 ```
 cpd job edit <key> [--title <text>] [--tier <T>] [--spec <file>] [--pr <key>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
+
+**Completing a stub draft** (hs-d241, R1): `cpd job edit <key> --tier <T> --spec <file>` sets the Tier and the Spec of a draft that lacks them (a draft is editable, so this is an ordinary edit; `fields` lists `tier` and `spec`). Once the draft has both, it is complete and a Plan review may approve it (§4.6). The edit changes the plan fingerprint (contract §2.3), which covers a stub as it is.
 
 A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), including one added after the lock, whose review may be pending: the edit changes the fingerprint of the drafts, so the pending review no longer matters (§4.6). `--needs` may name drafts. `--no-needs` removes every Dependency (cpd 1 had no way to). `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
 
@@ -1234,7 +1245,7 @@ Idempotent: yes; a base that has not moved gives `"rebased": false`, and only th
 cpd pr add <key> --repo <path> [--base <branch>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
 
-Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
+Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
 
 | Flag | Meaning |
 |---|---|
@@ -2244,6 +2255,33 @@ Pending work:
 ```
 
 Per active Plan (not `done`, not archived), one line `- <plan> (<phase>), PR <key> <status>[ #<n>]: <m> merged on its Lead Branch, <q> queued, <r> running, <f> failed, <d> draft` (one line per PR that is not `merged` and not `cancelled`; ` #<n>` only once the pull request exists), each followed by up to 10 lines `  - <job> <status>: <title>` for that PR's Jobs in `seq` order, then `  and <K> more` when there are more. Touched files are not listed: the Manager runs `cpd context pending` for them. The section is omitted when no Plan is active. Because it is not cursor-based it alone does not make the message appear when `Plans:` and the records have nothing new: the message is returned when either of them has something, or when `Pending work:` is not empty; `details.event` is unchanged by it. A failed read of the section fails the message as in "Failure".
+
+### 15.8 Turn-end reminder
+
+Batch register (hs-d241, R2; the rule is hs-d239: no planned work lives only in a Lead's chat). A heuristic that nudges a Lead to register what it announced. It lives in its own module of the adapter (`pi/lib/reminder.ts`), with a few lines in `adapter.ts`.
+
+**When.** At pi's `before_agent_start`, for a Session of role `lead` only (never a Manager, never a Worker). It never starts, wakes or interrupts a turn: it only adds a message to the run that is starting.
+
+**The check**, made at the end of each run of the Lead (so it concerns the Lead's **last assistant message of that run**) and held for the next run. The reminder is due when both hold:
+
+1. **It talks of future work**: the message contains, case-insensitively, one of these fixed phrases (substring match):
+
+   `next batch`, `next step`, `next steps`, `next pr`, `follow-up`, `follow up`, `followup`, `later`, `then i will`, `then i'll`, `we still need`, `still need to`, `still to do`, `todo`, `to do next`, `once that merges`, `once it merges`, `after that merges`, `after it merges`
+
+   and the pattern `after … merges`: `after`, then 1 to 60 characters that are not a newline or a full stop, then `merge` or `merges` (all as whole words). This list is the whole definition; extending it is a change to this section.
+2. **It names no registered key**: it contains, as a whole word (case-sensitive), no Job key and no PR key of the Lead's Plan, as `cpd plan show` lists them at the moment of the check, whatever their status (draft, queued, running, merged, failed, cancelled alike).
+
+A check that fails, whether `cpd plan show` returns an error or the message cannot be read, adds nothing: the reminder is not due and nothing is reported. A message with no assistant text is not checked.
+
+**What.** When due, the next `before_agent_start` of that Lead returns one message, `customType: "cpd-reminder"`, `display: false` (never shown to the User), with this `content`:
+
+```
+cpd reminder (hs-d239): your last message spoke of further work but named no registered Job or PR. Register it now (cpd job add <k> --draft --title "…", or cpd pr add …) and name its key.
+```
+
+It is added **at most once per run**, and once it has been added the reminder is not due again until a later run ends with a message that fails the check. It is never delivered to a Session that is not a `lead`, and never starts a turn (`triggerTurn: false`, as §15.1's messages).
+
+**Not done** (R3, *decided*): `pr open` does not ask for a checked statement; the reminder is the whole enforcement of this heuristic. The skills carry the rule (R4).
 
 ## 16. The Worker contract
 

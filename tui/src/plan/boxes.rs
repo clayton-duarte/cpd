@@ -307,7 +307,7 @@ mod tests {
             seq: 0,
             title: String::new(),
             status: JobStatus::Queued,
-            tier: Tier::parse("S1").unwrap(),
+            tier: Some(Tier::parse("S1").unwrap()),
             needs: needs.iter().map(|n| JobKey::parse(n).unwrap()).collect(),
             appended: false,
             retry_tier: None,
