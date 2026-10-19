@@ -604,6 +604,10 @@ impl Tmux {
             // The server was starting (another caller's `new-session`) when the
             // first call connected: list again, once.
             out = self.output(&args)?;
+            // A server with no session (`exit-empty off`, §6.1) has no pane: tmux says "no current target".
+            if !out.status.success() && String::from_utf8_lossy(&out.stderr).trim() == "no current target" {
+                return Ok(Vec::new());
+            }
             if !out.status.success() {
                 return Err(self.failed(&args, &out));
             }

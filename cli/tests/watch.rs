@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable, wait_until};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
@@ -398,15 +398,10 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
     assert_eq!(again, json!({"ok": true, "started": false, "already": true}));
     assert_eq!(fx.count("watch-started"), 1);
 
-    // A dead engine's window is replaced, not duplicated.
+    // A dead engine's window is replaced, not duplicated: the supervising hook starts it again at once (contract §6.6).
     kill(Pid::from_raw(pid as i32), Signal::SIGTERM).unwrap();
     wait_until("watch-stopped", || fx.count("watch-stopped") == 1);
-    wait_until("the dead pane", || {
-        let out = fx.env.tmux(&["list-panes", "-t", &pane, "-F", "#{pane_dead}"]);
-        String::from_utf8_lossy(&out.stdout).trim() == "1"
-    });
-    let third = fx.env.cpd(&["watch", "--ensure"]).ok();
-    assert_eq!(third["started"], true);
+    wait_until("the engine again", || fx.count("watch-started") == 2);
     let windows = fx.env.tmux(&["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]);
     assert_eq!(String::from_utf8_lossy(&windows.stdout), "watch\n");
 }
@@ -475,6 +470,224 @@ fn ensure_fails_when_the_engine_does_not_start() {
     assert_eq!(error["details"]["exit"], 7);
     assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
+}
+
+// ---------- supervision: the engine comes back whatever stopped it (contract §6.6, hs-d328) ----------
+
+/// How long the engine has to be back after it stopped, whatever stopped it: "within seconds" (contract §6.6).
+const BACK: Duration = Duration::from_secs(10);
+
+impl Fx {
+    /// The engine, started as a Plan starts it (`cpd watch --ensure`); its pid.
+    fn supervised(&self) -> i64 {
+        self.env.cpd(&["watch", "--ensure"]).ok();
+        self.engine_pid()
+    }
+
+    /// The pid of the newest `watch-started`.
+    fn engine_pid(&self) -> i64 {
+        self.query("SELECT json_extract(data, '$.pid') FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1")
+    }
+
+    /// Waits until a new engine runs after the `starts` it had counted: a newer `watch-started`
+    /// whose process is alive, in one `watch` window of the work session. Returns the time it took.
+    fn back_after(&self, starts: usize) -> Duration {
+        let began = Instant::now();
+        wait_until_for("the engine to be back", BACK, || {
+            self.count("watch-started") > starts && kill(Pid::from_raw(self.engine_pid() as i32), None).is_ok()
+        });
+        let windows = self.env.tmux(&["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]);
+        assert_eq!(String::from_utf8_lossy(&windows.stdout), "watch\n", "one engine window, no dead one");
+        began.elapsed()
+    }
+
+    /// A Manager Session of Context `ctx`.
+    fn manager(&self, id: &str) {
+        self.fixture(&format!(
+            "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
+               VALUES ('{id}', 'manager', 'ctx', 'Manager {id}', '/', 'O3', 'stopped', 't', 't');"
+        ));
+    }
+
+    /// The one message the Manager `mgr1` got, a downtime that says `how`.
+    fn manager_heard(&self, how: &str) {
+        let messages = self.messages();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        let (session, _, data) = &messages[0];
+        let text = data["text"].as_str().unwrap();
+        assert_eq!((session.as_str(), data["wake"].clone()), ("mgr1", json!(false)), "{messages:?}");
+        assert!(text.contains("The engine was down for ") && text.contains(how), "{text}");
+    }
+
+    /// The messages the engine sent: `(session, context, data)`.
+    fn messages(&self) -> Vec<(String, Option<String>, Value)> {
+        self.store()
+            .read(|conn| {
+                let mut stmt = conn.prepare("SELECT session, context, data FROM events WHERE kind = 'session-message' ORDER BY id")?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows.into_iter().map(|(s, c, d)| (s, c, serde_json::from_str(&d).unwrap())).collect())
+            })
+            .unwrap()
+    }
+}
+
+/// A `cpd` whose views only sleep, so a cockpit can be built without terminals.
+fn views_sleep(fx: &Fx) {
+    fx.env.fake("cpd", &format!("case \"$1 $2\" in \"tui view\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
+}
+
+#[test]
+fn a_crashed_engine_is_back_within_seconds() {
+    let fx = fx("");
+    let pid = fx.supervised();
+    kill(Pid::from_raw(pid as i32), Signal::SIGABRT).unwrap();
+    fx.back_after(1);
+    assert_eq!(fx.count("watch-stopped"), 0, "a crash says nothing");
+    assert_ne!(fx.engine_pid(), pid);
+}
+
+#[test]
+fn an_engine_that_got_sigterm_is_back_within_seconds() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    let pid = fx.supervised();
+    kill(Pid::from_raw(pid as i32), Signal::SIGTERM).unwrap();
+    fx.back_after(1);
+    assert_eq!(fx.count("watch-stopped"), 1);
+    fx.manager_heard("it stopped at");
+}
+
+#[test]
+fn an_engine_that_got_sigkill_is_back_within_seconds() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    let pid = fx.supervised();
+    kill(Pid::from_raw(pid as i32), Signal::SIGKILL).unwrap();
+    fx.back_after(1);
+    fx.manager_heard("it was last alive");
+}
+
+/// The work session holds nothing else: tmux would exit with its last window, and the server stays so that its hook can run (`exit-empty off`).
+#[test]
+fn an_engine_whose_window_was_killed_is_back_within_seconds() {
+    let fx = fx("");
+    fx.supervised();
+    assert!(fx.env.tmux(&["kill-window", "-t", "=cpd-work:watch"]).status.success());
+    fx.back_after(1);
+}
+
+/// An install that kills the `watch` window and then does nothing (it failed, or it was cut short).
+#[test]
+fn an_engine_killed_by_an_install_that_then_does_nothing_is_back_within_seconds() {
+    let fx = fx("");
+    fx.env.tmux(&["new-session", "-d", "-s", "cockpit", "sleep", "600"]);
+    fx.supervised();
+    fx.env.fake("fake-install", &format!("tmux -L '{}' kill-window -t =cpd-work:watch", fx.env.tmux_socket()));
+    assert!(fx.env.command(fx.env.bin().join("fake-install")).status().unwrap().success());
+    fx.back_after(1);
+}
+
+/// The install's own `watch --ensure` right after its kill: the hook and the script both start the engine, and one runs.
+#[test]
+fn an_install_that_restarts_the_engine_itself_leaves_one_engine() {
+    let fx = fx("");
+    fx.supervised();
+    assert!(fx.env.tmux(&["kill-window", "-t", "=cpd-work:watch"]).status.success());
+    fx.env.cpd(&["watch", "--ensure"]).ok();
+    fx.back_after(1);
+    wait_until("the dust to settle: one engine process holds the lock", || fx.env.cpd(&["watch"]).error()["code"] == "watch_running");
+    assert_eq!(fx.count("watch-started"), 2);
+}
+
+/// A tmux restart kills the server, hooks and all (nothing in it can start the engine); the restart's own path builds the cockpit
+/// again (`cpd tui`, contract §6.1), which starts the engine.
+#[test]
+fn an_engine_killed_with_its_tmux_server_is_back_once_the_cockpit_is_rebuilt() {
+    let fx = fx("");
+    views_sleep(&fx);
+    fx.manager("mgr1");
+    fx.env.cpd(&["tui"]).ok();
+    wait_until("the engine", || fx.count("watch-started") == 1);
+    fx.env.tmux(&["kill-server"]);
+    wait_until("the engine to stop with its server", || fx.count("watch-stopped") == 1);
+
+    fx.env.cpd(&["tui"]).ok();
+    fx.back_after(1);
+    fx.manager_heard("it stopped at");
+}
+
+#[test]
+fn an_engine_that_cannot_start_is_tried_once_every_few_seconds_not_in_a_loop() {
+    let fx = fx("");
+    // The engine itself exits 7 at once; `watch --ensure` is the real one, as the hooks call it.
+    fx.env.fake("cpd", &format!("case \"$2\" in --ensure) exec '{CPD}' \"$@\";; esac\nexit 7"));
+    assert_eq!(fx.env.cpd(&["watch", "--ensure"]).error()["code"], "watch_start_failed");
+    std::thread::sleep(Duration::from_secs(5));
+    // Each failed start waits 2 s while it holds the one-at-a-time lock: a few starts in 5 s, not a loop of hundreds.
+    let calls = fx.env.calls("cpd").len();
+    assert!((3..=14).contains(&calls), "{calls} calls in 5 s");
+    let log = fs::read_to_string(fx.env.cpd_home().join("run/watch.log")).unwrap();
+    assert!(log.contains("supervision: cannot start the engine"), "{log}");
+}
+
+// ---------- the downtime message (hs-d328) ----------
+
+#[test]
+fn the_first_engine_tells_nobody_and_the_next_one_tells_each_manager_how_long_it_was_down() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.fixture(
+        "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, archived_at)
+           VALUES ('mgr0', 'manager', 'ctx', 'Old', '/', 'O3', 'stopped', 't', 't', 't');
+         UPDATE contexts SET archived_at = NULL;",
+    );
+    let first = fx.start();
+    assert_eq!(fx.messages(), [], "no engine before it");
+    let started = fx.texts("watch-started");
+    assert!(!started[0].contains("down for"), "{started:?}");
+    let _ = first.stop();
+    assert_eq!(fx.messages(), []);
+
+    std::thread::sleep(Duration::from_millis(1500));
+    let second = fx.start();
+    let messages = fx.messages();
+    assert_eq!(messages.len(), 1, "one message, to the one Manager that is not archived: {messages:?}");
+    let (session, context, data) = &messages[0];
+    assert_eq!((session.as_str(), context.as_deref()), ("mgr1", Some("ctx")));
+    assert_eq!(data["wake"], false);
+    assert_eq!(data["from"], Value::Null);
+    let text = data["text"].as_str().unwrap();
+    let stopped_at = fx.query::<String>("SELECT at FROM events WHERE kind = 'watch-stopped'");
+    assert!(text.contains(&format!("it stopped at {stopped_at}")), "{text}");
+    let secs: f64 = text.split("down for ").nth(1).unwrap().split(" s").next().unwrap().parse().unwrap();
+    assert!((1.4..10.0).contains(&secs), "{text}");
+    // Without a Manager the same sentence is in the Event, which is enough.
+    assert!(fx.texts("watch-started")[1].contains(&format!("down for {secs:.1} s")), "{:?}", fx.texts("watch-started"));
+    let _ = second.stop();
+}
+
+#[test]
+fn an_engine_that_died_without_a_watch_stopped_is_told_from_the_last_time_it_was_alive() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    let first = fx.start();
+    // Its ticks mark the lock file: the time it was last seen alive is its newest tick, not its start.
+    std::thread::sleep(Duration::from_millis(2500));
+    first.signal(Signal::SIGKILL);
+    let mut first = first;
+    let _ = first.child.take().unwrap().wait();
+    assert_eq!(fx.count("watch-stopped"), 0);
+    let started_at = fx.query::<String>("SELECT at FROM events WHERE kind = 'watch-started'");
+
+    let second = fx.start();
+    let messages = fx.messages();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let text = messages[0].2["text"].as_str().unwrap();
+    assert!(text.contains("it was last alive (it left no watch-stopped: a crash or a kill) at "), "{text}");
+    assert!(!text.contains(&started_at), "alive since its ticks, not since its start: {text}\nstarted {started_at}");
+    let _ = second.stop();
 }
 
 // ---------- @cpd_workers ----------
@@ -1795,7 +2008,11 @@ fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<St
             r#"case "$1" in
 --version) echo '{{"ok":true,"version":"0.0.0","store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
-watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
+watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
+  l="$CPD_HOME/locks/watch.lock"; mkdir -p "$CPD_HOME/locks"
+  sh -c 'echo $$ > "$CPD_HOME/engine.pid"; exec flock "$1" sleep 120' sh "$l" </dev/null >/dev/null 2>&1 &
+  until ! flock -n "$l" true; do :; done
+  echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
             windows = env.root().join("windows-at-ensure").display()
         ),
@@ -1809,6 +2026,10 @@ esac"#,
         .env("CARGO_TARGET_DIR", &target)
         .output()
         .unwrap();
+    // The fake engine the script's `watch --ensure` started holds the lock for the script's check only.
+    if let Ok(pid) = fs::read_to_string(env.cpd_home().join("engine.pid")) {
+        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+    }
     (out, env.calls("cpd-built"))
 }
 
