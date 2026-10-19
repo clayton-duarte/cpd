@@ -32,6 +32,8 @@ struct Wanted {
     review: bool,
     /// `--draft`: a draft in a phase after `plan` too.
     draft: bool,
+    /// `--urgent` (§2.2): not a Locked field, so a rerun without it is `already`.
+    urgent: bool,
 }
 
 enum Decision {
@@ -58,6 +60,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         needs,
         review: args.review,
         draft: args.draft,
+        urgent: args.urgent,
     };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &wanted))?;
@@ -73,7 +76,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     NewEvent::new(
                         Kind::JobAdded,
                         text,
-                        json!({"pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review}),
+                        json!({"pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review, "urgent": job.urgent}),
                     )
                     .plan(plan.clone())
                     .job(wanted.key.clone()),
@@ -82,7 +85,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             }
         })?,
     };
-    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review}});
+    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review, "urgent": job.urgent}});
     if already {
         out["already"] = json!(true);
     }
@@ -131,6 +134,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended,
         review: wanted.review,
+        urgent: wanted.urgent,
         fingerprint: None,
         retry_tier: None,
         cancel_reason: None,
@@ -212,8 +216,8 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
     let spec = job.spec.as_ref();
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                           status, appended, fingerprint, review, created_txn, created_at)
-         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, cpd_txn(),
+                           status, appended, fingerprint, review, urgent, created_txn, created_at)
+         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",
         rusqlite::params![
             plan.as_str(),
@@ -230,6 +234,7 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
             job.fingerprint,
             job.pr,
             review,
+            job.urgent,
         ],
     )?;
     // An appended Job reopens its PR for E4: `all-merged` is sent again once the Jobs are all merged or cancelled.
