@@ -13,12 +13,13 @@ use cpd_core::output::Output;
 use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, pr, session, watch};
 
 
-/// cpd 2: every command prints exactly one JSON value on stdout.
+/// cpd 2: every command prints exactly one JSON value on stdout. Without a
+/// command, in a terminal, it opens the cockpit (commands.md §13.3).
 #[derive(Parser, Debug)]
 #[command(name = "cpd", version, color = clap::ColorChoice::Never)]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -65,10 +66,24 @@ pub enum Command {
 
 /// Parses `argv` and runs the command.
 pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
+    run_with(argv, cpd_tui::on_a_terminal())
+}
+
+/// [`run`], told whether stdin and stdout are a terminal: only then does `cpd`
+/// without a command open the cockpit; otherwise it is the usage error (A1).
+fn run_with(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<Output, CpdError> {
     let argv: Vec<OsString> = argv.into_iter().collect();
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
-        Ok(cli) => dispatch(cli.command),
+        Ok(Cli { command: Some(command) }) => dispatch(command),
+        Ok(Cli { command: None }) if terminal => cpd_tui::bare(run_command),
+        Ok(Cli { command: None }) => {
+            let required = Cli::command().subcommand_required(true).arg_required_else_help(true);
+            match required.try_get_matches_from(&argv) {
+                Err(err) => clap_result(err),
+                Ok(_) => unreachable!("a missing command is an error when one is required"),
+            }
+        }
         Err(err) if root_help && err.kind() == ErrorKind::DisplayHelp => {
             let text = err.render().to_string();
             Ok(Output::success(serde_json::json!({ "help": text, "tree": crate::interface::tree(&Cli::command()) })))
@@ -171,7 +186,7 @@ mod tests {
     }
 
     fn fails(words: &[&str]) -> CpdError {
-        run(argv(words)).expect_err("expected a failure")
+        run_with(argv(words), false).expect_err("expected a failure")
     }
 
     #[test]

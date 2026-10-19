@@ -383,6 +383,25 @@ impl Tmux {
         Ok(())
     }
 
+    /// `display -p '#{version}'`: the version of the tmux the server runs
+    /// (`3.4`, `next-3.7`), which is the one it was started with.
+    pub fn server_version(&self) -> Result<String, CpdError> {
+        Ok(self.run(&strings(&["display", "-p", "#{version}"]))?.trim().to_owned())
+    }
+
+    /// The server's own tmux program: `/proc/<server pid>/exe` (Linux), which
+    /// execs the binary the server runs even when an upgrade has replaced its
+    /// file. A client of another version cannot attach to the server (hs-n224).
+    pub fn server_exe(&self) -> Result<PathBuf, CpdError> {
+        let out = self.run(&strings(&["display", "-p", "#{pid}"]))?;
+        let exe = PathBuf::from(format!("/proc/{}/exe", out.trim()));
+        std::fs::metadata(&exe).map_err(|e| {
+            CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary {}: {e}.", exe.display()))
+                .with("path", exe.display().to_string())
+        })?;
+        Ok(exe)
+    }
+
     /// `show -gv <option>`: a global option's value, without the newline.
     pub fn global_option(&self, option: &str) -> Result<String, CpdError> {
         Ok(self.run(&strings(&["show", "-gv", option]))?.trim_end_matches('\n').to_owned())
@@ -513,6 +532,26 @@ impl Tmux {
             .with("argv", self.argv(args))
             .with("exit", 0)
             .with("stdout", output.to_owned())
+    }
+}
+
+/// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
+/// `tmux ` prefix, in the form of [`Tmux::server_version`].
+pub fn installed_version() -> Result<String, CpdError> {
+    let argv = vec!["tmux".to_owned(), "-V".to_owned()];
+    let out = Command::new("tmux").arg("-V").env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null()).output().map_err(|e| {
+        CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
+            .with("argv", argv.clone())
+            .with("exit", serde_json::Value::Null)
+            .with("stderr", e.to_string())
+    })?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    match (out.status.success(), text.trim().strip_prefix("tmux ")) {
+        (true, Some(version)) => Ok(version.to_owned()),
+        _ => Err(CpdError::new(ErrorCode::TmuxFailed, "tmux -V did not print `tmux <version>`.")
+            .with("argv", argv)
+            .with("exit", out.status.code())
+            .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
     }
 }
 
