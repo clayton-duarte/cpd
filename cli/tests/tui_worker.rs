@@ -189,8 +189,8 @@ fn the_foot_of_a_worker_waiting_for_its_lead_reads_waiting_and_its_label() {
     assert_eq!(screen.last().map(String::as_str), Some(" api-a1 running · waiting cpd: question to the Lead"), "{screen:?}");
 }
 
-/// An ended Attempt that failed says why at the foot (`failed: <cause>`, the Job's `failed_cause`): what the `job-stuck`
-/// click of the tree shows.
+/// An ended Attempt that failed says why at the foot (`failed: <cause>`, the Job's `failed_cause`): what the User reads
+/// when the Worker of a failed Job is opened from its pill in the Plan view.
 #[test]
 fn the_foot_of_a_failed_attempt_says_why_it_failed() {
     let env = env();
