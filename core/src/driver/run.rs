@@ -7,6 +7,9 @@
 
 use std::time::Duration;
 
+use nix::errno::Errno;
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -32,6 +35,68 @@ use crate::store::Store;
 
 /// How often A4 looks at the Attempt, its Session and its pane.
 const POLL: Duration = Duration::from_millis(500);
+
+/// What A4 knows of the Worker's pane at a poll.
+enum Look {
+    /// Alive, with its process's pid when tmux gave one (hs-n102).
+    Alive(Option<u32>),
+    /// Dead or missing: the `crashed` detail.
+    Gone(String),
+    /// `list-panes` failed once: not known until the next poll (engine-W8).
+    Unknown,
+}
+
+/// A4's watch on the Worker's pane (engine-F1). The pane's pid is read from
+/// `list-panes` once and then tested with `kill(pid, 0)` and `/proc`, with no
+/// fork; `list-panes` runs again only when there is no live pid, to learn how
+/// the pane ended. A failed `list-panes` is retried at the next poll, once,
+/// before the pane is judged (contract §6.3 liveness, engine-W8).
+#[derive(Default)]
+struct PaneWatch {
+    pid: Option<u32>,
+    failed: bool,
+}
+
+impl PaneWatch {
+    fn look(&mut self, tmux: &Tmux, pane: &PaneId) -> Result<Look, CpdError> {
+        if let Some(pid) = self.pid.filter(|&pid| alive(pid)) {
+            return Ok(Look::Alive(Some(pid)));
+        }
+        let panes = match tmux.list_panes() {
+            Ok(panes) => panes,
+            Err(e) if !self.failed => {
+                log(&format!("A4: listing the panes failed, trying again at the next poll: {}", e.message()));
+                self.failed = true;
+                return Ok(Look::Unknown);
+            }
+            Err(e) => return Err(e),
+        };
+        self.failed = false;
+        Ok(match panes.iter().find(|p| p.pane == *pane) {
+            None => Look::Gone("The Worker's pane is gone.".to_owned()),
+            Some(p) if p.dead => {
+                let status = p.dead_status.map_or_else(String::new, |s| format!(" (exit status {s})"));
+                Look::Gone(format!("The Worker's pane died{status} before it submitted."))
+            }
+            Some(p) => {
+                self.pid = p.pid;
+                Look::Alive(p.pid)
+            }
+        })
+    }
+}
+
+/// Whether process `pid` runs: `kill(pid, 0)` finds it and, where `/proc`
+/// exists, it is not a zombie (ended, not yet reaped by tmux).
+fn alive(pid: u32) -> bool {
+    let Ok(raw) = i32::try_from(pid) else { return false };
+    if matches!(kill(Pid::from_raw(raw), None), Err(Errno::ESRCH)) {
+        return false;
+    }
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else { return true };
+    // `pid (comm) state …`; comm may hold spaces and parentheses.
+    stat.rfind(')').and_then(|i| stat[i + 1..].split_whitespace().next()) != Some("Z")
+}
 
 /// How the Attempt ended, as the driver prints it.
 struct Ended {
@@ -360,10 +425,11 @@ impl Driver {
         // The Worker's assistant messages when it was nudged.
         let mut nudged_at: Option<u64> = None;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
+        let mut watch = PaneWatch::default();
         loop {
             std::thread::sleep(POLL);
-            // The panes before the row: a Worker that submits and exits is seen `merging`.
-            let panes = self.tmux.list_panes()?;
+            // The pane before the row: a Worker that submits and exits is seen `merging`.
+            let look = watch.look(&self.tmux, pane)?;
             if file.is_none() {
                 file = pi::session_file(dirs, session);
                 if let Some(found) = &file {
@@ -398,22 +464,16 @@ impl Driver {
                     return Err(CpdError::new(ErrorCode::StoreFailed, format!("Unknown stop_request {other:?}.")));
                 }
             }
-            let pi = match panes.iter().find(|p| p.pane == *pane) {
-                None => {
-                    let detail = "The Worker's pane is gone.".to_owned();
-                    return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
-                }
-                Some(p) if p.dead => {
-                    let status = p.dead_status.map_or_else(String::new, |s| format!(" (exit status {s})"));
-                    let detail = format!("The Worker's pane died{status} before it submitted.");
-                    return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs);
-                }
-                Some(p) => p.pid,
+            let pi = match look {
+                Look::Gone(detail) => return self.end(&now, End::Failed { cause: Cause::Crashed, detail }, dirs),
+                // `list-panes` failed: whether the pane is gone is decided at the next poll.
+                Look::Unknown => continue,
+                Look::Alive(pid) => pid,
             };
 
             let Some(file) = file.clone() else { continue };
             // The stall rule (§3.4 A4): pi is the pane's process, alive here. tmux
-            // gives a live pane's pid; it is empty only for a dead pane (hs-n102).
+            // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
             if let Some(line) = pi.and_then(|pi| stall.check(&file, pi)) {
                 log(&line);
             }
@@ -584,6 +644,21 @@ mod tests {
         assert_eq!(entry(&id, "starting").unwrap(), Entry::Start);
         assert_eq!(entry(&id, "running").unwrap(), Entry::Resume);
         assert_eq!(entry(&id, "merging").unwrap(), Entry::Merge);
+    }
+
+    #[test]
+    fn a_zombie_or_reaped_process_is_not_alive() {
+        assert!(alive(std::process::id()));
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        // Not reaped yet: a zombie once it has exited.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while alive(pid) {
+            assert!(std::time::Instant::now() < deadline, "{pid} still alive");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        child.wait().unwrap();
+        assert!(!alive(pid));
     }
 
     #[test]
