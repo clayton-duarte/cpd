@@ -954,6 +954,7 @@ fn a_pending_tmux_restart_stops_e3_from_starting_attempts_and_running_ones_finis
     let check = checks.as_array().unwrap().iter().find(|c| c["name"] == "tmux_restart").unwrap();
     assert_eq!((check["ok"].as_bool(), check["message"].as_str()), (Some(true), Some("tmux restart pending")));
     wait_until("E3's hold to be logged", || fs::read_to_string(fx.home().watch_log()).unwrap_or_default().contains("E3: holding"));
+    // time-claim: a pending restart holds E3, so no Attempt starts over several engine ticks; 2.5 s covers at least two ticks; no per-poll signal from the engine for a tick that held.
     std::thread::sleep(Duration::from_millis(2500));
     assert_eq!(fx.count("attempt-started"), 0, "a pending restart holds E3");
     assert_eq!((fx.job_status("next"), fx.attempt("busy-a1").0), ("queued".into(), "running".into()));

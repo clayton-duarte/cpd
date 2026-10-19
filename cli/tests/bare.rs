@@ -16,7 +16,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable};
+use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::{Store, WriteTxn};
@@ -60,14 +60,6 @@ fn fake_tmux(env: &TestEnv, extra: &str) {
 
 fn attach_calls(env: &TestEnv) -> Vec<Vec<String>> {
     env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "attach")).collect()
-}
-
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// A command run in a pty: `stdin_stdout` stay the terminal, stderr and the
@@ -573,10 +565,12 @@ fn once_nothing_runs_the_engine_restarts_the_server_detached_and_every_session_i
     let started = count_events(&env, "watch-started");
 
     // The Attempt runs, then ends; the Lead stays blocked: the restart waits for both.
+    // time-claim: the pending restart holds while an Attempt runs and a Lead is blocked; the engine ticks every 1 s, so 3.5 s is three ticks without kill-server; no per-poll signal from the engine for a tick that held.
     std::thread::sleep(Duration::from_millis(3500));
     assert_eq!((kill_server_calls(&env), server_pid(&env)), (0, before.clone()));
     end_attempt(&env);
     drop(driver);
+    // time-claim: the pending restart holds while an Attempt runs and a Lead is blocked (a dialog is open); the engine ticks every 1 s, so 3.5 s is three ticks without kill-server; no per-poll signal from the engine for a tick that held.
     std::thread::sleep(Duration::from_millis(3500));
     assert_eq!((kill_server_calls(&env), server_pid(&env)), (0, before.clone()), "a blocked Lead has a dialog open");
     assert!(pending_file(&env).exists());
@@ -612,6 +606,7 @@ fn a_failed_restart_keeps_the_pending_file_with_its_reason_and_raises_one_error_
 
     wait_until("the failure to be reported", || count_events(&env, "error") >= 1);
     // The engine that runs again raises it once.
+    // time-claim: the engine raises the failure once, not again on later ticks; 3.5 s is three 1 s ticks; no per-poll signal from the engine for a tick that raised nothing.
     std::thread::sleep(Duration::from_millis(3500));
     assert_eq!(count_events(&env, "error"), 1);
     let pending: serde_json::Value = serde_json::from_str(&fs::read_to_string(pending_file(&env)).unwrap()).unwrap();
