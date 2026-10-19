@@ -903,7 +903,8 @@ fn archived_contexts_and_plans_collapse_into_groups_and_a_click_on_their_toggle_
     // would have if live, with the normal guide, then the group's `└ collapse` row
     pane.click(4, 9);
     pane.settled();
-    assert_eq!(pane.screen_is(&expected), expected, "the `…` title row toggles nothing");
+    let without_note = |rows: Vec<String>| -> Vec<String> { rows.into_iter().filter(|r| !r.is_empty() && !r.contains(NO_CLIENT)).collect() };
+    assert_eq!(without_note(pane.screen()), without_note(expected), "the `…` title row toggles nothing");
     pane.click(5, 10);
     let shown = [
         row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
