@@ -11,9 +11,6 @@ use std::fs;
 use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use cpd_tui::palette::{DRAFT, FAILED, MERGED, MERGING, QUEUED, SPINNER};
 use serde_json::json;
 
@@ -494,7 +491,7 @@ fn without_a_port_file_the_pending_review_row_has_no_arrow() {
         "{}UPDATE pull_requests SET mergeable = 'conflicting' WHERE number = 7;",
         event("plan-review", "ctx", Some("ship"), None, "{}")
     ));
-    let after = screen_when(&env, &pane, "the re-read", |s| s.iter().any(|l| l.contains("#7 conflict ↗")));
+    let after = screen_when(&env, &pane, "the re-read", |s| s.iter().any(|l| l.contains("#7 conflict 󰏌")));
     assert_eq!(after[0], "   Plan review r1 pending");
 }
 
