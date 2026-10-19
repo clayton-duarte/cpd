@@ -310,6 +310,9 @@ fn older_server(env: &TestEnv) -> PathBuf {
                  *\" kill-server \"*) rm -f '{flag}';;\n\
                esac\n\
              fi\n\
+             if [ -e '{flag}.list-sessions-fails' ]; then\n\
+               case \" $* \" in *\" list-sessions \"*) echo hit >> '{flag}.hits'; echo 'server exited unexpectedly' >&2; exit 1;; esac\n\
+             fi\n\
              if [ -e '{flag}.no-park-other' ]; then\n\
                case \" $* \" in *\" new-window \"*\" -n park-other \"*) echo 'no window for you' >&2; exit 1;; esac\n\
              fi",
@@ -603,6 +606,30 @@ fn once_nothing_runs_the_engine_restarts_the_server_detached_and_every_session_i
     wait_until("the new engine", || count_events(&env, "watch-started") == started + 1);
     assert_eq!(tmux_out(&env, &["list-panes", "-t", "=cpd-work:watch", "-F", "#{pane_dead}"]).trim(), "0");
     assert_eq!(env.cpd(&["events", "list", "--kind", "error"]).ok()["events"], serde_json::json!([]), "no error Event at all");
+}
+
+#[test]
+fn a_tmux_failure_of_the_workers_step_while_a_restart_is_pending_is_no_error_and_the_options_are_set_on_the_new_server() {
+    let env = env();
+    let (flag, driver) = pending_restart_in_the_way(&env);
+    // The restart takes the server away under the step: `list-sessions` fails as tmux's does while it dies.
+    let fails = PathBuf::from(format!("{}.list-sessions-fails", flag.display()));
+    let hits = || fs::read_to_string(format!("{}.hits", flag.display())).map_or(0, |t| t.lines().count());
+    fs::write(&fails, "").unwrap();
+    // The Attempt ends, so the counts change and the step calls tmux; the blocked Lead holds the restart.
+    end_attempt(&env);
+    drop(driver);
+    // The step failed, and asks again at the next tick.
+    wait_until("the step to fail twice", || hits() >= 2);
+    assert_eq!(count_events(&env, "error"), 0, "{:?}", env.cpd(&["events", "list", "--kind", "error"]));
+    assert!(pending_file(&env).exists());
+
+    // The server is back: the restart runs and the new server has the options.
+    fs::remove_file(&fails).unwrap();
+    set_lead_state(&env, "idle");
+    wait_until("the restart to finish", || !pending_file(&env).exists());
+    wait_until("the options on the new server", || env.tmux(&["show", "-gv", "@cpd_workers"]).stdout.starts_with(b"#[dim]workers"));
+    assert_eq!(count_events(&env, "error"), 0, "{:?}", env.cpd(&["events", "list", "--kind", "error"]));
 }
 
 #[test]
