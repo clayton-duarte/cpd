@@ -14,7 +14,7 @@ use super::model::{Condition, Kind, Urgency};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::addr::review_host;
-use crate::ids::{ContextId, JobKey, PlanId, RecordId, SessionId};
+use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::plan::Phase;
 use crate::store::Store;
 
@@ -46,7 +46,8 @@ pub fn conditions(
     all.extend(store.read(unread)?);
     all.extend(store.read(|conn| job_stuck(conn, now, stuck_after))?);
     all.extend(engine_errors(errors));
-    all.extend(store.read(questions)?);
+    // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
+    // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
     all.extend(store.read(pr_failing)?);
     all.extend(store.read(pr_changes)?);
     all.extend(store.read(pr_ready)?);
@@ -286,41 +287,6 @@ fn engine_errors(errors: &[EngineError]) -> Vec<Condition> {
             event: Some(e.event),
         })
         .collect()
-}
-
-// ---- Contexts: question ------------------------------------------------------------------------------------------
-
-/// `question`: a Context record of kind `question` with no `answer` record pointing at it. Read from the records'
-/// index, as `context list` counts its open questions (`repo` is private to the context area, and the index is one
-/// query per tick). Its subject is Context-qualified because record ids (`hs-q1`) repeat across Contexts.
-fn questions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT q.context, q.id FROM context_records q
-          WHERE q.kind = 'question'
-            AND NOT EXISTS (SELECT 1 FROM context_records a
-                            WHERE a.context = q.context AND a.kind = 'answer' AND a.question = q.id)
-          ORDER BY q.seq",
-    )?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let (context, record): (String, String) = (row.get(0)?, row.get(1)?);
-        let context = id("Context id", &context, ContextId::parse)?;
-        out.push(Condition {
-            kind: Kind::Question,
-            urgency: Urgency::Magenta,
-            subject: format!("record:{context}/{record}"),
-            label: format!("{record} open question"),
-            url: None,
-            context: Some(context),
-            plan: None,
-            job: None,
-            session: None,
-            record: Some(id("Record id", &record, RecordId::parse)?),
-            event: None,
-        });
-    }
-    Ok(out)
 }
 
 // ---- Pull requests: pr-failing, pr-changes, pr-ready, review-requested -------------------------------------------
@@ -820,28 +786,29 @@ mod tests {
     }
 
     #[test]
-    fn a_question_without_an_answer_is_an_item_and_gone_when_answered() {
+    fn an_open_context_question_yields_no_condition() {
         let mut f = fixture("dispatch");
         record(&mut f, "ctx", "hs-q1", "question");
         record(&mut f, "ctx", "hs-d1", "decision");
-        let c = one(f.of(Kind::Question));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Magenta, "record:ctx/hs-q1", "hs-q1 open question"));
-        assert_eq!(c.record.as_ref().map(|r| r.to_string()), Some("hs-q1".to_owned()));
-        assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan, c.session), (Some("ctx"), None, None));
-
-        record(&mut f, "ctx", "hs-a1", "answer");
         assert!(f.of(Kind::Question).is_empty());
+        assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
     }
 
+    /// hs-d306 (1): the `question` kind is dropped, so an item an older engine opened for an open question closes at the
+    /// next reconcile, its condition no longer holding. The kind stays in the table's check for such history rows.
     #[test]
-    fn the_same_record_id_in_two_contexts_is_two_questions_and_an_answer_clears_only_its_own() {
+    fn an_open_question_item_an_older_engine_opened_is_closed_by_the_next_reconcile() {
         let mut f = fixture("dispatch");
         record(&mut f, "ctx", "hs-q1", "question");
-        record(&mut f, "other", "hs-q1", "question");
-        let subjects: Vec<_> = f.of(Kind::Question).into_iter().map(|c| c.subject).collect();
-        assert_eq!(subjects, ["record:ctx/hs-q1", "record:other/hs-q1"]);
-        record(&mut f, "other", "hs-a1", "answer");
-        assert_eq!(one(f.of(Kind::Question)).subject, "record:ctx/hs-q1");
+        f.sql(&format!(
+            "INSERT INTO inbox_items (kind, urgency, subject, label, context, record, opened_at)
+             VALUES ('question', 'magenta', 'record:ctx/hs-q1', 'hs-q1 open question', 'ctx', 'hs-q1', '{T}')"
+        ));
+        let found = conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap();
+        let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
+        assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1));
+        let open: i64 = f.store.read(|c| Ok(c.query_row("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(open, 0);
     }
 
     // ---- pull requests ----
@@ -1033,19 +1000,18 @@ mod tests {
         f.reply("mgr");
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), T, r#"{}"#);
-        record(&mut f, "ctx", "hs-q1", "question");
         let error = EngineError { step: "E8".into(), scope: "machine".into(), code: "x".into(), event: 1 };
         let kinds: Vec<_> =
             conditions(&mut f.store, &f.home, NOW, TEN, &[error]).unwrap().into_iter().map(|c| c.kind).collect();
         assert_eq!(
             kinds,
-            [Kind::Dialog, Kind::PlanReview, Kind::Unread, Kind::JobStuck, Kind::EngineError, Kind::Question]
+            [Kind::Dialog, Kind::PlanReview, Kind::Unread, Kind::JobStuck, Kind::EngineError]
         );
         pull_request(&mut f, 1, "failed", "mergeable", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
         f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
                VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
-        let tail: Vec<_> = conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().into_iter().map(|c| c.kind).skip(5).collect();
+        let tail: Vec<_> = conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().into_iter().map(|c| c.kind).skip(4).collect();
         assert_eq!(tail, [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
     }
 }

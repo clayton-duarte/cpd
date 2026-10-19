@@ -1,5 +1,5 @@
 //! The Inbox's core conditions (contract §2.2 "Inbox item", §3.7 E8) computed from a store the built binary wrote:
-//! a Plan's Lead that blocks, a Context's questions and answers, and the pull requests the poll wrote.
+//! a Plan's Lead that blocks, and the pull requests the poll wrote.
 
 mod common;
 
@@ -62,14 +62,11 @@ fn a_blocked_lead_in_grounding_is_a_magenta_dialog_until_it_works_again() {
 }
 
 #[test]
-fn a_question_is_an_item_until_its_answer_is_recorded() {
+fn a_question_opens_no_item_hs_d306() {
     let env = TestEnv::new();
     setup(&env);
     env.cpd(&["context", "ask", "Why?", "--context", "ctx"]).ok();
-    let items = found(&env, &[]);
-    assert_eq!(items.len(), 1, "{items:?}");
-    assert_eq!((items[0].kind, items[0].urgency), (Kind::Question, Urgency::Magenta));
-    assert_eq!((items[0].subject.as_str(), items[0].label.as_str()), ("record:ctx/hs-q1", "hs-q1 open question"));
+    assert!(found(&env, &[]).is_empty());
 
     env.cpd(&["context", "answer", "hs-q1", "Because.", "--context", "ctx"]).ok();
     assert!(found(&env, &[]).is_empty());

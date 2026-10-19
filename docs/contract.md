@@ -399,13 +399,14 @@ A hidden (snoozed or dismissed) item fills no dot and is not counted. Escalation
 | `job-stuck` | a Job is `failed` and its latest `job-failed` Event is at least `inbox.stuck_job_minutes` (§8.2) old; it clears on retry or cancel (the Job) | red | `<plan>/<job> failed` |
 | `engine-error` | an `error` the engine itself reported (a failure of E1–E9, §3.7) has not cleared (step, scope and code) | red | `engine <step>: <code>` |
 | `engine-down` | `locks/watch.lock` is free. **Not stored**: the engine cannot report its own absence, so `cpd inbox list` adds it, first, with `id: null` | red | `engine is down` |
-| `question` | a Context record of kind `question` has no `answer` record (the record) | magenta | `<record id> open question` |
 | `pr-failing` | an open pull request the User authored (`authored` 1) that no cpd PR points to (`prs.pull_request`; hs-d302, hs-d303) has `checks` `failed`, **or** `mergeable` `conflicting` (hs-d188 (3): a conflicting pull request counts as failing, with the same restriction: for a pull request a cpd PR points to, a conflict opens no item) (`pr:<owner>/<repo>#<n>`) | red | `<repo>#<n> checks failed`; `<repo>#<n> merge conflict` when only the conflict holds when it opens |
 | `pr-changes` | an open pull request the User authored that no cpd PR points to (`prs.pull_request`; hs-d302, hs-d303) has `review_decision` `changes_requested` (the pull request) | red | `<repo>#<n> changes requested` |
 | `pr-ready` | an open, non-draft pull request the User authored has `checks` `passed`, `mergeable` `mergeable` and no `changes_requested` (the pull request) | yellow | `<repo>#<n> ready to merge` |
 | `review-requested` | an open pull request requests the User's review (`review_requested` 1) (the pull request) | yellow | `review <repo>#<n>` |
 
 The four pull request kinds read the `pull_requests` row the poll last wrote (§7.6): `url` is the row's `url`, the pull request's page, and `<repo>` is the row's `repo` without the owner. When a Plan's PR points to the row, the item also links that Plan and its Context; but a pull request a Plan owns opens no `pr-failing` or `pr-changes` item (hs-d302): its conflict, failed checks and `changes requested` reach its Lead as `pr-feedback`, and only the Lead's own escalations (`dialog`, `job-stuck`, `engine-error`) reach the User. `pr-ready` and `review-requested` are unchanged. `mergeable` and `merge_state` are only read here; the PR poll's mergeable state defines them (§2.2 Pull request, §7.6). Labels are short, for a column of 20 % of 215 columns; the cockpit truncates with `…`.
+
+**Dropped kind** (hs-d306 (1)): E8 opens no `question` item: an unanswered Context question raises nothing, since questions to the User go only through `ask_user_question`. The kind stays in the table's `CHECK` for closed history rows, and an open `question` item an older engine left closes at the next reconcile.
 
 **Order** (hs-d167): red, then yellow, magenta, white; within one urgency the oldest `opened_at` first. `engine-down` is always first.
 
