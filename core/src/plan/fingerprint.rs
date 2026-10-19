@@ -137,7 +137,7 @@ mod tests {
         let expected = format!(
             "{:x}",
             Sha256::digest(
-                br#"{"jobs":[{"acceptance":null,"context":null,"goal":null,"key":"a","needs":[],"out_of_scope":null,"pr":"web","title":"Title a","tier":null,"touches":null}],"prs":[]}"#
+                br#"{"jobs":[{"acceptance":null,"context":null,"goal":null,"key":"a","needs":[],"out_of_scope":null,"pr":"web","tier":null,"title":"Title a","touches":null}],"prs":[]}"#
             )
         );
         assert_eq!(of(&[stub.clone()], &[]), expected);
