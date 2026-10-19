@@ -652,3 +652,54 @@ fn the_engine_tries_a_failed_seq_once_until_a_newer_record_arrives() {
     wait_until("the digest", || fx.digest_files() == [format!("{}.md", fx.highest_seq())]);
     stop_engine(engine);
 }
+
+/// Writes a decision and `notes` notes into `context`, all stamped now.
+fn write_now(fx: &Fx, context: &str, first: u32, notes: u32) {
+    let now = ago(0);
+    fx.insert(context, &format!("hs-d{first}"), &now, "A decision.", Draft::Decision { supersedes: None });
+    for n in 1..=notes {
+        fx.insert(context, &format!("hs-n{}", first + n), &now, "A note.", Draft::Note);
+    }
+}
+
+#[test]
+fn twenty_newer_records_start_a_run_at_once_and_never_two_at_once() {
+    let fx = fx();
+    write_now(&fx, CONTEXT, 100, 19); // 20 records, written seconds ago
+    // A slow pi, so a second start would overlap the first.
+    fx.env.fake_pi(&format!("sleep 3\n{}", says(CITES_ALL)));
+    let engine = start_engine(&fx);
+    wait_until("the digest", || fx.digest_files() == [format!("{}.md", fx.highest_seq())]);
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(fx.pi_calls(), 1, "one run in all");
+    stop_engine(engine);
+    assert!(fx.errors().is_empty());
+}
+
+#[test]
+fn nineteen_newer_records_wait_for_the_quiet_period_and_the_twentieth_starts_the_run() {
+    let fx = fx();
+    write_now(&fx, CONTEXT, 100, 18); // 19 records, written seconds ago
+    let engine = start_engine(&fx);
+    std::thread::sleep(Duration::from_secs(4));
+    assert_eq!((fx.pi_calls(), fx.digest_files()), (0, Vec::<String>::new()), "19 wait for the quiet period");
+    fx.insert(CONTEXT, "hs-n200", &ago(0), "The twentieth.", Draft::Note);
+    wait_until("the digest", || fx.digest_files() == [format!("{}.md", fx.highest_seq())]);
+    stop_engine(engine);
+    assert_eq!(fx.pi_calls(), 1);
+}
+
+#[test]
+fn the_twenty_count_runs_from_the_latest_digest() {
+    let fx = fx();
+    write_now(&fx, CONTEXT, 100, 19);
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let calls = fx.pi_calls();
+    write_now(&fx, CONTEXT, 300, 18); // 19 records newer than the digest
+    let engine = start_engine(&fx);
+    std::thread::sleep(Duration::from_secs(4));
+    assert_eq!(fx.pi_calls(), calls, "19 newer than the digest wait");
+    fx.insert(CONTEXT, "hs-n400", &ago(0), "The twentieth.", Draft::Note);
+    wait_until("the second digest", || fx.pi_calls() == calls + 1);
+    stop_engine(engine);
+}

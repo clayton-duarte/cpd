@@ -421,7 +421,7 @@ Idempotent: yes; it only reads.
 cpd context distill [--context <c>]
 ```
 
-Builds the Context's **digest** (contract §4.6, hs-d194 D1–D5; CONTEXT.md "Distilled Context"): a derived, compressed rendering of its records in force, written by one-shot pi and validated by cpd. Engine E9 starts it detached, debounced, when the Context has records newer than its digest (contract §3.7); anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
+Builds the Context's **digest** (contract §4.6, hs-d194 D1–D5; CONTEXT.md "Distilled Context"): a derived, compressed rendering of its records in force, written by one-shot pi and validated by cpd. Engine E9 starts it detached, debounced, when the Context has records newer than its digest (contract §3.7): once the newest record is 10 minutes old, or at once when 20 or more records are newer than the digest; anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
 
 | Precondition | Code | Exit |
 |---|---|---|
