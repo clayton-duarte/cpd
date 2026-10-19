@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "f72ed54c354fea63a224b0dd208d5d18e2531313b9de102f1a7f003673f2ba4a";
+pub const SCHEMA_HASH: &str = "bf4844b6e6d1aad200fe24b43034c13e62bbb923af4563c9869ba58838f59d08";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -401,13 +401,25 @@ fn migrated_pr_key(repo: &str) -> PrKey {
     PrKey::parse(&key).expect("the rule above always makes a valid PR key")
 }
 
+/// What a generated `_hist_upd` trigger writes in `before` and `after`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateRow {
+    /// The whole row, twice: what the legacy migrations created, frozen with
+    /// them (their schema hashes, §4.5 N2, include the triggers' text).
+    Whole,
+    /// The key and only the columns that changed (§4.4 "History row shape",
+    /// hs-d234, sql-F2): what [`reconcile`] makes and the schema check expects
+    /// since the named migration `history-changed`.
+    Changed,
+}
+
 /// Creates `<table>_hist_ins` and `<table>_hist_upd`, and `<table>_no_delete`
-/// when `no_delete`, from the table's current columns and primary key, in the
-/// shape of §4.4's `escalations` example. The legacy migrations that add or
-/// rename columns drop these and call this again; named migrations never
-/// create them: [`reconcile`] does (§4.5 K4).
+/// when `no_delete`, from the table's current columns and primary key, as the
+/// legacy migrations did (`_hist_upd` with the whole row, [`UpdateRow::Whole`]).
+/// The legacy migrations that add or rename columns drop these and call this
+/// again; named migrations never create them: [`reconcile`] does (§4.5 K4).
 fn create_history_triggers(conn: &Connection, table: &str, no_delete: bool) -> Result<()> {
-    for (_, sql) in history_triggers(conn, table, no_delete)? {
+    for (_, sql) in history_triggers(conn, table, no_delete, UpdateRow::Whole)? {
         conn.execute_batch(&format!("{sql};"))?;
     }
     Ok(())
@@ -420,14 +432,17 @@ fn table_columns(conn: &Connection, table: &str) -> Result<Vec<(String, i64)>> {
 }
 
 /// The generated triggers of `table` as `(name, sql)`, `sql` as `sqlite_schema`
-/// stores it (no closing `;`).
-fn history_triggers(conn: &Connection, table: &str, no_delete: bool) -> Result<Vec<(String, String)>> {
+/// stores it (no closing `;`), with `_hist_upd` in the shape `update`.
+fn history_triggers(conn: &Connection, table: &str, no_delete: bool, update: UpdateRow) -> Result<Vec<(String, String)>> {
     let columns = table_columns(conn, table)?;
     if columns.is_empty() {
         return Err(rusqlite::Error::InvalidParameterName(format!("no table {table}")));
     }
     let mut key: Vec<&(String, i64)> = columns.iter().filter(|(_, n)| *n > 0).collect();
     key.sort_by_key(|(_, n)| *n);
+    if key.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(format!("table {table} has no primary key")));
+    }
     let pk = |row: &str| -> String {
         let cols: Vec<String> = key.iter().map(|(name, _)| format!("{row}.{name}")).collect();
         format!("json_array({})", cols.join(", "))
@@ -435,6 +450,26 @@ fn history_triggers(conn: &Connection, table: &str, no_delete: bool) -> Result<V
     let object = |row: &str| -> String {
         let pairs: Vec<String> = columns.iter().map(|(name, _)| format!("'{name}', {row}.{name}")).collect();
         format!("json_object({})", pairs.join(", "))
+    };
+    // §4.4 "History row shape": a `json_group_object` of the key columns and of
+    // each other column whose value changed, one line per column.
+    let changed = |row: &str| -> String {
+        let keys: Vec<String> = key
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| if i == 0 { format!("SELECT '{name}' AS k, {row}.{name} AS v") } else { format!("SELECT '{name}', {row}.{name}") })
+            .collect();
+        let mut lines = vec![keys.join(" UNION ALL ")];
+        for (name, n) in &columns {
+            if *n == 0 {
+                lines.push(format!("UNION ALL SELECT '{name}', {row}.{name} WHERE OLD.{name} IS NOT NEW.{name}"));
+            }
+        }
+        format!("(SELECT json_group_object(k, v) FROM (\n       {}\n    ))", lines.join("\n       "))
+    };
+    let (before, after) = match update {
+        UpdateRow::Whole => (object("OLD"), object("NEW")),
+        UpdateRow::Changed => (changed("OLD"), changed("NEW")),
     };
     let mut triggers = vec![
         (
@@ -454,8 +489,8 @@ fn history_triggers(conn: &Connection, table: &str, no_delete: bool) -> Result<V
                  INSERT INTO history(txn, tbl, pk, op, before, after) VALUES (cpd_txn(), '{table}',\n    \
                  {}, 'update',\n    {},\n    {});\nEND",
                 pk("NEW"),
-                object("OLD"),
-                object("NEW"),
+                before,
+                after,
             ),
         ),
     ];
@@ -526,7 +561,7 @@ fn history_tables(conn: &Connection) -> Result<Vec<(String, bool)>> {
 /// order in which additive migrations added them.
 pub(super) fn reconcile(conn: &Connection) -> Result<()> {
     for (table, no_delete) in history_tables(conn)? {
-        for (name, sql) in history_triggers(conn, &table, no_delete)? {
+        for (name, sql) in history_triggers(conn, &table, no_delete, UpdateRow::Changed)? {
             let stored = stored_trigger(conn, &name)?;
             if stored.as_deref() == Some(sql.as_str()) {
                 continue;
@@ -766,7 +801,7 @@ pub(super) fn generated_mismatch(conn: &Connection) -> Result<Option<(String, St
         if table_columns(conn, &table)?.is_empty() {
             return Ok(Some((format!("{table}_hist_ins"), format!("a table {table}"), None)));
         }
-        for (name, sql) in history_triggers(conn, &table, no_delete)? {
+        for (name, sql) in history_triggers(conn, &table, no_delete, UpdateRow::Changed)? {
             let stored = stored_trigger(conn, &name)?;
             if stored.as_deref() != Some(sql.as_str()) {
                 return Ok(Some((name, sql, stored)));

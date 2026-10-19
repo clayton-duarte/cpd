@@ -4,11 +4,10 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::TestEnv;
+use common::{TestEnv, write_executable};
 
 const SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/preview-tui.sh");
 const CARGO_SCRIPT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/cargo.sh");
@@ -63,7 +62,7 @@ esac"#,
         );
         // The fake cargo writes the fake preview cpd; PREVIEW_PLAN_LIST is what its `plan list` answers.
         let cargo = env.root().join("fake-cargo");
-        fs::write(
+        write_executable(
             &cargo,
             r#"#!/bin/sh
 echo "cargo $*" >> "$LOG"
@@ -80,9 +79,7 @@ esac
 FAKE
 chmod 755 "$CARGO_TARGET_DIR/release/cpd"
 "#,
-        )
-        .unwrap();
-        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         Preview { env, worktree, dir, log }
     }
 

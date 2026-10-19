@@ -7,22 +7,15 @@ use std::fs;
 
 use common::TestEnv;
 use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-
-fn sql(env: &TestEnv, sql: &str) {
-    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
-    Store::open(&home, 5000).unwrap().write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
-}
 
 /// A Plan of `context` in `phase`, its Lead Session beside it; `archived` and `done` as its phase needs.
 fn plan(env: &TestEnv, context: &str, id: &str, phase: &str, archived: bool) {
     let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
     let archived = if archived { "'2000-01-03T00:00:00.000Z'" } else { "NULL" };
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                VALUES ('lead-{id}', 'lead', '{context}', '{id}', '{id}', '/', 'O3', 'idle', 't', 't');
@@ -54,24 +47,21 @@ fn pr(env: &TestEnv, plan: &str, key: &str, status: &str) {
         other => panic!("no fixture for {other}"),
     };
     if status == "open" {
-        sql(
-            env,
+        env.sql(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
              VALUES ('acme/api', 7, 'https://github.com/acme/api/pull/7', 'Add api', 0, 'open', 'none', 'none', 't', NULL, 't');",
         );
     }
     if status == "merged" {
         // One GitHub row per merged PR: the `number` is unique per repo.
-        sql(
-            env,
+        env.sql(
             &format!(
                 "INSERT OR IGNORE INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                  VALUES ('acme/api', 8, 'https://github.com/acme/api/pull/8', 'Old', 0, 'merged', 'none', 'none', 't', 't', 't');"
             ),
         );
     }
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at, merged_at)
@@ -82,8 +72,7 @@ fn pr(env: &TestEnv, plan: &str, key: &str, status: &str) {
 
 /// A Job of PR `pr` in `status`, with the columns that status requires; its title is `Title <key>`, it touches `src/<key>.rs`.
 fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str) {
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
@@ -100,8 +89,7 @@ fn env() -> TestEnv {
     let env = TestEnv::new();
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    sql(
-        &env,
+    env.sql(
         "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't'), ('other', 'Other', 't', 't'), ('empty', 'Empty', 't', 't');",
     );
     env

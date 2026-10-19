@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecords, pendingSection, summaryLine, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
-import { Fixture, ID, OTHER, sessionShow, settle, waitFor } from "./fake.ts";
+import { Fixture, ID, OTHER, sessionShow, waitFor } from "./fake.ts";
 
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
   type: "custom_message",
@@ -230,7 +230,7 @@ test("a Lead (the Plan's, or a side fork) gets no cpd-context message and reads 
     f.respond("context-show", contextShow([record(1), record(2), record(3)]));
     f.respond("context-pending", pendingJson(twoPlans));
     assert.deepEqual(await f.pi.fireWith("before_agent_start", { messageType: "user", prompt: "go" }), []);
-    await settle();
+    await f.quiet();
     assert.deepEqual(updatesCalls(f), []);
     assert.deepEqual(f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => a[1] === "pending"), []);
     assert.deepEqual(f.pi.sent, []);
@@ -244,7 +244,7 @@ test("a Worker never gets updates", async (t) => {
   worker.respond("events-list", eventsList([1]));
   worker.respond("context-show", contextShow([record(1)]));
   assert.deepEqual(await worker.pi.fireWith("before_agent_start"), []);
-  await settle();
+  await worker.quiet();
   assert.deepEqual(updatesCalls(worker), []);
 });
 

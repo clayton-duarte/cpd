@@ -25,7 +25,7 @@ async function follow() {
   process.on("SIGTERM", () => { fs.writeFileSync(path.join(dir, "killed-" + process.pid), "1"); process.exit(143); });
   fs.appendFileSync(path.join(dir, "follower.pids"), process.pid + "\\n");
   let done = 0;
-  for (;;) {
+  const print = () => {
     const lines = (read("events.jsonl") || "").split("\\n").filter(Boolean);
     while (done < lines.length) {
       const line = lines[done++];
@@ -34,6 +34,9 @@ async function follow() {
       if (Number.isSafeInteger(id) && id <= since) continue;
       process.stdout.write(line + "\\n");
     }
+  };
+  for (;;) {
+    print();
     const failure = read("follow-failure.json");
     if (failure !== undefined) {
       const f = JSON.parse(failure);
@@ -41,7 +44,8 @@ async function follow() {
       process.exit(f.exit);
     }
     const exitNext = read("exit-next");
-    if (exitNext !== undefined) { fs.rmSync(path.join(dir, "exit-next")); process.exit(Number(exitNext)); }
+    // every line emitted before \`exit-next\` is printed before the exit: a test's Events reach the adapter before the restart
+    if (exitNext !== undefined) { print(); fs.rmSync(path.join(dir, "exit-next")); process.exit(Number(exitNext)); }
     await sleep(10);
   }
 }
@@ -133,8 +137,15 @@ export class Fixture {
 
   /** Appends Event lines (objects or raw strings) to what the fake follower prints. */
   emit(...lines: unknown[]): void {
-    for (const l of lines) appendFileSync(join(this.dir, "events.jsonl"), (typeof l === "string" ? l : JSON.stringify(l)) + "\n");
+    for (const l of lines) {
+      appendFileSync(join(this.dir, "events.jsonl"), (typeof l === "string" ? l : JSON.stringify(l)) + "\n");
+      const id = (l as { id?: unknown }).id;
+      if (typeof id === "number") this.lastId = Math.max(this.lastId, id);
+    }
   }
+
+  /** The highest Event id emitted so far (a `drain` marker follows it, and a restart's cursor passes it). */
+  private lastId = 0;
 
   file(name: string, content: string): void {
     this.write(name, content);
@@ -192,15 +203,43 @@ export class Fixture {
     return existsSync(join(this.dir, `killed-${pid}`));
   }
 
-  /** Start the adapter under test with fast timing. */
-  load(options: Options = {}): void {
+  /** Start the adapter under test with fast timing; into `pi` (default the fixture's) to run a second adapter on the same fake `cpd`. */
+  load(options: Options = {}, pi: FakePi = this.pi): void {
     const start = options.spawn ?? spawn;
-    adapter(this.pi, {
+    adapter(pi, {
       ...options,
-      spawn: ((...args: Parameters<typeof spawn>) => this.pi.track(start(...args))) as typeof spawn,
+      spawn: ((...args: Parameters<typeof spawn>) => pi.track(start(...args))) as typeof spawn,
       timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
       reload: { dir: this.adapterDir, intervalMs: 20, ...options.reload },
     });
+  }
+
+  /** Resolves when no `cpd` call is in flight and none can start from what already ran: calls start in the same macrotask as the work that wants them, so one macrotask boundary with none running is quiet. */
+  async quiet(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+    await waitFor("no cpd call in flight", () => this.pi.execsRunning.size === 0);
+  }
+
+  /** Resolves when every fake follower started so far is gone and node has seen it end. */
+  async exited(): Promise<void> {
+    await waitFor("every fake follower to exit", () => this.pids().every((pid) => !alive(pid)), 10_000);
+    await new Promise((resolve) => setImmediate(resolve)); // the `close` event of a child follows its exit
+  }
+
+  /**
+   * Resolves when every Event emitted so far was handled, and the calls it made are done. Events are handled in order, so an Event delivered after
+   * them proves it: `marker` (default a `job-merged`, delivered to a Plan Lead; a Worker needs its own kind) is emitted last, with the id after the highest so far
+   * (a test's next Event must have a higher one, as the cursor has passed it), waited for and taken out of what the pi received, so the test can assert what is left. Replaces waiting a fixed time for something that must not happen.
+   */
+  async drain(marker: (id: number) => unknown = (id) => ev(id, "job-merged")): Promise<void> {
+    const id = this.lastId + 1;
+    this.emit(marker(id));
+    const at = await waitFor(`the marker Event ${id}`, () => {
+      const i = this.pi.sent.findIndex((s) => (s.message.details as any)?.id === id);
+      return i >= 0 ? { i } : undefined;
+    });
+    this.pi.sent.splice(at.i, 1);
+    await this.quiet();
   }
 
   async close(): Promise<void> {
@@ -448,9 +487,6 @@ export async function waitFor<T>(what: string, fn: () => T | undefined | null | 
     await sleep(10);
   }
 }
-
-/** Wait long enough for something that must NOT happen. */
-export const settle = (ms = 150) => sleep(ms);
 
 /** `session state` argvs, without the session id, as `idle` or `blocked:<label>`. */
 export const stateCalls = (f: Fixture): string[] =>

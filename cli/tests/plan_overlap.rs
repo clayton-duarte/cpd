@@ -9,7 +9,6 @@ use std::fs;
 use common::TestEnv;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::PlanId;
-use cpd_core::store::Store;
 use serde_json::{Value, json};
 
 const FP: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -18,17 +17,12 @@ fn home(env: &TestEnv) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
 }
 
-fn sql(env: &TestEnv, sql: &str) {
-    Store::open(&home(env), 5000).unwrap().write("fixture", |tx| Ok(tx.execute_batch(sql)?)).unwrap();
-}
-
 /// A Plan in `phase`, its Lead Session beside it; `archived` as a flag.
 fn plan(env: &TestEnv, id: &str, phase: &str, archived: bool) {
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
     let done = if phase == "done" { "'2000-01-02T00:00:00.000Z'" } else { "NULL" };
     let archived = if archived { "'2000-01-03T00:00:00.000Z'" } else { "NULL" };
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
                VALUES ('lead-{id}', 'lead', 'ctx', '{id}', '{id}', '/', 'O3', 'idle', 't', 't');
@@ -46,8 +40,7 @@ fn pr(env: &TestEnv, plan: &str, key: &str, repo: &str, status: &str) {
         "dispatch" => ("'/w'", "'t'", none.to_owned(), "NULL"),
         "merged" => {
             // A merged PR names its stored GitHub row, one number each.
-            sql(
-                env,
+            env.sql(
                 "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
                  VALUES ('acme/api', (SELECT COALESCE(MAX(number), 0) + 1 FROM pull_requests), 'u', 'Old', 0, 'merged', 'none', 'none', 't', 't', 't');",
             );
@@ -55,8 +48,7 @@ fn pr(env: &TestEnv, plan: &str, key: &str, repo: &str, status: &str) {
         }
         other => panic!("no fixture for {other}"),
     };
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
                               created_txn, created_at, started_at, merged_at)
@@ -67,8 +59,7 @@ fn pr(env: &TestEnv, plan: &str, key: &str, repo: &str, status: &str) {
 
 /// A Job of PR `pr` in `status` touching `touches`.
 fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str, touches: &[&str]) {
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
                                merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
@@ -86,7 +77,7 @@ fn job(env: &TestEnv, plan: &str, pr: &str, key: &str, status: &str, touches: &[
 fn fixture() -> TestEnv {
     let env = TestEnv::new();
     fs::write(home(&env).config(), "version = 1\nmachine = \"t\"\n").unwrap();
-    sql(&env, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't'), ('other', 'Other', 't', 't');");
+    env.sql("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't'), ('other', 'Other', 't', 't');");
     plan(&env, "mine", "plan", false);
     pr(&env, "mine", "api", "/r/api", "waiting");
     job(&env, "mine", "api", "x", "draft", &["core/src/x.rs"]);
@@ -300,8 +291,7 @@ fn a_plan_in_another_context_is_listed_and_this_plans_own_jobs_are_not() {
     // Another Job of this very Plan, in another PR of the same repo.
     pr(&env, "mine", "second", "/r/api", "waiting");
     job(&env, "mine", "second", "x2", "draft", &["core/src/"]);
-    sql(
-        &env,
+    env.sql(
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead-far', 'lead', 'other', 'far', 'far', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)

@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -170,26 +170,19 @@ impl Fx {
     }
 
     fn wait_status(&self, id: &str, status: &str) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
+        common::wait_some(&format!("Attempt {id} to become {status}"), Duration::from_secs(60), || {
             let attempt = self.attempt(id);
-            if attempt["status"] == status {
-                return attempt;
-            }
-            assert!(Instant::now() < deadline, "Attempt {id} never became {status}: {attempt}\nlog: {}", self.log(id));
-            std::thread::sleep(Duration::from_millis(200));
-        }
+            if attempt["status"] == status { Ok(attempt) } else { Err(format!("{attempt}\nlog: {}", self.log(id))) }
+        })
     }
 
     /// Waits until the Attempt has ended and its driver has exited.
     fn wait_end(&self, id: &str, pid: &Value) -> Value {
         let attempt = self.wait_status(id, "ended");
         let pid = nix::unistd::Pid::from_raw(pid.as_i64().unwrap() as i32);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while nix::sys::signal::kill(pid, None).is_ok() {
-            assert!(Instant::now() < deadline, "the driver of {id} did not exit\nlog: {}", self.log(id));
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        common::wait_some(&format!("the driver of {id} to exit"), Duration::from_secs(30), || {
+            if nix::sys::signal::kill(pid, None).is_ok() { Err(format!("log: {}", self.log(id))) } else { Ok(()) }
+        });
         attempt
     }
 
@@ -212,13 +205,6 @@ impl Fx {
         let text = fs::read_to_string(&path).unwrap();
         serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("{name}: {e}: {text}"))
     }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 /// A review Worker: it submits with no findings, then with a commit and findings, then
@@ -413,7 +399,10 @@ fn the_worker_starts_only_once_the_lead_is_idle() {
     fx.add("final", &["--review"]).ok();
 
     let out = fx.dispatch("final").ok();
-    std::thread::sleep(Duration::from_secs(5));
+    wait_until("the driver to wait for the Lead", || fx.log("final-a1").contains("A3: waiting for the Lead to be idle"));
+    // time-claim: the driver forks nothing while the Lead works, over a whole 2 s poll of the Lead (LEAD_POLL); no
+    // per-poll signal from the driver (its log says only that it waits).
+    std::thread::sleep(Duration::from_millis(2500));
 
     // Still waiting: `starting`, no Worker, no Session, nothing forked.
     assert_eq!(fx.attempt("final-a1")["status"], "starting");
@@ -433,7 +422,7 @@ fn a_cancel_while_the_driver_waits_for_the_lead_ends_the_attempt_cancelled() {
     fx.fixture("UPDATE sessions SET state = 'working' WHERE id = 'lead1';");
     fx.add("final", &["--review"]).ok();
     let out = fx.dispatch("final").ok();
-    std::thread::sleep(Duration::from_secs(1));
+    wait_until("the driver to wait for the Lead", || fx.log("final-a1").contains("A3: waiting for the Lead to be idle"));
 
     fx.env.cpd(&["job", "cancel", "final", "--reason", "not needed", "--plan", PLAN]).ok();
     let attempt = fx.wait_end("final-a1", &out["pid"]);
