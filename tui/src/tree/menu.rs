@@ -10,7 +10,7 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use super::rows::{Id, Row};
+use super::rows::{self, Id, Row};
 
 /// One item of a menu. The labels are the contract's, exactly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -161,7 +161,7 @@ impl Menu {
     /// The box inside `pane`: one border, one blank and the label per item, at the click, moved left and up as far as
     /// it takes to fit (and cut, when the pane is smaller than the box).
     pub fn rect(&self, pane: Rect) -> Rect {
-        let widest = self.items.iter().map(|i| i.label().chars().count()).max().unwrap_or(0) as u16;
+        let widest = self.items.iter().map(|i| rows::width(i.label())).max().unwrap_or(0) as u16;
         let width = (widest + 4).min(pane.width);
         let height = (self.items.len() as u16 + 2).min(pane.height);
         let x = self.at.x.min(pane.right().saturating_sub(width)).max(pane.x);
@@ -216,7 +216,6 @@ mod tests {
     use ratatui::crossterm::event::KeyModifiers;
 
     use super::super::fixture::{archived, sample};
-    use super::super::rows;
     use super::*;
 
     fn labels(kind: Kind) -> Vec<&'static str> {
