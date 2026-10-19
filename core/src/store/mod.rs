@@ -5,11 +5,12 @@
 //! Every module reads through [`Store::read`] and writes through
 //! [`Store::write`]; nothing else writes the database (§4.3).
 
+mod lock;
 mod schema;
 #[doc(hidden)] pub mod testing;
 mod verdict;
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,8 +27,9 @@ use serde_json::{Value, json};
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::lock;
 
+use lock::{SetupLock, setup_lock};
+pub use lock::MIGRATION_WAIT_CEILING;
 use schema::{LEGACY, Named};
 pub use schema::{SCHEMA_HASH, VERSION, canonical_hash};
 use verdict::verdict_with;
@@ -200,7 +202,7 @@ impl Store {
         let path = home.db();
         let setup = setup_lock(home, busy_ms)?;
         let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
-        store.migrate(home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
+        store.migrate(home, catalog, &setup).map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
         store.schema = schema_mismatch(&store.conn, home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         Ok(store)
@@ -277,10 +279,18 @@ impl Store {
     ///
     /// When the migration that imports the old Context stores (§4.5 legacy
     /// migration 0007) committed, the folders are moved to `archive/contexts/` (§1.4).
-    fn migrate(&mut self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<(), CpdError> {
-        if verdict_with(&self.conn, catalog)?.into_plan()?.is_none() {
-            return Ok(());
-        }
+    fn migrate(&mut self, home: &CpdHome, catalog: &Catalog<'_>, setup: &SetupLock) -> Result<(), CpdError> {
+        let Some(plan) = verdict_with(&self.conn, catalog)?.into_plan()? else { return Ok(()) };
+        // Before the first write, and while the `flock` is held: whoever waits for it learns that it is a migration.
+        let (from, to) = match plan.start {
+            Start::Fresh => (0, LEGACY.len() + plan.pending.len()),
+            Start::Convert(version) => (version as usize, LEGACY.len() + plan.pending.len()),
+            Start::Named => {
+                let applied: i64 = self.conn.query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))?;
+                (applied as usize, applied as usize + plan.pending.len())
+            }
+        };
+        setup.migrating(from, to)?;
         self.conn.pragma_update(None, "foreign_keys", "OFF")?;
         self.conn.pragma_update(None, "legacy_alter_table", "ON")?;
         let migrated = self.migrate_in_txn(home, catalog);
@@ -597,44 +607,6 @@ fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
     ))
     .with("problems", problems))
 }
-
-/// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
-/// use, and waits for it at most `busy_ms` (the config's `store_busy_ms`): then
-/// `lock_timeout` (exit 5) naming the lock file and the time waited (§4.3). A
-/// holder that hangs does not hang every other cpd command. Dropping the
-/// result releases it.
-fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<File, CpdError> {
-    let failed = |what: &str, path: &Path, e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
-    };
-    let dir = home.locks_dir();
-    fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
-    // `home.rs` has no method for this lock; it is the store's alone.
-    let path = dir.join("store.lock");
-    let file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
-    let deadline = Instant::now() + Duration::from_millis(busy_ms);
-    loop {
-        if lock::try_lock(&file).map_err(|e| failed("lock", &path, e))? {
-            return Ok(file);
-        }
-        if Instant::now() >= deadline {
-            return Err(CpdError::new(
-                ErrorCode::LockTimeout,
-                format!(
-                    "Another cpd process held the store's setup lock {} for longer than store_busy_ms ({busy_ms} ms).",
-                    path.display()
-                ),
-            )
-            .with("lock", path.display().to_string())
-            .with("waited_ms", busy_ms));
-        }
-        std::thread::sleep(SETUP_LOCK_RETRY);
-    }
-}
-
-/// How often `setup_lock` retries a held lock.
-const SETUP_LOCK_RETRY: Duration = Duration::from_millis(20);
 
 /// The database's `PRAGMA user_version`, or `None` when the file does not
 /// exist. Opens it read-only: no migration, no schema check, no write.
