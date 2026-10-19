@@ -57,7 +57,7 @@ pub enum Command {
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
     Start(StartArgs),
-    /// Push the Lead Branch and open the PR (§9.1)
+    /// Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1)
     Open(Args),
     /// Poll every open pull request of the User (§9.2)
     Poll(PollArgs),
