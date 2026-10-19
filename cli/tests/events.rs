@@ -832,10 +832,13 @@ fn follow_goes_on_when_the_store_gains_only_an_additive_migration_this_binary_la
     assert_eq!(follower.next().unwrap()["id"], 11);
     // Inside the window (contract §4.5): the verdict is recomputed, still opens, nothing ends.
     newer_cpd_migrates(&env, "additive");
-    std::thread::sleep(Duration::from_millis(500));
     let mut store = open(&env);
-    let n = append_watch(&mut store, 1);
-    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
+    // The Event committed after the migration is printed by a poll that has read the migration; the next one shows
+    // that the follower went on past that poll.
+    for i in 1..=2 {
+        let n = append_watch(&mut store, i);
+        assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
+    }
 }
 
 #[test]
@@ -843,8 +846,10 @@ fn follow_ends_when_a_migration_leaves_the_verdict_refusing_even_if_user_version
     // `migration_order`-like and `store_too_new` refusals come from the verdict, not from a number:
     // the schema changes (so `schema_version` moves) and `user_version` stays what it was.
     let env = seeded();
-    let mut follower = Follower::start(&env, &["--plan", "pay"]);
-    std::thread::sleep(Duration::from_millis(300));
+    let mut follower = Follower::start(&env, &["--plan", "pay", "--since", "11"]);
+    // It is idle, in its poll loop, once it has printed an Event committed after it started.
+    let n = append_edit(&mut open(&env), "goal");
+    assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), n);
     newer_cpd_migrates(&env, "breaking");
     let user_version: i64 = Connection::open(home(&env).db()).unwrap().pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
     assert_eq!(user_version, cpd_core::store::VERSION);

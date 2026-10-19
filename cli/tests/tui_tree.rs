@@ -303,6 +303,18 @@ impl<'a> Pane<'a> {
         self.wait("the view to handle the keys sent before", |_| self.footer_has(NO_CLIENT));
     }
 
+    /// [`Pane::settled`] where a fake tmux has a client (see [`popups`]): `?` then opens the legend's popup, the mark.
+    fn settled_with_a_client(&self) {
+        let before = popups(self.env).len();
+        self.keys(&["?"]);
+        let popups = common::wait_some("the view to handle the input sent before", common::WAIT, || {
+            let popups = popups(self.env);
+            if popups.len() > before { Ok(popups) } else { Err(format!("popups: {popups:?}")) }
+        });
+        assert_eq!(popups.len(), before + 1, "{popups:?}");
+        assert!(popups[before].contains(&" legend ".to_owned()), "the legend's: {:?}", popups[before]);
+    }
+
     fn keys(&self, keys: &[&str]) {
         let mut args = vec!["send-keys", "-t", SESSION];
         args.extend(keys);
@@ -502,21 +514,16 @@ fn no_key_but_the_references_does_anything() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 14);
+    let pane = Pane::start(&env, 46, 18);
     let before = pane.ready();
     pane.down(2); // on sketch
     pane.keys(&["q", "f", "r", "p", "Space", "G", "Escape"]);
     pane.settled();
     assert!(!pane.dead(), "q does not end the view");
     assert!(calls(&env).is_empty());
-    // The marker's note is the one change: the rows without it are what they were.
-    let without_note = |rows: Vec<String>| -> Vec<String> {
-        let mut rows: Vec<String> = rows.into_iter().filter(|r| !r.contains(NO_CLIENT)).collect();
-        while rows.last().is_some_and(String::is_empty) {
-            rows.pop();
-        }
-        rows
-    };
+    // The marker's note is the one change: the rows without it are what they were. Its row is taken from the blank
+    // rows between the tree and the Inbox pinned below (the pane is tall enough to have some), so they are left out.
+    let without_note = |rows: Vec<String>| -> Vec<String> { rows.into_iter().filter(|r| !r.is_empty() && !r.contains(NO_CLIENT)).collect() };
     assert_eq!(without_note(pane.screen()), without_note(before), "no prompt, nothing folded");
 }
 
@@ -629,7 +636,9 @@ fn the_tree_follows_the_events_of_the_store() {
     pane.ready();
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
-    std::thread::sleep(Duration::from_millis(300));
+    // a later change on the screen is the positive signal that the view has taken a snapshot with the blocked Session
+    env.cpd(&["session", "state", "working", "--session", "f-idle"]).ok();
+    pane.wait("the working fork", |s| s.iter().any(|r| r.contains("ship·f-id") && SPINNER.iter().any(|g| r.contains(g))));
     assert!(pane.screen().iter().any(|r| r.contains(&format!("├ {IDLE} sketch"))), "a blocked Session is no filled dot until the Inbox has its dialog");
     // inbox-opened: the engine's E8 opens the dialog
     let mut store = open(&env);
@@ -1178,13 +1187,12 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     pane.click(10, failing);
     // engine-error: the logs popup at the item's Event
     pane.click(10, row_of("engine: store busy"));
-    let popups = || -> Vec<_> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect() };
-    wait_for(|| !popups().is_empty());
-    let popups = popups();
+    common::wait_until("the logs popup", || !popups(&env).is_empty());
+    let popups = popups(&env);
     assert_eq!(popups.len(), 1, "{popups:?}");
     assert_eq!(popups[0].last().unwrap(), &format!("cpd tui view logs --event {event}"));
     assert!(popups[0].contains(&" logs ".to_owned()), "{:?}", popups[0]);
-    std::thread::sleep(Duration::from_millis(300));
+    pane.settled_with_a_client();
     assert_eq!(calls(&env).len(), 4, "the link and the logs ran no cpd command: {:?}", calls(&env));
 }
 
@@ -1208,21 +1216,17 @@ fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_l
     assert_eq!(screen[17..19], section[1..3]);
     assert_eq!(screen[19], " +2 more");
     pane.click(10, 16);
-    let popups = || -> Vec<_> { env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect() };
-    wait_for(|| !popups().is_empty());
-    let popups = popups();
+    common::wait_until("the logs popup", || !popups(&env).is_empty());
+    let popups = popups(&env);
     assert_eq!(popups.len(), 1, "{popups:?}");
     assert_eq!(popups[0].last().unwrap(), "cpd tui view logs");
-    std::thread::sleep(Duration::from_millis(300));
+    pane.settled_with_a_client();
     assert!(calls(&env).is_empty(), "no cpd command ran: {:?}", calls(&env));
 }
 
-fn wait_for(done: impl Fn() -> bool) {
-    let start = Instant::now();
-    while !done() {
-        assert!(start.elapsed() < Duration::from_secs(10), "timed out");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+/// The `display-popup` calls of a fake tmux.
+fn popups(env: &TestEnv) -> Vec<Vec<String>> {
+    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
 }
 
 #[test]
@@ -1280,7 +1284,7 @@ fn the_cursor_reaches_the_items_and_d_dismisses_and_s_snoozes_the_one_it_is_on()
     pane.wait("the snooze choices", |s| menu_open(s, "Snooze 15 min"));
     pane.keys(&["Escape"]);
     pane.wait("the menu closed", the_menu_is_closed);
-    std::thread::sleep(Duration::from_millis(300));
+    pane.settled();
     assert_eq!(calls(&env).len(), 3, "Esc ran nothing: {:?}", calls(&env));
 }
 
@@ -1294,7 +1298,7 @@ fn s_and_d_do_nothing_on_a_session_row_or_before_an_arrow_key() {
     pane.keys(&["s", "d"]);
     pane.down(1); // on the first Session
     pane.keys(&["s", "d"]);
-    std::thread::sleep(Duration::from_millis(300));
+    pane.settled();
     assert!(the_menu_is_closed(&pane.screen()));
     assert!(calls(&env).is_empty(), "{:?}", calls(&env));
 }
@@ -1341,7 +1345,7 @@ fn a_right_click_on_an_item_opens_its_four_entries_and_each_runs_its_command() {
     // the header has no menu
     pane.wait("the menu closed", the_menu_is_closed);
     pane.right_click(10, item_row(&pane, "── Inbox"));
-    std::thread::sleep(Duration::from_millis(300));
+    pane.settled();
     assert!(the_menu_is_closed(&pane.screen()));
     assert_eq!(calls(&env).len(), 4);
 }

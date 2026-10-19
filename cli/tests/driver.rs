@@ -541,8 +541,11 @@ fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
         assert!(Instant::now() < deadline, "the hiccup never happened\nlog: {}", fx.log(ATTEMPT));
         std::thread::sleep(Duration::from_millis(100));
     }
-    // Two polls after the hiccup.
-    std::thread::sleep(Duration::from_millis(1500));
+    // The poll after the hiccup lists the panes again: the failed one judged nothing.
+    common::wait_until("the driver to list the panes again", || list_panes_calls(&fx) >= 2);
+    // time-claim: the Worker is still running a poll after the retried listing; no per-poll signal from the driver
+    // once it has the pane's pid (it forks nothing).
+    std::thread::sleep(Duration::from_millis(1000));
     let attempt = fx.attempt(ATTEMPT);
     assert_eq!(attempt["status"], "running", "{attempt}\nlog: {}", fx.log(ATTEMPT));
 
@@ -561,9 +564,11 @@ fn a_running_worker_is_watched_without_listing_panes_at_every_poll() {
 
     let out = fx.dispatch(JOB).ok();
     fx.wait_status(ATTEMPT, "running");
-    // The pid is recorded at the first poll.
-    std::thread::sleep(Duration::from_millis(1500));
+    // The pid is recorded at the first poll, A4's first `list-panes` (the driver lists no panes before A4).
+    common::wait_until("A4's first poll to list the panes", || list_panes_calls(&fx) >= 1);
     let before = list_panes_calls(&fx);
+    // time-claim: no `list-panes` over six 0.5 s polls of a running Worker; no per-poll signal from the driver (that
+    // it forks nothing at a poll is the claim).
     std::thread::sleep(Duration::from_secs(3));
     let during = list_panes_calls(&fx) - before;
     assert_eq!(during, 0, "list-panes calls in 3 s of a running Worker\nlog: {}", fx.log(ATTEMPT));

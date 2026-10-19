@@ -141,15 +141,14 @@ fn styled_row_ending(env: &TestEnv, pane: &str, tail: &str) -> String {
 #[test]
 fn the_inbox_counts_the_visible_open_items_in_the_colour_of_the_most_urgent() {
     let env = env();
-    sql(&env, &plan_with_attempts(&[]));
+    env.sql(&plan_with_attempts(&[]));
     let pane = start_view(&env, 60);
     // nothing open: a dim zero, with no colour (SGR 2 is dim; tmux writes colours 1 and 3 as `38;5;1`, `38;5;3`)
     let row = styled_row_ending(&env, &pane, "inbox 0 workers 0/4");
     assert!(row.contains("\x1b[2minbox 0\x1b[0m"), "{row:?}");
 
     // red, yellow and white are open; a snoozed, a dismissed and a closed red one are not counted
-    sql(
-        &env,
+    env.sql(
         &format!(
             "{}{}{}{}{}{}
              UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'snoozed';
@@ -167,7 +166,7 @@ fn the_inbox_counts_the_visible_open_items_in_the_colour_of_the_most_urgent() {
     assert!(row.contains("\x1b[38;5;1minbox 3"), "red: {row:?}");
 
     // the red one is dismissed: the most urgent left is yellow
-    sql(&env, "UPDATE inbox_items SET dismissed_at = '2026-01-04T00:00:00.000Z' WHERE subject = 'red';");
+    env.sql("UPDATE inbox_items SET dismissed_at = '2026-01-04T00:00:00.000Z' WHERE subject = 'red';");
     let row = styled_row_ending(&env, &pane, "inbox 2 workers 0/4");
     assert!(row.contains("\x1b[38;5;3minbox 2"), "yellow: {row:?}");
 }

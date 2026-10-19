@@ -391,8 +391,11 @@ fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_doe
     let rows = wait_screen(&env, &pane, "the Event", |r| r.first().is_some_and(|l| l == " 00:00:02 event 2"));
     assert_eq!(rows[1], " 00:01:40 event 100", "then the latest 500");
     append_numbered(&mut store, 600, 1);
-    std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(screen(&env, &pane)[0], " 00:00:02 event 2", "it does not follow");
+    // The view reads the store after each key it handles, so once `j` has scrolled it one row, it has read Event 600:
+    // it did not follow it.
+    tmux_out(&env, &["send-keys", "-t", &pane, "j"]);
+    let rows = wait_screen(&env, &pane, "scrolled down once", |r| r.first().is_some_and(|l| l != " 00:00:02 event 2"));
+    assert_eq!(rows[0], " 00:01:40 event 100", "it does not follow: {rows:?}");
     tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
     wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
 

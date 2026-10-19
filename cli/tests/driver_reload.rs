@@ -11,7 +11,7 @@ use std::fs::{self, File};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use common::{CPD, TestEnv, copy_executable, output, wait_until_for, write_executable};
+use common::{CPD, TestEnv, copy_executable, output, wait_until, wait_until_for, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -392,7 +392,6 @@ fn after_a_reload_fd_3_is_the_lock_and_the_drivers_children_do_not_hold_it() {
 /// not `timed_out` after the Attempt's whole active time.
 #[test]
 fn a_nudged_worker_that_idles_again_after_a_reload_ends_no_submit() {
-    let _serial = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let fx = fx();
     let reloaded = fx.path("reloaded");
     fx.env.fake_pi(&format!(
