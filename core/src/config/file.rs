@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::Serialize;
 use toml::{Table, Value};
@@ -125,11 +126,57 @@ pub struct Timeouts {
     pub distill_minutes: u32,
     /// A Worker's tool call idle this long has its processes killed (§3.4 A4); 0 = off.
     pub stall_seconds: u32,
+    /// The grace pi gets to stop after `SIGTERM` before `SIGKILL` (§6.7).
+    pub pi_stop_seconds: u32,
+}
+
+/// `watch.tick_seconds`: a decimal of at least 0.1 (§3.7, §8.2), kept in whole milliseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TickSeconds(u32);
+
+impl TickSeconds {
+    const MIN_MILLIS: u32 = 100;
+
+    pub fn duration(self) -> Duration {
+        Duration::from_millis(u64::from(self.0))
+    }
+
+    fn parse(value: Value) -> Result<Self, String> {
+        let seconds = match value {
+            Value::Integer(i) => i as f64,
+            Value::Float(f) => f,
+            other => return Err(format!("must be a number, not {}", other.type_str())),
+        };
+        let millis = (seconds * 1000.0).round();
+        if (seconds * 1000.0 - millis).abs() > 1e-6 {
+            return Err(format!("must be a whole number of milliseconds, got {seconds}"));
+        }
+        if millis < f64::from(Self::MIN_MILLIS) {
+            return Err(format!("must be at least 0.1, got {seconds}"));
+        }
+        if millis > f64::from(u32::MAX) {
+            return Err(format!("must be at most {}, got {seconds}", u32::MAX / 1000));
+        }
+        Ok(Self(millis as u32))
+    }
+}
+
+impl std::fmt::Display for TickSeconds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", f64::from(self.0) / 1000.0)
+    }
+}
+
+/// A whole number of seconds is shown as an integer, as it was when the key was one.
+impl Serialize for TickSeconds {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.0 % 1000 == 0 { serializer.serialize_u32(self.0 / 1000) } else { serializer.serialize_f64(f64::from(self.0) / 1000.0) }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Watch {
-    pub tick_seconds: u32,
+    pub tick_seconds: TickSeconds,
     pub pr_poll_seconds: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
@@ -245,9 +292,10 @@ impl Config {
             fork_quiet_seconds: positive(&mut r, "timeouts.fork_quiet_seconds", 5)?,
             distill_minutes: positive(&mut r, "timeouts.distill_minutes", 15)?,
             stall_seconds: r.get("timeouts.stall_seconds", 1200, |v| int(v, 0, u32::MAX))?,
+            pi_stop_seconds: positive(&mut r, "timeouts.pi_stop_seconds", 10)?,
         };
         let watch = Watch {
-            tick_seconds: positive(&mut r, "watch.tick_seconds", 5)?,
+            tick_seconds: r.get("watch.tick_seconds", TickSeconds(5000), TickSeconds::parse)?,
             pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
         };

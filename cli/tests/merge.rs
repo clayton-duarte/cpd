@@ -11,7 +11,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::TestEnv;
+use common::{TestEnv, write_executable};
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
@@ -672,15 +672,13 @@ fn cas_lost_when_the_lead_branch_keeps_moving_outside_cpd() {
     // Someone outside cpd moves the Lead Branch after every rebase, to a
     // commit with the same tree, so the Lead worktree stays clean.
     let hook = fx.repo.join(".git/hooks/post-rewrite");
-    fs::write(
+    write_executable(
         &hook,
         "#!/bin/sh\nold=$(git rev-parse refs/heads/cpd/pay)\n\
          new=$(git commit-tree -p \"$old\" -m outsider \"$old^{tree}\")\n\
          git update-ref refs/heads/cpd/pay \"$new\" \"$old\"\n\
          echo x >> \"$(git rev-parse --git-common-dir)/outsider-moves\"\n",
-    )
-    .unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    );
 
     let result = fx.merge(&attempt);
 
@@ -761,8 +759,7 @@ fn a_rejected_push_leaves_the_job_merged_with_one_push_failed_error() {
     let (fx, origin) = fx_origin();
     let before = fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]);
     let hook = origin.join("hooks").join("pre-receive");
-    fs::write(&hook, "#!/bin/sh\necho nope >&2\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho nope >&2\nexit 1\n");
     let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
 
     let result = fx.merge(&attempt);
@@ -1171,8 +1168,7 @@ fn in_one_repo_a_merge_pushes_its_prs_branch_and_not_the_others() {
 fn a_rejected_push_of_one_prs_branch_is_that_attempts_push_failed_only() {
     let (fx, schema, web) = two_prs(false, true);
     let hook = schema.origin.as_ref().unwrap().join("hooks").join("pre-receive");
-    fs::write(&hook, "#!/bin/sh\necho nope >&2\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho nope >&2\nexit 1\n");
     let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
     let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
 

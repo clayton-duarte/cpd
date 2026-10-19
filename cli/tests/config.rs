@@ -4,19 +4,15 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, write_executable};
 use serde_json::{Value, json};
 
 const MINIMAL: &str = "version = 1\nmachine = \"hs\"\n";
 
-fn write_config(env: &TestEnv, text: &str) {
-    fs::write(env.cpd_home().join("config.toml"), text).expect("write config.toml");
-}
-
 fn config_with(env: &TestEnv, text: &str) -> Run {
-    write_config(env, text);
+    env.write_config(text);
     env.cpd(&["config"])
 }
 
@@ -66,7 +62,8 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "store_busy_ms": 5000,
                 "fork_quiet_seconds": 5,
                 "distill_minutes": 15,
-                "stall_seconds": 1200
+                "stall_seconds": 1200,
+                "pi_stop_seconds": 10
             },
             "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
             "inbox": {"stuck_job_minutes": 10},
@@ -74,6 +71,20 @@ fn config_with_only_the_required_keys_has_every_default() {
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+/// engine-W9, tests-build-F4: the tick is a decimal (minimum 0.1) and pi's stop grace is a key.
+#[test]
+fn config_takes_a_fractional_tick_and_pi_stop_seconds() {
+    let env = TestEnv::new();
+    let shown = |text: &str| config_with(&env, &format!("{MINIMAL}{text}")).ok()["config"].clone();
+    let config = shown("[watch]\ntick_seconds = 0.2\n[timeouts]\npi_stop_seconds = 1\n");
+    assert_eq!(config["watch"]["tick_seconds"], 0.2);
+    assert_eq!(config["timeouts"]["pi_stop_seconds"], 1);
+    // 0.1 is the floor; a whole number is shown as one, as before.
+    assert_eq!(shown("[watch]\ntick_seconds = 0.1\n")["watch"]["tick_seconds"], 0.1);
+    assert_eq!(shown("[watch]\ntick_seconds = 2\n")["watch"]["tick_seconds"], 2);
+    assert_eq!(shown("[watch]\ntick_seconds = 2.0\n")["watch"]["tick_seconds"], 2);
 }
 
 #[test]
@@ -149,6 +160,7 @@ store_busy_ms = 1
 fork_quiet_seconds = 1
 distill_minutes = 1
 stall_seconds = 0
+pi_stop_seconds = 1
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1
@@ -176,7 +188,7 @@ work_session = "w"
     // 0 turns the stall kill off (contract §8.2), unlike every other timeout.
     assert_eq!(out["config"]["timeouts"]["stall_seconds"], 0);
 
-    write_config(&env, &text.replace("poll_ms = 20", "poll_ms = 10000"));
+    env.write_config(&text.replace("poll_ms = 20", "poll_ms = 10000"));
     assert_eq!(env.cpd(&["config"]).ok()["config"]["events"]["poll_ms"], 10000);
 }
 
@@ -231,6 +243,12 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstore_busy_ms = 0\n", "timeouts.store_busy_ms"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstall_seconds = -1\n", "timeouts.stall_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0.05\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0.2501\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = \"0.2\"\n", "watch.tick_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_seconds = 0.5\n", "watch.pr_poll_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0\n", "timeouts.pi_stop_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0.5\n", "timeouts.pi_stop_seconds"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = \"10\"\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 19\n", "events.poll_ms"),
@@ -288,10 +306,12 @@ fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
         assert!(said.ends_with('.') && !said.ends_with(".."), "{said}");
     }
     // Above the largest value, the message says "at most"; below the smallest, "at least".
-    let above = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 4294967296\n");
+    let above = message("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_seconds = 4294967296\n");
     assert!(above.contains("must be at most 4294967295, got 4294967296"), "{above}");
-    let below = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n");
+    let below = message("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_seconds = 0\n");
     assert!(below.contains("must be at least 1, got 0"), "{below}");
+    let tick = message("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n");
+    assert!(tick.contains("must be at least 0.1, got 0"), "{tick}");
 }
 
 #[test]
@@ -326,7 +346,7 @@ fn config_leaves_cpd_1s_config_json_alone() {
 #[test]
 fn config_is_read_only_and_idempotent() {
     let env = TestEnv::new();
-    write_config(&env, MINIMAL);
+    env.write_config(MINIMAL);
     let first = env.cpd(&["config"]);
     let second = env.cpd(&["config"]);
     assert_eq!(first.stdout, second.stdout);
@@ -339,7 +359,7 @@ fn config_is_read_only_and_idempotent() {
 #[test]
 fn config_with_a_bad_argument_is_usage() {
     let env = TestEnv::new();
-    write_config(&env, MINIMAL);
+    env.write_config(MINIMAL);
     for args in [&["config", "--surprise"][..], &["config", "extra"], &["tiers", "--surprise"], &["tiers", "extra"]] {
         let run = env.cpd(args);
         assert_eq!(run.error()["code"], "usage", "{args:?}");
@@ -417,7 +437,7 @@ const ALL_LEVELS_JSON: &str = r#"{"O":["off","low","medium","high","xhigh","max"
 #[test]
 fn tiers_reads_efforts_from_pi_with_pis_node() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "9.9.9", FAKE_CODING_AGENT, FAKE_PI_AI);
     symlink(real_node(), env.bin().join("node")).unwrap();
     let out = cpd_isolated(&env, &["tiers"]).ok();
@@ -438,7 +458,7 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
 #[test]
 fn tiers_runs_the_catalog_module_from_argv() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     let (coding_agent, pi_ai) = install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let out = cpd_isolated(&env, &["tiers"]).ok();
@@ -470,7 +490,7 @@ fn tiers_runs_the_catalog_module_from_argv() {
 #[test]
 fn tiers_prefers_pis_own_node_over_node_on_path() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", "echo 'the node on PATH must not run' >&2; exit 1");
 
@@ -478,8 +498,7 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
     let pi_node = env.home().join(".local/share/pi-node/current/bin");
     fs::create_dir_all(&pi_node).unwrap();
     let script = format!("#!/bin/sh\necho '{ALL_LEVELS_JSON}'\n");
-    fs::write(pi_node.join("node"), script).unwrap();
-    fs::set_permissions(pi_node.join("node"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&pi_node.join("node"), &script);
     cpd_isolated(&env, &["tiers"]).ok();
     assert!(env.calls("node").is_empty());
     // The catalog is cached now; forget it so the next call reads pi again.
@@ -491,8 +510,7 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
     let xdg = env.root().join("xdg");
     let xdg_node = xdg.join("pi-node/current/bin");
     fs::create_dir_all(&xdg_node).unwrap();
-    fs::write(xdg_node.join("node"), "#!/bin/sh\necho 'xdg node ran' >&2; exit 1\n").unwrap();
-    fs::set_permissions(xdg_node.join("node"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&xdg_node.join("node"), "#!/bin/sh\necho 'xdg node ran' >&2; exit 1\n");
     let out = env.command(CPD).arg("tiers").env("PATH", env.bin()).env("XDG_DATA_HOME", &xdg).output().unwrap();
     let run = Run { exit: out.status.code().unwrap(), stdout: String::from_utf8(out.stdout).unwrap(), stderr: String::new() };
     let err = run.error();
@@ -503,7 +521,7 @@ fn tiers_prefers_pis_own_node_over_node_on_path() {
 #[test]
 fn tiers_without_pi_on_path_is_pi_not_found() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let run = cpd_isolated(&env, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
@@ -515,7 +533,7 @@ fn tiers_without_pi_on_path_is_pi_not_found() {
 fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     // No current-version file.
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     env.fake_pi("exit 0");
     let run = cpd_isolated(&env, &["tiers"]);
     assert_eq!(run.error()["code"], "pi_not_found");
@@ -524,7 +542,7 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     // A version that is not a plain name.
     for bad in ["", "..", "../x", "1 2"] {
         let env = TestEnv::new();
-        write_config(&env, TIERS_CONFIG);
+        env.write_config(TIERS_CONFIG);
         install_pi(&env, "1.2.0", "", "");
         fs::write(env.root().join("install/current-version"), format!("{bad}\n")).unwrap();
         let run = cpd_isolated(&env, &["tiers"]);
@@ -533,7 +551,7 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
 
     // A release without its entry points.
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     fs::remove_file(env.root().join("install/releases/1.2.0/node_modules/@earendil-works/pi-ai/dist/index.js")).unwrap();
     let run = cpd_isolated(&env, &["tiers"]);
@@ -545,12 +563,11 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
 #[test]
 fn tiers_finds_pi_through_a_symlink() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     // The agent directory is `real/agent`; `bin/pi` is a symlink into it.
     let agent = env.root().join("real/agent");
     fs::create_dir_all(agent.join("bin")).unwrap();
-    fs::write(agent.join("bin/pi"), "#!/bin/sh\nexit 0\n").unwrap();
-    fs::set_permissions(agent.join("bin/pi"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&agent.join("bin/pi"), "#!/bin/sh\nexit 0\n");
     fs::remove_file(env.bin().join("pi")).unwrap(); // the deny shim
     symlink(agent.join("bin/pi"), env.bin().join("pi")).unwrap();
     let release = agent.join("install/releases/3.0.0/node_modules/@earendil-works");
@@ -577,7 +594,7 @@ fn tiers_catalog_failures_are_catalog_failed() {
     ];
     for (name, body) in cases {
         let env = TestEnv::new();
-        write_config(&env, TIERS_CONFIG);
+        env.write_config(TIERS_CONFIG);
         install_pi(&env, "1.2.0", "", "");
         env.fake("node", body);
         let run = cpd_isolated(&env, &["tiers"]);
@@ -587,7 +604,7 @@ fn tiers_catalog_failures_are_catalog_failed() {
 
     // The failing node's exit and stderr are in `details`.
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", "echo 'boom: cannot import' >&2; exit 3");
     let err = cpd_isolated(&env, &["tiers"]).error();
@@ -598,7 +615,7 @@ fn tiers_catalog_failures_are_catalog_failed() {
 #[test]
 fn tiers_without_any_node_is_catalog_failed() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     let run = cpd_isolated(&env, &["tiers"]);
     assert_eq!(run.error()["code"], "catalog_failed");
@@ -608,7 +625,7 @@ fn tiers_without_any_node_is_catalog_failed() {
 #[test]
 fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", r#"echo '{"O":["off"],"S":null,"H":null}'"#);
     let run = cpd_isolated(&env, &["tiers"]);
@@ -621,7 +638,7 @@ fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
 #[test]
 fn tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown() {
     let env = TestEnv::new();
-    write_config(&env, "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"q/m-low\"\n");
+    env.write_config("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"q/m-low\"\n");
     install_pi(&env, "1.2.0", FAKE_CODING_AGENT, FAKE_PI_AI);
     symlink(real_node(), env.bin().join("node")).unwrap();
     let err = cpd_isolated(&env, &["tiers"]).error();
@@ -634,7 +651,7 @@ fn tiers_checks_pi_before_the_catalog_and_config_before_both() {
     let env = TestEnv::new();
     let run = cpd_isolated(&env, &["tiers"]);
     assert_eq!(run.error()["code"], "config_missing");
-    write_config(&env, "version = 1\nmachine = \"hs\"\nconcurrency = 0\n");
+    env.write_config("version = 1\nmachine = \"hs\"\nconcurrency = 0\n");
     assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "config_invalid");
 }
 
@@ -661,7 +678,7 @@ fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, Stri
 #[test]
 fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     assert!(!env.cpd_home().join("cpd.db").exists());
@@ -682,7 +699,7 @@ fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
 #[test]
 fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let cold = cpd_isolated(&env, &["tiers"]);
@@ -698,7 +715,7 @@ fn tiers_with_a_warm_cache_answers_from_it_without_node_or_a_write() {
 #[test]
 fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     cpd_isolated(&env, &["tiers"]).ok();
@@ -731,12 +748,12 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
 #[test]
 fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     cpd_isolated(&env, &["tiers"]).ok();
 
-    write_config(&env, &TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
+    env.write_config(&TIERS_CONFIG.replace("p/m-sonnet", "p/m-other"));
     let out = cpd_isolated(&env, &["tiers"]).ok();
     assert_eq!(out["tiers"]["S"]["model"], "p/m-other");
     assert_eq!(env.calls("node").len(), 2);
@@ -748,7 +765,7 @@ fn tiers_refreshes_the_cache_when_a_configured_model_changes() {
 #[test]
 fn tiers_does_not_cache_a_failed_catalog() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", r#"echo '{"O":["off"],"S":null,"H":["off"]}'"#);
     assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "tier_model_unknown");
@@ -759,7 +776,7 @@ fn tiers_does_not_cache_a_failed_catalog() {
 #[test]
 fn tiers_is_idempotent() {
     let env = TestEnv::new();
-    write_config(&env, TIERS_CONFIG);
+    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
     let first = cpd_isolated(&env, &["tiers"]);

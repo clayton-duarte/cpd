@@ -5,7 +5,7 @@ mod common;
 
 use std::fs;
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, refused};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use serde_json::{Value, json};
@@ -68,13 +68,6 @@ fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
         stdout: String::from_utf8(out.stdout).unwrap(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 fn messages(env: &TestEnv) -> Vec<Value> {

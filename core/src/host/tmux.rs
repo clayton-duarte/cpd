@@ -238,12 +238,20 @@ impl Split {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tmux {
     socket: String,
+    /// `TMUX_TMPDIR` for every call, when set; otherwise the process's own environment applies.
+    tmpdir: Option<PathBuf>,
 }
 
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into() }
+        Tmux { socket: socket.into(), tmpdir: None }
+    }
+
+    /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
+    /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
+    pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
+        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()) }
     }
 
     pub fn socket(&self) -> &str {
@@ -262,6 +270,9 @@ impl Tmux {
         let argv = self.argv(args);
         let mut cmd = Command::new(&argv[0]);
         cmd.args(&argv[1..]).env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null());
+        if let Some(tmpdir) = &self.tmpdir {
+            cmd.env("TMUX_TMPDIR", tmpdir);
+        }
         cmd
     }
 

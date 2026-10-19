@@ -5,9 +5,9 @@
 mod common;
 
 use std::fs;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{CPD, TestEnv};
+use common::{CPD, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
@@ -59,15 +59,6 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// Waits until `done` holds, at most 30 s.
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 /// `cpd tui view merge o/r#7` in a window of the popup's inside, 58x5.
 fn start(env: &TestEnv) -> String {
     let args = ["new-session", "-d", "-s", "view", "-x", "58", "-y", "5", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "merge", REF];
@@ -78,13 +69,8 @@ fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
     tmux_out(env, &["capture-pane", "-p", "-t", pane]).lines().map(|l| l.trim_end().to_owned()).collect()
 }
 
-fn wait_screen(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-    let mut rows = Vec::new();
-    wait_until(what, || {
-        rows = screen(env, pane);
-        done(&rows)
-    });
-    rows
+fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]) -> bool) -> Vec<String> {
+    common::wait_screen(what, || screen(env, pane), done)
 }
 
 fn wait_dialog(env: &TestEnv, pane: &str) -> Vec<String> {
@@ -155,7 +141,8 @@ fn y_or_enter_squash_merges_and_the_result_shows_until_a_key() {
             [["pr", "merge", "7", "--repo", "o/r", "--squash", "--delete-branch", "--match-head-commit", SHA].map(str::to_owned)],
             "{key}"
         );
-        // the result stays until a key
+        // time-claim: the result stays until a key, over 300 ms after it shows; no per-poll signal from the view, which
+        // blocks on its next terminal event.
         std::thread::sleep(Duration::from_millis(300));
         assert!(!closed(&env), "{key}");
         tmux_out(&env, &["send-keys", "-t", &pane, "x"]);
@@ -187,6 +174,8 @@ fn an_error_of_pr_merge_is_shown_until_a_key() {
     assert!(rows[2].starts_with(" o/r#7 is OPEN and BLOCKED"), "{rows:?}");
     assert_eq!(rows[4], " any key closes");
     assert!(merges(&env).is_empty());
+    // time-claim: the error stays until a key, over 300 ms after it shows; no per-poll signal from the view, which
+    // blocks on its next terminal event.
     std::thread::sleep(Duration::from_millis(300));
     assert!(!closed(&env));
     tmux_out(&env, &["send-keys", "-t", &pane, "Enter"]);

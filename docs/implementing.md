@@ -103,7 +103,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
   - `env.command(program)`: any other program in the same environment.
 - Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
-- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share (`TMUX_ENV` in `host.rs`, `ONE_AT_A_TIME` in `driver_reload.rs`) coordinates nothing there. Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it), as the tests of those two files do.
+- nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share coordinates nothing there: do not write one. Never `set_var`/`remove_var` in a test (`harness.rs` fails on it): put the variable on the `Command` (`env.command(..).env(..)`), or `Tmux::with_tmpdir` for tmux. Write and copy executables with `common::write_executable`/`copy_executable` (ETXTBSY, `harness.rs` checks it). Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it).
 - A test must fail first, for the right reason.
 
 ## Dependencies
@@ -138,6 +138,12 @@ Deliberately absent: a regex crate (the id patterns of §2.1 are checked by hand
 - Run one test file or one test with `scripts/cargo.sh nextest run -p cpd --test host` or `scripts/cargo.sh nextest run --workspace <part of the test's name>`.
 - nextest does not run doctests. The workspace has none (`scripts/cargo.sh test --workspace --doc` finds 0 tests in `cpd`, `cpd_core` and `cpd_tui`); when one is written, the Gate and CI also run that command.
 - `scripts/install-cpd.sh` builds `--release` and installs `~/.local/bin/cpd` and the adapter `pi/` at `~/.local/share/cpd/pi`, replacing the binary atomically; safe to rerun. Before replacing anything it refuses a build whose `cpd --version` has `store.opens` false, and a Lead Branch build that carries a migration file not on `origin/main` (contract §3.7). After an install, running Lead wrappers and Attempt drivers reload themselves (contract §3.4, §6.7).
+
+## Restarting the cockpit tmux server
+
+cpd requires tmux >= 3.6 (contract §6.1: older versions can lose a pane's `SIGCHLD`, so `pane-died` never respawns a cockpit view). A running tmux server keeps the version it started with. `scripts/restart-tmux.sh` restarts the cpd tmux server (`tmux -L <socket>`, default `cpd`) so it runs the installed tmux.
+
+Run it, by hand, once after tmux is upgraded on a machine whose cpd tmux server still runs the old version, and only while no Attempt runs. Restarting stops every pi in the server; Leads resume from their session files. It is never run automatically. When it refuses, it prints the attach command with the server's own tmux binary (`/proc/<server pid>/exe`) and the two versions, because a newer plain `tmux` cannot attach to an older server; after a restart, plain `tmux` attaches.
 
 ## Checking a pi version
 
