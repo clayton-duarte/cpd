@@ -10,7 +10,6 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::time::Duration;
 
 use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::home::CpdHome;
@@ -36,7 +35,7 @@ const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"rev
 fn fx() -> Fx {
     let env = TestEnv::new();
     let config = format!(
-        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\npr_poll_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
         env.tmux_socket()
     );
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
@@ -522,8 +521,8 @@ esac"#,
     ));
     let engine = fx.engine();
 
-    // a1 is not merged: nothing starts, however many ticks pass.
-    std::thread::sleep(Duration::from_millis(2500));
+    // a1 is not merged: nothing starts, however many ticks pass (two whole ticks of the engine).
+    fx.env.wait_whole_ticks(2);
     assert_eq!((fx.pr_status("a2"), fx.pr_status("a3")), ("waiting".to_owned(), "waiting".to_owned()));
 
     // a1 merges on GitHub: what it brought is on the remote, which this repo has not fetched.
@@ -574,7 +573,7 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     assert!(!fx.lead_path(&repo.path, "a2").exists(), "the worktree is removed");
 
     // The engine does not try again.
-    std::thread::sleep(Duration::from_millis(3500));
+    fx.env.wait_whole_ticks(3);
     assert_eq!(fx.events("error").len(), 1);
     assert!(fx.events("pr-started").is_empty());
 

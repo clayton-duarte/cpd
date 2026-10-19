@@ -480,10 +480,11 @@ fn e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it() {
     let lock = |attempt: &str| fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(attempt).unwrap());
     assert!(lock("api-a1").exists() && !lock("web-a1").exists());
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("both ended", || fx.attempt("api-a1").0 == "ended" && fx.attempt("web-a1").0 == "ended");
     // The lock goes with the end, and the next ticks do not bring it back.
-    std::thread::sleep(Duration::from_millis(2500));
+    fx.env.wait_whole_ticks(2);
     engine.stop();
 
     assert!(!lock("api-a1").exists() && !lock("web-a1").exists());
@@ -530,10 +531,11 @@ fn e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_th
     ));
     fx.add_running("fresh", "running", &ago(1));
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("stop requests", || fx.attempt("late-a1").3.is_some() && fx.attempt("gone-a1").3.is_some());
     // One more tick, for the Attempts it must leave alone.
-    std::thread::sleep(Duration::from_millis(1500));
+    fx.env.wait_whole_ticks(1);
     engine.stop();
 
     assert_eq!(fx.attempt("late-a1"), ("running".into(), None, None, Some("timed_out".into())));
@@ -604,9 +606,10 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
                   ('s-shut', 'lead', 'ctx', 'pay', 'Shut', '/', 'O3', '%998', 'stopped', NULL, 't', 't');"
     ));
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("three without a pane", || fx.count("session-moved") == 3);
-    std::thread::sleep(Duration::from_millis(1500));
+    fx.env.wait_whole_ticks(1);
     engine.stop();
 
     let row = |id: &str| {
@@ -655,9 +658,10 @@ fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
            VALUES ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', 't', 't');",
     );
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("the missing pane's Session stopped", || fx.count("session-moved") == 1);
-    std::thread::sleep(Duration::from_millis(2500));
+    fx.env.wait_whole_ticks(2);
     let out = engine.stop();
 
     assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
@@ -746,9 +750,10 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     let fx = fx("");
     fx.add_job("api", &[], &format!("UPDATE jobs SET fingerprint = '{}' WHERE key = 'api';", "0".repeat(64)));
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("error", || fx.count("error") == 1);
-    std::thread::sleep(Duration::from_millis(2500));
+    fx.env.wait_whole_ticks(2);
     engine.stop();
 
     let errors = fx.events("error");
@@ -812,8 +817,9 @@ fn e3_does_not_start_a_job_in_its_backoff() {
     let attempts: String = (1..=9).map(|n| ended_attempt("api", n, "S2", None, &now)).collect();
     fx.add_job("api", &[], &attempts);
 
+    poll_every(&fx, 1);
     let engine = fx.start();
-    std::thread::sleep(Duration::from_millis(3500));
+    fx.env.wait_whole_ticks(3);
     engine.stop();
 
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 9);
@@ -862,9 +868,10 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     fx.add_job("web", &[], "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'web';");
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("all-merged", || fx.count("all-merged") == 1);
-    std::thread::sleep(Duration::from_millis(2500));
+    fx.env.wait_whole_ticks(2);
     engine.stop();
 
     assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"pr": "repo", "merged": ["api"], "cancelled": ["web"]}))]);
@@ -877,6 +884,7 @@ fn e4_sends_all_merged_again_after_a_job_is_appended_and_merged() {
     let fx = fx("");
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
 
+    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("all-merged", || fx.count("all-merged") == 1);
     let spec = fx.env.root().join("late-spec.json");
@@ -887,7 +895,7 @@ fn e4_sends_all_merged_again_after_a_job_is_appended_and_merged() {
     // The Job merges (set directly; no Worker runs here).
     fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'late'; UPDATE jobs SET status = 'merged', merged_sha = 'def' WHERE key = 'late';");
     wait_until("second all-merged", || fx.count("all-merged") == 2);
-    std::thread::sleep(Duration::from_millis(2500));
+    fx.env.wait_whole_ticks(2);
     engine.stop();
 
     assert_eq!(fx.count("all-merged"), 2);
@@ -901,8 +909,9 @@ fn e4_waits_while_a_job_is_queued() {
     fx.add_running("busy", "running", &ago(1));
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
 
+    poll_every(&fx, 1);
     let engine = fx.start();
-    std::thread::sleep(Duration::from_millis(2500));
+    fx.env.wait_whole_ticks(2);
     engine.stop();
 
     assert_eq!(fx.count("all-merged"), 0);
@@ -924,8 +933,9 @@ fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
     let added = fx.env.cpd(&["job", "add", "later", "--title", "Later", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--draft", "--plan", "pay"]).ok();
     assert_eq!((&added["job"]["status"], &added["job"]["appended"]), (&json!("draft"), &json!(true)));
 
+    poll_every(&fx, 1);
     let engine = fx.start();
-    std::thread::sleep(Duration::from_millis(3500));
+    fx.env.wait_whole_ticks(3);
     engine.stop();
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
     assert_eq!(fx.job_status("later"), "draft");
@@ -955,11 +965,6 @@ fn in_pr(fx: &Fx) {
 /// What the fake `gh` answers to the search when it found no pull request, with `remaining` requests left until `reset_at`.
 fn search_reply(remaining: u32, reset_at: &str) -> String {
     format!(r#"{{"data":{{"search":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":{remaining},"resetAt":"{reset_at}"}}}}}}"#)
-}
-
-/// The fake `gh` calls that are a poll's search: one per `cpd pr poll`.
-fn searches(fx: &Fx) -> usize {
-    fx.env.calls("gh").iter().filter(|c| c[3].contains("search(type")).count()
 }
 
 /// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
@@ -1030,9 +1035,9 @@ fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_pol
     ));
 
     let engine = fx.start();
-    wait_until("the first poll", || searches(&fx) >= 1);
+    wait_until("the first poll", || fx.env.poll_searches() >= 1);
     let first = Instant::now();
-    wait_until("the second poll", || searches(&fx) >= 2);
+    wait_until("the second poll", || fx.env.poll_searches() >= 2);
     let gap = first.elapsed();
     engine.stop();
 
@@ -1148,8 +1153,9 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     // Not a store at all: E6 used to log and skip it; nothing looks now.
     fs::create_dir_all(fx.env.cpd_home().join("contexts/not a context")).unwrap();
 
+    poll_every(&fx, 1);
     let engine = fx.start();
-    std::thread::sleep(Duration::from_millis(2500)); // two ticks
+    fx.env.wait_whole_ticks(2);
     let run = engine.stop();
 
     assert_eq!(fx.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);

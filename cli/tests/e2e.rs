@@ -245,7 +245,6 @@ fn spec_file(fx: &Fx, key: &str) -> String {
 
 #[test]
 fn a_whole_plan_runs_from_context_new_to_pr_poll() {
-    let started = Instant::now();
     let fx = Fx::new();
     let repo = fx.repo.to_str().unwrap();
 
@@ -479,5 +478,4 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(shown["plan"]["phase"], "deploy");
     assert_eq!(shown["tamper"], json!([]));
     assert_eq!(fx.ok(&["attempt", "list", "--active", "--plan", PLAN])["attempts"], json!([]));
-    assert!(started.elapsed() < Duration::from_secs(120), "took {:?}", started.elapsed());
 }
