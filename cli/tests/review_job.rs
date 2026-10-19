@@ -205,7 +205,8 @@ impl Fx {
         self.env.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
     }
 
-    /// What a Worker's `attempt submit` printed, as the fake pi saved it.
+    /// What a Worker's `attempt submit` printed, as the fake pi saved it: written whole, then renamed into place, so
+    /// that the file exists only with all of it.
     fn submitted(&self, name: &str) -> Value {
         let path = self.repo.parent().unwrap().join(name);
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -221,13 +222,13 @@ impl Fx {
 /// A review Worker: it submits with no findings, then with a commit and findings, then
 /// as it should: findings and no commit. Each answer is saved next to the repos.
 const REVIEWER: &str = r#"out="$CPD_HOME/run/pay/reviews/final.md"
-"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-1.json 2>&1
+"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-1.part 2>&1; mv ../submit-1.part ../submit-1.json
 mkdir -p "$(dirname "$out")"
 echo "- one finding" > "$out"
 echo x > x.txt; git add -A; git commit -qm x
-"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-2.json 2>&1
+"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-2.part 2>&1; mv ../submit-2.part ../submit-2.json
 git reset -q --hard HEAD~1
-"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-3.json 2>&1
+"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-3.part 2>&1; mv ../submit-3.part ../submit-3.json
 sleep 120"#;
 
 // ---------- job add --review ----------
@@ -387,9 +388,9 @@ fn a_normal_job_without_commits_is_still_refused() {
     let fx = fx();
     fx.add("impl", &[]).ok();
     fx.pi(
-        r#""$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-1.json 2>&1
+        r#""$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-1.part 2>&1; mv ../submit-1.part ../submit-1.json
 echo x > impl.txt; git add -A; git commit -qm x
-"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-2.json 2>&1
+"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-2.part 2>&1; mv ../submit-2.part ../submit-2.json
 sleep 120"#,
     );
 
