@@ -81,7 +81,7 @@ struct Opener<'a> {
 
 /// Draws and follows until `q`. Reading failures end the view with their error. The wheel over the PRs section scrolls it by one
 /// pull request per notch. A left click on an owned PR row (not on its
-/// `↗`) opens its Lead in the chat slot; a refusal is the `note` in the column's last row until the next click.
+/// `󰏌`) opens its Lead in the chat slot; a refusal is the `note` in the column's last row until the next click.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,

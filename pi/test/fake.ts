@@ -403,10 +403,13 @@ export class FakePi implements PiApi {
     for (const h of this.handlers.get(event) ?? []) await h({ type: event, ...payload }, this.ctx());
   }
 
-  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). */
+  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). The adapter's `markReply` observer (reply.ts) adds nothing and is left out, so the list stays what the handlers that add a message returned. */
   async fireWith(event: string, payload: Record<string, unknown> = {}): Promise<unknown[]> {
     const out: unknown[] = [];
-    for (const h of this.handlers.get(event) ?? []) out.push(await h({ type: event, ...payload }, this.ctx()));
+    for (const h of this.handlers.get(event) ?? []) {
+      const result = await h({ type: event, ...payload }, this.ctx());
+      if (h.name !== "markReply") out.push(result);
+    }
     return out;
   }
 
