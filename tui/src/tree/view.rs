@@ -1759,6 +1759,32 @@ mod tests {
     }
 
     #[test]
+    fn the_inbox_toggle_is_the_fold_widgets_muted_line_and_only_it_toggles() {
+        let mut view = with_inbox(5);
+        let buf = draw_now(&mut view, 43, 16);
+        for x in 1..10 {
+            let cell = &buf[(x, 15)];
+            if cell.symbol() != " " {
+                assert_eq!(cell.fg, palette::color(crate::palette::Meaning::Nothing), "`└ expand` is muted: column {x}");
+                assert!(!cell.modifier.contains(Modifier::BOLD));
+            }
+        }
+        // the header (the section's title line) does nothing; a click on an item keeps its action
+        assert_eq!(click(&mut view, 20, 11), Effect::None);
+        assert!(!view.inbox_expanded, "the header does not toggle");
+        assert_eq!(click(&mut view, 20, 12), Effect::Run(Action::Open(sid("f-blocked"))), "an item jumps");
+        assert!(!view.inbox_expanded, "an item row does not toggle");
+        assert_eq!(click(&mut view, 20, 15), Effect::None);
+        assert!(view.inbox_expanded, "`└ expand` does");
+        let rows = text_rows(&draw_now(&mut view, 43, 16));
+        assert_eq!(rows[15], " └ collapse");
+        assert_eq!(click(&mut view, 20, rows.iter().position(|r| r.starts_with(" ── Inbox")).unwrap() as u16), Effect::None);
+        assert!(view.inbox_expanded, "the header does not fold it");
+        click(&mut view, 20, 15);
+        assert!(!view.inbox_expanded, "`└ collapse` does");
+    }
+
+    #[test]
     fn an_expanded_list_squeezes_the_tree_which_scrolls_to_keep_the_cursor_visible() {
         let mut view = with_inbox(5);
         press(&mut view, KeyCode::Down);
