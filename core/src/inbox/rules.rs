@@ -368,27 +368,31 @@ fn pull_request_conditions(
     Ok(out)
 }
 
-/// `pr-failing`: an authored open pull request has failed checks or a merge conflict (`unknown` is no conflict).
-/// The label names the conflict only when checks did not fail.
+/// A condition over `r`: no Plan's `prs` row points to the pull request (hs-d302: a Plan's Lead handles the feedback
+/// on the pull requests its Plan owns, so those open no `pr-failing` or `pr-changes` item).
+const UNOWNED: &str = "NOT EXISTS (SELECT 1 FROM prs o WHERE o.pull_request = r.id)";
+
+/// `pr-failing`: an authored open pull request no Plan owns has failed checks or a merge conflict (`unknown` is no
+/// conflict). The label names the conflict only when checks did not fail.
 fn pr_failing(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
         Kind::PrFailing,
         Urgency::Red,
-        "r.authored = 1 AND (r.checks = 'failed' OR r.mergeable = 'conflicting')",
+        &format!("r.authored = 1 AND {UNOWNED} AND (r.checks = 'failed' OR r.mergeable = 'conflicting')"),
         |name, n, checks_failed| {
             if checks_failed { format!("{name}#{n} checks failed") } else { format!("{name}#{n} merge conflict") }
         },
     )
 }
 
-/// `pr-changes`: an authored open pull request has `changes_requested`.
+/// `pr-changes`: an authored open pull request no Plan owns has `changes_requested`.
 fn pr_changes(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
         Kind::PrChanges,
         Urgency::Red,
-        "r.authored = 1 AND r.review_decision = 'changes_requested'",
+        &format!("r.authored = 1 AND {UNOWNED} AND r.review_decision = 'changes_requested'"),
         |name, n, _| format!("{name}#{n} changes requested"),
     )
 }
@@ -955,25 +959,67 @@ mod tests {
         assert!(pr_kinds(&mut f).is_empty());
     }
 
+    /// Makes the Plan's PR `p1` own the pull request numbered `n`.
+    fn own(f: &mut Fixture, n: i64) {
+        f.job("a", "queued");
+        f.sql(&format!(
+            "UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = {n}),
+                            pr_number = {n}, pr_url = 'https://github.com/acme/shop/pull/{n}', pr_opened_at = 't'"
+        ));
+    }
+
     #[test]
     fn a_pull_request_owned_by_a_plan_links_the_plan_its_context_and_its_lead() {
         let mut f = fixture("dispatch");
-        pull_request(&mut f, 6, "failed", "mergeable", "changes_requested");
+        pull_request(&mut f, 6, "passed", "mergeable", "approved");
         pull_request(&mut f, 7, "passed", "mergeable", "approved");
         set(&mut f, 6, "review_requested = 1");
-        f.job("a", "queued");
-        f.sql("UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = 6),
-                              pr_number = 6, pr_url = 'https://github.com/acme/shop/pull/6', pr_opened_at = 't'");
-        for kind in [Kind::PrFailing, Kind::PrChanges, Kind::ReviewRequested] {
-            let c = one(f.of(kind));
+        own(&mut f, 6);
+        for kind in [Kind::PrReady, Kind::ReviewRequested] {
+            let c = one(f.of(kind).into_iter().filter(|c| c.subject == "pr:acme/shop#6").collect());
             assert_eq!(
                 (c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str()), c.session.as_ref().map(|s| s.as_str())),
                 (Some("ctx"), Some("pay"), Some("l-pay")),
                 "{kind:?}"
             );
         }
-        let c = one(f.of(Kind::PrReady));
-        assert_eq!((c.subject.as_str(), c.plan, c.session), ("pr:acme/shop#7", None, None), "a pull request no PR owns");
+        let c = one(f.of(Kind::PrReady).into_iter().filter(|c| c.subject == "pr:acme/shop#7").collect());
+        assert_eq!((c.plan, c.session), (None, None), "a pull request no PR owns");
+    }
+
+    #[test]
+    fn a_pull_request_a_plan_owns_opens_no_pr_failing_or_pr_changes_item() {
+        for (checks, mergeable, review) in [
+            ("failed", "mergeable", "none"),
+            ("passed", "conflicting", "approved"),
+            ("pending", "mergeable", "changes_requested"),
+            ("failed", "conflicting", "changes_requested"),
+        ] {
+            let mut f = fixture("dispatch");
+            pull_request(&mut f, 6, checks, mergeable, review);
+            own(&mut f, 6);
+            assert!(pr_kinds(&mut f).is_empty(), "{checks} {mergeable} {review}");
+        }
+    }
+
+    #[test]
+    fn the_same_states_on_an_unowned_authored_pull_request_still_open_their_items() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 1, "failed", "mergeable", "none");
+        pull_request(&mut f, 2, "passed", "conflicting", "approved");
+        pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
+        pull_request(&mut f, 6, "failed", "conflicting", "changes_requested");
+        own(&mut f, 6);
+        let seen: Vec<_> = f.of(Kind::PrFailing).into_iter().chain(f.of(Kind::PrChanges)).map(|c| c.subject).collect();
+        assert_eq!(seen, ["pr:acme/shop#1", "pr:acme/shop#2", "pr:acme/shop#3"]);
+    }
+
+    #[test]
+    fn an_owned_pull_request_that_is_ready_still_opens_pr_ready() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 6, "passed", "mergeable", "approved");
+        own(&mut f, 6);
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady]);
     }
 
     // ---- all together ----
