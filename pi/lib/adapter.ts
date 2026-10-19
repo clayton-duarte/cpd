@@ -662,12 +662,17 @@ export function adapter(pi: PiApi, options: Options = {}): void {
       label: "cpd plan review",
       description:
         "Ask the User to review and approve the current cpd Plan (its draft Jobs) in plannotator. Returns at once; the decision arrives later as a cpd message. Call it once per revision.",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
+      parameters: {
+        type: "object",
+        properties: { title: { type: "string", description: "One line of at most 72 characters naming what the drafts under review do" } },
+        required: ["title"],
+        additionalProperties: false,
+      },
       exposure: "model-only",
-      async execute() {
+      async execute(_id: string, params: { title?: unknown }) {
         const r = run;
         if (!r || !r.info.planLead) throw new CpdError("not_a_lead", "cpd_plan_review is only available in a Plan Lead's session");
-        const out = await call(["plan", "review", "--plan", env.CPD_PLAN || (r.info.plan as string)]);
+        const out = await call(["plan", "review", "--plan", env.CPD_PLAN || (r.info.plan as string), "--title", typeof params?.title === "string" ? params.title : ""]);
         const review = isObject(out.review) && typeof out.review.id === "string" ? out.review.id : undefined;
         const already = out.already === true;
         if (review !== undefined && already) {
