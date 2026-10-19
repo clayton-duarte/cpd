@@ -13,7 +13,8 @@ use time::format_description::well_known::Rfc3339;
 use super::model::{Condition, Kind, Urgency};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::{ContextId, JobKey, PlanId, RecordId, SessionId};
+use crate::ids::{ContextId, JobKey, OwnerLogin, PlanId, RecordId, RepoName, SessionId};
+use crate::policy::{Checks, PolicyKey, resolve, resolve_unowned_row};
 use crate::plan::Phase;
 use crate::store::Store;
 
@@ -46,10 +47,10 @@ pub fn conditions(
     all.extend(store.read(|conn| job_stuck(conn, now, stuck_after))?);
     all.extend(engine_errors(errors));
     all.extend(store.read(questions)?);
-    all.extend(store.read(pr_failing)?);
-    all.extend(store.read(pr_changes)?);
-    all.extend(store.read(pr_ready)?);
-    all.extend(store.read(review_requested)?);
+    all.extend(store.read(|conn| pr_failing(conn, home))?);
+    all.extend(store.read(|conn| pr_changes(conn, home))?);
+    all.extend(store.read(|conn| pr_ready(conn, home))?);
+    all.extend(store.read(|conn| review_requested(conn, home))?);
     Ok(all)
 }
 
@@ -324,27 +325,40 @@ fn questions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 /// failed. A `prs` row that points to the pull request links its Plan, Context and Lead.
 fn pull_request_conditions(
     conn: &Connection,
+    home: &CpdHome,
     kind: Kind,
     urgency: Urgency,
     filter: &str,
+    gated: bool,
     label: fn(&str, i64, bool) -> String,
 ) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT r.repo, r.number, r.url, r.checks = 'failed', p.context, p.id, p.lead_session
+        "SELECT r.repo, r.number, r.url, r.checks = 'failed', p.context, p.id, p.lead_session, r.mergeable = 'conflicting',
+                c.owner, prs.name
            FROM pull_requests r
            LEFT JOIN prs ON prs.pull_request = r.id
            LEFT JOIN plans p ON p.id = prs.plan
+           LEFT JOIN contexts c ON c.id = p.context
           WHERE r.state = 'open' AND {filter}
           ORDER BY r.id"
     ))?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        let (repo, number, url, checks_failed): (String, i64, String, bool) =
+        let (repo, number, url, mut checks_failed): (String, i64, String, bool) =
             (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
+        let conflicting: bool = row.get(7)?;
+        let (owner, pr_name): (Option<String>, Option<String>) = (row.get(8)?, row.get(9)?);
         let (context, plan, lead): (Option<String>, Option<String>, Option<String>) =
             (row.get(4)?, row.get(5)?, row.get(6)?);
         let name = repo.split_once('/').map_or(repo.as_str(), |(_, name)| name);
+        // Failed checks count only where the row's policy says `any` (§8.3): `gated` kinds are `pr-failing`.
+        if gated && checks_failed {
+            checks_failed = checks_policy(home, &repo, owner.as_deref(), pr_name.as_deref())? == Checks::Any;
+            if !checks_failed && !conflicting {
+                continue;
+            }
+        }
         out.push(Condition {
             kind,
             urgency,
@@ -362,14 +376,40 @@ fn pull_request_conditions(
     Ok(out)
 }
 
+/// `pr.feedback.checks` of a pull request row: its PR's key when a PR points to it (`owner` is its Context's,
+/// `pr_name` the PR's repo name), else `Repo` of the row's `owner/name` through the unowned-row entry point.
+fn checks_policy(home: &CpdHome, repo: &str, owner: Option<&str>, pr_name: Option<&str>) -> Result<Checks, CpdError> {
+    let parse = |what: &str| corrupt(what, repo);
+    let resolved = match owner {
+        Some(owner) => {
+            let owner = OwnerLogin::parse(owner)?;
+            match pr_name {
+                Some(name) => resolve(home, &PolicyKey::Repo(owner, RepoName::parse(name)?))?,
+                None => resolve(home, &PolicyKey::Owner(owner))?,
+            }
+        }
+        None => {
+            let (owner, name) = repo.split_once('/').ok_or_else(|| parse("pull request repo"))?;
+            let key = PolicyKey::Repo(
+                OwnerLogin::parse(owner).map_err(|_| parse("pull request repo owner"))?,
+                RepoName::parse(name).map_err(|_| parse("pull request repo name"))?,
+            );
+            resolve_unowned_row(home, &key)?
+        }
+    };
+    Ok(resolved.policy.pr.feedback.checks)
+}
+
 /// `pr-failing`: an authored open pull request has failed checks or a merge conflict (`unknown` is no conflict).
 /// The label names the conflict only when checks did not fail.
-fn pr_failing(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+fn pr_failing(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
+        home,
         Kind::PrFailing,
         Urgency::Red,
         "r.authored = 1 AND (r.checks = 'failed' OR r.mergeable = 'conflicting')",
+        true,
         |name, n, checks_failed| {
             if checks_failed { format!("{name}#{n} checks failed") } else { format!("{name}#{n} merge conflict") }
         },
@@ -377,35 +417,41 @@ fn pr_failing(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 }
 
 /// `pr-changes`: an authored open pull request has `changes_requested`.
-fn pr_changes(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+fn pr_changes(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
+        home,
         Kind::PrChanges,
         Urgency::Red,
         "r.authored = 1 AND r.review_decision = 'changes_requested'",
+        false,
         |name, n, _| format!("{name}#{n} changes requested"),
     )
 }
 
 /// `pr-ready`: an authored, open, non-draft pull request has passed checks, no conflict and no changes requested.
-fn pr_ready(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+fn pr_ready(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
+        home,
         Kind::PrReady,
         Urgency::Yellow,
         "r.authored = 1 AND r.draft = 0 AND r.checks = 'passed' AND r.mergeable = 'mergeable'
          AND r.review_decision <> 'changes_requested'",
+        false,
         |name, n, _| format!("{name}#{n} ready to merge"),
     )
 }
 
 /// `review-requested`: an open pull request requests the User's review.
-fn review_requested(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+fn review_requested(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
+        home,
         Kind::ReviewRequested,
         Urgency::Yellow,
         "r.review_requested = 1",
+        false,
         |name, n, _| format!("review {name}#{n}"),
     )
 }

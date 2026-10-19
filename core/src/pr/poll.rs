@@ -25,6 +25,7 @@ use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId, PrKey};
 use crate::merge::RepoLock;
 use crate::output::Output;
+use crate::policy::Checks;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
@@ -60,6 +61,11 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let search = gh::search_open(&root)?;
     let present: Vec<(String, i64)> = search.prs.iter().map(|l| (l.pr.repo.clone(), l.pr.number)).collect();
     let owned = env.store.read(pulls::owned_open)?;
+    // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3): a resolve error fails the poll.
+    let mut checks = Vec::new();
+    for (plan, key, _) in &owned {
+        checks.push((plan.clone(), key.clone(), super::pr_policy(&mut env, plan, key)?.pr.feedback.checks));
+    }
 
     // The owned pull requests that left the open search: merged, closed, or the index lags (D3).
     // One stored as decided (`closed`, A11) is already right: it is not looked up again until the search lists it.
@@ -88,7 +94,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         Ok(unowned.iter().any(|row| !present.contains(row)))
     })?;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks))? } else { Outcome::default() };
 
     // After the transaction: the clean-up of each PR that merged, then the silent retry of the earlier ones.
     clean_up(&mut env, &outcome.merged)?;
@@ -147,7 +153,7 @@ fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
 
 /// The one write transaction (D5, D7): every changed row, the Events of the
 /// owning Plans, the rows that left the search.
-fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned]) -> Result<Outcome, CpdError> {
+fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned], checks: &[(PlanId, PrKey, Checks)]) -> Result<Outcome, CpdError> {
     let mut out = Outcome::default();
     for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
@@ -169,7 +175,7 @@ fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
-            } else if tell(tx, plan, key, &change)? {
+            } else if tell(tx, plan, key, checks_of(checks, plan, key), &change)? {
                 out.feedback.push((plan.clone(), key.clone()));
             }
         }
@@ -178,9 +184,14 @@ fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &
     Ok(out)
 }
 
+/// The PR's resolved `pr.feedback.checks`; every owned PR was resolved before the transaction.
+fn checks_of(checks: &[(PlanId, PrKey, Checks)], plan: &PlanId, key: &PrKey) -> Checks {
+    checks.iter().find(|(p, k, _)| p == plan && k == key).map(|(_, _, c)| *c).expect("every owned PR's policy was resolved")
+}
+
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
-fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change) -> Result<bool, CpdError> {
-    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after);
+fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &Change) -> Result<bool, CpdError> {
+    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, checks);
     if reasons.is_empty() {
         return Ok(false);
     }

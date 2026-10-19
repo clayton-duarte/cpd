@@ -9,7 +9,7 @@ use super::row::{PlanRow, PrRow};
 use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
-use super::{Args, Env, gate, illegal_phase, lock, require_clean};
+use super::{Args, Env, gate, pr_policy, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
 use crate::git;
@@ -29,6 +29,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         Step::Already(done) => return Ok(done),
         Step::Go(key) => key,
     };
+    let policy = pr_policy(&mut env, &id, &key)?;
     require_jobs_done(&mut env, &plan, &key)?;
 
     // Under the per-repo lock, after R: R may have recorded a merge, and
@@ -64,7 +65,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
         }
     }
     require_clean(&id, pr, &lead)?;
-    gate(&env, &id, pr, &lead, &format!("pr open --pr {key}"))?;
+    gate(&env, &policy, &id, pr, &lead, &format!("pr open --pr {key}"))?;
     git::run::ok(&lead, &["push", "-u", "origin", &pr.lead_branch])?;
     drop(lock);
 

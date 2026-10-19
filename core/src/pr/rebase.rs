@@ -6,7 +6,7 @@ use std::path::Path;
 use serde_json::json;
 
 use super::row::{PlanRow, PrRow};
-use super::{Args, Env, gate, illegal_phase, lock, require_clean};
+use super::{Args, Env, gate, pr_policy, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, TAIL_LINES, tail};
 use crate::ids::{PlanId, PrKey};
@@ -21,6 +21,7 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 
     let plan = env.plan(&id)?;
     let key = require_open(&plan, &args)?.key.clone();
+    let policy = pr_policy(&mut env, &id, &key)?;
 
     // Under the per-repo lock, after R, so that no merge interleaves and none is unrecorded.
     let lock = lock(&mut env, plan_pr(&plan, &key), COMMAND)?;
@@ -56,7 +57,7 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     }
     let new = git::run::rev_parse(&lead, &format!("refs/heads/{branch}"))?;
 
-    gate(&env, &id, pr, &lead, &format!("pr rebase --pr {key}"))?;
+    gate(&env, &policy, &id, pr, &lead, &format!("pr rebase --pr {key}"))?;
     let lease = format!("--force-with-lease=refs/heads/{branch}:{remote}");
     git::run::ok(&lead, &["push", &lease, "origin", branch])?;
     drop(lock);

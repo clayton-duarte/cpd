@@ -4,7 +4,7 @@
 use serde_json::json;
 
 use super::row::{PlanRow, PrRow};
-use super::{Args, Env, gate, illegal_phase, lock, require_clean};
+use super::{Args, Env, gate, pr_policy, illegal_phase, lock, require_clean};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, TAIL_LINES, tail};
 use crate::output::Output;
@@ -18,6 +18,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
 
     let plan = env.plan(&id)?;
     let key = require_open(&plan, &args)?.key.clone();
+    let policy = pr_policy(&mut env, &id, &key)?;
 
     // Under the per-repo lock, after R, so that no merge interleaves and none is unrecorded.
     let lock = lock(&mut env, require_open(&plan, &args)?, COMMAND)?;
@@ -25,7 +26,7 @@ pub(super) fn push(args: Args) -> Result<Output, CpdError> {
     let pr = require_open(&plan, &args)?;
     let lead = pr.lead(&id)?.clone();
     require_clean(&id, pr, &lead)?;
-    gate(&env, &id, pr, &lead, &format!("pr push --pr {key}"))?;
+    gate(&env, &policy, &id, pr, &lead, &format!("pr push --pr {key}"))?;
 
     let branch = pr.lead_branch.as_str();
     let out = git::run::run(&lead, &["push", "--porcelain", "origin", branch])?;
