@@ -11,12 +11,14 @@
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon;
 //! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
+//! - [`fold`]: the one widget every block that folds is drawn by (the tree's Contexts and archived groups, the Inbox's toggle);
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod background;
 mod chat;
 mod cockpit;
 pub mod dialog;
+pub mod fold;
 mod history;
 pub mod link;
 pub mod logs;
