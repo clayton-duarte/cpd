@@ -145,26 +145,6 @@ impl Fx {
         self.env.cpd(&["attempt", "show", ATTEMPT, "--plan", PLAN]).ok()["attempt"]["status"].as_str().unwrap().to_owned()
     }
 
-    /// Puts a `tmux` stand-in on `PATH` that records its calls and runs the real one: the driver lists the panes once per A4
-    /// tick (`POLL`, at the start of the tick), so those calls are the clock of its ticks.
-    fn count_ticks(&self) {
-        let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-            .map(|dir| dir.join("tmux"))
-            .find(|p| p.is_file())
-            .expect("tmux on PATH");
-        self.env.fake("tmux", &format!("exec '{}' \"$@\"", real.display()));
-    }
-
-    fn ticks(&self) -> usize {
-        self.env.calls("tmux").iter().filter(|c| c.iter().any(|a| a == "list-panes")).count()
-    }
-
-    /// Waits for `n` whole ticks of A4 after this call: the tick of the listing in progress ends before the next listing.
-    fn wait_whole_ticks(&self, n: usize) {
-        let from = self.ticks();
-        wait_until_for(&format!("{n} whole ticks of the driver"), LONG, || self.ticks() > from + n);
-    }
-
     fn log(&self) -> String {
         fs::read_to_string(self.env.cpd_home().join(format!("run/pay/logs/attempt-{ATTEMPT}.log"))).unwrap_or_default()
     }
@@ -310,11 +290,11 @@ fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one
     let pid = fx.dispatch();
     wait_until_for("the Attempt to run", LONG, || fx.status() == "running");
 
-    fx.count_ticks();
     fx.install_older();
     wait_until_for("the driver to refuse the reload", LONG, || fx.log().contains(SKIPPED));
-    // Four whole ticks of A4: it is not asked again, nor exec'd.
-    fx.wait_whole_ticks(4);
+    // time-claim: the older cpd is neither asked again nor exec'd over eight 0.5 s polls of A4; no per-poll signal from
+    // the driver, which forks nothing at a poll while its Worker's pane lives (engine-F1).
+    std::thread::sleep(Duration::from_secs(4));
     let log = fx.log();
     assert_eq!(log.matches(SKIPPED).count(), 1, "{log}");
     assert!(log.contains(&format!("reload skipped: {} cannot open the store: The database was migrated by a newer cpd.", fx.installed.display())), "{log}");
@@ -338,7 +318,7 @@ fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one
 
 /// After a reload exec, fd 3 of the driver is the lock and nothing the new driver
 /// starts holds it (§3.4 step 4, "Reload on install"). A `tmux` stand-in, which the
-/// driver starts at each A4 tick, lists its own open files once `probe` exists.
+/// driver starts at A4's first tick (the new driver's too: it knows no pane pid yet), lists its own open files once `probe` exists.
 #[cfg(target_os = "linux")]
 #[test]
 fn after_a_reload_fd_3_is_the_lock_and_the_drivers_children_do_not_hold_it() {
