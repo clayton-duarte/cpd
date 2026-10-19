@@ -1,10 +1,12 @@
 //! What the TUI reads (commands.md §17): a typed, read-only model over the
 //! store, which the views render.
 //!
-//! - [`tree()`]: the tree view, Contexts → Plans → Lead Sessions (`context list`, `session list`);
+//! - [`tree()`]: the tree view, Contexts → Plans → Lead Sessions (`context list`, `session list`), and the
+//!   Inbox's visible items, from which every dot of the tree comes (`inbox list`);
 //! - [`plan_boxes()`] and [`chat_slot()`]: the plan view, one Plan's PRs with their Jobs, Attempts and
 //!   Dependencies, and the Plan of the Lead in the chat slot; [`flow()`]: one Plan's Jobs, Escalations,
 //!   review and first PR (`plan show`);
+//! - [`pulse()`] and [`manager_slot()`]: the Pulse view, one Context's Plans with their 5-minute activity;
 //! - [`widgets()`]: the Dispatch column, slots, the engine, the open pull requests,
 //!   open Escalations and the latest Events (`plan list`);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
@@ -26,6 +28,7 @@
 mod dot;
 mod flow;
 mod logs;
+mod pulse;
 mod shared;
 mod tree;
 mod widgets;
@@ -39,8 +42,9 @@ pub use shared::{
     AttemptStatus, Cause, Checks, EscalationStatus, JobCounts, JobStatus, Origin, Outcome, Place, PlanHead, Pr,
     PrState, ReviewStatus, SessionNode,
 };
-pub use dot::{Dot, DotInputs};
+pub use dot::Dot;
 pub use logs::{Logs, logs, logs_after};
+pub use pulse::{BUCKET_MINUTES, Bucket, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
 pub use tree::{ContextNode, PlanNode, Tree, tree};
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, widgets,

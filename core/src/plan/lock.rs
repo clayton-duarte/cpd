@@ -9,8 +9,9 @@ use serde_json::{Map, Value, json};
 
 use super::fingerprint::plan_fingerprint;
 use super::jobs::{self, Job};
-use super::review::{latest_approved_for, latest_json, no_draft_jobs};
-use super::row::{self, Phase};
+use super::review::{check_drafts_complete, latest_approved_for, latest_json, no_draft_jobs};
+use super::row::Phase;
+use super::show;
 use super::{Env, LockArgs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{Kind, NewEvent, append};
@@ -25,7 +26,7 @@ const COMMAND: &str = "plan lock";
 pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (plan, jobs, prs) = env.store.read(|conn| Ok((row::load(conn, &id)?, jobs::load(conn, &id)?, start::load(conn, &id)?)))?;
+    let (plan, jobs, prs) = env.store.read(|conn| Ok((show::load_head(conn, &id)?, jobs::load(conn, &id)?, start::load(conn, &id)?)))?;
     match plan.phase {
         Phase::Plan => {}
         Phase::Dispatch => {
@@ -48,6 +49,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
     if drafts.is_empty() {
         return Err(no_draft_jobs(&id));
     }
+    check_drafts_complete(&id, &jobs)?;
     let fingerprint = env.store.read(|conn| plan_fingerprint(conn, &id))?;
     let (review, latest) = env.store.read(|conn| Ok((latest_approved_for(conn, &id, &fingerprint)?, latest_json(conn, &id)?)))?;
     let Some(review) = review else {

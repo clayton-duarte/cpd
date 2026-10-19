@@ -18,8 +18,11 @@ use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
 const LEAD: &str = "lead1";
-/// A store schema above the one the built cpd supports.
-const NEWER_SCHEMA: i64 = 999;
+/// A `user_version` the built cpd's verdict refuses (`store_too_new`, contract §4.5):
+/// neither legacy nor its own.
+const NEWER_SCHEMA: i64 = cpd_core::store::VERSION + 1;
+/// The `--version` of a cpd whose verdict opens the store (commands.md §1.2).
+const OPENS: &str = r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":1000,"store":{"opens":true,"refusal":null,"unknown":[],"pending":[]}}'; exit 0"#;
 
 fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -84,10 +87,10 @@ impl Fixture {
         self.install_script(&format!("exec '{CPD}' --version"));
     }
 
-    /// An older `cpd` installed over the wrapper: its `--version` says it supports
-    /// store schema 5 while the database is at 6.
+    /// A `cpd` that cannot open the store installed over the wrapper: its `--version` reports a
+    /// refusing verdict (`store.opens` false).
     fn install_older(&self) {
-        self.install_script("echo '{\"ok\":true,\"version\":\"x\",\"schema\":5,\"store_schema\":6}'; exit 0");
+        self.install_script(r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":1001,"store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}'; exit 0"#);
     }
 
     fn install_script(&self, on_version: &str) {
@@ -104,8 +107,8 @@ impl Fixture {
         fs::rename(&new, &self.installed).unwrap();
     }
 
-    /// The store as a newer cpd leaves it: a column the old code reads renamed, and
-    /// `user_version` above the one the built cpd supports (the migration of hs-n148).
+    /// The store as a newer cpd leaves it: a column the old code reads renamed, and a
+    /// `user_version` the built cpd's verdict refuses (the migration of hs-n148).
     fn migrate_store(&self) {
         self.store_sql(&format!("ALTER TABLE sessions RENAME COLUMN state TO state_v2; PRAGMA user_version = {NEWER_SCHEMA};"));
     }
@@ -367,7 +370,7 @@ fn a_newer_store_does_not_end_a_wrapper_and_the_new_cpd_that_opens_it_adopts_pi(
 
     // The new cpd has migrated the store itself: here the test puts it back for the built cpd to open.
     f.unmigrate_store();
-    f.install_script(&format!("echo '{{\"ok\":true,\"version\":\"x\",\"schema\":{NEWER_SCHEMA},\"store_schema\":{NEWER_SCHEMA}}}'; exit 0"));
+    f.install_script(OPENS);
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")]);
     std::thread::sleep(Duration::from_millis(2500));
@@ -401,8 +404,8 @@ fn a_failing_store_read_is_said_once_and_retried_with_pi_untouched() {
     f.env.tmux(&["kill-window", "-t", &f.pane]);
 }
 
-/// The 00:02Z incident: a cpd that supports an older store schema than the
-/// database's is installed over a running wrapper. The wrapper does not signal
+/// The 00:02Z incident: a cpd that cannot open the database (its verdict, contract §4.5) is
+/// installed over a running wrapper. The wrapper does not signal
 /// pi, does not `exec` it and says so once; a cpd that can open the store,
 /// installed next, is exec'd, and adopts pi.
 #[test]
@@ -417,7 +420,7 @@ fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_in
     std::thread::sleep(Duration::from_millis(2500));
     let screen = f.screen();
     assert_eq!(screen.matches("reload skipped").count(), 1, "{screen}");
-    assert!(screen.contains(&format!("reload skipped: {} supports store schema 5, the database is at 6", f.installed.display())), "{screen}");
+    assert!(screen.contains(&format!("reload skipped: {} cannot open the store: The database was migrated by a newer cpd.", f.installed.display())), "{screen}");
     assert!(f.signals().is_empty(), "pi was signalled");
     assert!(alive(old_pi));
     assert!(f.runs().is_empty(), "the older cpd was exec'd: {:?}", f.runs());
@@ -446,5 +449,35 @@ fn a_lead_wrapper_whose_pi_exits_does_not_exec_a_cpd_older_than_the_store() {
     wait_until("the wrapper to carry on", || f.screen().contains("pi exited. Press Enter"));
     assert!(f.runs().is_empty(), "the older cpd was exec'd: {:?}", f.runs());
     assert_eq!(f.env.calls("pi").len(), 1);
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+/// The verdict is the real one, not a fake `--version`: the store has applied a breaking migration
+/// the installed cpd does not know (its floor), so `cpd --version` reports `store.opens` false and
+/// the wrapper keeps running its old code.
+#[test]
+fn a_lead_wrapper_follows_the_real_verdict_of_the_new_binary() {
+    use rusqlite::{Connection, functions::FunctionFlags};
+    let f = start("idle");
+    let pid = f.pane_pid();
+    {
+        let conn = Connection::open(f.env.cpd_home().join("cpd.db")).unwrap();
+        let txn: i64 = conn.query_row("SELECT max(id) FROM txns", [], |r| r.get(0)).unwrap();
+        conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(txn)).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (name, compat, checksum, seq, txn, converted)
+             VALUES ('29991231T2359-breaking', 'breaking', lower(hex(zeroblob(32))), (SELECT max(seq) + 1 FROM schema_migrations), ?1, 0)",
+            [txn],
+        )
+        .unwrap();
+    }
+
+    f.install();
+    wait_until("the wrapper to refuse the reload", || f.screen().contains("reload skipped"));
+    let screen = f.screen();
+    assert!(screen.contains(&format!("reload skipped: {} cannot open the store: ", f.installed.display())), "{screen}");
+    assert!(f.signals().is_empty(), "pi was signalled");
+    assert!(f.runs().is_empty(), "the new cpd was exec'd: {:?}", f.runs());
+    assert_eq!(f.pane_pid(), pid);
     f.env.tmux(&["kill-window", "-t", &f.pane]);
 }

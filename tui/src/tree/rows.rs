@@ -3,7 +3,7 @@
 //!
 //! The widget draws one text per row (guide, dot, name). It has no
 //! right-aligned column, so each Plan's five Job counters are drawn as a
-//! right-aligned `Line` into the row's `Rect` after the tree. The `⏵` of the
+//! right-aligned `Line` into the row's `Rect` after the tree. The `󰐊` of the
 //! Session in the chat slot is drawn over the indent of its row for the same
 //! reason (the widget owns the indent). Context rows are not selectable (a click only
 //! collapses or expands them): the cursor moves between Sessions only, and is
@@ -240,7 +240,7 @@ pub fn truncate(text: &str, width: usize) -> String {
 
 /// What a Plan's or fork's row says (both are one level under their Context).
 struct RowText<'a> {
-    /// The Session of the row: its chat is marked with `⏵`, and its name is bold, when it is in the chat slot.
+    /// The Session of the row: its chat is marked with `󰐊`, and its name is bold, when it is in the chat slot.
     session: Option<&'a SessionNode>,
     name: String,
     /// How deep the row is: 1 for a Plan or fork of a live Context.

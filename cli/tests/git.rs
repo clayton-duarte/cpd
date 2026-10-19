@@ -315,6 +315,27 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 }
 
 #[test]
+fn the_log_has_a_hooks_line_before_the_hook_ends() {
+    let h = hooks("pre-merge = \"echo first; sleep 3; echo last\"\n");
+    let (repo, log) = (h.repo.clone(), h.log.clone());
+    let runner = std::thread::spawn(move || {
+        let op = Operation { branch: "main" };
+        run_hook(Hook::PreMerge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while fs::read_to_string(&h.log).unwrap_or_default() != "first\n" && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let seen = fs::read_to_string(&h.log).unwrap_or_default();
+    let ended = runner.is_finished();
+    let result = runner.join().unwrap();
+    assert_eq!(seen, "first\n", "the log before the hook ended");
+    assert!(!ended, "the hook ended before the log was read");
+    assert_eq!(result.tail.as_deref(), Some("first\nlast"));
+    assert_eq!(fs::read_to_string(&h.log).unwrap(), "first\nlast\n");
+}
+
+#[test]
 fn a_table_runs_together_waits_for_all_and_fails_with_the_first_in_file_order() {
     // Keys are not in alphabetical order: file order decides, not the table's sort.
     let h = hooks("[pre-merge]\nzeta = \"exit 5\"\nalpha = \"exit 3\"\nslow = \"sleep 0.3; echo slow-done\"\n");
@@ -773,4 +794,49 @@ fn base_ref_is_origin_slash_base_only_with_an_origin() {
     assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "main");
     env.git(&repo, &["remote", "add", "origin", "https://example.invalid/pay.git"]);
     assert_eq!(cpd_core::git::tamper::base_ref(&repo, "main").unwrap(), "origin/main");
+}
+
+// ------------------------------------------------------------ deadline (contract §1.2, §7)
+
+/// Whether process `pid` is running (a zombie is not).
+fn running(pid: i32) -> bool {
+    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| s.rsplit(") ").next().is_some_and(|r| !r.starts_with('Z')))
+}
+
+/// engine-W4, commands-W1: a git call that hangs is killed at its deadline with its
+/// whole process group, and fails `tool_timeout`. The deadline is shortened to 1 s by
+/// `CPD_TEST_DEADLINE_GIT`, which a debug build reads from its environment: this test
+/// runs itself again in a child process born with it, so no other test sees it.
+#[test]
+fn a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
+    const NAME: &str = "a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout";
+    if std::env::var_os("CPD_TEST_DEADLINE_GIT").is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child.args(["--exact", NAME, "--nocapture"]).env("CPD_TEST_DEADLINE_GIT", "1");
+        let out = common::output(&mut child).unwrap();
+        let printed = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && printed.contains("1 passed"), "{printed}");
+        return;
+    }
+    let env = TestEnv::new();
+    let repo = env.git_repo("pay");
+    let pidfile = env.root().join("sleep.pid");
+    // A real git whose alias runs a sleeper in git's process group, and waits for it.
+    env.git(&repo, &["config", "alias.hang", &format!("!sleep {} & echo $! > '{}'; wait", common::SLEEP_SECONDS, pidfile.display())]);
+
+    let started = Instant::now();
+    let err = cpd_core::git::run::run(&repo, &["hang"]).unwrap_err();
+
+    assert!(started.elapsed() < Duration::from_secs(4), "took {:?}", started.elapsed());
+    assert_eq!(err.code(), ErrorCode::ToolTimeout, "{err:?}");
+    let d = err.details();
+    assert_eq!(d["tool"], "git");
+    assert_eq!(d["deadline_seconds"], 1);
+    assert_eq!(d["argv"], serde_json::json!(["git", "-C", repo.display().to_string(), "hang"]));
+    let pid: i32 = fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
+    let gone = Instant::now() + Duration::from_secs(5);
+    while running(pid) && Instant::now() < gone {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!running(pid), "git's child {pid} outlived the deadline");
 }

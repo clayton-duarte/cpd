@@ -382,7 +382,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert_eq!(fx.git(&fx.lead, &["rev-parse", "--abbrev-ref", "cpd/pay@{upstream}"]), "origin/cpd/pay");
     // gh: look for an existing PR, then create it with the Jobs table as its body.
     let calls = fx.gh_calls();
-    assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay", "--state", "open", "--json", "number,url"]);
+    assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"]);
     assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", "Pay the bills"]);
     let body = &calls[1][9];
     assert_eq!(calls[1][8], "--body");
@@ -486,13 +486,143 @@ fn open_with_no_hooks_passes_the_gate() {
 #[test]
 fn open_adopts_a_pr_an_earlier_run_created() {
     let fx = fx("dispatch");
-    fx.gh("list.json", r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812"}]"#);
+    fx.gh("list.json", r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "OPEN"}]"#);
 
     let out = fx.pr("open").ok();
 
     assert_eq!(out["pr"]["pr"]["number"], 812);
     assert!(fx.gh_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_calls());
     assert_eq!(fx.plan_row().0, "deploy");
+}
+
+/// A fixture of phase `dispatch` whose `pre-merge` hook leaves a marker file when it runs; and that marker.
+fn fx_with_marked_hook() -> (Fx, PathBuf) {
+    let fx = fx("dispatch");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}\"\n", marker.display()));
+    (fx, marker)
+}
+
+const MERGED_LIST: &str = r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "MERGED"}]"#;
+
+#[test]
+fn open_adopts_a_merged_pull_request_without_the_gate_and_the_plan_is_done() {
+    let (fx, marker) = fx_with_marked_hook();
+    fx.gh("list.json", MERGED_LIST);
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+    let remote_before = fx.remote_branch("cpd/pay");
+
+    let out = fx.pr("open").ok();
+
+    let opened_at = out["pr"]["pr"]["opened_at"].as_str().unwrap().to_owned();
+    assert_eq!(
+        out,
+        json!({"ok": true, "adopted": "merged", "plan": "pay", "phase": "done",
+               "pr": {"key": "repo", "status": "merged", "pr": {"number": 812, "url": URL, "opened_at": opened_at}}})
+    );
+    // No Gate, no push, no pull request created.
+    assert!(!marker.exists(), "the pre-merge hook ran");
+    assert_eq!(fx.gate_log(), "");
+    assert_eq!(fx.remote_branch("cpd/pay"), remote_before);
+    assert!(fx.gh_calls().iter().all(|c| c[1] != "create"), "{:?}", fx.gh_calls());
+    // The PR and the Plan, as `pr poll` leaves them.
+    let row = fx.plan_row();
+    assert_eq!((row.0.as_str(), row.1, row.2.as_deref()), ("done", Some(812), Some(URL)));
+    assert!(row.4.is_some() && row.5.is_some(), "{row:?}");
+    assert_eq!(fx.pr_status("repo"), "merged");
+    assert_eq!(fx.pr_data(), ("Pay the bills".into(), "none".into(), "none".into(), "merged".into()));
+    assert_eq!(fx.shown_pull_request()["merged_at"], "2026-10-14T10:00:00Z");
+    let merged = fx.events("pr-merged");
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].1, json!({"pr": "repo", "number": 812, "url": URL, "merged_at": "2026-10-14T10:00:00Z"}));
+    assert!(fx.events("pr-opened").is_empty());
+    assert_eq!(fx.events("plan-phase")[0].1["to"], "deploy");
+    let done = fx.events("plan-done");
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].1["prs"][0]["key"], "repo");
+
+    // Again: already, nothing more.
+    let txns = fx.txns();
+    let again = fx.pr("open").ok();
+    assert_eq!((again["already"].as_bool(), again["phase"].as_str()), (Some(true), Some("done")));
+    assert_eq!((fx.txns(), fx.events("plan-done").len()), (txns, 1));
+}
+
+#[test]
+fn open_adopting_a_merged_pull_request_keeps_the_plan_in_dispatch_while_another_pr_is_not_open() {
+    let fx = fx("dispatch");
+    fx.add_web(Web::Dispatch);
+    fx.gh("list.json", MERGED_LIST);
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+
+    let out = fx.pr_cmd("open", "repo").ok();
+
+    assert_eq!((out["adopted"].as_str(), out["phase"].as_str(), out["pr"]["status"].as_str()), (Some("merged"), Some("dispatch"), Some("merged")));
+    assert_eq!((fx.phase().as_str(), fx.pr_status("web").as_str()), ("dispatch", "dispatch"));
+    assert_eq!(fx.events("pr-merged").len(), 1);
+    assert!(fx.events("plan-phase").is_empty() && fx.events("plan-done").is_empty());
+}
+
+#[test]
+fn open_adopting_a_merged_pull_request_updates_the_row_the_poll_stored_open() {
+    let fx = fx("dispatch");
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+                 VALUES ('acme/pay', 812, '{URL}', 'As the poll wrote it', 0, 'open', 'approved', 'passed', 'github time', NULL, 'poll time')"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    fx.gh("list.json", MERGED_LIST);
+    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")))]);
+
+    fx.pr("open").ok();
+
+    assert_eq!(fx.pr_data().3, "merged");
+    assert_eq!(fx.pr_status("repo"), "merged");
+    let rows: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM pull_requests", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(rows, 1);
+}
+
+#[test]
+fn open_refuses_a_closed_pull_request_naming_it_and_changes_nothing() {
+    let (fx, marker) = fx_with_marked_hook();
+    // The newest (813) is closed, whatever the order `gh` lists them in; the older one is open.
+    fx.gh(
+        "list.json",
+        r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "OPEN"},
+            {"number": 813, "url": "https://github.com/acme/pay/pull/813", "state": "CLOSED"}]"#,
+    );
+    let remote_before = fx.remote_branch("cpd/pay");
+    let txns = fx.txns();
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run), ("pr_closed".into(), 3));
+    let error = run.error();
+    assert_eq!((error["details"]["number"].clone(), error["details"]["url"].clone()), (json!(813), json!("https://github.com/acme/pay/pull/813")));
+    assert!(error["message"].as_str().unwrap().contains("https://github.com/acme/pay/pull/813"), "{error}");
+    assert!(!marker.exists(), "the pre-merge hook ran");
+    assert_eq!(fx.remote_branch("cpd/pay"), remote_before);
+    assert_eq!((fx.txns(), fx.plan_row().0.as_str(), fx.pr_status("repo").as_str()), (txns, "dispatch", "dispatch"));
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
+}
+
+#[test]
+fn open_with_an_open_pull_request_of_the_branch_still_gates_pushes_and_adopts_it() {
+    let (fx, marker) = fx_with_marked_hook();
+    fx.gh("list.json", r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "OPEN"}]"#);
+
+    let out = fx.pr("open").ok();
+
+    assert!(marker.exists(), "the Gate runs for an open pull request");
+    assert!(out.get("adopted").is_none(), "{out}");
+    assert_eq!((out["phase"].as_str(), out["pr"]["status"].as_str()), (Some("deploy"), Some("open")));
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
+    assert_eq!(fx.events("pr-opened").len(), 1);
+    assert!(fx.events("pr-merged").is_empty());
 }
 
 #[test]
@@ -598,7 +728,8 @@ fn open_refuses_a_failed_gate_and_pushes_nothing() {
     assert!(fx.gate_log().contains("the suite is red"));
     // Nothing pushed, no PR, no row: the phase stays dispatch.
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
-    assert!(fx.gh_calls().is_empty());
+    // Only the lookup before the Gate: nothing created.
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
     let row = fx.plan_row();
     assert_eq!((row.0.as_str(), row.1), ("dispatch", None));
     assert!(fx.events("plan-phase").is_empty());

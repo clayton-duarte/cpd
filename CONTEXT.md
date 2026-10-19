@@ -1,6 +1,14 @@
 # CPD 2
 
-CPD (Context → Plan → Deploy) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there.
+CPD (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request by having a lead agent specify work and a swarm of agents execute it in parallel. This is cpd 2's vocabulary; the contract is [contract.md](docs/contract.md). cpd 1's vocabulary is the root `CONTEXT.md` of the commit before the switch-over (git history); every term below that is not marked new or changed means what it meant there.
+
+The levels, the cpd objects and their roles:
+
+| Level | cpd object | Role |
+|---|---|---|
+| Epic | Context | Manager |
+| Ticket | Plan | Lead |
+| Task | Job | Worker |
 
 ## Phases
 
@@ -24,8 +32,8 @@ _Avoid_: review phase
 
 ## The CPD flow
 
-**CPD** (new, hs-n31):
-Context, Plan, Deploy: the cockpit's three columns, read as past, present and future. Each stage has steps; contract §3.9 maps them to phases and commands.
+**CPD** (new, hs-d245):
+Continuous Parallel Delivery. Its flow has three stages, Context, Plan and Deploy: the cockpit's three columns, read as past, present and future. Each stage has steps; contract §3.9 maps them to phases and commands.
 
 **Context** (stage):
 Grounding, Clarifying, Specifying; phase `grounding`, ending with `plan phase plan`. The Manager does it for the Context, each Lead for its Plan.
