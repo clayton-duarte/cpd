@@ -159,7 +159,7 @@ impl Fx {
     /// A `cpd` that cannot open the store installed over the driver: its `--version` reports a
     /// refusing verdict (`store.opens` false).
     fn install_older(&self) {
-        self.install_script(r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":1001,"store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}'; exit 0"#);
+        self.install_script(r#"echo '{"ok":true,"version":"x","store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}'; exit 0"#);
     }
 
     fn install_script(&self, on_version: &str) {

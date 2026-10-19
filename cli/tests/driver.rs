@@ -419,6 +419,33 @@ fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
     assert_eq!(fx.job_status(JOB), "queued");
 }
 
+// ---------- a busy store (contract §3.4, §4.2) ----------
+
+/// A step of the driver that meets the write lock held for longer than `store_busy_ms` (here 200 ms)
+/// waits and completes: the Attempt runs to its end, it is not `crashed`.
+#[test]
+fn a_driver_step_that_meets_a_held_write_lock_waits_and_the_attempt_is_not_crashed() {
+    let fx = fx_with("[timeouts]\nstore_busy_ms = 200\n");
+    // A2's pre-start takes a second, so the driver's first write comes while the lock is held.
+    fx.wt_toml("[pre-start]\nwait = \"sleep 1\"\n");
+    fx.pi(WORKER);
+
+    let out = fx.dispatch(JOB).ok();
+    let holder = rusqlite::Connection::open(fx.home().db()).unwrap();
+    holder.busy_timeout(Duration::from_secs(10)).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    std::thread::sleep(Duration::from_millis(2500));
+    holder.execute_batch("ROLLBACK").unwrap();
+
+    let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
+
+    assert_eq!(driver, json!({"ok": true, "attempt": ATTEMPT, "outcome": "merged", "cause": "merged"}), "{}", fx.log(ATTEMPT));
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")));
+    let log = fx.log(ATTEMPT);
+    assert!(log.contains("store_busy: "), "{log}");
+    assert!(log.contains("the store is clear again after "), "{log}");
+}
+
 // ---------- failures ----------
 
 #[test]

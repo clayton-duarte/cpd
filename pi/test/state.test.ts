@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Reporter } from "../lib/state.ts";
 import { ev, Fixture, ID, planShow, stateCalls, waitFor } from "./fake.ts";
 
 async function started(f: Fixture) {
@@ -67,6 +68,29 @@ test("a refused call is reported once and the next change is tried normally", as
   await waitFor("the next change", () => stateCalls(f).length === 3);
   assert.deepEqual(stateCalls(f), ["idle", "working", "idle"]);
   assert.equal(f.pi.errors().length, 1);
+});
+
+test("a refused state wanted again is sent again (pi-ci-W2)", async () => {
+  const sent: string[] = [];
+  const errs: string[] = [];
+  let fail = false;
+  const r = new Reporter(
+    async (w) => {
+      sent.push(w.state);
+      if (fail) throw new Error("db busy");
+    },
+    (e) => errs.push((e as Error).message),
+  );
+  r.want({ state: "working" });
+  await r.settled();
+  fail = true;
+  r.want({ state: "idle" });
+  await r.settled();
+  fail = false;
+  r.want({ state: "idle" });
+  await r.settled();
+  assert.deepEqual(sent, ["working", "idle", "idle"]);
+  assert.deepEqual(errs, ["db busy"]);
 });
 
 test("session_shutdown reports stopped and stops the follower", async (t) => {

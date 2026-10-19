@@ -105,6 +105,8 @@ test("Plan Lead: escalation opens `escalation:<id>`, answered and expired close 
   await waitFor("idle", () => stateCalls(f).length === 1);
 
   f.emit(event(101, "escalation"), event(102, "escalation", { text: "again" }));
+  // The two lines may be read in different polls: `blocked` follows the first, the second is delivered on its own time.
+  await waitFor("both escalations delivered", () => f.pi.delivered().length === 2);
   await waitFor("blocked", () => stateCalls(f).length === 2);
   assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question"]);
   assert.equal(f.pi.delivered().length, 2, "both are messages with a turn");
