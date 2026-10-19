@@ -23,7 +23,7 @@ use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::exe::{Exe, Refusal, Watched};
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
 use crate::output::Output;
@@ -223,8 +223,8 @@ fn adapter_missing(env: &mut Env, id: &SessionId, running: Duration) -> Result<b
             row.name
         );
         let details = json!({"session": row.id, "state_since": row.state_at, "seconds": seconds});
-        let data = json!({"source": "session run", "code": ErrorCode::AdapterMissing.as_str(), "message": message, "details": details});
-        append(tx, scoped(NewEvent::new(Kind::Error, message.clone(), data), &row))?;
+        let event = NewEvent::error(message.clone(), "session run", ErrorCode::AdapterMissing.as_str(), &message, details);
+        append(tx, scoped(event, &row))?;
         Ok(true)
     })
 }

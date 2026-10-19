@@ -18,7 +18,7 @@ use super::archive::archived;
 use super::{CloseArgs, Env, ForkArgs, OpenArgs, PROGRAM, ParkArgs, no_cockpit, not_a_lead, pane_gone};
 use crate::args::Name;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
 use crate::host::layout::{context_window, park_window};
 use crate::host::{Pane, PaneId, Spawn, Tmux, View, WindowId, chat_slot};
@@ -63,7 +63,7 @@ pub(super) fn moved(tx: &WriteTxn<'_>, row: &Row, pane: &PaneId, window: &Window
         "chat" => format!("{kind} {} is in the chat slot.", row.name),
         _ => format!("{kind} {} is {place}.", row.name),
     };
-    let event = NewEvent::new(Kind::SessionMoved, text, json!({"pane": pane.as_str(), "window": window.as_str(), "place": place}));
+    let event = NewEvent::session_moved(text, Some(pane.as_str()), Some(window.as_str()), place);
     append(tx, scoped(event, row))?;
     Ok(())
 }
@@ -149,8 +149,8 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
         )?;
         let row = row::load(tx, &id)?;
         let text = format!("Lead {name} registered, forked from {}. Next: cpd session open {id}", source.name);
-        let data = json!({"role": "lead", "name": name, "forked_from": source.id, "tier": tier});
-        append(tx, scoped(NewEvent::new(Kind::SessionRegistered, text, data), &row))?;
+        let event = NewEvent::session_registered(text, "lead", &name, &source.id, &tier);
+        append(tx, scoped(event, &row))?;
         Ok(row)
     })?;
 

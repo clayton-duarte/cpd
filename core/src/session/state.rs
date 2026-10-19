@@ -8,7 +8,7 @@ use serde_json::json;
 use super::row::{self, Row, State};
 use super::{Env, RenameArgs, StateArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::SessionId;
 use crate::output::Output;
 use crate::store::{Store, WriteTxn};
@@ -91,7 +91,7 @@ pub(super) fn set(store: &mut Store, command: &str, id: &SessionId, to: State, l
             Some(label) => format!("Session {} is {} ({label}).", read.name, to.as_str()),
             None => format!("Session {} is {}.", read.name, to.as_str()),
         };
-        let event = NewEvent::new(Kind::SessionState, text, json!({"from": read.state.as_str(), "to": to.as_str(), "label": label}));
+        let event = NewEvent::session_state(text, read.state.as_str(), to.as_str(), label);
         append(tx, scoped(event, &read))?;
         Ok(())
     })?;
@@ -122,13 +122,11 @@ pub(crate) fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Op
     }
     if read.state != State::Stopped {
         let text = format!("Session {} is stopped: {why}.", read.name);
-        let data = json!({"from": read.state.as_str(), "to": "stopped", "label": null});
-        append(tx, scoped(NewEvent::new(Kind::SessionState, text, data), &read))?;
+        append(tx, scoped(NewEvent::session_state(text, read.state.as_str(), "stopped", None), &read))?;
     }
     if pane.is_some() {
         let text = format!("Session {} has no pane: {why}.", read.name);
-        let data = json!({"pane": null, "window": null, "place": "none"});
-        append(tx, scoped(NewEvent::new(Kind::SessionMoved, text, data), &read))?;
+        append(tx, scoped(NewEvent::session_moved(text, None, None, "none"), &read))?;
     }
     Ok(true)
 }
@@ -190,7 +188,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     env.store.write("session rename", |tx| {
         tx.execute("UPDATE sessions SET name = ?1 WHERE id = ?2", [name, id.as_str()])?;
         let text = format!("Session {id} renamed to {name:?}.");
-        append(tx, scoped(NewEvent::new(Kind::SessionRenamed, text, json!({"name": name})), &read))?;
+        append(tx, scoped(NewEvent::session_renamed(text, name), &read))?;
         Ok(())
     })?;
     row::retitle(&id)?;
