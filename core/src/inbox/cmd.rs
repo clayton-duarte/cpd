@@ -328,11 +328,7 @@ fn snooze(args: SnoozeArgs) -> Result<Output, CpdError> {
     let item = store.write("inbox snooze", |tx| {
         let item = open_item(tx, args.id)?;
         tx.execute("UPDATE inbox_items SET snoozed_until = ?2 WHERE id = ?1", params![item.id, until])?;
-        let event = NewEvent::new(
-            events::Kind::InboxSnoozed,
-            format!("Inbox item {} snoozed until {until}: {}.", item.id, item.label),
-            json!({"item": item.id, "until": until}),
-        );
+        let event = NewEvent::inbox_snoozed(format!("Inbox item {} snoozed until {until}: {}.", item.id, item.label), item.id, &until);
         events::append(tx, scoped(event, &item))?;
         model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))
     })?;
@@ -354,11 +350,7 @@ fn dismiss(args: DismissArgs) -> Result<Output, CpdError> {
             return Ok((item, true));
         }
         tx.execute("UPDATE inbox_items SET dismissed_at = ?2 WHERE id = ?1", params![item.id, stamp(now)])?;
-        let event = NewEvent::new(
-            events::Kind::InboxDismissed,
-            format!("Inbox item {} dismissed: {}.", item.id, item.label),
-            json!({"item": item.id}),
-        );
+        let event = NewEvent::inbox_dismissed(format!("Inbox item {} dismissed: {}.", item.id, item.label), item.id);
         events::append(tx, scoped(event, &item))?;
         Ok((model::get(tx, item.id)?.ok_or_else(|| not_found(item.id))?, false))
     })?;

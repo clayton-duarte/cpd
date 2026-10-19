@@ -5,7 +5,6 @@
 use std::collections::BTreeSet;
 
 use rusqlite::{Connection, Row, params};
-use serde_json::json;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -279,11 +278,7 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
         let mut changes = Changes::default();
         for item in gone {
             tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, now])?;
-            let event = NewEvent::new(
-                events::Kind::InboxClosed,
-                format!("Inbox item {} closed: {}.", item.id, item.label),
-                json!({"item": item.id, "kind": item.kind.as_str()}),
-            );
+            let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
             events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
             changes.closed.push(item.id);
         }
@@ -307,10 +302,12 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
                 ],
             )?;
             let id = tx.last_insert_rowid();
-            let event = NewEvent::new(
-                events::Kind::InboxOpened,
+            let event = NewEvent::inbox_opened(
                 format!("Inbox item {id} opened: {}.", c.label),
-                json!({"item": id, "kind": c.kind.as_str(), "urgency": c.urgency.as_str(), "label": c.label}),
+                id,
+                c.kind.as_str(),
+                c.urgency.as_str(),
+                &c.label,
             );
             events::append(tx, scope(event, &c.context, &c.plan, &c.job, &c.session))?;
             changes.opened.push(id);
@@ -345,6 +342,7 @@ fn scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use crate::home::CpdHome;
 
     fn store() -> (tempfile::TempDir, Store) {
