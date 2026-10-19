@@ -5,7 +5,7 @@
 use std::ffi::OsString;
 
 use clap::error::ErrorKind;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -65,8 +65,14 @@ pub enum Command {
 
 /// Parses `argv` and runs the command.
 pub fn run(argv: impl IntoIterator<Item = OsString>) -> Result<Output, CpdError> {
-    match Cli::try_parse_from(argv) {
+    let argv: Vec<OsString> = argv.into_iter().collect();
+    let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
+    match Cli::try_parse_from(&argv) {
         Ok(cli) => dispatch(cli.command),
+        Err(err) if root_help && err.kind() == ErrorKind::DisplayHelp => {
+            let text = err.render().to_string();
+            Ok(Output::success(serde_json::json!({ "help": text, "tree": crate::interface::tree(&Cli::command()) })))
+        }
         Err(err) => clap_result(err),
     }
 }
@@ -168,6 +174,11 @@ mod tests {
     fn help_and_version_are_one_json_value() {
         let Ok(Output::Success(fields)) = run(argv(&["--help"])) else { panic!("help is a success") };
         assert!(fields["help"].as_str().unwrap().contains("context"));
+        assert!(fields["tree"].is_array());
+        for words in [&["plan", "--help"][..], &["help", "plan"]] {
+            let Ok(Output::Success(fields)) = run(argv(words)) else { panic!("help is a success") };
+            assert!(fields.contains_key("help") && !fields.contains_key("tree"));
+        }
         let Ok(Output::Success(fields)) = run(argv(&["--version"])) else { panic!("version is a success") };
         assert_eq!(fields["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(fields["schema"], cpd_core::store::VERSION);

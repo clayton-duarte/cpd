@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, Store, VERSION, WriteTxn};
+use cpd_core::store::{APPLICATION_ID, HISTORY_TABLES, ORPHAN_HISTORY_SQL, Store, VERSION, WriteTxn};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -434,6 +434,41 @@ fn a_locked_job_and_its_dependencies_are_job_locked() {
 }
 
 #[test]
+fn a_stub_draft_has_a_title_only_and_a_job_that_is_not_a_draft_has_its_tier_and_its_spec() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    let insert = |key: &str, status: &str, fingerprint: &str| {
+        format!(
+            "INSERT INTO jobs (plan, pr, key, title, status, appended, fingerprint, created_txn, created_at)
+             VALUES ('pay', 'pay', '{key}', 'T', '{status}', 1, {fingerprint}, cpd_txn(), 't')"
+        )
+    };
+    // A stub draft is stored, and may be cancelled as such.
+    store.write("test", |tx| exec(tx, &insert("stub", "draft", "NULL"))).unwrap();
+    store
+        .write("test", |tx| exec(tx, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'stub'"))
+        .unwrap();
+    // No other status is, and a draft cannot be queued while it lacks its Tier or Spec.
+    store.write("test", |tx| exec(tx, &insert("stub2", "draft", "NULL"))).unwrap();
+    for sql in [insert("direct", "queued", &format!("'{FP}'")), format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'stub2'")] {
+        let err = refused(&mut store, &sql);
+        assert!(sqlite_message(&err).contains("CHECK constraint failed"), "{sql}: {err:?}");
+    }
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "UPDATE jobs SET tier = 'S2', goal = 'g', context = 'c', touches = '[\"a\"]', acceptance = '[\"b\"]', out_of_scope = '[]' WHERE key = 'stub2';
+                     UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = 'stub2'"
+                ),
+            )
+        })
+        .unwrap();
+}
+
+#[test]
 fn appending_a_job_inserts_its_dependencies_in_its_own_transaction() {
     // dependencies_locked: a non-draft Job created in this transaction (append) may get Dependencies.
     let env = TestEnv::new();
@@ -630,6 +665,47 @@ fn the_tamper_report_lists_history_rows_without_a_txn() {
     assert_eq!(store.tamper().unwrap(), vec![json!({"kind": "history", "id": 1, "txn": 999})]);
 }
 
+#[test]
+fn the_tamper_report_lists_every_orphan_among_many_history_rows_in_id_order() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let conn = raw(&env);
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+    let current = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(0));
+    let seen = current.clone();
+    conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, move |_| Ok(seen.load(std::sync::atomic::Ordering::SeqCst)))
+        .unwrap();
+    let real: i64 = conn.query_row("SELECT min(id) FROM txns", [], |r| r.get(0)).unwrap();
+    for n in 0..30i64 {
+        let txn = if n % 7 == 3 { 900 + n } else { real };
+        current.store(txn, std::sync::atomic::Ordering::SeqCst);
+        conn.execute_batch(&format!(
+            "INSERT INTO history (txn, tbl, pk, op, before, after) VALUES ({txn}, 'contexts', '[\"x\"]', 'insert', NULL, '{{}}')"
+        ))
+        .unwrap();
+    }
+    let report = store.tamper().unwrap();
+    let orphans: Vec<i64> = report.iter().map(|e| e["txn"].as_i64().unwrap()).collect();
+    assert_eq!(orphans, vec![903, 910, 917, 924]);
+    let ids: Vec<i64> = report.iter().map(|e| e["id"].as_i64().unwrap()).collect();
+    assert!(ids.windows(2).all(|w| w[0] < w[1]));
+    assert!(report.iter().all(|e| e["kind"] == "history"));
+}
+
+#[test]
+fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() {
+    let env = TestEnv::new();
+    let _store = open(&env);
+    let conn = raw(&env);
+    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {ORPHAN_HISTORY_SQL}")).unwrap();
+    let details: Vec<String> = stmt.query_map([], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    assert!(
+        details.iter().any(|d| d.starts_with("SCAN h") && d.contains("COVERING INDEX history_txn")),
+        "history must be scanned through history_txn: {details:?}"
+    );
+    assert!(!details.iter().any(|d| d == "SCAN h"), "history must not be scanned as a table: {details:?}");
+}
+
 // ---------- §4.5 versions and migrations ----------
 
 #[test]
@@ -662,7 +738,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(cpd_core::store::schema_hash(c)?)).unwrap();
-    assert_eq!(hash, "7da9b792cadf9d12a54eb26ad99a78c48fdcbb2e4a220f767973a7760cd16c9a", "version 13 (the PR poll's Inbox kinds, migration 0013) on top of version 12 (the Inbox, migration 0012)");
+    assert_eq!(hash, "2d346012b74ad0cba8d2f1658e1b9178942c0f9b6dc0d1014c0a2b722d62c599", "version 14 (stub drafts, migration 0014) on top of version 13 (the PR poll's Inbox kinds, migration 0013)");
 
     for table in ["contexts", "plans", "sessions"] {
         let archived: Option<String> =
@@ -1255,6 +1331,39 @@ fn version_on_a_newer_database_succeeds_and_does_not_change_it() {
     assert_eq!(out["schema"], VERSION);
     assert_eq!(out["store_schema"], VERSION + 1);
     assert_eq!(fs::read(home(&env).db()).unwrap(), before);
+}
+
+/// store-W8: a held `locks/store.lock` is waited for at most `busy_ms`.
+#[test]
+fn a_held_setup_lock_gives_lock_timeout_after_store_busy_ms() {
+    use nix::fcntl::{Flock, FlockArg};
+    let env = TestEnv::new();
+    let h = home(&env);
+    fs::create_dir_all(h.locks_dir()).unwrap();
+    let path = h.locks_dir().join("store.lock");
+    let file = fs::OpenOptions::new().create(true).append(true).open(&path).unwrap();
+    let held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let opener = std::thread::spawn(move || {
+        let start = Instant::now();
+        let result = Store::open(&h, 300).map(drop);
+        tx.send((result, start.elapsed())).unwrap();
+    });
+    let received = rx.recv_timeout(Duration::from_secs(10));
+    drop(held); // lets a still-waiting opener finish
+    opener.join().unwrap();
+    let (result, waited) = received.expect("Store::open still waited for the lock after 10 s");
+
+    let err = result.unwrap_err();
+    assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
+    assert!(waited >= Duration::from_millis(300), "gave up after {waited:?}");
+    assert!(waited < Duration::from_secs(5), "waited {waited:?}");
+    assert!(err.message().contains("store.lock"), "{err}");
+    assert!(err.message().contains("300"), "{err}");
+    assert_eq!(err.details()["lock"], path.display().to_string());
+    assert_eq!(err.details()["waited_ms"], 300);
+    assert!(!home(&env).db().exists(), "a refused open created the database");
 }
 
 /// `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6) are both `store_busy` (contract §4.2).

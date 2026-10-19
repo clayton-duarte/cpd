@@ -12,7 +12,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
@@ -30,6 +30,13 @@ pub use schema::{HISTORY_TABLES, VERSION, schema_hash};
 
 /// `PRAGMA application_id` of a cpd 2 database: `0x63706432`, "cpd2" (§4.1).
 pub const APPLICATION_ID: i32 = 0x6370_6432;
+
+/// The `history` rows whose `txn` has no `txns` row (the tamper report's
+/// second part). `INDEXED BY history_txn` makes the planner scan the small
+/// covering index instead of the `history` table (its rows hold every column
+/// twice); the index is §4.4's, so a missing one is an error, not a silent scan.
+pub const ORPHAN_HISTORY_SQL: &str =
+    "SELECT h.id, h.txn FROM history h INDEXED BY history_txn WHERE NOT EXISTS (SELECT 1 FROM txns t WHERE t.id = h.txn) ORDER BY h.id";
 
 /// The `txns.command` of the transaction that migrates (§4.5).
 pub const MIGRATE_COMMAND: &str = "migrate";
@@ -95,7 +102,7 @@ impl Store {
     /// a new database with `SQLITE_BUSY` at once, without its busy handler.
     pub fn open(home: &CpdHome, busy_ms: u64) -> Result<Store, CpdError> {
         let path = home.db();
-        let setup = setup_lock(home)?;
+        let setup = setup_lock(home, busy_ms)?;
         let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
         store.migrate(home).map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
@@ -317,9 +324,7 @@ impl Store {
             report.push(json!({"kind": "schema", "expected": m.expected, "found": m.found}));
         }
         let orphans = self.read(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT h.id, h.txn FROM history h WHERE NOT EXISTS (SELECT 1 FROM txns t WHERE t.id = h.txn) ORDER BY h.id",
-            )?;
+            let mut stmt = conn.prepare(ORPHAN_HISTORY_SQL)?;
             let rows = stmt
                 .query_map([], |r| Ok(json!({"kind": "history", "id": r.get::<_, i64>(0)?, "txn": r.get::<_, i64>(1)?})))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -367,9 +372,11 @@ fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
 }
 
 /// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
-/// use, and waits for it without a limit: a holder is another cpd process
-/// doing the open's bounded setup. Dropping the result releases it.
-fn setup_lock(home: &CpdHome) -> Result<Flock<File>, CpdError> {
+/// use, and waits for it at most `busy_ms` (the config's `store_busy_ms`): then
+/// `lock_timeout` (exit 5) naming the lock file and the time waited (§4.3). A
+/// holder that hangs does not hang every other cpd command. Dropping the
+/// result releases it.
+fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<Flock<File>, CpdError> {
     let failed = |what: &str, path: &Path, e: std::io::Error| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display()))
             .with("path", path.display().to_string())
@@ -380,14 +387,30 @@ fn setup_lock(home: &CpdHome) -> Result<Flock<File>, CpdError> {
     let path = dir.join("store.lock");
     let mut file =
         OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
+    let deadline = Instant::now() + Duration::from_millis(busy_ms);
     loop {
-        match Flock::lock(file, FlockArg::LockExclusive) {
+        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
             Ok(lock) => return Ok(lock),
-            Err((f, Errno::EINTR)) => file = f,
+            Err((f, Errno::EWOULDBLOCK | Errno::EINTR)) => file = f,
             Err((_, errno)) => return Err(failed("lock", &path, errno.into())),
         }
+        if Instant::now() >= deadline {
+            return Err(CpdError::new(
+                ErrorCode::LockTimeout,
+                format!(
+                    "Another cpd process held the store's setup lock {} for longer than store_busy_ms ({busy_ms} ms).",
+                    path.display()
+                ),
+            )
+            .with("lock", path.display().to_string())
+            .with("waited_ms", busy_ms));
+        }
+        std::thread::sleep(SETUP_LOCK_RETRY);
     }
 }
+
+/// How often `setup_lock` retries a held lock.
+const SETUP_LOCK_RETRY: Duration = Duration::from_millis(20);
 
 /// The database's `PRAGMA user_version`, or `None` when the file does not
 /// exist. Opens it read-only: no migration, no schema check, no write.
