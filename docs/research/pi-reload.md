@@ -194,3 +194,24 @@ Every decision is a line of `$CPD_HOME/run/adapter/<session>.log` (`commands.md`
 
 - Whether a Lead that is *blocked* by a dialog or a Worker question for hours (`state`) gets the long notice: yes (the guard refuses for that time); the wrapper's restart covers parked ones.
 - The older-adapter inference above is unverified. A cheap record for the next time: `scripts/install-cpd.sh` (not in this Job's files) could log who installed what into `run/adapter/`; two concurrent installs also race on `rm -rf <dir>; mv <tmp> <dir>` (a second `mv` into an existing directory nests the new package inside it). Not reproduced.
+
+## Pre-validation with pi itself
+
+Job `rv-pi-validate` of Plan `cross-repo` (hs-d255 (a), hs-n214, hs-n76). Replaces the `node` + `jiti` child of pre-validation (`validatePackage`, commands.md §15.6 step 3), which failed `Cannot find module @earendil-works/pi-tui` since #61 (pi provides that module to extensions at runtime; a plain node load cannot resolve it).
+
+### What was run
+
+pi **1.3.0** (`~/.pi/agent/bin/pi`), once, in a scratch directory `/tmp/rv-live.*` (removed afterwards); never in the User's sessions. `PI_OFFLINE=1`, `PI_CODING_AGENT_DIR` an empty scratch directory, stdin `/dev/null`, no network, no credentials. Copies of the current `pi/` package (without `test/`, `extension.ts` importing `@earendil-works/pi-tui`), first by hand, then through the new `validatePackage` itself (`node run.ts` importing `pi/lib/reload.ts`):
+
+| Package | `pi --no-extensions --no-session -e <dir> --mode rpc </dev/null` | `validatePackage` |
+|---|---|---|
+| copy of `pi/` as is | exit 0, no output (3.6 s the first time, under 1 s after) | `undefined` (passes), 910 ms |
+| same with `throw new Error("boom");` appended to `extension.ts` | exit 1, stderr `Error: Failed to load extension "<dir>/extension.ts": Failed to load extension: boom` + a hint line | refused with that first line, 674 ms |
+| same with `export default 3;` | exit 1, stderr `Error: Failed to load extension "<dir>/extension.ts": Extension does not export a valid factory function: <dir>/extension.ts` | refused with that line, 852 ms |
+| copy of `pi/`, `timeoutMs: 200` | — | `load timed out after 200 ms` (refusal) |
+
+After the runs: no `cpd-validate-*` scratch directory left in the temp directory, no `pi` process left. The failure message goes to **stderr**, stdout stays empty. The copy imports `@earendil-works/pi-tui` and passes: the bug is gone.
+
+### Not run
+
+The unit tests use a fake `pi` on `PATH` (`pi/test/fake.ts`); the real-pi check is not part of `npm test`. Not run: a package whose factory hangs in real pi (the timeout is covered by the fake and by the `timeoutMs: 200` run above).
