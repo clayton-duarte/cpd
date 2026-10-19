@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "1ee8139a5bb66c61a28ed8edf439e417ee124f183ea95cb830a1b73e6c0e979b";
+pub const SCHEMA_HASH: &str = "384e5d7aaef292f40566a119d7913758cc71adbc17491daebef35c7a49595464";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -2492,12 +2492,26 @@ mod tests {
                 let mut rows_before = rows_before;
                 assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
                 // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(46));
+                assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
                 assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
                 assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
                 let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
                 assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
                 assert_eq!(txns_after.len(), txns_before.len() + 1);
+                // The columns additive named migrations add come last and are null in every converted row.
+                for (table, rows) in rows_after.iter_mut() {
+                    let width = rows_before.get(table).and_then(|r| r.first()).map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().len());
+                    for row in rows.iter_mut() {
+                        let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
+                        let width = width.unwrap_or(values.len());
+                        if values.len() == width {
+                            continue;
+                        }
+                        assert!(values[width..].iter().all(Value::is_null), "{table}: an added column is set: {row}");
+                        values.truncate(width);
+                        *row = Value::from(values).to_string();
+                    }
+                }
                 assert_eq!(rows_after, rows_before);
             }
 
@@ -3066,5 +3080,56 @@ mod tests {
         let mut store = Store::open(&home, 5000).unwrap();
         assert_eq!(count(&mut store, "SELECT count(*) FROM events"), 0);
         assert!(store.schema_mismatch().is_none());
+    }
+
+    // ---------- named migration session-titles ----------
+
+    #[test]
+    fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_and_accepts_session_titled() {
+        let titles = NAMED.iter().position(|n| n.name.ends_with("-session-titles")).expect("the migration session-titles exists");
+        let dir = tempfile::tempdir().unwrap();
+        let home = home(&dir);
+        let mut before = super::super::tests::open_named(&home, &NAMED[..titles]).unwrap();
+        write(
+            &mut before,
+            &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+             INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
+               ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
+               ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
+               ('w', 'worker', 'ctx', 'pay', 'api-a1', 'W', '/', 'S2', 'working', 't', 't');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'l', 't');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+               VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+               VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', cpd_txn(), 't');
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
+               VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'w', 't');"
+                .replace("{fp}", &"a".repeat(64)),
+        )
+        .unwrap();
+        let columns = "rowid, id, role, context, plan, attempt, name, cwd, tier, state";
+        let sessions = rows(&mut before, &format!("SELECT {columns} FROM sessions ORDER BY id"));
+        assert!(sqlite_message(&refused(&mut before, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{}')"))
+            .contains("FOREIGN KEY constraint failed"));
+        drop(before);
+
+        let mut store = Store::open(&home, 5000).unwrap();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+        assert_eq!(rows(&mut store, &format!("SELECT {columns} FROM sessions ORDER BY id")), sessions);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM sessions WHERE title IS NOT NULL OR titled_at IS NOT NULL"), 0);
+        assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+        write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{\"title\":\"T\"}')").unwrap();
+        // The title is 1–60 characters, and the history lists both new columns.
+        write(&mut store, &format!("UPDATE sessions SET title = '{}', titled_at = 't' WHERE id = 'l'", "é".repeat(60))).unwrap();
+        for bad in [String::new(), "x".repeat(61)] {
+            let error = refused(&mut store, &format!("UPDATE sessions SET title = '{bad}' WHERE id = 'm'"));
+            assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{bad:?}: {error:?}");
+        }
+        assert_eq!(
+            rows(&mut store, "SELECT json_extract(after, '$.title') IS NOT NULL, json_extract(after, '$.titled_at') FROM history WHERE tbl = 'sessions' AND op = 'update'"),
+            vec![serde_json::json!([1, "t"])]
+        );
+        let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
+        assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
     }
 }

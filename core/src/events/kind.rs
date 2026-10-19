@@ -210,7 +210,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (3, "ac82364d4f6b83ae5e1dad29db82b205a36e8705eb2ee5015a1ec9adee953abb");
+    const PINNED: (u32, &str) = (4, "de6aa3b01b4f7e113f517af11fc9882a00080fa804f924e769818f4929468bd9");
 
     fn kinds_hash() -> String {
         let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
