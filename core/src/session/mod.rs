@@ -12,6 +12,7 @@
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7).
 
 mod archive;
+mod fork_wait;
 mod history;
 mod moves;
 mod port;
