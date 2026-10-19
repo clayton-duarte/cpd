@@ -10,6 +10,7 @@
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
+mod background;
 mod chat;
 mod cockpit;
 mod history;

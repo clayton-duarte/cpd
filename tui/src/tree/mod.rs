@@ -28,11 +28,13 @@ mod view;
 #[cfg(test)]
 mod fixture;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event};
 
+use super::background::Background;
 use super::runner::kept;
 use super::{Capture, run_view};
 use super::{palette, read};
@@ -69,7 +71,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let view = View::new(read::tree(&mut store)?, false);
             let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            Ok((store, view, follow, poll, Runner::new(&config)))
+            Ok((store, view, follow, poll, Arc::new(Runner::new(&config))))
         },
         |terminal, (mut store, view, follow, poll, runner)| {
             Ok(event_loop(terminal, &mut store, view, follow, poll, &runner)?)
@@ -83,7 +85,7 @@ fn event_loop(
     mut view: View,
     mut follow: read::Follow,
     poll: Duration,
-    runner: &Runner,
+    runner: &Arc<Runner>,
 ) -> std::io::Result<()> {
     let mut dirty = false;
     let mut last_snapshot = Instant::now();
@@ -93,8 +95,26 @@ fn event_loop(
     let (mut snapshot_error, mut follow_error) = (None, None);
     // what the last draw showed of the clock, and whether anything changed since: the pane is written to only then
     let (mut redraw, mut drawn_frame) = (true, palette::frame(SystemTime::now()));
+    // the commands and the popup run off this thread (tui-W7): the loop goes on drawing, reading keys and the follower
+    // meanwhile. A popup returns when it closes, so it does not hold up the commands.
+    let mut actions = Background::<Result<String, String>>::new();
+    let mut popups = Background::<Result<(), String>>::new();
     loop {
         let error = view.error.clone();
+        while let Some(result) = actions.finished() {
+            view.done(result);
+            redraw = true;
+            // the tree shows the result on this loop's snapshot
+            dirty = true;
+            last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+        }
+        while let Some(result) = popups.finished() {
+            // only a failure is said
+            if let Err(why) = result {
+                view.done(Err(why));
+                redraw = true;
+            }
+        }
         if last_poll.elapsed() >= poll {
             last_poll = Instant::now();
             dirty |= kept(follow.poll_changes(store), &mut follow_error).is_some_and(|changes| changes.any());
@@ -140,16 +160,13 @@ fn event_loop(
         match effect {
             Effect::None => {}
             Effect::Legend => {
-                // `display-popup` returns when the popup closes; only a failure is said
-                if let Err(why) = runner.legend() {
-                    view.done(Err(why));
-                }
+                let runner = Arc::clone(runner);
+                popups.submit(move || runner.legend());
             }
             Effect::Run(action) => {
-                view.done(runner.run(&action));
-                // the tree shows the result on this loop's snapshot
-                dirty = true;
-                last_snapshot = Instant::now() - SNAPSHOT_EVERY;
+                view.done(Ok(format!("running: {}", action.argv().join(" "))));
+                let runner = Arc::clone(runner);
+                actions.submit(move || runner.run(&action));
             }
         }
     }
