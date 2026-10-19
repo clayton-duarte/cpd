@@ -34,14 +34,14 @@ The Worker's submit runs only the repo's quick check (its `pre-commit` hook). Th
 
 ## Size
 
-- An Attempt gets `attempt_minutes` of active time (90 on the User's machines, hs-d11); the timeout is that configured value. Size a Job to fit **well inside it** (about 150 turns), including worktree setup and dependency install. A Job that needs more fails and costs a retry.
+- An Attempt gets `attempt_minutes` of active time (the configured `attempt_minutes`); the timeout is that value. Size a Job to fit **well inside it** (about 150 turns), including worktree setup and dependency install. A Job that needs more fails and costs a retry.
 - A Job is one outcome that one Worker can finish and verify. Two independent outcomes are two Jobs.
 - Prefer many small Jobs that run in parallel. Do not split below a unit that has its own acceptance check.
 - A Job key matches `^[a-z][a-z0-9-]{0,31}$` and is unique in the Plan.
 
 ## Bounded commands
 
-Put these in the `context` of every Spec (they are a Worker's only rules; hs-n97, hs-n107):
+Put these in the `context` of every Spec (they are a Worker's only rules):
 
 - Commit a skeleton within 10 minutes, then at least every 20 minutes.
 - Wrap every measurement and test run in `timeout` (for example `timeout 300 npm test`).

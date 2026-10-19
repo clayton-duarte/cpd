@@ -264,7 +264,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
         format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()),
     )
     .unwrap();
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Pay"]).ok();
     assert_eq!(windows(&env, "cpd"), ["park-pay"], "plan new started the server, not tui");
     assert_server_options(&env);
@@ -565,6 +565,38 @@ fn tui_brings_the_last_chat_lead_into_a_new_slot() {
     assert_eq!(moved["session"], "lead-b");
     assert_eq!(moved["data"]["place"], "chat");
     assert_eq!(moved["data"]["pane"], lead_pane);
+}
+
+/// `cpd tui` on a server older than the installed tmux marks a restart pending, once, and never restarts
+/// it itself (it may run inside the server): the engine does, once nothing is in the way (contract §6.1).
+#[test]
+fn tui_marks_a_restart_of_an_older_tmux_server_pending_and_does_not_kill_it() {
+    let env = env();
+    let path = std::env::var_os("PATH").unwrap();
+    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH");
+    let older = env.root().join("older-server");
+    // While the file exists, the server says it runs tmux 1.0.
+    env.fake(
+        "tmux",
+        &format!("[ -e '{}' ] && case \" $* \" in *\" display -p #{{version}} \"*) echo 1.0; exit 0;; esac\nexec '{}' \"$@\"", older.display(), real.display()),
+    );
+    let pending = env.cpd_home().join("run/tmux-restart.pending");
+
+    env.cpd(&["tui"]).ok();
+    assert!(!pending.exists(), "a server as new as the installed tmux needs no restart");
+    let pid = tmux_out(&env, &["display", "-p", "#{pid}"]);
+    fs::write(&older, "").unwrap();
+    let run = env.cpd(&["tui"]);
+    assert_eq!(run.ok()["built"], false);
+    let marked: Value = serde_json::from_str(&fs::read_to_string(&pending).unwrap()).unwrap();
+    assert_eq!((marked["server"].as_str(), marked["failed"].is_null()), (Some("1.0"), true));
+    let at = marked["at"].clone();
+    // Again: still pending, with its first time; and nothing was killed.
+    env.cpd(&["tui"]).ok();
+    let again: Value = serde_json::from_str(&fs::read_to_string(&pending).unwrap()).unwrap();
+    assert_eq!(again["at"], at);
+    assert!(!env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "kill-server")));
+    assert_eq!(tmux_out(&env, &["display", "-p", "#{pid}"]), pid);
 }
 
 #[test]

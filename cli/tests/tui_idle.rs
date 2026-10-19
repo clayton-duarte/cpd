@@ -15,7 +15,7 @@ mod common;
 
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, TestEnv, wait_until};
 use cpd_core::error::CpdError;

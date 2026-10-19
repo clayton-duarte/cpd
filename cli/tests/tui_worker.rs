@@ -11,10 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use common::{CPD, SLEEP_SECONDS, TestEnv};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
 use cpd_core::host::tmux::PANE_DIED_HOOK;
-use cpd_core::store::Store;
 use serde_json::json;
 
 // ---------- the prepared store ----------

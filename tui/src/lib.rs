@@ -118,6 +118,11 @@ fn backed_off(result: Result<Output, CpdError>) -> Result<Output, CpdError> {
     result
 }
 
+/// `cpd` with no arguments, in a terminal (commands.md §13.3): the follow-ups of an update, then attach.
+pub fn bare(run_command: RunCommand) -> Result<Output, CpdError> {
+    cockpit::bare(run_command)
+}
+
 /// `not_a_terminal`: a command that owns its terminal was not given one.
 fn not_a_terminal(command: &str) -> CpdError {
     CpdError::new(ErrorCode::NotATerminal, format!("cpd {command} needs a terminal on stdin and stdout."))
@@ -125,7 +130,7 @@ fn not_a_terminal(command: &str) -> CpdError {
 }
 
 /// Whether stdin and stdout are both a terminal.
-fn on_a_terminal() -> bool {
+pub fn on_a_terminal() -> bool {
     use std::io::IsTerminal;
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }

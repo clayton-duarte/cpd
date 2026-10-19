@@ -195,7 +195,8 @@ fn contract_ddl_blocks() -> Vec<String> {
 /// documentation, not schema (a migration cannot change one without rebuilding the table).
 fn normalized(sql: &str) -> String {
     let code: Vec<&str> = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect();
-    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    // `ALTER TABLE … ADD COLUMN` splices its column in as `, <column>)`: the spaces before `,` and `)` are layout too.
+    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")")
 }
 
 /// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
@@ -1110,7 +1111,7 @@ fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
     let out = env
         .command("sh")
         .args(["-c", "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"", "sh", common::CPD])
-        .args(["context", "new", "ctx", "--title", "Ctx"])
+        .args(["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);

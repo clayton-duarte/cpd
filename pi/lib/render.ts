@@ -8,7 +8,7 @@ import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
- * commands.md §15.9 (hs-d286): every cpd message in a pi pane is drawn as a pi-compact-tools 0.16.6 tool row, collapsed. The rows are
+ * commands.md §15.9: every cpd message in a pi pane is drawn as a pi-compact-tools 0.16.6 tool row, collapsed. The rows are
  * copied from that extension's source (`compact-tools.ts`, `-layout.ts`, `-claude.ts`, `-codex.ts`, `-codex-rows.ts`), not imported: it
  * exposes no API and draws tool rows only. Display only: the message's `content` and `details` are read, never changed.
  */
