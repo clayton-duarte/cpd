@@ -232,6 +232,12 @@ fn remote_branch(fx: &Fx, repo: &Path, branch: &str) -> String {
     fx.env.git(repo, &["ls-remote", "--heads", "origin", branch])
 }
 
+/// The `branch.*` entries of `repo`'s `.git/config` (upstreams), one per line.
+fn branch_config(fx: &Fx, repo: &Path) -> String {
+    let out = common::output(fx.env.command("git").args(["-C", repo.to_str().unwrap(), "config", "--get-regexp", r"^branch\."])).unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
 // ---------- plan lock ----------
 
 #[test]
@@ -261,7 +267,7 @@ fn lock_starts_only_the_prs_without_needs() {
     // The started PR: branch, worktree, remote and row.
     assert_eq!(fx.env.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/api");
     assert_eq!(remote_branch(&fx, &api.path, "cpd/pay/api"), format!("{base}\trefs/heads/cpd/pay/api"));
-    assert_eq!(fx.env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/api");
+    assert_eq!(branch_config(&fx, &api.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("api"), "dispatch");
     assert_eq!(fx.query::<String>("SELECT lead_worktree FROM prs WHERE key = 'api'"), worktree.display().to_string());
     // The waiting one: nothing created anywhere.
@@ -412,7 +418,7 @@ fn pr_start_creates_pushes_and_records_the_start() {
     );
     assert_eq!(fx.env.git(&worktree, &["rev-parse", "HEAD"]), tip, "cut from a fresh fetch of origin/main");
     assert_eq!(remote_branch(&fx, &repo.path, "cpd/pay/a2"), format!("{tip}\trefs/heads/cpd/pay/a2"));
-    assert_eq!(fx.env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/a2");
+    assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("a2"), "dispatch");
     assert!(fx.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
     let started = fx.events("pr-started");
@@ -423,6 +429,33 @@ fn pr_start_creates_pushes_and_records_the_start() {
     let again = fx.start("a2").ok();
     assert_eq!((&again["already"], &again["pr"]["status"]), (&json!(true), &json!("dispatch")));
     assert_eq!(fx.events("pr-started").len(), 1);
+}
+
+#[test]
+fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let keys: Vec<String> = (1..=8).map(|i| format!("p{i}")).collect();
+    for key in &keys {
+        fx.add(key, &repo.path, &[]);
+    }
+    fx.dispatch();
+
+    let runs: Vec<Run> = std::thread::scope(|s| {
+        let started: Vec<_> = keys.iter().map(|key| s.spawn(|| fx.start(key))).collect();
+        started.into_iter().map(|t| t.join().unwrap()).collect()
+    });
+
+    for (key, run) in keys.iter().zip(&runs) {
+        let out = run.ok();
+        assert_eq!((&out["pr"]["status"], &out["pr"]["pushed"]), (&json!("dispatch"), &json!(true)), "{key}");
+        let branch = format!("cpd/pay/{key}");
+        assert_eq!(fx.env.git(&fx.lead_path(&repo.path, key), &["symbolic-ref", "--short", "HEAD"]), branch);
+        assert_ne!(remote_branch(&fx, &repo.path, &branch), "", "{key} pushed");
+    }
+    assert_eq!(branch_config(&fx, &repo.path), "", "no branch.* entry in .git/config");
+    assert_eq!(fx.events("pr-started").len(), 8);
+    assert!(fx.events("error").is_empty());
 }
 
 #[test]
