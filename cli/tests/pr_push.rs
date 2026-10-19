@@ -28,6 +28,7 @@ struct Fx {
 
 fn fx(status: &str) -> Fx {
     let env = TestEnv::new();
+    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = env.git_repo("pay").canonicalize().unwrap();
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
@@ -58,7 +59,7 @@ fn fx(status: &str) -> Fx {
         )
     };
     let sql = format!(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
@@ -177,6 +178,20 @@ fn push_with_a_failed_gate_pushes_nothing() {
     assert!(run.error()["details"]["tail"].as_str().unwrap().contains("the suite is red"));
     assert!(run.error()["details"]["log"].as_str().unwrap().ends_with("logs/pr-repo.pre-merge.log"));
     assert_eq!(fx.remote_sha(), before);
+}
+
+#[test]
+fn push_with_gate_ci_runs_no_gate_and_pushes() {
+    let fx = fx("open");
+    fx.env.owner_policy("acme", "[pr]\ngate = \"ci\"\n");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}; exit 3\"\n", marker.display()));
+
+    let out = fx.push().ok();
+
+    assert_eq!(out["pushed"], true);
+    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+    assert_eq!(fx.remote_sha(), fx.lead_sha());
 }
 
 #[test]

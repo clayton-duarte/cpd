@@ -90,6 +90,7 @@ struct Fx {
 impl Fx {
     fn new() -> Fx {
         let env = TestEnv::new();
+        env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
         // `cpd` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
         symlink(CPD, env.bin().join("cpd")).unwrap();
         env.fake_pi(&format!("{PI}exec sleep {SLEEP_SECONDS}"));

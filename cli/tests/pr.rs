@@ -77,6 +77,7 @@ fn fx_with(phase: &str, config_extra: &str) -> Fx {
 /// `job` is the status of the Plan's one Job, `merged` or `cancelled`.
 fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     let env = TestEnv::new();
+    env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = env.keyed_repo("pay").canonicalize().unwrap();
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
@@ -735,6 +736,49 @@ fn open_refuses_a_failed_gate_and_pushes_nothing() {
     assert!(fx.events("plan-phase").is_empty());
 }
 
+/// A fixture of `phase` under policy `pr.gate = "ci"` (cpd's default), whose failing `pre-merge` leaves a marker if it runs.
+fn ci_fx_with_failing_hook(phase: &str) -> (Fx, PathBuf) {
+    let fx = fx(phase);
+    fx.env.owner_policy("acme", "[pr]\ngate = \"ci\"\n");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}; exit 3\"\n", marker.display()));
+    (fx, marker)
+}
+
+#[test]
+fn open_with_gate_ci_runs_no_gate_and_pushes() {
+    let (fx, marker) = ci_fx_with_failing_hook("dispatch");
+
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["phase"], "deploy");
+    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()), "the Lead Branch was pushed");
+}
+
+#[test]
+fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
+    let (fx, marker) = ci_fx_with_failing_hook("deploy");
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    fx.advance_base("base.txt", "base\n");
+
+    let out = fx.pr("rebase").ok();
+
+    assert_eq!(out["rebased"], true);
+    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()), "the rebased branch was pushed");
+}
+
+#[test]
+fn open_with_gate_local_runs_the_gate_that_the_ci_policy_skips() {
+    let fx = fx("dispatch");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}; exit 3\"\n", marker.display()));
+
+    assert_eq!(code(&fx.pr("open")), ("gate_failed".into(), 3));
+    assert!(marker.exists());
+}
+
 #[test]
 fn open_reports_a_gate_that_could_not_be_judged_as_gate_error() {
     let fx = fx("dispatch");
@@ -1171,6 +1215,19 @@ fn a_second_identical_poll_writes_nothing() {
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
     assert_eq!(fx.gh_calls().iter().filter(|c| is_search(c)).count(), 2);
     assert!(fx.gh_calls().iter().all(|c| !is_lookup(c)), "812 is in the search: no lookup");
+}
+
+#[test]
+fn poll_does_not_tell_the_plan_of_failed_checks_when_the_policy_says_none() {
+    let fx = fx("deploy");
+    fx.env.owner_policy("acme", "[pr.feedback]\nchecks = \"none\"\n");
+    fx.search(&[pay("OPEN", None, Some("FAILURE"))]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["feedback"], json!([]));
+    assert_eq!(fx.pr_data().2, "failed", "the row still records the checks");
+    assert!(fx.events("pr-feedback").is_empty());
 }
 
 #[test]

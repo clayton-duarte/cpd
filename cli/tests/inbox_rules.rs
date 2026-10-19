@@ -137,3 +137,72 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
         .unwrap();
     assert!(found(&env, &[]).is_empty());
 }
+
+fn failing(env: &TestEnv) -> Vec<(String, String)> {
+    found(env, &[]).into_iter().filter(|c| c.kind == Kind::PrFailing).map(|c| (c.subject, c.label)).collect()
+}
+
+fn policy_file(env: &TestEnv, rel: &str, toml: &str) {
+    let path = env.cpd_home().join("policy").join(rel);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, toml).unwrap();
+}
+
+const NO_CHECKS: &str = "[pr.feedback]\nchecks = \"none\"\n";
+
+#[test]
+fn an_unowned_row_raises_failed_checks_only_where_its_policy_says_any() {
+    let env = TestEnv::new();
+    setup(&env);
+    // `acme` says none; its repo `shop` says any again; `nofile` has no owner file (cpd's default, any).
+    env.owner_policy("acme", NO_CHECKS);
+    policy_file(&env, "repos/acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
+    pull_request(&env, 1, "checks = 'failed'");
+    pull_request(&env, 2, "checks = 'failed', repo = 'acme/other', url = 'https://github.com/acme/other/pull/2'");
+    pull_request(&env, 3, "checks = 'failed', repo = 'nofile/shop', url = 'https://github.com/nofile/shop/pull/3'");
+
+    assert_eq!(
+        failing(&env),
+        [("pr:acme/shop#1".to_owned(), "shop#1 checks failed".to_owned()), ("pr:nofile/shop#3".to_owned(), "shop#3 checks failed".to_owned())]
+    );
+}
+
+#[test]
+fn a_conflict_stays_pr_failing_when_checks_are_not_feedback() {
+    let env = TestEnv::new();
+    setup(&env);
+    env.owner_policy("acme", NO_CHECKS);
+    pull_request(&env, 1, "checks = 'failed', mergeable = 'conflicting'");
+    pull_request(&env, 2, "checks = 'failed', mergeable = 'mergeable'");
+
+    assert_eq!(failing(&env), [("pr:acme/shop#1".to_owned(), "shop#1 merge conflict".to_owned())]);
+}
+
+#[test]
+fn an_owned_row_takes_its_prs_policy_not_the_default_of_an_unowned_row() {
+    let env = TestEnv::new();
+    setup(&env);
+    env.owner_policy("acme", NO_CHECKS);
+    pull_request(&env, 5, "checks = 'failed'");
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    let own = |name: &str| {
+        Store::open(&home, 5000)
+            .unwrap()
+            .write("test", |tx| {
+                tx.execute_batch(&format!(
+                    "UPDATE contexts SET owner = 'acme' WHERE id = 'ctx';
+                     INSERT INTO prs (plan, key, repo, base, name, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                                      pr_number, pr_url, pr_opened_at, pull_request)
+                       VALUES ('pay', 'shop', '/r', 'main', '{name}', 'open', 'cpd/pay/shop', '/w', cpd_txn(), 't', 't',
+                               5, 'https://github.com/acme/shop/pull/5', 't', (SELECT id FROM pull_requests WHERE number = 5));"
+                ))?;
+                Ok(())
+            })
+            .unwrap();
+    };
+    own("shop");
+    assert!(failing(&env).is_empty(), "the PR's key is acme/shop: owner none");
+
+    policy_file(&env, "repos/acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
+    assert_eq!(failing(&env), [("pr:acme/shop#5".to_owned(), "shop#5 checks failed".to_owned())]);
+}

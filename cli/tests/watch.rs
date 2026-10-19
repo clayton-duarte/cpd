@@ -172,7 +172,7 @@ fn fx_bare(config_extra: &str) -> Fx {
         .collect();
     fx.fixture(&format!(
         "{catalog}
-         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');"
+         INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');"
     ));
     fx
 }

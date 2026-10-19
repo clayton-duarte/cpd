@@ -287,6 +287,11 @@ impl TestEnv {
         self.dir.path()
     }
 
+    /// Replaces the owner `owner`'s policy file (every test env has `acme`, an empty one) with `toml`.
+    pub fn owner_policy(&self, owner: &str, toml: &str) {
+        fs::write(self.cpd_home().join(format!("policy/owners/{owner}.toml")), toml).expect("write the owner policy file");
+    }
+
     /// `$CPD_HOME` of every command run here (empty at first).
     pub fn cpd_home(&self) -> PathBuf {
         self.root().join("cpd-home")
