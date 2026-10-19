@@ -130,7 +130,7 @@ impl Exe {
     }
 
     /// Whether the file now at the path can open the store: it runs `<path>
-    /// --version` and compares the schema it supports with the database's.
+    /// --version` and reads the store verdict.
     /// A file refused once is not asked again until the path holds another file
     /// ([`Refusal::Known`]).
     pub fn check_store(&self) -> Result<(), Refusal> {
@@ -164,9 +164,9 @@ impl Exe {
 }
 
 /// Runs `command` (a cpd's `--version`: stdin null, killed after `timeout`)
-/// and decides from its JSON whether that cpd can open the store: the database
-/// does not exist (`store_schema` null) or is not newer than the newest schema
-/// the cpd supports. `Err` is the reason it cannot, or why it could not be asked.
+/// and decides from the `store` verdict in its JSON whether that cpd can open the
+/// store: the database does not exist (`store` null) or `store.opens` is true.
+/// `Err` is the reason it cannot, or why it could not be asked.
 fn asks_to_open_store(mut command: Command, timeout: Duration) -> Result<(), String> {
     let mut child = command
         .stdin(Stdio::null())
@@ -196,15 +196,18 @@ fn asks_to_open_store(mut command: Command, timeout: Duration) -> Result<(), Str
     }
     let json: serde_json::Value = serde_json::from_slice(&out)
         .map_err(|e| format!("--version printed no JSON: {e}"))?;
-    let schema = json.get("schema").and_then(|v| v.as_u64()).ok_or("--version does not report the store schema it supports")?;
-    match json.get("store_schema") {
+    // The verdict (contract §4.5; commands.md §1.2): `null` without a database, else `opens`.
+    match json.get("store") {
         Some(serde_json::Value::Null) => Ok(()),
-        Some(v) => match v.as_u64() {
-            Some(store) if store <= schema => Ok(()),
-            Some(store) => Err(format!("supports store schema {schema}, the database is at {store}")),
-            None => Err("--version reports a store_schema that is not a number".to_owned()),
+        Some(store) => match store.get("opens").and_then(|v| v.as_bool()) {
+            Some(true) => Ok(()),
+            Some(false) => {
+                let message = store.pointer("/refusal/message").and_then(|v| v.as_str());
+                Err(format!("cannot open the store: {}", message.ok_or("--version reports no refusal message")?))
+            }
+            None => Err("--version reports a store verdict without a boolean opens".to_owned()),
         },
-        None => Err("--version does not report the database's store schema".to_owned()),
+        None => Err("--version does not report the store verdict".to_owned()),
     }
 }
 
@@ -315,19 +318,25 @@ mod tests {
         asks_to_open_store(sh(script), Duration::from_secs(10))
     }
 
+    const OPENS: &str = r#"{"ok":true,"version":"x","schema":1000,"store_schema":1000,"store":{"opens":true,"refusal":null,"unknown":["29991231T2359-later"],"pending":[]}}"#;
+    const REFUSES: &str = r#"{"ok":true,"version":"x","schema":1000,"store_schema":1001,"store":{"opens":false,"refusal":{"code":"store_too_new","message":"too new"},"unknown":[],"pending":[]}}"#;
+
     #[test]
-    fn a_missing_database_or_an_equal_or_newer_binary_can_open_the_store() {
-        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","schema":6,"store_schema":null}'"#), Ok(()));
-        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","schema":6,"store_schema":6}'"#), Ok(()));
-        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","schema":7,"store_schema":6}'"#), Ok(()));
+    fn a_missing_database_or_a_store_that_opens_can_be_opened() {
+        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":null,"store":null}'"#), Ok(()));
+        assert_eq!(ask(&format!("echo '{OPENS}'")), Ok(()));
     }
 
     #[test]
-    fn an_older_binary_cannot_open_the_store() {
-        assert_eq!(
-            ask(r#"echo '{"ok":true,"version":"x","schema":5,"store_schema":6}'"#),
-            Err("supports store schema 5, the database is at 6".to_owned())
-        );
+    fn a_store_that_does_not_open_is_refused_with_the_verdicts_message() {
+        assert_eq!(ask(&format!("echo '{REFUSES}'")), Err("cannot open the store: too new".to_owned()));
+    }
+
+    #[test]
+    fn only_the_verdict_decides_not_the_legacy_numbers() {
+        // `store_schema` above `schema` and `opens` true: the verdict wins.
+        assert_eq!(ask(r#"echo '{"schema":5,"store_schema":6,"store":{"opens":true,"refusal":null}}'"#), Ok(()));
+        assert!(ask(r#"echo '{"schema":6,"store_schema":6,"store":{"opens":false,"refusal":{"code":"c","message":"m"}}}'"#).is_err());
     }
 
     #[test]
@@ -336,9 +345,12 @@ mod tests {
             "echo not json",
             "true",
             r#"echo '{"ok":true,"version":"x"}'"#,
-            r#"echo '{"schema":6}'"#,
-            r#"echo '{"schema":6,"store_schema":"6"}'"#,
-            r#"echo '{"schema":"6","store_schema":6}'"#,
+            // An integer-era cpd: no verdict.
+            r#"echo '{"ok":true,"version":"x","schema":6,"store_schema":6}'"#,
+            r#"echo '{"store":{}}'"#,
+            r#"echo '{"store":{"opens":"true"}}'"#,
+            r#"echo '{"store":{"opens":false}}'"#,
+            r#"echo '{"store":true}'"#,
         ] {
             assert!(ask(script).is_err(), "{script}");
         }
@@ -346,7 +358,7 @@ mod tests {
 
     #[test]
     fn a_failing_command_is_a_refusal() {
-        let reason = ask(r#"echo '{"schema":6,"store_schema":6}'; exit 3"#).unwrap_err();
+        let reason = ask(&format!("echo '{OPENS}'; exit 3")).unwrap_err();
         assert!(reason.contains("--version failed"), "{reason}");
         let reason = asks_to_open_store(Command::new("/nonexistent/cpd"), Duration::from_secs(10)).unwrap_err();
         assert!(reason.contains("cannot run --version"), "{reason}");
@@ -365,7 +377,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cpd");
         let calls = dir.path().join("calls");
-        let old = format!("#!/bin/sh\necho x >> '{}'\necho '{{\"schema\":5,\"store_schema\":6}}'\n", calls.display());
+        let old = format!("#!/bin/sh\necho x >> '{}'\necho '{REFUSES}'\n", calls.display());
         write_script(&path, &old);
         let exe = Exe::at(path.clone()).unwrap();
         // The check runs the script by path; the pre-existing file is the one the
@@ -380,7 +392,7 @@ mod tests {
                 other => break other,
             }
         };
-        assert!(matches!(asked(&exe), Err(Refusal::New(r)) if r == "supports store schema 5, the database is at 6"));
+        assert!(matches!(asked(&exe), Err(Refusal::New(r)) if r == "cannot open the store: too new"));
         assert_eq!(ran(), 1);
         assert_eq!(exe.check_store(), Err(Refusal::Known));
         assert_eq!(exe.check_store(), Err(Refusal::Known));

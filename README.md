@@ -1,6 +1,14 @@
 # cpd
 
-cpd (Context → Plan → Dispatch) turns one human ticket into a reviewed pull request: a Lead agent specifies the work, and a swarm of Workers executes it in parallel, each in its own git worktree. One binary, `cpd`, is the CLI, the engine and the cockpit (a terminal UI).
+cpd (Continuous Parallel Delivery) turns one human ticket into a reviewed pull request: a Lead agent specifies the work, and a swarm of Workers executes it in parallel, each in its own git worktree. One binary, `cpd`, is the CLI, the engine and the cockpit (a terminal UI).
+
+The levels, the cpd objects and their roles:
+
+| Level | cpd object | Role |
+|---|---|---|
+| Epic | Context | Manager |
+| Ticket | Plan | Lead |
+| Task | Job | Worker |
 
 ## System dependencies
 

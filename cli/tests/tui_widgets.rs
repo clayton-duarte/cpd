@@ -789,23 +789,23 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
 fn the_session_dots_are_listed_in_their_colours() {
     let buf = legend_buffer();
     let dots = find(&buf, "Session dots").1;
-    // The glyph column is as wide as the four spinner frames, then two cells of spacing.
+    // The glyph column is as wide as the spinner's frames, then two cells of spacing.
     let glyph_at = |text: &str| {
         let (x, y) = find_after(&buf, dots, text);
-        (x - 6, y)
+        (x - (palette::SPINNER.len() as u16 + 2), y)
     };
     let needs_you = glyph_at("the Session needs you");
-    assert_eq!(buf[needs_you].symbol(), "●");
+    assert_eq!(buf[needs_you].symbol(), palette::NEEDS_YOU);
     let working = glyph_at("the Lead is working");
-    let frames: String = (0..4).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
-    assert_eq!(frames, "◐◓◑◒");
+    let frames: String = (0..palette::SPINNER.len() as u16).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
+    assert_eq!(frames, palette::SPINNER.concat());
     for (text, glyph, dot) in [
-        ("idle, nothing needed", "○", Dot::Idle),
-        ("pi stopped", "◌", Dot::Stopped),
-        ("red:", "●", Dot::Red),
-        ("yellow:", "●", Dot::Yellow),
-        ("magenta:", "●", Dot::Magenta),
-        ("white:", "●", Dot::White),
+        ("idle, nothing needed", palette::IDLE, Dot::Idle),
+        ("pi stopped", palette::STOPPED, Dot::Stopped),
+        ("red:", palette::NEEDS_YOU, Dot::Red),
+        ("yellow:", palette::NEEDS_YOU, Dot::Yellow),
+        ("magenta:", palette::NEEDS_YOU, Dot::Magenta),
+        ("white:", palette::NEEDS_YOU, Dot::White),
     ] {
         let cell = &buf[glyph_at(text)];
         let want = palette::dot_span(dot, 0, false);
@@ -813,7 +813,8 @@ fn the_session_dots_are_listed_in_their_colours() {
         assert_eq!(cell.symbol(), want.content, "{text}");
         assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
-    find_after(&buf, dots, "red > yellow > magenta > white > ◐ > ○ > ◌");
+    let precedence = format!("red > yellow > magenta > white > {} > {} > {}", palette::SPINNER[0], palette::IDLE, palette::STOPPED);
+    find_after(&buf, dots, &precedence);
 }
 
 #[test]

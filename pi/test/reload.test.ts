@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { type Options } from "../lib/adapter.ts";
-import { LONG_REFUSAL_NOTICE, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, type Guard } from "../lib/reload.ts";
+import { LONG_REFUSAL_NOTICE, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, validatePackage, type Guard } from "../lib/reload.ts";
 import { Fixture, ID, planShow, settle, waitFor } from "./fake.ts";
 
 const GOOD = "export default function (pi: unknown): void {}\n";
@@ -175,17 +175,25 @@ test("a directory that changes between two polls is not validated or reloaded un
   assert.deepEqual(calls, ["validate", "trigger"], "the identity seen before the ENOENT does not count");
 });
 
-const refused: [string, Record<string, string>, string][] = [
-  ["extension.ts is missing", { "package.json": "{}" }, "entry files missing"],
-  ["package.json is missing", { "extension.ts": GOOD }, "entry files missing"],
-  ["extension.ts throws when loaded", { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" }, "boom"],
-  ["extension.ts has no default export function", { "extension.ts": "export default 3;\n", "package.json": "{}" }, "the default export of extension.ts is not a function"],
+/** pi's own refusal, as the fake pi prints it (its first stderr line). */
+const failedToLoad = (f: Fixture, why: string) => `Error: Failed to load extension "${join(f.adapterDir, "extension.ts")}": ${why}`;
+
+const refused: [string, Record<string, string>, (f: Fixture) => string][] = [
+  ["extension.ts is missing", { "package.json": "{}" }, () => "entry files missing"],
+  ["package.json is missing", { "extension.ts": GOOD }, () => "entry files missing"],
+  ["extension.ts throws when loaded", { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" }, (f) => failedToLoad(f, "boom")],
+  [
+    "extension.ts has no default export function",
+    { "extension.ts": "export default 3;\n", "package.json": "{}" },
+    (f) => failedToLoad(f, `Extension does not export a valid factory function: ${join(f.adapterDir, "extension.ts")}`),
+  ],
 ];
 
-for (const [name, files, reason] of refused) {
+for (const [name, files, reasonOf] of refused) {
   test(`no reload while ${name}: one visible error, retried at a later poll`, async (t) => {
     const f = await started(t);
     install(f, files);
+    const reason = reasonOf(f);
     await waitFor("the error", () => f.pi.errorNotices.length > 0);
     await settle(400); // many polls
     assert.deepEqual(f.pi.errorNotices, [noticeFor(reason)], "once, not once per poll");
@@ -205,12 +213,34 @@ for (const [name, files, reason] of refused) {
   });
 }
 
-test("a load that hangs is refused after the timeout", async (t) => {
+/** An extension the fake pi never finishes loading (a top-level await that never settles, with a timer keeping the process alive). */
+const HANGS = "setInterval(() => {}, 1000);\nawait new Promise(() => {});\nexport default function () {}\n";
+
+test("a load that hangs is refused after the timeout, and tried again at a later poll", async (t) => {
   const f = await started(t, { reload: { timeoutMs: 300 } });
-  install(f, { "extension.ts": "setInterval(() => {}, 1000);\nexport default function () {}\n", "package.json": "{}" });
+  install(f, { "extension.ts": HANGS, "package.json": "{}" });
   await waitFor("the error", () => f.pi.errorNotices.length > 0, 5000);
   assert.deepEqual(f.pi.errorNotices, [noticeFor("load timed out after 300 ms")]);
   assert.equal(f.pi.reloads, 0);
+  writeFileSync(join(f.adapterDir, "extension.ts"), GOOD); // the machine is free again: the next poll passes
+  touch(f.adapterDir);
+  await waitFor("the reload", () => f.pi.reloads > 0);
+  assert.equal(f.pi.errorNotices.length, 1, "a timeout is a refusal shown once, not a failure");
+});
+
+test("validatePackage runs pi with no extensions, no session, the package, rpc mode, offline and an empty scratch agent directory it removes", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  for (const [file, content] of Object.entries({ "extension.ts": GOOD, "package.json": "{}" })) writeFileSync(join(f.adapterDir, file), content);
+  assert.equal(await validatePackage(f.adapterDir), undefined, "pi exits 0: the package loads");
+  const [call, ...more] = readFileSync(join(f.dir, "validate-calls.jsonl"), "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  assert.deepEqual(more, [], "one pi run");
+  assert.deepEqual(call.argv, ["--no-extensions", "--no-session", "-e", f.adapterDir, "--mode", "rpc"]);
+  assert.equal(call.offline, "1");
+  assert.equal(call.agentDirExists, true);
+  assert.equal(dirname(call.agentDir), tmpdir());
+  assert.notEqual(call.agentDir, process.env.PI_CODING_AGENT_DIR);
+  assert.deepEqual(readdirSync(tmpdir()).filter((n) => join(tmpdir(), n) === call.agentDir), [], "the scratch directory is removed");
 });
 
 test("the same refusal is shown again after a poll that passed", async (t) => {
@@ -223,7 +253,7 @@ test("the same refusal is shown again after a poll that passed", async (t) => {
   await waitFor("the trigger", () => f.pi.userMessages.length > 0);
   install(f, bad);
   await waitFor("the second error", () => f.pi.errorNotices.length === 2);
-  assert.deepEqual(f.pi.errorNotices, [noticeFor("boom"), noticeFor("boom")]);
+  assert.deepEqual(f.pi.errorNotices, [noticeFor(failedToLoad(f, "boom")), noticeFor(failedToLoad(f, "boom"))]);
 });
 
 // ---- a busy Lead: its idle gaps are shorter than the poll interval ----
@@ -335,9 +365,10 @@ test("every decision of an install that reloads is logged, one line each, with a
 test("a pre-validation failure and the command's refusal are logged with their reason", async (t) => {
   const f = await started(t);
   install(f, { "extension.ts": 'throw new Error("boom");\n', "package.json": "{}" });
-  await waitFor("the failure", () => decisions(f).includes("poll: pre-validation failed: boom"));
+  const failed = `poll: pre-validation failed: ${failedToLoad(f, "boom")}`;
+  await waitFor("the failure", () => decisions(f).includes(failed));
   await settle(300); // many polls: the same line is not repeated
-  assert.equal(decisions(f).filter((l) => l === "poll: pre-validation failed: boom").length, 1);
+  assert.equal(decisions(f).filter((l) => l === failed).length, 1);
   f.pi.editorText = "unsent";
   const handler = f.pi.commands.get(RELOAD_COMMAND)!;
   await handler("", f.pi.commandCtx());
@@ -392,7 +423,9 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   assert.equal(failures().length, 1, "once per run, not once per line");
   install(f);
   await waitFor("the reload", () => f.pi.reloads > 0);
-  await settle(200);
+  // `reloads` counts the call to `ctx.reload()`: the old run's shutdown and the new run's start (each a `cpd` child) come after it.
+  await waitFor("the new run's notice", () => failures().length > 1);
+  await settle(200); // and it is only one
   assert.equal(failures().length, 2, "the new run notifies again");
   assert.deepEqual(f.pi.errors(), [], "no message, so no turn");
 });
