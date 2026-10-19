@@ -17,6 +17,12 @@ use cpd_tui::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED};
 
 const WORKING: &str = SPINNER[0];
 
+// The tree's glyphs. `cpd_tui::tree` is private, so the tests repeat them (the unit tests of `tui/src/tree/` use the constants).
+const OPEN: &str = "\u{F0140}"; // md-chevron_down
+const FOLDED: &str = "\u{F0142}"; // md-chevron_right
+const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
+const MORE: &str = "\u{F01D8}"; // md-dots_horizontal
+
 // ---------- the prepared store ----------
 
 /// An env with the config `cpd` needs; its tmux server is the env's private one.
@@ -330,15 +336,15 @@ fn the_tree_of_a_prepared_store() {
         screen,
         [
             String::new(),
-            format!(" ▾ {IDLE} alpha").to_owned(),
-            row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+            format!(" {OPEN} {IDLE} alpha").to_owned(),
+            row(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
             row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
             format!("   ├ {IDLE} ship·f-id").to_owned(),
             format!("   └ {NEEDS_YOU} ship·f-bl").to_owned(),
-            format!(" ▾ {NEEDS_YOU} beta").to_owned(),
+            format!(" {OPEN} {NEEDS_YOU} beta").to_owned(),
             row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
             row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
-            format!(" ▾ {STOPPED} gamma").to_owned(),
+            format!(" {OPEN} {STOPPED} gamma").to_owned(),
         ],
         "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text"
     );
@@ -403,10 +409,10 @@ fn a_click_on_a_context_row_opens_its_manager_and_its_fold_glyph_folds_it() {
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(calls(&env).len(), 2, "no more commands");
     let screen = pane.screen();
-    assert!(screen[1].starts_with(" ▾ ") && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
+    assert!(screen[1].starts_with(&format!(" {OPEN} ")) && screen.iter().any(|r| r.contains("ship")), "the label click folds nothing: {screen:?}");
     pane.click(1, 1); // its fold glyph
     let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
-    assert_eq!(folded[1], format!(" ▸ {IDLE} alpha 2"), "a folded Context draws ▸ and its number of Plans");
+    assert_eq!(folded[1], format!(" {FOLDED} {IDLE} alpha 2"), "a folded Context draws the folded glyph and its number of Plans");
     assert_eq!(calls(&env).len(), 2, "the glyph runs no command");
     pane.click(1, 1);
     pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
@@ -561,10 +567,10 @@ fn the_tree_follows_the_events_of_the_store() {
     // session-state
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "l-sketch"]).ok();
     let screen = pane.wait("the new state", |s| s.iter().any(|r| r.contains(&format!("├ {NEEDS_YOU} sketch"))));
-    assert!(screen.iter().any(|r| r.starts_with(&format!(" ▾ {IDLE} alpha"))), "a blocked Lead does not colour the Context row: {screen:?}");
+    assert!(screen.iter().any(|r| r.starts_with(&format!(" {OPEN} {IDLE} alpha"))), "a blocked Lead does not colour the Context row: {screen:?}");
     // the Manager's own state does
     env.cpd(&["session", "state", "blocked", "--label", "cpd: Ask", "--session", "m-alpha"]).ok();
-    pane.wait("the Context row follows its Manager", |s| s.iter().any(|r| r.starts_with(&format!(" ▾ {NEEDS_YOU} alpha"))));
+    pane.wait("the Context row follows its Manager", |s| s.iter().any(|r| r.starts_with(&format!(" {OPEN} {NEEDS_YOU} alpha"))));
 }
 
 /// `populate`, with the Context `gamma` and the Plan `old` of `beta` (and its Lead) archived.
@@ -590,32 +596,32 @@ fn archived_contexts_and_plans_collapse_into_more_rows_and_a_click_expands_and_c
         screen,
         [
             String::new(),
-            format!(" ▾ {IDLE} alpha").to_owned(),
-            row(&format!("⏵ ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+            format!(" {OPEN} {IDLE} alpha").to_owned(),
+            row(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
             row(&format!("  ├ {IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
             format!("   ├ {IDLE} ship·f-id").to_owned(),
             format!("   └ {NEEDS_YOU} ship·f-bl").to_owned(),
-            format!(" ▾ {NEEDS_YOU} beta").to_owned(),
+            format!(" {OPEN} {NEEDS_YOU} beta").to_owned(),
             row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
-            "   └ …".to_owned(),
-            " …".to_owned(),
+            format!("   └ {MORE}"),
+            format!(" {MORE}"),
         ],
         "the archived Plan `old` is behind beta's `…`, the archived Context `gamma` behind the last"
     );
     // a click on beta's `…` shows the archived Plan at the depth it would have if live, with the normal guide
     pane.click(4, 8);
     let screen = pane.wait("the archived Plan", |s| s.iter().any(|r| r.contains(&format!("└ {STOPPED} old"))));
-    assert_eq!(screen[7..11], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   ├ …".to_owned(), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned()]);
+    assert_eq!(screen[7..11], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), format!("   ├ {MORE}"), row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), format!(" {MORE}")]);
     // a click on the archived Plan shows its history (below); then the other `…` shows the archived Context
     pane.click(10, 9);
     wait_for_calls(&env, 1);
     pane.click(1, 10);
-    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == &format!(" ▾ {STOPPED} gamma")));
-    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), " …".to_owned(), format!(" ▾ {STOPPED} gamma").to_owned()]);
+    let screen = pane.wait("the archived Context", |s| s.iter().any(|r| r == &format!(" {OPEN} {STOPPED} gamma")));
+    assert_eq!(screen[9..12], [row(&format!("  └ {STOPPED} old"), "0⋅0⋅0⋅0⋅0"), format!(" {MORE}"), format!(" {OPEN} {STOPPED} gamma").to_owned()]);
     // a click on beta's `…` collapses its group again
     pane.click(4, 8);
     let screen = pane.wait("the group collapsed", |s| s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
-    assert_eq!(screen[7..9], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), "   └ …".to_owned()]);
+    assert_eq!(screen[7..9], [row(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"), format!("   └ {MORE}")]);
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
@@ -649,21 +655,21 @@ fn the_tree_follows_the_archive_events() {
          INSERT INTO events (txn, at, kind, context, plan, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:00.000Z', 'plan-archived', 'beta', 'old', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == "   └ …") && s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
+    pane.wait("the Plan behind `…`", |s| s.iter().any(|r| r == &format!("   └ {MORE}")) && s.iter().all(|r| !r.contains(&format!("└ {STOPPED} old"))));
     sql(
         &mut open(&env),
         "UPDATE contexts SET archived_at = '2026-02-02T00:00:00.000Z' WHERE id = 'gamma';
          INSERT INTO events (txn, at, kind, context, text, data)
          VALUES (cpd_txn(), '2026-02-02T00:00:01.000Z', 'context-archived', 'gamma', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the Context behind `…`", |s| s.iter().any(|r| r == " …") && s.iter().all(|r| !r.contains("gamma")));
+    pane.wait("the Context behind `…`", |s| s.iter().any(|r| r == &format!(" {MORE}")) && s.iter().all(|r| !r.contains("gamma")));
     sql(
         &mut open(&env),
         "UPDATE sessions SET archived_at = '2026-02-03T00:00:00.000Z' WHERE id = 'f-idle';
          INSERT INTO events (txn, at, kind, context, plan, session, text, data)
          VALUES (cpd_txn(), '2026-02-03T00:00:00.000Z', 'session-archived', 'alpha', 'ship', 'f-idle', 'fixture', '{\"archived\":true}');",
     );
-    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship·f-id")) && s.iter().filter(|r| r.as_str() == "   └ …").count() == 2);
+    pane.wait("the fork behind `…`", |s| s.iter().all(|r| !r.contains("ship·f-id")) && s.iter().filter(|r| r.as_str() == format!("   └ {MORE}")).count() == 2);
 }
 
 // ---------- the right-click menu ----------
@@ -799,7 +805,7 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 60, 14);
     let screen = pane.ready();
-    assert_eq!(screen[5], "   └ …", "the archived fork is behind alpha's `…`");
+    assert_eq!(screen[5], format!("   └ {MORE}"), "the archived fork is behind alpha's `…`");
     pane.click(4, 5);
     pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("└ {NEEDS_YOU} ship·f-bl"))));
     pane.click(10, 6);
