@@ -81,7 +81,7 @@ pub enum View {
 pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
     match args.command {
         None => cockpit::run(args.attach, args.respawn, run_command),
-        Some(Command::View(view)) => match view {
+        Some(Command::View(view)) => backed_off(match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),
             View::Widgets => widgets::run(run_command),
@@ -91,8 +91,24 @@ pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
             View::Legend => widgets::legend::run(),
             View::Logs => logs::run(),
             View::Chat => chat::run(),
-        },
+        }),
     }
+}
+
+/// How long a view in a pane that failed waits before it exits.
+const BACKOFF: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A view that fails exits, and the cockpit's `pane-died` hook starts it again at once (contract §6.1), so a
+/// persistent failure would be a tight loop. In a pane the failure is shown, and the view waits [`BACKOFF`] before
+/// it exits. Without a terminal no hook is involved: the error is returned at once.
+fn backed_off(result: Result<Output, CpdError>) -> Result<Output, CpdError> {
+    if let Err(e) = &result {
+        if on_a_terminal() {
+            eprintln!("{}\nStarting again in {} s.", e.message(), BACKOFF.as_secs());
+            std::thread::sleep(BACKOFF);
+        }
+    }
+    result
 }
 
 /// `not_a_terminal`: a command that owns its terminal was not given one.

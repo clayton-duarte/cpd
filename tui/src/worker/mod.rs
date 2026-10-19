@@ -12,7 +12,7 @@
 //! writes nothing and starts no process.
 //!
 //! Keys: Up/`k`, Down/`j`, PageUp, PageDown and the mouse wheel scroll; End or
-//! `G` follows the end again (the view starts there); `q` or Esc ends it.
+//! `G` follows the end again (the view starts there); `q` or Esc closes its pane.
 
 pub(crate) mod render;
 mod view;
@@ -32,6 +32,7 @@ use cpd_core::args::PlanArg;
 use cpd_core::config::Config;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::host::{PaneId, Tmux};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::output::Output;
 use cpd_core::store::Store;
@@ -60,12 +61,21 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     // `plan_not_found` and `attempt_not_found` refuse before anything is drawn.
     let snapshot = read::worker(&mut store, plan, &args.attempt)?;
     let follow = read::Follow::new(&mut store, &[], snapshot.events_cursor)?;
-    run_view(
+    let output = run_view(
         "worker",
         Capture::Mouse,
         || Ok(snapshot),
         |terminal, snapshot| Ok(event_loop(terminal, &mut store, follow, plan, &args.attempt, snapshot)?),
-    )
+    )?;
+    close_pane(&config)?;
+    Ok(output)
+}
+
+/// `q` closes the view's pane: the cockpit's `pane-died` hook starts a view again whenever its program exits
+/// (contract §6.1), so exiting would be a restart. Outside tmux there is no pane to close.
+fn close_pane(config: &Config) -> Result<(), CpdError> {
+    let Some(pane) = std::env::var("TMUX_PANE").ok().and_then(|p| PaneId::parse(&p)) else { return Ok(()) };
+    Tmux::new(config.tmux.socket.clone()).kill_pane(&pane)
 }
 
 /// What identifies the version of the session file last rendered.
