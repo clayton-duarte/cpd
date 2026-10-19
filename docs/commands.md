@@ -1895,7 +1895,9 @@ cpd events follow [--plan <id> | --context <id> | --session <id>] [--kind <kind>
 | the selected Plan, Context or Session exists | `plan_not_found`, `context_not_found`, `session_not_found` | 4 |
 | `--since` is not above the highest Event id (a cursor from another database) | `cursor_ahead` | 3 |
 
-**Any store error ends it** (hs-d140; contract §5.4): `store_too_new` after an upgrade (the verdict of contract §4.5, which the follower recomputes when `PRAGMA schema_version` changes), `migration_changed`, `migration_order`, `store_busy`, `store_failed`, … is printed as the last line, as the failure envelope, and the process exits with that code's exit (§1.2); it never stays alive on a store it cannot read. The pi adapter restarts a follower that ends (§15.2).
+**A migration in progress is waited out** (hs-n278; contract §4.2, §1.4): when it opens the store, or reopens it, while another cpd is migrating it, it waits, up to `MIGRATION_WAIT_CEILING` (10 minutes), and prints one line on stderr (`waiting for cpd pid <pid> to migrate the store <from> -> <to> (<command>)`), nothing on stdout; it does not fail `lock_timeout` for it, so an install never ends a follower.
+
+**Any other store error ends it** (hs-d140; contract §5.4): `store_too_new` after an upgrade (the verdict of contract §4.5, which the follower recomputes when `PRAGMA schema_version` changes), `migration_changed`, `migration_order`, `store_busy`, `store_failed`, … is printed as the last line, as the failure envelope, and the process exits with that code's exit (§1.2); it never stays alive on a store it cannot read. The pi adapter restarts a follower that ends (§15.2).
 
 **Re-exec** (hs-d140; contract §5.4): between polls it checks its executable path with `core/src/host/exe.rs`'s `(device, inode, mtime)` check, as `session run` and `attempt run` do (hs-d55); when it changed it re-execs itself with the same argv except `--since`, set to the id of the last Event it printed (none printed: the cursor it started from), so no follower outlives an install. Each line:
 
@@ -1923,7 +1925,7 @@ E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E9 (E3 starts nothing while a tmux restart is pending, and the engine starts that restart once nothing is in the way, §3.7) (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E9 (E3 starts nothing while a tmux restart is pending, and the engine starts that restart once nothing is in the way, §3.7) (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It waits out a migration in progress when it opens the store (hs-n278; contract §3.7, §4.2): it does not fail `lock_timeout`, and logs the one waiting line to `run/watch.log`. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0. Idempotent: a second one is refused.
 
 **With `--ensure`:** starts the engine when it is not running, and returns at once.
 
@@ -2212,7 +2214,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config
 ```
 
-Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path). No effects.
+Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path). It opens the store, so it waits out a migration in progress (hs-n278; contract §4.2): one line on stderr, the one JSON value at the end, and `lock_timeout` only past `MIGRATION_WAIT_CEILING`. No effects.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",
