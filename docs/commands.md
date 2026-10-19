@@ -1767,7 +1767,7 @@ Builds the cockpit (§6.1, §6.2) unless it exists, and starts the engine.
 
 Effects, each only when missing:
 - **tmux:** the server with §6.1's options; the session `cpd` with window `main` (`new-session -d -s cpd -n main -x 215 -y 62`), split into the tree (left, 20 %), the plan view (centre top) above the chat slot (centre bottom), and the widgets (right, 20 %), each running `cpd tui view <tree|plan|widgets>` with `@cpd_view` set, and the StatusBar, one row across the full width at the bottom (`split-window -v -f -l 1`), running `cpd tui view statusbar` with `@cpd_view statusbar`; the chat slot holds the placeholder (§10) or, when one exists, the Plan Lead whose latest `session-moved` Event with `place: "chat"` is the newest, moved in as `session open` does. "Plan Lead" here means any Lead with a Plan, as for `session open` (side forks included, a Context's grounded Lead never), and one that `session open` refuses stays where it is while the placeholder keeps the slot (Escalation `tui-cockpit-a1-q3`). The session `cpd-work`.
-- **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` with no `statusbar` pane it adds one (same split) and then runs reset-layout, so the added row is taken from the layout and the other panes get their sizes back (amendment 15, §19).
+- **Layout:** right after building a new `main`, `tui` runs reset-layout once (§13.2). On an existing `main` it adds every pane of the layout that is missing (the `tree`, `plan`, `widgets`, `chat` placeholder or `statusbar`, each running its view with `@cpd_view` set; the User killed it, or a build stopped half-way) where it goes in the layout above, and then runs reset-layout, so the added panes are taken from the layout and the other panes get their sizes back (amendment 15, §19; tui-W5). A chat slot that holds a Lead is not missing, so no placeholder is added beside it; a placeholder added opens the last chat Lead as a new `main` does.
 - **tmux options:** every option, the border format, the root mouse binding and the conditional `pane-died` hook of §6.1. `host` sets them at every server start, so a server started by `plan new` or `watch --ensure` has them too; `cpd tui` sets them again on a running server (rerunning is safe).
 - **`--respawn`:** `respawn-pane -k` on every live pane of `main` that has `@cpd_view` (the views, the chat placeholder and a Worker view), so each runs the installed binary again; a Lead or engine pane is never touched. `scripts/install-cpd.sh` runs `cpd tui --respawn` when a cockpit exists. (Why: `cpd tui` respawns only dead panes, so a reinstall would never reach a running view.)
 - `watch --ensure` (§12).
@@ -1781,7 +1781,7 @@ Effects, each only when missing:
 {"ok": true, "built": true, "socket": "cpd", "session": "cpd", "attach": ["tmux", "-L", "cpd", "attach", "-t", "cpd"], "watch": {"started": true, "pane": "%3"}}
 ```
 
-With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
+With `--respawn` the value also has `"respawned": ["%1", "%2", …]`, the panes restarted. With `--attach` it then replaces itself with `tmux -L cpd attach -t cpd` and prints nothing (§1.2). Idempotent: yes; an existing cockpit gives `"built": false`. A pane of the layout that has died, the StatusBar included, is respawned (`respawn-pane`, amendment 9, §19), never duplicated, and one that is gone is added again, so a second run adds nothing; a view pane that dies while the cockpit runs is respawned at once by the `pane-died` hook (§6.1).
 
 ### 13.2 `tui view` (internal)
 
@@ -2313,6 +2313,8 @@ Rows 22–27 were added by Job `docs` of Plan `tree-menu` (renames, archive and 
 | 29 | §6.3, §6.4 | tmux commands: `respawn-pane -k` also puts the history view in the slot; `set -p` also sets `@cpd_view history` and `@cpd_history`; `session open` kills a history pane like the placeholder; `session history` parks a Lead in the slot first; `session run` archives on the User's quit | §10.4, §10.8, §10.12 |
 | 30 | §2.2 "Archived", §6.2 (the views) | the tree: archived rows drawn at their live depth, normal guides, `Meaning::Nothing` colour, no blank row; a click on `…` toggles, a click on a guide does nothing; Archive without `y/N`; Archive of the chat slot's Lead opens another Session or parks first; archived rows offer Rename… and Unarchive; a click on an archived Session runs `session history` | §13.2 |
 | 31 | §2.2 "Archived", §6.7 | auto-archive when pi exits with status 0 and the wrapper did not cause it: park if in the chat slot, then `session archive` or (a Plan's own Lead) `plan archive`; a refusal archives nothing and keeps the resume prompt | §10.8 |
+
+Row 15's StatusBar rule now covers every missing pane of the layout, not only the StatusBar: [§13.1](#131-tui) (tui-W5).
 
 ## 20. Sections changed by R19 and R20
 
