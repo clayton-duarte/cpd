@@ -43,8 +43,9 @@ fn append(store: &mut Store, first: usize, events: &[(&str, &str)]) {
         .unwrap();
 }
 
+/// The log in an area of `height` rows of Events under the title's row.
 fn render(width: u16, height: u16, log: &mut Log) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(width, height + 1)).unwrap();
     terminal
         .draw(|f| {
             log.fit(f.area().height);
@@ -54,8 +55,9 @@ fn render(width: u16, height: u16, log: &mut Log) -> Buffer {
     terminal.backend().buffer().clone()
 }
 
+/// The rows under the title.
 fn rows(buf: &Buffer) -> Vec<String> {
-    (0..buf.area.height)
+    (1..buf.area.height)
         .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned())
         .collect()
 }
@@ -81,9 +83,9 @@ fn the_log_lists_the_events_one_line_each_newest_last() {
         [" 00:00:00 context-created", " 00:00:01 Plan ship: dispatch", " 00:00:02 store busy", "", ""]
     );
     // the time is dim, an `error` Event is in the failed colour and the others are not
-    assert!(buf[(1, 0)].modifier.contains(Modifier::DIM) && !buf[(10, 0)].modifier.contains(Modifier::DIM));
-    assert_eq!(buf[(10, 2)].fg, palette::fg(Meaning::Failed).fg.unwrap());
-    assert_ne!(buf[(10, 1)].fg, palette::fg(Meaning::Failed).fg.unwrap());
+    assert!(buf[(1, 1)].modifier.contains(Modifier::DIM) && !buf[(10, 1)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(10, 3)].fg, palette::fg(Meaning::Failed).fg.unwrap());
+    assert_ne!(buf[(10, 2)].fg, palette::fg(Meaning::Failed).fg.unwrap());
 }
 
 #[test]
@@ -208,40 +210,76 @@ fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]
     common::wait_screen(what, || screen(env, pane), done)
 }
 
+/// The log view in a pane showing `events` rows of Events under the title's row.
+fn start_log(env: &TestEnv, args: &[&str], width: u16, events: u16) -> String {
+    let view: Vec<&str> = ["logs"].into_iter().chain(args.iter().copied()).collect();
+    start(env, &view, width, events + 1)
+}
+
+/// Waits for the rows under the title; the title itself is asserted to be the section header.
+fn wait_log(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
+    let rows = common::wait_screen(what, || screen(env, pane), |r| r.len() > 1 && done(&r[1..]));
+    assert!(rows[0].starts_with("── logs ─"), "the title is a section header: {:?}", rows[0]);
+    rows[1..].to_vec()
+}
+
+/// One notch of the wheel at 1-based `column`, `row` of the pane, as the terminal sends it (SGR: 64 up, 65 down).
+fn wheel(env: &TestEnv, pane: &str, up: bool, column: u16, row: u16) {
+    tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<{};{column};{row}M", if up { 64 } else { 65 })]);
+}
+
 #[test]
 fn the_view_follows_live_scrolls_and_closes_with_q_or_esc() {
     let env = env();
     let mut store = open(&env);
     append_numbered(&mut store, 0, 10);
-    let pane = start(&env, &["logs"], 30, 4);
-    let rows = wait_screen(&env, &pane, "the latest Events", |r| r.get(3).is_some_and(|l| l == " 00:00:09 event 9"));
+    let pane = start_log(&env, &[], 30, 4);
+    let rows = wait_log(&env, &pane, "the latest Events", |r| r.get(3).is_some_and(|l| l == " 00:00:09 event 9"));
     assert_eq!(rows[0], " 00:00:06 event 6");
 
     // a new Event follows at the bottom
     append_numbered(&mut store, 10, 1);
-    wait_screen(&env, &pane, "the new Event", |r| r.get(3).is_some_and(|l| l == " 00:00:10 event 10"));
+    wait_log(&env, &pane, "the new Event", |r| r.get(3).is_some_and(|l| l == " 00:00:10 event 10"));
 
     // k scrolls up and the view stops following; j comes back and follows again
     tmux_out(&env, &["send-keys", "-t", &pane, "k", "k"]);
-    wait_screen(&env, &pane, "scrolled up", |r| r.first().is_some_and(|l| l == " 00:00:05 event 5"));
+    wait_log(&env, &pane, "scrolled up", |r| r.first().is_some_and(|l| l == " 00:00:05 event 5"));
     append_numbered(&mut store, 11, 1);
     // The view reads the store after each key it handles, so once `k` has scrolled it one more row, it has read
     // Event 11: it did not follow it.
     tmux_out(&env, &["send-keys", "-t", &pane, "k"]);
-    let rows = wait_screen(&env, &pane, "scrolled up once more", |r| r.first().is_some_and(|l| l == " 00:00:04 event 4"));
+    let rows = wait_log(&env, &pane, "scrolled up once more", |r| r.first().is_some_and(|l| l == " 00:00:04 event 4"));
     assert_eq!(rows[3], " 00:00:07 event 7", "the new Event did not move it: {rows:?}");
     tmux_out(&env, &["send-keys", "-t", &pane, "PageDown"]);
-    wait_screen(&env, &pane, "following again", |r| r.get(3).is_some_and(|l| l == " 00:00:11 event 11"));
+    wait_log(&env, &pane, "following again", |r| r.get(3).is_some_and(|l| l == " 00:00:11 event 11"));
     tmux_out(&env, &["send-keys", "-t", &pane, "Up", "PageUp", "PageUp", "PageUp"]);
-    wait_screen(&env, &pane, "the top", |r| r.first().is_some_and(|l| l == " 00:00:00 event 0"));
+    wait_log(&env, &pane, "the top", |r| r.first().is_some_and(|l| l == " 00:00:00 event 0"));
+
+    // the wheel scrolls too, three rows a notch, and the bottom follows again
+    wheel(&env, &pane, false, 5, 3);
+    wait_log(&env, &pane, "the wheel down", |r| r.first().is_some_and(|l| l == " 00:00:03 event 3"));
+    wheel(&env, &pane, false, 5, 3);
+    wait_log(&env, &pane, "the wheel down again", |r| r.first().is_some_and(|l| l == " 00:00:06 event 6"));
+    wheel(&env, &pane, true, 5, 3);
+    let rows = wait_log(&env, &pane, "the wheel up", |r| r.first().is_some_and(|l| l == " 00:00:03 event 3"));
+    assert_eq!(rows[3], " 00:00:06 event 6");
+    append_numbered(&mut store, 12, 1);
+    wheel(&env, &pane, false, 5, 3);
+    wait_log(&env, &pane, "the wheel down", |r| r.first().is_some_and(|l| l == " 00:00:06 event 6"));
+    for _ in 0..4 {
+        wheel(&env, &pane, false, 5, 3);
+    }
+    wait_log(&env, &pane, "the bottom", |r| r.get(3).is_some_and(|l| l == " 00:00:12 event 12"));
+    append_numbered(&mut store, 13, 1);
+    wait_log(&env, &pane, "following again", |r| r.get(3).is_some_and(|l| l == " 00:00:13 event 13"));
 
     // q closes it
     tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
     wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
 
     // so does Esc
-    let pane = start(&env, &["logs"], 30, 4);
-    wait_screen(&env, &pane, "the Events", |r| r.get(3).is_some_and(|l| l.contains("event 11")));
+    let pane = start_log(&env, &[], 30, 4);
+    wait_log(&env, &pane, "the Events", |r| r.get(3).is_some_and(|l| l.contains("event 13")));
     tmux_out(&env, &["send-keys", "-t", &pane, "Escape"]);
     wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
 }
@@ -320,11 +358,12 @@ fn a_click_on_the_logs_button_opens_the_popup_and_the_others_do_not() {
 
 // ---------- opening at an Event (`--event <id>`, the Inbox click of an engine-error or engine-down item) ----------
 
-/// The row indexes of `buf` whose first and last cell are reversed.
+/// The row indexes (under the title) of `buf` whose first and last cell are reversed.
 fn reversed_rows(buf: &Buffer) -> Vec<u16> {
     let width = buf.area.width;
-    (0..buf.area.height)
+    (1..buf.area.height)
         .filter(|&y| buf[(0, y)].modifier.contains(Modifier::REVERSED) && buf[(width - 1, y)].modifier.contains(Modifier::REVERSED))
+        .map(|y| y - 1)
         .collect()
 }
 
@@ -387,26 +426,26 @@ fn the_view_opens_at_the_event_even_when_it_is_older_than_the_latest_500_and_doe
     let mut store = open(&env);
     append_numbered(&mut store, 0, 600);
     // `event 2` is Event 3: older than the 500 the view starts with, so it is read on its own and shown first
-    let pane = start(&env, &["logs", "--event", "3"], 30, 5);
-    let rows = wait_screen(&env, &pane, "the Event", |r| r.first().is_some_and(|l| l == " 00:00:02 event 2"));
+    let pane = start_log(&env, &["--event", "3"], 30, 5);
+    let rows = wait_log(&env, &pane, "the Event", |r| r.first().is_some_and(|l| l == " 00:00:02 event 2"));
     assert_eq!(rows[1], " 00:01:40 event 100", "then the latest 500");
     append_numbered(&mut store, 600, 1);
     // The view reads the store after each key it handles, so once `j` has scrolled it one row, it has read Event 600:
     // it did not follow it.
     tmux_out(&env, &["send-keys", "-t", &pane, "j"]);
-    let rows = wait_screen(&env, &pane, "scrolled down once", |r| r.first().is_some_and(|l| l != " 00:00:02 event 2"));
+    let rows = wait_log(&env, &pane, "scrolled down once", |r| r.first().is_some_and(|l| l != " 00:00:02 event 2"));
     assert_eq!(rows[0], " 00:01:40 event 100", "it does not follow: {rows:?}");
     tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
     wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
 
     // an Event among the latest 500 is in the middle of the view
-    let pane = start(&env, &["logs", "--event", "301"], 30, 5);
-    let rows = wait_screen(&env, &pane, "the Event", |r| r.get(2).is_some_and(|l| l == " 00:05:00 event 300"));
+    let pane = start_log(&env, &["--event", "301"], 30, 5);
+    let rows = wait_log(&env, &pane, "the Event", |r| r.get(2).is_some_and(|l| l == " 00:05:00 event 300"));
     assert_eq!((rows[0].as_str(), rows[4].as_str()), (" 00:04:58 event 298", " 00:05:02 event 302"));
     tmux_out(&env, &["send-keys", "-t", &pane, "Escape"]);
     wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
 
     // an Event that does not exist: the bottom, as without the option
-    let pane = start(&env, &["logs", "--event", "99999"], 30, 5);
-    wait_screen(&env, &pane, "the bottom", |r| r.get(4).is_some_and(|l| l == " 00:10:00 event 600"));
+    let pane = start_log(&env, &["--event", "99999"], 30, 5);
+    wait_log(&env, &pane, "the bottom", |r| r.get(4).is_some_and(|l| l == " 00:10:00 event 600"));
 }
