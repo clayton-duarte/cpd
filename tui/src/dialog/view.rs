@@ -271,7 +271,7 @@ impl Dialog {
     }
 
     /// The outcome of a key press, if it closes the dialog. Scrolling and editing change the state.
-    pub(crate) fn on_key(&mut self, key: KeyEvent) -> Option<Outcome> {
+    pub(crate) fn press_key(&mut self, key: KeyEvent) -> Option<Outcome> {
         if key.kind != KeyEventKind::Press {
             return None;
         }
@@ -301,7 +301,7 @@ impl Dialog {
     }
 
     /// The outcome of a mouse event, if it closes the dialog: a left click on a button. The wheel scrolls.
-    pub(crate) fn on_mouse(&mut self, mouse: MouseEvent) -> Option<Outcome> {
+    pub(crate) fn press_mouse(&mut self, mouse: MouseEvent) -> Option<Outcome> {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             self.scroll.mouse(mouse);
             return None;
@@ -362,7 +362,7 @@ mod tests {
 
     fn type_str(d: &mut Dialog, s: &str) {
         for c in s.chars() {
-            assert_eq!(d.on_key(press(KeyCode::Char(c))), None);
+            assert_eq!(d.press_key(press(KeyCode::Char(c))), None);
         }
     }
 
@@ -405,19 +405,19 @@ mod tests {
     #[test]
     fn enter_or_y_confirms_and_esc_n_or_q_cancels() {
         for code in [KeyCode::Enter, KeyCode::Char('y')] {
-            assert_eq!(confirm().on_key(press(code)), Some(Outcome::confirmed()), "{code:?}");
-            assert_eq!(text(3).on_key(press(code)), Some(Outcome::confirmed()), "{code:?}");
+            assert_eq!(confirm().press_key(press(code)), Some(Outcome::confirmed()), "{code:?}");
+            assert_eq!(text(3).press_key(press(code)), Some(Outcome::confirmed()), "{code:?}");
         }
         for code in [KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char('q')] {
-            assert_eq!(confirm().on_key(press(code)), Some(Outcome::cancelled()), "{code:?}");
+            assert_eq!(confirm().press_key(press(code)), Some(Outcome::cancelled()), "{code:?}");
         }
         for code in [KeyCode::Char('Y'), KeyCode::Char(' '), KeyCode::Tab] {
-            assert_eq!(confirm().on_key(press(code)), None, "{code:?}");
+            assert_eq!(confirm().press_key(press(code)), None, "{code:?}");
         }
-        assert_eq!(confirm().on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)), None);
+        assert_eq!(confirm().press_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)), None);
         let mut release = press(KeyCode::Enter);
         release.kind = KeyEventKind::Release;
-        assert_eq!(confirm().on_key(release), None);
+        assert_eq!(confirm().press_key(release), None);
     }
 
     #[test]
@@ -426,15 +426,15 @@ mod tests {
         render(&mut d, 40, 5);
         let [yes, cancel] = d.buttons(Rect::new(0, 0, 40, 5))[..] else { panic!() };
         assert_eq!((yes, cancel), (Rect::new(2, 4, 9, 1), Rect::new(14, 4, 8, 1)));
-        assert_eq!(d.on_mouse(click(2, 4)), Some(Outcome::confirmed()));
-        assert_eq!(d.on_mouse(click(10, 4)), Some(Outcome::confirmed()));
-        assert_eq!(d.on_mouse(click(14, 4)), Some(Outcome::cancelled()));
-        assert_eq!(d.on_mouse(click(21, 4)), Some(Outcome::cancelled()));
+        assert_eq!(d.press_mouse(click(2, 4)), Some(Outcome::confirmed()));
+        assert_eq!(d.press_mouse(click(10, 4)), Some(Outcome::confirmed()));
+        assert_eq!(d.press_mouse(click(14, 4)), Some(Outcome::cancelled()));
+        assert_eq!(d.press_mouse(click(21, 4)), Some(Outcome::cancelled()));
         for (column, row) in [(1, 4), (11, 4), (13, 4), (22, 4), (2, 3), (2, 0)] {
-            assert_eq!(d.on_mouse(click(column, row)), None, "{column},{row}");
+            assert_eq!(d.press_mouse(click(column, row)), None, "{column},{row}");
         }
         let right = MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), ..click(2, 4) };
-        assert_eq!(d.on_mouse(right), None);
+        assert_eq!(d.press_mouse(right), None);
         // the buttons are where they are drawn
         let buf = render(&mut d, 40, 5);
         assert_eq!(buf[(yes.x, yes.y)].symbol(), "[");
@@ -449,20 +449,20 @@ mod tests {
         assert_eq!(buf[1..6], [" line 1", " line 2", " line 3", " line 4", " line 5"]);
         assert!(buf[7].starts_with("  [Close]"), "{:?}", buf[7]);
         assert!(buf[7].ends_with("1-5/20"), "{:?}", buf[7]);
-        assert_eq!(d.on_key(press(KeyCode::Down)), None);
+        assert_eq!(d.press_key(press(KeyCode::Down)), None);
         assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 2");
-        assert_eq!(d.on_mouse(wheel(MouseEventKind::ScrollDown)), None);
+        assert_eq!(d.press_mouse(wheel(MouseEventKind::ScrollDown)), None);
         assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 5");
-        d.on_key(press(KeyCode::PageDown));
+        d.press_key(press(KeyCode::PageDown));
         assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 10");
-        d.on_mouse(wheel(MouseEventKind::ScrollUp));
-        d.on_key(press(KeyCode::Char('k')));
+        d.press_mouse(wheel(MouseEventKind::ScrollUp));
+        d.press_key(press(KeyCode::Char('k')));
         assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 6");
-        d.on_key(press(KeyCode::Char('j')));
-        d.on_key(press(KeyCode::PageUp));
+        d.press_key(press(KeyCode::Char('j')));
+        d.press_key(press(KeyCode::PageUp));
         assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 2");
         for _ in 0..10 {
-            d.on_mouse(wheel(MouseEventKind::ScrollDown));
+            d.press_mouse(wheel(MouseEventKind::ScrollDown));
         }
         let end = rows(&render(&mut d, 30, 8));
         assert_eq!(end[1..6], [" line 16", " line 17", " line 18", " line 19", " line 20"]);
@@ -474,7 +474,7 @@ mod tests {
         let mut d = text(3);
         let buf = rows(&render(&mut d, 30, 8));
         assert_eq!(buf[7], "  [Close]");
-        d.on_mouse(wheel(MouseEventKind::ScrollDown));
+        d.press_mouse(wheel(MouseEventKind::ScrollDown));
         assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 1");
     }
 
@@ -482,7 +482,7 @@ mod tests {
     fn a_confirm_taller_than_its_area_scrolls_too() {
         let mut d = Dialog::new("T".into(), "a\nb\nc\nd\ne".into(), Mode::Confirm { yes: "Yes".into() });
         assert_eq!(rows(&render(&mut d, 30, 6))[1..4], [" a", " b", " c"]);
-        d.on_key(press(KeyCode::Down));
+        d.press_key(press(KeyCode::Down));
         assert_eq!(rows(&render(&mut d, 30, 6))[1..4], [" b", " c", " d"]);
     }
 
@@ -503,18 +503,18 @@ mod tests {
     fn input_types_edits_and_moves_the_cursor() {
         let mut d = input("");
         type_str(&mut d, "yqn");
-        d.on_key(press(KeyCode::Left));
-        d.on_key(press(KeyCode::Backspace));
+        d.press_key(press(KeyCode::Left));
+        d.press_key(press(KeyCode::Backspace));
         type_str(&mut d, "x");
-        d.on_key(press(KeyCode::Home));
-        d.on_key(press(KeyCode::Delete));
+        d.press_key(press(KeyCode::Home));
+        d.press_key(press(KeyCode::Delete));
         type_str(&mut d, "a");
-        d.on_key(press(KeyCode::End));
+        d.press_key(press(KeyCode::End));
         type_str(&mut d, "z");
         let Mode::Input { field, .. } = &d.mode else { panic!() };
         assert_eq!(field.text(), "axnz");
         // control keys are not text
-        assert_eq!(d.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), None);
+        assert_eq!(d.press_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), None);
         let Mode::Input { field, .. } = &d.mode else { panic!() };
         assert_eq!(field.text(), "axnz");
     }
@@ -531,31 +531,31 @@ mod tests {
     fn input_enter_accepts_a_valid_value_trimmed_and_esc_cancels() {
         let mut d = input("");
         type_str(&mut d, "  pay-4521 ");
-        assert_eq!(d.on_key(press(KeyCode::Enter)), Some(Outcome::value("pay-4521".into())));
-        assert_eq!(input("abc").on_key(press(KeyCode::Esc)), Some(Outcome::cancelled()));
+        assert_eq!(d.press_key(press(KeyCode::Enter)), Some(Outcome::value("pay-4521".into())));
+        assert_eq!(input("abc").press_key(press(KeyCode::Esc)), Some(Outcome::cancelled()));
     }
 
     #[test]
     fn input_refuses_a_bad_value_inside_the_popup_and_the_user_keeps_typing() {
         let mut d = input("");
         type_str(&mut d, "Bad");
-        assert_eq!(d.on_key(press(KeyCode::Enter)), None);
+        assert_eq!(d.press_key(press(KeyCode::Enter)), None);
         let buf = rows(&render(&mut d, 60, 9));
         assert!(buf[3].starts_with(" Invalid Plan id"), "{buf:?}");
         assert_eq!(buf[2], " Bad");
         // typing clears the refusal, and a fixed value is accepted
         for _ in 0..3 {
-            d.on_key(press(KeyCode::Backspace));
+            d.press_key(press(KeyCode::Backspace));
         }
         assert!(rows(&render(&mut d, 60, 9))[3].is_empty());
         type_str(&mut d, "good");
-        assert_eq!(d.on_key(press(KeyCode::Enter)), Some(Outcome::value("good".into())));
+        assert_eq!(d.press_key(press(KeyCode::Enter)), Some(Outcome::value("good".into())));
     }
 
     #[test]
     fn an_empty_input_is_refused() {
         let mut d = input("   ");
-        assert_eq!(d.on_key(press(KeyCode::Enter)), None);
+        assert_eq!(d.press_key(press(KeyCode::Enter)), None);
         assert!(matches!(&d.mode, Mode::Input { refused: Some(_), .. }));
     }
 
@@ -563,11 +563,11 @@ mod tests {
     fn the_buttons_of_an_input_accept_and_cancel() {
         let mut d = input("ok-id");
         render(&mut d, 44, 7);
-        assert_eq!(d.on_mouse(click(3, 6)), Some(Outcome::value("ok-id".into())));
-        assert_eq!(d.on_mouse(click(11, 6)), Some(Outcome::cancelled()));
+        assert_eq!(d.press_mouse(click(3, 6)), Some(Outcome::value("ok-id".into())));
+        assert_eq!(d.press_mouse(click(11, 6)), Some(Outcome::cancelled()));
         let mut bad = input("Bad");
         render(&mut bad, 44, 7);
-        assert_eq!(bad.on_mouse(click(3, 6)), None);
+        assert_eq!(bad.press_mouse(click(3, 6)), None);
         assert!(matches!(&bad.mode, Mode::Input { refused: Some(_), .. }));
     }
 
@@ -577,7 +577,7 @@ mod tests {
         type_str(&mut d, "END");
         let buf = rows(&render(&mut d, 20, 8));
         assert_eq!(buf[3], format!(" {}END", "x".repeat(14)));
-        d.on_key(press(KeyCode::Home));
+        d.press_key(press(KeyCode::Home));
         assert_eq!(rows(&render(&mut d, 20, 8))[3], format!(" {}", "x".repeat(18)));
     }
 
@@ -586,11 +586,11 @@ mod tests {
         for (w, h) in [(0, 0), (1, 1), (10, 2), (3, 3), (58, 3), (5, 40)] {
             for mut d in [confirm(), input("abc"), text(20)] {
                 render(&mut d, w, h);
-                d.on_mouse(click(0, 0));
-                d.on_key(press(KeyCode::Down));
+                d.press_mouse(click(0, 0));
+                d.press_key(press(KeyCode::Down));
             }
             let mut d = input("Bad");
-            d.on_key(press(KeyCode::Enter));
+            d.press_key(press(KeyCode::Enter));
             render(&mut d, w, h);
         }
     }

@@ -159,8 +159,8 @@ fn show(terminal: &mut ratatui::DefaultTerminal, dialog: &mut Dialog) -> std::io
     loop {
         terminal.draw(|f| dialog.draw(f))?;
         let closed = match event::read()? {
-            Event::Key(key) => dialog.on_key(key),
-            Event::Mouse(mouse) => dialog.on_mouse(mouse),
+            Event::Key(key) => dialog.press_key(key),
+            Event::Mouse(mouse) => dialog.press_mouse(mouse),
             _ => None,
         };
         if let Some(outcome) = closed {
