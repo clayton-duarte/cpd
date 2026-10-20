@@ -10,7 +10,7 @@ use super::row::PlanPrs;
 use crate::plan::PrRow;
 use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
-use super::start::base_pr;
+use super::start::{base_pr, unstack_stored};
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use super::{Args, Env, gate, illegal_phase, pr_policy, short};
 use crate::error::{CpdError, ErrorCode};
@@ -35,6 +35,10 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     let policy = pr_policy(&mut env, &id, &key)?;
     let list = require_jobs_done(&mut env, &plan, &key)?;
     let stored = stored_title(&mut env, &id, &key)?;
+    // A merged base PR unstacks the PR first, before step 0 and every check after it, and the unstack stays when one of
+    // them refuses (contract §7.6 `pr open` "Stacked", hs-d301): GitHub deleted the merged branch, never look it up.
+    unstack_stored(&mut env.store, COMMAND, &id, &key, "pr open")?;
+    let plan = env.plan(&id)?;
 
     // No lock and no R (hs-d243): an unrecorded merge leaves its Job `running`,
     // which `jobs_not_done` refused above.

@@ -23,6 +23,7 @@ use crate::output::{Output, to_line};
 pub use append::{NewEvent, append};
 pub use kind::{Kind, PROTOCOL, Set, Spec};
 pub use select::{Event, Selection, highest_id};
+pub use typed::BasePull;
 
 /// How many Events one query reads, and `follow`'s batch (§5.4).
 const BATCH: i64 = 500;

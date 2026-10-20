@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -184,6 +184,156 @@ for (const tool of ["tmux", "node"]) {
       assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
       assert.match(r.stderr, new RegExp(`pi-check: FAIL: step 0 \\(tools\\): ${tool} is not installed \\(step 3 needs it\\)`));
       assert.doesNotMatch(r.stdout, /pi-check: ok/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+// hs-d463 (docs/implementing.md "Checking a pi version", "The cleanup cannot fail a pass"): on macOS pi-check printed `pi-check: ok`,
+// then its `rm -rf "$tmp"` failed `Directory not empty` (a child of the private tmux server still wrote into it), and the exit
+// status became the cleanup's: the check failed after a pass and the pi pin did not move. The exit status is the check's.
+
+const realRm = (): string => lookup("rm");
+
+/** A fake pi that passes (it follows, as pi-check waits for), after `activation` (shell code, run only at the activation step). */
+const passingPi = (dir: string, activation = ""): string =>
+  write(
+    join(dir, "fake-pi"),
+    `#!/bin/sh
+case " $* " in
+  *" --version "*) echo "fake-pi 1.0"; exit 0 ;;
+  *" --mode rpc "*) exit 0 ;;
+esac
+${activation}
+exec cpd events follow --session "$CPD_SESSION" --since 0
+`,
+  );
+
+/** A directory first on `PATH` with a fake `rm` that fails its first `failures` calls like macOS's (`Directory not empty`), then removes. */
+const flakyRm = (dir: string, failures: number): string => {
+  const bin = join(dir, "fakebin");
+  mkdirSync(bin);
+  const count = join(dir, "rm.count");
+  write(
+    join(bin, "rm"),
+    `#!/bin/sh
+n=$(cat '${count}' 2>/dev/null || echo 0); n=$((n + 1)); echo $n >'${count}'
+for last; do :; done
+if [ "$n" -le ${failures} ]; then echo "rm: $last: Directory not empty" >&2; exit 1; fi
+exec '${realRm()}' "$@"
+`,
+  );
+  return bin;
+};
+
+/** What a run of pi-check leaves in `base`, its TMPDIR: the `pi-check.*` directories. */
+const leftovers = (base: string): string[] => readdirSync(base).filter((n) => n.startsWith("pi-check."));
+
+/** A scratch TMPDIR for pi-check, so the temp directory it makes is found and the test owns it. */
+const scratchTmp = (dir: string): string => {
+  const base = join(dir, "tmpbase");
+  mkdirSync(base);
+  return base;
+};
+
+test("a cleanup whose rm fails twice with `Directory not empty` is retried, and the pass stays a pass", () => {
+  const dir = temp();
+  try {
+    const base = scratchTmp(dir);
+    const bin = flakyRm(dir, 2);
+    const r = run(join(ROOT, "scripts", "pi-check.sh"), [passingPi(dir)], dir, { ...baseEnv(), TMPDIR: base, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` });
+
+    assert.match(r.stdout, /pi-check: ok \(/);
+    assert.equal(r.status, 0, `the check passed and its cleanup failed it: ${r.stdout}${r.stderr}`);
+    assert.deepEqual(leftovers(base), [], "the temporary directory is removed once rm stops failing");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a cleanup that always fails only warns: the pass stays a pass, in bounded time, with no FAIL line", () => {
+  const dir = temp();
+  try {
+    const base = scratchTmp(dir);
+    const bin = flakyRm(dir, 1_000_000);
+    const started = Date.now();
+    const r = run(join(ROOT, "scripts", "pi-check.sh"), [passingPi(dir)], dir, { ...baseEnv(), TMPDIR: base, PI_CHECK_CLEANUP_SECS: "1", PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` });
+    const seconds = (Date.now() - started) / 1000;
+
+    assert.match(r.stdout, /pi-check: ok \(/);
+    assert.equal(r.status, 0, `the check passed and its cleanup failed it: ${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /pi-check: warning: could not remove \S*pi-check\.\w+: .*Directory not empty/);
+    assert.doesNotMatch(`${r.stdout}${r.stderr}`, /pi-check: FAIL/, "a cleanup never prints FAIL");
+    // The pass itself takes a few seconds (a pi, a tmux server); the retries are bounded by PI_CHECK_CLEANUP_SECS=1, not 5.
+    assert.ok(seconds < 30, `took ${seconds} s`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed check whose cleanup also fails still fails: FAIL, the warning, exit 1, never 0", () => {
+  const dir = temp();
+  try {
+    const base = scratchTmp(dir);
+    const bin = flakyRm(dir, 1_000_000);
+    const pi = write(join(dir, "fake-pi"), `#!/bin/sh\necho "fake-pi: broken" >&2\nexit 3\n`);
+    const r = run(join(ROOT, "scripts", "pi-check.sh"), [pi], dir, { ...baseEnv(), TMPDIR: base, PI_CHECK_CLEANUP_SECS: "1", PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` });
+
+    assert.equal(r.status, 1, `${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /pi-check: FAIL: step 1 \(version\)/);
+    assert.match(r.stderr, /pi-check: warning: could not remove \S*pi-check\.\w+: /);
+    assert.doesNotMatch(r.stdout, /pi-check: ok/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a pi whose child keeps writing into the temp directory after the check passed does not fail the pass and leaves no directory behind", () => {
+  const dir = temp();
+  try {
+    const base = scratchTmp(dir);
+    // A background writer that ignores SIGHUP (what kill-server sends) and creates files in $TMPDIR (= pi-check's temp directory) for 3 s.
+    const pi = passingPi(
+      dir,
+      `mkdir -p "$TMPDIR/writer"
+( trap '' HUP TERM; i=0; end=$(( $(date +%s) + 3 ))
+  while [ "$(date +%s)" -lt "$end" ]; do j=0; while [ $j -lt 20 ]; do : >"$TMPDIR/writer/f$i"; i=$((i + 1)); j=$((j + 1)); done; done ) >/dev/null 2>&1 &`,
+    );
+    const r = run(join(ROOT, "scripts", "pi-check.sh"), [pi], dir, { ...baseEnv(), TMPDIR: base });
+
+    assert.match(r.stdout, /pi-check: ok \(/);
+    assert.equal(r.status, 0, `the check passed and its cleanup failed it: ${r.stdout}${r.stderr}`);
+    assert.deepEqual(leftovers(base), [], "the temporary directory is gone when pi-check exits: it stopped the child, waited, and removed it");
+  } finally {
+    // The writer ends by itself 3 s after it started; this removal can race a straggler.
+    for (let i = 0; i < 20; i++) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+        break;
+      } catch {
+        spawnSync("sleep", ["0.5"]);
+      }
+    }
+  }
+});
+
+for (const [name, locale] of [["no LANG and no LC_*", {}], ["LC_ALL=C", { LC_ALL: "C" }]] as const) {
+  test(`every tmux call of pi-check is a UTF-8 client (tmux -u first), with ${name}`, () => {
+    const dir = temp();
+    try {
+      const bin = join(dir, "fakebin");
+      mkdirSync(bin);
+      const log = join(dir, "tmux.log");
+      write(join(bin, "tmux"), `#!/bin/sh\necho "$*" >>'${log}'\nexec '${lookup("tmux")}' "$@"\n`);
+      const env: Record<string, string> = { PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`, TERM: "xterm", ...locale };
+      const r = run(join(ROOT, "scripts", "pi-check.sh"), [passingPi(dir)], dir, env);
+
+      assert.equal(r.status, 0, `${r.stdout}${r.stderr}`);
+      const calls = readFileSync(log, "utf8").split("\n").filter(Boolean);
+      assert.ok(calls.length >= 3, `the fake tmux saw ${calls.length} calls`);
+      const bare = calls.filter((c) => !c.startsWith("-u "));
+      assert.deepEqual(bare, [], "tmux calls that are not UTF-8 clients (`-u` first)");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

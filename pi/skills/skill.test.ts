@@ -624,3 +624,14 @@ test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and
   assert.match(manager, /Split by deliverable and area/);
   assert.match(manager, /small follow-up goes into its area's existing PR, not a new one/);
 });
+
+test("both skills: plans go to plannotator, ask_user_question is for a few short choices, and the adapter refuses two cases", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  for (const text of [lead, manager]) {
+    assert.match(text, /go to the User only with `cpd_plan_review` \(plannotator\)/);
+    assert.match(text, /`ask_user_question` is for a few short choices/);
+    assert.match(text, /over 1500 characters/);
+  }
+  assert.match(lead, /refuses `ask_user_question` for a Lead whose Plan has draft Jobs/);
+});
