@@ -13,10 +13,11 @@ use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
 use super::row::PlanPrs;
+use super::start::unstack;
 use super::status::PrState;
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{NewEvent, append};
+use crate::events::{BasePull, NewEvent, append};
 use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
@@ -212,6 +213,7 @@ fn apply(
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
+                unstack_stacked_on(tx, plan, key)?;
             } else if let Some(checks) = checks_of(checks, plan, key)
                 && tell(tx, plan, key, checks, &change)?
             {
@@ -267,7 +269,7 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
         "PR {pr} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
          Read it with cpd plan show --plan {plan}."
     );
-    let event = NewEvent::pr_base_changed(text, pr, (from, to), (from_pr.as_deref(), to_pr.as_deref()), COMMAND_BY, Some((*number, url)));
+    let event = NewEvent::pr_base_changed(text, pr, (from, to), (from_pr.as_deref(), to_pr.as_deref()), COMMAND_BY, BasePull::Of(*number, url));
     append(tx, event.plan(plan.clone()))?;
     Ok(json!({"plan": plan, "pr": pr, "from": from, "to": to}))
 }
@@ -366,6 +368,24 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
     append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
     Ok(true)
+}
+
+/// The unstack of the PRs with no pull request yet that were stacked on the PR `key` of `plan`, which this transaction
+/// merged (§7.6 step 6, hs-d301): every `waiting` or `dispatch` PR of any Plan whose `base` is its Lead Branch, told to
+/// its own Plan, so that engine E7 of the same tick already sees the new base.
+fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    let mut stmt = tx.prepare(
+        "SELECT r.plan, r.key FROM prs r, prs m
+          WHERE m.plan = ?1 AND m.key = ?2 AND r.repo = m.repo AND r.base = m.lead_branch AND r.status IN ('waiting', 'dispatch')
+          ORDER BY r.plan, r.key",
+    )?;
+    let stacked = stmt
+        .query_map([plan.as_str(), key.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (plan, key) in stacked {
+        unstack(tx, &PlanId::parse(&plan)?, &PrKey::parse(&key)?, COMMAND_BY)?;
+    }
+    Ok(())
 }
 
 /// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.

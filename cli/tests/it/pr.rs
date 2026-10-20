@@ -3408,6 +3408,8 @@ fn open_of_a_pr_stacked_on_a_merged_base_pr_whose_branch_is_gone_opens_on_the_ba
     stacked_pr(&fx);
     fx.delete_base_branch();
     assert_eq!(fx.web_base(), "cpd/pay");
+    // `pr open` reads `createdAt` of the pull request it just opened (store-W5).
+    fx.gh("lookup.json", &lookup_answer(&[Some(node("acme/web", 813, "OPEN", None, None))]));
 
     let out = fx.open_web().ok();
 

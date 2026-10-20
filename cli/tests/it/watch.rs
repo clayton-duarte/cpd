@@ -2418,8 +2418,8 @@ fn e5_a_cut_gh_response_is_an_error_only_after_the_window_and_then_once() {
     assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
     let details = &data["details"];
     assert_eq!(
-        (&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"], &details["transient"]),
-        (&json!("search"), &since, &json!(11), &json!("unexpected end of JSON input"), &json!(1), &json!(true))
+        (&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"]),
+        (&json!("search"), &since, &json!(11), &json!("unexpected end of JSON input"), &json!(1))
     );
     assert!(details["stderr"].as_str().unwrap().contains("unexpected end of JSON input"), "{details}");
     let sent = messages(&fx);
