@@ -22,7 +22,7 @@ use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
 use crate::metrics;
 use crate::plan::jobs::Job;
 use crate::session::run::{quiet_since, turn_finished};
-use crate::spec::{self, Answer, Cause, Input, Previous};
+use crate::spec::{self, Answer, Cause, Input, JobKind, Previous};
 use crate::store::Store;
 
 /// How often a review Job's driver looks at the Lead while it waits for it to be idle (§6.7 step 1; tests:
@@ -145,9 +145,23 @@ pub fn render_spec(conn: &Connection, home: &CpdHome, target: &Target, job: &Job
         strings(&job_spec.acceptance, "acceptance")?,
         strings(&job_spec.out_of_scope, "out_of_scope")?,
     );
+    // The kind's facts are read as stored now: an approval reaches an Attempt that is running (§7.7).
+    let all = crate::plan::jobs::load(conn, &target.plan)?;
+    let guard = crate::job::guard::of(&all, job);
+    let (own_tests, own_files) = crate::job::guard::own(job);
+    let kind = match job.kind.as_str() {
+        "work" => JobKind::Work,
+        "docs" => JobKind::Docs,
+        "test" => JobKind::Test { tests: &own_tests, test_files: &own_files },
+        "impl" => JobKind::Impl { test_jobs: &guard.jobs, tests: &guard.tests, guarded: &guard.files, approved: &guard.approved },
+        "open" => JobKind::Open,
+        "update" => JobKind::Update,
+        other => return Err(bad(format!("kind {other:?} of Job {}", job.key))),
+    };
     let path = spec::write(
         home,
         &Input {
+            kind,
             plan: &target.plan,
             attempt: &target.id,
             title: &job.title,

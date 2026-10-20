@@ -8,7 +8,7 @@ use cpd_core::config::Tier;
 use cpd_core::error::ErrorCode;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, EscalationId, PlanId};
-use cpd_core::spec::{self, Answer, Cause, Input, Previous};
+use cpd_core::spec::{self, Answer, Cause, Input, JobKind, Previous};
 
 fn plan() -> PlanId {
     PlanId::parse("pay").unwrap()
@@ -30,6 +30,7 @@ fn first_input<'a>(plan: &'a PlanId, attempt: &'a AttemptId, lists: &'a Lists) -
         title: "API schema",
         tier: Tier::parse("S3").unwrap(),
         worktree: Path::new("/w/pay--api-schema-a1"),
+        kind: JobKind::Work,
         goal: "Define the schema.",
         context: "The API has none yet.",
         touches: &lists.touches,
@@ -110,6 +111,7 @@ fn later() -> String {
         title: "API schema",
         tier: Tier::parse("S3").unwrap(),
         worktree: Path::new("/w/pay--api-schema-a3"),
+        kind: JobKind::Work,
         goal: "Define the schema: {% raw %}.",
         context: "",
         touches: &touches,
@@ -231,7 +233,7 @@ Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktre
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
 - Commit a skeleton within 10 minutes of starting, then commit at least every 20 minutes.
 - Run only commands that exit. Wrap every test and measurement in `timeout`. Write no synthetic benchmarks. Never start `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit.
-- Run only the tests your change touches: the test files or modules of what you changed and your new tests, named in your Spec's acceptance. Never the full suite (`cargo test` or `nextest` with `--workspace` or no filter, `npm test` of everything): the Gate runs it at `pr open`, and the adapter refuses it in a Worker session.
+- Run only the tests your change touches: the test files or modules of what you changed and your new tests, named in your Spec's acceptance. Never the full suite (`cargo test` or `nextest` with `--workspace` or no filter, `npm test` of everything): the Gate runs it, in the PR's open Job, and the adapter refuses it in a Worker session.
 - Before submitting, stop every process you started (background commands, private tmux servers you started with `tmux -L <name>` — kill them with `tmux -L <name> kill-server` —, any `cpd watch`, servers, watchers) and remove the temporary homes and files you created outside the worktree. Never leave anything running when you submit.
 - Do not stop until you have submitted.
 
@@ -308,7 +310,7 @@ Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktre
   Ask one real blocker at a time. Do not ask what this Spec or the code already answers.
 - Commit a skeleton within 10 minutes of starting, then commit at least every 20 minutes.
 - Run only commands that exit. Wrap every test and measurement in `timeout`. Write no synthetic benchmarks. Never start `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit.
-- Run only the tests your change touches: the test files or modules of what you changed and your new tests, named in your Spec's acceptance. Never the full suite (`cargo test` or `nextest` with `--workspace` or no filter, `npm test` of everything): the Gate runs it at `pr open`, and the adapter refuses it in a Worker session.
+- Run only the tests your change touches: the test files or modules of what you changed and your new tests, named in your Spec's acceptance. Never the full suite (`cargo test` or `nextest` with `--workspace` or no filter, `npm test` of everything): the Gate runs it, in the PR's open Job, and the adapter refuses it in a Worker session.
 - Before submitting, stop every process you started (background commands, private tmux servers you started with `tmux -L <name>` — kill them with `tmux -L <name> kill-server` —, any `cpd watch`, servers, watchers) and remove the temporary homes and files you created outside the worktree. Never leave anything running when you submit.
 - Do not stop until you have submitted.
 
@@ -391,3 +393,107 @@ If it succeeds, stop at once and make no more changes. If it refuses, the error 
 
 Do not stop until `cpd attempt submit` has succeeded.
 "####;
+
+/// The Spec of the first Attempt with `kind` (commands.md §16.1 "The kinds that have checks").
+fn kind_spec(kind: JobKind<'_>) -> String {
+    let (plan, attempt, lists) = (plan(), attempt("api-schema-a1"), lists());
+    spec::render(&Input { kind, ..first_input(&plan, &attempt, &lists) }).unwrap()
+}
+
+fn assert_has(text: &str, wanted: &[&str]) {
+    for w in wanted {
+        assert!(text.contains(w), "the Spec lacks {w:?}:\n{text}");
+    }
+}
+
+fn assert_lacks(text: &str, unwanted: &[&str]) {
+    for w in unwanted {
+        assert!(!text.contains(w), "the Spec has {w:?}:\n{text}");
+    }
+}
+
+#[test]
+fn a_work_and_a_docs_job_have_no_section_of_their_own() {
+    for kind in [JobKind::Work, JobKind::Docs] {
+        let text = kind_spec(kind);
+        assert_has(&text, &["- Commit your work.", "- `no_commits`:"]);
+        assert_lacks(&text, &["### Tests", "**test Job**", "**implementation Job**", "**open Job**", "**update Job**", "tests_", "base_conflict"]);
+    }
+}
+
+#[test]
+fn a_test_job_s_spec_names_its_tests_files_and_refusals() {
+    let (tests, files) = (strings(&["schema::parses", "schema::rejects"]), strings(&["tests/schema.rs"]));
+    let text = kind_spec(JobKind::Test { tests: &tests, test_files: &files });
+    assert_has(
+        &text,
+        &[
+            "This is a **test Job**",
+            "- Commit your work.",
+            "Add stubs",
+            "### Tests",
+            "- `schema::parses`",
+            "- `schema::rejects`",
+            "- `tests/schema.rs`",
+            "- `test_files_missing`:",
+            "- `tests_build_failed`:",
+            "- `tests_not_found`:",
+            "- `tests_not_red`:",
+            "- `tests_error`:",
+            "- `no_commits`:",
+        ],
+    );
+    assert_lacks(&text, &["tests_tampered", "tests_failed", "**open Job**", "base_conflict"]);
+}
+
+#[test]
+fn an_impl_job_s_spec_names_the_test_jobs_the_guarded_files_and_the_approved_paths() {
+    let (jobs, tests) = (strings(&["schema-tests", "more-tests"]), strings(&["schema::parses"]));
+    let (guarded, approved) = (strings(&["tests/schema.rs", "tests/more/"]), strings(&["tests/schema.rs"]));
+    let text = kind_spec(JobKind::Impl { test_jobs: &jobs, tests: &tests, guarded: &guarded, approved: &approved });
+    assert_has(
+        &text,
+        &[
+            "This is an **implementation Job**",
+            "`schema-tests`, `more-tests`",
+            "- `schema::parses`",
+            "- `tests/more/`",
+            "The Lead approved you to change these guarded paths:",
+            "`cpd ask`",
+            "- `tests_tampered`:",
+            "- `tests_failed`:",
+            "- `tests_build_failed`:",
+            "- `tests_not_found`:",
+            "- `tests_error`:",
+            "- `no_commits`:",
+        ],
+    );
+    assert_lacks(&text, &["tests_not_red", "test_files_missing", "base_conflict"]);
+    let none = kind_spec(JobKind::Impl { test_jobs: &jobs, tests: &tests, guarded: &guarded, approved: &[] });
+    assert_lacks(&none, &["The Lead approved you"]);
+}
+
+#[test]
+fn an_open_and_an_update_job_merge_the_base_only_on_a_conflict_and_leave_the_rest_to_cpd() {
+    for (kind, own, other) in [(JobKind::Open, "pr_title_required", "illegal_transition"), (JobKind::Update, "illegal_transition", "pr_title_required")] {
+        let text = kind_spec(kind);
+        assert_has(
+            &text,
+            &[
+                "**only if the Lead Branch conflicts with it**",
+                "merely moved ahead is no reason",
+                "Do not push, do not run `gh`, do not run the Gate",
+                "- `base_conflict`:",
+                "- `lead_branch_moved`:",
+                "- `gate_failed`:",
+                "- `gate_error`:",
+                "- `base_not_found`:",
+                "- `owner_unset`, `owner_unknown`, `policy_invalid`:",
+                own,
+            ],
+        );
+        assert_lacks(&text, &["- Commit your work.", "- `no_commits`:", "### Tests", "tests_", other]);
+    }
+    assert_has(&kind_spec(JobKind::Open), &["This is the **open Job**"]);
+    assert_has(&kind_spec(JobKind::Update), &["This is an **update Job**"]);
+}
