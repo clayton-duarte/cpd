@@ -1340,3 +1340,309 @@ fn list_and_show_carry_urgent() {
     let flags: Vec<&Value> = shown["jobs"].as_array().unwrap().iter().map(|j| &j["urgent"]).collect();
     assert_eq!(flags, [&json!(false), &json!(true)]);
 }
+
+// ---------- kinds (contract §2.2 "Job kinds"; commands.md §5.1, §5.2, §5.6, §5.7) ----------
+
+/// A Spec file for a `test` Job: the Spec of every Job and the named tests with the files that hold them.
+fn test_spec_file(env: &TestEnv, name: &str, tests: Value, files: Value) -> String {
+    let mut spec = spec_json();
+    spec["tests"] = tests;
+    spec["test_files"] = files;
+    write_spec(env, name, &spec.to_string())
+}
+
+/// `job add <key> --kind <kind> --spec <spec>` into PR `pr` of Plan `plan`, a draft, with the Tier S2.
+fn add_kind(env: &TestEnv, plan: &str, key: &str, kind: &str, spec: &str, pr: &str) -> Run {
+    env.cpd(&["job", "add", key, "--title", &format!("Title of {key}"), "--tier", "S2", "--spec", spec, "--kind", kind, "--pr", pr, "--plan", plan])
+}
+
+/// PR `key` of Plan `plan`, `waiting`, of the stored `shape`.
+fn shaped_pr(env: &TestEnv, plan: &str, key: &str, shape: &str) {
+    fixture(
+        env,
+        &format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+             VALUES ('{plan}', '{key}', '/repo', 'main', 'waiting', 'cpd/{plan}/{key}', '{shape}', cpd_txn(), 't');"
+        ),
+    );
+}
+
+#[test]
+fn add_kind_stores_the_kind_and_a_test_jobs_tests_and_shows_them() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let spec = spec_file(&env);
+    let tests = test_spec_file(&env, "tests.json", json!(["pr_open_job::merges_the_base", "pr_open_job::opens"]), json!(["cli/tests/pr_open_job.rs", "core/src/pr/"]));
+    // The default is `work`; the kinds are the Lead's: `docs`, `test` and `impl`.
+    assert_eq!(job_add(&env, "pl", "w", "S2", &[]).ok()["job"]["kind"], "work");
+    let docs = add_kind(&env, "pl", "d", "docs", &spec, "repo").ok();
+    assert_eq!((&docs["job"]["kind"], &docs["job"]["status"]), (&json!("docs"), &json!("draft")));
+    let test = add_kind(&env, "pl", "t", "test", &tests, "repo").ok();
+    assert_eq!(test["job"]["kind"], "test");
+    assert_eq!(add_kind(&env, "pl", "i", "impl", &spec, "repo").ok()["job"]["kind"], "impl");
+    assert_eq!(job(&env, &["add", "c", "--title", "C", "--tier", "S2", "--spec", &spec, "--kind", "work"], "pl").ok()["job"]["kind"], "work");
+    assert_eq!(
+        job_row(&env, "pl", "t", "tests"),
+        json!("[\"pr_open_job::merges_the_base\",\"pr_open_job::opens\"]")
+    );
+    assert_eq!(job_row(&env, "pl", "t", "test_files"), json!("[\"cli/tests/pr_open_job.rs\",\"core/src/pr/\"]"));
+    assert_eq!(job_row(&env, "pl", "d", "tests"), Value::Null);
+    assert_eq!(job_row(&env, "pl", "i", "kind"), json!("impl"));
+
+    // The Event carries the kind; `job list` and `job show` show it, and a `test` Job's tests and files.
+    let added = events(&env, "job-added");
+    let kinds: Vec<(&Value, &Value)> = added.iter().map(|e| (&e["job"], &e["data"]["kind"])).collect();
+    assert_eq!(kinds, [(&json!("w"), &json!("work")), (&json!("d"), &json!("docs")), (&json!("t"), &json!("test")), (&json!("i"), &json!("impl")), (&json!("c"), &json!("work"))]);
+    let listed = job(&env, &["list"], "pl").ok();
+    let by_key: Vec<(&str, &str)> = listed["jobs"].as_array().unwrap().iter().map(|j| (j["key"].as_str().unwrap(), j["kind"].as_str().unwrap())).collect();
+    assert_eq!(by_key, [("w", "work"), ("d", "docs"), ("t", "test"), ("i", "impl"), ("c", "work")]);
+    let shown = job(&env, &["show", "t"], "pl").ok();
+    assert_eq!(shown["job"]["kind"], "test");
+    assert_eq!(shown["job"]["tests"], json!(["pr_open_job::merges_the_base", "pr_open_job::opens"]));
+    assert_eq!(shown["job"]["test_files"], json!(["cli/tests/pr_open_job.rs", "core/src/pr/"]));
+    let shown = job(&env, &["show", "i"], "pl").ok();
+    assert_eq!((&shown["job"]["kind"], &shown["job"]["test_approved"]), (&json!("impl"), &Value::Null));
+    assert!(job(&env, &["show", "d"], "pl").ok()["job"].get("tests").is_none(), "a `docs` Job has no tests");
+}
+
+#[test]
+fn the_kind_is_part_of_the_locked_fields_of_an_add_that_repeats() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let spec = spec_file(&env);
+    add_kind(&env, "pl", "d", "docs", &spec, "repo").ok();
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    assert_eq!(add_kind(&env, "pl", "d", "docs", &spec, "repo").ok()["already"], true);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+    refused(&add_kind(&env, "pl", "d", "impl", &spec, "repo"), "job_key_exists", 3);
+    refused(&job_add(&env, "pl", "d", "S2", &[]), "job_key_exists", 3);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+}
+
+#[test]
+fn add_kind_refusals_write_nothing() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let spec = spec_file(&env);
+    let tests = test_spec_file(&env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
+    let writes = || (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+    let before = writes();
+
+    // `open` and `update` are cpd's (exit 3, `details.kind`).
+    for kind in ["open", "update"] {
+        let e = refused(&add_kind(&env, "pl", "k", kind, &spec, "repo"), "kind_reserved", 3);
+        assert_eq!(e["details"]["kind"], kind);
+    }
+    // Not a kind (clap), and a review Job is a `work` Job.
+    refused(&add_kind(&env, "pl", "k", "other", &spec, "repo"), "usage", 2);
+    refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", &spec, "--kind", "docs", "--review", "--pr", "repo", "--plan", "pl"]), "usage", 2);
+    // The Spec fits the kind: a `test` Job names its tests and files, every other kind neither.
+    let e = refused(&add_kind(&env, "pl", "k", "test", &spec, "repo"), "spec_invalid", 2);
+    assert_eq!(e["details"]["path"], "$.tests");
+    for kind in ["work", "docs", "impl"] {
+        let e = refused(&add_kind(&env, "pl", "k", kind, &tests, "repo"), "spec_invalid", 2);
+        assert_eq!(e["details"]["path"], "$.tests", "{kind}");
+    }
+    let bad = test_spec_file(&env, "bad.json", json!(["t::one"]), json!(["../escape.rs"]));
+    assert_eq!(refused(&add_kind(&env, "pl", "k", "test", &bad, "repo"), "spec_invalid", 2)["details"]["path"], "$.test_files[0]");
+    let bad = test_spec_file(&env, "bad.json", json!(["t::one", "t::one"]), json!(["tests/t.rs"]));
+    assert_eq!(refused(&add_kind(&env, "pl", "k", "test", &bad, "repo"), "spec_invalid", 2)["details"]["path"], "$.tests[1]");
+    assert_eq!(writes(), before);
+}
+
+#[test]
+fn a_job_cannot_need_an_open_or_an_update_job() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    lock(&env, "pl");
+    // What engine E4 adds: an `open` Job, queued, with its fingerprint and no Dependency.
+    let fingerprint = "a".repeat(64);
+    fixture(
+        &env,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, kind, created_txn, created_at)
+             VALUES ('pl', 'repo', 'open-repo', 'Open', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, '{fingerprint}', 'open', cpd_txn(), 't');"
+        ),
+    );
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    let e = refused(&job_add(&env, "pl", "k", "S2", &["open-repo"]), "needs_unavailable", 3);
+    assert_eq!(e["details"]["jobs"], json!(["open-repo"]));
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+    // And a review Job does not take it as a Dependency.
+    let spec = spec_file(&env);
+    let review = env.cpd(&["job", "add", "rev", "--title", "R", "--tier", "S2", "--spec", &spec, "--review", "--draft", "--plan", "pl"]).ok();
+    assert_eq!(review["job"]["needs"], json!(["a"]));
+}
+
+#[test]
+fn the_stored_shape_decides_the_kinds_a_waiting_pr_may_have() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    for shape in ["tdd", "docs", "config"] {
+        shaped_pr(&env, "pl", shape, shape);
+    }
+    let spec = spec_file(&env);
+    let tests = test_spec_file(&env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
+    let spec_of = |kind: &str| if kind == "test" { tests.clone() } else { spec.clone() };
+    let allowed = |shape: &str| match shape {
+        "tdd" => vec!["docs", "test", "impl"],
+        "docs" => vec!["docs"],
+        "config" => vec!["work"],
+        _ => unreachable!(),
+    };
+    for shape in ["tdd", "docs", "config"] {
+        for kind in ["work", "docs", "test", "impl"] {
+            let key = format!("{shape}-{kind}");
+            let run = add_kind(&env, "pl", &key, kind, &spec_of(kind), shape);
+            if allowed(shape).contains(&kind) {
+                assert_eq!(run.ok()["job"]["kind"], kind, "{shape} allows {kind}");
+            } else {
+                let e = refused(&run, "shape_violation", 3);
+                assert_eq!(
+                    e["details"],
+                    json!({"plan": "pl", "pr": shape, "shape": shape, "kind": kind, "allowed": allowed(shape)}),
+                    "{shape} refuses {kind}"
+                );
+            }
+        }
+    }
+    // A review Job (kind `work`) is allowed in every shape; a PR from before the migration (`free`) allows every kind.
+    for shape in ["tdd", "docs", "config"] {
+        let key = format!("rev-{shape}");
+        env.cpd(&["job", "add", &key, "--title", "R", "--tier", "S2", "--spec", &spec, "--review", "--draft", "--pr", shape, "--plan", "pl"]).ok();
+        assert_eq!(job_row(&env, "pl", &key, "review"), json!(1));
+    }
+    for kind in ["work", "docs", "test", "impl"] {
+        assert_eq!(add_kind(&env, "pl", &format!("free-{kind}"), kind, &spec_of(kind), "repo").ok()["job"]["kind"], kind);
+    }
+}
+
+#[test]
+fn an_open_pr_is_not_checked_against_its_shape_and_a_job_added_to_it_is_queued() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "deploy");
+    // A `tdd` PR that has opened its pull request: a feedback fix is whatever it is, a `work` Job included.
+    fixture(
+        &env,
+        &format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+             VALUES ('pl', 'fix', '/repo', 'main', 'waiting', 'cpd/pl/fix', 'tdd', cpd_txn(), 't');
+             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
+             {}
+             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
+                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/fix') WHERE key = 'fix';",
+            pull_request("fix", 2, "open")
+        ),
+    );
+    let out = env.cpd(&["job", "add", "late", "--title", "Fix", "--tier", "S2", "--spec", &spec_file(&env), "--pr", "fix", "--plan", "pl"]).ok();
+    assert_eq!((&out["job"]["kind"], &out["job"]["status"]), (&json!("work"), &json!("queued")));
+    // A `waiting` PR of the same shape refuses it.
+    shaped_pr(&env, "pl", "next", "tdd");
+    refused(
+        &env.cpd(&["job", "add", "late2", "--title", "Fix", "--tier", "S2", "--spec", &spec_file(&env), "--pr", "next", "--plan", "pl"]),
+        "shape_violation",
+        3,
+    );
+}
+
+#[test]
+fn an_impl_job_that_is_not_a_draft_needs_a_test_job_of_its_pr() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let spec = spec_file(&env);
+    let tests = test_spec_file(&env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
+    add_kind(&env, "pl", "t", "test", &tests, "repo").ok();
+    add_kind(&env, "pl", "d", "docs", &spec, "repo").ok();
+    lock(&env, "pl");
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    // Appended and queued with no Dependency, or with one that is no test Job: refused, naming the test Jobs of the PR.
+    let impl_job = |key: &str, needs: &str, draft: bool| {
+        let mut args = vec!["job", "add", key, "--title", "I", "--tier", "S2", "--spec", &spec, "--kind", "impl", "--plan", "pl"];
+        if !needs.is_empty() {
+            args.extend(["--needs", needs]);
+        }
+        if draft {
+            args.push("--draft");
+        }
+        env.cpd(&args)
+    };
+    let e = refused(&impl_job("i", "", false), "test_job_required", 3);
+    assert_eq!((&e["details"]["job"], &e["details"]["jobs"]), (&json!("i"), &json!(["t"])));
+    refused(&impl_job("i", "d", false), "test_job_required", 3);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+    // A draft is checked where it stops being one; a Job that needs the test Job is queued.
+    assert_eq!(impl_job("i", "", true).ok()["job"]["status"], "draft");
+    assert_eq!(impl_job("i2", "t", false).ok()["job"]["status"], "queued");
+}
+
+#[test]
+fn edit_kind_changes_a_drafts_kind_and_its_spec_must_fit() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let spec = spec_file(&env);
+    let tests = test_spec_file(&env, "tests.json", json!(["t::one"]), json!(["tests/t.rs"]));
+    for key in ["a", "b", "c"] {
+        job_add(&env, "pl", key, "S2", &[]).ok();
+    }
+    shaped_pr(&env, "pl", "docs", "docs");
+    // A kind alone: `work` to `docs`, and back.
+    let out = job(&env, &["edit", "a", "--kind", "docs"], "pl").ok();
+    assert_eq!(out["fields"], json!(["kind"]));
+    assert_eq!(job_row(&env, "pl", "a", "kind"), json!("docs"));
+    assert_eq!(events(&env, "job-edited").last().unwrap()["data"], json!({"fields": ["kind"]}));
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    assert_eq!(job(&env, &["edit", "a", "--kind", "docs"], "pl").ok()["already"], true);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+
+    // To `test`, the Spec it has names no tests: refused; with a Spec that does, it changes together.
+    let e = refused(&job(&env, &["edit", "a", "--kind", "test"], "pl"), "spec_invalid", 2);
+    assert_eq!(e["details"]["path"], "$.tests");
+    let out = job(&env, &["edit", "a", "--kind", "test", "--spec", &tests], "pl").ok();
+    assert_eq!(out["fields"], json!(["kind", "tests", "test_files"]));
+    assert_eq!(job_row(&env, "pl", "a", "tests"), json!("[\"t::one\"]"));
+    // Out of `test`, the Spec still names tests: refused, and given a Spec that does not, it goes.
+    refused(&job(&env, &["edit", "a", "--kind", "impl"], "pl"), "spec_invalid", 2);
+    let out = job(&env, &["edit", "a", "--kind", "impl", "--spec", &spec], "pl").ok();
+    assert_eq!(out["fields"], json!(["kind", "tests", "test_files"]));
+    assert_eq!((job_row(&env, "pl", "a", "tests"), job_row(&env, "pl", "a", "test_files")), (Value::Null, Value::Null));
+    // A Spec with tests for a Job that stays `impl` is refused too.
+    refused(&job(&env, &["edit", "a", "--spec", &tests], "pl"), "spec_invalid", 2);
+
+    // `open` and `update` are cpd's; the stored shape of the PR holds for an edit as for an add.
+    for kind in ["open", "update"] {
+        assert_eq!(refused(&job(&env, &["edit", "a", "--kind", kind], "pl"), "kind_reserved", 3)["details"]["kind"], kind);
+    }
+    // Moving a Job to a PR whose shape does not allow its kind is the same refusal.
+    let e = refused(&job(&env, &["edit", "c", "--pr", "docs"], "pl"), "shape_violation", 3);
+    assert_eq!((&e["details"]["pr"], &e["details"]["kind"], &e["details"]["allowed"]), (&json!("docs"), &json!("work"), &json!(["docs"])));
+    job(&env, &["edit", "c", "--pr", "docs", "--kind", "docs"], "pl").ok();
+    assert_eq!((job_row(&env, "pl", "c", "pr"), job_row(&env, "pl", "c", "kind")), (json!("docs"), json!("docs")));
+}
+
+#[test]
+fn a_locked_jobs_kind_cannot_be_edited() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    job_add(&env, "pl", "a", "S2", &[]).ok();
+    lock(&env, "pl");
+    refused(&job(&env, &["edit", "a", "--kind", "docs"], "pl"), "job_locked", 3);
+    assert_eq!(job_row(&env, "pl", "a", "kind"), json!("work"));
+    // Nor by the database: the column is in `jobs_locked`.
+    let e = fixture_error(&env, "UPDATE jobs SET kind = 'docs' WHERE key = 'a'");
+    assert!(e.contains("job_locked"), "{e}");
+}
+
+/// The message of the error `sql` fails with.
+fn fixture_error(env: &TestEnv, sql: &str) -> String {
+    store(env).write("fixture", |tx| exec(tx, sql)).unwrap_err().to_string()
+}

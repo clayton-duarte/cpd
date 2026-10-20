@@ -743,7 +743,7 @@ fn enrich(e: CpdError, path: &Path, busy_ms: u64) -> CpdError {
 /// refusal (§4.4), with the code and the text of each. A new typed trigger
 /// error is one more row here. The others (`append_only: …`, `… must be
 /// cpd_txn()`) stay `store_failed` by design.
-const TRIGGER_ERRORS: [(&str, ErrorCode, &str); 4] = [
+const TRIGGER_ERRORS: [(&str, ErrorCode, &str); 5] = [
     ("job_locked", ErrorCode::JobLocked, "The Job is Locked: its Spec and Dependencies cannot change."),
     ("illegal_transition", ErrorCode::IllegalTransition, "The state change is not a legal transition (§3)."),
     (
@@ -752,6 +752,11 @@ const TRIGGER_ERRORS: [(&str, ErrorCode, &str); 4] = [
         "The PR is Locked: its repo, base and needs cannot change after the Plan's lock.",
     ),
     ("needs_other_pr", ErrorCode::NeedsOtherPr, "A Dependency can only link Jobs of the same PR."),
+    (
+        "spec_invalid",
+        ErrorCode::SpecInvalid,
+        "The Job's kind and its Spec do not agree: only a test Job has tests and test_files, only an impl Job approved tests, only a work Job is a review Job.",
+    ),
 ];
 
 /// Who holds the write lock (§4.2). A process that holds it records itself in
@@ -889,7 +894,7 @@ impl Drop for Holder {
 
 /// A SQLite failure, as Escalation `rs-store-a1-q1` decided: busy after the
 /// busy timeout is `store_busy`, and so is `SQLITE_LOCKED`; the triggers' `RAISE(ABORT, 'job_locked')`,
-/// `'illegal_transition'`, `'pr_locked'` and `'needs_other_pr'` (§4.4) are
+/// `'illegal_transition'`, `'pr_locked'`, `'needs_other_pr'` and `'spec_invalid'` (§4.4) are
 /// those refusals; anything else is `store_failed` with `sqlite_code` and
 /// `sqlite_message`.
 impl From<rusqlite::Error> for CpdError {
