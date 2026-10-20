@@ -14,7 +14,6 @@ test("the verify script runs the portability check and pi-check, in the document
     "npm test",
     "scripts/pi-check.sh node_modules/.bin/pi",
     "export CPD_COMMIT=$(git rev-parse --short HEAD)",
-    "scripts/cargo.sh build --workspace",
     "scripts/cargo.sh nextest run --workspace",
   ]);
 });
