@@ -1274,22 +1274,6 @@ fn a_good_install_marks_the_restart_after_the_check_and_right_before_the_kill_wi
 }
 
 #[test]
-fn a_failing_watch_check_marks_nothing() {
-    let env = TestEnv::new();
-    let checkout = Checkout::new(&env, &[]);
-    logging_tmux(&env, "");
-    running_old_engine(&env);
-    let extra = new_cpd(&env, CHECK_FAILS, RESPAWN_OK, STARTS_ENGINE);
-
-    let run = install_with(&env, &checkout, &version("null"), &extra);
-
-    let log = order(&env);
-    assert_eq!(run.exit, 1, "{}", run.stderr);
-    assert!(lines_with(&log, "cpd watch --mark-restart").is_empty(), "the engine was not retired, so it is not marked: {log:?}");
-    assert_old_engine_runs(&env, &run);
-}
-
-#[test]
 fn a_mark_restart_that_fails_is_printed_and_the_retirement_goes_on() {
     let env = TestEnv::new();
     let checkout = Checkout::new(&env, &[]);

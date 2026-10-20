@@ -3021,7 +3021,7 @@ const PREVIOUS_ENGINE: i64 = 424_242;
 /// The sentence a planned restart adds before the final full stop.
 const PLANNED: &str = "(an install's planned restart)";
 
-fn ago(secs: f64) -> String {
+fn secs_ago(secs: f64) -> String {
     clock::timestamp(OffsetDateTime::now_utc() - time::Duration::seconds_f64(secs))
 }
 
@@ -3033,7 +3033,7 @@ impl Fx {
         let stopped = if said {
             format!(
                 "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-stopped', 'The engine stopped.', '{{\"pid\":{PREVIOUS_ENGINE}}}');",
-                ago(down)
+                secs_ago(down)
             )
         } else {
             String::new()
@@ -3042,7 +3042,7 @@ impl Fx {
         let started_ago = if said { 3600.0 } else { down };
         self.fixture(&format!(
             "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-started', 'The engine started.', '{{\"pid\":{PREVIOUS_ENGINE}}}');{stopped}",
-            ago(started_ago)
+            secs_ago(started_ago)
         ));
     }
 
@@ -3052,7 +3052,7 @@ impl Fx {
 
     /// The install's marker, written `age` seconds ago for the engine `pid`.
     fn marker(&self, pid: i64, age: f64) {
-        self.raw_marker(&json!({"by": "install-cpd.sh", "at": ago(age), "engine_pid": pid}).to_string());
+        self.raw_marker(&json!({"by": "install-cpd.sh", "at": secs_ago(age), "engine_pid": pid}).to_string());
     }
 
     fn raw_marker(&self, text: &str) {
@@ -3115,19 +3115,19 @@ fn a_planned_restart_that_stayed_down_past_ten_seconds_tells_each_manager_it_too
 /// quiet side is set a little under 10 s (exactly 10.0 would be a race with the process start) and the other a little over.
 #[test]
 fn the_bound_is_ten_seconds_quiet_up_to_it_and_told_past_it() {
-    let fx = fx("");
-    fx.manager("mgr1");
-    fx.previous_engine(9.2, true);
-    fx.marker(PREVIOUS_ENGINE, 9.5);
-    fx.start_and_stop();
-    assert_eq!(fx.messages(), [], "under 10 s is quiet");
+    let quiet = fx("");
+    quiet.manager("mgr1");
+    quiet.previous_engine(9.2, true);
+    quiet.marker(PREVIOUS_ENGINE, 9.5);
+    quiet.start_and_stop();
+    assert_eq!(quiet.messages(), [], "under 10 s is quiet");
 
-    let fx = fx("");
-    fx.manager("mgr1");
-    fx.previous_engine(10.6, true);
-    fx.marker(PREVIOUS_ENGINE, 11.0);
-    fx.start_and_stop();
-    fx.told_with("took longer than 10 s");
+    let told = fx("");
+    told.manager("mgr1");
+    told.previous_engine(10.6, true);
+    told.marker(PREVIOUS_ENGINE, 11.0);
+    told.start_and_stop();
+    told.told_with("took longer than 10 s");
 }
 
 #[test]
@@ -3172,7 +3172,7 @@ fn a_marker_with_a_field_of_another_type_is_no_marker() {
     let fx = fx("");
     fx.manager("mgr1");
     fx.previous_engine(0.5, true);
-    fx.raw_marker(&json!({"by": "install-cpd.sh", "at": ago(1.0), "engine_pid": "424242"}).to_string());
+    fx.raw_marker(&json!({"by": "install-cpd.sh", "at": secs_ago(1.0), "engine_pid": "424242"}).to_string());
     fx.start_and_stop();
     fx.told_with("it stopped at");
     assert!(!fx.marker_path().exists());
@@ -3206,7 +3206,7 @@ fn mark_restart_writes_the_marker_of_the_latest_engine_and_twice_leaves_one_file
     fx.previous_engine(0.5, true);
     fx.fixture(&format!(
         "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-started', 'The engine started.', '{{\"pid\":{}}}');",
-        ago(0.1),
+        secs_ago(0.1),
         PREVIOUS_ENGINE + 7
     ));
     let before = OffsetDateTime::now_utc() - time::Duration::seconds(1);
