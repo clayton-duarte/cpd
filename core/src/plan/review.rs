@@ -90,8 +90,8 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     })
 }
 
-fn plan_markdown(s: &Snapshot) -> String {
-    render::markdown(&s.plan.title, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps)
+fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
+    render::markdown(heading, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps)
 }
 
 /// `plan render` (§4.5).
@@ -100,7 +100,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let s = snapshot(&mut env, &id)?;
     let path = env.home.plan_md(&id);
-    write_file(&path, &plan_markdown(&s))?;
+    write_file(&path, &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title }))?;
     Ok(Output::success(json!({
         "path": path.display().to_string(),
         "fingerprint": s.fingerprint,
@@ -141,10 +141,15 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
     // The files first, so the review row never names a file that is missing.
     let number = latest_review.as_ref().map_or(0, |r| r.id.number().get()) + 1;
     let review = ReviewId::new(std::num::NonZeroU32::new(number).expect("one more than a count"));
-    let text = plan_markdown(&s);
-    write_file(&env.home.plan_md(&id), &text)?;
+    write_file(&env.home.plan_md(&id), &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title }))?;
     let path = env.home.plan_review_md(&id, review);
-    write_file(&path, &text)?;
+    let heading = render::Heading::Review {
+        title: args.title.as_str(),
+        plan: id.as_str(),
+        plan_title: &s.plan.title,
+        review: &review.to_string(),
+    };
+    write_file(&path, &plan_markdown(&s, &heading))?;
 
     let requested_at = env.store.write("plan review", |tx| {
         // Compare-and-swap on what was read: the phase, the plan fingerprint and the latest review.
@@ -155,9 +160,9 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
                 .with("plan", id.as_str()));
         }
         tx.execute(
-            "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at)
-             SELECT ?1, ?2, ?3, ?4, 'pending', at FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![id.as_str(), review.to_string(), number, fingerprint],
+            "INSERT INTO plan_reviews (plan, id, number, fingerprint, title, status, requested_at)
+             SELECT ?1, ?2, ?3, ?4, ?5, 'pending', at FROM txns WHERE id = cpd_txn()",
+            rusqlite::params![id.as_str(), review.to_string(), number, fingerprint, args.title.as_str()],
         )?;
         let text = format!("Plan review {review} of Plan {id} requested: the User reviews {drafts} draft Jobs in plannotator.");
         append(tx, NewEvent::plan_review_requested(text, review, &fingerprint).plan(id.clone()))?;
@@ -257,7 +262,7 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
                 queued.join(", ")
             ),
             ("approved", _) => format!(
-                "Plan review {} of Plan {id} was {verdict}, but the draft Jobs changed since it was requested: nothing is queued. Next: cpd plan review --plan {id}",
+                "Plan review {} of Plan {id} was {verdict}, but the draft Jobs changed since it was requested: nothing is queued. Next: cpd plan review --plan {id} --title <title>",
                 review.id
             ),
             _ => format!("Plan review {} of Plan {id} was {verdict}. Revise the plan (job edit, job add, job cancel), then cpd plan review", review.id),
