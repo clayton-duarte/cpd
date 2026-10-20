@@ -107,6 +107,8 @@ echo "installed $dest_dir/cpd and $adapter_dir" >&2
 # silently (hs-n278): each failure prints what failed and why, the later
 # follow-ups still run, and the script exits non-zero at the end. cpd waits out a
 # migration holding the setup lock (contract §4.2), so these run after it.
+# How long to wait for the killed engine to release locks/watch.lock (tests set it).
+lock_wait_secs="${CPD_INSTALL_LOCK_WAIT_SECS:-60}"
 failed=0
 fail() {
   echo "cpd install follow-up failed: $1" >&2
@@ -132,22 +134,29 @@ else
     if ! env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null kill-window -t "=$work:watch" >&2; then
       fail "tmux kill-window $work:watch failed: the engine still runs the old binary"
     else
-      # The killed engine releases its lock a moment later; --ensure answers
-      # "already" until then.
-      tries=0
-      ok=1
-      while :; do
-        if ! out=$("$dest_dir/cpd" watch --ensure 2>"$errfile"); then
-          fail "cpd watch --ensure: $out $(cat "$errfile"); the engine is not running"
-          ok=0
+      # The killed engine releases its lock a moment later, possibly well after
+      # (it finishes its tick, waits for a store write): wait for the lock
+      # itself, bounded, then start the engine once and check that it holds the
+      # lock (hs-n288). Nothing gives up silently.
+      lock="${CPD_HOME:-$HOME/.cpd}/locks/watch.lock"
+      mkdir -p "$(dirname "$lock")"
+      waited=0
+      while ! flock -n "$lock" true; do
+        waited=$((waited + 1))
+        if [ "$waited" -gt $((lock_wait_secs * 4)) ]; then
           break
         fi
-        case $out in *'"already":true'*) ;; *) break ;; esac
-        tries=$((tries + 1))
-        [ "$tries" -lt 40 ] || break
         sleep 0.25
       done
-      [ "$ok" -eq 0 ] || echo "$out" >&2
+      if ! flock -n "$lock" true; then
+        fail "the old engine still holds $lock after ${lock_wait_secs}s: the new engine was not started"
+      elif ! out=$("$dest_dir/cpd" watch --ensure 2>"$errfile"); then
+        fail "cpd watch --ensure: $out $(cat "$errfile"); the engine is not running"
+      elif flock -n "$lock" true; then
+        fail "cpd watch --ensure answered $out, but no engine holds $lock: the engine is not running"
+      else
+        echo "$out" >&2
+      fi
     fi
   fi
 fi

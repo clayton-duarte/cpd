@@ -8,10 +8,11 @@ use crate::common;
 mod checkout;
 
 use std::fs;
-use std::process::Output;
+use std::path::PathBuf;
+use std::process::{Child, Command, Output};
 
 use checkout::Checkout;
-use common::TestEnv;
+use common::{spawn, wait_until, TestEnv};
 
 const OPENS: &str = r#"{"opens":true,"refusal":null,"unknown":[],"pending":[]}"#;
 
@@ -28,6 +29,11 @@ fn install(env: &TestEnv, checkout: &Checkout, version: &str) -> Install {
 
 /// As [`install`], with `extra` shell code in the fake `cpd` before its `--version` case.
 fn install_with(env: &TestEnv, checkout: &Checkout, version: &str, extra: &str) -> Install {
+    install_env(env, checkout, version, extra, &[])
+}
+
+/// As [`install_with`], with `vars` in the script's environment.
+fn install_env(env: &TestEnv, checkout: &Checkout, version: &str, extra: &str, vars: &[(&str, &str)]) -> Install {
     let built = env.fake("cpd-built", &format!("{extra}\ncase \"$1\" in --version) echo '{version}' ;; esac"));
     let target = env.root().join("target");
     let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
@@ -35,6 +41,7 @@ fn install_with(env: &TestEnv, checkout: &Checkout, version: &str, extra: &str) 
         .command(checkout.script())
         .env("CARGO", cargo)
         .env("CARGO_TARGET_DIR", &target)
+        .envs(vars.iter().copied())
         .output()
         .unwrap();
     Install { exit: out.status.code().unwrap(), stderr: String::from_utf8_lossy(&out.stderr).into_owned() }
@@ -193,6 +200,46 @@ fn a_version_without_a_store_verdict_or_that_fails_is_refused() {
     assert!(!installed(&env));
 }
 
+/// Fake `watch --ensure` body: starts an engine, a process holding `locks/watch.lock` (it is
+/// `$CPD_HOME/engine.pid`; the test kills it), and answers once the lock is held.
+const STARTS_ENGINE: &str = r#"l="$CPD_HOME/locks/watch.lock"; mkdir -p "$CPD_HOME/locks"
+sh -c 'echo $$ > "$CPD_HOME/engine.pid"; exec flock "$1" sleep 120' sh "$l" </dev/null >/dev/null 2>&1 &
+until ! flock -n "$l" true; do :; done
+echo '{"ok":true,"started":true}'"#;
+
+/// Kills the fake engine and the fake old engine when the test ends.
+struct Engines(Vec<PathBuf>, Vec<Child>);
+
+impl Drop for Engines {
+    fn drop(&mut self) {
+        for pid in &self.0 {
+            if let Ok(pid) = fs::read_to_string(pid) {
+                let _ = Command::new("kill").arg(pid.trim()).status();
+            }
+        }
+        for child in &mut self.1 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn lock_path(env: &TestEnv) -> PathBuf {
+    env.cpd_home().join("locks/watch.lock")
+}
+
+fn lock_held(env: &TestEnv) -> bool {
+    !Command::new("flock").arg("-n").arg(lock_path(env)).arg("true").status().unwrap().success()
+}
+
+/// An old engine: a process holding the lock for `secs` seconds.
+fn old_engine(env: &TestEnv, secs: &str) -> Child {
+    fs::create_dir_all(lock_path(env).parent().unwrap()).unwrap();
+    let child = spawn(Command::new("flock").arg(lock_path(env)).args(["sleep", secs])).unwrap();
+    wait_until("the old engine holds the lock", || lock_held(env));
+    child
+}
+
 const CONFIG: &str = r#"{"ok":true,"config":{"tmux":{"socket":"s","cockpit_session":"cock","work_session":"work"}}}"#;
 
 /// A fake `tmux` on `PATH`: the cockpit has `main` and the work session has `watch`.
@@ -225,7 +272,7 @@ fn a_failing_follow_up_is_printed_and_the_later_ones_still_run() {
     let env = TestEnv::new();
     let checkout = Checkout::new(&env, &[]);
     fake_tmux(&env);
-    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; tui) echo 'no cockpit' >&2; exit 3;; watch) echo '{{"ok":true}}';; esac"#);
+    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; tui) echo 'no cockpit' >&2; exit 3;; watch) {STARTS_ENGINE};; esac"#);
 
     let run = install_with(&env, &checkout, &version("null"), &extra);
 
@@ -240,10 +287,62 @@ fn the_follow_ups_run_after_a_slow_config() {
     let checkout = Checkout::new(&env, &[]);
     fake_tmux(&env);
     // A migration holds the setup lock: cpd config answers only after a while.
-    let extra = format!(r#"case "$1" in config) sleep 2; echo '{CONFIG}';; watch) echo '{{"ok":true}}';; esac"#);
+    let extra = format!(r#"case "$1" in config) sleep 2; echo '{CONFIG}';; watch) {STARTS_ENGINE};; esac"#);
 
     let run = install_with(&env, &checkout, &version("null"), &extra);
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
     assert_eq!(follow_ups(&env), ["tui --respawn", "watch --ensure"]);
+}
+
+fn engine_restart_extra() -> String {
+    format!(r#"case "$1" in config) echo '{CONFIG}';; watch) {STARTS_ENGINE};; esac"#)
+}
+
+#[test]
+fn an_old_engine_that_holds_its_lock_for_longer_than_ten_seconds_is_waited_for() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    fake_tmux(&env);
+    // time-claim: the old engine outlives the former 10 s give-up; no per-poll signal from the script's wait.
+    let old = old_engine(&env, "12");
+    let _engines = Engines(vec![env.cpd_home().join("engine.pid")], vec![old]);
+
+    let run = install_with(&env, &checkout, &version("null"), &engine_restart_extra());
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert_eq!(follow_ups(&env), ["tui --respawn", "watch --ensure"]);
+    assert!(lock_held(&env), "the new engine holds the lock");
+}
+
+#[test]
+fn an_old_engine_that_never_frees_its_lock_fails_the_install_with_the_reason() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    fake_tmux(&env);
+    // time-claim: the bound is 2 s here; the old engine holds well past it; no per-poll signal from the script's wait.
+    let old = old_engine(&env, "120");
+    let _engines = Engines(vec![], vec![old]);
+
+    let run = install_env(&env, &checkout, &version("null"), &engine_restart_extra(), &[("CPD_INSTALL_LOCK_WAIT_SECS", "2")]);
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("cpd install follow-up failed: the old engine still holds "), "{}", run.stderr);
+    assert!(run.stderr.contains("after 2s: the new engine was not started"), "{}", run.stderr);
+    assert_eq!(follow_ups(&env), ["tui --respawn"]);
+}
+
+#[test]
+fn a_new_engine_that_does_not_run_fails_the_install_with_the_reason() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    fake_tmux(&env);
+    // --ensure answers, but no process holds the lock.
+    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; watch) echo '{{"ok":true,"started":true}}';; esac"#);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("but no engine holds "), "{}", run.stderr);
+    assert!(run.stderr.contains("the engine is not running"), "{}", run.stderr);
 }

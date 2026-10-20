@@ -213,7 +213,9 @@ fn a_restarted_engine_does_not_tell_the_manager_of_the_same_failure_again() {
     let second = Engine(fx.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap());
     wait_until("the second watch-started", || fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'watch-started'") == 2);
     fx.env.wait_whole_ticks(3);
-    assert_eq!(fx.messages(), [("mgr1".to_owned(), None, false, stuck_text("old", 2, "crashed"))]);
+    // The restarted engine also tells the Manager how long it was down (contract §3.7, hs-d328): not a stuck-Job message.
+    let messages: Vec<_> = fx.messages().into_iter().filter(|(_, _, _, text)| !text.contains("The engine was down for ")).collect();
+    assert_eq!(messages, [("mgr1".to_owned(), None, false, stuck_text("old", 2, "crashed"))]);
     drop(second);
 }
 

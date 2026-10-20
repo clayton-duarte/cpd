@@ -119,8 +119,20 @@ fn assert_server_options(s: &Server) {
     for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
         assert_eq!(features.matches(feature).count(), 1, "{feature} in {features}");
     }
+    // A view is respawned; the engine's window (`watch`) starts the engine again, as does its window's loss (contract §6.6, hs-d328).
     let hook = s.env.tmux(&["show-hooks", "-g", "pane-died"]);
-    assert_eq!(String::from_utf8_lossy(&hook.stdout), "pane-died[0] if-shell -F \"#{@cpd_view}\" respawn-pane\n", "{hook:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&hook.stdout),
+        "pane-died[0] if-shell -F \"#{@cpd_view}\" respawn-pane \"if -F '#{==:#{window_name},watch}' \\\"run-shell -b 'cpd watch --ensure --wait >/dev/null 2>&1'\\\"\"\n",
+        "{hook:?}"
+    );
+    let hook = s.env.tmux(&["show-hooks", "-g", "window-unlinked"]);
+    assert_eq!(
+        String::from_utf8_lossy(&hook.stdout),
+        "window-unlinked[0] if-shell -F \"#{==:#{hook_window_name},watch}\" \"run-shell -b 'cpd watch --ensure --wait >/dev/null 2>&1'\"\n",
+        "{hook:?}"
+    );
+    assert_eq!(s.env.tmux(&["show", "-sv", "exit-empty"]).stdout, b"off\n");
     let binding = |key| {
         let out = s.env.tmux(&["list-keys", "-T", "root", key]);
         String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>().join(" ")
