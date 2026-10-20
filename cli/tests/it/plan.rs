@@ -59,10 +59,6 @@ fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
     }
 }
 
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
-
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
@@ -182,7 +178,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert_eq!((&out["lead"]["session"], &out["lead"]["name"], &out["lead"]["forked_from"]), (&json!(session), &json!("pay"), &Value::Null));
     assert_eq!(out["lead"]["cwd"], cwd);
     assert_eq!(out["record"], "m1-p1");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM prs"), 0, "a new Plan has no PR");
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM prs"), 0, "a new Plan has no PR");
     let (pane, window) = (out["lead"]["pane"].as_str().unwrap(), out["lead"]["window"].as_str().unwrap());
 
     // The Lead: stopped, in its parked window, with its pane recorded, in the caller's cwd.
@@ -334,11 +330,11 @@ fn new_again_with_the_brief_writes_no_second_brief_record() {
     let env = TestEnv::new();
     setup(&env);
     new_with_brief(&env, "pay", "The brief.\n").ok();
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     let again = new_with_brief(&env, "pay", "The brief.\n").ok();
     assert_eq!(again["already"], true);
     assert_eq!(briefs(&env).len(), 1);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns, "nothing written");
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns, "nothing written");
 
     // A first run that stopped before the brief record (here: run without the file): the rerun writes it, once.
     new_plan_only(&env, "web");
@@ -487,10 +483,10 @@ fn a_managers_first_message_is_the_same_digest_and_records() {
 fn new_refuses_an_empty_brief_file_and_writes_nothing() {
     let env = TestEnv::new();
     setup(&env);
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     refused(&new_with_brief(&env, "pay", ""), "usage", 2);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
 }
 
 #[test]
@@ -498,14 +494,14 @@ fn new_takes_neither_repo_nor_base() {
     let env = TestEnv::new();
     let repo = setup(&env);
     let repo_arg = repo.to_str().unwrap();
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     for extra in [["--repo", repo_arg], ["--base", "main"]] {
         let mut args = vec!["plan", "new", "pay", "--context", "ctx", "--title", "T"];
         args.extend(extra);
         refused(&env.cpd(&args), "usage", 2);
     }
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
     assert!(panes(&env).is_empty());
 }
 
@@ -515,14 +511,14 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
     let repo = setup(&env);
     let first = new_plan_only(&env, "pay");
     let session = first["plan"]["lead_session"].as_str().unwrap().to_owned();
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
 
     // From another directory: still `already`, and the stored cwd stays.
     let again = env.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     assert_eq!(again["already"], true);
     assert_eq!((&again["plan"], &again["record"]), (&first["plan"], &first["record"]));
     assert_eq!((&again["lead"]["pane"], &again["lead"]["window"]), (&first["lead"]["pane"], &first["lead"]["window"]));
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns, "nothing written");
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns, "nothing written");
     assert_eq!(panes(&env).len(), 1);
 
     // A crash after the first transaction: no pane, no message. Rerunning redoes both.
@@ -565,12 +561,12 @@ fn new_and_rename_titles_are_1_to_200_characters_with_no_control_characters() {
     let env = TestEnv::new();
     setup(&env);
     let (long, ok) = ("a".repeat(201), "a".repeat(200));
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     for title in [long.as_str(), "a\nb", "a\tb", "a\u{7f}b"] {
         refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", title]), "usage", 2);
         refused(&env.cpd(&["plan", "rename", "--plan", "nope", "--title", title]), "usage", 2);
     }
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
     env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", &ok]).ok();
     for title in [long.as_str(), "a\nb", "a\tb"] {
         refused(&env.cpd(&["plan", "rename", "--plan", "pay", "--title", title]), "usage", 2);
@@ -589,7 +585,7 @@ fn new_refusals_write_nothing() {
         args.extend(extra);
         env.cpd(&args)
     };
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
 
     refused(&new(&["--context", "nope"]), "context_not_found", 4);
     refused(&new(&["--context", "ctx", "--brief-file", "/no/such/brief"]), "file_unreadable", 2);
@@ -597,8 +593,8 @@ fn new_refusals_write_nothing() {
     refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx"]), "usage", 2);
     refused(&new(&["--context", "ctx", "--name", ""]), "invalid_name", 2);
     refused(&new(&["--context", "ctx", "--jira", "nope"]), "usage", 2);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
 }
 
 #[test]
@@ -607,16 +603,16 @@ fn new_in_a_context_with_no_owner_is_owner_unset_and_writes_nothing() {
     setup(&env);
     // A Context made before the policy keys has no owner.
     store(&env).write("test", |tx| Ok(tx.execute("UPDATE contexts SET owner = NULL", []).map(|_| ())?)).unwrap();
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "T"]), "owner_unset", 3);
     assert_eq!(error["details"]["context"], "ctx");
     assert!(error["details"].get("next").is_none() && error["message"].as_str().unwrap().contains("cpd context owner <login> --context ctx"), "{error}");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
     // After `context owner` the Plan is created.
     env.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
     new_plan_only(&env, "pay");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 1);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 1);
 }
 
 #[test]
@@ -656,9 +652,9 @@ fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     let first = new_plan(&env, "pay", &repo);
     let lead = first["plan"]["lead_session"].as_str().unwrap().to_owned();
     let (sessions, windows, events_before) = (
-        query::<i64>(&env, "SELECT count(*) FROM sessions"),
+        env.query::<i64>("SELECT count(*) FROM sessions"),
         panes(&env).len(),
-        query::<i64>(&env, "SELECT count(*) FROM events"),
+        env.query::<i64>("SELECT count(*) FROM events"),
     );
 
     let out = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
@@ -666,18 +662,18 @@ fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     let phase = &events(&env, "plan-phase")[0];
     assert_eq!((&phase["plan"], &phase["data"]), (&json!("pay"), &json!({"from": "grounding", "to": "plan"})));
     // No Session, no window, no Event but `plan-phase`; no `context-grounded` ever.
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), sessions);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions"), sessions);
     assert_eq!(panes(&env).len(), windows);
     assert!(panes(&env).iter().all(|p| p.1 != "ctx-ctx"));
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), events_before + 1);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), events_before + 1);
     assert_eq!(events(&env, "context-grounded").len(), 0);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions WHERE plan IS NULL"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions WHERE plan IS NULL"), 0);
 
     // Already in phase plan: nothing is written.
     let again = env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     assert_eq!(again, json!({"ok": true, "plan": "pay", "phase": "plan", "already": true}));
     assert_eq!(events(&env, "plan-phase").len(), 1);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM events"), events_before + 1);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), events_before + 1);
 
     // A later Plan of the Context is a fresh Lead, never a fork: its first message holds every record.
     env.cpd(&["context", "note", "Recorded after the first Plan.", "--context", "ctx"]).ok();
@@ -685,7 +681,7 @@ fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     assert_eq!(second["lead"]["forked_from"], Value::Null);
     let session = second["lead"]["session"].as_str().unwrap();
     assert_ne!(session, lead);
-    assert_eq!(query::<Option<String>>(&env, &format!("SELECT forked_from FROM sessions WHERE id = '{session}'")), None);
+    assert_eq!(env.query::<Option<String>>(&format!("SELECT forked_from FROM sessions WHERE id = '{session}'")), None);
     assert_eq!(events(&env, "plan-created").last().unwrap()["data"]["forked_from"], Value::Null);
     assert_eq!(events(&env, "session-registered").last().unwrap()["data"]["forked_from"], Value::Null);
     let message = fs::read_to_string(home(&env).lead_message(&pid("refund"))).unwrap();
@@ -718,7 +714,7 @@ fn a_plan_with_no_pr_is_read_by_phase_list_show_archive_and_unarchive() {
     let env = TestEnv::new();
     setup(&env);
     new_plan_only(&env, "pay");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM prs"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM prs"), 0);
 
     assert_eq!(show(&env, "pay")["prs"], json!([]));
     let ids = |env: &TestEnv| -> Vec<String> {
@@ -748,7 +744,7 @@ fn plans_moving_to_phase_plan_at_once_all_move() {
     for plan in plans {
         new_plan(&env, plan, &repo);
     }
-    let sessions = query::<i64>(&env, "SELECT count(*) FROM sessions");
+    let sessions = env.query::<i64>("SELECT count(*) FROM sessions");
     let barrier = std::sync::Barrier::new(plans.len());
     std::thread::scope(|scope| {
         let handles: Vec<_> = plans
@@ -763,10 +759,10 @@ fn plans_moving_to_phase_plan_at_once_all_move() {
             .collect();
         handles.into_iter().for_each(|h| drop(h.join().unwrap()));
     });
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), sessions);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions"), sessions);
     assert_eq!(events(&env, "context-grounded").len(), 0);
     assert_eq!(events(&env, "plan-phase").len(), plans.len());
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans WHERE phase = 'plan'"), plans.len() as i64);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE phase = 'plan'"), plans.len() as i64);
 }
 
 // ---------- plan list, plan show ----------
@@ -1009,7 +1005,7 @@ fn locked_fingerprint_of(key: &str, needs: &[&str]) -> String {
 }
 
 fn job_status(env: &TestEnv, key: &str) -> String {
-    query(env, &format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+    env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
 }
 
 #[test]
@@ -1416,7 +1412,7 @@ fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
 
     env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
     assert_eq!(pane_title(&env, &pane), "Dynamic subject");
-    assert_eq!(query::<String>(&env, "SELECT title FROM plans WHERE id = 'pay'"), "Retry the payouts");
+    assert_eq!(env.query::<String>("SELECT title FROM plans WHERE id = 'pay'"), "Retry the payouts");
     assert_eq!(events(&env, "plan-renamed").len(), 1);
 
     env.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
@@ -1471,15 +1467,14 @@ fn has_pane(env: &TestEnv, session: &str) -> bool {
 }
 
 fn archived_ats(env: &TestEnv) -> i64 {
-    query(
-        env,
+    env.query(
         "SELECT count(*) FROM (SELECT archived_at FROM contexts UNION ALL SELECT archived_at FROM plans
                               UNION ALL SELECT archived_at FROM sessions) WHERE archived_at IS NOT NULL",
     )
 }
 
 fn event_count(env: &TestEnv) -> i64 {
-    query(env, "SELECT count(*) FROM events")
+    env.query("SELECT count(*) FROM events")
 }
 
 #[test]
@@ -1519,7 +1514,7 @@ fn archive_covers_the_plan_its_lead_and_forks_kills_their_panes_and_appends_one_
     let at = show(&env, "pay")["plan"]["archived_at"].clone();
     assert!(at.is_string());
     assert_eq!(env.cpd(&["plan", "list"]).ok()["plans"][0]["archived_at"], at);
-    assert_eq!(query::<String>(&env, &format!("SELECT state FROM sessions WHERE id = '{lead}'")), "stopped");
+    assert_eq!(env.query::<String>(&format!("SELECT state FROM sessions WHERE id = '{lead}'")), "stopped");
 
     // Again: nothing is written.
     let before = event_count(&env);
@@ -1575,7 +1570,7 @@ fn plan_new_in_an_archived_context_is_refused_before_any_write() {
     let args = ["plan", "new", "pay", "--context", "ctx", "--title", "Pay"];
     let error = refused(&env.cpd(&args), "archived", 3);
     assert_eq!(error["details"]["next"], "cpd context unarchive ctx");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans"), 0);
     assert_eq!(event_count(&env), events_before);
     assert!(panes(&env).is_empty());
 
@@ -1749,12 +1744,12 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     assert_eq!((&pending_stub["status"], &pending_stub["touches"]), (&json!("draft"), &json!([])));
 
     // The review is refused, listing each stub and what it lacks (the cancelled one is not a draft); nothing is written.
-    let (reviews, evs) = (events(&env, "plan-review").len(), query::<i64>(&env, "SELECT count(*) FROM events"));
+    let (reviews, evs) = (events(&env, "plan-review").len(), env.query::<i64>("SELECT count(*) FROM events"));
     let error = refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "draft_incomplete", 3);
     assert_eq!(error["details"]["jobs"], json!([{"key": "next-1", "missing": ["tier", "spec"]}, {"key": "next-2", "missing": ["spec"]}]));
     assert_eq!(error["details"]["plan"], "pay");
     assert!(error["message"].as_str().unwrap().contains("next-1, next-2"), "{error}");
-    assert_eq!((events(&env, "plan-review").len(), query::<i64>(&env, "SELECT count(*) FROM events")), (reviews, evs));
+    assert_eq!((events(&env, "plan-review").len(), env.query::<i64>("SELECT count(*) FROM events")), (reviews, evs));
     assert!(!home(&env).plan_review_md(&pid("pay"), ReviewId::parse("r2").unwrap()).exists());
     // `plan render` still shows them, and the fingerprint covers them as they are.
     let before = env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();

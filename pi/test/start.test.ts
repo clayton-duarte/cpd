@@ -178,7 +178,7 @@ test("start-up: open Escalations of the Plan block the Lead before the first sta
   f.load();
   await f.pi.fire("session_start");
   await waitFor("blocked", () => stateCalls(f).length === 2);
-  assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question"]);
+  assert.deepEqual(stateCalls(f), ["idle", "waiting:cpd: Worker question"]);
 });
 
 test("a Worker does not read the Plan", async (t) => {

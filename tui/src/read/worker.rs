@@ -2,13 +2,13 @@
 //! Session and its Escalations (`attempt show`). The Worker's session file is
 //! not in the database: the view reads `session.file` itself, read-only.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
-use cpd_core::ids::{AttemptId, EscalationId, PlanId, SessionId};
+use cpd_core::ids::{AttemptId, EscalationId, JobKey, PlanId, SessionId};
 use cpd_core::store::Store;
 
 use super::flow::WorkerRef;
@@ -93,6 +93,20 @@ pub fn worker(store: &mut Store, plan: &PlanId, attempt: &AttemptId) -> Result<W
             session,
             events_cursor: highest_id(conn)?,
         })
+    })
+}
+
+/// The latest Attempt of Job `job` of `plan`: the one with the highest number; none for a Job that has not started.
+pub fn latest_attempt(store: &mut Store, plan: &PlanId, job: &JobKey) -> Result<Option<AttemptId>, CpdError> {
+    store.read(|conn| {
+        let latest: Option<String> = conn
+            .query_row(
+                "SELECT id FROM attempts WHERE plan = ?1 AND job = ?2 ORDER BY number DESC LIMIT 1",
+                [plan.as_str(), job.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        latest.map(|latest| id("Attempt id", &latest, AttemptId::parse)).transpose()
     })
 }
 

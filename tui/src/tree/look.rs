@@ -275,7 +275,7 @@ fn an_item_row_keeps_its_icon_in_its_urgency_colour_between_the_muted_line_and_t
     let buf = draw(&mut view, 43, 24);
     let got = rows(&buf);
     let first = find(&got, "f-blocked: Worker") as u16;
-    for (i, colour) in [Color::Red, Color::Yellow, Color::Magenta].into_iter().enumerate() {
+    for (i, colour) in [Meaning::Failed, Meaning::Review, Meaning::Planning].map(palette::color).into_iter().enumerate() {
         let y = first + i as u16;
         assert_eq!((buf[(1, y)].symbol(), buf[(1, y)].fg), ("│", muted()), "row {y}: the line");
         assert_eq!(buf[(2, y)].symbol(), " ");

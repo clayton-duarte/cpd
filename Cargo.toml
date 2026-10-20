@@ -29,3 +29,13 @@ tempfile = "3.27"
 # took 48-62 s and 4.7G of target/ with `true`, 33-40 s and 2.4G with this.
 [profile.dev]
 debug = "line-tables-only"
+
+# Deviation from the default (opt-level 0 for everything): dependencies only.
+# The tests spend their time in dependency code (rusqlite's bundled SQLite
+# creating, migrating and checking a store at every `cpd` command and every
+# `Store::open`; serde, toml, time, minijinja), and unoptimised that is several
+# times slower (docs/research/test-speed.md §7.1). Only dependencies change: the
+# workspace's own crates (cli, core, tui) stay at opt-level 0, so editing them
+# recompiles as before. Cost: a clean build compiles the dependencies optimised.
+[profile.dev.package."*"]
+opt-level = 3

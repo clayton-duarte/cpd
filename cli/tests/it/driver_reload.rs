@@ -28,6 +28,11 @@ const SKIPPED: &str = "reload skipped";
 /// These waits cover a driver that reloads and re-runs: twice the default.
 const LONG: Duration = Duration::from_secs(60);
 
+/// The driver's polls as these tests set them (contract §1.2 "Test overrides"): A4's look at the Worker
+/// (`DRIVER_POLL`, 0.5 s) and A9's pause between `kill-window` tries (`KILL_PAUSE`, 1 s).
+const POLL: Duration = Duration::from_millis(50);
+const DRIVER_ENV: [(&str, &str); 2] = [("CPD_TEST_DRIVER_POLL", "0.05"), ("CPD_TEST_KILL_PAUSE", "0.05")];
+
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
@@ -125,17 +130,14 @@ impl Fx {
         self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     fn path(&self, name: &str) -> PathBuf {
         self.env.root().join(name)
     }
 
-    /// `job dispatch api` by the copy: its driver's executable is the copy. Returns the driver's pid.
+    /// `job dispatch api` by the copy: its driver's executable is the copy, with [`DRIVER_ENV`]. Returns the
+    /// driver's pid.
     fn dispatch(&self) -> i64 {
-        let out = output(self.env.command(&self.installed).args(["job", "dispatch", "api", "--plan", PLAN])).unwrap();
+        let out = output(self.env.command(&self.installed).envs(DRIVER_ENV).args(["job", "dispatch", "api", "--plan", PLAN])).unwrap();
         let json: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {out:?}"));
         assert_eq!(json["ok"], true, "{json}");
         json["pid"].as_i64().unwrap()
@@ -202,9 +204,9 @@ impl Fx {
         let lead = self.env.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"]);
         assert_ne!(lead, old_lead);
         assert_eq!(fs::read_to_string(self.lead.join("api.txt")).unwrap(), "api\n");
-        let status: String = self.query("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'");
+        let status: String = self.env.query("SELECT status FROM jobs WHERE plan = 'pay' AND key = 'api'");
         assert_eq!(status, "merged");
-        assert_eq!(self.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-retry'"), 0);
+        assert_eq!(self.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-retry'"), 0);
     }
 }
 
@@ -214,7 +216,7 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     let pid = fx.dispatch();
     wait_until_for("the Attempt to run", LONG, || fx.status() == "running");
-    let txns = fx.query::<i64>("SELECT count(*) FROM txns");
+    let txns = fx.env.query::<i64>("SELECT count(*) FROM txns");
 
     fx.install();
     wait_until_for("the driver to reload", LONG, || !fx.runs().is_empty());
@@ -222,7 +224,7 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
     assert_eq!(fx.runs(), [format!("{pid} attempt run {ATTEMPT} --plan {PLAN}")], "the same process, the same argv");
     fx.assert_lock_held_by(pid);
     assert_eq!(fx.status(), "running");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), txns, "the reload writes nothing");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns, "the reload writes nothing");
 
     fs::write(fx.path("go"), "").unwrap();
     fx.finish(pid);
@@ -237,7 +239,7 @@ fn a_driver_reloads_while_running_keeps_its_lock_and_the_attempt_merges() {
 fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
     let fx = fx();
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
-    // A `tmux` that holds the driver's `list-panes` (the start of its A4 tick)
+    // A `tmux` that holds the driver's `list-panes` of a `running` Attempt (A4's first look at the Worker's pane)
     // while `hold` exists: the Attempt can be made `merging`, and the new cpd
     // installed, before the driver's tick looks at the Attempt. Only A4's first
     // tick lists the panes: later ticks test the pane's pid with no fork
@@ -253,7 +255,9 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
         &format!(
             "#!/bin/sh\n\
              case \" $* \" in *\" list-panes \"*)\n\
-               if [ -e '{hold}' ]; then : > '{blocked}'; while [ -e '{hold}' ]; do sleep 0.05; done; fi;;\n\
+               if [ -e '{hold}' ] && '{CPD}' attempt show {ATTEMPT} --plan {PLAN} | grep -q '\"status\":\"running\"'; then\n\
+                 : > '{blocked}'; while [ -e '{hold}' ]; do sleep 0.05; done\n\
+               fi;;\n\
              esac\n\
              exec '{real}' \"$@\"\n",
             hold = fx.path("hold").display(),
@@ -295,9 +299,9 @@ fn a_driver_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_into_one
 
     fx.install_older();
     wait_until_for("the driver to refuse the reload", LONG, || fx.log().contains(SKIPPED));
-    // time-claim: the older cpd is neither asked again nor exec'd over eight 0.5 s polls of A4; no per-poll signal from
+    // time-claim: the older cpd is neither asked again nor exec'd over eight polls of A4; no per-poll signal from
     // the driver, which forks nothing at a poll while its Worker's pane lives (engine-F1).
-    std::thread::sleep(Duration::from_secs(4));
+    std::thread::sleep(POLL * 8);
     let log = fx.log();
     assert_eq!(log.matches(SKIPPED).count(), 1, "{log}");
     assert!(log.contains(&format!("reload skipped: {} cannot open the store: The database was migrated by a newer cpd.", fx.installed.display())), "{log}");
@@ -393,7 +397,7 @@ sleep 120"#,
         reloaded = reloaded.display()
     ));
     let pid = fx.dispatch();
-    wait_until("the Worker to be nudged", || fx.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-nudge'") == 1);
+    wait_until("the Worker to be nudged", || fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'attempt-nudge'") == 1);
 
     fx.install();
     wait_until("the driver to reload", || !fx.runs().is_empty());

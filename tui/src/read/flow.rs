@@ -10,11 +10,13 @@ use rusqlite::{Connection, OptionalExtension};
 use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
+use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::{jobs, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
 
+use super::tree::visible_items;
 use super::shared::{
     AttemptStatus, Cause, JobStatus, Origin, Outcome, PlanHead, PrState, ReviewStatus, bad_row, id, plan_heads, tier,
     value_enum,
@@ -46,8 +48,34 @@ pub struct PlanBoxes {
     pub jobs: Vec<JobNode>,
     /// The Plan's latest Plan review, if there is one.
     pub review: Option<Review>,
+    /// What of the Plan needs the User, from the same transaction.
+    pub needs_user: NeedsUser,
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
+}
+
+/// What of a Plan needs the User, from the Inbox's visible items (hs-d303): the plan view draws a failed Job, or a closed
+/// pull request, in the waiting colour while an agent handles it, and in red only for these.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NeedsUser {
+    /// The Jobs with an open `job-stuck` item.
+    pub stuck_jobs: Vec<JobKey>,
+    /// The Plan's Lead has an open `dialog` item: it asks the User (about a closed pull request, say).
+    pub lead_dialog: bool,
+}
+
+impl NeedsUser {
+    /// Of the `visible` items (not snoozed, not dismissed) of `plan`, whose Lead is `lead`.
+    fn of(visible: &[Item], plan: &PlanId, lead: &SessionId) -> NeedsUser {
+        NeedsUser {
+            stuck_jobs: visible
+                .iter()
+                .filter(|i| i.kind == Kind::JobStuck && i.plan.as_ref() == Some(plan))
+                .filter_map(|i| i.job.clone())
+                .collect(),
+            lead_dialog: visible.iter().any(|i| i.kind == Kind::Dialog && i.session.as_ref() == Some(lead)),
+        }
+    }
 }
 
 /// A PR's status (contract §3.8). A `cancelled` PR is not drawn, so it is never read.
@@ -94,6 +122,9 @@ pub struct Pull {
     pub url: String,
     /// `pull_requests.mergeable = 'conflicting'` as of the last poll; `unknown` is not a conflict.
     pub conflicting: bool,
+    /// The Plan's Lead Session has `state = 'working'` (contract §3.6), read with the rest: the title shows the Lead's
+    /// working dot beside the state (hs-d335).
+    pub lead_working: bool,
 }
 
 /// Whether a `pull_requests.mergeable` value is a conflict; a value outside the column's set is an error.
@@ -202,14 +233,21 @@ pub fn flow(store: &mut Store, plan: &PlanId) -> Result<Flow, CpdError> {
 /// is read too (R34: `plan new` adds none).
 pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdError> {
     store.read(|conn| {
-        let context: String = conn
-            .query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))
+        let (context, lead, lead_working): (String, String, bool) = conn
+            .query_row(
+                "SELECT p.context, p.lead_session, s.state = 'working' FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
+                [plan.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()?
             .ok_or_else(|| plan_not_found(plan))?;
+        let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
+        let needs_user = NeedsUser::of(&visible_items(conn, &now)?, plan, &id("Session id", &lead, SessionId::parse)?);
         Ok(PlanBoxes {
+            needs_user,
             review: latest_review(conn, plan, &plan_fingerprint(conn, plan)?)?,
             context: id("Context id", &context, ContextId::parse)?,
-            prs: pr_nodes(conn, plan)?,
+            prs: pr_nodes(conn, plan, lead_working)?,
             jobs: job_nodes(conn, plan)?,
             events_cursor: highest_id(conn)?,
             plan: plan.clone(),
@@ -217,8 +255,8 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
     })
 }
 
-/// The PRs of `plan` that are not `cancelled`, in key order, with their needs.
-fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
+/// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `lead_working`: the Plan's Lead is working.
+fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<PrNode>, CpdError> {
     let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
@@ -254,6 +292,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
                     state: PrState::of(status == PrStatus::Merged, row_state.as_deref()),
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
+                    lead_working,
                 })
             })
             .transpose()?;

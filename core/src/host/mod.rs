@@ -7,6 +7,7 @@
 //! - [`deadline`]: the one subprocess runner with a deadline (contract §1.2 `tool_timeout`);
 //! - [`git_guard`]: the `git` wrapper that refuses `git stash` and the `PATH` that puts it first (§6.5, hs-d310);
 //! - [`exe`]: the running executable and the reload after an install (§6.7);
+//! - [`limit`]: the test overrides of fixed limits and polls (contract §1.2, debug builds only);
 //! - [`layout`]: window names, `@cpd_*` options and the chat slot (§6.2);
 //! - [`pi`]: pi's argv and environment per role, and the `[-e …]` rule (§6.5).
 
@@ -15,6 +16,7 @@ pub mod deadline;
 pub mod exe;
 pub mod git_guard;
 pub mod layout;
+pub mod limit;
 pub mod pi;
 pub mod tmux;
 

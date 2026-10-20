@@ -301,7 +301,7 @@ fn reset_steps(panes: &[(PaneId, View)]) -> Vec<Vec<String>> {
 }
 
 /// Resets the layout of `<cockpit>:main`: `cpd tui` runs it after building
-/// `main`, `cpd tui action reset` on the StatusBar's ⧉ click.
+/// `main`, `cpd tui action reset` on the StatusBar's 󰨝 (U+F0A1D) click.
 fn reset_layout(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
     let panes: Vec<(PaneId, View)> =
         main_views(tmux, cockpit)?.into_iter().filter_map(|(pane, view)| Some((pane, View::parse(&view)?))).collect();

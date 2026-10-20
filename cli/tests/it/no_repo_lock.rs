@@ -17,7 +17,7 @@ use std::fs::{self, File};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, TestEnv, write_executable};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
@@ -330,11 +330,7 @@ impl Child {
     /// Its stdout as JSON, once it has exited (at most 120 s).
     fn finish(mut self) -> Value {
         let child = self.0.as_mut().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(120);
-        while child.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < deadline, "the child did not exit");
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        common::wait_until_for("the child to exit", Duration::from_secs(120), || child.try_wait().unwrap().is_some());
         let out = self.0.take().unwrap().wait_with_output().unwrap();
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -418,11 +414,7 @@ fn a_merge_during_pr_rebases_gate_lands_and_reaches_origin_through_the_rebases_p
     fx.git(&fx.repo, &["push", "-q", "origin", "main"]);
 
     let rebase = fx.spawn_rebase(&pay);
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !fx.env.root().join("gate-started").exists() {
-        assert!(Instant::now() < deadline, "the Gate never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until_for("the Gate to start", Duration::from_secs(120), || fx.env.root().join("gate-started").exists());
     // The rebase's compare-and-swap is done (R'); its push waits for the Gate. The merge
     // runs to its end meanwhile: it lands on R', and its own push, against the remote's
     // pre-rebase head, is rejected.
