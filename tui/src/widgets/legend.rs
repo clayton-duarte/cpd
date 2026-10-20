@@ -226,11 +226,11 @@ fn body_height(sections: &[Section]) -> u16 {
 }
 
 /// The size the legend needs: columns, rows (without a popup's border). The title is a section header, which
-/// needs its own width: `╭─`, the pill (the title and its two caps) and one `─`.
+/// needs its own width: the padding, `╭─`, the pill (the title and its two caps), one `─` and the padding.
 pub fn size() -> (u16, u16) {
     let sections = sections();
     let width = sections.iter().map(Section::width).max().unwrap_or(0) + 2;
-    (width.max(INTRO.chars().count() as u16 + 5), HEADER_ROWS + body_height(&sections))
+    (width.max(INTRO.chars().count() as u16 + 7), HEADER_ROWS + body_height(&sections))
 }
 
 /// The whole body drawn off screen, `width` columns wide: the popup shows a window of it.
@@ -265,8 +265,9 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
         let last = (scroll.offset() + scroll.page()).min(scroll.total());
         let position = format!(" {}-{}/{} ", scroll.offset() + 1, last, scroll.total());
         let width = position.chars().count() as u16;
-        if width < title.width {
-            let at = Rect::new(title.x + title.width - width, title.y, width, 1);
+        // ends one column before the edge: the padding stays blank
+        if width + 1 < title.width {
+            let at = Rect::new(title.x + title.width - 1 - width, title.y, width, 1);
             f.render_widget(Paragraph::new(position).style(palette::fg(Meaning::Nothing)), at);
         }
     }

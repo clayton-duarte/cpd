@@ -192,12 +192,13 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 const CAP_LEFT: &str = "\u{E0B6}";
 const CAP_RIGHT: &str = "\u{E0B4}";
 
-/// A section title on a `width`-column pane: `╭─`, the pill (the title between its caps), then `─` to the edge, or to the count.
+/// A section title on a `width`-column pane (hs-d475, hs-d476): a blank column, `╭─`, the pill (the title between its caps), then
+/// `─` to the count or to the blank last column (the rows read back are trimmed).
 fn pill(width: usize, title: &str, count: Option<usize>) -> String {
-    let used = 4 + title.chars().count();
+    let used = 4 + title.chars().count() + 2;
     match count {
-        None => format!("╭─{CAP_LEFT}{title}{CAP_RIGHT}{}", "─".repeat(width - used)),
-        Some(n) => format!("╭─{CAP_LEFT}{title}{CAP_RIGHT}{}{n}", "─".repeat(width - used - n.to_string().len())),
+        None => format!(" ╭─{CAP_LEFT}{title}{CAP_RIGHT}{}", "─".repeat(width - used)),
+        Some(n) => format!(" ╭─{CAP_LEFT}{title}{CAP_RIGHT}{}{n}", "─".repeat(width - used - n.to_string().len())),
     }
 }
 
@@ -1144,7 +1145,7 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
 #[test]
 fn the_session_dots_are_listed_in_their_colours() {
     let buf = legend_buffer();
-    let dots = find(&buf, "Session dots").1;
+    let dots = find(&buf, "Session Dots").1;
     // The glyph column is as wide as the spinner's frames, then two cells of spacing.
     let glyph_at = |text: &str| {
         let (x, y) = find_after(&buf, dots, text);
@@ -1193,7 +1194,7 @@ fn the_pr_states_and_checks_are_listed_in_their_colours() {
     for (name, state) in palette::PR_LEGEND {
         assert_eq!(buf[find(&buf, &format!("#2 {name}"))].fg, palette::color(palette::pr_state(state)), "{name}");
     }
-    let checks = find(&buf, "PR checks").1;
+    let checks = find(&buf, "PR Checks").1;
     for (name, c) in palette::CHECKS_LEGEND {
         let (icon, m) = palette::checks(c);
         let (x, y) = find_after(&buf, checks, &format!(" {name}"));
@@ -1205,7 +1206,7 @@ fn the_pr_states_and_checks_are_listed_in_their_colours() {
 #[test]
 fn the_legend_fits_its_own_size() {
     let buf = legend_buffer();
-    assert!(row(&buf, 1).contains("any key closes"));
+    assert!(row(&buf, 1).contains("Any Key Closes"));
     let (w, h) = legend::size();
     assert_eq!((buf.area.width, buf.area.height), (w, h));
     assert!(row(&buf, h - 1).contains("passed"), "the last section is not cut");
