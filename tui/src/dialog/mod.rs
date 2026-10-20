@@ -234,11 +234,11 @@ const MIN_INNER: usize = 40;
 const MAX_INNER: usize = 76;
 
 /// The popup's size `(columns, rows)`, border included, for content `natural` columns wide whose body is
-/// `body_rows(width)` rows at `width` text columns; at most the client's size. The inside is the header, the body, a
-/// blank row and the buttons.
+/// `body_rows(width)` rows at `width` text columns; at most the client's size. The inside is an empty row, the title, an empty
+/// row, the body, a blank row and the buttons.
 fn popup_size(client: (u16, u16), title: &str, natural: usize, body_rows: impl Fn(usize) -> usize) -> (u16, u16) {
     let inner = (natural + 2).max(title.chars().count() + 6).clamp(MIN_INNER, MAX_INNER);
-    let rows = body_rows(inner - 2) + 3;
+    let rows = body_rows(inner - 2) + 5;
     let fit = |wanted: usize, cap: u16| u16::try_from(wanted + 2).unwrap_or(u16::MAX).min(cap);
     (fit(inner, client.0), fit(rows, client.1))
 }
@@ -371,10 +371,10 @@ mod tests {
     #[test]
     fn the_popup_is_sized_to_its_content_and_capped_at_the_client() {
         let client = (200, 60);
-        // short content: the narrowest inside (40), header + 1 row + blank + buttons = 4, and the border
-        assert_eq!(popup_size(client, "T", 10, |_| 1), (42, 6));
+        // short content: the narrowest inside (40), empty + title + empty + 1 row + blank + buttons = 6, and the border
+        assert_eq!(popup_size(client, "T", 10, |_| 1), (42, 8));
         // long content: the widest inside (76), wrapped
-        assert_eq!(popup_size(client, "T", 300, |w| 300usize.div_ceil(w)), (78, 5 + 3 + 2));
+        assert_eq!(popup_size(client, "T", 300, |w| 300usize.div_ceil(w)), (78, 5 + 5 + 2));
         // a long title widens it
         assert_eq!(popup_size(client, &"t".repeat(50), 10, |_| 1).0, 58);
         // capped
