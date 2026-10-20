@@ -3,6 +3,7 @@
 use crate::common;
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -1350,4 +1351,119 @@ fn a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
     assert_eq!(d["argv"], serde_json::json!(["git", "-C", repo.display().to_string(), "hang"]));
     let pid: i32 = fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
     common::wait_until("git's child to die with its process group", || !running(pid));
+}
+
+// ------------------------------------------------ `worktree::list` over a half-written admin dir (contract §7)
+//
+// `git worktree list --porcelain` reads `.git/worktrees/<id>/commondir` of every linked worktree. Another cpd operation
+// in the same repo adding a worktree (git creates `commondir` empty, then writes it) or removing one (git deletes its
+// files one after another) leaves an admin dir half-written for a moment, and git dies on it: exit 128, `fatal: failed
+// to read .git/worktrees/<id>/commondir: Success` (reproduced by hand, git 2.43). Each test below holds that file as a
+// FIFO (`common::answer_reads`): the read of it is observed, answered with an empty file, and the dir is completed or
+// removed before the read ends, so what the second read finds does not depend on timing.
+
+/// A repo with one linked worktree, `held` on branch `held`: returns the repo, the worktree and its admin dir.
+fn repo_with_a_linked_worktree(env: &TestEnv) -> (PathBuf, PathBuf, PathBuf) {
+    let repo = env.git_repo("pay");
+    let worktree = env.root().join("pay.held");
+    env.git(&repo, &["worktree", "add", "-q", "-b", "held", worktree.to_str().unwrap()]);
+    let admin = repo.join(".git/worktrees/pay.held");
+    assert!(admin.join("commondir").is_file(), "git writes commondir in {}", admin.display());
+    (repo, worktree, admin)
+}
+
+/// The paths `worktree::list` found, symlinks resolved.
+fn listed(repo: &Path) -> Result<Vec<PathBuf>, cpd_core::error::CpdError> {
+    Ok(cpd_core::git::worktree::list(repo)?.into_iter().map(|w| w.path.canonicalize().unwrap_or(w.path)).collect())
+}
+
+#[test]
+fn list_reads_again_when_the_admin_dir_it_read_half_written_is_completed() {
+    let env = TestEnv::new();
+    let (repo, worktree, admin) = repo_with_a_linked_worktree(&env);
+    let commondir = admin.join("commondir");
+    let whole = admin.join("commondir.whole");
+    fs::copy(&commondir, &whole).unwrap();
+
+    let (found, reads) = common::answer_reads(
+        &commondir,
+        4,
+        |_, _| {
+            // The first read got an empty `commondir`; the writer has finished before the read ends.
+            fs::rename(&whole, &commondir).unwrap();
+            common::Next::Done
+        },
+        || listed(&repo),
+    );
+
+    assert_eq!(reads, 1, "the first read of commondir");
+    let found = found.expect("list reads again: the admin dir is complete at the second read");
+    assert_eq!(found, [repo.canonicalize().unwrap(), worktree.canonicalize().unwrap()]);
+}
+
+#[test]
+fn list_reads_again_when_the_admin_dir_it_read_is_removed() {
+    let env = TestEnv::new();
+    let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
+
+    let (found, reads) = common::answer_reads(
+        &admin.join("commondir"),
+        4,
+        |_, _| {
+            // `git worktree remove` deleted the dir while the first read was in it.
+            fs::remove_dir_all(&admin).unwrap();
+            common::Next::Done
+        },
+        || listed(&repo),
+    );
+
+    assert_eq!(reads, 1, "the first read of commondir");
+    let found = found.expect("list reads again: the admin dir is gone at the second read");
+    assert_eq!(found, [repo.canonicalize().unwrap()]);
+}
+
+#[test]
+fn an_admin_dir_that_stays_half_written_is_one_git_failed_after_twenty_reads() {
+    let env = TestEnv::new();
+    let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
+
+    let (found, reads) = common::answer_reads(&admin.join("commondir"), 40, |_, _| common::Next::Hold, || listed(&repo));
+
+    // The bound is the one of `worktree add` (§7): 20 rounds; the 20th failure is the error.
+    assert_eq!(reads, 20, "git ran 20 times, each read the half-written commondir");
+    let error = found.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::GitFailed);
+    let details = error.details();
+    assert_eq!(details["exit"], 128);
+    assert_eq!(details["argv"].as_array().unwrap()[3..], [serde_json::json!("worktree"), serde_json::json!("list"), serde_json::json!("--porcelain")]);
+    let stderr = details["stderr"].as_str().unwrap();
+    assert!(stderr.contains("fatal: failed to read ") && stderr.contains("worktrees/pay.held/commondir: Success"), "{stderr}");
+}
+
+#[test]
+fn any_other_worktree_list_failure_is_git_failed_at_once() {
+    let env = TestEnv::new();
+    let (repo, _worktree, _admin) = repo_with_a_linked_worktree(&env);
+    let config = repo.join(".git/config");
+    let whole = repo.join(".git/config.whole");
+    fs::copy(&config, &whole).unwrap();
+
+    let (found, reads) = common::answer_reads(
+        &config,
+        4,
+        |_, file| {
+            // The first read of the config finds a line git cannot parse: not the half-written admin dir. Then the
+            // config is whole again, so a read after it would succeed.
+            file.write_all(b"[broken\n").unwrap();
+            fs::rename(&whole, &config).unwrap();
+            common::Next::Done
+        },
+        || listed(&repo),
+    );
+
+    assert_eq!(reads, 1, "git read the config once");
+    let error = found.expect_err("no second read: the failure is not the half-written admin dir");
+    assert_eq!(error.code(), ErrorCode::GitFailed);
+    assert_eq!(error.details()["exit"], 128);
+    assert!(error.details()["stderr"].as_str().unwrap().contains("bad config"), "{error:?}");
 }

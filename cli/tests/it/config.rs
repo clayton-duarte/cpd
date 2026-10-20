@@ -68,7 +68,7 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "stall_seconds": 1200,
                 "pi_stop_seconds": 10
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "error_repeat_seconds": 600},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
             "inbox": {
                 "stuck_job_minutes": 10,
                 "team_channel": "",
@@ -190,6 +190,7 @@ pi_stop_seconds = 1
 tick_seconds = 1
 pr_poll_seconds = 1
 team_review_seconds = 1
+pr_poll_transient_minutes = 1
 error_repeat_seconds = 1
 [inbox]
 stuck_job_minutes = 1
@@ -283,6 +284,7 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0.2501\n", "watch.tick_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = \"0.2\"\n", "watch.tick_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_seconds = 0.5\n", "watch.pr_poll_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_transient_minutes = 0\n", "watch.pr_poll_transient_minutes"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0\n", "timeouts.pi_stop_seconds"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0.5\n", "timeouts.pi_stop_seconds"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
