@@ -8,10 +8,10 @@ import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
- * Every cpd message in a pi pane is one fold, drawn like every block that folds: a bold title led by `⦁`; expanded, each content line
- * led by a muted `│` and a muted `└ collapse` line; folded, a muted `└ expand` line. Colours come from pi's theme (`muted`, bold).
+ * Every cpd message in a pi pane is one fold, drawn like every block that folds: a bold title led by a muted `╭` and `⦁`; expanded, each
+ * content line led by a muted `│ ` and a muted `╰─ collapse` line; folded, a muted `╰─ expand` line. Colours come from pi's theme (`muted`, bold).
  * Expanding is pi's own mechanism, the renderer's `expanded` option (Ctrl+O), plus a left click anywhere on the message: pi gives the
- * renderer one mouse region per message, so the click cannot be limited to the `└` line. Display only: the message's `content` and
+ * renderer one mouse region per message, so the click cannot be limited to the `╰─` line. Display only: the message's `content` and
  * `details` are read, never changed. The style `off` (pi-compact-tools' config) still hands the message to pi's own box.
  */
 
@@ -166,8 +166,9 @@ const withinWidth = (lines: string[], width: number): string[] => lines.map((l) 
 
 const INDICATOR = "⦁";
 const MARGIN = " ";
-const RAIL = "│";
-const CLOSE = "└";
+const TOP = "╭";
+const RAIL = "│ ";
+const CLOSE = "╰─";
 const EXPAND = "expand";
 const COLLAPSE = "collapse";
 
@@ -177,9 +178,9 @@ type Rows = { head: (width: number) => string[]; body: (width: number) => string
 function rowsOf(summary: string, content: string, theme: Theme): Rows {
   const muted = (text: string) => theme.fg("muted", text);
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${theme.fg("customMessageLabel", INDICATOR)} `;
+  const lead = `${MARGIN}${muted(TOP)}${theme.fg("customMessageLabel", INDICATOR)} `;
   const indent = " ".repeat(visibleWidth(lead));
-  const rail = `${MARGIN}${muted(RAIL)} `;
+  const rail = `${MARGIN}${muted(RAIL)}`;
   return {
     head: (width) => hardWrap(theme.bold(`cpd ${summary}`), width - visibleWidth(lead)).map((l, i) => `${i === 0 ? lead : indent}${l}`),
     body: text === "" ? () => [] : prefixedText(text, rail),

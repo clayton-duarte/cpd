@@ -29,7 +29,7 @@ mod sql_trace;
 
 use std::path::{Path, PathBuf};
 
-use crate::args::{Name, PlanArg, Text, Title};
+use crate::args::{Name, PlanArg, PrTitle, Text, Title};
 use crate::context::Jira;
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
@@ -128,6 +128,9 @@ pub struct RenderArgs {
 pub struct ReviewArgs {
     #[command(flatten)]
     plan: PlanArg,
+    /// What the drafts under review do: the heading of the review; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: PrTitle,
 }
 
 #[derive(clap::Args, Debug)]

@@ -70,11 +70,11 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The kind of the row clicked (`None`: the empty area); a `…` row has no menu.
+    /// The kind of the row clicked (`None`: the empty area); a toggle row has no menu.
     pub fn of(row: Option<Row<'_>>) -> Option<Kind> {
         match row {
             None => Some(Kind::Empty),
-            Some(Row::More | Row::Toggle) => None,
+            Some(Row::Toggle) => None,
             Some(row) if row.archived() => Some(Kind::Archived),
             Some(Row::Context(_)) => Some(Kind::Context),
             Some(Row::Plan(..)) => Some(Kind::Plan),
@@ -181,8 +181,7 @@ mod tests {
         assert_eq!(Kind::of(None), Some(Kind::Empty));
         let tree = archived();
         let kind = |p: &[&str]| Kind::of(rows::row(&tree, &path(p)));
-        assert_eq!(kind(&["alpha", rows::MORE]), None, "a `…` row has no menu");
-        assert_eq!(kind(&[rows::MORE]), None);
+        assert_eq!(kind(&["╰─ alpha"]), None, "a toggle row has no menu");
         assert_eq!(kind(&["alpha", "old"]), Some(Kind::Archived), "an archived Plan");
         assert_eq!(kind(&["alpha", "f-blocked"]), Some(Kind::Archived), "an archived fork of a live Plan");
         assert_eq!(kind(&["zeta"]), Some(Kind::Archived), "an archived Context");

@@ -464,7 +464,11 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   assert.match(lead, /Register planned work at once/);
   assert.match(lead, /cpd job add <k> --draft --title/);
-  assert.match(lead, /cpd pr add <key> --repo <path> --needs/);
+  assert.match(lead, /cpd pr add <key> --repo <path> --title "<title>" --needs/);
+  assert.match(lead, /pr_title_required/);
+  assert.match(lead, /cpd pr edit <key> --title/);
+  for (const l of lead.split("\n")) if (/cpd pr add <key>/.test(l)) assert.match(l, /--title/, `pr add without --title: ${l}`);
+  assert.doesNotMatch(lead, /cpd_plan_review` \(no parameters\)/);
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Check each Plan's registered work/);
   assert.match(manager, /cpd plan show --plan <p>/);
