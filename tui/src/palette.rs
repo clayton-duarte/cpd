@@ -83,8 +83,8 @@ pub fn color(m: Meaning) -> Color {
         Meaning::Planning => Color::Magenta,
         Meaning::Grounding => Color::White,
         Meaning::Nothing => Color::DarkGray,
-        // A calm blue: no other meaning uses blue; it is neither the red of a failure nor the yellow of attention.
-        Meaning::Waiting => Color::Blue,
+        // Cyan, not blue: blue means focus only (hs-d352); it is neither the red of a failure nor the yellow of attention.
+        Meaning::Waiting => Color::Cyan,
     }
 }
 
@@ -340,7 +340,7 @@ mod tests {
             (Meaning::Planning, Color::Magenta),
             (Meaning::Grounding, Color::White),
             (Meaning::Nothing, Color::DarkGray),
-            (Meaning::Waiting, Color::Blue),
+            (Meaning::Waiting, Color::Cyan),
         ];
         assert_eq!(table.map(|(m, _)| m), Meaning::ALL);
         for (m, c) in table {
@@ -396,8 +396,8 @@ mod tests {
         assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled(IDLE, Style::new()), "the terminal's foreground");
         assert_eq!(
             dot_span(Dot::Waiting, 0, false),
-            Span::styled(WAITING, Style::new().fg(Color::Blue)),
-            "a calm blue: not red, not the yellow of attention, and not a filled dot"
+            Span::styled(WAITING, Style::new().fg(Color::Cyan)),
+            "cyan, never the focus blue: not red, not the yellow of attention, and not a filled dot"
         );
         assert_ne!(WAITING, NEEDS_YOU);
         assert_ne!(color(Meaning::Waiting), color(Meaning::Failed));
@@ -481,10 +481,10 @@ mod tests {
     fn a_failed_job_and_its_counter_are_waiting_until_it_is_stuck() {
         assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
         assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
-        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::Blue));
+        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::Cyan));
         assert_eq!(failed_count_style(2, true), Style::new().fg(Color::Red));
         assert_eq!(failed_count_style(0, true), Style::new().fg(Color::DarkGray), "nothing failed: nothing to show");
-        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::Blue));
+        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::Cyan));
     }
 
     #[test]
