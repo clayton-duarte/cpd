@@ -18,3 +18,5 @@ mod preview_script;
 mod prune_script;
 mod release_script;
 mod slot;
+mod test_changed_script;
+mod version;
