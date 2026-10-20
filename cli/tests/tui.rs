@@ -47,6 +47,12 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
+/// `tmux <args>`'s stdout, or `None` when tmux refuses (an option it does not know).
+fn tmux_try(env: &TestEnv, args: &[&str]) -> Option<String> {
+    let out = env.tmux(args);
+    out.status.success().then(|| String::from_utf8(out.stdout).unwrap())
+}
+
 /// One pane of `cpd:main`.
 #[derive(Debug, Clone, PartialEq)]
 struct Pane {
@@ -271,6 +277,11 @@ fn assert_server_options(env: &TestEnv) {
     for option in SERVER_OPTIONS {
         match option {
             ["set", "-g", name, value] => assert_eq!(tmux_out(env, &["show", "-gv", name]).trim_end_matches('\n'), *value, "{name}"),
+            // `-q`: tmux older than 3.5 or so does not know the option, and there is nothing to read back
+            ["set", "-gq", name, value] => match tmux_try(env, &["show", "-gv", name]) {
+                Some(shown) => assert_eq!(shown.trim_end_matches('\n'), *value, "{name}"),
+                None => eprintln!("{name} not asserted: this tmux does not know the option"),
+            },
             ["set", "-as", name, value] => {
                 let shown = tmux_out(env, &["show", "-sv", name]);
                 for feature in value.split(',').filter(|f| !f.is_empty()) {
@@ -289,6 +300,15 @@ fn assert_server_options(env: &TestEnv) {
             other => panic!("an option this test cannot check: {other:?}"),
         }
     }
+}
+
+/// After `cpd tui`: `@cpd_machine` is the test config's machine and the title
+/// tmux expands from `set-titles-string` is `cpd · <machine>` (contract §6.1, hs-d300).
+fn assert_window_title(env: &TestEnv) {
+    assert_eq!(tmux_out(env, &["show", "-gv", "set-titles"]).trim_end_matches('\n'), "on");
+    assert_eq!(tmux_out(env, &["show", "-gv", "@cpd_machine"]).trim_end_matches('\n'), "m1");
+    let format = tmux_out(env, &["show", "-gv", "set-titles-string"]);
+    assert_eq!(tmux_out(env, &["display", "-p", format.trim_end_matches('\n')]).trim_end_matches('\n'), "cpd · m1");
 }
 
 #[test]
@@ -310,6 +330,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
 fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let env = env();
     let out = env.cpd(&["tui"]).ok();
+    assert_window_title(&env);
     let engine = out["watch"]["pane"].as_str().unwrap();
     assert_server_options(&env);
     let before = main_panes(&env);
@@ -590,6 +611,102 @@ fn a_pane_header_is_a_title_pill_whose_caps_take_the_borders_colour() {
     tmux_out(&env, &["select-pane", "-t", &plan.id]);
     wait_until("the focus to move", || caps_blue(&styled_row(&outer, plan_row), "Plan") == (true, true));
     assert_eq!(caps_blue(&styled_row(&outer, lead_row), "Retry payouts"), (false, false));
+}
+
+/// Kills `gone` (views of `main`), runs `cpd tui`, and asserts the layout is whole again with the panes that were
+/// not killed unchanged, and that rerunning adds nothing.
+fn assert_repaired_after_killing(gone: &[&str]) {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let full = main_panes(&env);
+    for name in gone {
+        tmux_out(&env, &["kill-pane", "-t", &view(&full, name).id]);
+    }
+    // An old main, its sizes changed by the User.
+    if !gone.contains(&"widgets") {
+        tmux_out(&env, &["resize-pane", "-t", &view(&full, "widgets").id, "-x", "80"]);
+    }
+    let before = main_panes(&env);
+    assert_eq!(before.len(), 4 - gone.len(), "{before:?}");
+
+    let out = env.cpd(&["tui"]).ok();
+    assert_eq!(out["built"], false, "{out}");
+    let after = main_panes(&env);
+    assert_layout(&after);
+    for old in &before {
+        let new = after.iter().find(|p| p.id == old.id).unwrap_or_else(|| panic!("{} is gone: {after:?}", old.id));
+        assert_eq!((new.view.as_str(), new.pid, new.dead), (old.view.as_str(), old.pid, false));
+    }
+
+    // Rerunning adds nothing and starts nothing.
+    let started = views_started(&env).len();
+    env.cpd(&["tui"]).ok();
+    assert_eq!(main_panes(&env), after);
+    assert_eq!(views_started(&env).len(), started);
+}
+
+#[test]
+fn tui_adds_a_missing_tree_to_an_existing_main() {
+    assert_repaired_after_killing(&["tree"]);
+}
+
+#[test]
+fn tui_adds_a_missing_plan_view_to_an_existing_main() {
+    assert_repaired_after_killing(&["plan"]);
+}
+
+#[test]
+fn tui_adds_a_missing_widgets_view_to_an_existing_main() {
+    assert_repaired_after_killing(&["widgets"]);
+}
+
+#[test]
+fn tui_adds_a_missing_chat_placeholder_to_an_existing_main() {
+    assert_repaired_after_killing(&["chat"]);
+}
+
+#[test]
+fn tui_adds_the_plan_view_and_the_chat_slot_when_both_are_missing() {
+    assert_repaired_after_killing(&["plan", "chat"]);
+}
+
+#[test]
+fn tui_finishes_a_build_that_stopped_after_the_first_pane() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let full = main_panes(&env);
+    let tree = view(&full, "tree").clone();
+    for name in ["plan", "widgets", "chat"] {
+        tmux_out(&env, &["kill-pane", "-t", &view(&full, name).id]);
+    }
+    assert_eq!(main_panes(&env).len(), 1);
+
+    let out = env.cpd(&["tui"]).ok();
+    assert_eq!(out["built"], false, "{out}");
+    let after = main_panes(&env);
+    assert_layout(&after);
+    assert_eq!(view(&after, "tree").pid, tree.pid, "the pane that was there is not touched");
+    env.cpd(&["tui"]).ok();
+    assert_eq!(main_panes(&env), after);
+}
+
+#[test]
+fn tui_keeps_a_lead_in_the_chat_slot_when_the_plan_view_is_missing() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let placeholder = view(&main_panes(&env), "chat").clone();
+    let lead = tmux_out(&env, &["new-window", "-d", "-t", "=cpd:", "-n", "park-pay", "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    let lead = lead.trim();
+    tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_session", "lead-a"]);
+    tmux_out(&env, &["swap-pane", "-d", "-s", lead, "-t", &placeholder.id]);
+    let full = main_panes(&env);
+    tmux_out(&env, &["kill-pane", "-t", &view(&full, "plan").id]);
+
+    env.cpd(&["tui"]).ok();
+    let after = main_panes(&env);
+    assert_layout(&after);
+    assert!(after.iter().any(|p| p.id == lead), "the Lead keeps the slot: {after:?}");
+    assert!(after.iter().all(|p| p.view != "chat"), "no second slot: {after:?}");
 }
 
 #[test]

@@ -8,9 +8,11 @@ import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
- * commands.md §15.9: every cpd message in a pi pane is drawn as a pi-compact-tools 0.16.6 tool row, collapsed. The rows are
- * copied from that extension's source (`compact-tools.ts`, `-layout.ts`, `-claude.ts`, `-codex.ts`, `-codex-rows.ts`), not imported: it
- * exposes no API and draws tool rows only. Display only: the message's `content` and `details` are read, never changed.
+ * Every cpd message in a pi pane is one fold, drawn like every block that folds: a bold title led by `⦁`; expanded, each content line
+ * led by a muted `│` and a muted `└ collapse` line; folded, a muted `└ expand` line. Colours come from pi's theme (`muted`, bold).
+ * Expanding is pi's own mechanism, the renderer's `expanded` option (Ctrl+O), plus a left click anywhere on the message: pi gives the
+ * renderer one mouse region per message, so the click cannot be limited to the `└` line. Display only: the message's `content` and
+ * `details` are read, never changed. The style `off` (pi-compact-tools' config) still hands the message to pi's own box.
  */
 
 /** Every `customType` the adapter sends with `display: true`. */
@@ -152,16 +154,6 @@ function prefixedText(text: string, first: string, rest: string = first): (width
   return (width) => wrapTextWithAnsi(normalized, Math.max(1, width - prefixWidth)).map((line, i) => `${i === 0 ? first : rest}${line}`);
 }
 
-/** `prefixedSentence` (without the wrapped-indent trim): each row of a sentence kept to one row. */
-function prefixedSentence(text: string, first: string, rest: string): (width: number) => string[] {
-  const prefixWidth = Math.max(visibleWidth(first), visibleWidth(rest));
-  return (width) => {
-    const available = Math.max(1, width - prefixWidth);
-    return text.split("\n").flatMap((line) => wrapTextWithAnsi(line, available).map((row) => truncateToWidth(row, available, "")))
-      .map((row, i) => `${i === 0 ? first : rest}${row}`);
-  };
-}
-
 /** `outputPadLines`: with `outputPad` 0 the row's one margin column is reclaimed. */
 function outputPadLines(lines: string[], width: number): string[] {
   return lines.map((line) => (stripTerminalSequences(line).startsWith(" ") ? sliceByColumn(line, 1, Math.max(0, width), true) : truncateToWidth(line, Math.max(0, width), "…")));
@@ -170,69 +162,28 @@ function outputPadLines(lines: string[], width: number): string[] {
 /** `WithinWidth`: a row never draws past the pane's edge. */
 const withinWidth = (lines: string[], width: number): string[] => lines.map((l) => (visibleWidth(l) > width ? truncateToWidth(l, Math.max(1, width), "") : l));
 
-// ---- the rows ----
+// ---- the fold ----
 
-const INDICATOR = "⦁"; // `indicatorGlyph`
-const CLAUDE_RESULT_PREFIX = "   ⎿  ";
-const CLAUDE_INDENT = "      ";
-const CLAUDE_TITLE_INDENT = "   ";
-const CODEX_RESULT_PREFIX = "   └ ";
-const CODEX_INDENT = "     ";
-const CODEX_MARGIN = " ";
-const CODEX_BULLET = "•";
-const CODEX_TAB = "    ";
-const EXPAND = "Click to expand";
-const COLLAPSE = "Click to collapse";
-
-/** `codexDisclosure`. */
-function codexDisclosure(width: number, expanded: boolean): string {
-  const indent = CODEX_MARGIN + " ".repeat(Math.min(Math.floor(width / 4), 4));
-  return expanded ? `${indent}− Show less` : `${indent}+ Show details`;
-}
+const INDICATOR = "⦁";
+const MARGIN = " ";
+const RAIL = "│";
+const CLOSE = "└";
+const EXPAND = "expand";
+const COLLAPSE = "collapse";
 
 type Rows = { head: (width: number) => string[]; body: (width: number) => string[]; toggle: (width: number, expanded: boolean) => string[] };
 
-/** The extension's rows for one message in one style. `body` is empty when `content` is. */
-function rowsOf(style: Exclude<Style, "off">, summary: string, content: string, theme: Theme): Rows {
-  const chrome = (text: string) => theme.fg("dim", text); // `chromePainter`'s fallback (§15.9: the one deliberate difference)
-  const dot = theme.fg("customMessageLabel", INDICATOR);
-  const name = theme.fg("toolTitle", theme.bold("cpd"));
+/** The fold's rows for one message. `body` is empty when `content` is. */
+function rowsOf(summary: string, content: string, theme: Theme): Rows {
+  const muted = (text: string) => theme.fg("muted", text);
   const text = normalizeLineEndings(content).trimEnd();
-
-  if (style === "claude") {
-    const lines = text === "" ? [] : text.split("\n").map((l) => theme.fg("toolOutput", l));
-    const head = (width: number) => hardWrap(`${dot} ${name}${theme.fg("toolOutput", `(${summary})`)}`, width - visibleWidth(CLAUDE_TITLE_INDENT)).map((l, i) => `${i === 0 ? " " : CLAUDE_TITLE_INDENT}${l}`);
-    return {
-      head,
-      body: (width) => {
-        const wrapWidth = Math.max(1, width - visibleWidth(CLAUDE_RESULT_PREFIX));
-        return lines.flatMap((l) => hardWrap(l, wrapWidth).map((r) => r.trimEnd())).map((row, i) => `${i === 0 ? chrome(CLAUDE_RESULT_PREFIX) : CLAUDE_INDENT}${row}`);
-      },
-      toggle: (width, expanded) => (expanded ? [] : prefixedSentence(chrome(EXPAND), chrome(CLAUDE_RESULT_PREFIX), CLAUDE_INDENT)(width)),
-    };
-  }
-
-  if (style === "codex") {
-    const bullet = theme.bold(theme.fg("customMessageLabel", CODEX_BULLET));
-    const dim = (t: string) => (t === "" ? "" : theme.fg("dim", t));
-    return {
-      head: (width) => [truncateToWidth(`${CODEX_MARGIN}${bullet} ${theme.bold("cpd")} ${summary}`, Math.max(1, width), "…")],
-      body: (width) => {
-        const available = Math.max(1, width - visibleWidth(CODEX_INDENT));
-        const rows = text.replace(/\t/gu, CODEX_TAB).split("\n").flatMap((l) => (l === "" ? [""] : wrapTextWithAnsi(l, available)));
-        return text === "" ? [] : rows.map((row, i) => (i === 0 ? chrome(CODEX_RESULT_PREFIX) : CODEX_INDENT) + dim(row));
-      },
-      toggle: (width, expanded) => [truncateToWidth(theme.fg("dim", codexDisclosure(width, expanded)), Math.max(1, width), theme.fg("dim", "…"))],
-    };
-  }
-
-  // compact: `renderToolCall`, `renderOutput`, `renderControls`
-  const rail = chrome(" │ ");
-  const styled = text.split("\n").map((l) => theme.fg("toolOutput", l)).join("\n");
+  const lead = `${MARGIN}${theme.fg("customMessageLabel", INDICATOR)} `;
+  const indent = " ".repeat(visibleWidth(lead));
+  const rail = `${MARGIN}${muted(RAIL)} `;
   return {
-    head: (width) => hardWrap(`${dot} ${name} ${theme.fg("toolOutput", summary)}`, width - visibleWidth(rail)).map((l, i) => `${i === 0 ? " " : rail}${l}`),
-    body: text === "" ? () => [] : prefixedText(styled, rail),
-    toggle: (width, expanded) => prefixedText(chrome(expanded ? COLLAPSE : EXPAND), chrome(" └ "), "   ")(width),
+    head: (width) => hardWrap(theme.bold(`cpd ${summary}`), width - visibleWidth(lead)).map((l, i) => `${i === 0 ? lead : indent}${l}`),
+    body: text === "" ? () => [] : prefixedText(text, rail),
+    toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE} ${expanded ? COLLAPSE : EXPAND}`)}`],
   };
 }
 
@@ -252,10 +203,9 @@ export class Rendering {
   /** §15.9 `off`: no component, so pi draws its own default box with the full `content`. */
   readonly render: MessageRenderer = (message, { expanded, outputPad }, theme) => {
     if (this.style === "off") return undefined;
-    const style = this.style;
     const content = contentOf(message);
     const summary = summaryOf(message, content);
-    const rows = rowsOf(style, summary ?? CONTEXT_TYPE, content, theme);
+    const rows = rowsOf(summary ?? CONTEXT_TYPE, content, theme);
     // No summary: the row is always open, with no closing row and no toggle (§15.9 "No summary").
     const open = summary === undefined;
     const state = this.states.get(message) ?? { expanded, host: expanded };
