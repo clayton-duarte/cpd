@@ -8,7 +8,7 @@ import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
- * Every cpd message in a pi pane is one fold, drawn like every block that folds: a title row, `╭─` then the title as a pill: U+E0B6, the title, U+E0B4, no padding inside, no dot (hs-d486, replacing hs-d484/d485). It matches the cockpit's pill title, `title` in `tui/src/section.rs` (what `tui/src/dialog/view.rs` and `tui/src/logs/view.rs` test): the lead `╭─` muted, the text REVERSED. pi's theme has no inverse, so the caps are `theme.fg("muted")` and the text is muted then SGR-reversed (the muted colour becomes its background). Expanded, each
+ * Every cpd message in a pi pane is one fold, drawn like every block that folds: a title row, `╭─` then the title as a pill: U+E0B6, the title, U+E0B4, no padding inside, no dot (contract §15, the fold language). It matches the cockpit's pill title, `title` in `tui/src/section.rs` (what `tui/src/dialog/view.rs` and `tui/src/logs/view.rs` test): the lead `╭─` muted, the text REVERSED. pi's theme has no inverse, so the caps are `theme.fg("muted")` and the text is muted then SGR-reversed (the muted colour becomes its background). Expanded, each
  * content line led by a muted `│ ` and a muted `╰󰁣 collapse` line; folded, a muted `╰󰁋 expand` line (U+F0063 and U+F004B, the
  * cockpit's own toggle, `toggle` in `tui/src/fold.rs`; glyphs `UP` / `DOWN` in `tui/src/tree/look.rs`; contract §5.3). Colours come from pi's theme (`muted`, bold).
  * Expanding is pi's own mechanism, the renderer's `expanded` option (Ctrl+O), plus a left click anywhere on the message: pi gives the
