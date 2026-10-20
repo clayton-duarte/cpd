@@ -1,5 +1,140 @@
 #!/bin/sh
-# Stub (Plan quality, lp-tests): the behaviour is docs/implementing.md "The scoped loop";
-# lp-scoped implements it. Until then it does nothing and fails.
-echo "scripts/test-changed: not implemented yet (docs/implementing.md \"The scoped loop\")" >&2
-exit 1
+# scripts/test-changed [--dry-run] [<base>]: runs the Rust tests that the changed files can reach,
+# with `scripts/cargo.sh nextest run` (docs/implementing.md "The scoped loop", which is the contract).
+#
+# Changed files: those that differ between the merge base of <base> (default origin/main) and HEAD,
+# and the working tree (committed, staged, unstaged), plus untracked files.
+# Selection, in order:
+#   - a root-level input (root Cargo.toml, Cargo.lock, rust-toolchain*, any build.rs, .config/,
+#     core/src/store/migrations/, scripts/cargo.sh): the full suite, `--workspace`;
+#   - a file of a workspace crate (`cargo metadata --no-deps`, the deepest crate directory holding it):
+#     that crate and its reverse dependencies (any dependency kind, dev included), `-p` each;
+#     a file `<crate>/tests/it/<module>.rs` (not main.rs): only `-E 'test(/^<module>::/)'` of that crate;
+#   - anything else (docs/, pi/, other scripts): no Rust test.
+# --dry-run prints the one command on stdout and runs nothing. Nothing selected: says so on stderr, exit 0.
+# Needs git, node (as the rest of the repo) and cargo (through scripts/cargo.sh).
+set -eu
+set -f # no pathname expansion: file names and arguments are split on newlines only, below
+
+usage() {
+  echo "usage: scripts/test-changed [--dry-run] [<base>]" >&2
+  exit 2
+}
+
+dry_run=false
+base=
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) dry_run=true ;;
+    -*) usage ;;
+    *) [ -z "$base" ] || usage; base=$arg ;;
+  esac
+done
+base=${base:-origin/main}
+
+cd "$(dirname "$0")/.."
+cd "$(git rev-parse --show-toplevel)"
+
+merge_base=$(git merge-base "$base" HEAD) || {
+  echo "test-changed: no merge base between $base and HEAD" >&2
+  exit 2
+}
+
+changed=$({
+  git -c core.quotePath=false diff --name-only --no-renames "$merge_base" --
+  git -c core.quotePath=false ls-files --others --exclude-standard
+} | sort -u)
+
+IFS='
+'
+# The root-level inputs that no crate's selection can bound: the full suite.
+full=false
+for file in $changed; do
+  case "$file" in
+    Cargo.toml | Cargo.lock | rust-toolchain* | build.rs | */build.rs | .config/* | \
+      core/src/store/migrations/* | scripts/cargo.sh)
+      full=true
+      ;;
+  esac
+done
+if $full; then
+  if $dry_run; then
+    echo "scripts/cargo.sh nextest run --workspace"
+    exit 0
+  fi
+  exec scripts/cargo.sh nextest run --workspace
+fi
+
+# Which crates and test modules the files reach: one nextest argument per line.
+args=$(scripts/cargo.sh metadata --format-version 1 --no-deps | node -e '
+const fs = require("fs");
+const path = require("path");
+const meta = JSON.parse(fs.readFileSync(0, "utf8"));
+const root = fs.realpathSync(process.cwd());
+const members = new Set(meta.workspace_members);
+const crates = meta.packages
+  .filter((p) => members.has(p.id))
+  .map((p) => ({ name: p.name, dir: fs.realpathSync(path.dirname(p.manifest_path)), deps: p.dependencies }));
+const byDir = new Map(crates.map((c) => [c.dir, c]));
+// Reverse dependencies: a member depends on another through a path dependency to its directory.
+const users = new Map(crates.map((c) => [c.name, []]));
+for (const c of crates) {
+  for (const d of c.deps) {
+    const dep = d.path === undefined ? undefined : byDir.get(fs.realpathSync(d.path));
+    if (dep) users.get(dep.name).push(c.name);
+  }
+}
+const whole = new Set();
+const modules = new Map(); // crate -> Set of module names
+const reach = (name) => {
+  if (whole.has(name)) return;
+  whole.add(name);
+  for (const u of users.get(name)) reach(u);
+};
+for (const file of process.argv.slice(1)) {
+  const abs = path.join(root, file);
+  const owner = crates
+    .filter((c) => abs.startsWith(c.dir + path.sep))
+    .sort((a, b) => b.dir.length - a.dir.length)[0];
+  if (!owner) continue;
+  const m = /^tests\/it\/([A-Za-z_][A-Za-z0-9_]*)\.rs$/.exec(path.relative(owner.dir, abs).split(path.sep).join("/"));
+  if (m && m[1] !== "main") {
+    if (!modules.has(owner.name)) modules.set(owner.name, new Set());
+    modules.get(owner.name).add(m[1]);
+  } else {
+    reach(owner.name);
+  }
+}
+for (const name of whole) modules.delete(name);
+const out = [];
+for (const name of [...whole, ...modules.keys()]) out.push("-p", name);
+if (modules.size > 0) {
+  // The union: every test of the whole crates, and the named modules of the others.
+  for (const name of whole) out.push("-E", `package(=${name})`);
+  for (const [name, mods] of modules) {
+    for (const mod of mods) {
+      out.push("-E", whole.size > 0 || modules.size > 1 ? `package(=${name}) & test(/^${mod}::/)` : `test(/^${mod}::/)`);
+    }
+  }
+}
+for (const a of out) console.log(a);
+' $changed)
+
+if [ -z "$args" ]; then
+  echo "test-changed: nothing to run" >&2
+  exit 0
+fi
+
+if $dry_run; then
+  line=scripts/cargo.sh\ nextest\ run
+  for a in $args; do
+    case "$a" in
+      *[!A-Za-z0-9_=-]*) line="$line '$a'" ;;
+      *) line="$line $a" ;;
+    esac
+  done
+  printf '%s\n' "$line"
+  exit 0
+fi
+# shellcheck disable=SC2086 # one argument per line, IFS is a newline
+exec scripts/cargo.sh nextest run $args
