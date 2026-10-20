@@ -1006,6 +1006,66 @@ fn e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_th
     assert_eq!(fx.count("job-cancelled") + fx.count("job-failed") + fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
+/// `attempt-status` check Events of `<key>-a1`: `(at, "start" | "end")`, in order.
+fn check_events(fx: &Fx, key: &str, edges: &[(&str, &str)]) {
+    for (at, edge) in edges {
+        fx.fixture(&format!(
+            "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
+               VALUES (cpd_txn(), '{at}', 'attempt-status', 'ctx', 'pay', '{key}', '{key}-a1', 'check',
+                       '{{\"from\":\"running\",\"to\":\"running\",\"check\":\"{edge}\",\"what\":\"tests\"}}');"
+        ));
+    }
+}
+
+#[test]
+fn e2_does_not_count_a_check_span_toward_the_attempts_timeout() {
+    // hs-d497, contract §7.7: 31 minutes since `running`, 25 of them in a Gate (one closed span, one still open): not over 30 active.
+    let fx = fx("");
+    let _locks: Vec<_> = ["spent-a1", "over-a1"].iter().map(|a| fx.live_driver(a)).collect();
+    fx.add_running("spent", "running", &ago(31));
+    check_events(&fx, "spent", &[(&ago(30), "start"), (&ago(20), "end"), (&ago(15), "start")]);
+    // The same time with a span of one minute: 30.x minutes active, which is over.
+    fx.add_running("over", "running", &ago(31));
+    check_events(&fx, "over", &[(&ago(10), "start"), (&ago(9), "end")]);
+
+    let engine = fx.start();
+    wait_until("the stop request", || fx.attempt("over-a1").3.is_some());
+    fx.env.wait_whole_ticks(1);
+    engine.stop();
+
+    assert_eq!(fx.attempt("over-a1").3.as_deref(), Some("timed_out"));
+    assert_eq!(fx.attempt("spent-a1"), ("running".into(), None, None, None), "a span still open is not active time either");
+}
+
+#[test]
+fn e2_closes_a_check_span_whose_submit_died_and_leaves_one_that_is_held() {
+    let fx = fx("");
+    let _drivers: Vec<_> = ["dead-a1", "held-a1", "done-a1"].iter().map(|a| fx.live_driver(a)).collect();
+    for key in ["dead", "held", "done"] {
+        fx.add_running(key, "running", &ago(5));
+    }
+    check_events(&fx, "dead", &[(&ago(4), "start")]);
+    check_events(&fx, "held", &[(&ago(4), "start")]);
+    check_events(&fx, "done", &[(&ago(4), "start"), (&ago(3), "end")]);
+    // `held`'s submit is alive: it holds the check lock.
+    let path = fx.home().check_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse("held-a1").unwrap());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+    let _submit = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+
+    let engine = fx.start();
+    wait_until("the missing end", || fx.events("attempt-status").iter().any(|e| e.3["died"] == json!(true)));
+    fx.env.wait_whole_ticks(2);
+    engine.stop();
+
+    let ends: Vec<_> = fx.events("attempt-status").into_iter().filter(|e| e.3["died"] == json!(true)).collect();
+    assert_eq!(ends.len(), 1, "once, and only for the span nobody holds: {ends:?}");
+    assert_eq!(
+        (ends[0].1.as_deref(), ends[0].2.as_deref(), &ends[0].3),
+        (Some("dead"), Some("dead-a1"), &json!({"from": "running", "to": "running", "check": "end", "what": "tests", "died": true}))
+    );
+}
+
 /// Attempt `api-a1` of Plan `pay` in `merging`, its worktree cut from the Lead Branch with one commit, its driver
 /// dead. With `moved` the driver had moved the Lead Branch (step 8) and synced the Lead worktree before it died.
 /// Returns the worktree and the tip.
