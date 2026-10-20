@@ -32,6 +32,7 @@ impl Fixture {
         for script in ["release.sh", "cargo.sh"] {
             fs::copy(Path::new(SCRIPTS).join(script), work.join("scripts").join(script)).unwrap();
         }
+        fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../release.toml"), work.join("release.toml")).unwrap();
         fs::write(work.join("Cargo.toml"), "[workspace]\nmembers = []\n\n[workspace.package]\nversion = \"0.0.0\"\npublish = false\n").unwrap();
         fs::write(work.join("Cargo.lock"), "version 0.0.0\n").unwrap();
         fs::write(work.join("CHANGELOG.md"), "# Changelog\n\n").unwrap();
@@ -46,7 +47,9 @@ impl Fixture {
     }
 
     /// `cargo release --version` succeeds; `cargo release <v> ...` bumps `Cargo.toml` and
-    /// `Cargo.lock`, runs the release.toml hook (`git-cliff`) and commits `Release <v>`.
+    /// `Cargo.lock`, runs release.toml's `pre-release-hook` (if any) once per workspace member
+    /// (core, cli, tui) like the real cargo-release, with `WORKSPACE_ROOT` set, and commits
+    /// `Release <v>`. `git-cliff --prepend <file> --tag v<x>` prepends one section to the file.
     fn mock_tools(&self) {
         self.env.fake(
             "cargo",
@@ -54,15 +57,29 @@ impl Fixture {
 [ "$2" = --version ] && exit 0
 sed -i "s/^version = .*/version = \"$2\"/" Cargo.toml
 echo "version $2" > Cargo.lock
-git-cliff --unreleased --tag "v$2" --prepend CHANGELOG.md
+hook=$(sed -n 's/^pre-release-hook = \["sh", "-c", "\(.*\)"\]$/\1/p' release.toml | sed 's/\\"/"/g')
+if [ -n "$hook" ]; then
+  hook=$(printf '%s' "$hook" | sed "s/{{version}}/$2/g")
+  for _member in core cli tui; do
+    WORKSPACE_ROOT="$PWD" sh -c "$hook" || exit 1
+  done
+fi
 git add -A
 git commit -q -m "Release $2""#,
         );
         self.env.fake(
             "git-cliff",
-            r#"printf '# Changelog\n\n## [%s] - 2026-01-01\n\n- A change (#2)\n\n' "${3#v}" > new.md
-tail -n +3 CHANGELOG.md >> new.md
-mv new.md CHANGELOG.md"#,
+            r#"while [ $# -gt 0 ]; do
+  case "$1" in
+    --tag) tag=$2; shift;;
+    --prepend) file=$2; shift;;
+  esac
+  shift
+done
+[ -n "${file:-}" ] || exit 0
+printf '# Changelog\n\n## [%s] - 2026-01-01\n\n- A change (#2)\n\n' "${tag#v}" > "$file.new"
+tail -n +3 "$file" >> "$file.new"
+mv "$file.new" "$file""#,
         );
         self.env.fake("npm", "exit 0");
         self.env.fake_gh("echo https://github.com/o/r/pull/9");
@@ -148,6 +165,21 @@ fn release_opens_the_pr_with_one_release_commit() {
     assert_eq!(fx.env.git(&fx.clone, &["branch", "--show-current"]), "main");
     assert_eq!(fx.env.git(&fx.clone, &["worktree", "list"]).lines().count(), 1);
     assert_eq!(fx.env.git(&fx.clone, &["branch", "--format=%(refname:short)"]), "main");
+}
+
+#[test]
+fn release_writes_one_changelog_section() {
+    let fx = Fixture::new();
+    let main = fx.origin_git(&["rev-parse", "main"]);
+    fx.origin_git(&["tag", "v0.0.5", &main]);
+    let (exit, stdout, stderr) = fx.run(&["0.0.6"]);
+    assert_eq!(exit, 0, "{stdout}{stderr}");
+
+    let changelog = fx.origin_git(&["show", "release/v0.0.6:CHANGELOG.md"]);
+    let sections = changelog.lines().filter(|l| l.starts_with("## [0.0.6]")).count();
+    assert_eq!(sections, 1, "one `## [0.0.6]` section in the release commit's CHANGELOG.md:\n{changelog}");
+    let cliff = fx.env.calls("git-cliff");
+    assert_eq!(cliff.len(), 1, "git-cliff runs once, not once per crate: {cliff:?}");
 }
 
 #[test]

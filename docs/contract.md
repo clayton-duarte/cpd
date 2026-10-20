@@ -119,6 +119,8 @@ $CPD_HOME/
     store.lock                    held by every open of `cpd.db` during its one-time setup only: the WAL switch, the migrations and the conversion of a legacy store (§4.1, §4.5); waited for at most `store_busy_ms`, then `lock_timeout`, except while its holder is migrating: then until the holder releases it, at most `MIGRATION_WAIT_CEILING` (§4.2, §4.5); a migrating holder writes a JSON marker into it and keeps it until it releases the lock (below)
   run/
     watch.log                     the engine's stderr
+    tui/plan-scroll.json          the `plan` view's scroll offsets, `{"<plan id>": [x, y]}`, written by the view itself (a file a view writes, commands.md §13.2, hs-d254); read at its start
+    tui/tree-folds.json           the `tree` view's folds, `{"collapsed": ["<context id>", …], "expanded": [["<context id>"], …]}`: the live Contexts the User collapsed and the archived ones the User expanded; written by the view itself, under the same exception as `tui/plan-scroll.json` (commands.md §13.2, hs-d260); read at its start
     tmux-restart.pending          a restart of the tmux server is pending (§6.1, hs-d294): JSON `{at, server, installed, failed}`; not in the store
     tmux-restart.log              the output of the detached tmux restart (§6.1)
     tmux-restart.pid              the pid of the detached tmux restart the engine started, one line; removed when the engine reaps it (an engine that dies first leaves it, its pid perhaps reused); what finds that process, which is in no process group of the engine's
