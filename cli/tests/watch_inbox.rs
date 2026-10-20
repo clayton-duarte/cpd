@@ -110,23 +110,19 @@ impl Fx {
 
     /// The open items: `(kind, urgency, subject, label)`.
     fn open_items(&self) -> Vec<(String, String, String, String)> {
-        self.store()
-            .read(|conn| {
-                let mut stmt =
-                    conn.prepare("SELECT kind, urgency, subject, label FROM inbox_items WHERE closed_at IS NULL ORDER BY id")?;
-                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
-            })
-            .unwrap()
+        self.env.read(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT kind, urgency, subject, label FROM inbox_items WHERE closed_at IS NULL ORDER BY id")?;
+            Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
     }
 
     fn events(&self, kind: &str) -> Vec<Value> {
-        self.store()
-            .read(|conn| {
-                let mut stmt = conn.prepare("SELECT data FROM events WHERE kind = ?1 ORDER BY id")?;
-                let rows = stmt.query_map([kind], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows.iter().map(|d| serde_json::from_str(d).unwrap()).collect())
-            })
-            .unwrap()
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT data FROM events WHERE kind = ?1 ORDER BY id")?;
+            let rows = stmt.query_map([kind], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows.iter().map(|d| serde_json::from_str(d).unwrap()).collect())
+        })
     }
 }
 

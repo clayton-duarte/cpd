@@ -182,9 +182,10 @@ impl Fx {
 
     fn wait_status(&self, id: &str, status: &str) -> Value {
         common::wait_some(&format!("Attempt {id} to become {status}"), Duration::from_secs(60), || {
-            let attempt = self.attempt(id);
-            if attempt["status"] == status { Ok(attempt) } else { Err(format!("{attempt}\nlog: {}", self.log(id))) }
-        })
+            let now: Option<String> = self.env.query(&format!("SELECT (SELECT status FROM attempts WHERE plan = '{PLAN}' AND id = '{id}')"));
+            if now.as_deref() == Some(status) { Ok(()) } else { Err(format!("status {now:?}\nlog: {}", self.log(id))) }
+        });
+        self.attempt(id)
     }
 
     /// Waits until the Attempt has ended and its driver has exited.

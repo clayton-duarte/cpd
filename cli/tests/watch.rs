@@ -276,15 +276,13 @@ impl Fx {
 
     /// Every Event of `kind`, in order: `(plan, job, attempt, data)`.
     fn events(&self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
-        self.store()
-            .read(|conn| {
-                let mut stmt = conn.prepare("SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id")?;
-                let rows = stmt
-                    .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows.into_iter().map(|(p, j, a, d)| (p, j, a, serde_json::from_str(&d).unwrap())).collect())
-            })
-            .unwrap()
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id")?;
+            let rows = stmt
+                .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows.into_iter().map(|(p, j, a, d)| (p, j, a, serde_json::from_str(&d).unwrap())).collect())
+        })
     }
 
     fn count(&self, kind: &str) -> usize {
@@ -292,24 +290,20 @@ impl Fx {
     }
 
     fn texts(&self, kind: &str) -> Vec<String> {
-        self.store()
-            .read(|conn| {
-                let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
-                Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
-            })
-            .unwrap()
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
+            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
     }
 
     fn attempt(&self, id: &str) -> (String, Option<String>, Option<String>, Option<String>) {
-        self.store()
-            .read(|conn| {
-                Ok(conn.query_row(
-                    "SELECT status, outcome, cause, stop_request FROM attempts WHERE plan = 'pay' AND id = ?1",
-                    [id],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-                )?)
-            })
-            .unwrap()
+        self.env.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT status, outcome, cause, stop_request FROM attempts WHERE plan = 'pay' AND id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?)
+        })
     }
 
     fn job_status(&self, key: &str) -> String {
@@ -782,9 +776,7 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     engine.stop();
 
     let row = |id: &str| {
-        fx.store()
-            .read(|c| Ok(c.query_row("SELECT state, tmux_pane, state_at FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
-            .unwrap()
+        fx.env.read(|c| Ok(c.query_row("SELECT state, tmux_pane, state_at FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
     };
     let rows: Vec<(String, Option<String>, String)> = ["s-live", "s-dead", "s-gone", "s-waiting", "s-shut"].iter().map(|id| row(id)).collect();
     let (states, panes): (Vec<&str>, Vec<Option<&str>>) = rows.iter().map(|r| (r.0.as_str(), r.1.as_deref())).unzip();
@@ -1001,15 +993,12 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
 
     assert_ne!(fx.job_status("api"), "failed");
     assert_eq!(fx.count("job-failed"), 0);
-    let attempts: Vec<(String, String, String, Option<i64>, String, String)> = fx
-        .store()
-        .read(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, tier, origin, driver_pid, started_at, ended_at FROM attempts WHERE job = 'api' AND status = 'ended' ORDER BY number",
-            )?;
-            Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?)
-        })
-        .unwrap();
+    let attempts: Vec<(String, String, String, Option<i64>, String, String)> = fx.env.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, tier, origin, driver_pid, started_at, ended_at FROM attempts WHERE job = 'api' AND status = 'ended' ORDER BY number",
+        )?;
+        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?)
+        });
     assert!(attempts.len() >= 3, "{attempts:?}");
     for (id, tier, origin, pid, _, _) in &attempts {
         assert_eq!((tier.as_str(), origin.as_str(), *pid), ("S2", "ladder", None), "{id}");
@@ -1053,10 +1042,10 @@ fn e2_counts_only_attempts_whose_driver_started() {
     fx.add_running("busy", "running", &ago(1));
     let running = |key: &str, number: u32, tier: &str| {
         format!(
-            "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';
-             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
-               VALUES ('pay', '{key}-a{number}', '{key}', {number}, '{tier}', 'ladder', 'running', 'cpd/pay--{key}-a{number}', '/w', '{}', 4242);",
-            ago(1)
+        "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+           VALUES ('pay', '{key}-a{number}', '{key}', {number}, '{tier}', 'ladder', 'running', 'cpd/pay--{key}-a{number}', '/w', '{}', 4242);",
+        ago(1)
         )
     };
     // `web`: spawn failure, then a started driver that died: one try used, the ladder climbs.
@@ -1269,7 +1258,7 @@ fn in_pr(fx: &Fx) {
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
          UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
-                pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay';",
+            pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay';",
     );
 }
 
@@ -1325,9 +1314,9 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
         .unwrap()
         .lines()
         .map(|l| {
-            let (what, ns) = l.split_once(' ').unwrap();
-            (what.to_owned(), ns.parse::<i128>().unwrap() / 1_000_000)
-        })
+        let (what, ns) = l.split_once(' ').unwrap();
+        (what.to_owned(), ns.parse::<i128>().unwrap() / 1_000_000)
+    })
         .collect();
     for (i, pair) in notes.windows(2).enumerate() {
         match (i % 2, pair[0].0.as_str(), pair[1].0.as_str()) {
