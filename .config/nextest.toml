@@ -4,17 +4,24 @@
 # Everything not set here is nextest's default.
 
 # No test group is needed: nothing in the tests shares process state. ETXTBSY
-# (a fork while a script is open for writing) is handled in `cli/tests/it/common`;
+# (a fork while a script is open for writing) is handled in `cli/tests/common`;
 # under nextest each test is a process of its own, so no fork can hold another
 # test's descriptors. A test that must not overlap others goes in a test group
 # here (`[test-groups]`, `max-threads = 1`, and a `[[profile.default.overrides]]`
 # with a `filter` and `test-group`), the reason beside it. The integration tests are
-# one binary, `cpd::it`, a module per file: select a file's tests with
-# `filter = 'binary_id(cpd::it) and test(/^host::/)'`.
+# one binary per area, `cli/tests/<area>/` (the area table of docs/implementing.md,
+# Tests), `cpd::<area>`, a module per file: select a file's tests with
+# `filter = 'binary_id(cpd::session) and test(/^host::/)'`. A Worker's targeted
+# build is `--test <area>`.
 
 # hs-d236: a red run lists every failing test, not only the first.
 [profile.default]
 fail-fast = false
+
+# A test that leaves a process holding its stdout/stderr pipes is marked LEAK by
+# nextest and, by default, still passes. Fail it, so no leak comes back
+# (ms-leak: the fake old engine's `sleep` outlived an `install_script` test).
+leak-timeout = { period = "100ms", result = "fail" }
 
 # The per-test limit: a test is reported slow after 30 s and killed, and so
 # failed, after 3 periods (90 s). Measured on hs with `scripts/test-time.sh`, 7
@@ -33,8 +40,8 @@ slow-timeout = { period = "30s", terminate-after = 3 }
 # (sp-fixed ... sp-poll), 3.5-27 s at load 82-144: a whole plan (two
 # tests: e2e, and e2e_cross across two repos), the engine's quiet period, the
 # adapter watchdog's stall limit, the pi stop, the spawn back-off, the
-# stuck-Job minutes. `/::name$/` matches the test's last path segment in the one binary
-# (`cli/tests/it/`): a renamed test drops out of the list silently, so check the list with
+# stuck-Job minutes. `/::name$/` matches the test's last path segment in its binary
+# (`cli/tests/<area>/`): a renamed test drops out of the list silently, so check the list with
 # `scripts/cargo.sh nextest list --workspace -E '<the filter>'` (one line per name).
 [[profile.default.overrides]]
 filter = '''

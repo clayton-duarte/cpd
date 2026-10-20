@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
-import { PROTOCOL } from "../lib/event.ts";
+import { answers, ID, policyShow, sessionShow } from "./answers.ts";
 import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
@@ -85,7 +85,7 @@ import(entry).then((m) => {
 });
 `;
 
-export const ID = "596d007f-6775-4134-b77a-b356cc523842";
+export { ID, policyShow, sessionShow };
 export const OTHER = "11111111-2222-4333-8444-555555555555";
 
 export type Call = { phase: "start" | "end"; argv: string[]; since?: string; feedback?: string; t: number };
@@ -116,10 +116,7 @@ export class Fixture {
     process.env.PI_CODING_AGENT_DIR = this.agentDir; // pi's agent directory: where the adapter reads `compact-tools.json` (commands.md §15.9)
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
-    this.respond("session-show", sessionShow());
-    this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.7)
-    this.respond("policy-show", policyShow()); // no text anywhere: no section
-    this.respond("--version", { ok: true, version: "0.0.0", schema: 6, store_schema: 6, protocol: PROTOCOL });
+    for (const [key, answer] of Object.entries(answers())) this.respond(key, answer); // the same answers as pi-check's fake (answers.ts)
   }
 
   /** A new install of the fake `cpd`: the same program in a file of another size and mtime. */
@@ -283,21 +280,6 @@ function alive(pid: number): boolean {
     throw e;
   }
 }
-
-export const sessionShow = (over: Record<string, unknown> = {}) => ({
-  ok: true,
-  session: { id: ID, role: "lead", context: "ctx", plan: "p1", attempt: null, name: "the lead", state: "stopped", plan_lead: true, grounded_lead: false, registered_event: 100, ...over },
-  open_escalations: [],
-});
-
-/** A `cpd policy show` output (commands.md §22.1): the domains of contract §8.3, each with its audience; `texts` sets a domain's text and `source`. */
-export const policyShow = (role = "lead", texts: Record<string, string> = {}, source = "owner:/p/o.toml") => {
-  const audience: Record<string, string[]> = {
-    pr: ["lead", "worker"], deploy: ["lead"], code: ["lead", "worker"], tests: ["lead", "worker"], monitor: ["lead", "worker"], instructions: ["manager", "lead", "worker"],
-  };
-  const policy = Object.fromEntries(Object.entries(audience).map(([d, a]) => [d, { source: d in texts ? source : "default", audience: a, keys: {}, text: texts[d] ?? "" }]));
-  return { ok: true, key: { owner: "o", repo: null }, role, files: [], policy };
-};
 
 export const planShow = (over: Record<string, unknown> = {}) => ({ ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null, ...over });
 
@@ -507,6 +489,6 @@ export async function waitFor<T>(what: string, fn: () => T | undefined | null | 
   }
 }
 
-/** `session state` argvs, without the session id, as `idle` or `blocked:<label>`. */
+/** `session state` argvs, without the session id, as `idle`, `blocked:<label>` or `waiting:<label>`. */
 export const stateCalls = (f: Fixture): string[] =>
-  f.argvs().filter((a) => a[0] === "session" && a[1] === "state").map((a) => (a[2] === "blocked" ? `blocked:${a[a.indexOf("--label") + 1]}` : a[2]!));
+  f.argvs().filter((a) => a[0] === "session" && a[1] === "state").map((a) => (a[2] === "blocked" || a[2] === "waiting" ? `${a[2]}:${a[a.indexOf("--label") + 1]}` : a[2]!));

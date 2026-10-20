@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::dot::{self, Dot};
-use super::shared::{PlanHead, SessionNode, bad_row, id, plan_heads, sessions};
+use super::shared::{Place, PlanHead, SessionNode, bad_row, id, plan_heads, sessions};
 
 /// Every Context of the machine, by id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,10 +24,10 @@ pub struct Tree {
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
     /// The Inbox's open, visible items (not snoozed, not dismissed) in the order of `cpd inbox list`, as of this
-    /// snapshot (§17), `engine-down` first when no engine runs. Every dot of the tree comes from the stored ones.
+    /// snapshot (§17), `engine-down` first when no engine runs and no live Manager exists. Every dot of the tree comes from the stored ones.
     pub inbox: Vec<Item>,
-    /// Whether an engine holds `locks/watch.lock` (§1.4). `engine-down` is never stored: with none, `inbox` starts
-    /// with it (id 0, which no stored item has), as `cpd inbox list` does.
+    /// Whether an engine holds `locks/watch.lock` (§1.4). `engine-down` is never stored: with none and no live Manager,
+    /// `inbox` starts with it (id 0, which no stored item has), as `cpd inbox list` does.
     pub engine_running: bool,
 }
 
@@ -46,6 +46,8 @@ pub struct ContextNode {
     /// The dot of its row: its live (not archived) Manager Session's own dot, `Stopped` with none (§17, hs-d215):
     /// a `●` only from the Manager's own Inbox items (hs-d217), else the glyph of its state.
     pub dot: Dot,
+    /// Where its live Manager's chat is, `None` with no Manager: the Context row is selected when it is `Chat`.
+    pub manager_place: Option<Place>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,11 +169,11 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         let mut heads = plan_heads(conn, None)?;
         // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot, a `●` only from
         // the Manager's own items (hs-d215, hs-d217).
-        let managers: BTreeMap<ContextId, Dot> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
+        let managers: BTreeMap<ContextId, (Dot, Place)> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
             .into_iter()
             .map(|s| {
                 let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None));
-                (s.context, dot)
+                (s.context, (dot, s.place))
             })
             .collect();
 
@@ -194,7 +196,8 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 .collect::<Vec<PlanNode>>();
             let archived_at: Option<String> = r.get(3)?;
             contexts.push(ContextNode {
-                dot: managers.get(&context).copied().unwrap_or(Dot::Stopped),
+                dot: managers.get(&context).map_or(Dot::Stopped, |m| m.0),
+                manager_place: managers.get(&context).map(|m| m.1),
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),
@@ -204,7 +207,8 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 id: context,
             });
         }
-        if !engine_running {
+        // With a live Manager the tree restarts the engine and a failure goes to the Manager (hs-d318): no item.
+        if !engine_running && managers.is_empty() {
             inbox.insert(0, engine_down(now));
         }
         Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox, engine_running })

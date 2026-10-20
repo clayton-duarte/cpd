@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use crate::error::{CpdError, ErrorCode};
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use crate::git::{TAIL_LINES, tail};
+use crate::host::limit::limit;
 
 /// A `gh` call that takes longer than this is killed (`gh_failed`).
 const TIMEOUT: Duration = Duration::from_secs(60);
@@ -126,9 +127,24 @@ struct Output {
     exit: Option<i32>,
 }
 
+/// `gh` ran past its timeout and was killed; `stderr` is what it had printed.
+struct Killed {
+    stderr: String,
+}
+
 /// Runs `gh <args>` in `cwd` for at most `timeout`; a spawn failure and a
 /// timeout are `gh_failed`, any exit code is a result. Never prompts, never colours.
 fn run_raw(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdError> {
+    run_timed(cwd, args, timeout)?.map_err(|k| killed(args, timeout, &k.stderr))
+}
+
+/// The `gh_failed` of a call killed after `timeout`.
+fn killed(args: &[&str], timeout: Duration, stderr: &str) -> CpdError {
+    failed(args, format!("gh {} took longer than {}s and was killed.", args[0], timeout.as_secs_f64()), None, stderr)
+}
+
+/// [`run_raw`], telling a kill at the timeout (`Err(Killed)`) from a failure to run `gh` (`Err` of the outer result).
+fn run_timed(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Result<Output, Killed>, CpdError> {
     let mut child = Command::new("gh")
         .args(args)
         .current_dir(cwd)
@@ -169,9 +185,9 @@ fn run_raw(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output, CpdEr
     let stdout = String::from_utf8_lossy(&stdout.join().unwrap_or_default()).into_owned();
     let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
     let Some(status) = status else {
-        return Err(failed(args, format!("gh {} took longer than {}s and was killed.", args[0], timeout.as_secs()), None, &stderr));
+        return Ok(Err(Killed { stderr }));
     };
-    Ok(Output { stdout, stderr, exit: status.code() })
+    Ok(Ok(Output { stdout, stderr, exit: status.code() }))
 }
 
 /// Runs `gh <args>` in `cwd` and returns its stdout; a non-zero exit, a signal
@@ -283,6 +299,19 @@ pub fn view_for_merge(cwd: &Path, repo: &str, number: i64) -> Result<MergeView, 
     let n = number.to_string();
     let args = ["pr", "view", &n, "--repo", repo, "--json", "state,mergeStateStatus,headRefOid,title"];
     parse(&args, &run(cwd, &args)?)
+}
+
+/// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
+/// deletion of the branch (contract §7.2 "The recorded head").
+pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
+    #[derive(Deserialize)]
+    struct Head {
+        #[serde(rename = "headRefOid")]
+        oid: String,
+    }
+    let n = number.to_string();
+    let args = ["pr", "view", &n, "--repo", repo, "--json", "headRefOid"];
+    parse::<Head>(&args, &run(cwd, &args)?).map(|h| h.oid)
 }
 
 /// `gh pr merge <number> --repo <repo> --squash --delete-branch --match-head-commit <head>`: GitHub
@@ -497,19 +526,40 @@ impl Reply<'_> {
         failed(self.args, message, self.out.exit, &self.out.stderr).with("stdout", tail(&self.out.stdout, TAIL_LINES))
     }
 
+    /// [`Reply::fail`] of a call that is transient (`transient` true) when `gh` exited non-zero with an HTTP 5xx in its
+    /// message (`reason` `HTTP 5xx`) and printed no GraphQL `errors`, or, when its stdout holds no complete JSON
+    /// (`unparsable`), with its own failure to parse a response that ended early (`reason` [`CUT_RESPONSE`]; contract
+    /// §7.6 step 4, hs-d354).
+    fn fail_unless_transient(&self, message: String, graphql_errors: bool, unparsable: bool) -> CpdError {
+        let status = if graphql_errors || self.out.exit == Some(0) {
+            None
+        } else {
+            http_5xx(&self.out).or_else(|| (unparsable && self.out.stderr.contains(CUT_RESPONSE)).then(|| CUT_RESPONSE.to_owned()))
+        };
+        let e = self.fail(message);
+        match status {
+            Some(status) => e.with("transient", true).with("reason", status),
+            None => e,
+        }
+    }
+
     /// The body, whatever the exit code (`gh` exits 1 on a partial result); no
-    /// JSON, or no `data`, is `gh_failed`.
+    /// JSON, or no `data`, is `gh_failed`: transient when it is an HTTP 5xx, or a cut response with no JSON.
     fn envelope<T: for<'de> Deserialize<'de>>(&self) -> Result<(T, Vec<GqlError>), CpdError> {
         let envelope: Envelope<T> = serde_json::from_str(&self.out.stdout)
-            .map_err(|e| self.fail(format!("gh {} printed no usable JSON: {e}.", self.args[0])))?;
+            .map_err(|e| self.fail_unless_transient(format!("gh {} printed no usable JSON: {e}.", self.args[0]), false, true))?;
         let errors = envelope.errors.unwrap_or_default();
         match envelope.data {
             Some(data) => Ok((data, errors)),
-            None => Err(self.fail(format!(
-                "gh {} answered without data: {}",
-                self.args[0],
-                errors.iter().filter_map(|e| e.message.as_deref()).collect::<Vec<_>>().join("; ")
-            ))),
+            None => Err(self.fail_unless_transient(
+                format!(
+                    "gh {} answered without data: {}",
+                    self.args[0],
+                    errors.iter().filter_map(|e| e.message.as_deref()).collect::<Vec<_>>().join("; ")
+                ),
+                !errors.is_empty(),
+                false,
+            )),
         }
     }
 
@@ -535,20 +585,48 @@ impl Reply<'_> {
     }
 }
 
-/// Runs the GraphQL `query` inline (`-f query=@file` would send the literal text) in `cwd`.
+/// What `gh` prints when it cannot parse a response that ended early (hs-d354): the cut response, transient.
+const CUT_RESPONSE: &str = "unexpected end of JSON input";
+
+/// `HTTP 5xx` as `gh` prints it (`gh: HTTP 502: Bad Gateway`, `... (HTTP 503)`), in its stderr, or in its stdout when
+/// stderr is empty: the status, `HTTP 502`. Matches `HTTP 5\d\d`.
+fn http_5xx(out: &Output) -> Option<String> {
+    let text = if out.stderr.trim().is_empty() { &out.stdout } else { &out.stderr };
+    text.match_indices("HTTP 5").find_map(|(at, _)| {
+        let status = text.get(at..at + "HTTP 5".len() + 2)?;
+        status["HTTP 5".len()..].bytes().all(|b| b.is_ascii_digit()).then(|| status.to_owned())
+    })
+}
+
+/// A failure of the poll's call `call` (`search` or `lookup`): `details` always holds `call`, `transient` and `reason`
+/// (an HTTP 5xx or a timeout is transient; nothing else is), so the engine parses one shape (contract §7.6 step 4).
+fn polled_call(call: &str, e: CpdError) -> CpdError {
+    let transient = e.details().get("transient").cloned().unwrap_or(Value::Bool(false));
+    let reason = e.details().get("reason").cloned().unwrap_or(Value::Null);
+    e.with("call", call).with("transient", transient).with("reason", reason)
+}
+
+/// Runs the GraphQL `query` inline (`-f query=@file` would send the literal text) in `cwd`, killed after
+/// [`POLL_TIMEOUT`] (a timeout is transient, `reason` `timeout`; tests: `CPD_TEST_DEADLINE_GH`, [`limit`]).
 fn graphql(cwd: &Path, query: &str) -> Result<(Vec<String>, Output), CpdError> {
     let args = vec!["api".to_owned(), "graphql".to_owned(), "-f".to_owned(), format!("query={query}")];
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run_raw(cwd, &refs, POLL_TIMEOUT)?;
-    Ok((args, out))
+    let timeout = limit("DEADLINE_GH", POLL_TIMEOUT);
+    match run_timed(cwd, &refs, timeout)? {
+        Ok(out) => Ok((args, out)),
+        Err(k) => Err(killed(&refs, timeout, &k.stderr).with("transient", true).with("reason", "timeout")),
+    }
 }
 
 /// The User's open pull requests (`SEARCH_QUERY`), 15 s at most. A response with
 /// `errors`, without `data` or without JSON is `gh_failed`, never "no PRs".
 pub fn search_open(cwd: &Path) -> Result<Search, CpdError> {
-    let (args, out) = graphql(cwd, SEARCH_QUERY)?;
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    parse_search(&Reply { args: &refs, out: &out })
+    let search = || {
+        let (args, out) = graphql(cwd, SEARCH_QUERY)?;
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        parse_search(&Reply { args: &refs, out: &out })
+    };
+    search().map_err(|e| polled_call("search", e))
 }
 
 fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
@@ -602,6 +680,10 @@ pub fn lookup(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>
     if prs.is_empty() {
         return Ok(Vec::new());
     }
+    lookup_call(cwd, prs).map_err(|e| polled_call("lookup", e))
+}
+
+fn lookup_call(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
     let mut query = String::from("query {");
     for (i, (repo, number)) in prs.iter().enumerate() {
         let (owner, name) = repo_parts(repo).ok_or_else(|| {
@@ -811,6 +893,34 @@ mod tests {
             let e = search(&reply(stdout, exit)).unwrap_err();
             assert_eq!(e.code(), ErrorCode::GhFailed, "{name}");
         }
+    }
+
+    #[test]
+    fn an_http_5xx_is_read_from_stderr_or_from_stdout_when_stderr_is_empty() {
+        let out = |stdout: &str, stderr: &str| Output { stdout: stdout.to_owned(), stderr: stderr.to_owned(), exit: Some(1) };
+        assert_eq!(http_5xx(&out("", "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)")).as_deref(), Some("HTTP 502"));
+        assert_eq!(http_5xx(&out("", "gh: Service Unavailable (HTTP 503)")).as_deref(), Some("HTTP 503"));
+        assert_eq!(http_5xx(&out("gh: HTTP 504: Gateway Timeout", "")).as_deref(), Some("HTTP 504"));
+        // stdout is read only when stderr is empty; a 4xx, a bare 5 and a body without a status are no 5xx.
+        assert_eq!(http_5xx(&out("HTTP 502", "gh: exit status 1")), None);
+        assert_eq!(http_5xx(&out("", "gh: HTTP 401: Bad credentials")), None);
+        assert_eq!(http_5xx(&out("", "HTTP 5")), None);
+        assert_eq!(http_5xx(&out("<html>502 Bad Gateway</html>", "")), None);
+    }
+
+    #[test]
+    fn a_failure_of_a_poll_call_holds_call_transient_and_reason_whatever_it_was() {
+        let details = |e: CpdError| Value::Object(polled_call("search", e).details().clone());
+        let plain = details(CpdError::new(ErrorCode::GhFailed, "x"));
+        assert_eq!((&plain["call"], &plain["transient"], &plain["reason"]), (&json!("search"), &json!(false), &Value::Null));
+        let transient = details(CpdError::new(ErrorCode::GhFailed, "x").with("transient", true).with("reason", "HTTP 502"));
+        assert_eq!((&transient["transient"], &transient["reason"]), (&json!(true), &json!("HTTP 502")));
+        // Only an answer that is no GraphQL result and exited non-zero is transient.
+        let body = |stdout: &str, exit: i32| search(&Output { stdout: stdout.to_owned(), stderr: "gh: HTTP 502: Bad Gateway".to_owned(), exit: Some(exit) });
+        let transient = |r: Result<Search, CpdError>| r.unwrap_err().details().get("transient").cloned();
+        assert_eq!(transient(body("<html>", 1)), Some(json!(true)));
+        assert_eq!(transient(body("<html>", 0)), None);
+        assert_eq!(transient(body(r#"{"errors":[{"message":"x"}]}"#, 1)), None);
     }
 
     #[test]

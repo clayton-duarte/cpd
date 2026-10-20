@@ -135,11 +135,28 @@ fn clock(at: &str) -> &str {
     at.get(11..19).unwrap_or(at)
 }
 
+/// The `error` codes of a failure the engine hit for a Lead, whose source is still `watch`: the Lead handles them
+/// (contract §2.2: not Inbox items).
+const LEAD_CODES: [&str; 2] = ["pr_start_failed", "push_failed"];
+
+/// Whether an `error` Event is addressed to a Lead, who handles it (audit Q5): it names a Plan and its source is not the
+/// engine's own `watch` (`pr poll`'s `cleanup_failed`, the drivers' errors), or its code is one of [`LEAD_CODES`]. The
+/// engine's own step errors (`source` `watch`, contract §5.2) and those that name no Plan are the User's.
+fn addressed_to_lead(e: &Event) -> bool {
+    let field = |name: &str| e.data.get(name).and_then(|v| v.as_str());
+    e.plan.is_some() && (field("source") != Some("watch") || field("code").is_some_and(|c| LEAD_CODES.contains(&c)))
+}
+
 /// The Event's line, as the Dispatch column showed it: its time of day (dim), then its `text`, or its kind when
-/// the `text` is empty; an `error` Event in the failed colour. Cut to `width` columns with `…`.
+/// the `text` is empty; an `error` Event in the failed colour, in the waiting colour when it is addressed to a Lead (who
+/// handles it). Cut to `width` columns with `…`.
 fn line(e: &Event, width: usize) -> Line<'static> {
     let text = if e.text.is_empty() { &e.kind } else { &e.text };
-    let style = if e.kind == "error" { palette::fg(Meaning::Failed) } else { Style::new() };
+    let style = match (e.kind.as_str(), addressed_to_lead(e)) {
+        ("error", true) => palette::fg(Meaning::Waiting),
+        ("error", false) => palette::fg(Meaning::Failed),
+        _ => Style::new(),
+    };
     let room = width.saturating_sub(" 00:00:00 ".len());
     let text = if text.chars().count() <= room {
         text.clone()
@@ -154,7 +171,7 @@ fn line(e: &Event, width: usize) -> Line<'static> {
 pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let [head, area] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
     let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
-    f.render_widget(Paragraph::new(section::title("logs", None, usize::from(title.width))), title);
+    f.render_widget(Paragraph::new(section::title("Logs", None, usize::from(title.width))), title);
     let area = match &log.error {
         Some(error) => {
             let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
@@ -310,11 +327,85 @@ mod tests {
         let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
         // an empty row, the title, an empty row, then the Events
         assert_eq!(row(0).trim_end(), "");
-        assert_eq!(row(1), format!("━━ logs {}", "━".repeat(16)));
+        assert_eq!(row(1), format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(14)));
         assert_eq!(row(2).trim_end(), "");
         assert!(row(3).starts_with(" 00:00:08 event 8"), "{}", row(3));
         // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows
         assert!(row(5).contains("event 10") && got[(0, 5)].modifier.contains(Modifier::REVERSED));
         assert!(!got[(0, 4)].modifier.contains(Modifier::REVERSED));
+    }
+
+    // ---- the logs popup's title v4 (hs-d475, hs-d476): red until it is `Logs`, a grey pill inside the padding ----
+
+    #[test]
+    fn the_title_is_a_grey_title_case_pill_inside_the_padding_of_one_column_each_side() {
+        let mut log = Log::at(events(30), 11);
+        log.fit(8);
+        let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
+        let got = terminal.backend().buffer();
+        let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
+        assert_eq!(row(0).trim_end(), "", "an empty row above");
+        assert_eq!(row(1), format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(24 - 1 - 2 - 6 - 1)), "column 1 to column 22");
+        assert_eq!(row(2).trim_end(), "", "an empty row below");
+        crate::section::check::grey_pill(got, 3, 1, "Logs");
+    }
+}
+
+/// The colour of an `error` line: red when the engine reported it for itself, the waiting colour when it is a Lead's
+/// (hs-d303, audit Q5).
+#[cfg(test)]
+mod error_colour {
+    use ratatui::style::Color;
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn event(kind: &str, plan: Option<&str>, data: Value) -> Event {
+        Event {
+            id: 1,
+            at: "2026-01-01T10:20:30.000Z".into(),
+            kind: kind.into(),
+            context: None,
+            plan: plan.map(Into::into),
+            job: None,
+            attempt: None,
+            session: None,
+            text: "something happened".into(),
+            data,
+        }
+    }
+
+    fn error(plan: Option<&str>, source: &str, code: &str) -> Event {
+        event("error", plan, json!({"source": source, "code": code, "message": "m", "details": {}}))
+    }
+
+    /// The colour of the Event's text in its line (the line is ` 10:20:30 something happened`).
+    fn colour(e: &Event) -> Option<Color> {
+        line(e, 60).spans.last().unwrap().style.fg
+    }
+
+    #[test]
+    fn an_error_the_engine_reports_for_itself_is_red() {
+        let red = Some(palette::color(Meaning::Failed));
+        assert_eq!(colour(&error(None, "watch", "tmux_failed")), red, "the machine");
+        assert_eq!(colour(&error(Some("pay"), "watch", "store_failed")), red, "a step of the engine, about a Plan");
+        assert_eq!(colour(&error(None, "pr poll", "gh_rate_limited")), red, "no Plan to address: the User's");
+    }
+
+    #[test]
+    fn an_error_addressed_to_a_lead_is_waiting() {
+        let waiting = Some(palette::color(Meaning::Waiting));
+        assert_eq!(colour(&error(Some("pay"), "attempt run", "git_failed")), waiting, "a driver's error");
+        assert_eq!(colour(&error(Some("pay"), "pr poll", "cleanup_failed")), waiting);
+        assert_eq!(colour(&error(Some("pay"), "plan lock", "push_failed")), waiting);
+        // the engine's own start of a PR (source `watch`) is for the Lead too
+        assert_eq!(colour(&error(Some("pay"), "watch", "pr_start_failed")), waiting);
+        assert_eq!(colour(&error(Some("pay"), "watch", "push_failed")), waiting);
+    }
+
+    #[test]
+    fn other_events_have_no_colour() {
+        assert_eq!(colour(&event("job-failed", Some("pay"), json!({}))), None);
     }
 }

@@ -34,10 +34,11 @@ impl Role {
     }
 }
 
-/// A Session's agent state (§3.6).
+/// A Session's agent state (§3.6): `blocked` needs the User, `waiting` needs another agent (hs-d303).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
     Working,
+    Waiting,
     Blocked,
     Idle,
     Stopped,
@@ -47,14 +48,20 @@ impl State {
     pub fn as_str(self) -> &'static str {
         match self {
             State::Working => "working",
+            State::Waiting => "waiting",
             State::Blocked => "blocked",
             State::Idle => "idle",
             State::Stopped => "stopped",
         }
     }
 
+    /// The states that say why: `waiting` and `blocked` have a label, no other state has one (§3.6).
+    pub fn has_label(self) -> bool {
+        matches!(self, State::Waiting | State::Blocked)
+    }
+
     fn parse(s: &str) -> Option<State> {
-        [State::Working, State::Blocked, State::Idle, State::Stopped].into_iter().find(|v| v.as_str() == s)
+        [State::Working, State::Waiting, State::Blocked, State::Idle, State::Stopped].into_iter().find(|v| v.as_str() == s)
     }
 }
 

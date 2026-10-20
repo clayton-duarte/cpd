@@ -13,10 +13,11 @@ use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
 use super::row::PlanPrs;
+use super::start::unstack;
 use super::status::PrState;
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{NewEvent, append};
+use crate::events::{BasePull, NewEvent, append};
 use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
@@ -212,6 +213,7 @@ fn apply(
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
+                unstack_stacked_on(tx, plan, key)?;
             } else if let Some(checks) = checks_of(checks, plan, key)
                 && tell(tx, plan, key, checks, &change)?
             {
@@ -267,7 +269,7 @@ fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
         "PR {pr} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
          Read it with cpd plan show --plan {plan}."
     );
-    let event = NewEvent::pr_base_changed(text, pr, (from, to), (from_pr.as_deref(), to_pr.as_deref()), COMMAND_BY, Some((*number, url)));
+    let event = NewEvent::pr_base_changed(text, pr, (from, to), (from_pr.as_deref(), to_pr.as_deref()), COMMAND_BY, BasePull::Of(*number, url));
     append(tx, event.plan(plan.clone()))?;
     Ok(json!({"plan": plan, "pr": pr, "from": from, "to": to}))
 }
@@ -368,6 +370,24 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     Ok(true)
 }
 
+/// The unstack of the PRs with no pull request yet that were stacked on the PR `key` of `plan`, which this transaction
+/// merged (§7.6 step 6, hs-d301): every `waiting` or `dispatch` PR of any Plan whose `base` is its Lead Branch, told to
+/// its own Plan, so that engine E7 of the same tick already sees the new base.
+fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    let mut stmt = tx.prepare(
+        "SELECT r.plan, r.key FROM prs r, prs m
+          WHERE m.plan = ?1 AND m.key = ?2 AND r.repo = m.repo AND r.base = m.lead_branch AND r.status IN ('waiting', 'dispatch')
+          ORDER BY r.plan, r.key",
+    )?;
+    let stacked = stmt
+        .query_map([plan.as_str(), key.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (plan, key) in stacked {
+        unstack(tx, &PlanId::parse(&plan)?, &PrKey::parse(&key)?, COMMAND_BY)?;
+    }
+    Ok(())
+}
+
 /// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
 fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
     env.store.read(|conn| {
@@ -409,6 +429,8 @@ struct Merged {
     repo: String,
     lead_branch: String,
     lead_worktree: Option<String>,
+    /// The PR's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
+    pull_request: Option<(String, i64)>,
     attempts: Vec<Attempt>,
 }
 
@@ -488,10 +510,13 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
 
 /// Every PR in status `merged`, with its Attempts.
 fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
-    let mut prs = conn.prepare("SELECT plan, key, repo, lead_branch, lead_worktree FROM prs WHERE status = 'merged' ORDER BY plan, key")?;
+    let mut prs = conn.prepare("SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number
+           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status = 'merged' ORDER BY p.plan, p.key",
+    )?;
     let rows = prs
         .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))
+            let pull_request = r.get::<_, Option<String>>(5)?.zip(r.get::<_, Option<i64>>(6)?);
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, pull_request))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
@@ -499,14 +524,14 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdEr
           WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
     )?;
     let mut found = Vec::new();
-    for (plan, pr, repo, lead_branch, lead_worktree) in rows {
+    for (plan, pr, repo, lead_branch, lead_worktree, pull_request) in rows {
         let list = attempts
             .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .map(|(id, branch, worktree, ended)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
             .collect::<Result<Vec<_>, CpdError>>()?;
-        found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, attempts: list });
+        found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, pull_request, attempts: list });
     }
     Ok(found)
 }
@@ -564,7 +589,13 @@ fn clean(merged: &Merged) -> Vec<Failure> {
                 }
             }
         }
-        match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch) {
+        // The pull request's head commit, asked of GitHub only when `HEAD` has commits outside every `origin/*` ref:
+        // a squash merge deletes the head branch, so the PR's own commits look unpushed (contract §7.2).
+        let recorded_head = || {
+            let (gh_repo, number) = merged.pull_request.as_ref()?;
+            super::gh::head_ref_oid(repo, gh_repo, *number).ok()
+        };
+        match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch, recorded_head) {
             Ok(git::LeadRemoval::Removed) => {}
             Ok(git::LeadRemoval::Kept(why)) => failures.push((lead.clone(), why.as_str().to_owned())),
             Err(e) => failures.push((lead.clone(), reason(&e))),

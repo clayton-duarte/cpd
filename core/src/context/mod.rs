@@ -12,7 +12,7 @@
 mod archive;
 mod contexts;
 pub mod digest;
-pub(crate) mod distill;
+pub mod distill;
 pub mod inforce;
 mod list;
 pub(crate) mod legacy;
@@ -182,7 +182,7 @@ pub struct ShowArgs {
 pub struct DecideArgs {
     /// The decision
     text: Text,
-    /// The decision this one replaces
+    /// The decision or note this one replaces
     #[arg(long, value_name = "record")]
     supersedes: Option<RecordId>,
     #[command(flatten)]
@@ -193,6 +193,9 @@ pub struct DecideArgs {
 pub struct NoteArgs {
     /// The note
     text: Text,
+    /// The note this one replaces
+    #[arg(long, value_name = "record")]
+    supersedes: Option<RecordId>,
     #[command(flatten)]
     select: Select,
 }
@@ -245,7 +248,13 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
             let draft = Draft::Decision { supersedes: args.supersedes };
             write::write("context decide", &args.select, &args.text, draft)
         }
-        Command::Note(args) => write::write("context note", &args.select, &args.text, Draft::Note),
+        Command::Note(args) => {
+            let draft = match args.supersedes {
+                Some(supersedes) => Draft::NoteSupersedes { supersedes },
+                None => Draft::Note,
+            };
+            write::write("context note", &args.select, &args.text, draft)
+        }
         Command::Ask(args) => write::write("context ask", &args.select, &args.question, Draft::Question),
         Command::Answer(args) => {
             write::write("context answer", &args.select, &args.text, Draft::Answer { question: args.question })

@@ -26,7 +26,9 @@ pub enum Kind {
     EngineError,
     EngineDown,
     Question,
+    /// No longer opened, hs-d470; only history rows an older engine wrote.
     PrFailing,
+    /// No longer opened, hs-d470; only history rows an older engine wrote.
     PrChanges,
     PrReady,
     ReviewRequested,
@@ -131,6 +133,25 @@ pub struct Item {
 impl Item {
     fn identity(&self) -> (Kind, &str, Urgency) {
         (self.kind, &self.subject, self.urgency)
+    }
+}
+
+impl From<&Item> for Condition {
+    /// The condition that keeps `item` as it is: the rules re-emit an open item whose cause they cannot read now.
+    fn from(item: &Item) -> Condition {
+        Condition {
+            kind: item.kind,
+            urgency: item.urgency,
+            subject: item.subject.clone(),
+            label: item.label.clone(),
+            url: item.url.clone(),
+            context: item.context.clone(),
+            plan: item.plan.clone(),
+            job: item.job.clone(),
+            session: item.session.clone(),
+            record: item.record.clone(),
+            event: item.event,
+        }
     }
 }
 
@@ -281,7 +302,7 @@ fn diff<'a>(open: &'a [Item], conditions: &'a [Condition]) -> (Vec<&'a Item>, Ve
     (gone, new)
 }
 
-fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
+pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
     items(conn, &format!("SELECT {COLUMNS} FROM inbox_items WHERE closed_at IS NULL ORDER BY id"), [])
 }
 

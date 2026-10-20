@@ -3,7 +3,7 @@
 //! model ([`read::open_prs`]: the one thing it draws), then follows the Events: it looks at the Events and at the pull
 //! request rows every [`TICK`] and re-reads when one concerns it (a pull request row changes with no Event), at most
 //! once per [`COALESCE`]; the CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when the
-//! pull requests, the CPU, GPU and memory, the note, the size, a click or the wheel changed, not on every tick. It makes no write of
+//! pull requests, the CPU, GPU and memory, the error, the size, a click or the wheel changed, not on every tick. It makes no write of
 //! its own, but for what a click on an owned PR row asks of `cpd session open`, and the merge popup a click on a merge
 //! icon opens. A right click on a PR row opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), which then
 //! takes every key and click until it closes. Otherwise it has no key; mouse capture is on, for the clicks and the
@@ -19,13 +19,17 @@ mod column;
 mod host;
 pub mod legend;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 
+use super::dialog;
+use super::palette;
+use super::viewlog::ViewLog;
 use super::menu::{Menu, Outcome};
 use super::read::{self, OpenPr};
 use super::runner::{ViewError, kept};
@@ -35,19 +39,21 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::Kind;
 use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
-use cpd_core::host::{Pane, Tmux, chat_slot};
-use cpd_core::ids::SessionId;
+use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View, chat_slot, view_pane};
+use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
-pub use column::{Drawn, Hit, Machine, MergeIcon, PrItem, PrRow, draw};
+pub use column::{Drawn, Hit, Machine, MergeIcon, PrItem, PrRow, draw, draw_error};
 pub use host::Usage;
 use host::Sampler;
-pub(crate) use column::{Window, dim, max_scroll, window};
+pub(crate) use column::{Window, max_scroll, window};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);
+/// How often the view redraws while a shown PR's Lead is working: one frame of the spinner (`palette::frame`, 100 ms).
+const FRAME: Duration = Duration::from_millis(100);
 /// At most one snapshot per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 /// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
@@ -65,11 +71,12 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let machine = Machine { name: hostname(), usage: sampler.sample() };
             let (prs, cursor) = read::open_prs(&mut store)?;
             let follow = read::Follow::new(&mut store, KINDS, cursor)?;
-            Ok((store, config, prs, machine, sampler, follow))
+            Ok((store, home, config, prs, machine, sampler, follow))
         },
-        |terminal, (mut store, config, prs, machine, sampler, follow)| {
+        |terminal, (mut store, home, config, prs, machine, sampler, follow)| {
             let tmux = Tmux::new(config.tmux.socket.clone());
-            let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session };
+            let log = ViewLog::of(&home, "widgets");
+            let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session, log: &log };
             show(terminal, &mut store, follow, prs, machine, sampler, &lead)
         },
     )
@@ -80,10 +87,12 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
 const KINDS: &[Kind] = &[Kind::PrOpened, Kind::PlanCreated, Kind::SessionRegistered, Kind::SessionMoved];
 
 /// What a click on an owned PR row runs: `session open <lead>` through `run_command`, then the focus on the chat slot.
+/// `log` is `run/tui/widgets.log`.
 struct Opener<'a> {
     run_command: RunCommand,
     tmux: &'a Tmux,
     cockpit: &'a str,
+    log: &'a ViewLog,
 }
 
 /// The right-click menu of a PR row, while it is open: its entries and the row it is about, as drawn when it opened.
@@ -92,17 +101,17 @@ struct PrMenu {
     row: PrRow,
 }
 
-/// What the entry `item` of `row`'s menu does; the note it leaves on success (empty for none).
-fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> Result<String, CpdError> {
+/// What the entry `item` of `row`'s menu does: the title of the dialog that says it failed (what failed), and the result.
+/// A success says nothing (commands.md §17 "No notes").
+fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(), CpdError>) {
     match item {
-        PrItem::Merge => crate::merge::open(opener.tmux, &row.pull).map(|()| String::new()),
+        PrItem::Merge => ("Merge Pull Request", crate::merge::open(opener.tmux, &row.pull)),
         PrItem::CopyLink => {
-            opener.tmux.run(&["set-buffer", "-w", "--", row.url.as_str()].map(str::to_owned))?;
-            Ok(format!("copied {}", row.url))
+            ("Copy Link", opener.tmux.run(&["set-buffer", "-w", "--", row.url.as_str()].map(str::to_owned)).map(drop))
         }
         PrItem::GoToLead => {
             let lead = row.lead.as_ref().expect("Go to Lead is offered only on an owned PR");
-            open_lead(opener.run_command, opener.tmux, opener.cockpit, lead).map(|()| String::new())
+            ("Go to Lead", open_lead(opener.run_command, opener.tmux, opener.cockpit, lead))
         }
     }
 }
@@ -110,9 +119,8 @@ fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> Result<String, CpdError> 
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the PRs section scrolls it by one pull request per notch. A left click on an owned
 /// PR row (not on its `󰏌` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
-/// popup; a refusal or a failure is the `note` in the column's last row until the
-/// next click. A right click on a PR row opens its menu, which takes every key and click until it closes; Copy Link
-/// leaves `copied <url>` as the note.
+/// popup; a failure is the error dialog and a line of the log (commands.md §17 "No notes"). A right click on a PR row
+/// opens its menu, which takes every key and click until it closes.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
@@ -124,28 +132,32 @@ fn show(
 ) -> Result<(), ViewError> {
     let (mut read_at, mut sampled_at) = (Instant::now(), Instant::now());
     let mut last = None::<Drawn>;
-    let mut note = String::new();
     let mut error = None::<String>;
     let mut redraw = true;
+    let mut drawn_frame = None::<usize>;
     let mut menu = None::<PrMenu>;
     let mut pane = Rect::default();
     // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
     let mut scroll = 0usize;
     loop {
-        if redraw {
-            let shown = error.as_deref().unwrap_or(&note);
+        // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
+        let frame = palette::frame(SystemTime::now());
+        if redraw || (spins(&prs) && Some(frame) != drawn_frame) {
             terminal.draw(|f| {
                 pane = f.area();
-                last = Some(draw(f, pane, &prs, &machine, shown, scroll));
+                last = Some(draw(f, pane, &prs, &machine, scroll, frame));
+                if let Some(error) = &error {
+                    draw_error(f, pane, error);
+                }
                 if let Some(open) = &menu {
                     open.menu.draw(f, pane);
                 }
             })?;
-            redraw = false;
+            (redraw, drawn_frame) = (false, Some(frame));
         }
         let drawn = last.as_ref().expect("the terminal drew");
         scroll = scroll.min(drawn.max_scroll);
-        if event::poll(TICK)? {
+        if event::poll(tick(&prs))? {
             redraw = true; // a click, the wheel, a key or a resize
             let event = event::read()?;
             if let Some(open) = menu.as_mut() {
@@ -160,26 +172,28 @@ fn show(
                     Outcome::Close => menu = None,
                     Outcome::Pick(item) => {
                         let PrMenu { row, .. } = menu.take().expect("the menu was open");
-                        note = pick(item, &row, opener).unwrap_or_else(|e| e.message().to_owned());
+                        if let (what, Err(e)) = pick(item, &row, opener) {
+                            dialog::report(opener.tmux, opener.log, what, &e);
+                        }
                     }
                 }
             } else {
                 match event {
                     Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Right) => {
-                        note.clear();
                         let at = Position::new(m.column, m.row);
                         menu = drawn.rows.iter().find(|r| r.area.contains(at)).map(|row| PrMenu { menu: Menu::new(row.items(), at), row: row.clone() });
                     }
                     Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
-                        note.clear();
                         let at = Position::new(m.column, m.row);
                         let result = if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
-                            Some(crate::merge::open(opener.tmux, &icon.pull))
+                            Some(("Merge Pull Request", crate::merge::open(opener.tmux, &icon.pull)))
                         } else {
-                            drawn.hits.iter().find(|h| h.contains(at)).map(|hit| open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead))
+                            drawn.hits.iter().find(|h| h.contains(at)).map(|hit| {
+                                ("Go to Lead", open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead))
+                            })
                         };
-                        if let Some(Err(e)) = result {
-                            note = e.message().to_owned();
+                        if let Some((what, Err(e))) = result {
+                            dialog::report(opener.tmux, opener.log, what, &e);
                         }
                     }
                     Event::Mouse(m) if drawn.prs.contains(Position::new(m.column, m.row)) => match m.kind {
@@ -222,6 +236,16 @@ fn show(
     }
 }
 
+/// How long the view waits for input before it draws again: one spinner frame while a PR's Lead works, else [`TICK`].
+fn tick(prs: &[OpenPr]) -> Duration {
+    if spins(prs) { FRAME } else { TICK }
+}
+
+/// A shown PR's Lead is working: its spinner turns.
+fn spins(prs: &[OpenPr]) -> bool {
+    prs.iter().any(|p| p.lead_working)
+}
+
 /// A click on a tab or on an owned PR row: `session open <id>`, which moves that Lead into the chat slot, then `select-pane`
 /// on the chat. The plan view's tabs and this column's rows share it.
 pub(crate) fn open_lead(run_command: RunCommand, tmux: &Tmux, cockpit: &str, session: &SessionId) -> Result<(), CpdError> {
@@ -237,6 +261,102 @@ pub(crate) fn open_lead(run_command: RunCommand, tmux: &Tmux, cockpit: &str, ses
 pub(crate) fn main_panes(tmux: &Tmux, cockpit: &str) -> Result<Vec<Pane>, CpdError> {
     let all = tmux.list_panes()?;
     Ok(all.into_iter().filter(|p| p.session_name == cockpit && p.window_name == MAIN_WINDOW).collect())
+}
+
+/// The pane option holding the Job a Worker pane shows (its border title shows it), so a second click on the same Job
+/// closes it.
+const OPT_JOB: &str = "@cpd_job";
+
+/// The pane option holding the Attempt a Worker pane shows.
+const OPT_ATTEMPT: &str = "@cpd_attempt";
+
+/// The Job a Worker pane shows.
+fn worker_shows(tmux: &Tmux, pane: &PaneId) -> Result<String, CpdError> {
+    let shown = tmux.run(&["display", "-p", "-t", pane.as_str(), &format!("#{{{OPT_JOB}}}")].map(str::to_owned))?;
+    Ok(shown.trim_end_matches('\n').to_owned())
+}
+
+/// `set -p` of the Worker pane's options: the Job and its current Attempt.
+fn mark_worker(tmux: &Tmux, pane: &PaneId, job: &str, attempt: &str) -> Result<(), CpdError> {
+    for (option, value) in [(OPT_JOB, job), (OPT_ATTEMPT, attempt)] {
+        tmux.run(&["set", "-p", "-t", pane.as_str(), option, value].map(str::to_owned))?;
+    }
+    Ok(())
+}
+
+/// The Worker pane's program: `tui view worker <attempt> --plan <plan>`, in cpd's home.
+fn worker_spawn(home: &CpdHome, plan: &PlanId, attempt: &str) -> Spawn {
+    Spawn {
+        cwd: Some(home.root().to_owned()),
+        env: BTreeMap::from([("CPD_HOME".to_owned(), home.root().display().to_string())]),
+        argv: [PROGRAM, "tui", "view", "worker", attempt, "--plan", plan.as_str()].map(str::to_owned).into(),
+    }
+}
+
+/// Opens the read-only Worker pane beside the chat (`split-window -h -d -l 50%`, so the focus stays) for `job`'s
+/// `attempt`, and retargets it (`respawn-pane -k`) when it already shows a Worker. The plan view's pills and the tree's
+/// `job-stuck` click share it.
+pub(crate) fn open_worker(
+    home: &CpdHome,
+    tmux: &Tmux,
+    cockpit: &str,
+    plan: &PlanId,
+    job: &str,
+    attempt: &AttemptId,
+) -> Result<(), CpdError> {
+    let panes = main_panes(tmux, cockpit)?;
+    let attempt = attempt.to_string();
+    if let Some(pane) = view_pane(&panes, cockpit, View::Worker) {
+        let spawn = worker_spawn(home, plan, &attempt);
+        let mut args = ["respawn-pane", "-k", "-t", pane.pane.as_str()].map(str::to_owned).to_vec();
+        if let Some(cwd) = &spawn.cwd {
+            args.extend(["-c".to_owned(), cwd.display().to_string()]);
+        }
+        for (key, value) in &spawn.env {
+            args.extend(["-e".to_owned(), format!("{key}={value}")]);
+        }
+        args.push("--".to_owned());
+        args.extend(spawn.argv);
+        tmux.run(&args)?;
+        return mark_worker(tmux, &pane.pane, job, &attempt);
+    }
+    let Some(chat) = chat_slot(&panes, cockpit) else {
+        return Err(CpdError::new(ErrorCode::TmuxFailed, "There is no chat slot to open the Worker beside."));
+    };
+    let pane = tmux.split_window(&chat.pane, Split::Right, Some("50%"), &worker_spawn(home, plan, &attempt))?;
+    tmux.set_pane_view(&pane, View::Worker)?;
+    mark_worker(tmux, &pane, job, &attempt)
+}
+
+/// A click on a pill: [`open_worker`], or closes the Worker pane when it already shows `job`. Returns whether it is open now.
+pub(crate) fn toggle_worker(
+    home: &CpdHome,
+    tmux: &Tmux,
+    cockpit: &str,
+    plan: &PlanId,
+    job: &str,
+    attempt: &AttemptId,
+) -> Result<bool, CpdError> {
+    let panes = main_panes(tmux, cockpit)?;
+    if let Some(pane) = view_pane(&panes, cockpit, View::Worker) {
+        if worker_shows(tmux, &pane.pane)? == job {
+            tmux.kill_pane(&pane.pane)?;
+            return Ok(false);
+        }
+    }
+    open_worker(home, tmux, cockpit, plan, job, attempt)?;
+    Ok(true)
+}
+
+/// Closes the Worker pane when it shows `job`; any other Worker pane stays.
+pub(crate) fn close_worker(tmux: &Tmux, cockpit: &str, job: &str) -> Result<(), CpdError> {
+    let panes = main_panes(tmux, cockpit)?;
+    if let Some(pane) = view_pane(&panes, cockpit, View::Worker) {
+        if worker_shows(tmux, &pane.pane)? == job {
+            tmux.kill_pane(&pane.pane)?;
+        }
+    }
+    Ok(())
 }
 
 /// What the column draws for a hostname it could not read.
@@ -285,6 +405,31 @@ pub(crate) fn newest_client(listing: &str) -> Option<(u16, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pr(working: bool) -> read::OpenPr {
+        read::OpenPr {
+            repo: "acme/repo".to_owned(),
+            number: 1,
+            url: String::new(),
+            title: String::new(),
+            draft: false,
+            checks: read::Checks::Passed,
+            review_decision: read::ReviewDecision::None,
+            conflicting: false,
+            clean: false,
+            active: false,
+            lead: Some(SessionId::parse("l-a").unwrap()),
+            lead_working: working,
+        }
+    }
+
+    #[test]
+    fn the_view_redraws_every_spinner_frame_while_a_shown_leads_works_and_every_tick_otherwise() {
+        assert_eq!(tick(&[]), TICK);
+        assert_eq!(tick(&[pr(false), pr(false)]), TICK);
+        assert_eq!(tick(&[pr(false), pr(true)]), FRAME);
+        assert_eq!(FRAME, Duration::from_millis(100), "one frame of `palette::frame`");
+    }
 
     #[test]
     fn the_legend_popup_is_sized_by_the_most_recently_active_client() {

@@ -13,7 +13,7 @@ use crate::ids::SessionId;
 use crate::output::Output;
 use crate::store::{Store, WriteTxn};
 
-/// Why a Session is `blocked`: 1–80 characters, no control characters; else
+/// Why a Session is `blocked` or `waiting`: 1–80 characters, no control characters; else
 /// `usage` (commands.md §10.6).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Label(String);
@@ -47,13 +47,20 @@ impl fmt::Display for Label {
     }
 }
 
-/// §3.6's table. `blocked → blocked` is a change of label, which is a
-/// `session-state` Event too (§5.2: "a Session's state or label changes").
+/// §3.6's table. `blocked → blocked` and `waiting → waiting` are a change of label, which is a
+/// `session-state` Event too (§5.2: "a Session's state or label changes"). `waiting` is left for
+/// `blocked` when a human reason opens and entered from `blocked` when the last one closes while
+/// an agent is still waited for.
 fn legal(from: State, to: State) -> bool {
     use State::*;
     matches!(
         (from, to),
-        (_, Stopped) | (Stopped, Idle) | (Idle | Blocked, Working) | (Working | Blocked, Idle) | (Working | Idle | Blocked, Blocked)
+        (_, Stopped)
+            | (Stopped, Idle)
+            | (Idle | Blocked | Waiting, Working)
+            | (Working | Blocked | Waiting, Idle)
+            | (Working | Idle | Blocked | Waiting, Blocked)
+            | (Working | Idle | Blocked | Waiting, Waiting)
     )
 }
 
@@ -65,7 +72,7 @@ pub(super) struct Change {
 }
 
 /// Moves Session `id` to `to` with `label` (set exactly when `to` is
-/// `blocked`), as `command`: one transaction with its `session-state` Event,
+/// `waiting` or `blocked`), as `command`: one transaction with its `session-state` Event,
 /// or nothing when unchanged (§3.6).
 pub(super) fn set(store: &mut Store, command: &str, id: &SessionId, to: State, label: Option<&Label>) -> Result<Change, CpdError> {
     set_reply(store, command, id, to, label, false)
@@ -118,7 +125,7 @@ pub(super) fn set_reply(
 /// `{pane: null, window: null, place: "none"}` when it had a pane. Returns
 /// false, writing nothing, when the row is no longer as read (it got a new
 /// pane, or changed state, meanwhile). `why` ends each Event's text.
-pub(crate) fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Option<&str>, why: &str) -> Result<bool, CpdError> {
+pub fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Option<&str>, why: &str) -> Result<bool, CpdError> {
     let read = row::load(tx, id)?;
     if read.state.as_str() != state || read.tmux_pane.as_deref() != pane {
         return Ok(false);
@@ -164,13 +171,17 @@ pub(super) fn scoped(event: NewEvent, row: &Row) -> NewEvent {
 
 /// `session state` (commands.md §10.6).
 pub(super) fn state(args: StateArgs) -> Result<Output, CpdError> {
-    match (args.state, &args.label) {
-        (State::Blocked, None) => {
-            return Err(CpdError::new(ErrorCode::Usage, "--label is required with blocked.").with("state", "blocked"));
+    match (args.state.has_label(), &args.label) {
+        (true, None) => {
+            let state = args.state.as_str();
+            return Err(CpdError::new(ErrorCode::Usage, format!("--label is required with {state}.")).with("state", state));
         }
-        (other, Some(_)) if other != State::Blocked => {
-            return Err(CpdError::new(ErrorCode::Usage, format!("--label is only allowed with blocked, not {}.", other.as_str()))
-                .with("state", other.as_str()));
+        (false, Some(_)) => {
+            return Err(CpdError::new(
+                ErrorCode::Usage,
+                format!("--label is only allowed with waiting or blocked, not {}.", args.state.as_str()),
+            )
+            .with("state", args.state.as_str()));
         }
         _ => {}
     }
@@ -218,20 +229,28 @@ mod tests {
     #[test]
     fn the_transitions_of_section_3_6() {
         use State::*;
-        let all = [Working, Blocked, Idle, Stopped];
+        let all = [Working, Waiting, Blocked, Idle, Stopped];
         let allowed: Vec<(State, State)> =
             all.iter().flat_map(|f| all.iter().map(move |t| (*f, *t))).filter(|(f, t)| legal(*f, *t)).collect();
         assert_eq!(
             allowed,
             [
+                (Working, Waiting),
                 (Working, Blocked),
                 (Working, Idle),
                 (Working, Stopped),
+                (Waiting, Working),
+                (Waiting, Waiting),
+                (Waiting, Blocked),
+                (Waiting, Idle),
+                (Waiting, Stopped),
                 (Blocked, Working),
+                (Blocked, Waiting),
                 (Blocked, Blocked),
                 (Blocked, Idle),
                 (Blocked, Stopped),
                 (Idle, Working),
+                (Idle, Waiting),
                 (Idle, Blocked),
                 (Idle, Stopped),
                 (Stopped, Idle),

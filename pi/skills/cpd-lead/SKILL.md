@@ -26,7 +26,7 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 ## Rules
 
 - Never write product code, edit the repo checkout, or commit product changes. Workers code.
-- To ask the User, use `ask_user_question`; for something too big for a dialog (a long document, a table, a set of options with detail), use plannotator (`cpd_plan_review` for a Plan; for other material, write it to a file outside the repo and point to it in `ask_user_question`). Never use `cpd context ask`: it records an open question in the Context and asks nobody.
+- To ask the User, use `ask_user_question` only for a few short choices. A plan, its drafts or a design go to the User only with `cpd_plan_review` (plannotator), never through `ask_user_question`: `ask_user_question` is for a few short choices. The adapter refuses `ask_user_question` for a Lead whose Plan has draft Jobs, and any `ask_user_question` over 1500 characters. Anything larger (a long document, a table, a set of options with detail) goes through plannotator: `cpd_plan_review` for a Plan; for other material, write it to a file outside the repo and point to it in chat. Never use `cpd context ask`: it records an open question in the Context and asks nobody.
 - Act only through `cpd` commands, `ask_user_question` and `cpd_plan_review`. You may also read files (the User's material, the repo, the Context's records) and write Spec files and briefs **outside** the repo, for example `/tmp/cpd-<plan>/<key>.json`. `git` and `gh` are allowed for reading (diagnosis: `gh pr checks <n>`, `gh run view <run-id> --log-failed`, `git log`, `git diff`) and, in the Plan's own Lead worktree, for resolving that PR's conflict with its base inline (`git fetch origin`, `git merge origin/<base>`, and committing the merge together with the code the merge needs; those resolution commits are not product changes). A branch is pushed only as `cpd pr push` or `cpd pr rebase` push it (each runs the Gate first when the PR's policy says `pr.gate = local`), never with `git push`. Never run `tmux` or `wt`, never force-push, never commit product changes.
 - Never run what belongs to cpd itself: `cpd plan decide` (the pi adapter records the User's decision), `cpd watch` (the engine; only `cpd watch --ensure`, see [Approving](#approving) and [Dispatching](#dispatching)), `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui` and `cpd events follow`.
 - Open a PR as soon as its last Job merges; never wait for a slot, a turn or another PR.
@@ -91,7 +91,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
    ```
 
    Use `decide` for a settled choice (`--supersedes` when it replaces an earlier one), `note` for a fact, `ask` for a question the User has not settled and `answer` when it is. Plan-only detail (this Plan's assumptions, its Jobs) belongs in the Specs, not the Context.
-2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). List them in the chat first, then confirm them with the User in one short `ask_user_question` (Accept or Change). Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec. Move on only after the User accepts.
+2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). List them in the chat first, then confirm them with the User in one short `ask_user_question` (Accept or Change). If they are long, or the Plan already has draft Jobs, present them with `cpd_plan_review` instead. Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec. Move on only after the User accepts.
 3. **Move to `plan`.** `cpd plan phase plan` is the only manual phase change. PRs and Jobs can be drafted only from here. Run it once Grounding, Clarifying and Specifying are done.
 
 ## 2. Plan
@@ -153,7 +153,7 @@ cpd pr edit <key> --needs <k1,k2>
 
 1. **Render.** Run `cpd plan render` and read the file it returns as the User will: table, graph, every Spec.
 2. **Settle the overlaps.** Read the `## Overlaps` section of the rendered file (after the PRs table; `overlaps` in the JSON output). Each row is a path one of your Jobs touches that overlaps a path a Job of **another** active Plan touches in the same repo (any Context; equal paths, or a directory containing the other), with that Plan, its PR, its Job and the Job's status. It is a warning only: nothing is refused. Settle each overlap before you call the review: decide the order (which Plan changes the path first), coordinate with the other Plan's Lead through a Context note (`cpd context note "<fact>"`, which reaches it at its next turn), or ask the User when the choice is theirs. `No other active Plan touches these files.` means there is nothing to settle.
-3. **Review.** Call `cpd_plan_review` with a `title` (one line of at most 72 characters naming what the drafts under review do), then stop. The User decides in plannotator. The decision arrives as a message: `Plan review <id> was APPROVED` or `REJECTED`, with feedback.
+3. **Review.** Present the drafts only with `cpd_plan_review` (plannotator); `ask_user_question` is refused while the Plan has draft Jobs. Call `cpd_plan_review` with a `title` (one line of at most 72 characters naming what the drafts under review do), then stop. The User decides in plannotator. The decision arrives as a message: `Plan review <id> was APPROVED` or `REJECTED`, with feedback.
    - **Rejected:** apply the feedback to the drafts, then call `cpd_plan_review` again, with a title. Revise with `cpd job edit <k> --spec <file.json>` (draft Jobs only; `--title`, `--tier` and `--needs` work too) and add Jobs as in [Dividing](#dividing). To drop a draft Job, first take it out of its dependents' Dependencies, then cancel it:
 
      ```
@@ -193,7 +193,7 @@ The engine polls every open pull request of the User every 5 s. You may run `cpd
 
 | Event | Meaning | Action |
 |---|---|---|
-| `job-merged` | A Job is Merged. | Note it. When it is the PR's last Job (`cpd plan show`: no Job of the PR queued, running or draft), open the PR now: merge the base into the Lead Branch first if it moved, then `cpd pr open --pr <key>`; never wait for `all-merged`, a slot, a turn or another PR. Tell the User in one line only if they are waiting. A research Job: read its findings, then revise the drafts that depend on them (`cpd job edit <k> --spec <file.json>`; add missing ones with `cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2> --draft`) and start that batch ([Starting a later batch](#starting-a-later-batch)). When every feedback Job of a PR is Merged: `cpd pr rebase --pr <key>`. After `cpd pr open --pr <key>` was refused with `gate_failed`, when every fix Job of that PR is Merged: `cpd pr open --pr <key>` again. A review Job ([Judging material](#judging-material)): read its findings file `run/<plan>/reviews/<k>.md`, append one fix Job per real finding ([Appending fixes](#appending-fixes)), then `cpd pr open --pr <key>`. |
+| `job-merged` | A Job is Merged. | Note it. When it is the PR's last Job (`cpd plan show`: no Job of the PR queued, running or draft), open the PR now: merge the base into the Lead Branch first only if it conflicts with it (a base that merely moved is no reason), then `cpd pr open --pr <key>`; never wait for `all-merged`, a slot, a turn or another PR. Tell the User in one line only if they are waiting. A research Job: read its findings, then revise the drafts that depend on them (`cpd job edit <k> --spec <file.json>`; add missing ones with `cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2> --draft`) and start that batch ([Starting a later batch](#starting-a-later-batch)). When every feedback Job of a PR is Merged: `cpd pr rebase --pr <key>`. After `cpd pr open --pr <key>` was refused with `gate_failed`, when every fix Job of that PR is Merged: `cpd pr open --pr <key>` again. A review Job ([Judging material](#judging-material)): read its findings file `run/<plan>/reviews/<k>.md`, append one fix Job per real finding ([Appending fixes](#appending-fixes)), then `cpd pr open --pr <key>`. |
 | `attempt-retry` | An Attempt failed with a cause the ladder retries; the next one is queued at a higher Tier. | No action. Do not interrupt the User. |
 | `job-failed` | The ladder is exhausted, or a timeout, setup failure or merge failure needs a decision. | Diagnose ([Failed Jobs](#failed-jobs)), then do one of: retry higher with `cpd job retry <k> --tier <T>`; cancel with `cpd job cancel <k> --reason "<why>"` and append the replacement with `cpd job add <k2> --title "<title>" --tier <T> --spec <file.json> --needs <k1,k2>` ([Appending fixes](#appending-fixes)); or escalate to the User with `ask_user_question` when the choice is theirs. |
 | `job-cancelled` | A cancel took effect (the one you asked for, once the engine stopped the Attempt). | No action. |
@@ -211,7 +211,7 @@ A message that starts `cpd adapter:` comes from the pi adapter, not from a Plan:
 A batch added as drafts ([Approving](#approving) step 5, or a follow-up PR after `plan-done`) starts only with the User's approval, in any phase after the lock. Only undecided design is a batch of drafts: decided work is added queued and needs no review (when unsure, a draft):
 
 1. Revise the drafts if the work since changed them (`cpd job edit <k> --spec <file.json>`; drop one as in [Approving](#approving) step 3).
-2. Run `cpd plan render`, read the file it returns, and show the batch to the User in chat (the drafts are marked under review; the Locked Jobs are context).
+2. Run `cpd plan render`, read the file it returns, and show the batch to the User in chat (the drafts are marked under review; the Locked Jobs are context). Never present the batch through `ask_user_question`: the adapter refuses it while drafts exist.
 3. Call `cpd_plan_review` with a `title` (one line of at most 72 characters naming what the drafts under review do), then stop. The review covers exactly the drafts, all at once: keep as drafts only what should start together.
 4. **APPROVED:** the drafts are queued and start as soon as they are Ready. There is no `cpd plan lock` here and nothing else to run; the message lists the Jobs queued. If it says the Jobs changed since the review, call `cpd_plan_review` again, with a title.
 5. **REJECTED:** the drafts stay drafts. Apply the feedback with `cpd job edit`, `cpd job cancel` and `cpd job add --draft`, then call `cpd_plan_review` again, with a title.
@@ -235,7 +235,7 @@ Find the cause in the message text or `cpd job show <k>` (it lists Attempts with
 | `tampered` | The Attempt changed a protected path (`.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, the repo's protected list). Retry once; if it recurs the Job needs such a change: cancel and ask the User. |
 
 - The retry ladder already raised the Tier on every automatic Attempt (at most `retry_cap`, default 2, retries). If the Job failed at `O5`, no higher Tier exists: change the Spec (cancel and append) or ask the User.
-- A cancelled or failed Job leaves its dependents blocked forever, because Locked Jobs cannot be edited. Cancel each dependent too and append replacements whose `--needs` point at the new Jobs.
+- A cancelled or failed Job leaves its dependents unable to start, because Locked Jobs cannot be edited. Cancel each dependent too and append replacements whose `--needs` point at the new Jobs.
 - A Job with a running Attempt is stopped by the engine within one tick after you cancel the Job (`cancel_requested` in the result).
 
 #### Escalations
@@ -248,7 +248,7 @@ You have the Context: answer from the Spec, Requirements, assumptions, Context r
 cpd answer <esc-id> "<answer>"
 ```
 
-- The text names the Escalation id (`<attempt-id>-q<k>`), the Job and the question. The Worker is blocked until you answer (it expires after `ask_minutes`, default 60 min), so answer promptly.
+- The text names the Escalation id (`<attempt-id>-q<k>`), the Job and the question. The Worker is waiting for you until you answer (it expires after `ask_minutes`, default 60 min), so answer promptly.
 - Write the answer so the Worker can act on it literally: concrete, self-contained, no follow-up needed. Quote the Spec, assumption or Context record it comes from.
 - When the User must decide, name the Job and the Worker's question in your own question. Send the User's decision back as the answer, never the raw dialog. If the decision outlives this Plan, record it too (`cpd context decide "<decision>"`).
 - `escalation_answered` or `escalation_expired` means it is already answered or expired. Do nothing more.
@@ -278,7 +278,7 @@ The end of phase `dispatch` (every Job of a PR merged, `pr open`) and phase `dep
 
 Before `pr open`, read new records: `cpd context show --since <seq>`.
 
-When a PR's last Job merges (`job-merged`; `all-merged` may come late or never, so never wait for it, a slot, a turn or another PR), merge the base into the Lead Branch if it moved, so the Gate runs on a head that contains the base, then run `cpd pr open --pr <key>`. When the PR's policy says `pr.gate = local` (`cpd policy show --pr <key>`), it first runs the Gate (the repo's `pre-merge` hook) on the PR's Lead Branch, then pushes it and opens the PR, titled with the PR's stored title; under `pr.gate = ci` it runs no Gate and pushes at once.
+When a PR's last Job merges (`job-merged`; `all-merged` may come late or never, so never wait for it, a slot, a turn or another PR), merge the base into the Lead Branch only when the Lead Branch conflicts with it (a base that merely moved ahead is no reason: no re-merge, no new Gate run), then run `cpd pr open --pr <key>`. `cpd pr open` refuses with `base_conflict` (exit 3) only when the Lead Branch conflicts with its base. When the PR's policy says `pr.gate = local` (`cpd policy show --pr <key>`), it first runs the Gate (the repo's `pre-merge` hook) on the PR's Lead Branch, then pushes it and opens the PR, titled with the PR's stored title; under `pr.gate = ci` it runs no Gate and pushes at once.
 
 - `gate_failed` (exit 3; only under `pr.gate = local`): the Gate failed on the merged Lead Branch, and nothing was pushed. The last 60 lines of output are in `error.details.tail`, the whole log is `error.details.log`. Append one fix Job per cause to that PR, as for `pr-feedback`, with the failing output in the Spec; if the log is long, give it to a Worker ([Judging material](#judging-material)). When they are Merged, run `cpd pr open --pr <key>` again. Do not retry before that.
 - `pr_title_required` (exit 3): the PR has no title (it was added before titles existed); nothing was run. Set it with `cpd pr edit <key> --title "<title>"` (one line of at most 72 characters naming the change), then run `cpd pr open --pr <key>` again. The same command retitles an open pull request on GitHub.
@@ -289,11 +289,11 @@ When a PR's last Job merges (`job-merged`; `all-merged` may come late or never, 
 
 Once the Gate passes (when `pr.gate = local`), or at once otherwise, `cpd pr open` pushes the Lead Branch and opens the pull request. Give the User the PR URL. Never run `cpd pr open` again for a PR that is open. Once every PR is open the phase becomes `deploy`. A PR that needs another starts only after that one is merged (`pr-started`).
 
-**Stacked PRs.** The next PR in an area is built on the previous PR's last commit (its Lead Branch head), never in parallel from the base. Open it only when it is ready: its Gate passed on a head that contains its base (the base branch, or the PR below it); never as a draft.
+**Stacked PRs.** The next PR in an area is built on the previous PR's last commit (its Lead Branch head), never in parallel from the base. Open it only when it is ready: its Gate passed on its own head and GitHub reports no conflict with its base (the base branch, or the PR below it), latest base or not; never as a draft.
 
 - While the previous PR is open, the next PR targets the previous PR's branch: run `gh pr edit <n> --base <branch>` right after `cpd pr open`, or add a later PR with `cpd pr add <key> --repo <path> --base <branch> --title "<title>"` (`cpd pr edit` cannot change a base after the lock). GitHub then cannot land it first.
 - While stacked, take the previous branch's new commits with a merge and push with `cpd pr push --pr <key>`, not `cpd pr rebase` (cpd still records the base as the default branch).
-- When the previous PR lands, its branch is deleted and GitHub repoints the next PR to the base: merge the base, then `cpd pr push --pr <key>` runs the Gate (when `pr.gate = local`) and pushes.
+- When the previous PR lands, its branch is deleted and GitHub repoints the next PR to the base: merge the base only if the PR now conflicts with it, then `cpd pr push --pr <key>` runs the Gate (when `pr.gate = local`) and pushes.
 - Merging the earlier branch into a PR that targets the base is not stacking.
 
 ### Reviewing and Monitoring

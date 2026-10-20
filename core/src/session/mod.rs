@@ -41,7 +41,8 @@ pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
-pub(crate) use state::pane_gone;
+pub use send::tell_managers;
+pub use state::pane_gone;
 
 /// The program in every pane cpd starts, resolved on the tmux server's `PATH`
 /// (Escalation `rs-session-a1-q2`): a pane must outlive any one build.
@@ -195,7 +196,7 @@ pub struct StateArgs {
     /// The agent state
     #[arg(value_name = "state")]
     state: State,
-    /// Why it is blocked: required with `blocked`, refused otherwise
+    /// Why it is waiting or blocked: required with `waiting` and `blocked`, refused otherwise
     #[arg(long, value_name = "text")]
     label: Option<Label>,
     /// The run that ended answered a message the User wrote to this Session: allowed only with `idle`

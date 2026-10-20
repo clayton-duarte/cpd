@@ -162,7 +162,11 @@ impl Run<'_> {
             }
             None => {
                 self.write_inputs(&dir, &in_force)?;
-                let (ran, text) = self.run_pi(upto, KIND_DISTILL, &["prompt.md", "records.md"])?;
+                let (mut ran, text) = self.run_pi(upto, KIND_DISTILL, &["prompt.md", "records.md"])?;
+                // Recency wins (contract §4.6 "The contradictions report"): the report is taken out of the text
+                // before anything validates it, and goes to the run's line.
+                let (text, report) = take_contradictions(&text);
+                ran.report = Report::of(&report, &in_force);
                 fs::write(&tmp, text).map_err(|e| io_failed("write", &tmp, &e))?;
                 Some(ran)
             }
@@ -258,7 +262,9 @@ impl Run<'_> {
             fs::write(&path, content).map_err(|e| io_failed("write", &path, &e))?;
         }
         let (ran, text) = self.run_pi(upto, KIND_REPAIR, &["repair-prompt.md", "digest.md", "missing.md", "problem.md"])?;
-        // As for a digest, an index the model wrote anyway is not an addition.
+        // As for a digest, an index the model wrote anyway is not an addition, nor is a contradictions section
+        // (a repair line reports no pairs, contract §4.6).
+        let (text, _) = take_contradictions(&text);
         Ok((ran, digest::topic_sections(&text).trim_end().to_owned() + "\n"))
     }
 
@@ -296,7 +302,14 @@ impl Run<'_> {
         let started_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
         let started = Instant::now();
         let waited = wait_limited(&mut command, limit);
-        let mut ran = Ran { started_at, seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0, model, kind, usage: None };
+        let mut ran = Ran {
+            started_at,
+            seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0,
+            model,
+            kind,
+            usage: None,
+            report: Report::default(),
+        };
         let failure = match waited {
             Err(e) => Failed::Spawn(e.to_string()),
             Ok(Waited::TimedOut) => Failed::Timeout(limit),
@@ -336,6 +349,8 @@ impl Run<'_> {
         line["upto_seq"] = json!(upto);
         line["result"] = json!(result);
         line["kind"] = json!(ran.kind);
+        line["contradictions"] = json!(ran.report.kept);
+        line["contradictions_dropped"] = json!(ran.report.dropped);
         let path = runs_path(self.home, self.context);
         let written = OpenOptions::new().create(true).append(true).open(&path).and_then(|mut file| writeln!(file, "{line}"));
         if let Err(e) = written {
@@ -474,6 +489,70 @@ fn distiller_records_md(in_force: &[&Indexed]) -> String {
     out
 }
 
+/// The heading of the contradictions report, which the prompt asks the model to end its text with.
+const CONTRADICTIONS_HEADING: &str = "## Contradictions";
+
+/// Splits the model's text into the text without its `## Contradictions` section (from that heading to the next
+/// `## ` heading or the end) and the section's lines.
+fn take_contradictions(text: &str) -> (String, Vec<&str>) {
+    let (mut kept, mut lines, mut inside) = (String::new(), Vec::new(), false);
+    for line in text.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\r', '\n']);
+        if bare.trim_end() == CONTRADICTIONS_HEADING {
+            inside = true;
+        } else if inside && bare.starts_with("## ") {
+            inside = false;
+        }
+        if !inside {
+            kept.push_str(line);
+        } else if bare.trim_end() != CONTRADICTIONS_HEADING && !bare.trim().is_empty() {
+            lines.push(bare);
+        }
+    }
+    (kept, lines)
+}
+
+/// One pair of contradicting records: `older` is overruled by `newer` (recency wins), `why` in one line.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+struct Contradiction {
+    older: RecordId,
+    newer: RecordId,
+    why: String,
+}
+
+/// The pairs a run reported that cpd keeps, and how many it dropped.
+#[derive(Debug, Default)]
+struct Report {
+    kept: Vec<Contradiction>,
+    dropped: usize,
+}
+
+impl Report {
+    /// Keeps each line `- [<older>] -> [<newer>]: <why>` whose two ids are headers of `records.md` (`in_force`)
+    /// with the older one's `seq` lower than the newer one's; any other line (an unknown id, the reverse
+    /// order, an unparseable line) is dropped and counted.
+    fn of(lines: &[&str], in_force: &[&Indexed]) -> Report {
+        let seq = |id: &RecordId| in_force.iter().find(|(_, r)| &r.id == id).map(|(seq, _)| *seq);
+        let mut report = Report::default();
+        for line in lines {
+            match Self::pair(line).filter(|c| matches!((seq(&c.older), seq(&c.newer)), (Some(o), Some(n)) if o < n)) {
+                Some(pair) => report.kept.push(pair),
+                None => report.dropped += 1,
+            }
+        }
+        report
+    }
+
+    fn pair(line: &str) -> Option<Contradiction> {
+        let rest = line.trim().strip_prefix("- [")?;
+        let (older, rest) = rest.split_once("] -> [")?;
+        let (newer, why) = rest.split_once("]:")?;
+        let why = why.trim();
+        (!why.is_empty()).then_some(())?;
+        Some(Contradiction { older: RecordId::parse(older.trim()).ok()?, newer: RecordId::parse(newer.trim()).ok()?, why: why.to_owned() })
+    }
+}
+
 /// Why pi failed.
 enum Failed {
     Spawn(String),
@@ -493,6 +572,8 @@ struct Ran {
     kind: &'static str,
     /// `None` when pi reported none (a spawn failure, a kill, a stream without an assistant message).
     usage: Option<pi_json::Usage>,
+    /// The contradictions the run's text reported; empty for a run without such a section (a repair turn, a failure).
+    report: Report,
 }
 
 impl Ran {
@@ -698,6 +779,22 @@ mod tests {
             )
         );
         assert_eq!(records, records_md(&in_force));
+    }
+
+    #[test]
+    fn the_contradictions_section_runs_to_the_next_heading_and_its_pairs_are_checked_against_the_headers() {
+        let text = "# D\n- [hs-d1] x\n\n## Contradictions\n- [hs-d1] -> [hs-d2]: why\nnoise\n- [hs-d2] -> [hs-d1]: back\n## Tail\n- [hs-d2] y\n";
+        let (rest, lines) = take_contradictions(text);
+        assert_eq!(rest, "# D\n- [hs-d1] x\n\n## Tail\n- [hs-d2] y\n");
+        let (d1, d2) = (record("hs-d1", "2026-10-01T10:00:00.000Z", "a", Draft::Note), record("hs-d2", "2026-10-02T10:00:00.000Z", "b", Draft::Note));
+        let (d1, d2) = ((1, d1.1), (2, d2.1));
+        let report = Report::of(&lines, &[&d1, &d2]);
+        assert_eq!(report.kept.len(), 1);
+        assert_eq!(
+            (report.kept[0].older.to_string(), report.kept[0].newer.to_string(), report.kept[0].why.as_str()),
+            ("hs-d1".to_owned(), "hs-d2".to_owned(), "why")
+        );
+        assert_eq!(report.dropped, 2);
     }
 
     fn assistant(text: &str, stop: &str, input: u64, cache_read: u64, cache_write: u64, output: u64, cost: f64) -> String {

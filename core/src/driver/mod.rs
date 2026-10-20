@@ -7,11 +7,11 @@
 //! - `worker`: the Worker Spec, the Worker's pane, its session file;
 //! - `stall`: A4's stall rule, the kill of a Worker's idle tool call.
 
-pub(crate) mod lock;
+pub mod lock;
 mod run;
 mod stall;
 mod start;
-pub(crate) mod worker;
+pub mod worker;
 
 use serde_json::json;
 

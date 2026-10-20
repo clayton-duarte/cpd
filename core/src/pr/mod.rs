@@ -54,11 +54,11 @@ pub enum Command {
     Add(AddArgs),
     /// Change a waiting PR before the lock (§9.5)
     Edit(EditArgs),
-    /// Remove a PR from the Plan before the lock (§9.6)
+    /// Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6)
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
     Start(StartArgs),
-    /// Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1)
+    /// Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1)
     Open(Args),
     /// Poll every open pull request of the User (§9.2)
     Poll(PollArgs),
@@ -151,6 +151,9 @@ pub struct CancelArgs {
     /// The PR key
     #[arg(value_name = "key")]
     key: PrKey,
+    /// Cancel a dispatch PR whose merged work another PR carried: that PR, as <plan>/<key> (a bare <key> is of the Plan)
+    #[arg(long = "superseded-by", value_name = "ref")]
+    superseded_by: Option<add::PrRef>,
     #[command(flatten)]
     plan: PlanArg,
 }

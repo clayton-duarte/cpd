@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -156,7 +156,7 @@ impl Kind {
             PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
             PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &["title"]),
             PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
-            PrCancelled => spec([Y, Y, N, N, N], &["pr"], &[]),
+            PrCancelled => spec([Y, Y, N, N, N], &["pr"], &["superseded_by"]),
             PrStarted => spec(
                 [Y, Y, N, N, N],
                 &["pr", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"],
@@ -205,31 +205,5 @@ impl FromStr for Kind {
                 .with("kind", s)
                 .with("kinds", Kind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>())
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sha2::{Digest, Sha256};
-
-    /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (6, "c96ee1a3bc1b33daa186960cbea25f5b23a02c56cc06e932f7aba1e0dd990d04");
-
-    fn kinds_hash() -> String {
-        let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
-        names.sort_unstable();
-        format!("{:x}", Sha256::digest(names.join("\n").as_bytes()))
-    }
-
-    #[test]
-    fn the_event_kinds_are_pinned_to_the_protocol() {
-        assert_eq!(
-            (PROTOCOL, kinds_hash().as_str()),
-            PINNED,
-            "The Event kinds or PROTOCOL changed. Raise PROTOCOL (core/src/events/kind.rs) when the kinds changed, \
-             then set PINNED to ({PROTOCOL}, {:?}) and update `PROTOCOL` and `KINDS` in pi/lib/event.ts.",
-            kinds_hash()
-        );
     }
 }

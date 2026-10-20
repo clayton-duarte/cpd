@@ -263,6 +263,7 @@ version = "0.0.5"
 dependencies = [
  "clap",
  "cpd-core",
+ "cpd-engine",
  "cpd-tui",
  "nix 0.31.3",
  "ratatui",
@@ -290,6 +291,20 @@ dependencies = [
  "time",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "cpd-engine"
+version = "0.0.5"
+dependencies = [
+ "clap",
+ "cpd-core",
+ "nix 0.31.3",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
 ]
 
 [[package]]

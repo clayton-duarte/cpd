@@ -7,6 +7,7 @@
 #   sh scripts/preview-tui.sh on [<worktree>]   build, then swap the views
 #   sh scripts/preview-tui.sh off               installed cpd in the views again
 #
+# While a preview is on, the tmux server option @cpd_preview holds '<worktree> <sha>'.
 # The preview lives in ${CPD_PREVIEW_DIR:-~/.cache/cpd-preview}. Safe to rerun.
 set -eu
 
@@ -20,7 +21,7 @@ usage() {
 }
 
 tmux_cmd() {
-  env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null "$@"
+  env -u TMUX -u TMUX_PANE tmux -u -L "$socket" -f /dev/null "$@"
 }
 
 # Reads the socket and the cockpit session from `cpd config` (no jq: this must
@@ -92,6 +93,8 @@ on() {
   respawn_views "$dir/cpd"
 
   sha=$(git -C "$worktree" rev-parse --short HEAD)
+  # The status line shows it while set (commands.md §13.2); `cpd tui --respawn` warns.
+  tmux_cmd set -g @cpd_preview "$(basename "$worktree") $sha"
   printf '%s\n%s\n' "$worktree" "$sha" >"$dir/state"
   echo "previewing $worktree @ $sha; revert with: sh $self off" >&2
   echo "a reinstall's cpd tui --respawn may keep the preview in the views; run off to be sure." >&2
@@ -100,6 +103,7 @@ on() {
 off() {
   require_cockpit
   respawn_views cpd
+  tmux_cmd set -gu @cpd_preview
   cpd tui >&2
   rm -f "$dir/state"
   echo "installed cpd is back in the views" >&2

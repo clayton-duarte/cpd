@@ -16,23 +16,36 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 
 use cpd_core::error::CpdError;
+use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, JobCounts};
+use crate::read::{Dot, JobCounts, JobStatus, PrState};
 use crate::section;
 use crate::{Capture, run_view};
+
+/// The rounded caps of a Plan pill (powerline, U+E0B6 and U+E0B4), as the Plan view draws them (`plan/flow.rs`, which is
+/// private to its module).
+const CAP_L: &str = "\u{e0b6}";
+const CAP_R: &str = "\u{e0b4}";
+
+/// A sample pill with its rounded caps: the caps in the pill's colour on the default background, as the Plan view draws
+/// a Job pill (`plan/flow.rs`).
+fn capped(body: String, pill: Style) -> Line<'static> {
+    let cap = Style::new().fg(pill.bg.expect("a pill has a colour"));
+    Line::from(vec![Span::styled(CAP_L, cap), Span::styled(body, pill), Span::styled(CAP_R, cap)])
+}
 
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
 const POPUP_BORDER: u16 = 2;
-const DOTS_TITLE: &str = "Session dots";
+const DOTS_TITLE: &str = "Session Dots";
 /// The rows above the body: the title, drawn as a section header (hs-d124, hs-d297).
 /// The title's rows: an empty row above it; the body's first row is the empty row below (hs-d308).
 const HEADER_ROWS: u16 = 2;
-const INTRO: &str = "Legend: what the cockpit's colours and icons mean   (any key closes)";
+const INTRO: &str = "Legend: What The Cockpit's Colours And Icons Mean (Any Key Closes)";
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
 
@@ -91,8 +104,9 @@ fn plain(text: &str) -> Line<'static> {
 /// The Context row's precedence line, with the real glyphs (the working one as its first frame).
 fn precedence() -> String {
     format!(
-        "Context row: its most urgent Session: red > yellow > magenta > white > {} > {} > {}",
+        "Context row: its most urgent Session: red > yellow > magenta > white > {} > {} > {} > {}",
         palette::SPINNER[0],
+        palette::WAITING,
         palette::IDLE,
         palette::STOPPED
     )
@@ -101,7 +115,7 @@ fn precedence() -> String {
 /// The sections, built only from the palette and the read model's counters.
 fn sections() -> Vec<Section> {
     let meanings = Section {
-        title: "Meanings → colour (one source for every view)",
+        title: "Meanings → Colour (One Source For Every View)",
         header: None,
         rows: Meaning::ALL
             .iter()
@@ -114,11 +128,22 @@ fn sections() -> Vec<Section> {
             let (icon, meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                Line::from(Span::styled(format!(" {icon} key │S1 "), palette::pill(meaning))),
+                capped(format!("{icon} key│S1"), palette::pill(meaning)),
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })
         .collect();
+    // a failed Job is waiting (its Lead handles it) until `job-stuck` opens (audit Q3): the stuck one is red, after `failed`
+    let (stuck_icon, stuck) = palette::JOB_STUCK;
+    let failed = palette::JOB_LEGEND.iter().position(|(_, status, _)| *status == JobStatus::Failed).expect("the legend lists failed");
+    jobs.insert(
+        failed + 1,
+        vec![
+            plain("failed, stuck"),
+            capped(format!("{stuck_icon} key│S1"), palette::pill(stuck)),
+            Line::from(Span::styled("3", palette::fg(stuck))),
+        ],
+    );
     // The counters' order is `JobCounts::counters`'s: queued, running, merging, failed, merged.
     let sample = JobCounts { queued: 1, running: 1, merging: 2, failed: 0, merged: 3, ..JobCounts::default() };
     let slots = [0, 1, 2, 4, 3].map(|i| palette::JOB_LEGEND[i]);
@@ -135,7 +160,7 @@ fn sections() -> Vec<Section> {
         Line::from(counters),
         Line::from(order).style(Style::new().add_modifier(Modifier::DIM)),
     ]);
-    let jobs = Section { title: "Jobs: Plan pills and Context counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
+    let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
     let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
     let dots = Section {
@@ -144,27 +169,30 @@ fn sections() -> Vec<Section> {
         rows: vec![
             vec![plain(palette::NEEDS_YOU), plain("the Session needs you (colour below)")],
             vec![frames, plain("the Lead is working (one frame every 100 ms)")],
+            vec![dot(Dot::Waiting, 0), plain("waiting: an agent waits for another agent (a Worker for its Lead), not for you")],
             vec![dot(Dot::Idle, 0), plain("idle, nothing needed")],
             vec![dot(Dot::Stopped, 0), plain("pi stopped")],
-            vec![dot(Dot::Red, 0), plain("red: blocked work (a dialog, an Escalation) in dispatch or pr")],
-            vec![dot(Dot::Yellow, 0), plain("yellow: the Plan's Lead, its pull request is open with checks passed or failed")],
+            vec![dot(Dot::Red, 0), plain("red: a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request")],
+            vec![dot(Dot::Yellow, 0), plain("yellow: ready to merge, review requested")],
             vec![dot(Dot::Magenta, 0), plain("magenta: blocked while grounding, planning or done, or the Plan's review is pending")],
             vec![dot(Dot::White, 0), plain("white: idle, not seen since it last went idle")],
             vec![plain(""), plain(&precedence())],
         ],
     };
-    let prs = Section {
-        title: "PRs (Dispatch)",
-        header: None,
-        rows: palette::PR_LEGEND
-            .iter()
-            .map(|(name, state)| (*name, palette::pr_state(*state)))
-            .chain([palette::PR_CONFLICT])
-            .map(|(name, meaning)| vec![Line::from(Span::styled(format!("#2 {name}"), palette::fg(meaning)))])
-            .collect(),
-    };
+    let sample = |(name, meaning): (&str, Meaning)| Line::from(Span::styled(format!("#2 {name}"), palette::fg(meaning)));
+    let mut pr_rows: Vec<Vec<Line<'static>>> = palette::PR_LEGEND
+        .iter()
+        .map(|(name, state)| {
+            let row = vec![sample((name, palette::pr_state(*state)))];
+            // a closed pull request is waiting while its Lead handles it, red once it asks you (audit Q4)
+            if *state == PrState::Closed { [row, vec![plain("its Lead handles it")]].concat() } else { row }
+        })
+        .collect();
+    pr_rows.push(vec![sample(palette::PR_CLOSED_ASKED), plain("its Lead asks you")]);
+    pr_rows.push(vec![sample(palette::PR_CONFLICT)]);
+    let prs = Section { title: "PRs (Dispatch)", header: None, rows: pr_rows };
     let checks = Section {
-        title: "PR checks",
+        title: "PR Checks",
         header: None,
         rows: vec![
             palette::CHECKS_LEGEND
@@ -176,16 +204,27 @@ fn sections() -> Vec<Section> {
                 .collect(),
         ],
     };
+    let tier = |urgency, meaning: &'static str| vec![Line::from(palette::tier_span(urgency)), plain(meaning)];
+    let inbox = Section {
+        title: "Inbox",
+        header: None,
+        rows: vec![
+            tier(Urgency::Red, "a blocker only you can clear"),
+            tier(Urgency::Yellow, "pull-request work"),
+            tier(Urgency::Magenta, "a decision before the work runs"),
+            tier(Urgency::White, "an unread reply"),
+        ],
+    };
     let pulse = Section {
         title: "Pulse",
         header: None,
-        // two entries a row: the popup is at most 80 % of the client tall (one row an entry would not fit)
+        // three entries a row: the popup is at most 80 % of the client tall (fewer an entry would not fit)
         rows: crate::plan::pulse::legend()
-            .chunks(2)
+            .chunks(3)
             .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
             .collect(),
     };
-    vec![meanings, jobs, dots, prs, pulse, checks]
+    vec![meanings, jobs, dots, prs, inbox, pulse, checks]
 }
 
 /// The vertical constraints of the body: each section after a gap.
@@ -199,11 +238,11 @@ fn body_height(sections: &[Section]) -> u16 {
 }
 
 /// The size the legend needs: columns, rows (without a popup's border). The title is a section header, which
-/// needs its own width: `──`, ` <title> ` and one `─`.
+/// needs its own width: the padding, `╭─`, the pill (the title and its two caps), one `─` and the padding.
 pub fn size() -> (u16, u16) {
     let sections = sections();
     let width = sections.iter().map(Section::width).max().unwrap_or(0) + 2;
-    (width.max(INTRO.chars().count() as u16 + 5), HEADER_ROWS + body_height(&sections))
+    (width.max(INTRO.chars().count() as u16 + 7), HEADER_ROWS + body_height(&sections))
 }
 
 /// The whole body drawn off screen, `width` columns wide: the popup shows a window of it.
@@ -238,8 +277,9 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
         let last = (scroll.offset() + scroll.page()).min(scroll.total());
         let position = format!(" {}-{}/{} ", scroll.offset() + 1, last, scroll.total());
         let width = position.chars().count() as u16;
-        if width < title.width {
-            let at = Rect::new(title.x + title.width - width, title.y, width, 1);
+        // ends one column before the edge: the padding stays blank
+        if width + 1 < title.width {
+            let at = Rect::new(title.x + title.width - 1 - width, title.y, width, 1);
             f.render_widget(Paragraph::new(position).style(palette::fg(Meaning::Nothing)), at);
         }
     }
@@ -291,6 +331,7 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::read::Kind;
 
     fn text(line: &Line) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -302,43 +343,69 @@ mod tests {
         assert_eq!(
             titles,
             [
-                "Meanings → colour (one source for every view)",
-                "Jobs: Plan pills and Context counters",
-                "Session dots",
+                "Meanings → Colour (One Source For Every View)",
+                "Jobs: Plan Pills And Context Counters",
+                "Session Dots",
                 "PRs (Dispatch)",
+                "Inbox",
                 "Pulse",
-                "PR checks",
+                "PR Checks",
             ]
         );
     }
 
     #[test]
-    fn the_pulse_section_lists_its_five_glyphs_in_their_colours() {
-        let pulse = &sections()[4];
+    fn the_pulse_section_lists_the_kind_colours_in_precedence_order_the_grey_zero_and_quiet() {
+        let pulse = &sections()[5];
         let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();
         assert_eq!(
             cells,
             [
-                "▄", "activity per 5 minutes", "▄", "a Job merged",
-                crate::plan::pulse::merged_icon(), "a PR merged", "▁", "a Worker running",
+                "▂▄▆", "activity per 5 min, first colour wins",
+                "▄", "an error, or a Job failed",
+                "▄", "a Plan or ask Event",
+                "▄", "a PR opened",
+                "▄", "an escalation",
+                "▄", "a Job or a PR merged",
+                "▄", "any other activity",
+                "▁", "no activity",
                 "quiet 41m", "queued or running work with no activity for 30 min",
             ]
         );
         let colours: Vec<_> = pulse.rows.iter().flatten().step_by(2).map(|l| l.spans[0].style.fg).collect();
-        let fg = |m| palette::fg(m).fg;
-        assert_eq!(colours, [None, fg(Meaning::Done), fg(Meaning::Done), fg(Meaning::Nothing), fg(Meaning::Review)]);
+        let c = |k| Some(palette::pulse_kind(k));
+        assert_eq!(
+            colours,
+            [
+                None,
+                c(Kind::Error),
+                c(Kind::Plan),
+                c(Kind::PrOpened),
+                c(Kind::Escalation),
+                c(Kind::Merged),
+                c(Kind::Other),
+                palette::fg(Meaning::Nothing).fg,
+                palette::fg(Meaning::Review).fg
+            ]
+        );
     }
 
     #[test]
     fn session_dots_lists_every_glyph_and_each_circle_in_its_palette_colour() {
         let dots = &sections()[2];
-        assert_eq!(dots.title, "Session dots");
+        assert_eq!(dots.title, "Session Dots");
         let shown: String = dots.rows.iter().flatten().map(text).collect();
-        let precedence = format!("red > yellow > magenta > white > {} > {} > {}", palette::SPINNER[0], palette::IDLE, palette::STOPPED);
-        for glyph in [palette::NEEDS_YOU, &palette::SPINNER.concat(), palette::IDLE, palette::STOPPED, &precedence] {
+        let precedence = format!(
+            "red > yellow > magenta > white > {} > {} > {} > {}",
+            palette::SPINNER[0],
+            palette::WAITING,
+            palette::IDLE,
+            palette::STOPPED
+        );
+        for glyph in [palette::NEEDS_YOU, &palette::SPINNER.concat(), palette::WAITING, palette::IDLE, palette::STOPPED, &precedence] {
             assert!(shown.contains(glyph), "{glyph}: {shown}");
         }
-        for (row, dot) in dots.rows[4..8].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White]) {
+        for (row, dot) in dots.rows[5..9].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White]) {
             assert_eq!(row[0].spans, [palette::dot_span(dot, 0, false)], "{dot:?}");
         }
         assert!(!shown.contains("phase"), "{shown}");
@@ -347,19 +414,75 @@ mod tests {
     }
 
     #[test]
+    fn the_dots_say_what_needs_you_and_what_only_waits_for_an_agent() {
+        let dots = &sections()[2];
+        let says: Vec<String> = dots.rows.iter().map(|r| text(&r[1])).collect();
+        assert_eq!(
+            says[2],
+            "waiting: an agent waits for another agent (a Worker for its Lead), not for you",
+            "the waiting dot, between working and idle"
+        );
+        assert_eq!(dots.rows[2][0].spans, [palette::dot_span(Dot::Waiting, 0, false)]);
+        assert_eq!(
+            says[5],
+            "red: a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"
+        );
+        assert_eq!(says[6], "yellow: ready to merge, review requested");
+        let shown = says.join("\n");
+        assert!(!shown.contains("Escalation") && !shown.contains("or pr"), "an Escalation is no item, the phase is deploy: {shown}");
+    }
+
+    #[test]
     fn the_pr_states_list_conflict_in_the_failed_colour_after_the_others() {
         let prs = &sections()[3];
         let names: Vec<String> = prs.rows.iter().map(|r| text(&r[0])).collect();
-        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 conflict"]);
-        let conflict = &prs.rows[3][0].spans[0];
+        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 closed", "#2 conflict"]);
+        let conflict = &prs.rows[4][0].spans[0];
         assert_eq!(conflict.style, palette::fg(palette::Meaning::Failed));
+    }
+
+    #[test]
+    fn a_closed_pr_is_waiting_while_its_lead_handles_it_and_red_once_it_asks_you() {
+        let prs = &sections()[3];
+        let (handled, asked) = (&prs.rows[2], &prs.rows[3]);
+        assert_eq!(handled[0].spans[0].style, palette::fg(Meaning::Waiting));
+        assert_eq!(asked[0].spans[0].style, palette::fg(Meaning::Failed));
+        assert_eq!((text(&handled[1]), text(&asked[1])), ("its Lead handles it".to_owned(), "its Lead asks you".to_owned()));
+    }
+
+    #[test]
+    fn a_failed_job_is_waiting_and_a_stuck_one_is_red_in_the_pill_and_the_counter() {
+        let jobs = &sections()[1];
+        let (failed, stuck) = (&jobs.rows[4], &jobs.rows[5]);
+        assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
+        // the pill's body, after its left cap
+        let bg = |row: &Vec<Line>| row[1].spans[1].style.bg;
+        assert_eq!((bg(failed), bg(stuck)), (palette::pill(Meaning::Waiting).bg, palette::pill(Meaning::Failed).bg));
+        let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
+        assert_eq!((fg(failed), fg(stuck)), (palette::fg(Meaning::Waiting).fg, palette::fg(Meaning::Failed).fg));
+    }
+
+    #[test]
+    fn a_sample_pill_is_cap_icon_key_bar_tier_cap_with_no_padding_like_the_charts() {
+        // hs-d474: the legend's sample follows the chart's compact pill
+        let jobs = &sections()[1];
+        let pills: Vec<_> = jobs.rows.iter().filter(|r| r[1].spans[0].content == CAP_L).collect();
+        assert_eq!(pills.len(), 7, "one sample per status, the stuck one too");
+        for row in pills {
+            let body = row[1].spans[1].content.as_ref();
+            assert_eq!(row[1].spans[2].content, CAP_R);
+            assert!(body.ends_with(" key│S1") && !body.starts_with(' ') && !body.contains(" │"), "{}: {body:?}", text(&row[0]));
+        }
+        let sample = |name: &str| text(&jobs.rows.iter().find(|r| text(&r[0]) == name).unwrap()[1]);
+        assert_eq!(sample("queued"), format!("{CAP_L}{} key│S1{CAP_R}", palette::QUEUED));
+        assert_eq!(sample("failed, stuck"), format!("{CAP_L}{} key│S1{CAP_R}", palette::JOB_STUCK.0));
     }
 
     #[test]
     fn the_job_statuses_listed_are_those_the_chart_draws_and_not_cancelled() {
         let jobs = &sections()[1];
         let names: Vec<String> = jobs.rows.iter().map(|r| text(&r[0])).collect();
-        assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "draft", "counters row"]);
+        assert_eq!(names, ["queued", "running", "merging", "merged", "failed", "failed, stuck", "draft", "counters row"]);
         let shown: String =
             sections().iter().flat_map(|s| s.rows.iter().flatten().map(text)).chain(sections().iter().map(|s| s.title.to_owned())).collect();
         assert!(!shown.contains("cancelled") && !shown.contains(palette::CANCELLED), "{shown}");
@@ -409,7 +532,7 @@ mod tests {
         assert!((0..w).all(|x| buf[(x, 1)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 1));
         assert_eq!(row(&buf, 0), "");
         assert_eq!(row(&buf, 2), "");
-        assert!(row(&buf, 1).starts_with("━━ Legend: what") && row(&buf, 1).contains("(any key closes) ━"));
+        assert!(row(&buf, 1).starts_with(" ──\u{E0B6}Legend: What") && row(&buf, 1).contains("(Any Key Closes)\u{E0B4}─"));
     }
 
     #[test]
@@ -474,5 +597,53 @@ mod tests {
             assert!(!closes(&mouse(kind), &mut scroll), "{kind:?}");
         }
         assert!(!closes(&Event::FocusGained, &mut scroll));
+    }
+
+    // ---- the legend's titles v4 (hs-d475, hs-d476): red until they are Title Case and the popup's title is a grey pill in its padding ----
+
+    #[test]
+    fn the_section_titles_are_in_title_case() {
+        let titles: Vec<&str> = sections().iter().map(|s| s.title).collect();
+        for want in ["Jobs: Plan Pills And Context Counters", "Session Dots", "Pulse"] {
+            assert!(titles.contains(&want), "{want:?} is a section title: {titles:?}");
+        }
+        assert!(!titles.contains(&"Session dots") && !titles.iter().any(|t| t.starts_with("Jobs: Plan pills")), "{titles:?}");
+    }
+
+    #[test]
+    fn the_popups_title_is_a_grey_pill_inside_the_padding_of_one_column_each_side() {
+        let (w, h) = size();
+        let buf = render(w, h, &mut Scroll::default());
+        assert_eq!((buf[(0, 1)].symbol(), buf[(1, 1)].symbol(), buf[(w - 1, 1)].symbol()), (" ", "─", " "), "{}", row(&buf, 1));
+        assert_eq!((buf[(2, 1)].symbol(), buf[(3, 1)].symbol(), buf[(4, 1)].symbol()), ("─", "\u{E0B6}", "L"), "{}", row(&buf, 1));
+        let text: String = (4..).map(|x| buf[(x, 1)].symbol()).take_while(|s| *s != "\u{E0B4}").collect();
+        section::check::grey_pill(&buf, 3, 1, &text);
+    }
+
+    // ---- the Inbox section (hs-d483): the four tiers, red to white, each glyph in its colour with its meaning; red until it exists ----
+
+    #[test]
+    fn the_inbox_section_lists_the_four_tiers_red_to_white_each_glyph_in_its_colour_with_its_meaning() {
+        let all = sections();
+        let at = all.iter().position(|s| s.title == "Inbox").unwrap_or_else(|| panic!("no Inbox section: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>()));
+        let inbox = &all[at];
+        let cells: Vec<String> = inbox.rows.iter().flatten().map(text).collect();
+        assert_eq!(
+            cells,
+            [
+                "\u{F0362}", "a blocker only you can clear",
+                "\u{F069A}", "pull-request work",
+                "\u{F173A}", "a decision before the work runs",
+                "\u{F0366}", "an unread reply",
+            ]
+        );
+        let colours: Vec<_> = inbox.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
+        let c = |m| Some(palette::color(m));
+        assert_eq!(colours, [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::NotStarted)], "red, yellow, magenta, white");
+        let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
+        let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();
+        assert!(dots < at && at < pulse, "between the Session Dots and the Pulse: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>());
+        let shown: String = cells.concat();
+        assert!(palette::SPINNER.iter().all(|frame| !shown.contains(frame)), "the Inbox section draws no state dot: {shown:?}");
     }
 }
