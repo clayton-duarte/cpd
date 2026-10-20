@@ -4,7 +4,7 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::TestEnv;
 use cpd_core::error::ErrorCode;
@@ -323,10 +323,7 @@ fn the_log_has_a_hooks_line_before_the_hook_ends() {
         let op = Operation { branch: "main" };
         run_hook(Hook::PreMerge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
     });
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while fs::read_to_string(&h.log).unwrap_or_default() != "first\n" && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::poll(Duration::from_secs(2), || (fs::read_to_string(&h.log).unwrap_or_default() == "first\n").then_some(()));
     let seen = fs::read_to_string(&h.log).unwrap_or_default();
     let ended = runner.is_finished();
     fs::write(h.repo.join("go"), "").unwrap();

@@ -1,7 +1,7 @@
 //! The integration-test harness: runs the built `cpd` in an isolated
 //! environment and parses its JSON.
 //!
-//! Every `TestEnv` lives in its own temporary directory and holds:
+//! Every `TestEnv` lives in its own temporary directory, on a tmpfs ([`ENVS_DIR`]), and holds:
 //! - `$CPD_HOME` and `$HOME` there, never the real `~/.cpd` or home;
 //! - a private tmux server: its own `TMUX_TMPDIR` and socket name, killed on drop,
 //!   so the cockpit server `-L cpd` is never touched;
@@ -166,6 +166,11 @@ fn run_quietly(cmd: &mut Command) -> std::io::Result<std::process::ExitStatus> {
     spawn(cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()))?.wait()
 }
 
+/// Where every env's directory is made: a tmpfs, so the `fsync`s of the store's writes (several per `cpd` command
+/// that writes) and git's cost no disk flush. On a disk shared with builds and other test runs one such `fsync` waits
+/// for their writeback, from tens of ms to seconds; no test claims durability across a power loss.
+const ENVS_DIR: &str = "/dev/shm";
+
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
 /// The tools a test never runs for real: `TestEnv::new` installs a deny shim for each.
@@ -232,8 +237,10 @@ pub fn backdate(path: &Path, by: Duration) {
 /// enough for a loaded machine. A wait that needs longer says so with [`wait_until_for`].
 pub const WAIT: Duration = Duration::from_secs(30);
 
-/// How often a wait looks again.
-const POLL: Duration = Duration::from_millis(100);
+/// How often a wait looks again: 10 ms, so a wait ends at most a few ms after its signal (half a poll on average),
+/// against a look that costs about 1 ms (a read of the store on a read-only connection, a file, `/proc`) up to a few
+/// ms (a `tmux capture-pane`).
+const POLL: Duration = Duration::from_millis(10);
 
 /// Waits until `ready` is true, at most [`WAIT`]; panics `timed out waiting for <what>`.
 pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
@@ -242,9 +249,22 @@ pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
 
 /// [`wait_until`] with its own `timeout`.
 pub fn wait_until_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
+    poll(timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
+}
+
+/// The suite's one poll loop: looks at `ready` every [`POLL`] until it gives a value, and at
+/// least once; `None` once `timeout` has passed without one. A wait panics on `None` ([`wait_until`],
+/// [`wait_some`], or its own message); a check that something does not happen within a window
+/// asserts `None`.
+pub fn poll<T>(timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
     let deadline = Instant::now() + timeout;
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+    loop {
+        if let Some(value) = ready() {
+            return Some(value);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
         std::thread::sleep(POLL);
     }
 }
@@ -268,14 +288,8 @@ pub fn wait_for_flock_waiter(path: &Path) {
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
 /// where it is; the last `state` is in the panic message.
 pub fn wait_some<T>(what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match ready() {
-            Ok(value) => return value,
-            Err(state) => assert!(Instant::now() < deadline, "timed out waiting for {what}: {state}"),
-        }
-        std::thread::sleep(POLL);
-    }
+    let mut state = String::new();
+    poll(timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
 }
 
 /// Waits until `done` accepts the screen `screen` reads, at most [`WAIT`]; returns that
@@ -328,6 +342,9 @@ pub struct TestEnv {
     reaper: Mutex<Option<Child>>,
     /// The reaper's start: every process this env starts starts at or after it.
     since: OnceLock<Since>,
+    /// The read-only connection [`TestEnv::read`] reads on, kept open across reads (a new connection parses the whole
+    /// schema at its first query: ~10-15 ms a read), with the identity (device, inode) of the `cpd.db` it opened.
+    reader: Mutex<Option<((u64, u64), rusqlite::Connection)>>,
 }
 
 /// When a process started: its pid and its start time.
@@ -388,9 +405,9 @@ impl TestEnv {
 
     /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
     pub fn empty() -> TestEnv {
-        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir().expect("temp dir");
+        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(ENVS_DIR).unwrap_or_else(|e| panic!("a temp dir in {ENVS_DIR}: {e}"));
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
-        let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None), since: OnceLock::new() };
+        let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None), since: OnceLock::new(), reader: Mutex::new(None) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -464,10 +481,7 @@ impl TestEnv {
             for &pid in &pids {
                 let _ = kill(pid, Signal::SIGTERM);
             }
-            let grace = Instant::now() + Duration::from_secs(1);
-            while pids.iter().any(|&pid| alive(pid)) && Instant::now() < grace {
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            poll(Duration::from_secs(1), || (!pids.iter().any(|&pid| alive(pid))).then_some(()));
             for &pid in &pids {
                 let _ = kill(pid, Signal::SIGKILL);
             }
@@ -543,13 +557,22 @@ impl TestEnv {
 
     /// `f` on a read-only connection to this env's store, for a test that only looks: no
     /// [`Store::open`] (its migration and schema check cost ~30 ms per open in a debug build).
+    /// One connection serves every read (each statement sees the last commit); it is opened again
+    /// when `cpd.db` is another file than the one it opened (replaced, or removed and created).
     /// Panics when the store does not exist or `f` fails.
     pub fn read<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> T {
+        use std::os::unix::fs::MetadataExt;
         let db = self.cpd_home().join("cpd.db");
-        let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
-        conn.busy_timeout(Duration::from_secs(5)).expect("set the busy timeout");
-        f(&conn).unwrap_or_else(|e| panic!("read {}: {e}", db.display()))
+        let file = fs::metadata(&db).map(|m| (m.dev(), m.ino())).unwrap_or_else(|e| panic!("stat {}: {e}", db.display()));
+        let mut reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
+        if reader.as_ref().is_none_or(|(opened, _)| *opened != file) {
+            let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
+            conn.busy_timeout(Duration::from_secs(5)).expect("set the busy timeout");
+            *reader = Some((file, conn));
+        }
+        let (_, conn) = reader.as_ref().expect("opened above");
+        f(conn).unwrap_or_else(|e| panic!("read {}: {e}", db.display()))
     }
 
     /// The first column of the one row `sql` returns, read with [`TestEnv::read`].

@@ -14,7 +14,7 @@ mod common;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, write_executable};
 use nix::sys::signal::{Signal, kill};
@@ -193,15 +193,8 @@ impl Fx {
     }
 
     /// Waits until `ready` gives a value, at most `secs` seconds.
-    fn wait<T>(&self, what: &str, secs: u64, mut ready: impl FnMut() -> Option<T>) -> T {
-        let deadline = Instant::now() + Duration::from_secs(secs);
-        loop {
-            if let Some(value) = ready() {
-                return value;
-            }
-            assert!(Instant::now() < deadline, "timed out waiting for {what}\n{}", self.diagnostics());
-            std::thread::sleep(Duration::from_millis(50));
-        }
+    fn wait<T>(&self, what: &str, secs: u64, ready: impl FnMut() -> Option<T>) -> T {
+        common::poll(Duration::from_secs(secs), ready).unwrap_or_else(|| panic!("timed out waiting for {what}\n{}", self.diagnostics()))
     }
 
     /// Waits for the first Event of `kind` after `cursor` matching `filter`, as `events list` gives it; listed again

@@ -9,7 +9,7 @@ mod common;
 
 use std::fs::{self, File, OpenOptions};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, write_executable};
 use cpd_core::error::CpdError;
@@ -208,12 +208,13 @@ impl Fx {
         self.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
-    /// Waits until Attempt `id` is `status` (at most 60 s); returns it.
+    /// Waits until Attempt `id` is `status` in the store (at most 60 s); returns it as `attempt show` then gives it.
     fn wait_status(&self, id: &str, status: &str) -> Value {
         common::wait_some(&format!("Attempt {id} to become {status}"), Duration::from_secs(60), || {
-            let attempt = self.attempt(id);
-            if attempt["status"] == status { Ok(attempt) } else { Err(format!("{attempt}\nlog: {}", self.log(id))) }
-        })
+            let now: Option<String> = self.env.query(&format!("SELECT (SELECT status FROM attempts WHERE plan = '{PLAN}' AND id = '{id}')"));
+            if now.as_deref() == Some(status) { Ok(()) } else { Err(format!("status {now:?}\nlog: {}", self.log(id))) }
+        });
+        self.attempt(id)
     }
 
     /// Waits until the Attempt has ended and its driver has exited; returns
@@ -382,11 +383,10 @@ fn the_workers_window_is_killed_when_the_driver_sees_merging() {
 
     let out = fx.dispatch(JOB).ok();
     fx.wait_status(ATTEMPT, "merging");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while fx.windows().contains("pay--api-a1") {
-        assert!(Instant::now() < deadline, "the Worker's window outlived `merging`: {}\nlog: {}", fx.windows(), fx.log(ATTEMPT));
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    common::wait_some("the Worker's window to close in `merging`", Duration::from_secs(30), || {
+        let windows = fx.windows();
+        if windows.contains("pay--api-a1") { Err(format!("{windows}\nlog: {}", fx.log(ATTEMPT))) } else { Ok(()) }
+    });
     assert_eq!(fx.attempt(ATTEMPT)["status"], "merging");
 
     drop(lock);
@@ -596,11 +596,7 @@ fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
 
     let out = fx.dispatch(JOB).ok();
     fx.wait_status(ATTEMPT, "running");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !answered.exists() {
-        assert!(Instant::now() < deadline, "the hiccup never happened\nlog: {}", fx.log(ATTEMPT));
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    common::wait_some("the hiccup", Duration::from_secs(30), || if answered.exists() { Ok(()) } else { Err(format!("log: {}", fx.log(ATTEMPT))) });
     // The poll after the hiccup lists the panes again: the failed one judged nothing.
     common::wait_until("the driver to list the panes again", || list_panes_calls(&fx) >= 2);
     // time-claim: the Worker is still running two polls after the retried listing; no per-poll signal from the driver
@@ -949,14 +945,10 @@ const CALL_1_RESULT: &str =
 /// The pid the fake pi's tool call runs as, once it has started (at most 60 s).
 fn stall_child(fx: &Fx) -> nix::unistd::Pid {
     let path = fx.env.root().join("repos/stall-child.pid");
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        if let Some(pid) = fs::read_to_string(&path).ok().and_then(|t| t.trim().parse().ok()) {
-            return nix::unistd::Pid::from_raw(pid);
-        }
-        assert!(Instant::now() < deadline, "the fake pi never started its tool call\nlog: {}", fx.log(ATTEMPT));
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    let pid = common::wait_some("the fake pi to start its tool call", Duration::from_secs(60), || {
+        fs::read_to_string(&path).ok().and_then(|t| t.trim().parse().ok()).ok_or_else(|| format!("log: {}", fx.log(ATTEMPT)))
+    });
+    nix::unistd::Pid::from_raw(pid)
 }
 
 fn alive(pid: nix::unistd::Pid) -> bool {
@@ -978,11 +970,7 @@ fn assert_not_killed(fx: &Fx, child: nix::unistd::Pid, polls: u32) {
     });
     // time-claim: the call is not killed over `polls` polls of the driver; no per-poll signal from the driver (a poll
     // that kills nothing leaves nothing behind).
-    let until = Instant::now() + POLL * polls;
-    while Instant::now() < until {
-        assert!(alive(child), "the tool call was killed\nlog: {}", fx.log(ATTEMPT));
-        std::thread::sleep(POLL);
-    }
+    assert!(common::poll(POLL * polls, || (!alive(child)).then_some(())).is_none(), "the tool call was killed\nlog: {}", fx.log(ATTEMPT));
     assert!(!fx.log(ATTEMPT).contains("stall"), "{}", fx.log(ATTEMPT));
     assert_eq!(fx.attempt(ATTEMPT)["status"], "running");
 }
@@ -995,11 +983,10 @@ fn a_stalled_tool_call_has_its_processes_killed_and_the_worker_keeps_running() {
     let out = fx.dispatch(JOB).ok();
     let child = stall_child(&fx);
     let survived = fx.env.root().join("repos/stall-survived");
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while !survived.exists() || !fx.log(ATTEMPT).contains("stall") {
-        assert!(Instant::now() < deadline, "pi never got its tool's failure, or no kill was logged\nlog: {}", fx.log(ATTEMPT));
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    common::wait_some("pi to get its tool's failure and the kill to be logged", Duration::from_secs(60), || {
+        let log = fx.log(ATTEMPT);
+        if survived.exists() && log.contains("stall") { Ok(()) } else { Err(format!("log: {log}")) }
+    });
 
     // The tool call is dead, pi lives on (it wrote the marker after the call
     // ended, then stays), and the Attempt keeps running.

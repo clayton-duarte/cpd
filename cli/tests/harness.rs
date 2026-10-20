@@ -100,13 +100,8 @@ fn tmux_server_is_private_and_killed_on_drop() {
     let pid = pid.trim().to_owned();
     assert!(!pid.is_empty());
     drop(env);
-    let gone = (0..50).any(|_| {
-        let alive = std::process::Command::new("kill").args(["-0", &pid]).stderr(std::process::Stdio::null()).status().unwrap();
-        if alive.success() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        !alive.success()
-    });
+    let pid: u32 = pid.parse().unwrap();
+    let gone = common::poll(std::time::Duration::from_secs(5), || (!alive(pid)).then_some(())).is_some();
     assert!(gone, "the tmux server {pid} outlived its TestEnv");
 }
 
@@ -259,13 +254,23 @@ fn the_shared_helpers_are_defined_only_in_the_harness() {
     let found = test_lines_with(&[
         "fn wait_until(",
         "fn wait_until_for(",
+        "fn wait_some<",
+        "fn poll<",
         "fn refused(run: &Run, code: &str, exit: i32)",
         "fn sql(&self",
         "fn sql(env: &TestEnv",
         "fn sql(store: &mut Store",
         "fn query<T",
     ]);
-    assert!(found.is_empty(), "use common::wait_until, wait_until_for, refused, sql and TestEnv::query:\n{}", found.join("\n"));
+    assert!(found.is_empty(), "use common::wait_until, wait_until_for, wait_some, poll, refused, sql and TestEnv::query:\n{}", found.join("\n"));
+}
+
+#[test]
+fn every_wait_polls_through_the_harness() {
+    // One poll loop, at one period (common::poll, every 10 ms): a wait or an absence window calls wait_until,
+    // wait_some, wait_screen or poll; it keeps no deadline and no sleep of its own.
+    let found = test_lines_with(&["Instant::now() +"]);
+    assert!(found.is_empty(), "wait with common::wait_until, wait_some, wait_screen or poll:\n{}", found.join("\n"));
 }
 
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
@@ -323,18 +328,16 @@ fn processes_mentioning(dir: &std::path::Path) -> Vec<u32> {
 
 /// Waits up to WAIT until nothing of `up` is left; returns what is left otherwise.
 fn leftovers_after_wait(up: &Up) -> Vec<String> {
-    let start = std::time::Instant::now();
-    loop {
-        let mut left: Vec<String> = up.pids.iter().filter(|(_, p)| alive(*p)).map(|(n, p)| format!("{n} {p}")).collect();
+    let mut left = Vec::new();
+    common::poll(WAIT, || {
+        left = up.pids.iter().filter(|(_, p)| alive(*p)).map(|(n, p)| format!("{n} {p}")).collect();
         if up.dir.exists() {
             left.push(format!("dir {}", up.dir.display()));
         }
         left.extend(processes_mentioning(&up.dir).into_iter().map(|p| format!("process {p} (reaper?) mentioning the dir")));
-        if left.is_empty() || start.elapsed() > WAIT {
-            return left;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+        left.is_empty().then_some(())
+    });
+    left
 }
 
 /// Not a test of its own: the child process the killed-test test kills. Does nothing

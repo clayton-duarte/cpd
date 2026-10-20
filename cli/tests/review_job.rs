@@ -8,7 +8,7 @@ mod common;
 
 use std::fs::{self, File};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, Run, TestEnv, refused, wait_until};
 use cpd_core::error::CpdError;
@@ -182,9 +182,10 @@ impl Fx {
 
     fn wait_status(&self, id: &str, status: &str) -> Value {
         common::wait_some(&format!("Attempt {id} to become {status}"), Duration::from_secs(60), || {
-            let attempt = self.attempt(id);
-            if attempt["status"] == status { Ok(attempt) } else { Err(format!("{attempt}\nlog: {}", self.log(id))) }
-        })
+            let now: Option<String> = self.env.query(&format!("SELECT (SELECT status FROM attempts WHERE plan = '{PLAN}' AND id = '{id}')"));
+            if now.as_deref() == Some(status) { Ok(()) } else { Err(format!("status {now:?}\nlog: {}", self.log(id))) }
+        });
+        self.attempt(id)
     }
 
     /// Waits until the Attempt has ended and its driver has exited.
@@ -209,11 +210,7 @@ impl Fx {
     /// that the file exists only with all of it.
     fn submitted(&self, name: &str) -> Value {
         let path = self.repo.parent().unwrap().join(name);
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while !path.exists() {
-            assert!(Instant::now() < deadline, "the Worker never wrote {name}");
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        common::wait_until_for(&format!("the Worker to write {name}"), Duration::from_secs(60), || path.exists());
         let text = fs::read_to_string(&path).unwrap();
         serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("{name}: {e}: {text}"))
     }

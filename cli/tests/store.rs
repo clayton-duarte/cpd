@@ -1203,11 +1203,7 @@ fn child_writer() {
             match std::env::var_os("STORE_CHILD_RELEASE").map(PathBuf::from) {
                 // Holds the lock until the test says so, not for a time.
                 Some(release) => {
-                    let deadline = Instant::now() + Duration::from_secs(60);
-                    while !release.exists() {
-                        assert!(Instant::now() < deadline, "{} never appeared", release.display());
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
+                    common::wait_until_for(&format!("{}", release.display()), Duration::from_secs(60), || release.exists());
                 }
                 None => std::thread::sleep(hold),
             }
@@ -1311,14 +1307,12 @@ impl Writer {
 impl Writer {
     /// Waits until the writer is inside its write transaction.
     fn wait_started(&mut self, started: &Path) {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !started.exists() {
+        common::wait_until(&format!("{}", started.display()), || {
             if let Some(status) = self.child.try_wait().unwrap() {
                 panic!("the writer exited ({status}) before starting: {}", fs::read_to_string(&self.out).unwrap_or_default());
             }
-            assert!(Instant::now() < deadline, "{} never appeared", started.display());
-            std::thread::sleep(Duration::from_millis(10));
-        }
+            started.exists()
+        });
     }
 }
 
