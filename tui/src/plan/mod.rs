@@ -11,6 +11,9 @@
 //! [`COALESCE`] after an Event that concerns the view.
 //! The User's keys and clicks run commands ([`actions`]); nothing else starts a process.
 //!
+//! The Plans' scroll offsets survive a restart of the view, in `run/tui/plan-scroll.json` ([`Offsets`], hs-d254): the
+//! one file a view writes, its own state.
+//!
 //! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
 //! dies is started again by the `pane-died` hook (contract §6.1), so the view never exits on a key.
 
@@ -19,8 +22,10 @@ mod boxes;
 mod flow;
 pub(crate) mod pulse;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -222,8 +227,8 @@ struct Ui {
     selected: Selection,
     /// The window's top-left in the chart.
     scroll: (u16, u16),
-    /// The scroll offset each Plan was left at, kept while the view runs only (hs-d197). Not clamped: the chart may
-    /// have changed size by the time it comes back, and a draw clamps.
+    /// The scroll offset each Plan was left at (hs-d197), read from [`Offsets`] at the view's start. Not clamped: the
+    /// chart may have changed size by the time it comes back, and a draw clamps.
     remembered: HashMap<PlanId, (u16, u16)>,
     /// The first Pulse row shown (reset whenever the Context of the Pulse changes).
     pulse_offset: usize,
@@ -243,6 +248,14 @@ impl Ui {
         self.selected.reset();
         self.scroll = to.and_then(|plan| self.remembered.get(plan).copied()).unwrap_or((0, 0));
         self.note.clear();
+    }
+
+    /// Records the offset of `plan`, the Plan on show, once it differs from the one remembered (a Plan never scrolled
+    /// is at its corner). Called after a draw, so the offset is clamped.
+    fn remember(&mut self, plan: &PlanId) {
+        if self.remembered.get(plan).copied().unwrap_or((0, 0)) != self.scroll {
+            self.remembered.insert(plan.clone(), self.scroll);
+        }
     }
 
     /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`, the note).
@@ -290,6 +303,65 @@ impl Ui {
             self.selected.follow = false;
         }
         self.scroll = c.boxes.chart.blit(f.buffer_mut(), window, self.scroll, sel);
+    }
+}
+
+/// The Plans' scroll offsets in `$CPD_HOME/run/tui/plan-scroll.json` (commands.md §13.2, hs-d254): a JSON object
+/// `{"<plan id>": [x, y]}`. The view's own state, not Ledger state: the one file a view writes.
+struct Offsets {
+    path: PathBuf,
+    /// What the file holds, as far as this view knows; a write is due when the offsets differ from it.
+    saved: HashMap<PlanId, (u16, u16)>,
+    /// When the file was last written, or tried.
+    written: Option<Instant>,
+}
+
+/// A write is due at most this often (an offset that changes more often waits).
+const SAVE_EVERY: Duration = Duration::from_secs(1);
+
+impl Offsets {
+    fn at(home: &CpdHome) -> Offsets {
+        // Not in `CpdHome` (contract §1.4): the layout's one source of truth lists this file there.
+        let path = home.run_dir().join("tui").join("plan-scroll.json");
+        Offsets { path, saved: HashMap::new(), written: None }
+    }
+
+    /// The offsets in the file: none when it is missing; `Err` with the reason when it cannot be read or is not
+    /// `{"<plan id>": [x, y]}`.
+    fn load(&mut self) -> Result<HashMap<PlanId, (u16, u16)>, String> {
+        let text = match fs::read(&self.path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(e) => return Err(format!("{}: {e}", self.path.display())),
+        };
+        let offsets: HashMap<PlanId, (u16, u16)> =
+            serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        self.saved = offsets.clone();
+        Ok(offsets)
+    }
+
+    /// Writes `offsets` when they differ from the file and, unless `now` (the Plan changed), a second has passed
+    /// since the last write. A failure is returned and leaves the offsets unsaved, so the next call retries.
+    fn save(&mut self, offsets: &HashMap<PlanId, (u16, u16)>, now: bool) -> Result<(), String> {
+        if *offsets == self.saved || (!now && self.written.is_some_and(|at| at.elapsed() < SAVE_EVERY)) {
+            return Ok(());
+        }
+        self.written = Some(Instant::now());
+        self.write(offsets).map_err(|e| format!("scroll positions not saved: {}: {e}", self.path.display()))?;
+        self.saved.clone_from(offsets);
+        Ok(())
+    }
+
+    /// Replaces the file: a temporary file beside it, then a rename.
+    fn write(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> io::Result<()> {
+        let sorted: BTreeMap<&str, (u16, u16)> = offsets.iter().map(|(plan, at)| (plan.as_str(), *at)).collect();
+        let text = serde_json::to_vec(&sorted).map_err(io::Error::other)?;
+        let dir = self.path.parent().unwrap_or(Path::new("."));
+        fs::create_dir_all(dir)?;
+        let tmp = self.path.with_extension(format!("json.tmp{}", std::process::id()));
+        fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &self.path)).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
     }
 }
 
@@ -352,6 +424,14 @@ fn show(
     actions: &Arc<Actions>,
 ) -> Result<(), ViewError> {
     let mut ui = Ui::default();
+    let mut offsets = Offsets::at(home);
+    let loaded = offsets.load();
+    // an unreadable or invalid file starts empty; it is replaced at the next write
+    ui.remembered = loaded.clone().unwrap_or_default();
+    ui.switch(None, snap.centre.as_ref().map(|c| &c.plan.plan));
+    if let Err(reason) = loaded {
+        ui.note = format!("scroll positions reset: {reason}");
+    }
     // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
     // (runner::kept), the snapshot's error first
     let (mut snapshot_error, mut follow_error) = (None, None);
@@ -375,6 +455,14 @@ fn show(
             redraw |= c.turn(frame);
         }
         redraw |= snap.pulse.as_ref().is_some_and(pulse_spins) && frame != pulse_frame;
+        // the scroll offsets file follows the chart's offset (a write only when they changed, at most every SAVE_EVERY)
+        if let Some(c) = snap.centre.as_ref() {
+            ui.remember(&c.plan.plan);
+            if let Err(e) = offsets.save(&ui.remembered, false) {
+                redraw |= ui.error.as_deref() != Some(e.as_str());
+                ui.error = Some(e);
+            }
+        }
         if redraw {
             terminal.draw(|f| match snap.pulse.as_ref() {
                 Some(pulse) => ui.draw_pulse(f, pulse, frame),
@@ -411,6 +499,9 @@ fn show(
                     }
                     if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
                         ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
+                        if let Err(e) = offsets.save(&ui.remembered, true) {
+                            ui.error = Some(e);
+                        }
                     }
                 }
                 taken = Instant::now();
@@ -815,9 +906,113 @@ mod tests {
     }
 
     #[test]
-    fn a_view_that_restarts_starts_at_the_top() {
+    fn a_fresh_ui_starts_at_the_top_with_nothing_remembered() {
         assert_eq!(Ui::default().scroll, (0, 0));
         assert!(Ui::default().remembered.is_empty());
+    }
+
+    #[test]
+    fn a_plan_never_scrolled_is_not_remembered_and_a_scrolled_one_is() {
+        let a = plan("plan-a");
+        let mut ui = Ui::default();
+        ui.remember(&a);
+        assert!(ui.remembered.is_empty(), "at its corner: nothing to keep");
+        ui.scroll = (0, 4);
+        ui.remember(&a);
+        ui.scroll = (0, 0);
+        ui.remember(&a);
+        assert_eq!(ui.remembered.get(&a), Some(&(0, 0)), "back at the corner is a change too");
+    }
+
+    fn offsets_in(dir: &tempfile::TempDir) -> Offsets {
+        Offsets::at(&CpdHome::resolve(Some(dir.path().into()), None).unwrap())
+    }
+
+    fn map(entries: &[(&str, (u16, u16))]) -> HashMap<PlanId, (u16, u16)> {
+        entries.iter().map(|(id, at)| (plan(id), *at)).collect()
+    }
+
+    #[test]
+    fn the_offsets_round_trip_through_the_file_which_is_a_json_object_of_plan_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let offsets = map(&[("plan-b", (4, 9)), ("plan-a", (0, 7))]);
+        let mut writer = offsets_in(&dir);
+        writer.save(&offsets, true).unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"plan-a":[0,7],"plan-b":[4,9]}"#);
+        assert_eq!(offsets_in(&dir).load().unwrap(), offsets);
+    }
+
+    #[test]
+    fn a_missing_file_is_an_empty_map() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), HashMap::new());
+    }
+
+    #[test]
+    fn an_invalid_file_is_refused_with_its_reason_and_replaced_by_the_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for bad in ["", "{not json", "[]", r#"{"Bad Id":[0,1]}"#, r#"{"plan-a":[0]}"#, r#"{"plan-a":[0,-1]}"#, r#"{"plan-a":"top"}"#] {
+            fs::write(&path, bad).unwrap();
+            let reason = offsets_in(&dir).load().unwrap_err();
+            assert!(reason.contains("plan-scroll.json"), "{bad:?}: {reason}");
+        }
+        let mut offsets = offsets_in(&dir);
+        offsets.load().unwrap_err();
+        offsets.save(&map(&[("plan-a", (0, 3))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 3))]));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_refused_with_its_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("run/tui/plan-scroll.json")).unwrap(); // reading a directory fails
+        let reason = offsets_in(&dir).load().unwrap_err();
+        assert!(reason.contains("plan-scroll.json"), "{reason}");
+    }
+
+    #[test]
+    fn a_write_leaves_no_temporary_file_and_creates_the_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut offsets = offsets_in(&dir);
+        offsets.save(&map(&[("plan-a", (1, 2))]), true).unwrap();
+        offsets.save(&map(&[("plan-a", (3, 4))]), true).unwrap();
+        let names: Vec<_> = fs::read_dir(dir.path().join("run/tui")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["plan-scroll.json"]);
+    }
+
+    #[test]
+    fn a_failed_write_is_reported_leaves_no_temporary_file_and_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let tui = dir.path().join("run/tui");
+        fs::create_dir_all(tui.join("plan-scroll.json")).unwrap(); // a directory cannot be replaced by a file
+        let mut offsets = offsets_in(&dir);
+        let want = map(&[("plan-a", (0, 5))]);
+        let error = offsets.save(&want, true).unwrap_err();
+        assert!(error.starts_with("scroll positions not saved: "), "{error}");
+        assert_eq!(fs::read_dir(&tui).unwrap().count(), 1, "only the directory is there");
+        fs::remove_dir(tui.join("plan-scroll.json")).unwrap();
+        offsets.save(&want, true).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), want);
+    }
+
+    #[test]
+    fn a_write_waits_a_second_after_the_last_unless_the_plan_changed_and_unchanged_offsets_write_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        let mut offsets = offsets_in(&dir);
+        offsets.save(&HashMap::new(), false).unwrap();
+        assert!(!path.exists(), "nothing changed: nothing written");
+        offsets.save(&map(&[("plan-a", (0, 1))]), false).unwrap();
+        offsets.save(&map(&[("plan-a", (0, 2))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 1))]), "the second change waits");
+        offsets.save(&map(&[("plan-a", (0, 2))]), true).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 2))]), "a Plan change writes at once");
+        offsets.written = Some(Instant::now() - SAVE_EVERY);
+        offsets.save(&map(&[("plan-a", (0, 3))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 3))]), "a second later it writes");
     }
 
     fn pulse_of(rows: &[&str]) -> Pulse {

@@ -3,8 +3,6 @@
 # tags nor pushes (the script passes --no-tag --no-push). The version is chosen by the User.
 pre-release-commit-message = "Release {{version}}"
 tag-name = "v{{version}}"
-# One commit for the three crates: Cargo.toml, Cargo.lock and CHANGELOG.md.
+# One commit for the three crates: Cargo.toml and Cargo.lock. scripts/release.sh runs git-cliff once
+# and amends CHANGELOG.md into it.
 consolidate-commits = true
-# Once, from the workspace root (git-cliff would otherwise run once per crate). CHANGELOG.md is
-# tracked, so the release commit includes it.
-pre-release-hook = ["sh", "-c", "git-cliff --workdir \"$WORKSPACE_ROOT\" --unreleased --tag v{{version}} --prepend \"$WORKSPACE_ROOT/CHANGELOG.md\""]

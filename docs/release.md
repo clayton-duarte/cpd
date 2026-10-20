@@ -25,6 +25,8 @@ This command:
 - Runs `npm run verify` (the Gate, executed first)
 - Pushes and opens a PR titled 'Release 0.0.5' with `gh`
 
+Git-cliff runs once from `release.sh` after the cargo-release bump, not from a cargo-release hook. The `release.toml` file carries no hook because cargo-release runs any hook once per workspace crate.
+
 The User merges the PR on GitHub (squash merge).
 
 ### Step 2: Tag the release (on hs)
