@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until};
+use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -860,11 +860,7 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
     assert_eq!((fx.job_status("web"), fx.job_status("ui")), ("queued".into(), "queued".into()));
     assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some());
     // Its driver runs detached; the Worker exits at once, so it ends crashed.
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while fx.attempt("api-a1").0 != "ended" {
-        assert!(Instant::now() < deadline, "the driver never ended api-a1");
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
 }
 
 /// SQL that marks Job `key` urgent, for `add_job`'s `then`.
@@ -944,11 +940,7 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
 
     wait_until("attempt-started", || fx.count("attempt-started") == 1);
     engine.stop();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while fx.attempt("api-a1").0 != "ended" {
-        assert!(Instant::now() < deadline, "the driver never ended api-a1");
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
     assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some(), "the driver was not started");
     let texts = fx.texts("attempt-ended");
     assert!(texts.iter().all(|t| !t.contains("cannot run") && !t.contains("deleted")), "{texts:?}");

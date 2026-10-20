@@ -8,7 +8,7 @@ mod common;
 
 use std::fs::{self, File};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, Run, TestEnv, refused, wait_until};
 use cpd_core::error::CpdError;
@@ -209,11 +209,7 @@ impl Fx {
     /// that the file exists only with all of it.
     fn submitted(&self, name: &str) -> Value {
         let path = self.repo.parent().unwrap().join(name);
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while !path.exists() {
-            assert!(Instant::now() < deadline, "the Worker never wrote {name}");
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        common::wait_until_for(&format!("the Worker to write {name}"), Duration::from_secs(60), || path.exists());
         let text = fs::read_to_string(&path).unwrap();
         serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("{name}: {e}: {text}"))
     }

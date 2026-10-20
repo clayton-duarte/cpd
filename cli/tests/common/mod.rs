@@ -244,9 +244,22 @@ pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
 
 /// [`wait_until`] with its own `timeout`.
 pub fn wait_until_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
+    poll(timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
+}
+
+/// The suite's one poll loop: looks at `ready` every [`POLL`] until it gives a value, and at
+/// least once; `None` once `timeout` has passed without one. A wait panics on `None` ([`wait_until`],
+/// [`wait_some`], or its own message); a check that something does not happen within a window
+/// asserts `None`.
+pub fn poll<T>(timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
     let deadline = Instant::now() + timeout;
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+    loop {
+        if let Some(value) = ready() {
+            return Some(value);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
         std::thread::sleep(POLL);
     }
 }
@@ -270,14 +283,8 @@ pub fn wait_for_flock_waiter(path: &Path) {
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
 /// where it is; the last `state` is in the panic message.
 pub fn wait_some<T>(what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match ready() {
-            Ok(value) => return value,
-            Err(state) => assert!(Instant::now() < deadline, "timed out waiting for {what}: {state}"),
-        }
-        std::thread::sleep(POLL);
-    }
+    let mut state = String::new();
+    poll(timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
 }
 
 /// Waits until `done` accepts the screen `screen` reads, at most [`WAIT`]; returns that
@@ -466,10 +473,7 @@ impl TestEnv {
             for &pid in &pids {
                 let _ = kill(pid, Signal::SIGTERM);
             }
-            let grace = Instant::now() + Duration::from_secs(1);
-            while pids.iter().any(|&pid| alive(pid)) && Instant::now() < grace {
-                std::thread::sleep(Duration::from_millis(10));
-            }
+            poll(Duration::from_secs(1), || (!pids.iter().any(|&pid| alive(pid))).then_some(()));
             for &pid in &pids {
                 let _ = kill(pid, Signal::SIGKILL);
             }
