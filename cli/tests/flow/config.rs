@@ -42,9 +42,9 @@ fn config_with_only_the_required_keys_has_every_default() {
             "concurrency": 3,
             "test_concurrency": 2,
             "retry_cap": 2,
-            "lead_tier": "O3",
-            "manager_tier": "O5",
-            "context_distill_tier": "S2",
+            "lead_tier": "O2",
+            "manager_tier": "O4",
+            "context_distill_tier": "H2",
             "open_tier": "S2",
             "lead_pi_packages": [
                 "npm:@plannotator/pi-extension@0.28.17",
@@ -169,7 +169,7 @@ retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"
 context_distill_tier = "H0"
-open_tier = "O5"
+open_tier = "S4"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
 pr_open_escalate_minutes = 1
@@ -213,7 +213,7 @@ work_session = "w"
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "H0");
-    assert_eq!(out["config"]["open_tier"], "O5");
+    assert_eq!(out["config"]["open_tier"], "S4");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
     assert_eq!(out["config"]["pr_open_escalate_minutes"], 1);
@@ -315,6 +315,16 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nmanager_tier = \"O6\"\n", "manager_tier"),
         ("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"X2\"\n", "context_distill_tier"),
         ("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"S6\"\n", "context_distill_tier"),
+        // hs-d506: no effort 5 for a Lead or the Manager; auxiliaries are H only; `open` Jobs are Workers'
+        ("version = 1\nmachine = \"hs\"\nlead_tier = \"O5\"\n", "lead_tier"),
+        ("version = 1\nmachine = \"hs\"\nlead_tier = \"S5\"\n", "lead_tier"),
+        ("version = 1\nmachine = \"hs\"\nmanager_tier = \"O5\"\n", "manager_tier"),
+        ("version = 1\nmachine = \"hs\"\nmanager_tier = \"H5\"\n", "manager_tier"),
+        ("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"S2\"\n", "context_distill_tier"),
+        ("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"O2\"\n", "context_distill_tier"),
+        ("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"H5\"\n", "context_distill_tier"),
+        ("version = 1\nmachine = \"hs\"\nopen_tier = \"O2\"\n", "open_tier"),
+        ("version = 1\nmachine = \"hs\"\nopen_tier = \"S5\"\n", "open_tier"),
         ("version = 1\nmachine = \"hs\"\nopen_tier = \"X2\"\n", "open_tier"),
         ("version = 1\nmachine = \"hs\"\nopen_tier = \"S6\"\n", "open_tier"),
         ("version = 1\nmachine = \"hs\"\nopen_tier = 2\n", "open_tier"),
@@ -890,4 +900,19 @@ fn tiers_is_idempotent() {
     first.ok();
     assert_eq!(first.stdout, second.stdout);
     assert_eq!(env.calls("node").len(), 1);
+}
+
+#[test]
+fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
+    let env = TestEnv::new();
+    let out = config_with(
+        &env,
+        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"H4\"\nopen_tier = \"H1\"\n",
+    )
+    .ok();
+    let config = &out["config"];
+    assert_eq!(
+        (&config["lead_tier"], &config["manager_tier"], &config["context_distill_tier"], &config["open_tier"]),
+        (&json!("O0"), &json!("O4"), &json!("H4"), &json!("H1"))
+    );
 }

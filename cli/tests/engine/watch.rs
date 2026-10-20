@@ -190,9 +190,14 @@ impl Fx {
 
     /// `add_job` in PR `pr` of Plan `pay`.
     fn add_job_in(&self, pr: &str, key: &str, needs: &[&str], then: &str) {
+        self.add_job_on("S2", pr, key, needs, then);
+    }
+
+    /// `add_job_in` with the Job's Tier `tier`.
+    fn add_job_on(&self, tier: &str, pr: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', '{tier}', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
             sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
@@ -1390,6 +1395,33 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     assert!(fx.texts("error")[0].ends_with("See: cpd job show api --plan pay"), "{:?}", fx.texts("error"));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0);
     assert_eq!(fx.job_status("api"), "queued");
+}
+
+/// hs-d506: a store written before the rule may hold a queued Job on an `O` or effort-5 Tier. E3 never starts it:
+/// one `error` Event (`tier_not_allowed`) per Job, once, the Job stays `queued`, no Attempt is made.
+#[test]
+fn e3_does_not_start_a_job_on_an_o_or_effort_5_tier_and_raises_one_error_per_job() {
+    let fx = fx("");
+    for (key, tier) in [("api", "O3"), ("web", "S5")] {
+        fx.add_job_on(tier, "repo", key, &[], "");
+    }
+
+    let engine = fx.start();
+    wait_until("two errors", || fx.count("error") == 2);
+    fx.env.wait_whole_ticks(2);
+    engine.stop();
+
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    let mut jobs_named: Vec<_> = errors.iter().map(|(plan, job, attempt, _)| (plan.clone(), job.clone().unwrap(), attempt.clone())).collect();
+    jobs_named.sort();
+    assert_eq!(jobs_named, [(Some("pay".into()), "api".into(), None), (Some("pay".into()), "web".into(), None)]);
+    for (_, _, _, data) in &errors {
+        assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tier_not_allowed")), "{data}");
+    }
+    assert!(fx.texts("error").iter().all(|t| t.contains("hs-d506")), "{:?}", fx.texts("error"));
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0);
+    assert_eq!((fx.job_status("api"), fx.job_status("web")), ("queued".into(), "queued".into()));
 }
 
 /// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt

@@ -263,10 +263,9 @@ mod tests {
     fn the_contract_examples() {
         assert_eq!(next("H1").as_deref(), Some("H2"));
         assert_eq!(next("H3").as_deref(), Some("S3"));
-        assert_eq!(next("S4").as_deref(), Some("S5"));
-        assert_eq!(next("S5").as_deref(), Some("O5"));
-        assert_eq!(next("O4").as_deref(), Some("O5"));
-        assert_eq!(next("O5"), None);
+        // hs-d506: the ladder never enters O and never reaches effort 5.
+        assert_eq!(next("S3").as_deref(), Some("S4"));
+        assert_eq!(next("S4"), None);
     }
 
     #[test]
@@ -275,9 +274,9 @@ mod tests {
         c.s = model("sonnet", &[2, 4, 5]);
         assert_eq!(c.next(t("H3")).unwrap(), Some(t("S4")));
         c.s = model("sonnet", &[0, 1, 2]);
-        assert_eq!(c.next(t("H3")).unwrap(), Some(t("O3")));
-        c.o = model("opus", &[0, 1, 2]);
-        assert_eq!(c.next(t("H3")).unwrap(), None);
+        assert_eq!(c.next(t("H3")).unwrap(), None, "never O (hs-d506)");
+        c.s = model("sonnet", &[0, 1, 2, 5]);
+        assert_eq!(c.next(t("H3")).unwrap(), None, "never effort 5 (hs-d506)");
     }
 
     #[test]
@@ -301,8 +300,9 @@ mod tests {
         assert_eq!(at("H2", 1).as_deref(), Some("H2"));
         assert_eq!(at("H2", 2).as_deref(), Some("H3"));
         assert_eq!(at("H2", 3).as_deref(), Some("S3"));
-        assert_eq!(at("O4", 2).as_deref(), Some("O5"));
-        assert_eq!(at("O4", 3), None);
-        assert_eq!(at("O4", 9), None);
+        assert_eq!(at("S3", 2).as_deref(), Some("S4"));
+        assert_eq!(at("S3", 3), None);
+        assert_eq!(at("S4", 2), None);
+        assert_eq!(at("S4", 9), None);
     }
 }
