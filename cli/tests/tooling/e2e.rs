@@ -350,16 +350,17 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
     assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
+    fx.env.outline_for_review(PLAN);
     let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     assert_eq!(review["review"]["id"], "r1");
     let decided = fx.ok(&["plan", "decide", "r1", "--approve", "--plan", PLAN]);
     assert_eq!(decided["current"], true);
     let events = fx.events_since(cursor);
-    assert_eq!(kinds(&events), ["job-added", "job-added", "plan-review", "plan-review"]);
+    assert_eq!(kinds(&events), ["job-added", "job-added", "plan-outlined", "plan-review", "plan-review"]);
     assert_eq!(events[1]["job"], "ui");
     assert_eq!(events[1]["data"], json!({"pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
-    assert_eq!(events[2]["data"]["status"], "pending");
-    assert_eq!(events[3]["data"]["status"], "approved");
+    assert_eq!(events[3]["data"]["status"], "pending");
+    assert_eq!(events[4]["data"]["status"], "approved");
     cursor = fx.cursor();
 
     // ---------- 5. plan lock: the Lead worktree, Jobs queued, the engine started

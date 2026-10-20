@@ -27,6 +27,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd plan render` | Render the Plan to run/<plan>/plan.md (§4.5) | Lead | |
 | `cpd plan review` | Request the User's approval of the draft Jobs (§4.6) | Lead | |
 | `cpd plan decide` | Record the User's decision on a Plan review (§4.7) | internal | |
+| `cpd plan outline` | Set the Plan's outline: what its review summary says (§4.13) | Lead | |
 | `cpd plan lock` | Lock the Plan and start dispatching (§4.8) | Lead | |
 | `cpd plan rename` | Change the Plan's title (§4.9) | | yes |
 | `cpd plan archive` | Archive the Plan, its Lead and its side forks (§4.10) | | yes |

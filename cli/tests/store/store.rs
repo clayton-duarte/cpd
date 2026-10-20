@@ -1579,7 +1579,7 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     let env = TestEnv::empty();
     let out = env.cpd(&["--version"]).ok();
     assert!(out["store"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 8, "{out}");
+    assert_eq!(out["protocol"], 9, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

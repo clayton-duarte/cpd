@@ -136,7 +136,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
     fx.env.sql("UPDATE jobs SET review = 1 WHERE key = 'b'");
     let show = fx.show();
     let plan = show["plan"].as_object().unwrap();
-    assert_eq!(plan.keys().map(String::as_str).collect::<Vec<_>>(), ["archived_at", "context", "created_at", "done_at", "id", "jira", "lead_session", "locked_at", "phase", "title"]);
+    assert_eq!(plan.keys().map(String::as_str).collect::<Vec<_>>(), ["archived_at", "context", "created_at", "done_at", "id", "jira", "lead_session", "locked_at", "outline", "phase", "title"]);
     assert_eq!((&plan["phase"], &plan["lead_session"], &plan["jira"]), (&json!("dispatch"), &json!("lead1"), &Value::Null));
 
     let prs = show["prs"].as_array().unwrap();

@@ -222,13 +222,14 @@ fn the_outline_refusals_that_are_not_about_its_content() {
     assert!(outlined_events(&env).is_empty());
 }
 
-/// `text` is refused `outline_invalid` (exit 2) at `field`; nothing is written.
+/// `text` is refused `outline_invalid` (exit 2) at `field`; nothing is written: no outline, and no new Event.
 fn invalid(env: &TestEnv, text: &str, field: &str) -> Value {
+    let events = outlined_events(env).len();
     let path = file(env, "bad.json", text);
     let error = refused(&env.cpd(&["plan", "outline", "--file", &path, "--plan", "mine"]), "outline_invalid", 2);
     assert_eq!(error["details"]["field"], field, "{text}");
     assert_eq!(count(env, "SELECT count(*) FROM plans WHERE outline IS NOT NULL"), 0, "{text}");
-    assert!(outlined_events(env).is_empty(), "{text}");
+    assert_eq!(outlined_events(env).len(), events, "{text}");
     error
 }
 

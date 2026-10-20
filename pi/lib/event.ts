@@ -5,12 +5,12 @@ import { errorOfEnvelope, isObject, type CpdError } from "./cpd.ts";
  * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
  * or the output of a command the adapter runs changes in a way the adapter depends on.
  */
-export const PROTOCOL = 8;
+export const PROTOCOL = 9;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
   "context-created", "context-record", "context-grounded",
-  "plan-created", "plan-phase", "plan-review", "plan-done",
+  "plan-created", "plan-phase", "plan-review", "plan-outlined", "plan-done",
   "job-added", "job-edited", "job-merged", "job-failed", "job-retried", "job-cancel-requested", "job-cancelled",
   "attempt-started", "attempt-status", "attempt-retry", "attempt-nudge",
   "all-merged", "pr-feedback",
