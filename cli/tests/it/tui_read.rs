@@ -404,9 +404,42 @@ const T0: &str = "2026-01-04T00:00:00.000Z";
 /// (own state first, hs-d183).
 ///
 /// - `hot`: `red` (a dialog, red), `yel` (the Lead has a `pr-ready` item of its Plan; its fork `f-yel` is working and shows
-///   no item of the Plan), `mag` (a magenta dialog), `whi` (`unread`), `blk` (blocked, no item), `wrk` (working, with items: still the spinner), `idl` (idle, with an
+///   no item of the Plan), `mag` (a magenta dialog), `whi` (`unread`), `blk` (blocked, no item), `wai` (waiting, no item), `wrk` (working, with items: still the spinner), `idl` (idle, with an
 ///   `unread` and a red `dialog`: the most urgent), `stp`;
 /// - `calm`: a working and an idle Lead; `dead`: a stopped one; `ice`: no Plan, no Session.
+#[test]
+fn a_plan_carries_its_stuck_jobs_and_whether_its_lead_asks_the_user() {
+    let (_env, mut store) = fixture();
+    let needs = |store: &mut Store, p: &str| read::plan_boxes(store, &plan(p)).unwrap().needs_user;
+    assert_eq!(needs(&mut store, "ship"), read::NeedsUser::default(), "no item: an agent handles everything");
+
+    let stuck = |plan: &str, job: &str| Condition {
+        job: Some(key(job)),
+        ..condition(Kind::JobStuck, Urgency::Red, Some(&format!("l-{plan}")), Some(plan), "alpha", &format!("job:{plan}/{job}"))
+    };
+    inbox(
+        &mut store,
+        &[
+            stuck("ship", "e"),
+            stuck("sketch", "s1"),
+            condition(Kind::Dialog, Urgency::Red, Some("f-ship"), Some("ship"), "alpha", "session:f-ship"),
+            condition(Kind::Dialog, Urgency::Red, Some("l-sketch"), Some("sketch"), "alpha", "session:l-sketch"),
+        ],
+        T0,
+    );
+    assert_eq!(
+        needs(&mut store, "ship"),
+        read::NeedsUser { stuck_jobs: vec![key("e")], lead_dialog: false },
+        "a fork's dialog is not the Lead's"
+    );
+    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: true });
+    assert_eq!(needs(&mut store, "rel"), read::NeedsUser::default(), "another Plan's items are not its own");
+
+    // a hidden item needs nobody: the item is snoozed
+    sql(&mut store, "UPDATE inbox_items SET snoozed_until = '2999-01-01T00:00:00.000Z' WHERE subject = 'session:l-sketch';");
+    assert_eq!(needs(&mut store, "sketch"), read::NeedsUser { stuck_jobs: vec![key("s1")], lead_dialog: false });
+}
+
 #[test]
 fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_filled_dot() {
     let (_env, mut store) = fixture();
@@ -421,6 +454,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
         ("mag", "hot", "plan", "blocked"),
         ("whi", "hot", "dispatch", "idle"),
         ("blk", "hot", "dispatch", "blocked"),
+        ("wai", "hot", "dispatch", "waiting"),
         ("wrk", "hot", "dispatch", "working"),
         ("idl", "hot", "dispatch", "idle"),
         ("stp", "hot", "dispatch", "stopped"),
@@ -431,7 +465,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     for (n, (plan, context, phase, state)) in plans.into_iter().enumerate() {
         let pr = (plan == "yel").then_some((20, "open", "passed"));
         s += &plan_row(plan, context, phase, &format!("l-{plan}"), &at(n as u32), pr);
-        let label = (state == "blocked").then_some("cpd: asking");
+        let label = matches!(state, "blocked" | "waiting").then_some("cpd: asking");
         s += &session_row(&format!("l-{plan}"), "lead", context, plan, None, state, label, &at(n as u32));
     }
     s += &session_row("f-yel", "lead", "hot", "yel", None, "working", None, "2026-01-02T00:01:00.000Z");
@@ -447,6 +481,8 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
     let all = dots(&mut store);
     assert!(all.iter().all(|(_, d)| !d.needs_you()), "no item, never a filled dot: {all:?}");
     assert_eq!((dot(&all, "l-red"), dot(&all, "l-wrk"), dot(&all, "l-idl"), dot(&all, "l-stp")), (Dot::Idle, Dot::Working, Dot::Idle, Dot::Stopped));
+    // A Lead waiting for an agent (hs-d303) shows the waiting dot: not the idle glyph, and never red.
+    assert_eq!(dot(&all, "l-wai"), Dot::Waiting);
 
     inbox(
         &mut store,
@@ -473,6 +509,7 @@ fn a_session_shows_the_colour_of_its_most_urgent_item_and_with_no_item_never_a_f
         ("l-whi", Dot::White),
         ("l-wrk", Dot::Working), // working shows the spinner, not its red dialog
         ("l-blk", Dot::Idle),
+        ("l-wai", Dot::Waiting), // waiting with no item: its own calm dot, not idle and not red
         ("l-idl", Dot::Red),
         ("l-stp", Dot::Stopped),
         ("l-ship", Dot::Working),
@@ -508,7 +545,7 @@ fn a_plans_items_fill_its_lead_and_not_its_forks() {
     }
     assert_eq!(dots(&tree.contexts[0].plans[0]), [("l-ship", Dot::Red), ("f-ship", Dot::Red)], "the Lead: job-stuck; the fork: its own dialog");
     assert_eq!(dots(&tree.contexts[0].plans[1]), [("l-sketch", Dot::Idle)], "another Plan of the Context: nothing");
-    assert_eq!(dots(&tree.contexts[1].plans[1]), [("l-rel", Dot::Red)], "pr-failing of its Plan");
+    assert_eq!(dots(&tree.contexts[1].plans[1]), [("l-rel", Dot::Idle)], "pr-failing of its Plan: its Lead fixes it, no dot (hs-d302)");
     assert_eq!(dots(&tree.contexts[1].plans[0]), [("l-old", Dot::Stopped)]);
 
     inbox(&mut store, &[condition(Kind::PlanReview, Urgency::Magenta, None, Some("ship"), "alpha", "review:ship/r2")], T0);
@@ -927,6 +964,31 @@ fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
 }
 
 #[test]
+fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
+    let (_env, mut store) = fixture();
+    // `acme/work#70` is no Plan's: nobody works it.
+    sql(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/work', 70, 'https://github.com/acme/work/pull/70', 'Mine', 0, 'open', 'none', 'none',
+                 '2026-01-07T00:00:00.000Z', NULL, '2026-01-07T00:00:00.000Z');",
+    );
+    let worked = |store: &mut Store| {
+        let w = read::widgets(store, 3, 0).unwrap();
+        let boxes = read::plan_boxes(store, &plan("rel")).unwrap();
+        (w.prs.iter().map(|p| (p.number, p.lead_working)).collect::<Vec<_>>(), boxes.prs[0].pull.as_ref().unwrap().lead_working)
+    };
+    for state in ["blocked", "idle", "waiting", "stopped"] {
+        sql(&mut store, &format!(
+                "UPDATE sessions SET state = '{state}', state_label = CASE WHEN '{state}' IN ('waiting', 'blocked') THEN 'why' END WHERE id = 'l-rel'"
+            ));
+        assert_eq!(worked(&mut store), (vec![(7, false), (70, false)], false), "{state}");
+    }
+    sql(&mut store, "UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'l-rel'");
+    assert_eq!(worked(&mut store), (vec![(7, true), (70, false)], true), "the Lead of acme/repo#7 works; nobody owns #70");
+}
+
+#[test]
 fn the_widgets_list_every_open_escalation_of_the_machine() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
@@ -1051,6 +1113,16 @@ fn a_worker_is_its_attempt_session_and_escalations() {
     let expired = read::worker(&mut store, &plan("ship"), &attempt("e-a1")).unwrap();
     assert_eq!(expired.escalations[0].status, EscalationStatus::Expired);
     assert!(expired.escalations[0].expired_at.is_some());
+}
+
+#[test]
+fn the_latest_attempt_of_a_job_is_the_one_with_the_highest_number_and_a_job_that_never_started_has_none() {
+    let (_env, mut store) = fixture();
+    let mut latest = |plan_id: &str, job: &str| read::latest_attempt(&mut store, &plan(plan_id), &key(job)).unwrap();
+    assert_eq!(latest("ship", "c"), Some(attempt("c-a2")), "two Attempts: the second");
+    assert_eq!(latest("ship", "e"), Some(attempt("e-a1")), "a failed Job: its failed Attempt");
+    assert_eq!(latest("ship", "d"), None, "queued, never started");
+    assert_eq!(latest("nope", "c"), None);
 }
 
 #[test]
@@ -1212,6 +1284,18 @@ fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
         assert!(small.len() > 2, "{name} ran no query: {small:#?}");
         assert_eq!(small.len(), large.len(), "{name} runs a number of statements that grows with the store:\nsmall: {small:#?}\nlarge: {large:#?}");
     }
+}
+
+#[test]
+fn with_a_live_manager_the_snapshot_has_no_engine_down_though_the_engine_is_down() {
+    let (_env, mut store) = fixture();
+    sql(&mut store, &session_row("m-alpha", "manager", "alpha", "", None, "idle", None, "2026-01-02T00:00:05.000Z"));
+    let tree = read::tree(&mut store).unwrap();
+    assert!(!tree.engine_running, "the lock is still free");
+    assert!(tree.inbox.is_empty(), "a Manager handles it: {:?}", tree.inbox);
+    sql(&mut store, "UPDATE sessions SET archived_at = '2026-01-04T00:00:00.000Z' WHERE id = 'm-alpha'");
+    let tree = read::tree(&mut store).unwrap();
+    assert_eq!(tree.inbox.iter().map(|i| i.kind).collect::<Vec<_>>(), [Kind::EngineDown], "an archived Manager is not live");
 }
 
 #[test]

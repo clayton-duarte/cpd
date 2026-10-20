@@ -68,12 +68,32 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "stall_seconds": 1200,
                 "pi_stop_seconds": 10
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
-            "inbox": {"stuck_job_minutes": 10},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "error_repeat_seconds": 600, "pr_poll_transient_minutes": 10},
+            "inbox": {
+                "stuck_job_minutes": 10,
+                "team_channel": "",
+                "slack_user_id": "",
+                "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]
+            },
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+/// Context decision 'Team review Inbox' (contract §8.2): the channel and the User's Slack id are set together.
+#[test]
+fn config_takes_the_team_review_keys() {
+    let env = TestEnv::new();
+    let shown = config_with(
+        &env,
+        &format!("{MINIMAL}[watch]\nteam_review_seconds = 900\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\nslack_user_id = \"U04DB4MTUMR\"\nbot_reviewers = [\"ci-bot\"]\n"),
+    )
+    .ok();
+    assert_eq!(shown["config"]["watch"]["team_review_seconds"], 900);
+    assert_eq!(shown["config"]["inbox"], json!({"stuck_job_minutes": 10, "team_channel": "C02JU6C2Z1D", "slack_user_id": "U04DB4MTUMR", "bot_reviewers": ["ci-bot"]}));
+    assert_eq!(shown["sources"]["inbox.team_channel"], "file");
+    assert_eq!(shown["sources"]["watch.team_review_seconds"], "file");
 }
 
 /// engine-W9, tests-build-F4: the tick is a decimal (minimum 0.1) and pi's stop grace is a key.
@@ -169,9 +189,14 @@ pi_stop_seconds = 1
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1
+team_review_seconds = 1
+pr_poll_transient_minutes = 1
 error_repeat_seconds = 1
 [inbox]
 stuck_job_minutes = 1
+team_channel = "C1"
+slack_user_id = "U1"
+bot_reviewers = ["a"]
 [events]
 poll_ms = 20
 [tmux]
@@ -259,10 +284,19 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0.2501\n", "watch.tick_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = \"0.2\"\n", "watch.tick_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_seconds = 0.5\n", "watch.pr_poll_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\npr_poll_transient_minutes = 0\n", "watch.pr_poll_transient_minutes"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0\n", "timeouts.pi_stop_seconds"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0.5\n", "timeouts.pi_stop_seconds"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = \"10\"\n", "inbox.stuck_job_minutes"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\nteam_review_seconds = 0\n", "watch.team_review_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nteam_channel = \"c02ju\"\nslack_user_id = \"U1\"\n", "inbox.team_channel"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\nslack_user_id = \"clayton\"\n", "inbox.slack_user_id"),
+        // both or neither: the claim and mention rules need the User's id, and the id is useless without the channel
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\n", "inbox.slack_user_id"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nslack_user_id = \"U04DB4MTUMR\"\n", "inbox.team_channel"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nbot_reviewers = [\"\"]\n", "inbox.bot_reviewers"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nbot_reviewers = \"github-actions\"\n", "inbox.bot_reviewers"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 19\n", "events.poll_ms"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 10001\n", "events.poll_ms"),
         // text constraints

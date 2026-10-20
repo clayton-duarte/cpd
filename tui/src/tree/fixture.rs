@@ -32,12 +32,7 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         created_at: "2026-01-01T00:00:00.000Z".into(),
         place,
         plan_lead: false,
-        dot: match state {
-            State::Blocked => Dot::Red,
-            State::Working => Dot::Working,
-            State::Idle => Dot::Idle,
-            State::Stopped => Dot::Stopped,
-        },
+        dot: Dot::glyph(state),
         archived_at: None,
     }
 }
@@ -95,13 +90,20 @@ pub fn managed(mut c: ContextNode, dot: Dot) -> ContextNode {
     c
 }
 
+/// `s` showing `dot`: what its Inbox items give it. `session` takes the dot of the state alone (`Dot::glyph`): a
+/// `blocked` Session is idle until its `dialog` item makes the dot red.
+pub fn shown(mut s: SessionNode, dot: Dot) -> SessionNode {
+    s.dot = dot;
+    s
+}
+
 pub fn tree(contexts: Vec<ContextNode>) -> Tree {
     Tree { contexts, events_cursor: 1, inbox: Vec::new(), engine_running: true }
 }
 
 /// Every state of a Session, a side fork, a Plan in each phase and an empty Context:
 ///
-/// - `alpha`: `ship` (dispatch; its Lead is working and in the chat slot; two forks, one idle, one blocked),
+/// - `alpha`: `ship` (dispatch; its Lead is working and in the chat slot; two forks, one idle, one blocked with its dialog: red),
 ///   `sketch` (plan; idle), `old` (done; stopped);
 /// - `beta`: `rel` (pr; its Lead is blocked on a Worker question);
 /// - `gamma`: no Plan, no Manager.
@@ -122,7 +124,7 @@ pub fn sample() -> Tree {
                     session("l-ship", "ship lead", Working, None, Place::Chat),
                     vec![
                         session("f-idle", "ship fork", Idle, None, Place::Parked),
-                        session("f-blocked", "ship review", Blocked, Some("cpd: Worker question"), Place::Parked),
+                        shown(session("f-blocked", "ship review", Blocked, Some("cpd: Worker question"), Place::Parked), Dot::Red),
                     ],
                 ),
                 plan("sketch", "alpha", Phase::Plan, [4, 0, 0, 0, 0, 0], session("l-sketch", "sketch", Idle, None, Place::Parked), vec![]),
@@ -131,7 +133,7 @@ pub fn sample() -> Tree {
         ), Dot::White),
         managed(context(
             "beta",
-            vec![plan("rel", "beta", Phase::Deploy, [0, 0, 0, 0, 0, 3], session("l-rel", "rel lead", Blocked, Some("cpd: Plan review"), Place::Parked), vec![])],
+            vec![plan("rel", "beta", Phase::Deploy, [0, 0, 0, 0, 0, 3], shown(session("l-rel", "rel lead", Blocked, Some("cpd: Plan review"), Place::Parked), Dot::Red), vec![])],
         ), Dot::Magenta),
         context("gamma", vec![]),
     ])

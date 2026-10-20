@@ -184,9 +184,14 @@ impl Fx {
     /// Job `key` of Plan `pay`, `queued` with its Locked-Job fingerprint, then
     /// moved to `status` by `then` (SQL run after the fingerprint is set).
     fn add_job(&self, key: &str, needs: &[&str], then: &str) {
+        self.add_job_in("repo", key, needs, then);
+    }
+
+    /// `add_job` in PR `pr` of Plan `pay`.
+    fn add_job_in(&self, pr: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
             sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
@@ -389,15 +394,10 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
     assert_eq!(again, json!({"ok": true, "started": false, "already": true}));
     assert_eq!(fx.count("watch-started"), 1);
 
-    // A dead engine's window is replaced, not duplicated.
+    // A dead engine's window is replaced, not duplicated: the supervising hook starts it again at once (contract §6.6).
     kill(Pid::from_raw(pid as i32), Signal::SIGTERM).unwrap();
     wait_until("watch-stopped", || fx.count("watch-stopped") == 1);
-    wait_until("the dead pane", || {
-        let out = fx.env.tmux(&["list-panes", "-t", &pane, "-F", "#{pane_dead}"]);
-        String::from_utf8_lossy(&out.stdout).trim() == "1"
-    });
-    let third = fx.env.cpd(&["watch", "--ensure"]).ok();
-    assert_eq!(third["started"], true);
+    wait_until("the engine again", || fx.count("watch-started") == 2);
     let windows = fx.env.tmux(&["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]);
     assert_eq!(String::from_utf8_lossy(&windows.stdout), "watch\n");
 }
@@ -468,6 +468,252 @@ fn ensure_fails_when_the_engine_does_not_start() {
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
 }
 
+// ---------- supervision: the engine comes back whatever stopped it (contract §6.6, hs-d328) ----------
+
+/// How long the engine has to be back after it stopped, whatever stopped it: "within seconds" (contract §6.6).
+const BACK: Duration = Duration::from_secs(10);
+
+impl Fx {
+    /// The engine, started as a Plan starts it (`cpd watch --ensure`); its pid.
+    fn supervised(&self) -> i64 {
+        self.env.cpd(&["watch", "--ensure"]).ok();
+        self.engine_pid()
+    }
+
+    /// The pid of the newest `watch-started`.
+    fn engine_pid(&self) -> i64 {
+        self.env.query("SELECT json_extract(data, '$.pid') FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1")
+    }
+
+    /// Waits until a new engine runs after the `starts` it had counted: a newer `watch-started`
+    /// whose process is alive, in one `watch` window of the work session. Returns the time it took.
+    fn back_after(&self, starts: usize) -> Duration {
+        let began = Instant::now();
+        wait_until_for("the engine to be back", BACK, || {
+            self.count("watch-started") > starts && kill(Pid::from_raw(self.engine_pid() as i32), None).is_ok()
+        });
+        let windows = self.env.tmux(&["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]);
+        assert_eq!(String::from_utf8_lossy(&windows.stdout), "watch\n", "one engine window, no dead one");
+        began.elapsed()
+    }
+
+    /// A Manager Session of Context `ctx`.
+    fn manager(&self, id: &str) {
+        self.fixture(&format!(
+            "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
+               VALUES ('{id}', 'manager', 'ctx', 'Manager {id}', '/', 'O3', 'stopped', 't', 't');"
+        ));
+    }
+
+    /// The one message the Manager `mgr1` got, a downtime that says `how`.
+    fn manager_heard(&self, how: &str) {
+        let messages = self.messages();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        let (session, _, data) = &messages[0];
+        let text = data["text"].as_str().unwrap();
+        assert_eq!((session.as_str(), data["wake"].clone()), ("mgr1", json!(false)), "{messages:?}");
+        assert!(text.contains("The engine was down for ") && text.contains(how), "{text}");
+    }
+
+    /// The messages the engine sent: `(session, context, data)`.
+    fn messages(&self) -> Vec<(String, Option<String>, Value)> {
+        self.store()
+            .read(|conn| {
+                let mut stmt = conn.prepare("SELECT session, context, data FROM events WHERE kind = 'session-message' ORDER BY id")?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, String>(2)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows.into_iter().map(|(s, c, d)| (s, c, serde_json::from_str(&d).unwrap())).collect())
+            })
+            .unwrap()
+    }
+}
+
+/// A `cpd` whose views only sleep, so a cockpit can be built without terminals.
+fn views_sleep(fx: &Fx) {
+    fx.env.fake("cpd", &format!("case \"$1 $2\" in \"tui view\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
+}
+
+#[test]
+fn a_crashed_engine_is_back_within_seconds() {
+    let fx = fx("");
+    let pid = fx.supervised();
+    kill(Pid::from_raw(pid as i32), Signal::SIGABRT).unwrap();
+    fx.back_after(1);
+    assert_eq!(fx.count("watch-stopped"), 0, "a crash says nothing");
+    assert_ne!(fx.engine_pid(), pid);
+}
+
+#[test]
+fn an_engine_that_got_sigterm_is_back_within_seconds() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    let pid = fx.supervised();
+    kill(Pid::from_raw(pid as i32), Signal::SIGTERM).unwrap();
+    fx.back_after(1);
+    assert_eq!(fx.count("watch-stopped"), 1);
+    fx.manager_heard("it stopped at");
+}
+
+#[test]
+fn an_engine_that_got_sigkill_is_back_within_seconds() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    let pid = fx.supervised();
+    kill(Pid::from_raw(pid as i32), Signal::SIGKILL).unwrap();
+    fx.back_after(1);
+    fx.manager_heard("it was last alive");
+}
+
+/// The work session holds nothing else: tmux would exit with its last window, and the server stays so that its hook can run (`exit-empty off`).
+#[test]
+fn an_engine_whose_window_was_killed_is_back_within_seconds() {
+    let fx = fx("");
+    fx.supervised();
+    assert!(fx.env.tmux(&["kill-window", "-t", "=cpd-work:watch"]).status.success());
+    fx.back_after(1);
+}
+
+/// An install that kills the `watch` window and then does nothing (it failed, or it was cut short).
+#[test]
+fn an_engine_killed_by_an_install_that_then_does_nothing_is_back_within_seconds() {
+    let fx = fx("");
+    fx.env.tmux(&["new-session", "-d", "-s", "cockpit", "sleep", "600"]);
+    fx.supervised();
+    fx.env.fake("fake-install", &format!("tmux -L '{}' kill-window -t =cpd-work:watch", fx.env.tmux_socket()));
+    assert!(fx.env.command(fx.env.bin().join("fake-install")).status().unwrap().success());
+    fx.back_after(1);
+}
+
+/// A plain `--ensure` waits for `locks/watch-ensure.lock` like a supervising one: held by another call between its probe and its
+/// start, it keeps the plain call from probing, so no second window starts. Released, the call starts the engine.
+#[test]
+fn a_plain_ensure_waits_for_the_ensure_lock_another_call_holds() {
+    let fx = fx("");
+    let path = fx.env.cpd_home().join("locks/watch-ensure.lock");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+    let held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let mut child = common::spawn(fx.env.command(CPD).args(["watch", "--ensure"]).stdout(Stdio::piped()).stderr(Stdio::piped())).unwrap();
+    // time-claim: nothing signals "the call did not start", so it gets 2 s, far over what a start that is not held takes to begin.
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(child.try_wait().unwrap().is_none(), "the plain call returned while the lock was held");
+    assert_eq!(fx.count("watch-started"), 0);
+    drop(held);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(serde_json::from_slice::<Value>(&out.stdout).unwrap()["started"], true);
+    fx.back_after(0);
+}
+
+/// The install's own `watch --ensure` right after its kill: the hook and the script both start the engine, and one runs.
+#[test]
+fn an_install_that_restarts_the_engine_itself_leaves_one_engine() {
+    let fx = fx("");
+    fx.supervised();
+    assert!(fx.env.tmux(&["kill-window", "-t", "=cpd-work:watch"]).status.success());
+    fx.env.cpd(&["watch", "--ensure"]).ok();
+    fx.back_after(1);
+    wait_until("the dust to settle: one engine process holds the lock", || fx.env.cpd(&["watch"]).error()["code"] == "watch_running");
+    assert_eq!(fx.count("watch-started"), 2);
+}
+
+/// A tmux restart kills the server, hooks and all (nothing in it can start the engine); the restart's own path builds the cockpit
+/// again (`cpd tui`, contract §6.1), which starts the engine.
+#[test]
+fn an_engine_killed_with_its_tmux_server_is_back_once_the_cockpit_is_rebuilt() {
+    let fx = fx("");
+    views_sleep(&fx);
+    fx.manager("mgr1");
+    fx.env.cpd(&["tui"]).ok();
+    wait_until("the engine", || fx.count("watch-started") == 1);
+    fx.env.tmux(&["kill-server"]);
+    wait_until("the engine to stop with its server", || fx.count("watch-stopped") == 1);
+
+    fx.env.cpd(&["tui"]).ok();
+    fx.back_after(1);
+    fx.manager_heard("it stopped at");
+}
+
+#[test]
+fn an_engine_that_cannot_start_is_tried_once_every_few_seconds_not_in_a_loop() {
+    let fx = fx("");
+    // The engine itself exits 7 at once; `watch --ensure` is the real one, as the hooks call it.
+    fx.env.fake("cpd", &format!("case \"$2\" in --ensure) exec '{CPD}' \"$@\";; esac\nexit 7"));
+    assert_eq!(fx.env.cpd(&["watch", "--ensure"]).error()["code"], "watch_start_failed");
+    // time-claim: the back-off is a rate, so the bound is a duration; no signal says "no more starts will come".
+    std::thread::sleep(Duration::from_secs(5));
+    // Each failed start waits 2 s while it holds the one-at-a-time lock: a few starts in 5 s, not a loop of hundreds.
+    let calls = fx.env.calls("cpd").len();
+    assert!((3..=14).contains(&calls), "{calls} calls in 5 s");
+    let log = fs::read_to_string(fx.env.cpd_home().join("run/watch.log")).unwrap();
+    assert!(log.contains("supervision: cannot start the engine"), "{log}");
+}
+
+// ---------- the downtime message (hs-d328) ----------
+
+#[test]
+fn the_first_engine_tells_nobody_and_the_next_one_tells_each_manager_how_long_it_was_down() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.fixture(
+        "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, archived_at)
+           VALUES ('mgr0', 'manager', 'ctx', 'Old', '/', 'O3', 'stopped', 't', 't', 't');
+         UPDATE contexts SET archived_at = NULL;",
+    );
+    let first = fx.start();
+    assert_eq!(fx.messages(), [], "no engine before it");
+    let started = fx.texts("watch-started");
+    assert!(!started[0].contains("down for"), "{started:?}");
+    let _ = first.stop();
+    assert_eq!(fx.messages(), []);
+
+    let second = fx.start();
+    let messages = fx.messages();
+    assert_eq!(messages.len(), 1, "one message, to the one Manager that is not archived: {messages:?}");
+    let (session, context, data) = &messages[0];
+    assert_eq!((session.as_str(), context.as_deref()), ("mgr1", Some("ctx")));
+    assert_eq!(data["wake"], false);
+    assert_eq!(data["from"], Value::Null);
+    let text = data["text"].as_str().unwrap();
+    let stopped_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-stopped'");
+    assert!(text.contains(&format!("it stopped at {stopped_at}")), "{text}");
+    // The downtime is the time between the stop and the second start.
+    let started_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1");
+    let secs: f64 = text.split("down for ").nth(1).unwrap().split(" s").next().unwrap().parse().unwrap();
+    let between = (parse_time(&started_at) - parse_time(&stopped_at)).as_seconds_f64();
+    assert!((secs - between).abs() < 0.5, "{secs} s said, {between} s between {stopped_at} and {started_at}: {text}");
+    // Without a Manager the same sentence is in the Event, which is enough.
+    assert!(fx.texts("watch-started")[1].contains(&format!("down for {secs:.1} s")), "{:?}", fx.texts("watch-started"));
+    let _ = second.stop();
+}
+
+#[test]
+fn an_engine_that_died_without_a_watch_stopped_is_told_from_the_last_time_it_was_alive() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    let first = fx.start();
+    // Its ticks mark the lock file: the time it was last seen alive is its newest tick, not its start.
+    let started_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-started'");
+    let lock = fx.env.cpd_home().join("locks/watch.lock");
+    wait_until("a tick after its start marked the lock", || {
+        let marked = OffsetDateTime::from(fs::metadata(&lock).unwrap().modified().unwrap());
+        marked - parse_time(&started_at) > time::Duration::milliseconds(500)
+    });
+    first.signal(Signal::SIGKILL);
+    let mut first = first;
+    let _ = first.child.take().unwrap().wait();
+    assert_eq!(fx.count("watch-stopped"), 0);
+
+    let second = fx.start();
+    let messages = fx.messages();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    let text = messages[0].2["text"].as_str().unwrap();
+    assert!(text.contains("it was last alive (it left no watch-stopped: a crash or a kill) at "), "{text}");
+    assert!(!text.contains(&started_at), "alive since its ticks, not since its start: {text}\nstarted {started_at}");
+    let _ = second.stop();
+}
+
 // ---------- @cpd_workers ----------
 
 const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3 · 0 waiting · 0 queued#[default]";
@@ -499,7 +745,8 @@ fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
     let engine = fx.start();
     wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
     assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·0#[default]");
-    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
+    assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
 
     // Unchanged, it is not set again: a value put there by hand survives the next ticks.
     assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
@@ -530,7 +777,8 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 2 queued#[default]";
     wait_until("@cpd_workers", || fx.workers() == long);
     assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·2#[default]");
-    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
+    assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
     engine.stop();
     drop(lock);
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
@@ -540,26 +788,19 @@ fn the_engine_counts_waiting_and_queued_jobs() {
 /// and the width the status line compares counts it.
 #[test]
 fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
-    let fx = fx("[inbox]\nstuck_job_minutes = 1");
+    let fx = fx("");
     fx.tmux_server();
     let engine = fx.start();
     wait_until("@cpd_inbox", || fx.option("@cpd_inbox") == "#[dim]inbox 0#[default]");
 
-    // Two failed Jobs whose `job-failed` Event is older than `stuck_job_minutes`: E8 opens two red `job-stuck` items.
-    for key in ["old", "older"] {
-        fx.fixture(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                               fingerprint, failed_cause, created_txn, created_at)
-             VALUES ('pay', 'repo', '{key}', 'Title', 'S2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'failed', 0,
-                     hex(zeroblob(32)), 'crashed', cpd_txn(), 't');
-             INSERT INTO events (txn, at, kind, context, plan, job, text, data)
-             VALUES (cpd_txn(), '{}', 'job-failed', 'ctx', 'pay', '{key}', 'x', '{{}}');",
-            ago(5)
-        ));
-    }
-    wait_until("@cpd_inbox red 2", || fx.option("@cpd_inbox") == "#[fg=red]inbox 2#[default]");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'job-stuck'"), 2);
-    assert_eq!(fx.option("@cpd_workers_width"), "42");
+    // The Plan's Lead, in a live pane, asks the User in a dialog in Dispatch: E8 opens a red `dialog` item. (No pull
+    // request row: the engine's own `pr poll` prunes the rows its fake `gh` does not list.)
+    let pane = fx.env.tmux(&["display-message", "-p", "-t", "keepalive", "#{pane_id}"]);
+    let pane = String::from_utf8(pane.stdout).unwrap().trim().to_owned();
+    fx.fixture(&format!("UPDATE sessions SET state = 'blocked', state_label = 'dialog', state_at = 't2', tmux_pane = '{pane}' WHERE id = 'lead1';"));
+    wait_until("@cpd_inbox red 1", || fx.option("@cpd_inbox") == "#[fg=red]inbox 1#[default]");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'dialog'"), 1);
+    assert_eq!(fx.option("@cpd_workers_width"), "46");
     engine.stop();
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
@@ -1569,8 +1810,10 @@ fn e4_tells_no_one_of_a_pr_opened_after_all_merged_however_late() {
         fx.fixture(&format!("{} UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';", opened(status), ago(60)));
         fx.env.wait_whole_ticks(2);
         engine.stop();
-        assert_eq!(fx.count("session-message"), 0, "{status}");
-        // (E5 may report its own error for the pull request the fake `gh` does not know.)
+        // (E5 may report its own error for the pull request the fake `gh` does not know, and the Manager hears of that
+        // error, hs-d314: no message of E4's.)
+        let escalations: Vec<_> = fx.escalations().into_iter().filter(|e| e.3["escalation"] == "pr_unopened").collect();
+        assert!(escalations.is_empty(), "{status}: {escalations:?}");
         assert!(fx.events("error").iter().all(|e| e.3["code"] != "pr_unopened"), "{status}");
     }
 }
@@ -1640,7 +1883,10 @@ fn e4_a_restarted_engine_repeats_no_escalation() {
     let engine = fx.start();
     fx.env.wait_whole_ticks(3);
     engine.stop();
-    assert_eq!(fx.count("session-message"), 1);
+    // The restarted engine tells the Manager how long it was down (contract §3.7, hs-d328): that message
+    // is not an escalation, so only the others are counted.
+    let escalations: Vec<String> = fx.texts("session-message").into_iter().filter(|t| !t.contains("The engine was down for ")).collect();
+    assert_eq!(escalations.len(), 1, "{escalations:?}");
 }
 
 #[test]
@@ -1662,6 +1908,176 @@ fn e4_without_a_manager_gives_the_lead_one_error_instead() {
     let (plan, _, _, data) = &errors[0];
     assert_eq!(plan.as_deref(), Some("pay"));
     assert_eq!((&data["source"], &data["code"], &data["details"]), (&json!("watch"), &json!("pr_unopened"), &json!({"pr": "repo", "minutes": 11})));
+}
+
+// ---------- E4: a stacked PR's 10 minutes start when its base PR is open or merged (hs-d301) ----------
+
+/// What the fake `gh` answers while PR 7 (`base_open`) is open: the search lists nothing, the lookup says "still open".
+fn gh_pr7_open(fx: &Fx) {
+    fx.env.fake_gh(&format!(
+        "case \"$4\" in *'search(type'*) echo '{EMPTY_SEARCH}' ;; *) echo '{LOOKUP_OPEN}' ;; esac"
+    ));
+}
+
+impl Fx {
+    /// PR `top` of Plan `pay` in `dispatch` on `base` (a stacked PR when `base` is `cpd/pay`, the Lead Branch of PR
+    /// `repo`), its one Job `web` merged: the engine sends `all-merged`.
+    fn add_top(&self, base: &str) {
+        self.fixture(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', 'top', '{}', '{base}', 'dispatch', 'cpd/pay/top', '/x/top', cpd_txn(), 't', 't');",
+            self.repo.display()
+        ));
+        self.add_job_in("top", "web", &[], "UPDATE jobs SET status = 'running' WHERE key = 'web'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'web';");
+    }
+
+    /// Makes `top`'s `all-merged` `minutes` old.
+    fn age_all_merged_top(&self, minutes: i64) {
+        self.fixture(&format!("UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'top';", ago(minutes)));
+    }
+
+    /// The base PR `repo` `open` since `minutes` ago (its pull request is PR 7, so use [`gh_pr7_open`]).
+    fn base_open(&self, minutes: i64) {
+        self.fixture(&format!("{} UPDATE prs SET pr_opened_at = '{}' WHERE plan = 'pay' AND key = 'repo';", opened("open"), ago(minutes)));
+    }
+
+    /// The base PR `repo` `merged`, `pr_opened_at` `opened_ago` minutes ago, `merged_at` `merged_ago` minutes ago.
+    fn base_merged(&self, opened_ago: i64, merged_ago: i64) {
+        self.fixture(&format!(
+            "{} UPDATE prs SET pr_opened_at = '{}', merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';",
+            opened("merged"),
+            ago(opened_ago),
+            ago(merged_ago)
+        ));
+    }
+
+    /// A base PR `base`, which `top` is stacked on (`cpd/pay/base`), not open: `waiting` (never started), `dispatch` or `cancelled`.
+    fn base_not_ready(&self, status: &str) {
+        let (state, worktree, started, failed) = match status {
+            "waiting" => ("waiting", "NULL", "NULL", "'t'"),
+            _ => ("dispatch", "'/x/base'", "'t'", "NULL"),
+        };
+        self.fixture(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, start_failed_at)
+               VALUES ('pay', 'base', '{}', 'main', '{state}', 'cpd/pay/base', {worktree}, cpd_txn(), 't', {started}, {failed});",
+            self.repo.display()
+        ));
+        if status == "cancelled" {
+            self.fixture("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay' AND key = 'base';");
+        }
+    }
+
+    /// The escalations of E4 (`pr_unopened`) and the `pr_unopened` errors.
+    fn unopened(&self) -> (Vec<Value>, usize) {
+        let messages = self.escalations().into_iter().map(|e| e.3).filter(|d| d["escalation"] == "pr_unopened").collect();
+        (messages, self.events("error").iter().filter(|e| e.3["code"] == "pr_unopened").count())
+    }
+}
+
+/// `top` (on `base`) is all merged, `all_merged_ago` minutes ago, with a Manager and the base PR as `setup` leaves
+/// it; the engine runs for a few whole ticks. Returns what E4 told the Manager.
+fn stacked_run(base: &str, setup: impl Fn(&Fx), all_merged_ago: i64) -> Vec<Value> {
+    let fx = fx("");
+    fx.add_manager();
+    fx.add_top(base);
+    gh_pr7_open(&fx);
+    setup(&fx);
+
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    fx.age_all_merged_top(all_merged_ago);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    let (messages, errors) = fx.unopened();
+    assert_eq!(errors, 0);
+    messages
+}
+
+/// `stacked_run` must say nothing for a base PR ready `before` minutes ago, and one message of `after` minutes for one ready `after` minutes ago.
+fn the_window_starts_at_the_base_pr(setup: impl Fn(&Fx, i64)) {
+    let text = "Plan pay (Pay): PR top has had all its Jobs merged for 11 minutes and its pull request is not opened. The Lead was told to run cpd pr open --pr top and has not. Look at the Lead: cpd session show lead1, and tell it or the User.";
+    // Everything merged an hour ago: only the base PR's moment can say it is too early.
+    let early = stacked_run("cpd/pay", |fx| setup(fx, 9), 60);
+    assert!(early.is_empty(), "the base PR opened 9 minutes ago: {early:?}");
+    let late = stacked_run("cpd/pay", |fx| setup(fx, 11), 60);
+    assert_eq!(late.len(), 1, "{late:?}");
+    // `minutes` is the age of the clock start (the base PR's moment), not of `all_merged_at` (60).
+    assert_eq!(late[0], json!({"from": "lead1", "text": text, "wake": true, "escalation": "pr_unopened", "plan": "pay", "pr": "top", "minutes": 11}));
+}
+
+#[test]
+fn e4_a_stacked_pr_is_escalated_ten_minutes_after_its_base_pr_opened_not_after_all_merged() {
+    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_open(minutes));
+}
+
+#[test]
+fn e4_a_stacked_pr_counts_from_the_merge_of_a_merged_base_pr_and_from_its_pr_opened_at_when_it_has_one() {
+    // `pr_opened_at`, not `merged_at` (the merge was long after): a merged PR always carries `pr_opened_at` (schema CHECK).
+    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_merged(minutes, 1));
+}
+
+#[test]
+fn e4_a_stacked_pr_whose_all_merged_is_later_than_its_base_prs_opening_counts_from_all_merged() {
+    // The base PR opened an hour ago: `all_merged_at` is the later moment.
+    let early = stacked_run("cpd/pay", |fx| fx.base_open(60), 9);
+    assert!(early.is_empty(), "{early:?}");
+    let late = stacked_run("cpd/pay", |fx| fx.base_open(60), 11);
+    assert_eq!(late.len(), 1, "{late:?}");
+    assert_eq!(late[0]["minutes"], 11);
+}
+
+#[test]
+fn e4_a_stacked_pr_whose_base_pr_is_not_open_raises_no_alarm_however_late() {
+    for status in ["waiting", "dispatch", "cancelled"] {
+        let sent = stacked_run("cpd/pay/base", |fx| fx.base_not_ready(status), 60);
+        assert!(sent.is_empty(), "base PR {status}: {sent:?}");
+    }
+}
+
+#[test]
+fn e4_a_stacked_pr_with_no_manager_gives_the_lead_no_error_while_its_base_pr_is_not_open() {
+    let fx = fx("");
+    fx.add_top("cpd/pay");
+    gh_pr7_open(&fx);
+
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    fx.age_all_merged_top(60);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert_eq!(fx.unopened(), (vec![], 0));
+}
+
+/// SQL for a `pr-base-changed` Event of PR `top` `minutes` ago, `from_pr` the base PR before.
+fn base_changed(minutes: i64, from_pr: Option<&str>) -> String {
+    let data = json!({"pr": "top", "from": "cpd/pay", "to": "main", "from_pr": from_pr, "to_pr": null, "by": "engine"});
+    format!(
+        "INSERT INTO events (txn, at, kind, context, plan, text, data)
+           VALUES (cpd_txn(), '{}', 'pr-base-changed', 'ctx', 'pay', 'PR top of Plan pay now targets main (was cpd/pay).', '{data}');",
+        ago(minutes)
+    )
+}
+
+#[test]
+fn e4_a_pr_unstacked_after_its_base_pr_merged_counts_from_its_latest_pr_base_changed_with_from_pr() {
+    for (minutes, told) in [(9, false), (11, true)] {
+        // The PR now targets `main`; its base PR merged long ago and the repoint was `minutes` ago.
+        let sent = stacked_run("main", |fx| fx.fixture(&format!("{}{}", base_changed(60, Some("pay/repo")), base_changed(minutes, Some("pay/repo")))), 60);
+        assert_eq!(sent.len(), usize::from(told), "the base changed {minutes} minutes ago: {sent:?}");
+        if told {
+            assert_eq!(sent[0]["minutes"], 11);
+        }
+    }
+}
+
+#[test]
+fn e4_a_pr_that_was_never_stacked_counts_from_all_merged_alone_whatever_its_base_changed() {
+    // On `develop`, no PR's Lead Branch; a repoint with no base PR (`from_pr` null) is no candidate.
+    let sent = stacked_run("develop", |fx| fx.fixture(&base_changed(1, None)), 11);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["minutes"], 11);
+    let sent = stacked_run("develop", |_| {}, 9);
+    assert!(sent.is_empty(), "{sent:?}");
 }
 
 // ---------- E5 ----------
@@ -1806,6 +2222,171 @@ fn e5_reports_a_failing_poll_once() {
     let (plan, job, attempt, data) = &errors[0];
     assert_eq!((plan, job, attempt), (&None, &None, &None));
     assert_eq!((&data["source"], &data["code"], &data["details"]["exit"]), (&json!("watch"), &json!("gh_failed"), &json!(1)));
+}
+
+// ---------- E5: a gh HTTP 5xx or timeout is transient (hs-d354) ----------
+
+/// What GitHub's 502 looks like through `gh api graphql`: nginx's HTML page on stdout and `gh`'s message on stderr, exit 1.
+const GH_502: &str = "echo '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>'; echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1";
+
+/// The last line of [`GH_502`]'s stderr.
+const GH_502_LINE: &str = "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)";
+
+fn failing_file(fx: &Fx) -> PathBuf {
+    fx.env.cpd_home().join("run/pr-poll-failing.json")
+}
+
+/// `run/pr-poll-failing.json` as the engine keeps it: the `call` that failed and `since` when it first did, `minutes` ago.
+fn fail_since(fx: &Fx, call: &str, minutes: i64) {
+    fs::create_dir_all(failing_file(fx).parent().unwrap()).unwrap();
+    fs::write(failing_file(fx), json!({"call": call, "since": ago(minutes)}).to_string()).unwrap();
+}
+
+fn failing(fx: &Fx) -> Option<Value> {
+    fs::read_to_string(failing_file(fx)).ok().map(|t| serde_json::from_str(&t).unwrap())
+}
+
+/// Sets `watch.pr_poll_transient_minutes`.
+fn transient_minutes(fx: &Fx, minutes: u32) {
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text.replace("[watch]\n", &format!("[watch]\npr_poll_transient_minutes = {minutes}\n"))).unwrap();
+}
+
+/// What the Manager was sent that is not E4's: `data.text` of every `session-message`.
+fn messages(fx: &Fx) -> Vec<String> {
+    fx.events("session-message").into_iter().map(|e| e.3["text"].as_str().unwrap().to_owned()).collect()
+}
+
+#[test]
+fn e5_a_gh_502_raises_no_error_and_no_message_logs_a_line_and_the_next_poll_heals() {
+    let fx = fx("");
+    fx.add_manager();
+    let healed = fx.env.root().join("healed");
+    fx.env.fake_gh(&format!("if [ -e '{}' ]; then echo '{EMPTY_SEARCH}'; else {GH_502}; fi", healed.display()));
+
+    let engine = fx.start();
+    wait_until("three failing polls", || fx.env.calls("gh").len() >= 3);
+    wait_until("the engine's record of the failure", || failing(&fx).is_some());
+    let record = failing(&fx).unwrap();
+    assert_eq!(record["call"], "search");
+    let since = parse_time(record["since"].as_str().unwrap());
+    assert!((OffsetDateTime::now_utc() - since).whole_seconds() < 60, "the first failure was just now: {record}");
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+
+    // The next poll heals it: the record is gone, and nothing was ever raised.
+    fs::write(&healed, "").unwrap();
+    wait_until("the record to be deleted by a poll that succeeded", || failing(&fx).is_none());
+    fx.env.wait_whole_ticks(2);
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    let log = watch_log(&fx);
+    assert!(log.contains("pr poll: gh search failed transiently (HTTP 502), failing since "), "{log}");
+    assert!(log.contains("): retrying at the next poll"), "{log}");
+}
+
+#[test]
+fn e5_a_gh_timeout_is_transient_too() {
+    let fx = fx("");
+    fx.add_manager();
+    // `gh` hangs; the poll's 15 s kill is shortened (contract §1.2, `CPD_TEST_DEADLINE_GH`).
+    fx.env.fake_gh(&format!("exec sleep {SLEEP_SECONDS}"));
+    let mut vars = common::PLAN_POLLS.to_vec();
+    vars.push(("CPD_TEST_DEADLINE_GH", "0.3"));
+
+    let engine = fx.start_with(Path::new(CPD), &vars);
+    wait_until("the first failure to be handled", || fx.count("error") >= 1 || watch_log(&fx).contains("failed transiently"));
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    assert!(watch_log(&fx).contains("pr poll: gh search failed transiently (timeout), failing since "), "{}", watch_log(&fx));
+    assert_eq!(failing(&fx).unwrap()["call"], "search");
+}
+
+#[test]
+fn e5_raises_one_error_after_ten_minutes_of_the_same_call_failing_and_none_before() {
+    // Nine minutes of failing (the record the engine kept, as if it had polled that long): still nothing.
+    let fx = fx("");
+    fx.add_manager();
+    fx.env.fake_gh(GH_502);
+    fail_since(&fx, "search", 9);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    assert_eq!(failing(&fx).unwrap()["call"], "search");
+
+    // Eleven: one error Event for the machine, and one message to the Manager, not one per tick.
+    let fx = fx_with_manager_failing(11);
+    let since = failing(&fx).unwrap()["since"].clone();
+    let engine = fx.start();
+    wait_until("the error", || fx.count("error") >= 1);
+    fx.env.wait_whole_ticks(4);
+    engine.stop();
+
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let (plan, job, attempt, data) = &errors[0];
+    assert_eq!((plan, job, attempt), (&None, &None, &None));
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
+    let details = &data["details"];
+    assert_eq!((&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"]), (&json!("search"), &since, &json!(11), &json!("HTTP 502"), &json!(1)));
+    assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"]);
+    assert!(details["stderr"].as_str().unwrap().contains(GH_502_LINE), "{details}");
+
+    let sent = messages(&fx);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0].starts_with("Engine error at "), "{}", sent[0]);
+    assert!(sent[0].contains(&format!("pr poll: gh search has failed for 11 minutes (HTTP 502): {GH_502_LINE}")), "{}", sent[0]);
+    // The failure stays: the record keeps its first time, the polls (and their log lines) go on.
+    assert_eq!(failing(&fx).unwrap()["since"], since);
+    assert!(watch_log(&fx).matches("failed transiently (HTTP 502)").count() >= 2, "{}", watch_log(&fx));
+}
+
+/// A `fx` with a Manager, a `gh` that always answers 502 and `run/pr-poll-failing.json` for `minutes` minutes of failing.
+fn fx_with_manager_failing(minutes: i64) -> Fx {
+    let fx = fx("");
+    fx.add_manager();
+    fx.env.fake_gh(GH_502);
+    fail_since(&fx, "search", minutes);
+    fx
+}
+
+#[test]
+fn e5_counts_the_failing_window_from_pr_poll_transient_minutes() {
+    for (minutes, raised) in [(4, 0), (6, 1)] {
+        let fx = fx_with_manager_failing(minutes);
+        transient_minutes(&fx, 5);
+        let engine = fx.start();
+        fx.env.wait_whole_ticks(3);
+        engine.stop();
+        assert_eq!(fx.count("error"), raised, "failing for {minutes} minutes, limit 5");
+    }
+}
+
+#[test]
+fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record() {
+    for (name, script, line) in [
+        ("a 401", "echo 'gh: HTTP 401: Bad credentials' >&2; exit 1", "gh: HTTP 401: Bad credentials"),
+        ("an HTML page with no 5xx status", "echo '<html><body>nginx</body></html>'; echo 'gh: exit status 1' >&2; exit 1", "gh: exit status 1"),
+    ] {
+        let fx = fx("");
+        fx.add_manager();
+        fx.env.fake_gh(script);
+        // A transient failure was recorded a minute ago; this one is not that.
+        fail_since(&fx, "search", 1);
+        let engine = fx.start();
+        wait_until("the error", || fx.count("error") >= 1);
+        fx.env.wait_whole_ticks(3);
+        engine.stop();
+
+        let errors = fx.events("error");
+        assert_eq!(errors.len(), 1, "{name}: {errors:?}");
+        let data = &errors[0].3;
+        assert_eq!((&data["source"], &data["code"], &data["details"]["transient"], &data["details"]["call"]), (&json!("watch"), &json!("gh_failed"), &json!(false), &json!("search")), "{name}");
+        assert!(data["details"]["stderr"].as_str().unwrap().contains(line), "{name}: {data}");
+        assert_eq!(failing(&fx), None, "{name}: a failure that is not transient deletes the record");
+        assert!(!watch_log(&fx).contains("failed transiently"), "{name}");
+    }
 }
 
 /// Whether process `pid` is running (a zombie is not).
@@ -2196,7 +2777,11 @@ fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<St
             r#"case "$1" in
 --version) echo '{{"ok":true,"version":"0.0.0","store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
-watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1; echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
+watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
+  l="$CPD_HOME/locks/watch.lock"; mkdir -p "$CPD_HOME/locks"
+  sh -c 'echo $$ > "$CPD_HOME/engine.pid"; exec flock "$1" sleep 120' sh "$l" </dev/null >/dev/null 2>&1 &
+  until ! flock -n "$l" true; do :; done
+  echo '{{"ok":true,"started":true,"pane":"%9"}}' ;;
 esac"#,
             windows = env.root().join("windows-at-ensure").display()
         ),
@@ -2210,6 +2795,10 @@ esac"#,
         .env("CARGO_TARGET_DIR", &target)
         .output()
         .unwrap();
+    // The fake engine the script's `watch --ensure` started holds the lock for the script's check only.
+    if let Ok(pid) = fs::read_to_string(env.cpd_home().join("engine.pid")) {
+        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+    }
     (out, env.calls("cpd-built"))
 }
 
