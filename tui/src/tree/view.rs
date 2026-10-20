@@ -158,6 +158,9 @@ pub struct View {
     /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
     /// Managers were told of it (view state only).
     down: Option<Down>,
+    /// The pull requests (`<owner>/<repo>#<n>`) whose merge runs, as of the last snapshot of the merge markers
+    /// ([`View::set_merging`], hs-d495): view state only, no Event tells it.
+    merging: BTreeSet<String>,
 }
 
 /// One downtime of the engine (see [`View::down`]).
@@ -230,6 +233,7 @@ impl View {
             error: None,
             owners_dir: CpdHome::from_env().ok().map(|h| h.root().join("policy").join("owners")),
             down: None,
+            merging: BTreeSet::new(),
         };
         view.refresh(tree);
         view
@@ -238,16 +242,21 @@ impl View {
     /// The pull requests (`<owner>/<repo>#<n>`) whose merge is running, from the live merge markers
     /// (`crate::merge::marker::live`) as of this snapshot (hs-d495): their `pr-ready` items show the spinner in the glyph
     /// cell and a click on them does nothing.
-    #[cfg_attr(not(test), allow(dead_code))] // no caller until Job ms-impl
-    pub fn set_merging(&mut self, pulls: BTreeSet<String>) {
-        let _ = pulls; // Job ms-impl
+    /// Whether the set changed (the pane is then redrawn).
+    pub fn set_merging(&mut self, pulls: BTreeSet<String>) -> bool {
+        std::mem::replace(&mut self.merging, pulls) != self.merging
     }
 
-    /// A working dot is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot of an archived
-    /// Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
+    /// An Inbox item's `pr-ready` pull request has a merge running.
+    fn merges(&self, item: &cpd_core::inbox::model::Item) -> bool {
+        item.kind == InboxKind::PrReady && Pull::from_subject(&item.subject).is_some_and(|pull| self.merging.contains(&pull.to_string()))
+    }
+
+    /// A working dot or a merging item is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot
+    /// of an archived Session never turns; one scrolled or folded out of sight counts, the cost being a redraw.)
     pub fn animated(&self) -> bool {
         let mut sessions = self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions);
-        sessions.any(|s| s.dot == Dot::Working && !s.is_archived())
+        sessions.any(|s| s.dot == Dot::Working && !s.is_archived()) || self.tree.inbox.iter().any(|item| self.merges(item))
     }
 
     /// A new snapshot: keep the cursor on its Session, or on its Inbox item (the item now at the same position when
@@ -660,6 +669,8 @@ impl View {
                 let steps: Vec<Action> = steps.into_iter().filter(|a| !self.in_focus(a)).collect();
                 if steps.is_empty() { Effect::None } else { Effect::Steps(steps) }
             }
+            // a merge of it runs: the click, like the glyph's spinner, is its marker's (hs-d495)
+            Some(Jump::Merge(pull)) if self.merging.contains(&pull.to_string()) => Effect::None,
             Some(Jump::Merge(pull)) => Effect::Merge(pull),
             None => Effect::None,
         }
@@ -718,7 +729,7 @@ impl View {
         let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
         // the section's title carries the padding itself, so the section is drawn across the panel (`inbox::draw`)
         let across = Rect { x: f.area().x, width: f.area().width, ..inbox_area };
-        inbox::draw(f, across, &self.tree.inbox, self.shape(), inbox_cursor, now);
+        inbox::draw(f, across, &self.tree.inbox, self.shape(), inbox_cursor, now, &|item| self.merges(item).then_some(frame));
         if footer_height > 0 {
             f.render_widget(Paragraph::new(footer).style(palette::note()).wrap(Wrap { trim: false }), footer_area);
         }

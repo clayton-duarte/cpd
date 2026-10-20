@@ -2,45 +2,91 @@
 //! `$CPD_HOME/run/tui/merging/<owner>__<repo>__<n>.json`, `{"pid", "at"}`, that `cpd tui action merge` writes before
 //! `cpd pr merge` and removes when the request ends. Every view reads it on each snapshot ([`live`]): a marker whose
 //! pid is not alive is stale and ignored.
-//!
-//! The functions are stubs until Job `ms-impl`: the red tests pin what they must do.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::Pull;
-use cpd_core::error::CpdError;
+use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
+use nix::errno::Errno;
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
+use serde::Deserialize;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 /// The marker file of `pull`: `<owner>/<repo>#<n>` is `<owner>__<repo>__<n>.json`.
 pub fn path(home: &CpdHome, pull: &Pull) -> PathBuf {
     let (owner_repo, number) = (pull.repo.replace('/', "__"), pull.number);
-    home.run_dir().join("tui").join("merging").join(format!("{owner_repo}__{number}.json"))
+    path_dir(home).join(format!("{owner_repo}__{number}.json"))
 }
 
 /// Writes the marker of `pull` for this process (`{"pid": <this pid>, "at": <RFC 3339 now>}`), atomically (a temporary
 /// file, then a rename), replacing any marker there, a stale one included.
 pub fn write(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
-    let _ = (home, pull);
-    Ok(())
+    let target = path(home, pull);
+    let pid = std::process::id();
+    let at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
+    let failed = |e: std::io::Error| {
+        CpdError::new(ErrorCode::Internal, format!("Cannot write the merge marker {}: {e}.", target.display()))
+            .with("path", target.display().to_string())
+    };
+    let dir = target.parent().expect("a marker is in a directory");
+    std::fs::create_dir_all(dir).map_err(failed)?;
+    // The temporary name does not end in `.json`, so no reader takes it for a marker; the pid keeps two writers apart.
+    let temporary = dir.join(format!(".{pid}.tmp"));
+    let text = serde_json::json!({ "pid": pid, "at": at }).to_string();
+    std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, &target)).map_err(|e| {
+        let _ = std::fs::remove_file(&temporary);
+        failed(e)
+    })
 }
 
 /// Removes the marker of `pull`; none there is no error.
 pub fn remove(home: &CpdHome, pull: &Pull) {
-    let _ = (home, pull);
+    let _ = std::fs::remove_file(path(home, pull));
 }
 
-/// The pull requests, as `<owner>/<repo>#<n>`, that have a live marker: one whose `pid` is alive. A stale one is none.
+/// The pull requests, as `<owner>/<repo>#<n>`, that have a live marker: one whose `pid` is alive. A stale one is none,
+/// and so is a file that is not a marker (a view cannot fail on it, and the next merge action replaces it).
 pub fn live(home: &CpdHome) -> BTreeSet<String> {
-    let _ = home;
-    BTreeSet::new()
+    let Ok(entries) = std::fs::read_dir(path_dir(home)) else { return BTreeSet::new() };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let (owner_repo, number) = name.strip_suffix(".json")?.rsplit_once("__")?;
+            let (owner, repo) = owner_repo.split_once("__")?;
+            let marker: Marker = serde_json::from_str(&std::fs::read_to_string(entry.path()).ok()?).ok()?;
+            alive(marker.pid).then(|| format!("{owner}/{repo}#{number}"))
+        })
+        .collect()
+}
+
+/// A marker file's content; `at` is for the reader of the file, no view uses it.
+#[derive(Deserialize)]
+struct Marker {
+    pid: i64,
+    #[allow(dead_code)]
+    at: String,
+}
+
+/// The directory of the markers.
+fn path_dir(home: &CpdHome) -> PathBuf {
+    home.run_dir().join("tui").join("merging")
+}
+
+/// Whether process `pid` exists (signal 0). A process of another user exists too (`EPERM`).
+fn alive(pid: i64) -> bool {
+    // 0 and the negatives would signal a process group, not a process.
+    let Some(pid) = i32::try_from(pid).ok().filter(|p| *p > 0) else { return false };
+    !matches!(kill(Pid::from_raw(pid), None), Err(Errno::ESRCH))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::OffsetDateTime;
-    use time::format_description::well_known::Rfc3339;
 
     fn pull(repo: &str, number: i64) -> Pull {
         Pull::parse(&format!("{repo}#{number}")).unwrap()

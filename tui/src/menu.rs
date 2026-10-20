@@ -10,6 +10,9 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
+/// The columns a busy entry's spinner takes beside its label: a space and the glyph.
+const SPINNER_WIDTH: usize = 2;
+
 /// An entry of a menu: what the box shows. The view's own type says what it does.
 pub trait Entry: Copy {
     fn label(self) -> &'static str;
@@ -62,7 +65,7 @@ impl<E: Entry> Menu<E> {
     pub fn key(&mut self, key: KeyEvent) -> Outcome<E> {
         match key.code {
             KeyCode::Esc => Outcome::Close,
-            KeyCode::Enter => Outcome::Pick(self.items[self.selected]),
+            KeyCode::Enter => self.pick(self.selected),
             KeyCode::Down => {
                 self.selected = (self.selected + 1).min(self.items.len() - 1);
                 Outcome::Stay
@@ -75,10 +78,15 @@ impl<E: Entry> Menu<E> {
         }
     }
 
+    /// Picks entry `i`: a busy entry is not selectable, the menu stays as it is.
+    fn pick(&self, i: usize) -> Outcome<E> {
+        if self.items[i].busy() { Outcome::Stay } else { Outcome::Pick(self.items[i]) }
+    }
+
     /// The box inside `pane`: one border, one blank and the label per entry, at the click, moved left and up as far as
     /// it takes to fit (and cut, when the pane is smaller than the box).
     pub fn rect(&self, pane: Rect) -> Rect {
-        let widest = self.items.iter().map(|i| Span::raw(i.label()).width()).max().unwrap_or(0) as u16;
+        let widest = self.items.iter().map(|i| Span::raw(i.label()).width() + if i.busy() { SPINNER_WIDTH } else { 0 }).max().unwrap_or(0) as u16;
         let width = (widest + 4).min(pane.width);
         let height = (self.items.len() as u16 + 2).min(pane.height);
         let x = self.at.x.min(pane.right().saturating_sub(width)).max(pane.x);
@@ -101,9 +109,10 @@ impl<E: Entry> Menu<E> {
     /// A left click: an entry picks it, the border does nothing, outside closes the menu.
     pub fn click(&mut self, pane: Rect, at: Position) -> Outcome<E> {
         match self.hit(pane, at) {
+            Hit::Item(i) if self.items[i].busy() => Outcome::Stay,
             Hit::Item(i) => {
                 self.selected = i;
-                Outcome::Pick(self.items[i])
+                self.pick(i)
             }
             Hit::Border => Outcome::Stay,
             Hit::Outside => Outcome::Close,
@@ -127,14 +136,18 @@ impl<E: Entry> Menu<E> {
 
     /// Draws the menu; a busy entry ([`Entry::busy`]) shows `palette::SPINNER[frame % 9]` (hs-d495).
     pub fn draw_at(&self, f: &mut Frame, pane: Rect, frame: usize) {
-        let _ = frame; // Job ms-impl
         let rect = self.rect(pane);
         let lines: Vec<Line> = self
             .items
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                let line = Line::from(format!(" {:<w$} ", item.label(), w = usize::from(rect.width.saturating_sub(4))));
+                let label = if item.busy() {
+                    format!("{} {}", item.label(), crate::palette::SPINNER[frame % crate::palette::SPINNER.len()])
+                } else {
+                    item.label().to_owned()
+                };
+                let line = Line::from(format!(" {label:<w$} ", w = usize::from(rect.width.saturating_sub(4))));
                 if i == self.selected { line.style(Modifier::REVERSED) } else { line }
             })
             .collect();

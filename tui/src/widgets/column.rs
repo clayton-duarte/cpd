@@ -26,7 +26,8 @@ pub struct Hit {
     pub area: Rect,
     /// The `󰏌` cell, inside `area`.
     pub arrow: Position,
-    /// The merge icon's cell, inside `area`, when the PR shows one.
+    /// The merge icon's cell, inside `area`, when the PR shows one, or the spinner's while its merge runs: no click on
+    /// it reaches the Lead.
     pub icon: Option<Position>,
     /// The Lead of the owner: `cpd session open <lead>`.
     pub lead: SessionId,
@@ -84,9 +85,10 @@ pub struct PrRow {
 }
 
 impl PrRow {
-    /// The menu's entries, in order: Merge (a clean row), Copy Link, Go to Lead (an owned one).
+    /// The menu's entries, in order: Merge (a clean row; busy while its merge runs), Copy Link, Go to Lead (an owned one).
     pub fn items(&self) -> Vec<PrItem> {
-        [self.clean.then_some(PrItem::Merge), Some(PrItem::CopyLink), self.lead.as_ref().map(|_| PrItem::GoToLead)]
+        let merge = if self.merging { PrItem::Merging } else { PrItem::Merge };
+        [self.clean.then_some(merge), Some(PrItem::CopyLink), self.lead.as_ref().map(|_| PrItem::GoToLead)]
             .into_iter()
             .flatten()
             .collect()
@@ -184,7 +186,8 @@ fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     }
     if pr.clean {
         spans.push(" ".repeat(width.saturating_sub(shown + 1)).into());
-        spans.push(MERGE.into());
+        // While its merge runs the cell is the spinner (hs-d495), turning with the shared clock.
+        spans.push(if pr.merging { palette::SPINNER[frame % palette::SPINNER.len()] } else { MERGE }.into());
     }
     let first = Line::from(vec![bold(name), gap.into(), link::CUE.into()]);
     let second = Line::from(spans);
@@ -287,11 +290,12 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
             pull: format!("{}#{}", pr.repo, pr.number),
             url: pr.url.clone(),
             clean: pr.clean,
-            merging: false,
+            merging: pr.clean && pr.merging,
             lead: pr.lead.clone(),
         });
         let icon = arrow_x.filter(|_| pr.clean).map(|x| Position::new(x, y + 1));
-        if let Some(at) = icon {
+        // The spinner is no merge icon: a click on it opens no popup.
+        if let Some(at) = icon.filter(|_| !pr.merging) {
             icons.push(MergeIcon { area: Rect::new(at.x, at.y, 1, 1), pull: format!("{}#{}", pr.repo, pr.number) });
         }
         if let (Some(lead), Some(x)) = (&pr.lead, arrow_x) {
