@@ -22,4 +22,10 @@ toml.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Not used by core. It makes `-p cpd-core` resolve dependency features as
+# `--workspace` does: ratatui is what enables rustix `termios`/`stdio`,
+# hashbrown 0.16's features, syn `extra-traits` and time `local-offset`. Without
+# it the first `-p cpd-core` run after a workspace build rebuilt 12 dependencies
+# (20-30 s). Dev-only: core's library and `cargo build` never see ratatui.
+ratatui.workspace = true
 tempfile.workspace = true
