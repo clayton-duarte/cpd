@@ -668,6 +668,51 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
     check(&plan.id);
 }
 
+/// The SGR parameters in force at the 0-based column `column` of the styled `row`.
+fn sgr_at(row: &str, column: usize) -> String {
+    let (mut sgr, mut col, mut chars) = (String::new(), 0, row.chars());
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            let seq: String = chars.by_ref().take_while(|e| !e.is_ascii_alphabetic()).collect();
+            sgr = seq.trim_start_matches('[').to_owned();
+        } else {
+            if col == column {
+                return sgr;
+            }
+            col += 1;
+        }
+    }
+    panic!("no column {column} in {row:?}");
+}
+
+/// hs-d489: the border between two unfocused panes is grey (colour 8: SGR 90 or `38;5;8`), the one beside the focused
+/// pane is blue.
+#[test]
+fn a_pane_border_is_grey_and_the_focused_panes_border_is_blue() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let panes = main_panes(&env);
+    let (tree, widgets) = (view(&panes, "tree").clone(), view(&panes, "widgets").clone());
+    tmux_out(&env, &["select-pane", "-t", &tree.id]);
+    let outer = Outer::attach(&env, 120, 30);
+    wait_until("the client", || outer.screen().contains('\u{e0b6}'));
+    tmux_out(&env, &["resize-pane", "-t", &tree.id, "-x", "30"]);
+    wait_until("the tree's header", || outer.screen().contains("\u{e0b6}Context\u{e0b4}"));
+    let geometry = |pane: &str| -> (usize, usize, usize) {
+        let out = tmux_out(&env, &["display", "-p", "-t", pane, "#{pane_top} #{pane_left} #{pane_width}"]);
+        let n: Vec<usize> = out.split_whitespace().map(|v| v.parse().unwrap()).collect();
+        (n[0], n[1], n[2])
+    };
+    // A body row, below the header: the focused tree's right border, then the widgets' left one (between two unfocused panes).
+    let (top, left, width) = geometry(&tree.id);
+    let (_, widgets_left, _) = geometry(&widgets.id);
+    let row = styled_row(&outer, top + 2);
+    let focused_border = sgr_at(&row, left + width);
+    assert_eq!(focused_border, "34", "the focused pane's border is blue: {row:?}");
+    let border = sgr_at(&row, widgets_left - 1);
+    assert!(border == "90" || border == "38;5;8", "an unfocused pane's border is grey, not {border:?}: {row:?}");
+}
+
 /// Kills `gone` (views of `main`), runs `cpd tui`, and asserts the layout is whole again with the panes that were
 /// not killed unchanged, and that rerunning adds nothing.
 fn assert_repaired_after_killing(gone: &[&str]) {

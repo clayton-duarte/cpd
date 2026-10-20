@@ -83,6 +83,14 @@ fn a_right_click_is_tmuxs_default_binding_that_passes_it_to_a_pane_that_captures
     assert!(String::from_utf8_lossy(&own.stdout).contains("cpd tui action"));
 }
 
+/// Contract §6.1 (hs-d489): the borders of unfocused panes are grey, `pane-border-style fg=colour8` set right before
+/// `pane-active-border-style`.
+#[test]
+fn the_pane_border_style_is_a_server_option_set_right_before_the_active_border_style() {
+    let at = SERVER_OPTIONS.iter().position(|o| *o == ["set", "-g", "pane-active-border-style", "fg=blue"]).unwrap();
+    assert_eq!(SERVER_OPTIONS[at.checked_sub(1).unwrap()], ["set", "-g", "pane-border-style", "fg=colour8"]);
+}
+
 /// Contract §6.1 (hs-d353): tmux 3.8 defaults the popup, popup border and menu styles to a grey background, so
 /// cpd sets each to `default`, with `-gq`, right after `pane-active-border-style`.
 #[test]
@@ -137,6 +145,7 @@ fn assert_server_options(s: &Server) {
             "pane-border-format",
             BORDER_FORMAT_WANT,
         ),
+        ("pane-border-style", "fg=colour8"),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
         ("set-titles", "on"),
