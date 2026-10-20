@@ -7,12 +7,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
 use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, team, titles, workers};
+use crate::clock;
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -213,18 +217,88 @@ fn watch_event(store: &mut Store, event: NewEvent) -> Result<i64, CpdError> {
     store.write(SOURCE, |tx| events::append(tx, event.clone()))
 }
 
+/// How long the engine was down before this start (contract §3.7, hs-d328).
+struct Downtime {
+    /// When the previous engine stopped: its `watch-stopped`, else the last time it was alive.
+    since: OffsetDateTime,
+    /// Whether the previous engine said it stopped (`watch-stopped`): otherwise it crashed or was killed.
+    said: bool,
+    down: time::Duration,
+}
+
+impl Downtime {
+    /// None for the first engine this home has seen. The previous engine's last Event is `watch-stopped`
+    /// (its `at` is when it stopped), or `watch-started` with no stop (a crash, SIGKILL): then it was last
+    /// alive at the lock file's modification time (the engine marks it every tick), or at its start when
+    /// that engine did not mark it.
+    fn since_previous(store: &mut Store, lock: &WatchLock) -> Result<Option<Downtime>, CpdError> {
+        let last: Option<(String, String)> = store.read(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT kind, at FROM events WHERE kind IN ('watch-started', 'watch-stopped') ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?)
+        })?;
+        let Some((kind, at)) = last else { return Ok(None) };
+        let at = OffsetDateTime::parse(&at, &Rfc3339)
+            .map_err(|e| CpdError::new(ErrorCode::StoreFailed, format!("A {kind} Event has an `at` that is not RFC 3339: {e}.")))?;
+        let said = kind == "watch-stopped";
+        let since = if said { at } else { at.max(OffsetDateTime::from(lock.last_alive()?)) };
+        Ok(Some(Downtime { since, said, down: (OffsetDateTime::now_utc() - since).max(time::Duration::ZERO) }))
+    }
+
+    /// `The engine was down for 3.2 s: it stopped at … ` (the one sentence of the log, the Event and the message).
+    fn sentence(&self) -> String {
+        let how = if self.said { "it stopped" } else { "it was last alive (it left no watch-stopped: a crash or a kill)" };
+        format!("The engine was down for {:.1} s: {how} at {}.", self.down.as_seconds_f64(), clock::timestamp(self.since))
+    }
+
+    /// One `session-message` (no `--wake`) to each Manager that is not archived, as `cpd session send` appends
+    /// it; returns how many. A Context with no Manager hears nothing: the `watch-started` text says it too.
+    fn tell_managers(&self, store: &mut Store, pid: u32) -> Result<usize, CpdError> {
+        let text = format!("From cpd's engine, not the User: {} A new engine runs (pid {pid}).", self.sentence());
+        store.write(SOURCE, |tx| {
+            let managers = {
+                let mut stmt = tx.prepare("SELECT id, context, name FROM sessions WHERE role = 'manager' AND archived_at IS NULL ORDER BY created_at, id")?;
+                let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for (id, context, name) in &managers {
+                let summary = format!("Message for {name} from the cpd engine: {}", text.chars().take(60).collect::<String>());
+                let event = NewEvent::session_message(summary, None::<String>, &text, false)
+                    .session(SessionId::parse(id)?)
+                    .context(ContextId::parse(context)?);
+                events::append(tx, event)?;
+            }
+            Ok(managers.len())
+        })
+    }
+}
+
 /// `cpd watch`: the engine in the foreground.
 pub(super) fn run() -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
-    let _lock = WatchLock::take(&home)?;
+    let lock = WatchLock::take(&home)?;
     let mut log = Log::open(&home)?;
     // A tick's steps give up waiting when the engine is told to stop.
     let mut store = Store::open_persistent(&home, u64::from(config.timeouts.store_busy_ms), persist(&home, stopping)?)?;
     catch_signals()?;
     let pid = std::process::id();
-    watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}). See: cpd doctor"), pid))?;
+    // What the previous engine left, read before this one's `watch-started` hides it.
+    let down = Downtime::since_previous(&mut store, &lock)?;
+    let how_long = down.as_ref().map(|d| format!(" {}", d.sentence())).unwrap_or_default();
+    watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}).{how_long} See: cpd doctor"), pid))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
+    if let Some(down) = down {
+        log.line(&down.sentence());
+        match down.tell_managers(&mut store, pid) {
+            Ok(told) => log.line(&format!("told {told} Manager(s) how long the engine was down")),
+            Err(e) => log.line(&format!("cannot tell the Managers: {} ({})", e.message(), e.code().as_str())),
+        }
+    }
 
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let report = Report::new(Duration::from_secs(u64::from(config.watch.error_repeat_seconds)));
@@ -248,6 +322,10 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let tick = engine.config.watch.tick_seconds.duration();
     while !stopping() {
         let began = Instant::now();
+        // The next engine says when this one stopped from it when it leaves no `watch-stopped`.
+        if let Err(e) = lock.touch() {
+            engine.log.line(&format!("{} ({})", e.message(), e.code().as_str()));
+        }
         engine.tick();
         // The next tick comes at the earlier of a tick from now and E5's due time (§3.7): a poll is not held to a tick boundary.
         let next = (began + tick).min(pr::due(&engine, began));

@@ -1828,6 +1828,10 @@ fn a_marker_of_a_dead_process_does_not_block() {
 
 /// hs-n278, contract §1.4: the opener that migrates writes its marker while it migrates and empties the file
 /// when it is done; a second opener that finds the lock held waits it out, whatever its own `busy_ms`.
+///
+/// The test, not the clock, keeps the migration in progress: it holds the database's write lock (`BEGIN IMMEDIATE`)
+/// until the second opener has started, so the first opener, which has taken `store.lock` and written its marker,
+/// waits on SQLite for its own write transaction (its `busy_ms` is long enough for that).
 #[test]
 fn the_opener_that_migrates_writes_its_marker_and_clears_it() {
     // An env with no store (TestEnv::new copies a migrated one in): this opener migrates from 0.

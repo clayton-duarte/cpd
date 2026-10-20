@@ -68,11 +68,36 @@ pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\u{e0b6}#[r
 \u{e0b6}#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
 #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]\u{e0b4}}}}";
 
-/// The `pane-died` hook (contract §6.1): only a pane that carries `@cpd_view`
-/// (a view of the cockpit) is respawned when its program dies; a Lead or
-/// engine pane stays dead, as `remain-on-exit` leaves it, so engine E2 sees
-/// its death. tmux runs it with the dead pane as the current target.
-pub const PANE_DIED_HOOK: &str = r##"if -F "#{@cpd_view}" "respawn-pane""##;
+/// What the supervising hooks run when the engine's pane died or its window is
+/// gone (contract §6.6): `watch --ensure --wait`, which starts the engine again
+/// (commands.md §12). `cpd` is found on `PATH` as for every pane cpd starts
+/// (`session::PROGRAM`), and its output is dropped, since a `run-shell -b` that
+/// prints puts the active pane into view mode; `ensure` logs its failures in
+/// `run/watch.log`. A macro, so both hooks' strings are built from this one.
+macro_rules! engine_ensure {
+    () => {
+        "run-shell -b 'cpd watch --ensure --wait >/dev/null 2>&1'"
+    };
+}
+
+/// The `pane-died` hook (contract §6.1, §6.6): a pane that carries `@cpd_view`
+/// (a view of the cockpit) is respawned when its program dies; the pane of the
+/// engine (window `watch`, `host::layout::WATCH_WINDOW`) starts the engine
+/// again with `engine_ensure!`; any other pane (a Lead's) stays dead, as
+/// `remain-on-exit` leaves it, so engine E2 sees its death. tmux runs it with
+/// the dead pane as the current target.
+pub const PANE_DIED_HOOK: &str = concat!(
+    r##"if -F "#{@cpd_view}" "respawn-pane" "if -F '#{==:#{window_name},watch}' \""##,
+    engine_ensure!(),
+    r##"\"""##
+);
+
+/// The `window-unlinked` hook (contract §6.6): the engine's window is gone
+/// (`kill-window`, an install's restart), so no pane died to say so: start the
+/// engine again with `engine_ensure!`. The window is already gone, so its name
+/// is what tells it was the engine's (`hook_window_name`).
+pub const WINDOW_UNLINKED_HOOK: &str =
+    concat!(r##"if -F "#{==:#{hook_window_name},watch}" ""##, engine_ensure!(), r##"""##);
 
 /// Every global option, key binding and hook of contract §6.1, each as the
 /// arguments after `tmux -L <socket>`, in the order of the reference's
@@ -106,6 +131,8 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "set-titles", "on"],
     &["set", "-g", "set-titles-string", SET_TITLES_STRING],
     &["set-hook", "-g", "pane-died", PANE_DIED_HOOK],
+    &["set-hook", "-g", "window-unlinked", WINDOW_UNLINKED_HOOK],
+    &["set", "-s", "exit-empty", "off"],
     &["bind", "-T", "root", "MouseDown1Pane", "select-pane -t = ; send-keys -M"],
     &["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK],
 ];
@@ -695,6 +722,10 @@ impl Tmux {
             // The server was starting (another caller's `new-session`) when the
             // first call connected: list again, once.
             out = self.output(&args)?;
+            // A server with no session (`exit-empty off`, §6.1) has no pane: tmux says "no current target".
+            if !out.status.success() && String::from_utf8_lossy(&out.stderr).trim() == "no current target" {
+                return Ok(Vec::new());
+            }
             if !out.status.success() {
                 return Err(self.failed(&args, &out));
             }
@@ -961,6 +992,15 @@ mod tests {
     fn a_status_click_runs_cpd_quietly() {
         assert!(STATUS_CLICK.starts_with(&format!("{} tui action ", crate::session::PROGRAM)));
         assert!(STATUS_CLICK.ends_with(" 2>/dev/null"));
+    }
+
+    #[test]
+    fn the_engines_hooks_name_its_window_and_start_it_again_quietly() {
+        for hook in [PANE_DIED_HOOK, WINDOW_UNLINKED_HOOK] {
+            assert!(hook.contains(&format!("_name}},{}}}", super::super::layout::WATCH_WINDOW)), "{hook}");
+            assert!(hook.contains("cpd watch --ensure --wait >/dev/null 2>&1"), "{hook}");
+        }
+        assert!(WINDOW_UNLINKED_HOOK.contains("#{hook_window_name}"));
     }
 
     #[test]

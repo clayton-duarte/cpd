@@ -2055,7 +2055,7 @@ Idempotent: read-only; the same `--since` replays the same lines.
 cpd watch [--ensure]
 ```
 
-(and the internal `cpd watch --restart-tmux`, below)
+(and the internal `cpd watch --restart-tmux` and `cpd watch --ensure --wait`, below)
 
 The engine, one per machine (§3.7, §6.6, D5).
 
@@ -2067,7 +2067,7 @@ E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll
 |---|---|---|
 | `locks/watch.lock` is free | `watch_running` | 3 |
 
-Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, and every row and Event of E1–E5 and E7–E11 (E3 starts nothing while a tmux restart is pending, and the engine starts that restart once nothing is in the way, §3.7) (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12; a retitle run E10 starts (§10.14) appends its own `session-titled` when it succeeds, and when it fails E10 reports one `error` with code `title_failed` for the Session). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It waits out a migration in progress when it opens the store (hs-n278; contract §3.7, §4.2): it does not fail `lock_timeout`, and logs the one waiting line to `run/watch.log`. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0.
+Effects: **Events** `watch-started` and `watch-stopped` `{pid}`, one `session-message` to each Manager that is not archived when this engine follows an earlier one (how long none ran, contract §3.7), and every row and Event of E1–E5 and E7–E11 (E3 starts nothing while a tmux restart is pending, and the engine starts that restart once nothing is in the way, §3.7) (§3.7; a PR that E7 fails to start gets its own `error` with code `pr_start_failed` and is not tried again, §9.7; a distill run E9 starts appends its own `error` when it fails, §3.12; a retitle run E10 starts (§10.14) appends its own `session-titled` when it succeeds, and when it fails E10 reports one `error` with code `title_failed` for the Session). An unexpected failure in a step appends `error` `{source: "watch", code, message, details}` for the Plan it concerns and the loop continues; the same failure for the same object is appended once until it clears. It waits out a migration in progress when it opens the store (hs-n278; contract §3.7, §4.2): it does not fail `lock_timeout`, and logs the one waiting line to `run/watch.log`. It runs until SIGTERM or SIGINT, then prints `{"ok": true, "stopped": true}` and exits 0.
 **The `@cpd_workers` step** (contract §6.1; User, hs-d149, hs-d198): on each tick the engine reads, in one read, the open, visible Inbox items (the read of `cpd inbox list`, §21.1: neither snoozed nor dismissed; `<n>` their count and the urgency of the most urgent), `N` (the Attempts not `ended`), `M` (config `concurrency`), `W` (**waiting**: the Ready Jobs, §3.2, the ones E3 would start if a slot were free) and `Q` (**queued**: every Job with status `queued`, waiting ones included), and builds the StatusBar's styled texts: the Inbox counter `inbox <n>`, in the tmux colour of the most urgent item (`red`, `yellow`, `magenta` or `white`, the colours of the tree's `󰪥`, §17) or dim when there is none; the long form `workers N/M · W waiting · Q queued` and the short form `N/M·W·Q`; and the visible width in cells of the right items in each form, `@cpd_workers_width` (long) and `@cpd_workers_short_width` (short): the counter's pill, one space and the workers' pill, each pill with its two caps `` and `` (the texts' widths plus 4; hs-d322, contract §6.1); the texts hold neither caps nor background. The words, `/M` and `·` are dim; `N` is in the palette's in-progress colour (green) above 0, else colour 8; `W` is dim at 0, else the palette's Review colour (yellow); `Q` is dim. It runs `tmux -L <socket> set -g @cpd_inbox '<counter>' ';' set -g @cpd_workers '<long>' ';' set -g @cpd_workers_short '<short>' ';' set -g @cpd_workers_width <cells> ';' set -g @cpd_workers_short_width <cells>` **only when a text or the width changed** since the last tick it set (the first tick always sets them, and so does the first tick after a tmux failure or a missing server: a restarted server starts without them). No row, no Event; a tmux failure of the step is no `error` Event while a tmux restart is pending and has not failed (§13.3: the restart takes the server away under the step), it is tried again at the next tick. The indicator is therefore up to one tick (`watch.tick_seconds`) late, and stale while the engine is stopped; this deviates on purpose from §17's "no tmux option carries state".
 
 Idempotent: a second one is refused.
@@ -2078,13 +2078,25 @@ Idempotent: a second one is refused.
 |---|---|---|
 | the window started and its process took the lock within 10 s | `watch_start_failed` | 1 |
 
-Effects: probe `locks/watch.lock` (open and `flock(LOCK_EX | LOCK_NB)`, released at once). Free: start the server and `cpd-work` session if needed (§6.1), kill a dead `watch` window, then `new-window -d -t =cpd-work: -n watch -c $CPD_HOME -P -F '#{pane_id}' -- cpd watch`. No rows. The engine itself appends its stderr to `run/watch.log` (§1.4), so no shell is needed.
+Effects: probe `locks/watch.lock` (open and `flock(LOCK_EX | LOCK_NB)`, released at once). Free: start the server and `cpd-work` session if needed (§6.1), set the server options and hooks again on a running server (§6.1), respawn a dead `watch` pane in its window (killing the window of any other dead one), else `new-window -d -t =cpd-work: -n watch -c $CPD_HOME -P -F '#{pane_id}' -- cpd watch`. No rows. The engine itself appends its stderr to `run/watch.log` (§1.4), so no shell is needed.
 
 ```json
 {"ok": true, "started": true, "pane": "%3"}
 ```
 
 Idempotent: yes; a running engine gives `"started": false` with `"already": true`.
+
+Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it probes the engine's lock and holds it until it has started the engine, so two calls never start two windows. A plain call waits for it 30 s at most (a supervising call holds it up to 15 s + 10 s + 2 s) and then fails with `watch_start_failed` (`details.next` = `cpd watch --ensure`); it still answers `already` when an engine runs.
+
+**`--ensure --wait` (internal; hs-d328).** What the tmux server's hooks run when the engine's pane died or its window is gone (contract §6.1, §6.6); not an interface of the User or an agent. As `--ensure`, with these differences:
+
+- a held lock with no live pane in the `watch` window (its window is gone, its process is stopping) is waited for, 15 s at most, then the engine is started; with a live pane it answers `already` at once;
+- it takes `locks/watch-ensure.lock` first, as every `--ensure` does, and waits for it without a limit, and holds it until it is done, so only one runs at a time; after a failed start it waits 2 s under it, so a failing engine is tried once every few seconds;
+- a dead engine pane is respawned in its window (`respawn-pane -e CPD_HOME=…`), the other dead `watch` windows are killed;
+- it sets the server options and hooks again on a running server (§6.1), as `cpd tui` does: **`--ensure` does it too**, so every start of the engine leaves the hooks in place;
+- it appends one line `supervision: …` to `run/watch.log` with the outcome. Its own output is dropped by the hook.
+
+The engine it starts says how long it was down to each Manager (contract §3.7).
 
 **`--restart-tmux` (internal; hs-d294).** Started by the engine, detached, when a restart of the tmux server is pending and nothing is in the way (contract §3.7, §6.1; §13.3); it is not an interface of the User or an agent. It restarts the server onto the installed tmux as §13.3 describes and exits 0, also when it did nothing (the server needs no restart, it is not safe now, another run holds `locks/tmux-restart.lock`). It prints one JSON value, `{"ok": true, "outcome": "…"}`, and logs to stderr, which the engine appends to `run/tmux-restart.log`. A failed restart exits with its failure and keeps the reason in `run/tmux-restart.pending`.
 
