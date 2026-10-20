@@ -1683,7 +1683,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
     env.fake(
         "tmux",
-        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60 /dev/pts/9';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
     );
     let pane = Pane::start(&env, 60, 40);
     pane.ready();
@@ -1719,7 +1719,8 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     pane.click(10, row_of("acme/api#3 ready"));
     common::wait_until("the merge popup", || !popups(&env).is_empty());
     assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
-    assert_eq!(popups(&env)[0].last().unwrap(), "cpd tui view merge 'acme/api#3'");
+    assert_eq!(popups(&env)[0].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'");
+    assert!(popups(&env)[0].windows(2).any(|w| w == ["-c", "/dev/pts/9"]), "on the client: {:?}", popups(&env)[0]);
     assert!(popups(&env)[0].contains(&" merge ".to_owned()), "{:?}", popups(&env)[0]);
     // a review request: the url is copied, and the log says how to open it
     pane.click(10, row_of("acme/web#5 review requested"));
