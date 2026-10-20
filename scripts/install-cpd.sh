@@ -35,7 +35,7 @@ if [ -n "$unmerged" ]; then
   exit 1
 fi
 
-"$root/scripts/cargo.sh" build --release --locked --manifest-path "$root/Cargo.toml" -p cpd
+CPD_COMMIT=$(git -C "$root" rev-parse --short HEAD) "$root/scripts/cargo.sh" build --release --locked --manifest-path "$root/Cargo.toml" -p cpd
 
 target_dir="${CARGO_TARGET_DIR:-$root/target}"
 

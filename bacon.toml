@@ -1,0 +1,16 @@
+# bacon (https://dystroy.org/bacon/config/): the watch loop of docs/implementing.md "The scoped loop".
+# A developer's tool, not a dependency; the Gate does not use it. Both jobs go through scripts/cargo.sh.
+
+default_job = "fast"
+
+# `bacon`: the tests the changed files can reach (scripts/test-changed, against origin/main).
+[jobs.fast]
+command = ["scripts/test-changed"]
+need_stdout = true
+analyzer = "nextest"
+
+# `bacon full`: the whole suite.
+[jobs.full]
+command = ["scripts/cargo.sh", "nextest", "run", "--workspace"]
+need_stdout = true
+analyzer = "nextest"
