@@ -147,15 +147,26 @@ pub struct MachineEscalation {
 pub fn widgets(store: &mut Store, concurrency: u32, recent: u32) -> Result<Widgets, CpdError> {
     store.read(|conn| {
         Ok(Widgets {
-            slots: slots(conn, concurrency)?,
+            slots: held_slots(conn, concurrency)?,
             engine: engine(conn)?,
             plans: plan_cards(conn)?,
-            prs: open_prs(conn)?,
+            prs: open_pr_rows(conn)?,
             escalations: escalations(conn)?,
             events: recent_events(conn, recent)?,
             events_cursor: highest_id(conn)?,
         })
     })
+}
+
+/// The machine-wide slots (§3.4), and the Event id of this read: the StatusBar's whole model (`widgets` reads far
+/// more: the Plans' `jobs` alone are most of its cost, tui-F1).
+pub fn slots(store: &mut Store, concurrency: u32) -> Result<(Slots, i64), CpdError> {
+    store.read(|conn| Ok((held_slots(conn, concurrency)?, highest_id(conn)?)))
+}
+
+/// The open pull requests of the User, and the Event id of this read: the Dispatch column's whole model.
+pub fn open_prs(store: &mut Store) -> Result<(Vec<OpenPr>, i64), CpdError> {
+    store.read(|conn| Ok((open_pr_rows(conn)?, highest_id(conn)?)))
 }
 
 fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
@@ -176,7 +187,7 @@ fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
 
 /// The `open` pull requests the User wrote (`authored` 1), oldest first. `lead`: the owner's (see [`OpenPr::lead`]). `active`: a PR of the Plan of the chat slot's Lead (the Plan Lead whose latest
 /// `session-moved` says `chat`, the newest when there are several: `chat_slot`'s rule) points to it.
-fn open_prs(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
+fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT q.repo, q.number, q.title, q.draft, q.checks, q.review_decision, q.url,
                 q.mergeable = 'conflicting', q.merge_state = 'clean',
@@ -262,7 +273,7 @@ fn pulls(conn: &Connection) -> Result<BTreeMap<String, Vec<PrRow>>, CpdError> {
     Ok(out)
 }
 
-fn slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {
+fn held_slots(conn: &Connection, limit: u32) -> Result<Slots, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT plan, id, tier, status, started_at FROM attempts WHERE status <> 'ended' ORDER BY started_at, plan, id",
     )?;
