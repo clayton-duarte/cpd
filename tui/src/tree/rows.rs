@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(lines(&folded)[..2], [format!("╭{NEEDS_YOU} alpha 3"), "╰─ expand".to_owned()]);
         assert!(!click_toggle(&mut state, &tree, &toggle_of(&["nope"])), "no Context, no toggle row");
         assert!(click_toggle(&mut state, &tree, &toggle_of(&["alpha"])));
-        assert!(state.opened().contains(&path(&["alpha"])), "`└ expand` unfolds it");
+        assert!(state.opened().contains(&path(&["alpha"])), "`╰─ expand` unfolds it");
     }
 
     #[test]
