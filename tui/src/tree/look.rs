@@ -385,3 +385,91 @@ fn a_scrolled_inbox_has_both_cues_right_aligned_and_every_row_of_the_block_keeps
     }
     assert_eq!(got[close], format!(" ╰{UP} collapse"), "the closing row stays in view");
 }
+
+// ---------- the Inbox's tier glyphs (hs-d483): red until the rows draw them ----------
+
+/// The four tiers, red to white (the order of `cpd inbox list`): urgency, glyph (code point, never a copied glyph) and the
+/// colour of its urgency, through the palette.
+fn tiers() -> [(Urgency, &'static str, Color); 4] {
+    [
+        (Urgency::Red, "\u{F0362}", palette::color(Meaning::Failed)),
+        (Urgency::Yellow, "\u{F069A}", palette::color(Meaning::Review)),
+        (Urgency::Magenta, "\u{F173A}", palette::color(Meaning::Planning)),
+        (Urgency::White, "\u{F0366}", palette::color(Meaning::NotStarted)),
+    ]
+}
+
+/// A view whose Inbox holds the one item `kind` and `urgency`, drawn in 43 columns: its buffer and the row of its label.
+fn one_item(kind: Kind, urgency: Urgency) -> (Buffer, u16) {
+    let mut view = with_inbox(vec![item(1, kind, urgency, "the label", "2026-01-02T23:59:18.000Z")]);
+    let buf = draw(&mut view, 43, 24);
+    let y = find(&rows(&buf), "the label") as u16;
+    (buf, y)
+}
+
+#[test]
+fn an_item_row_is_the_muted_line_two_spaces_its_tier_glyph_in_its_colour_a_space_and_the_text() {
+    for (urgency, glyph, colour) in tiers() {
+        let (buf, y) = one_item(Kind::Unread, urgency);
+        assert_eq!((buf[(1, y)].symbol(), buf[(1, y)].fg), ("│", muted()), "{urgency:?}: the line");
+        assert_eq!((buf[(4, y)].symbol(), buf[(4, y)].fg), (glyph, colour), "{urgency:?}: the tier glyph in its colour");
+        assert_eq!((buf[(2, y)].symbol(), buf[(3, y)].symbol()), (" ", " "), "{urgency:?}: two spaces after the line");
+        assert_eq!(buf[(5, y)].symbol(), " ", "{urgency:?}");
+        assert_eq!(buf[(6, y)].symbol(), "t", "{urgency:?}: the text starts at column 6");
+        assert_ne!(buf[(6, y)].fg, muted(), "{urgency:?}: the text is not muted");
+        assert_eq!(buf[(40, y)].fg, muted(), "{urgency:?}: the age");
+        assert_eq!(rows(&buf)[y as usize], format!(" │  {glyph} the label{}42s", " ".repeat(41 - 5 - "the label".len() - 3)), "{urgency:?}");
+    }
+}
+
+#[test]
+fn the_glyph_is_its_urgencys_never_its_kinds() {
+    let kinds = [
+        Kind::Dialog,
+        Kind::Unread,
+        Kind::EngineError,
+        Kind::EngineDown,
+        Kind::JobStuck,
+        Kind::Question,
+        Kind::PlanReview,
+        Kind::PrReady,
+        Kind::PrFailing,
+        Kind::PrChanges,
+        Kind::ReviewRequested,
+    ];
+    for (urgency, glyph, colour) in tiers() {
+        for kind in kinds {
+            let (buf, y) = one_item(kind, urgency);
+            assert_eq!((buf[(4, y)].symbol(), buf[(4, y)].fg), (glyph, colour), "{kind:?} at {urgency:?}");
+        }
+    }
+}
+
+#[test]
+fn no_inbox_row_draws_a_state_dot() {
+    let items = inbox_items(4);
+    let mut view = with_inbox(items);
+    let got = rows(&draw(&mut view, 43, 24));
+    let section = &got[find(&got, "f-blocked: Worker question")..find(&got, "engine: store busy") + 1];
+    assert_eq!(section.len(), 3, "{got:#?}");
+    for row in section {
+        for frame in SPINNER {
+            assert!(!row.contains(frame), "{frame:?} is a state dot, reserved for the Context tree: {row:?}");
+        }
+    }
+    for (urgency, _, _) in tiers() {
+        let (buf, y) = one_item(Kind::Dialog, urgency);
+        let row = &rows(&buf)[y as usize];
+        assert!(SPINNER.iter().all(|frame| !row.contains(frame)), "{urgency:?}: {row:?}");
+    }
+}
+
+#[test]
+fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_tier_glyph() {
+    let mut items = inbox_items(1);
+    items[0].label = "x".repeat(60);
+    let mut view = with_inbox(items);
+    let got = rows(&draw(&mut view, 43, 24));
+    // 41 columns: `│`, two spaces, the glyph and a space (5), the label, a space, `42s` (3): 32 for the label
+    assert_eq!(got[find(&got, "xxx")], format!(" │  \u{F0362} {}… 42s", "x".repeat(31)));
+}

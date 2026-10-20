@@ -589,4 +589,31 @@ mod tests {
         let text: String = (4..).map(|x| buf[(x, 1)].symbol()).take_while(|s| *s != "\u{E0B4}").collect();
         section::check::grey_pill(&buf, 3, 1, &text);
     }
+
+    // ---- the Inbox section (hs-d483): the four tiers, red to white, each glyph in its colour with its meaning; red until it exists ----
+
+    #[test]
+    fn the_inbox_section_lists_the_four_tiers_red_to_white_each_glyph_in_its_colour_with_its_meaning() {
+        let all = sections();
+        let at = all.iter().position(|s| s.title == "Inbox").unwrap_or_else(|| panic!("no Inbox section: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>()));
+        let inbox = &all[at];
+        let cells: Vec<String> = inbox.rows.iter().flatten().map(text).collect();
+        assert_eq!(
+            cells,
+            [
+                "\u{F0362}", "a blocker only you can clear",
+                "\u{F069A}", "pull-request work",
+                "\u{F173A}", "a decision before the work runs",
+                "\u{F0366}", "an unread reply",
+            ]
+        );
+        let colours: Vec<_> = inbox.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
+        let c = |m| Some(palette::color(m));
+        assert_eq!(colours, [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::NotStarted)], "red, yellow, magenta, white");
+        let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
+        let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();
+        assert!(dots < at && at < pulse, "between the Session Dots and the Pulse: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>());
+        let shown: String = cells.concat();
+        assert!(palette::SPINNER.iter().all(|frame| !shown.contains(frame)), "the Inbox section draws no state dot: {shown:?}");
+    }
 }
