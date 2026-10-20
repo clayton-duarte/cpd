@@ -245,13 +245,18 @@ impl Fx {
         self.store().read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap()
     }
 
-    /// `(kind, data)` of the Plan's Events of `kind`, in order.
+    /// `(text, data)` of the Events of Plan `pay` of `kind`, in order.
     fn events(&self, kind: &str) -> Vec<(String, Value)> {
+        self.plan_events("pay", kind)
+    }
+
+    /// `(text, data)` of the Events of Plan `plan` of `kind`, in order.
+    fn plan_events(&self, plan: &str, kind: &str) -> Vec<(String, Value)> {
         self.store()
             .read(|c| {
-                let mut stmt = c.prepare("SELECT text, data FROM events WHERE plan = 'pay' AND kind = ?1 ORDER BY id")?;
+                let mut stmt = c.prepare("SELECT text, data FROM events WHERE plan = ?1 AND kind = ?2 ORDER BY id")?;
                 let rows = stmt
-                    .query_map([kind], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
+                    .query_map([plan, kind], |r| Ok((r.get::<_, String>(0)?, serde_json::from_str(&r.get::<_, String>(1)?).unwrap())))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
             })
@@ -1709,6 +1714,46 @@ fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
     assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
 }
 
+/// What PR `web` of Plan `ship` is told when its base PR `pay/repo` merged before `web` had a pull request (hs-d301): `by` is who
+/// unstacked it, `number` and `url` are the poll's, both null.
+fn web_unstacked(by: &str) -> (String, Value) {
+    let data = match by {
+        "poll" => json!({"pr": "web", "from": "cpd/pay", "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": "poll", "number": null, "url": null}),
+        _ => json!({"pr": "web", "from": "cpd/pay", "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": by}),
+    };
+    (
+        "PR web of Plan ship now targets main (was cpd/pay): its base PR pay/repo merged before its pull request existed. \
+         Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan ship."
+            .to_owned(),
+        data,
+    )
+}
+
+#[test]
+fn poll_unstacks_a_dispatch_pr_of_another_plan_in_the_transaction_that_records_its_base_prs_merge() {
+    let fx = fx("deploy");
+    stacked_pr(&fx);
+    assert_eq!(fx.web_base(), "cpd/pay");
+    // pay/repo merged (a pull request the search no longer lists); web, in Plan `ship`, has no pull request.
+    fx.search(&[]);
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!(fx.web_base(), "main");
+    assert_eq!(fx.plan_events("ship", "pr-base-changed"), vec![web_unstacked("poll")], "told to web's own Plan, once");
+    assert!(fx.events("pr-base-changed").is_empty(), "not to the merged PR's Plan");
+    assert_eq!(fx.plan_events("ship", "pr-feedback"), vec![]);
+    assert_eq!(fx.web_status(), "dispatch", "nothing else about web changed: no Gate, no start, no pull request");
+    assert!(fx.gh_calls().iter().all(|c| c[0] == "api"), "{:?}", fx.gh_calls());
+
+    // A second poll changes nothing.
+    let (txns, events) = (fx.txns(), fx.event_count());
+    fx.poll();
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events));
+}
+
 #[test]
 fn poll_does_not_tell_the_plan_of_failed_checks_when_the_policy_says_none() {
     let fx = fx("deploy");
@@ -2232,6 +2277,53 @@ fn poll_says_an_http_5xx_of_the_lookup_is_transient_and_other_lookup_failures_ar
     for script in ["echo 'gh: HTTP 401: Bad credentials' >&2; exit 1", r#"echo '{"errors":[{"message":"Bad credentials"}]}'; exit 1"#] {
         let details = poll_failure(&fx, &lookup_script(script), &[]);
         assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("lookup"), &Value::Null), "{script}: {details}");
+    }
+}
+
+/// `gh`'s own failure to parse a response that ended early (hs-d354, E5 at 2026-10-20 16:43:13Z): exit 1, this on stderr, nothing on stdout.
+const GH_CUT: &str = "echo 'unexpected end of JSON input' >&2; exit 1";
+
+#[test]
+fn poll_says_a_cut_response_of_the_search_is_transient() {
+    let fx = fx("deploy");
+    for script in [
+        GH_CUT,
+        // A body that stopped mid-way holds no complete JSON.
+        r#"echo '{"data":{"search":{"issueCount":1,"nodes":[{"repository":'; echo 'unexpected end of JSON input' >&2; exit 1"#,
+    ] {
+        let details = poll_failure(&fx, script, &[]);
+        assert_eq!(
+            (&details["transient"], &details["call"], &details["reason"], &details["exit"]),
+            (&json!(true), &json!("search"), &json!("unexpected end of JSON input"), &json!(1)),
+            "{script}: {details}"
+        );
+        assert!(details["stderr"].as_str().unwrap().contains("unexpected end of JSON input"), "{details}");
+    }
+}
+
+#[test]
+fn poll_says_a_cut_response_of_the_lookup_is_transient() {
+    let fx = fx("deploy");
+    let details = poll_failure(&fx, &lookup_script(GH_CUT), &[]);
+    assert_eq!(
+        (&details["transient"], &details["call"], &details["reason"]),
+        (&json!(true), &json!("lookup"), &json!("unexpected end of JSON input")),
+        "{details}"
+    );
+}
+
+#[test]
+fn poll_says_other_json_failures_of_gh_are_not_the_cut_response() {
+    let fx = fx("deploy");
+    for script in [
+        // A body that arrived whole and is wrong: other `gh` parse messages.
+        "echo \"invalid character '<' looking for beginning of value\" >&2; exit 1",
+        "echo 'json: cannot unmarshal string into Go value of type map[string]interface {}' >&2; exit 1",
+        // `gh` exit 0 with an empty body is the poll's own check, never transient, whatever stderr says.
+        "echo 'unexpected end of JSON input' >&2; exit 0",
+    ] {
+        let details = poll_failure(&fx, script, &[]);
+        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("search"), &Value::Null), "{script}: {details}");
     }
 }
 
@@ -3286,6 +3378,70 @@ fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_it_is_behind
     // The stacked Lead takes the new commits by merge, as `next` says, and opens.
     fx.git(&web.lead, &["merge", "-q", "--no-edit", "origin/cpd/pay"]);
     assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
+}
+
+impl Fx {
+    /// PR `repo` of Plan `pay` (`done` here) is merged and GitHub deleted its branch ("Automatically delete head branches"):
+    /// no Lead worktree, no local branch `cpd/pay`, none on origin.
+    fn delete_base_branch(&self) {
+        self.git(&self.repo, &["worktree", "remove", "--force", self.lead.to_str().unwrap()]);
+        self.git(&self.repo, &["branch", "-D", "cpd/pay"]);
+        self.git(&self.repo, &["push", "-q", "origin", "--delete", "cpd/pay"]);
+        assert_eq!(self.remote_branch("cpd/pay"), None);
+        assert_eq!(self.git(&self.repo, &["branch", "--list", "cpd/pay"]), "");
+    }
+
+    /// The `base` of PR `web` of Plan `ship`.
+    fn web_base(&self) -> String {
+        self.store().read(|c| Ok(c.query_row("SELECT base FROM prs WHERE plan = 'ship' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+    }
+
+    fn web_status(&self) -> String {
+        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'ship' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+    }
+}
+
+#[test]
+fn open_of_a_pr_stacked_on_a_merged_base_pr_whose_branch_is_gone_opens_on_the_base_prs_base() {
+    // pay/repo merged (#164 in the field) and its branch is deleted everywhere; web, stacked on it, never had a pull request.
+    let fx = fx("done");
+    stacked_pr(&fx);
+    fx.delete_base_branch();
+    assert_eq!(fx.web_base(), "cpd/pay");
+
+    let out = fx.open_web().ok();
+
+    assert_eq!((&out["phase"], &out["pr"]["status"]), (&json!("deploy"), &json!("open")));
+    let calls = fx.gh_calls();
+    let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).expect("gh pr create ran");
+    let at = |flag: &str| create.iter().position(|a| a == flag).map(|i| create[i + 1].as_str());
+    assert_eq!((at("--base"), at("--head")), (Some("main"), Some("cpd/ship/web")), "{create:?}");
+    assert_eq!(fx.web_base(), "main");
+    assert_eq!(fx.plan_events("ship", "pr-base-changed"), vec![web_unstacked("pr open")], "one Event, for web's own Plan");
+    assert_eq!(fx.remote_branch("cpd/ship/web"), Some(fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/ship/web"])));
+    assert_eq!(fx.remote_branch("cpd/pay"), None, "the deleted branch is not pushed again either");
+}
+
+#[test]
+fn open_unstacks_a_merged_base_pr_before_every_check_and_keeps_the_unstack_when_a_later_step_refuses() {
+    let fx = fx("done");
+    stacked_pr(&fx);
+    fx.delete_base_branch();
+    // Step 0: the Lead Branch has a closed pull request, which is a refusal after the unstack.
+    fx.gh("list.json", r#"[{"number": 813, "url": "https://github.com/acme/pay/pull/813", "state": "CLOSED"}]"#);
+
+    let run = fx.open_web();
+
+    assert_eq!(code(&run), ("pr_closed".into(), 3));
+    assert_eq!(fx.web_base(), "main", "the unstack is a fact about the base PR: written although the opening was refused");
+    assert_eq!(fx.plan_events("ship", "pr-base-changed"), vec![web_unstacked("pr open")]);
+    assert_eq!(fx.web_status(), "dispatch");
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
+
+    // Again: already unstacked, nothing more is written.
+    let (txns, events) = (fx.txns(), fx.event_count());
+    assert_eq!(code(&fx.open_web()), ("pr_closed".into(), 3));
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events));
 }
 
 // ------------------------------------------------------------ the test slots

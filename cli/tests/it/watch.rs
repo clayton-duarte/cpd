@@ -2363,6 +2363,75 @@ fn e5_counts_the_failing_window_from_pr_poll_transient_minutes() {
     }
 }
 
+/// `gh`'s own failure to parse a response that GitHub cut off mid-body (hs-d354, 2026-10-20 16:43:13Z): exit 1, this on stderr, an empty stdout.
+const GH_CUT: &str = "echo 'unexpected end of JSON input' >&2; exit 1";
+
+#[test]
+fn e5_a_cut_gh_response_raises_no_error_and_no_message_logs_a_line_and_the_next_poll_heals() {
+    let fx = fx("");
+    fx.add_manager();
+    let healed = fx.env.root().join("healed");
+    fx.env.fake_gh(&format!("if [ -e '{}' ]; then echo '{EMPTY_SEARCH}'; else {GH_CUT}; fi", healed.display()));
+
+    let engine = fx.start();
+    wait_until("three failing polls", || fx.env.calls("gh").len() >= 3);
+    wait_until("the engine's record of the failure", || failing(&fx).is_some());
+    assert_eq!(failing(&fx).unwrap()["call"], "search");
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+
+    // The next poll heals it: the record is gone, and nothing was ever raised.
+    fs::write(&healed, "").unwrap();
+    wait_until("the record to be deleted by a poll that succeeded", || failing(&fx).is_none());
+    fx.env.wait_whole_ticks(2);
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    let log = watch_log(&fx);
+    assert!(log.contains("pr poll: gh search failed transiently (unexpected end of JSON input), failing since "), "{log}");
+    assert!(log.contains("): retrying at the next poll"), "{log}");
+}
+
+#[test]
+fn e5_a_cut_gh_response_is_an_error_only_after_the_window_and_then_once() {
+    // Nine minutes of failing: still nothing.
+    let fx = fx("");
+    fx.add_manager();
+    fx.env.fake_gh(GH_CUT);
+    fail_since(&fx, "search", 9);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    assert_eq!(failing(&fx).unwrap()["call"], "search");
+
+    // Eleven: one error Event and one message to the Manager, not one per tick.
+    let fx = fx_with_manager_failing(11);
+    fx.env.fake_gh(GH_CUT);
+    let since = failing(&fx).unwrap()["since"].clone();
+    let engine = fx.start();
+    wait_until("the error", || fx.count("error") >= 1);
+    fx.env.wait_whole_ticks(4);
+    engine.stop();
+
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let data = &errors[0].3;
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
+    let details = &data["details"];
+    assert_eq!(
+        (&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"], &details["transient"]),
+        (&json!("search"), &since, &json!(11), &json!("unexpected end of JSON input"), &json!(1), &json!(true))
+    );
+    assert!(details["stderr"].as_str().unwrap().contains("unexpected end of JSON input"), "{details}");
+    let sent = messages(&fx);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].contains("pr poll: gh search has failed for 11 minutes (unexpected end of JSON input): unexpected end of JSON input"),
+        "{}",
+        sent[0]
+    );
+    assert_eq!(failing(&fx).unwrap()["since"], since);
+}
+
 #[test]
 fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record() {
     for (name, script, line) in [
