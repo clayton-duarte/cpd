@@ -2069,7 +2069,7 @@ Idempotent: read-only; the same `--since` replays the same lines.
 cpd watch [--ensure | --check]
 ```
 
-(and the internal `cpd watch --restart-tmux` and `cpd watch --ensure --wait`, below)
+(and the internal `cpd watch --restart-tmux`, `cpd watch --ensure --wait` and `cpd watch --mark-restart`, below)
 
 The engine, one per machine (§3.7, §6.6, D5).
 
@@ -2109,6 +2109,17 @@ Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it p
 ```
 
 `"server"` is `"running"` or `"none"`. `scripts/install-cpd.sh` runs it with the new binary before it stops anything (contract §3.7).
+**`--mark-restart` (internal; hs-d471).** What `scripts/install-cpd.sh` runs right before it retires the old engine (contract §3.7 "The install's engine order", step 3); not an interface of the User or an agent. It writes `run/install-restart.json`, `{"by": "install-cpd.sh", "at": <now>, "engine_pid": <pid>}` (`pid` of the latest `watch-started` Event, the engine about to be retired), by rename of a temporary file, replacing any earlier marker. No Event, no row, no lock, no tmux call. It does not need the engine to run.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the home has a `watch-started` Event | `watch_not_started` | 3 |
+
+```json
+{"ok": true, "marked": true, "engine_pid": 4242}
+```
+
+Idempotent: a second one rewrites the same marker with a new `at`. The next engine consumes the marker at its start: a restart back within 10 s (`PLANNED_RESTART_QUIET_SECS`) whose marker names the previous engine's pid is logged only (`watch-started`'s `text` and `run/watch.log`) and sends no `session-message` to the Managers; past 10 s, or with no valid marker, they hear it as before (contract §3.7 "A planned restart", hs-d471). The tests are listed there.
 
 **`--ensure --wait` (internal; hs-d328).** What the tmux server's hooks run when the engine's pane died or its window is gone (contract §6.1, §6.6); not an interface of the User or an agent. As `--ensure`, with these differences:
 

@@ -58,6 +58,9 @@ pub struct Args {
     /// Restart the tmux server onto the installed tmux (internal: the engine starts it, contract §6.1)
     #[arg(long, hide = true, conflicts_with = "ensure")]
     restart_tmux: bool,
+    /// Write run/install-restart.json for the engine about to be retired (internal: scripts/install-cpd.sh, contract §3.7 "A planned restart")
+    #[arg(long, hide = true, conflicts_with_all = ["ensure", "restart_tmux"])]
+    mark_restart: bool,
 }
 
 /// `cpd watch [--ensure]`.
@@ -68,6 +71,8 @@ pub fn run(args: Args) -> Result<Output, CpdError> {
         ensure::ensure(args.wait)
     } else if args.restart_tmux {
         restart::detached()
+    } else if args.mark_restart {
+        engine::mark_restart()
     } else {
         engine::run()
     }
