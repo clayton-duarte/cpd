@@ -637,4 +637,74 @@ mod tests {
         }
         assert!(!d.hits.iter().any(|h| h.contains(Position::new(0, 6))), "the cue row is no hit");
     }
+
+    // ---- section look v3 (commands.md §13.2 `widgets`, §17; hs-d348, hs-d349): red until the column draws them ----
+
+    /// The pill's caps, U+E0B6 and U+E0B4.
+    const CAPS: (&str, &str) = ("\u{E0B6}", "\u{E0B4}");
+
+    fn all_rows(buf: &Buffer) -> Vec<String> {
+        (0..buf.area.height).map(|y| row(buf, y)).collect()
+    }
+
+    /// The rows that are a section title: they start with the pill's `╭─`.
+    fn titles(buf: &Buffer) -> Vec<(u16, String)> {
+        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with('╭')).map(|(y, r)| (y as u16, r)).collect()
+    }
+
+    #[test]
+    fn the_prs_title_is_the_pill_with_the_count_one_empty_row_above_it() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let (open, close) = CAPS;
+        let (y, title) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
+        assert_eq!(title, format!("╭─{open}PRs{close}{}5", "─".repeat(30 - 2 - 5 - 1)));
+        assert_eq!(title.chars().count(), 30, "full width, no margin");
+        assert_eq!(row(&buf, y - 1), "", "one empty row above the title");
+    }
+
+    #[test]
+    fn the_prs_pill_text_is_inverted_and_its_lines_are_muted() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let muted = palette::color(palette::Meaning::Nothing);
+        let (y, _) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
+        let at = |x: u16| &buf[(x, y)];
+        assert_eq!((at(0).symbol(), at(0).fg), ("╭", muted), "the corner");
+        assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "its line");
+        for x in 3..6 {
+            assert!(at(x).modifier.contains(Modifier::REVERSED), "the title text is inverted: column {x} {:?}", at(x));
+        }
+        assert_eq!((at(10).symbol(), at(10).fg), ("─", muted), "the line to the edge");
+    }
+
+    #[test]
+    fn the_git_and_jira_titles_are_the_same_pill_without_a_count() {
+        let (buf, _) = scrolled(30, height(5), &many(2), "", 0);
+        let (open, close) = CAPS;
+        let got: Vec<String> = titles(&buf).into_iter().map(|(_, t)| t).collect();
+        let bare = |t: &str| format!("╭─{open}{t}{close}{}", "─".repeat(30 - 2 - t.chars().count() - 2));
+        assert_eq!(got, [format!("╭─{open}PRs{close}{}2", "─".repeat(30 - 2 - 5 - 1)), bare("git"), bare("Jira")]);
+    }
+
+    /// The cue rows of the section, top to bottom.
+    fn cue_rows(buf: &Buffer) -> Vec<String> {
+        all_rows(buf).into_iter().filter(|r| r.contains('▲') || r.contains('▼')).collect()
+    }
+
+    #[test]
+    fn the_cues_are_right_aligned_at_the_end_of_their_rows() {
+        let (buf, _) = scrolled(30, height(7), &many(6), "", 2);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▲ 2 more"), format!("{:>30}", "▼ 2 more")]);
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▼ 3 more")]);
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 99);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▲ 3 more")]);
+    }
+
+    #[test]
+    fn a_right_aligned_cue_is_dim_and_leaves_the_left_of_its_row_blank() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let y = all_rows(&buf).iter().position(|r| r.contains('▼')).expect("a ▼ cue row") as u16;
+        assert!((0..22).all(|x| buf[(x, y)].symbol() == " "), "nothing on the left of the cue");
+        assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "`▼ 3 more` is dim and ends at the last column");
+    }
 }

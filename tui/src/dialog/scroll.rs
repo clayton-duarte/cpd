@@ -10,6 +10,7 @@ pub(crate) const WHEEL_ROWS: usize = 3;
 
 /// Which way a scroll cue points: `▲ <n> more` (rows hidden above) or `▼ <n> more` (rows hidden below).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // the shared scroll cue's direction: no view builds one until they move onto `cue`
 pub(crate) enum Cue {
     Above,
     Below,
