@@ -232,8 +232,10 @@ pub fn backdate(path: &Path, by: Duration) {
 /// enough for a loaded machine. A wait that needs longer says so with [`wait_until_for`].
 pub const WAIT: Duration = Duration::from_secs(30);
 
-/// How often a wait looks again.
-const POLL: Duration = Duration::from_millis(100);
+/// How often a wait looks again: 10 ms, so a wait ends at most a few ms after its signal (half a poll on average),
+/// against a look that costs about 1 ms (a read of the store on a read-only connection, a file, `/proc`) up to a few
+/// ms (a `tmux capture-pane`).
+const POLL: Duration = Duration::from_millis(10);
 
 /// Waits until `ready` is true, at most [`WAIT`]; panics `timed out waiting for <what>`.
 pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
