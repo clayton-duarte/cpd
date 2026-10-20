@@ -1062,7 +1062,7 @@ fn the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command() {
 // of cpd's `-F` formats as `_` and every call failed `tmux_failed: tmux list-panes printed unexpected output`.
 
 /// `cpd <args>` for a caller whose locale is `locale`: its exit code and its stdout and stderr.
-fn cpd_as(env: &TestEnv, locale: crate::host::Locale, args: &[&str]) -> (i32, String, String) {
+fn cpd_as(env: &TestEnv, locale: crate::common::Locale, args: &[&str]) -> (i32, String, String) {
     let mut cmd = env.command(CPD);
     locale.apply(&mut cmd).args(args);
     let out = common::output(&mut cmd).unwrap();
@@ -1072,7 +1072,7 @@ fn cpd_as(env: &TestEnv, locale: crate::host::Locale, args: &[&str]) -> (i32, St
 #[test]
 fn tui_builds_and_respawns_the_cockpit_for_a_caller_without_a_utf8_locale() {
     let mut failures = Vec::new();
-    for locale in crate::host::LOCALES {
+    for locale in crate::common::LOCALES {
         let env = env();
         let (exit, stdout, stderr) = cpd_as(&env, locale, &["tui"]);
         if exit != 0 {
@@ -1092,7 +1092,7 @@ fn tui_builds_and_respawns_the_cockpit_for_a_caller_without_a_utf8_locale() {
 #[test]
 fn tui_respawn_restarts_the_views_of_a_cockpit_for_a_caller_without_a_utf8_locale() {
     let mut failures = Vec::new();
-    for locale in crate::host::LOCALES {
+    for locale in crate::common::LOCALES {
         let env = env();
         env.cpd(&["tui"]).ok();
         let before: Vec<Option<u32>> = main_panes(&env).iter().map(|p| p.pid).collect();

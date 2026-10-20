@@ -953,3 +953,54 @@ fn copy_tree(from: &Path, to: &Path) {
         }
     }
 }
+
+// ---- A caller without a UTF-8 locale (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client"): shared by the
+// session, engine, tooling and tui binaries.
+
+/// The caller's locale of a `cpd` or tmux call: what the incident's launchd agent had (nothing), and the cases around it.
+#[derive(Clone, Copy, Debug)]
+pub enum Locale {
+    /// No `LANG`, no `LANGUAGE`, no `LC_*`: the launchd agent of the incident, which sets only `PATH`.
+    Unset,
+    /// `LANG` set and empty.
+    EmptyLang,
+    /// `LANG=C`.
+    LangC,
+    /// `LC_ALL=C`, which tmux reads before `LANG`: a `LANG` of cpd's could not undo it.
+    LcAllC,
+}
+
+pub const LOCALES: [Locale; 4] = [Locale::Unset, Locale::EmptyLang, Locale::LangC, Locale::LcAllC];
+
+impl Locale {
+    /// `cmd` with every locale variable of this process removed, then this locale's own.
+    pub fn apply(self, cmd: &mut std::process::Command) -> &mut std::process::Command {
+        for (key, _) in std::env::vars_os() {
+            if key == "LANG" || key == "LANGUAGE" || key.to_string_lossy().starts_with("LC_") {
+                cmd.env_remove(&key);
+            }
+        }
+        match self {
+            Locale::Unset => cmd,
+            Locale::EmptyLang => cmd.env("LANG", ""),
+            Locale::LangC => cmd.env("LANG", "C"),
+            Locale::LcAllC => cmd.env("LC_ALL", "C"),
+        }
+    }
+
+    /// The same as `env` words for `env -i`: what a wrapper script passes to the real tmux.
+    pub fn env_words(self) -> &'static str {
+        match self {
+            Locale::Unset => "",
+            Locale::EmptyLang => "LANG=",
+            Locale::LangC => "LANG=C",
+            Locale::LcAllC => "LC_ALL=C",
+        }
+    }
+}
+
+/// The first `tmux` of the real `PATH`.
+pub fn real_tmux() -> std::path::PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path).map(|dir| dir.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH")
+}

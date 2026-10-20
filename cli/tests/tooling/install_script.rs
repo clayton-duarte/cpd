@@ -371,7 +371,7 @@ fn lines_with<'a>(log: &'a [String], word: &str) -> Vec<&'a String> {
 
 /// A fake `tmux` that logs its argv, runs `before` (shell code: it can fail a call) and then the real tmux.
 fn logging_tmux(env: &TestEnv, before: &str) {
-    env.fake("tmux", &format!("echo \"tmux $*\" >> '{}'\n{before}\nexec '{}' \"$@\"", order_log(env).display(), crate::host::real_tmux().display()));
+    env.fake("tmux", &format!("echo \"tmux $*\" >> '{}'\n{before}\nexec '{}' \"$@\"", order_log(env).display(), crate::common::real_tmux().display()));
 }
 
 /// The new `cpd`: logs its argv; `config` answers the real tmux server's names; `watch --check`, `watch --ensure` and `tui --respawn`
@@ -547,7 +547,7 @@ fn a_good_install_verifies_then_respawns_the_views_then_retires_the_old_engine_a
 #[test]
 fn the_install_restarts_the_engine_of_a_real_cockpit_for_a_caller_without_a_utf8_locale() {
     let mut failures = Vec::new();
-    for locale in [crate::host::Locale::Unset, crate::host::Locale::LangC, crate::host::Locale::LcAllC] {
+    for locale in [crate::common::Locale::Unset, crate::common::Locale::LangC, crate::common::Locale::LcAllC] {
         let env = TestEnv::new();
         env.write_config(&format!("version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()));
         env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);

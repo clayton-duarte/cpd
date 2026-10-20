@@ -3202,7 +3202,7 @@ fn install_over_a_real_adapter_directory_moves_it_aside_and_links_in_one_process
 #[test]
 fn ensure_starts_the_engine_for_a_caller_without_a_utf8_locale() {
     let mut failures = Vec::new();
-    for locale in crate::host::LOCALES {
+    for locale in crate::common::LOCALES {
         let fx = fx("");
         fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
         let mut cmd = fx.env.command(CPD);
