@@ -97,6 +97,11 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "pane-border-lines", "heavy"],
     &["set", "-g", "pane-border-format", BORDER_FORMAT],
     &["set", "-g", "pane-active-border-style", "fg=blue"],
+    // tmux 3.8 greys popups and menus by default (bg=themedarkgrey); the cockpit's dialogs keep the terminal's own
+    // background (User, hs-d353). `-q`: an older tmux does not know them.
+    &["set", "-gq", "popup-style", "default"],
+    &["set", "-gq", "popup-border-style", "default"],
+    &["set", "-gq", "menu-style", "default"],
     &["set", "-g", "remain-on-exit", "on"],
     &["set", "-g", "set-titles", "on"],
     &["set", "-g", "set-titles-string", SET_TITLES_STRING],
