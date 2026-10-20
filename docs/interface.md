@@ -54,9 +54,9 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr edit` | Change a waiting PR before the lock (§9.5) | Lead | |
 | `cpd pr cancel` | Remove a PR from the Plan before the lock (§9.6) | Lead | |
 | `cpd pr start` | Start a waiting PR whose needs are merged, after a failed start (§9.7) | Lead | |
-| `cpd pr open` | Push the Lead Branch and open the PR (§9.1) | Lead | |
+| `cpd pr open` | Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1) | Lead | |
 | `cpd pr poll` | Poll every open pull request of the User (§9.2) | Lead | |
-| `cpd pr rebase` | Rebase the Lead Branch onto the base and push (§9.3) | Lead | |
+| `cpd pr rebase` | Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3) | Lead | |
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
@@ -75,6 +75,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session send` | Send a message to a Lead (§10.13) | Lead, Manager | |
 | `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
 | `cpd session state` | Report a Session's agent state (pi adapter) (§10.6) | internal | |
+| `cpd session retitle` | Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14) | internal | |
 | `cpd session run` | The program in every Lead pane (internal; owns its terminal) (§10.8) | internal | |
 | `cpd events` | Events (commands.md §11) | | |
 | `cpd events list` | List Events (§11.1) | Manager | |

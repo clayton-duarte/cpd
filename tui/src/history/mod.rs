@@ -14,12 +14,11 @@
 
 mod view;
 
-use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
-use ratatui::crossterm::execute;
+use ratatui::crossterm::event::{self, Event};
 use ratatui::DefaultTerminal;
 use rusqlite::OptionalExtension;
 
-use super::{chat, not_a_terminal, on_a_terminal};
+use super::{Capture, chat, run_view};
 use crate::worker::render::render;
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
@@ -50,19 +49,7 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
     // `session_not_found` and `file_unreadable` refuse before anything is drawn.
     let history = load(&mut store, &args.id)?;
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view history"));
-    }
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let _ = execute!(std::io::stdout(), EnableMouseCapture);
-    let result = event_loop(&mut terminal, history);
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    result.map_err(|e| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view history failed: {e}."))
-            .with("command", "tui view history")
-    })?;
+    run_view("history", Capture::Mouse, || Ok(history), |terminal, history| Ok(event_loop(terminal, history)?))?;
     // `q` or Esc: the pane shows the placeholder text, as the chat slot's placeholder does.
     chat::run()
 }

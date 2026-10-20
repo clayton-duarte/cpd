@@ -47,6 +47,10 @@ const WEB_URL: &str = "https://github.com/acme/web/pull/813";
 
 const TITLE: &str = "Add the payment webhook";
 
+/// The stored title of PR `repo`, and of PR `web` (hs-d285): neither is the Plan's title, `Pay the bills`.
+const REPO_TITLE: &str = "Charge the card at checkout";
+const WEB_PR_TITLE: &str = "Show the receipt";
+
 const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
 fn plan() -> PlanId {
@@ -142,8 +146,8 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, cpd_txn(), 't', {locked}{values});",
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, '{REPO_TITLE}', cpd_txn(), 't', {locked}{values});",
         repo = fx.repo.display(),
     );
     fx.store()
@@ -336,8 +340,8 @@ impl Fx {
             .write("fixture", |tx| {
                 tx.execute_batch(&format!(
                     "{row}
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{open_columns})
-                       VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', {worktree}, cpd_txn(), 't', {started}{open_values});
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at{open_columns})
+                       VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', cpd_txn(), 't', {started}{open_values});
                      {needs}",
                     repo = repo.display(),
                     row = if matches!(state, Web::Open) {
@@ -444,7 +448,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     // gh: look for an existing PR, then create it with the Jobs table as its body.
     let calls = fx.gh_calls();
     assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"]);
-    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", "Pay the bills"]);
+    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE]);
     let body = &calls[1][9];
     assert_eq!(calls[1][8], "--body");
     assert!(body.contains("| api | The \\| API | merged | `"), "{body}");
@@ -456,7 +460,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert!(row.4.is_some(), "prs.pull_request is set");
     assert_eq!(
         fx.shown_pull_request(),
-        json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "Pay the bills", "draft": false, "state": "open",
+        json!({"repo": "acme/pay", "number": 812, "url": URL, "title": REPO_TITLE, "draft": false, "state": "open",
                "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
                "created_at": "opened", "merged_at": null})
     );
@@ -467,6 +471,36 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1, json!({"from": "dispatch", "to": "deploy", "prs": [{"key": "repo", "number": 812, "url": URL}]}));
     assert!(events[0].0.contains("cpd pr poll --plan pay"), "{}", events[0].0);
+}
+
+#[test]
+fn open_titles_the_pull_request_and_the_body_with_the_stored_title() {
+    let fx = fx("dispatch");
+    fx.pr("open").ok();
+
+    let create = &fx.gh_calls()[1];
+    assert_eq!(create[1], "create");
+    assert_eq!(create[7], REPO_TITLE, "not the Plan's title");
+    assert!(create[9].starts_with(&format!("# {REPO_TITLE}\n")), "{}", create[9]);
+}
+
+#[test]
+fn open_refuses_a_pr_without_a_title_before_the_gate_and_any_gh_call() {
+    let fx = fx("dispatch");
+    fx.hooks("pre-merge = \"echo gate ran\"\n");
+    fx.store().write("fixture", |tx| Ok(tx.execute("UPDATE prs SET title = NULL", [])?)).unwrap();
+    let txns = fx.txns();
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run), ("pr_title_required".into(), 3));
+    let error = run.error();
+    assert_eq!(error["details"], json!({"plan": "pay", "pr": "repo"}));
+    assert!(error["message"].as_str().unwrap().contains("cpd pr edit repo --title \"<text>\""), "{error}");
+    assert!(fx.gh_calls().is_empty(), "no gh call");
+    assert!(fs::read_to_string(fx.home.plan_dir(&plan()).join("logs/pr-repo.pre-merge.log")).is_err(), "the Gate did not run");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "nothing pushed");
+    assert_eq!((fx.plan_row().0, fx.txns()), ("dispatch".to_owned(), txns));
 }
 
 #[test]
@@ -495,9 +529,9 @@ fn open_keeps_the_row_the_poll_stored_first() {
     assert_eq!(rows, 1);
 }
 
-/// `pay` as GitHub reports it, created at `created`.
+/// `pay` as GitHub reports it (with the title `pr open` gave it), created at `created`.
 fn pay_created(state: &str, created: &str) -> String {
-    pay(state, None, None).replace(r#""createdAt":"opened""#, &format!(r#""createdAt":"{created}""#))
+    pay(state, None, None).replace("Pay the bills", REPO_TITLE).replace(r#""createdAt":"opened""#, &format!(r#""createdAt":"{created}""#))
 }
 
 #[test]
@@ -924,6 +958,74 @@ fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
     assert_eq!(out["rebased"], true);
     assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()), "the rebased branch was pushed");
+}
+
+/// The Lead Branch of `fx` is behind its base: `main` moved on `origin` after the Lead Branch was cut.
+fn behind(fx: &Fx) -> String {
+    fx.advance_base("base.txt", "base\n")
+}
+
+/// The refusal `base_behind`: its `details`, nothing pushed, no `gh pr create`, no Gate, nothing written.
+fn assert_base_behind(fx: &Fx, run: &Run, base_sha: &str) {
+    assert_eq!(code(run), ("base_behind".into(), 3));
+    let details = &run.error()["details"];
+    assert_eq!(
+        *details,
+        json!({"pr": "repo", "base": "main", "base_sha": base_sha, "sha": fx.lead_sha(),
+               "next": [format!("git -C {} merge --no-edit origin/main", fx.lead.display()), "cpd pr open --pr repo"]})
+    );
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
+    assert_eq!(fx.plan_row().0, "dispatch");
+    assert!(fx.events("pr-opened").is_empty());
+}
+
+#[test]
+fn open_refuses_a_lead_branch_behind_its_base_then_opens_after_the_merge() {
+    let fx = fx("dispatch");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}\"\n", marker.display()));
+    let base = behind(&fx);
+
+    let run = fx.pr("open");
+
+    assert_base_behind(&fx, &run, &base);
+    assert!(!marker.exists(), "the Gate ran before the base check refused");
+
+    // The Lead runs `next`: the merge in the Lead worktree, then `pr open` again.
+    fx.git(&fx.lead, &["merge", "-q", "--no-edit", "origin/main"]);
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["phase"], "deploy");
+    assert!(marker.exists(), "the Gate ran on the merged head");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
+    assert_eq!(fx.git(&fx.repo, &["merge-base", "--is-ancestor", &base, &fx.lead_sha()]), "");
+}
+
+#[test]
+fn open_under_gate_ci_applies_the_same_base_check_and_runs_no_gate() {
+    let (fx, marker) = ci_fx_with_failing_hook("dispatch");
+    let base = behind(&fx);
+
+    let run = fx.pr("open");
+
+    assert_base_behind(&fx, &run, &base);
+    assert!(!marker.exists());
+    fx.git(&fx.lead, &["merge", "-q", "--no-edit", "origin/main"]);
+    assert_eq!(fx.pr("open").ok()["phase"], "deploy");
+    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+}
+
+#[test]
+fn open_never_creates_a_draft_pull_request() {
+    let fx = fx("dispatch");
+
+    fx.pr("open").ok();
+
+    let calls = fx.gh_calls();
+    let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).expect("gh pr create ran");
+    assert!(!create.iter().any(|a| a.contains("draft")), "{create:?}");
+    assert!(calls.iter().all(|c| !c.iter().any(|a| a.contains("draft"))), "{calls:?}");
 }
 
 #[test]
@@ -2054,27 +2156,245 @@ fn rebase_with_the_base_unmoved_only_gates_and_pushes() {
     assert_eq!(fx.pr("rebase").ok()["rebased"], false);
 }
 
+impl Fx {
+    /// The Lead Branch commits `README.md` as `lead` and pushes; the base then commits it as `base`.
+    /// Returns the Lead Branch's tip.
+    fn conflicting(&self, lead: &[&str]) -> String {
+        for text in lead {
+            fs::write(self.lead.join("README.md"), format!("{text}\n")).unwrap();
+            self.git(&self.lead, &["add", "-A"]);
+            self.git(&self.lead, &["commit", "-q", "-m", &format!("lead {text}")]);
+        }
+        self.git(&self.lead, &["push", "-q", "origin", "cpd/pay"]);
+        self.advance_base("README.md", "base\n");
+        self.lead_sha()
+    }
+
+    /// `cpd pr rebase --plan pay <flag>`.
+    fn rebase(&self, flag: &str) -> Run {
+        self.env.cpd(&["pr", "rebase", "--plan", "pay", flag])
+    }
+
+    fn rebasing(&self) -> bool {
+        ["rebase-merge", "rebase-apply"].iter().any(|name| {
+            let path = self.git(&self.lead, &["rev-parse", "--path-format=absolute", "--git-path", name]);
+            Path::new(&path).exists()
+        })
+    }
+
+    /// Resolves `README.md` in the Lead worktree and stages it, as the Lead does.
+    fn resolve(&self, text: &str) {
+        fs::write(self.lead.join("README.md"), format!("{text}\n")).unwrap();
+        self.git(&self.lead, &["add", "README.md"]);
+    }
+}
+
 #[test]
-fn rebase_refuses_a_conflict_and_changes_nothing() {
+fn rebase_stops_at_a_conflict_in_the_lead_worktree_and_pushes_nothing() {
     let fx = fx("deploy");
-    fs::write(fx.lead.join("README.md"), "lead\n").unwrap();
-    fx.git(&fx.lead, &["add", "-A"]);
-    fx.git(&fx.lead, &["commit", "-q", "-m", "lead readme"]);
-    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
-    fx.advance_base("README.md", "base\n");
-    let before = fx.lead_sha();
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    let before = fx.conflicting(&["lead"]);
 
     let run = fx.pr("rebase");
 
     assert_eq!(code(&run), ("rebase_conflict".into(), 3));
-    assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
+    let details = &run.error()["details"];
+    assert_eq!(details["files"], json!(["README.md"]));
+    assert_eq!(details["worktree"], fx.lead.to_str().unwrap());
+    assert_eq!(details["next"], "cpd pr rebase --pr repo --plan pay --continue");
+    assert_eq!(details["abort"], "cpd pr rebase --pr repo --plan pay --abort");
+    // The rebase waits in the Lead worktree, with markers; the ref and the remote are as they were.
+    assert!(fx.rebasing());
+    assert!(fs::read_to_string(fx.lead.join("README.md")).unwrap().contains("<<<<<<<"));
     assert_eq!(fx.lead_sha(), before);
-    assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(before));
-    let rebasing = fx.git(&fx.lead, &["rev-parse", "--git-path", "rebase-merge"]);
-    assert!(!fx.lead.join(&rebasing).exists() && !Path::new(&rebasing).exists());
+    // No Gate, no `gh`, no gate worktree, no Event.
+    assert_eq!(fx.gate_log(), "");
     assert!(fx.gh_calls().is_empty());
     fx.assert_no_gate_worktree();
+    assert!(fx.events("error").is_empty());
+
+    // A second plain run does not start another one.
+    let again = fx.pr("rebase");
+    assert_eq!(code(&again), ("rebase_in_progress".into(), 3));
+    assert_eq!(again.error()["details"]["next"], details["next"]);
+    assert_eq!(again.error()["details"]["abort"], details["abort"]);
+    assert!(fx.rebasing());
+}
+
+#[test]
+fn rebase_continue_gates_and_pushes_the_resolved_rebase_with_the_lease() {
+    let fx = fx("deploy");
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    let before = fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+    fx.resolve("resolved");
+
+    let out = fx.rebase("--continue").ok();
+
+    let new = fx.lead_sha();
+    assert_ne!(new, before);
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "rebased": true, "old": before, "new": new, "pushed": true}));
+    assert!(!fx.rebasing());
+    assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
+    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "resolved\n");
+    assert_eq!(fx.git(&fx.lead, &["rev-parse", "HEAD"]), new);
+    // The Gate ran on the rebased commit, then the push.
+    assert_eq!(fx.gate_log().trim(), new);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(new));
+    fx.assert_no_gate_worktree();
+    // No Event, and nothing left to continue.
+    assert!(fx.events("error").is_empty());
+    assert_eq!(code(&fx.rebase("--continue")), ("no_rebase_in_progress".into(), 3));
+}
+
+#[test]
+fn rebase_continue_stops_again_at_a_second_conflicting_commit() {
+    let fx = fx("deploy");
+    let before = fx.conflicting(&["lead 1", "lead 2"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+    fx.resolve("resolved 1");
+
+    let run = fx.rebase("--continue");
+
+    assert_eq!(code(&run), ("rebase_conflict".into(), 3));
+    assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
+    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --pr repo --plan pay --continue");
+    assert!(fx.rebasing());
+    assert_eq!(fx.lead_sha(), before);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(before.clone()));
+
+    fx.resolve("resolved 2");
+    let out = fx.rebase("--continue").ok();
+    assert_eq!((out["rebased"].as_bool(), out["old"].as_str()), (Some(true), Some(before.as_str())));
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
+    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "resolved 2\n");
+    assert!(!fx.rebasing());
+}
+
+#[test]
+fn rebase_continue_refuses_while_conflict_markers_remain() {
+    let fx = fx("deploy");
+    let before = fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+
+    // Unmerged.
+    let run = fx.rebase("--continue");
+    assert_eq!(code(&run), ("rebase_conflict".into(), 3));
+    assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
+    assert_eq!(run.error()["details"]["next"], "cpd pr rebase --pr repo --plan pay --continue");
+
+    // Staged with the markers in it.
+    fx.git(&fx.lead, &["add", "README.md"]);
+    let run = fx.rebase("--continue");
+    assert_eq!(code(&run), ("rebase_conflict".into(), 3));
+    assert_eq!(run.error()["details"]["files"], json!(["README.md"]));
+
+    assert!(fx.rebasing());
+    assert_eq!(fx.lead_sha(), before);
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(before));
+    assert_eq!(fx.gate_log(), "");
+}
+
+#[test]
+fn rebase_continue_and_abort_refuse_when_no_rebase_is_in_progress() {
+    let fx = fx("deploy");
+    let before = fx.lead_sha();
+
+    for flag in ["--continue", "--abort"] {
+        let run = fx.rebase(flag);
+        assert_eq!(code(&run), ("no_rebase_in_progress".into(), 3), "{flag}");
+    }
+    assert_eq!(fx.lead_sha(), before);
+    assert!(fx.gh_calls().is_empty());
+    assert_eq!(fx.gate_log(), "");
+}
+
+#[test]
+fn rebase_continue_and_abort_together_are_a_usage_error() {
+    let fx = fx("deploy");
+    let run = fx.env.cpd(&["pr", "rebase", "--plan", "pay", "--continue", "--abort"]);
+    assert_eq!(code(&run), ("usage".into(), 2));
+}
+
+#[test]
+fn rebase_abort_restores_the_branch() {
+    let fx = fx("deploy");
+    fx.hooks("pre-merge = \"git rev-parse HEAD\"\n");
+    let before = fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+
+    let out = fx.rebase("--abort").ok();
+
+    assert_eq!(out, json!({"ok": true, "plan": "pay", "pr": "repo", "aborted": true, "tip": before}));
+    assert!(!fx.rebasing());
+    assert_eq!(fx.lead_sha(), before);
+    assert_eq!(fx.git(&fx.lead, &["rev-parse", "HEAD"]), before);
+    assert_eq!(fx.git(&fx.lead, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay");
+    assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
+    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "lead\n");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(before));
+    assert_eq!(fx.gate_log(), "");
+    assert!(fx.events("error").is_empty());
+    // Idempotent: no.
+    assert_eq!(code(&fx.rebase("--abort")), ("no_rebase_in_progress".into(), 3));
+}
+
+#[test]
+fn rebase_continue_does_not_overwrite_a_push_it_has_not_seen() {
+    let fx = fx("deploy");
+    fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+    // Someone else pushes to the PR's branch during the stop.
+    let clone = fx.env.root().join("repos/clone");
+    fx.git(fx.env.root(), &["clone", "-q", fx.origin.to_str().unwrap(), clone.to_str().unwrap()]);
+    fx.git(&clone, &["checkout", "-q", "cpd/pay"]);
+    fs::write(clone.join("theirs.txt"), "theirs\n").unwrap();
+    fx.git(&clone, &["add", "-A"]);
+    fx.git(&clone, &["commit", "-q", "-m", "theirs"]);
+    fx.git(&clone, &["push", "-q", "origin", "cpd/pay"]);
+    let theirs = fx.remote_branch("cpd/pay");
+    fx.resolve("resolved");
+
+    let run = fx.rebase("--continue");
+
+    assert_eq!(code(&run), ("git_failed".into(), 1));
+    assert_eq!(fx.remote_branch("cpd/pay"), theirs);
+    fx.assert_no_gate_worktree();
+}
+
+#[test]
+fn rebase_continue_refuses_when_the_lead_branch_moved_during_the_stop() {
+    let fx = fx("deploy");
+    let before = fx.conflicting(&["lead"]);
+    assert_eq!(code(&fx.pr("rebase")).0, "rebase_conflict");
+    // A merge lands during the stop: the ref moves under the rebase.
+    let moved = fx.git(&fx.repo, &["rev-parse", &format!("{before}^")]);
+    fx.git(&fx.repo, &["update-ref", "refs/heads/cpd/pay", &moved]);
+    fx.resolve("resolved");
+
+    let run = fx.rebase("--continue");
+
+    assert_eq!(code(&run), ("cas_lost".into(), 3));
+    assert_eq!(run.error()["details"]["reason"], "lead_branch_moved");
+    assert_eq!(run.error()["details"]["tip"], moved);
+    assert!(fx.rebasing());
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(before));
+}
+
+#[test]
+fn rebase_with_tracked_local_changes_that_a_conflict_needs_refuses_and_changes_nothing() {
+    let fx = fx("deploy");
+    let before = fx.conflicting(&["lead"]);
+    fs::write(fx.lead.join("api.txt"), "edited\n").unwrap();
+
+    let run = fx.pr("rebase");
+
+    assert_eq!(code(&run), ("lead_worktree_dirty".into(), 3));
+    assert_eq!(run.error()["details"]["files"], json!(["api.txt"]));
+    assert!(!fx.rebasing());
+    assert_eq!(fx.lead_sha(), before);
+    assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "edited\n");
 }
 
 #[test]
@@ -2268,10 +2588,10 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     assert_eq!((fx.phase().as_str(), fx.pr_status("repo").as_str(), fx.pr_status("web").as_str()), ("dispatch", "open", "dispatch"));
     assert!(fx.events("plan-phase").is_empty());
     assert_eq!(fx.events("pr-opened")[0].1, json!({"pr": "repo", "number": 812, "url": URL}));
-    // Its own Gate log, in its own gate worktree; its own title: two PRs, so `<plan title> (<key>)`.
+    // Its own Gate log, in its own gate worktree; its own stored title: no `(<key>)` suffix with two PRs (hs-d285).
     assert!(fx.gate_log().trim().starts_with("gate ran in pay.pay.repo.gate-"), "{}", fx.gate_log());
     let calls = fx.gh_calls();
-    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", "Pay the bills (repo)"].map(String::from));
+    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE].map(String::from));
 
     // `web` opens: now every PR is open, and the Plan moves on.
     let out = fx.pr_cmd("open", "web").ok();
@@ -2284,7 +2604,7 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     assert_eq!(fx.git(&web.parent().unwrap().join("web"), &["rev-parse", "refs/heads/cpd/pay/web"]), fx.git(&web, &["rev-parse", "HEAD"]));
     let calls = fx.gh_calls();
     let create = calls.iter().filter(|c| c[1] == "create").nth(1).unwrap();
-    assert_eq!(create[2..8], ["--base", "main", "--head", "cpd/pay/web", "--title", "Pay the bills (web)"].map(String::from));
+    assert_eq!(create[2..8], ["--base", "main", "--head", "cpd/pay/web", "--title", WEB_PR_TITLE].map(String::from));
     // The body covers the PR's own Jobs only.
     assert!(create[9].contains("| ui | The UI | merged |") && !create[9].contains("| api |"), "{}", create[9]);
 
@@ -2382,7 +2702,7 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
     assert_eq!(fx.events("plan-done").len(), 1);
 
     // `pr add` moves the legacy branch and reopens the Plan.
-    fx.env.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--plan", "pay"]).ok();
+    fx.env.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
     assert_eq!(fx.phase(), "dispatch");
     // The engine would start the PR and the Lead open it: written straight, as the other tests do,
     // with the pull request's row `pr open` writes.
@@ -2479,7 +2799,7 @@ fn needs_of(fx: &Fx, key: &str) -> Vec<String> {
 }
 
 fn add_fix(fx: &Fx, extra: &[&str]) -> Run {
-    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--plan", "pay"];
+    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"];
     args.extend(extra);
     fx.env.cpd(&args)
 }
@@ -2502,7 +2822,7 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
     assert!(needs_of(&a, "fix").is_empty());
 
     let b = fx("done");
-    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--plan", "pay", "--no-needs"]).ok();
+    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay", "--no-needs"]).ok();
     // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
     assert_eq!(add_fix(&b, &["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
     assert_eq!(needs_of(&b, "fix"), ["x"]);
@@ -2517,7 +2837,7 @@ fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     let f = fx("dispatch");
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
     let other = f.env.keyed_repo("other").canonicalize().unwrap();
-    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
+    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(needs_of(&f, "fix").is_empty());
 }

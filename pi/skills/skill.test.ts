@@ -464,11 +464,31 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   assert.match(lead, /Register planned work at once/);
   assert.match(lead, /cpd job add <k> --draft --title/);
-  assert.match(lead, /cpd pr add <key> --repo <path> --needs/);
+  assert.match(lead, /cpd pr add <key> --repo <path> --title "<title>" --needs/);
+  assert.match(lead, /pr_title_required/);
+  assert.match(lead, /cpd pr edit <key> --title/);
+  for (const l of lead.split("\n")) if (/cpd pr add <key>/.test(l)) assert.match(l, /--title/, `pr add without --title: ${l}`);
+  assert.doesNotMatch(lead, /cpd_plan_review` \(no parameters\)/);
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Check each Plan's registered work/);
   assert.match(manager, /cpd plan show --plan <p>/);
   assert.match(manager, /cpd session send <lead-session>[^\n]*register/);
+});
+
+test("cpd-manager splits work by area, maps files and sets the landing order", () => {
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(manager, /Split by area/);
+  assert.match(manager, /cpd context pending --context <c>/);
+  assert.match(manager, /Set the landing order/);
+});
+
+test("both skills describe a stacked PR: gh pr edit --base, then cpd pr push", () => {
+  for (const skill of ["cpd-lead", "cpd-manager"]) {
+    const text = skillFiles(skill)[0]!.text;
+    assert.match(text, /gh pr edit <n> --base/, `${skill}: gh pr edit --base`);
+    assert.match(text, /cpd pr add <key> --repo <path> --base/, `${skill}: pr add --base`);
+    assert.match(text, /cpd pr push --pr <key>/, `${skill}: cpd pr push`);
+  }
 });
 
 test("urgent Jobs: both skills state the flag, the command and the explicit-request rule", () => {
@@ -551,4 +571,10 @@ test("cpd-lead resolves a PR conflict inline and pushes through the Gate, never 
   assert.match(step, /cpd pr rebase --pr <key>/);
   assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
   assert.match(rule, /never with `git push`/);
+});
+
+test("cpd-manager never blocks and says the adapter refuses waits over 30 seconds", () => {
+  const text = skillFiles("cpd-manager")[0]!.text;
+  assert.match(text, /\*\*Never block\.\*\*/);
+  assert.match(text, /waits longer than 30 seconds/);
 });
