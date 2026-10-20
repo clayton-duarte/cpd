@@ -36,6 +36,11 @@ struct Fx {
 
 /// `files` are committed on `main` before the Lead worktree is cut from it.
 fn fixture(files: &[(&str, &str)]) -> Fx {
+    fixture_kind(files, "work", None)
+}
+
+/// [`fixture`] with Job `api` of `kind` and, for a `test` Job, its `(tests, test_files)` as JSON arrays.
+fn fixture_kind(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>) -> Fx {
     let env = TestEnv::new();
     let repo = env.git_repo("pay").canonicalize().unwrap();
     // The worktrees are created in this process, whose environment is not the TestEnv's.
@@ -67,7 +72,7 @@ fn fixture(files: &[(&str, &str)]) -> Fx {
         fx.repo.display(),
         fx.lead.display()
     ));
-    fx.work = fx.attempt("api");
+    fx.work = fx.attempt_kind(&Pr { key: "repo".into(), repo: fx.repo.clone(), lead: fx.lead.clone() }, "api", "running", kind, tests);
     fx
 }
 
@@ -127,6 +132,11 @@ impl Fx {
 
     /// [`Fx::attempt_as`] for a Job of `pr`.
     fn attempt_in(&self, pr: &Pr, key: &str, status: &str) -> PathBuf {
+        self.attempt_kind(pr, key, status, "work", None)
+    }
+
+    /// [`Fx::attempt_in`] for a Job of `kind` (`tests`: a `test` Job's `(tests, test_files)`, JSON arrays).
+    fn attempt_kind(&self, pr: &Pr, key: &str, status: &str, kind: &str, tests: Option<(&str, &str)>) -> PathBuf {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
         let made = create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup).unwrap();
@@ -134,9 +144,9 @@ impl Fx {
             .write("fixture", |tx| {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't')",
-                    params![key, "f".repeat(64), tx.id(), pr.key],
+                                       status, appended, fingerprint, created_txn, created_at, kind, tests, test_files)
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7)",
+                    params![key, "f".repeat(64), tx.id(), pr.key, kind, tests.map(|t| t.0), tests.map(|t| t.1)],
                 )?;
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
@@ -432,6 +442,318 @@ fn submit_checks_its_arguments_and_selection() {
     refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit", "api-a1", "--plan", "nope"]), "plan_not_found", 4);
     refused(&fx.env.cpd_in(&fx.work, &["attempt", "submit"]), "usage", 2);
     assert_eq!(fx.status(), "running");
+}
+
+// ---------- attempt submit: the checks of the `test` and `impl` kinds (contract §7.7, commands.md §6.1) ----------
+
+/// A repo's `[tests]`, as fake commands (they run in the Attempt worktree, `sh -c`): `build` fails while `BROKEN` exists,
+/// `run` fails unless `GREEN` exists, so a test Job that adds neither is red and one that adds `GREEN` is not. Each leaves a
+/// trace beside the worktree: `ran.txt` the named tests it was given, `slot.txt` the slot it was told it holds.
+const TESTS: &str = "[tests]\n\
+    build = \"echo building; test ! -e BROKEN\"\n\
+    run = \"echo running; echo {{ tests }} > ../ran.txt; echo slot=[$CPD_TEST_SLOT] > ../slot.txt; test -e GREEN\"\n";
+
+/// `TESTS` with a `list` that exists for the one name `t::one` only; it traces the names it was asked about.
+const TESTS_LIST: &str = "[tests]\n\
+    build = \"true\"\n\
+    list = \"echo {{ test }} >> ../listed.txt; test {{ test }} = t::one || test {{ test }} = t::two\"\n\
+    run = \"echo {{ tests }} > ../ran.txt; false\"\n";
+
+/// Job `api` is a `test` Job of the named test `t::one`, held in `tests/t.rs`.
+fn red(toml: &str) -> Fx {
+    fixture_kind(&[(".config/cpd.toml", toml)], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)))
+}
+
+/// Job `api` is an `impl` Job that needs the merged `test` Job `t` (the tests `t::one` and `t::two`, in `tests/`).
+fn green(toml: &str, approved: Option<&str>) -> Fx {
+    let fx = fixture_kind(&[(".config/cpd.toml", toml)], "impl", None);
+    fx.env.sql(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                           created_txn, created_at, kind, tests, test_files, merged_sha)
+           VALUES ('pay', 'repo', 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
+                   cpd_txn(), 't', 'test', '[\"t::one\",\"t::two\"]', '[\"tests/\"]', 'c0ffee');
+         INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'api', 't');",
+    );
+    if let Some(paths) = approved {
+        fx.env.sql(&format!("UPDATE jobs SET test_approved = '{paths}' WHERE key = 'api'"));
+    }
+    fx
+}
+
+impl Fx {
+    /// A file the fake `[tests]` commands left beside the Attempt worktree (`None`: it was never written).
+    fn seen(&self, name: &str) -> Option<String> {
+        fs::read_to_string(self.work.parent().unwrap().join(name)).ok()
+    }
+
+    /// The log `<attempt>.tests-<what>.log` of `api-a1`.
+    fn tests_log(&self, what: &str) -> PathBuf {
+        self.home.root().join(format!("run/pay/logs/api-a1.tests-{what}.log"))
+    }
+
+    /// The `attempt-status` Events' `data`, oldest first.
+    fn statuses(&self) -> Vec<Value> {
+        self.events("attempt-status").iter().map(|e| e["data"].clone()).collect()
+    }
+}
+
+fn span(edge: &str) -> Value {
+    json!({"from": "running", "to": "running", "check": edge, "what": "tests"})
+}
+
+#[test]
+fn a_test_job_whose_build_fails_is_refused_tests_build_failed_and_run_never_runs() {
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// red\n");
+    fx.commit("BROKEN", "x\n");
+    let error = refused(&fx.submit(), "tests_build_failed", 3);
+    let details = &error["details"];
+    assert_eq!((&details["job"], &details["tests"]), (&json!("api"), &json!(["t::one"])));
+    assert!(details["tail"].as_str().unwrap().contains("building"), "{error}");
+    assert_eq!(details["log"], fx.tests_log("build").to_str().unwrap());
+    assert!(fs::read_to_string(fx.tests_log("build")).unwrap().contains("building"));
+    assert_eq!(fx.seen("ran.txt"), None, "`run` runs only after `build` succeeded");
+    assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn a_test_job_whose_named_tests_pass_is_refused_tests_not_red_and_checked_again_at_every_submit() {
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// passes\n");
+    fx.commit("GREEN", "x\n");
+    let error = refused(&fx.submit(), "tests_not_red", 3);
+    assert_eq!((&error["details"]["job"], &error["details"]["tests"]), (&json!("api"), &json!(["t::one"])));
+    assert!(error["details"]["tail"].as_str().unwrap().contains("running"), "{error}");
+    assert_eq!(error["details"]["log"], fx.tests_log("run").to_str().unwrap());
+    assert_eq!(fx.seen("ran.txt").as_deref(), Some("t::one\n"), "the run was given the named tests");
+    assert_eq!(fx.status(), "running");
+    // The Worker makes them fail and submits again: every submit runs the checks again.
+    fx.env.git(&fx.work, &["rm", "-q", "GREEN"]);
+    fx.env.git(&fx.work, &["commit", "-q", "-m", "red"]);
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+}
+
+#[test]
+fn a_test_job_whose_named_tests_fail_passes_and_leaves_both_logs() {
+    let fx = red(TESTS);
+    let sha = fx.commit("tests/t.rs", "// fails\n");
+    let out = fx.submit().ok();
+    assert_eq!(out, json!({"ok": true, "attempt": "api-a1", "submitted": true, "sha": sha, "next": NEXT}));
+    assert_eq!(fx.status(), "merging");
+    assert!(fs::read_to_string(fx.tests_log("build")).unwrap().contains("building"));
+    assert!(fs::read_to_string(fx.tests_log("run")).unwrap().contains("running"));
+    assert_eq!(fx.seen("ran.txt").as_deref(), Some("t::one\n"));
+}
+
+#[test]
+fn the_tests_commands_are_not_given_a_test_slot() {
+    // hs-d464: a run of named tests is not a full run; the Gate is what takes a slot (contract §7.7).
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// fails\n");
+    fx.submit().ok();
+    assert_eq!(fx.seen("slot.txt").as_deref(), Some("slot=[]\n"));
+}
+
+#[test]
+fn a_test_job_must_change_a_path_its_test_files_name_or_is_refused_test_files_missing() {
+    let fx = fixture_kind(&[(".config/cpd.toml", TESTS)], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs","tests/more/"]"#)));
+    fx.commit("tests/t.rs", "// red\n");
+    let error = refused(&fx.submit(), "test_files_missing", 3);
+    assert_eq!(error["details"]["paths"], json!(["tests/more/"]));
+    assert_eq!(fx.seen("ran.txt"), None, "no command ran: the guard guards no file");
+    assert!(!fx.tests_log("build").exists());
+    // A directory prefix matches a file inside it.
+    fx.commit("tests/more/m.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+}
+
+#[test]
+fn a_test_or_impl_job_in_a_repo_with_no_tests_table_is_refused_tests_unconfigured() {
+    let fx = red("protected = []\n");
+    fx.commit("tests/t.rs", "// red\n");
+    let error = refused(&fx.submit(), "tests_unconfigured", 3);
+    let message = error["message"].as_str().unwrap();
+    assert!(message.contains("--shape docs") && message.contains("config"), "{message}");
+    assert_eq!(fx.status(), "running");
+
+    let fx = green("protected = []\n", None);
+    fx.commit("src/lib.rs", "// green\n");
+    refused(&fx.submit(), "tests_unconfigured", 3);
+}
+
+#[test]
+fn a_tests_table_that_is_not_as_documented_is_config_invalid() {
+    // The table is part of `.config/cpd.toml` (contract §7.5, §7.7): a valid one, `list` included, is read.
+    let fx = red("protected = [\"verify.sh\"]\n[tests]\nbuild = \"true\"\nlist = \"echo {{ test }}\"\nrun = \"false\"\n");
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+
+    for (toml, key) in [
+        ("[tests]\nbuild = \"true\"\n", "run"),                                          // `run` missing
+        ("[tests]\nrun = \"true\"\n", "build"),                                           // `build` missing
+        ("[tests]\nbuild = \"true\"\nrun = \"true\"\nlist = \"true\"\n", "list"),         // `list` without the variable `test`
+        ("[tests]\nbuild = \"true\"\nrun = \"true\"\nextra = \"true\"\n", "extra"),       // any other key
+    ] {
+        let fx = red(toml);
+        fx.commit("tests/t.rs", "// red\n");
+        let error = refused(&fx.submit(), "config_invalid", 1);
+        assert_eq!(error["details"]["file"], ".config/cpd.toml", "{toml}");
+        assert!(error["message"].as_str().unwrap().contains(key), "the message names `{key}`: {error}");
+        assert_eq!(fx.status(), "running", "{toml}");
+    }
+}
+
+#[test]
+fn list_refuses_a_name_that_matches_no_test_before_run_for_a_test_job() {
+    let fx = fixture_kind(&[(".config/cpd.toml", TESTS_LIST)], "test", Some((r#"["t::one","t::typo"]"#, r#"["tests/t.rs"]"#)));
+    fx.commit("tests/t.rs", "// red\n");
+    let error = refused(&fx.submit(), "tests_not_found", 3);
+    let details = &error["details"];
+    assert_eq!((&details["job"], &details["tests"]), (&json!("api"), &json!(["t::typo"])), "only the name that matches nothing");
+    assert_eq!(details["log"], fx.tests_log("list").to_str().unwrap());
+    assert_eq!(fx.seen("listed.txt").as_deref(), Some("t::one\nt::typo\n"), "`list` runs once per named test, with the variable `test`");
+    assert_eq!(fx.seen("ran.txt"), None, "before `run`");
+    assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn list_refuses_a_name_that_matches_no_test_for_an_impl_job_too_and_passes_when_every_name_exists() {
+    let fx = green(TESTS_LIST, None);
+    fx.env.sql("UPDATE jobs SET tests = '[\"t::one\",\"t::missing\"]' WHERE key = 't'");
+    fx.commit("src/lib.rs", "// green\n");
+    let error = refused(&fx.submit(), "tests_not_found", 3);
+    assert_eq!(error["details"]["tests"], json!(["t::missing"]));
+    assert_eq!(fx.seen("ran.txt"), None);
+
+    // Every name exists: `list` does not decide, `run` does (here it fails: a red test Job passes).
+    let fx = red(TESTS_LIST);
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.seen("listed.txt").as_deref(), Some("t::one\n"));
+    assert_eq!(fx.seen("ran.txt").as_deref(), Some("t::one\n"));
+}
+
+#[test]
+fn a_command_that_cannot_run_is_tests_error_and_changes_nothing() {
+    for (toml, what) in [
+        ("[tests]\nbuild = \"kill -9 $$\"\nrun = \"true\"\n", "build killed by a signal"),
+        ("[tests]\nbuild = \"true\"\nrun = \"kill -9 $$\"\n", "run killed by a signal"),
+        ("[tests]\nbuild = \"echo {{ no_such_variable }}\"\nrun = \"true\"\n", "hook_invalid"),
+    ] {
+        let fx = red(toml);
+        fx.commit("tests/t.rs", "// red\n");
+        let error = refused(&fx.submit(), "tests_error", 1);
+        assert_eq!(error["details"]["job"], "api", "{what}");
+        assert_eq!(fx.status(), "running", "{what}");
+    }
+}
+
+#[test]
+fn an_impl_job_is_run_against_the_union_of_the_tests_of_the_test_jobs_it_needs() {
+    let fx = green(TESTS, None);
+    let sha = fx.commit("src/lib.rs", "// green\n");
+    fx.commit("GREEN", "x\n");
+    let out = fx.submit().ok();
+    assert_eq!(out["submitted"], true, "{out}");
+    assert_ne!(out["sha"], sha);
+    assert_eq!(fx.status(), "merging");
+    assert_eq!(fx.seen("ran.txt").as_deref(), Some("t::one t::two\n"), "derived: the Job names no tests of its own");
+    assert!(fs::read_to_string(fx.tests_log("run")).unwrap().contains("running"));
+}
+
+#[test]
+fn an_impl_job_whose_tests_still_fail_is_refused_tests_failed() {
+    let fx = green(TESTS, None);
+    fx.commit("src/lib.rs", "// not enough\n");
+    let error = refused(&fx.submit(), "tests_failed", 3);
+    assert_eq!((&error["details"]["job"], &error["details"]["tests"]), (&json!("api"), &json!(["t::one", "t::two"])));
+    assert_eq!(error["details"]["log"], fx.tests_log("run").to_str().unwrap());
+    assert!(error["details"]["tail"].as_str().unwrap().contains("running"), "{error}");
+    assert_eq!(fx.status(), "running");
+}
+
+#[test]
+fn an_impl_job_whose_build_fails_is_refused_tests_build_failed() {
+    let fx = green(TESTS, None);
+    fx.commit("src/lib.rs", "// green\n");
+    fx.commit("BROKEN", "x\n");
+    let error = refused(&fx.submit(), "tests_build_failed", 3);
+    assert_eq!(error["details"]["log"], fx.tests_log("build").to_str().unwrap());
+    assert_eq!(fx.seen("ran.txt"), None);
+}
+
+#[test]
+fn an_impl_job_may_not_touch_the_files_of_the_test_job_it_needs_unless_the_lead_approved_the_path() {
+    let fx = green(TESTS, None);
+    fx.commit("GREEN", "x\n");
+    fx.commit("tests/t.rs", "// edited to pass\n");
+    fx.commit("tests/new/n.rs", "// a new file in a guarded directory\n");
+    let error = refused(&fx.submit(), "tests_tampered", 3);
+    let mut paths: Vec<String> = serde_json::from_value(error["details"]["paths"].clone()).unwrap();
+    paths.sort();
+    assert_eq!((paths, &error["details"]["jobs"]), (vec!["tests/new/n.rs".to_owned(), "tests/t.rs".to_owned()], &json!(["t"])));
+    assert_eq!(fx.seen("ran.txt"), None, "refused before the tests ran");
+    assert_eq!(fx.status(), "running");
+
+    // Approving one path is not approving the other; both approved, the Job passes (`test_approved` is read at the check).
+    fx.env.sql("UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'api'");
+    assert_eq!(refused(&fx.submit(), "tests_tampered", 3)["details"]["paths"], json!(["tests/new/n.rs"]));
+    fx.env.sql("UPDATE jobs SET test_approved = '[\"tests/t.rs\",\"tests/new/\"]' WHERE key = 'api'");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+}
+
+#[test]
+fn only_an_impl_job_is_guarded_and_only_the_files_of_the_test_jobs_it_needs() {
+    // A `test` Job may change its own files, and an `impl` Job anything else.
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    let fx = green(TESTS, None);
+    fx.commit("GREEN", "x\n");
+    fx.commit("src/tests/lib.rs", "// not under tests/ at the root\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+}
+
+#[test]
+fn the_kind_checks_run_after_the_quick_check_and_a_work_job_runs_none() {
+    let toml = ("[pre-commit]\ncheck = \"exit 7\"\n", "[tests]\nbuild = \"echo building\"\nrun = \"false\"\n");
+    let fx = fixture_kind(&[(".config/wt.toml", toml.0), (".config/cpd.toml", toml.1)], "test", Some((r#"["t::one"]"#, r#"["tests/t.rs"]"#)));
+    fx.commit("tests/t.rs", "// red\n");
+    refused(&fx.submit(), "check_failed", 3);
+    assert!(!fx.tests_log("build").exists(), "the tests did not run");
+
+    // A `work` Job in a repo that has `[tests]`: nothing of it runs, and no span is recorded.
+    let fx = fixture(&[(".config/cpd.toml", TESTS)]);
+    fx.commit("BROKEN", "x\n");
+    fx.submit().ok();
+    assert_eq!(fx.seen("ran.txt"), None);
+    assert!(!fx.tests_log("build").exists());
+    assert_eq!(fx.statuses(), [json!({"from": "running", "to": "merging"})]);
+}
+
+#[test]
+fn a_kind_check_is_a_span_of_the_attempt_that_ends_also_when_it_refuses() {
+    // Refused: `start` then `end`, and the Attempt stays running.
+    let fx = red(TESTS);
+    fx.commit("tests/t.rs", "// passes\n");
+    fx.commit("GREEN", "x\n");
+    refused(&fx.submit(), "tests_not_red", 3);
+    assert_eq!(fx.statuses(), [span("start"), span("end")]);
+    assert!(fx.home.locks_dir().join("check-pay--api-a1.lock").exists(), "held by the submit, removed when the Attempt ends");
+
+    // Passed: the span closes before the Attempt becomes `merging`.
+    fx.env.git(&fx.work, &["rm", "-q", "GREEN"]);
+    fx.env.git(&fx.work, &["commit", "-q", "-m", "red"]);
+    fx.submit().ok();
+    assert_eq!(fx.statuses(), [span("start"), span("end"), span("start"), span("end"), json!({"from": "running", "to": "merging"})]);
+    // The Events carry the Attempt and the Job.
+    let events = fx.events("attempt-status");
+    assert_eq!((events[0]["plan"].as_str(), events[0]["job"].as_str(), events[0]["attempt"].as_str()), (Some("pay"), Some("api"), Some("api-a1")));
 }
 
 // ---------- attempt read ----------

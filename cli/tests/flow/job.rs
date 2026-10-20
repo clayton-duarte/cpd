@@ -1765,3 +1765,269 @@ fn retry_accepts_s1_to_s4_and_h1_to_h3() {
         assert_eq!(job_row(&env, "pl", "a", "retry_tier"), tier);
     }
 }
+
+// ---------- the shape's `shape_incomplete` and `test_job_required` at the review, the lock and the cancel; `job approve-tests` ----------
+// (contract §2.2 "Job kinds", §7.7; commands.md §4.6, §4.8, §5.3, §5.9)
+
+/// `plan review` of Plan `plan`.
+fn review(env: &TestEnv, plan: &str) -> Run {
+    env.cpd(&["plan", "review", "--title", "The batch", "--plan", plan])
+}
+
+/// `plan lock` of Plan `plan`.
+fn plan_lock(env: &TestEnv, plan: &str) -> Run {
+    env.cpd(&["plan", "lock", "--plan", plan])
+}
+
+/// `job add <key> --kind <kind> --needs <needs>` into PR `pr`, with the Spec of the kind (a `test` Job names `t::<key>` in `tests/<key>.rs`).
+fn add_needing(env: &TestEnv, plan: &str, key: &str, kind: &str, needs: &[&str], pr: &str) -> Run {
+    let spec = if kind == "test" {
+        test_spec_file(env, &format!("{key}.json"), json!([format!("t::{key}")]), json!([format!("tests/{key}.rs")]))
+    } else {
+        spec_file(env)
+    };
+    let needs = needs.join(",");
+    let title = format!("Title of {key}");
+    let mut args = vec!["job", "add", key, "--title", &title, "--tier", "S2", "--spec", &spec, "--kind", kind, "--pr", pr, "--plan", plan];
+    if !needs.is_empty() {
+        args.extend(["--needs", &needs]);
+    }
+    env.cpd(&args)
+}
+
+#[test]
+fn plan_review_and_plan_lock_refuse_an_impl_draft_that_needs_no_test_job_of_its_pr() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    add_kind(&env, "pl", "t", "test", &test_spec_file(&env, "t.json", json!(["t::one"]), json!(["tests/t.rs"])), "repo").ok();
+    // A draft is added; it is checked where it stops being one. It needs a Job of its PR that is no test Job.
+    job_add(&env, "pl", "w", "S2", &[]).ok();
+    add_needing(&env, "pl", "i", "impl", &["w"], "repo").ok();
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    let e = refused(&review(&env, "pl"), "test_job_required", 3);
+    assert_eq!(e["details"]["jobs"], json!(["i"]));
+    // `plan lock` refuses it before it looks at the review (which does not exist).
+    let e = refused(&plan_lock(&env, "pl"), "test_job_required", 3);
+    assert_eq!(e["details"]["jobs"], json!(["i"]));
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "plan_reviews")), (writes.0, writes.1, 0), "a refusal writes nothing");
+
+    // It needs the test Job: the review is requested.
+    job(&env, &["edit", "i", "--needs", "t"], "pl").ok();
+    let out = review(&env, "pl").ok();
+    assert_eq!(out["review"]["status"], "pending");
+}
+
+#[test]
+fn plan_review_and_plan_lock_refuse_a_tdd_pr_with_no_test_or_no_impl_job() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    shaped_pr(&env, "pl", "api", "tdd");
+    // A PR of a shape that is not `tdd`, and a PR from before the migration, are not asked for a test Job.
+    shaped_pr(&env, "pl", "docs", "docs");
+    shaped_pr(&env, "pl", "cfg", "config");
+    add_kind(&env, "pl", "docs-d", "docs", &spec_file(&env), "docs").ok();
+    add_needing(&env, "pl", "cfg-w", "work", &[], "cfg").ok();
+    add_needing(&env, "pl", "free-w", "work", &[], "repo").ok();
+    // `api` has a docs Job only: it lacks both.
+    add_kind(&env, "pl", "api-d", "docs", &spec_file(&env), "api").ok();
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    let e = refused(&review(&env, "pl"), "shape_incomplete", 3);
+    assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["test", "impl"])));
+    let e = refused(&plan_lock(&env, "pl"), "shape_incomplete", 3);
+    assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["test", "impl"])));
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "plan_reviews")), (writes.0, writes.1, 0));
+
+    // A test Job but no impl Job.
+    add_needing(&env, "pl", "api-t", "test", &["api-d"], "api").ok();
+    let e = refused(&review(&env, "pl"), "shape_incomplete", 3);
+    assert_eq!(e["details"]["missing"], json!(["impl"]));
+    // A cancelled one does not count.
+    add_needing(&env, "pl", "api-i", "impl", &["api-t"], "api").ok();
+    fixture(&env, "UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'api-i'");
+    assert_eq!(refused(&review(&env, "pl"), "shape_incomplete", 3)["details"]["missing"], json!(["impl"]));
+    // A live one completes the PR: the review is requested, and `plan lock` goes on to the review it lacks.
+    add_needing(&env, "pl", "api-i2", "impl", &["api-t"], "api").ok();
+    assert_eq!(review(&env, "pl").ok()["review"]["status"], "pending");
+    refused(&plan_lock(&env, "pl"), "plan_not_approved", 3);
+}
+
+#[test]
+fn job_cancel_keeps_the_last_test_and_the_last_impl_job_of_a_tdd_pr_that_has_not_opened() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    shaped_pr(&env, "pl", "api", "tdd");
+    add_kind(&env, "pl", "d", "docs", &spec_file(&env), "api").ok();
+    add_needing(&env, "pl", "t", "test", &["d"], "api").ok();
+    add_needing(&env, "pl", "i", "impl", &["t"], "api").ok();
+    // A stub the PR does not need goes.
+    job(&env, &["cancel", "d", "--reason", "No docs."], "pl").ok();
+    // The last `impl` and the last `test` Job do not: `details` `{pr, missing}`, nothing written.
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    let e = refused(&job(&env, &["cancel", "i", "--reason", "No."], "pl"), "shape_incomplete", 3);
+    assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["impl"])));
+    let e = refused(&job(&env, &["cancel", "t", "--reason", "No."], "pl"), "shape_incomplete", 3);
+    assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["test"])));
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+    assert_eq!((job_row(&env, "pl", "i", "status"), job_row(&env, "pl", "t", "status")), (json!("draft"), json!("draft")));
+    // A replacement is added first; then the first one goes, and the replacement is the last.
+    add_needing(&env, "pl", "i2", "impl", &["t"], "api").ok();
+    job(&env, &["cancel", "i", "--reason", "Replaced."], "pl").ok();
+    assert_eq!(job_row(&env, "pl", "i", "status"), json!("cancelled"));
+    let e = refused(&job(&env, &["cancel", "i2", "--reason", "No."], "pl"), "shape_incomplete", 3);
+    assert_eq!(e["details"]["missing"], json!(["impl"]));
+
+    // After the lock (a `queued` Job) it is the same while the PR has not opened.
+    lock(&env, "pl");
+    let e = refused(&job(&env, &["cancel", "i2", "--reason", "No."], "pl"), "shape_incomplete", 3);
+    assert_eq!(e["details"]["missing"], json!(["impl"]));
+    assert_eq!(job_row(&env, "pl", "i2", "status"), json!("queued"));
+}
+
+#[test]
+fn job_cancel_checks_no_shape_for_a_pr_that_is_not_tdd_or_that_has_opened() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    for shape in ["docs", "config", "tdd"] {
+        shaped_pr(&env, "pl", shape, shape);
+    }
+    add_kind(&env, "pl", "d", "docs", &spec_file(&env), "docs").ok();
+    add_needing(&env, "pl", "c", "work", &[], "config").ok();
+    // A PR from before the migration (`free`) has any kinds, and any of them is cancelled.
+    add_kind(&env, "pl", "free-i", "impl", &spec_file(&env), "repo").ok();
+    // The contrast: the lone `docs` Job of a `tdd` PR goes, its lone `impl` Job does not.
+    add_kind(&env, "pl", "tdd-d", "docs", &spec_file(&env), "tdd").ok();
+    add_kind(&env, "pl", "tdd-i", "impl", &spec_file(&env), "tdd").ok();
+    refused(&job(&env, &["cancel", "tdd-i", "--reason", "No."], "pl"), "shape_incomplete", 3);
+    job(&env, &["cancel", "tdd-d", "--reason", "No."], "pl").ok();
+    for key in ["d", "c", "free-i"] {
+        job(&env, &["cancel", key, "--reason", "No."], "pl").ok();
+        assert_eq!(job_row(&env, "pl", key, "status"), json!("cancelled"), "{key}");
+    }
+
+    // A `tdd` PR that has opened its pull request: a fix is whatever it is, and the last `impl` Job may go.
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "deploy");
+    fixture(
+        &env,
+        &format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+             VALUES ('pl', 'fix', '/repo', 'main', 'waiting', 'cpd/pl/fix', 'tdd', cpd_txn(), 't');
+             UPDATE prs SET status = 'dispatch', lead_worktree = '/wt2', started_at = 't' WHERE key = 'fix';
+             {}
+             UPDATE prs SET status = 'open', pr_number = 2, pr_url = 'https://github.com/acme/fix/pull/2', pr_opened_at = 't',
+                    pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/fix') WHERE key = 'fix';
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                               kind, tests, test_files, created_txn, created_at)
+             VALUES ('pl', 'fix', 'fix-t', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, printf('%064d', 1),
+                     'test', '[\"t::a\"]', '[\"tests/a.rs\"]', cpd_txn(), 't'),
+                    ('pl', 'fix', 'fix-i', 'I', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 0, printf('%064d', 2),
+                     'impl', NULL, NULL, cpd_txn(), 't');",
+            pull_request("fix", 2, "open")
+        ),
+    );
+    job(&env, &["cancel", "fix-i", "--reason", "Not needed."], "pl").ok();
+    job(&env, &["cancel", "fix-t", "--reason", "Not needed."], "pl").ok();
+    assert_eq!((job_row(&env, "pl", "fix-i", "status"), job_row(&env, "pl", "fix-t", "status")), (json!("cancelled"), json!("cancelled")));
+}
+
+/// A Plan `pl` locked with the test Job `t` (`tests/t.rs`, `tests/more/`) and the impl Job `i` that needs it, both queued.
+fn locked_tdd(env: &TestEnv) {
+    setup(env);
+    plan(env, "pl", "plan");
+    let tests = test_spec_file(env, "t.json", json!(["t::one"]), json!(["tests/t.rs", "tests/more/"]));
+    add_kind(env, "pl", "t", "test", &tests, "repo").ok();
+    add_needing(env, "pl", "i", "impl", &["t"], "repo").ok();
+}
+
+fn approve(env: &TestEnv, args: &[&str]) -> Run {
+    let mut all = vec!["job", "approve-tests"];
+    all.extend(args);
+    all.extend(["--plan", "pl"]);
+    env.cpd(&all)
+}
+
+#[test]
+fn approve_tests_records_the_paths_the_impl_job_may_change_and_tells_the_event() {
+    let env = TestEnv::new();
+    locked_tdd(&env);
+    // A draft is not a Job that can be checked yet.
+    refused(&approve(&env, &["i", "--path", "tests/t.rs", "--reason", "Wrong."]), "illegal_transition", 3);
+    lock(&env, "pl");
+    let out = approve(&env, &["i", "--path", "tests/t.rs", "--reason", "The assertion is wrong."]).ok();
+    assert_eq!(
+        out,
+        json!({"ok": true, "job": {"key": "i", "status": "queued", "kind": "impl"}, "approved": ["tests/t.rs"], "fields": ["test_approved"]})
+    );
+    assert_eq!(job_row(&env, "pl", "i", "test_approved"), json!("[\"tests/t.rs\"]"));
+    let edited = events(&env, "job-edited");
+    let last = edited.last().unwrap();
+    assert_eq!((&last["job"], &last["data"]), (&json!("i"), &json!({"fields": ["test_approved"]})));
+    let text = last["text"].as_str().unwrap();
+    assert!(text.contains("tests/t.rs") && text.contains("The assertion is wrong."), "{text}");
+
+    // The union of what was approved; a path inside a guarded directory counts; paths already approved write nothing.
+    let out = approve(&env, &["i", "--path", "tests/more/m.rs", "--path", "tests/t.rs", "--reason", "More."]).ok();
+    let sorted = |v: &Value| {
+        let mut all: Vec<String> = serde_json::from_value(v.clone()).unwrap();
+        all.sort();
+        all
+    };
+    assert_eq!(sorted(&out["approved"]), ["tests/more/m.rs", "tests/t.rs"], "`approved` is what the Job has now: the union");
+    let stored: Value = serde_json::from_str(job_row(&env, "pl", "i", "test_approved").as_str().unwrap()).unwrap();
+    assert_eq!(sorted(&stored), ["tests/more/m.rs", "tests/t.rs"]);
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    let out = approve(&env, &["i", "--path", "tests/t.rs", "--reason", "Again."]).ok();
+    assert_eq!((&out["already"], &out["fields"]), (&json!(true), &json!([])));
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+
+    // Not a Locked field: the Job's fingerprint is what it was.
+    assert_eq!(job_row(&env, "pl", "i", "fingerprint"), json!(locked_fingerprint_of(&env, "i")));
+}
+
+/// The Locked-Job fingerprint of Job `key` of Plan `pl`, recomputed.
+fn locked_fingerprint_of(env: &TestEnv, key: &str) -> String {
+    let id = PlanId::parse("pl").unwrap();
+    let all = store(env).read(|conn| jobs::load(conn, &id)).unwrap();
+    locked_fingerprint(all.iter().find(|j| j.key == key).unwrap())
+}
+
+#[test]
+fn approve_tests_is_the_leads_and_not_a_workers() {
+    let env = TestEnv::new();
+    locked_tdd(&env);
+    lock(&env, "pl");
+    let args = ["job", "approve-tests", "i", "--path", "tests/t.rs", "--reason", "Wrong.", "--plan", "pl"];
+    let writes = (count(&env, "txns"), count(&env, "events"));
+    refused(&env.cpd_with(env.root(), &args, &[("CPD_ATTEMPT", "i-a1")]), "not_a_lead", 3);
+    assert_eq!((count(&env, "txns"), count(&env, "events")), writes);
+    assert_eq!(job_row(&env, "pl", "i", "test_approved"), Value::Null);
+    env.cpd_with(env.root(), &args, &[]).ok();
+}
+
+#[test]
+fn approve_tests_refuses_what_it_cannot_approve_and_writes_nothing() {
+    let env = TestEnv::new();
+    locked_tdd(&env);
+    lock(&env, "pl");
+    let writes = || (count(&env, "txns"), count(&env, "events"));
+    let before = writes();
+    refused(&approve(&env, &["ghost", "--path", "tests/t.rs", "--reason", "Wrong."]), "job_not_found", 4);
+    // Only an `impl` Job is approved for; a `test` Job guards its own files.
+    refused(&approve(&env, &["t", "--path", "tests/t.rs", "--reason", "Wrong."]), "not_an_impl_job", 3);
+    // Every path must be guarded by the `test_files` of a `test` Job it needs; the unguarded are listed and nothing is approved.
+    let e = refused(&approve(&env, &["i", "--path", "tests/t.rs", "--path", "src/lib.rs", "--path", "tests/other.rs", "--reason", "Wrong."]), "path_not_guarded", 3);
+    assert_eq!(e["details"]["paths"], json!(["src/lib.rs", "tests/other.rs"]));
+    assert_eq!(job_row(&env, "pl", "i", "test_approved"), Value::Null);
+    // A path and a reason are required.
+    refused(&approve(&env, &["i", "--reason", "Wrong."]), "usage", 2);
+    refused(&approve(&env, &["i", "--path", "tests/t.rs"]), "usage", 2);
+    assert_eq!(writes(), before);
+    // A Job that has ended is not approved for.
+    engine(&env, "pl", "i", "merged");
+    refused(&approve(&env, &["i", "--path", "tests/t.rs", "--reason", "Wrong."]), "illegal_transition", 3);
+}

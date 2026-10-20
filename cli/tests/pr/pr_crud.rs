@@ -23,10 +23,30 @@ struct Fx {
     web: PathBuf,
 }
 
+/// The repo's `[tests]` (contract §7.7): what a `tdd` PR needs of its repo.
+const TESTS_TABLE: &str = "[tests]\nbuild = \"true\"\nrun = \"true\"\n";
+
+/// A keyed repo whose `main` has `.config/cpd.toml` with `[tests]`, and `origin/main` at it.
+fn keyed_repo_with_tests(env: &TestEnv, name: &str) -> PathBuf {
+    let repo = env.keyed_repo(name).canonicalize().unwrap();
+    commit_tests_table(env, &repo);
+    env.git(&repo, &["update-ref", "refs/remotes/origin/main", "main"]);
+    repo
+}
+
+/// Commits `[tests]` to `.config/cpd.toml` on the repo's `main` (not on `origin/main`).
+fn commit_tests_table(env: &TestEnv, repo: &PathBuf) {
+    fs::create_dir_all(repo.join(".config")).unwrap();
+    fs::write(repo.join(".config/cpd.toml"), TESTS_TABLE).unwrap();
+    env.git(repo, &["add", "-A"]);
+    env.git(repo, &["commit", "-q", "-m", "tests table"]);
+}
+
 fn fx(phase: &str) -> Fx {
     let env = TestEnv::new();
-    let pay = env.keyed_repo("pay").canonicalize().unwrap();
-    let web = env.keyed_repo("web").canonicalize().unwrap();
+    // `pr add` of the default shape, `tdd`, needs the repo's `[tests]`.
+    let pay = keyed_repo_with_tests(&env, "pay");
+    let web = keyed_repo_with_tests(&env, "web");
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     fs::write(home.config(), "version = 1\nmachine = \"t\"\n").unwrap();
     let locked = if matches!(phase, "grounding" | "plan") { "NULL" } else { "'2000-01-01T00:00:00.000Z'" };
@@ -310,6 +330,65 @@ fn a_shape_is_one_of_tdd_docs_and_config() {
         assert_eq!(run.error()["code"], "usage", "{shape:?}");
     }
     assert_eq!(fx.writes(), writes);
+}
+
+#[test]
+fn add_refuses_a_tdd_pr_in_a_repo_without_a_tests_table_and_reads_it_from_origin_base() {
+    let fx = fx("plan");
+    let bare = fx.env.keyed_repo("bare").canonicalize().unwrap();
+    let add = |shape: Option<&str>| {
+        let mut args = vec!["add", "api", "--repo", bare.to_str().unwrap(), "--title", "Add retries"];
+        args.extend(shape.into_iter().flat_map(|s| ["--shape", s]));
+        fx.add_with_stubs("pay-1", &args)
+    };
+    let writes = fx.writes();
+    // `tdd`, by default or named, needs the table; the message names the ways out.
+    for shape in [None, Some("tdd")] {
+        let error = fx.refused(&add(shape), "tests_unconfigured", 3, writes);
+        let message = error["message"].as_str().unwrap();
+        assert!(message.contains("--shape docs") && message.contains("--shape config") && message.contains("[tests]"), "{message}");
+    }
+    // The table is read from `origin/<base>`: a commit on the local `main` that `origin/main` lacks is not enough.
+    commit_tests_table(&fx.env, &bare);
+    fx.refused(&add(None), "tests_unconfigured", 3, writes);
+    // The shapes that have no test Job do not need it.
+    fx.env.git(&bare, &["update-ref", "refs/remotes/origin/main", "main"]);
+    assert_eq!(add(None).ok()["pr"]["shape"], "tdd");
+    // A repo that never had it is fine for a `docs` or a `config` PR.
+    let plain = fx.env.keyed_repo("plain").canonicalize().unwrap();
+    for (key, shape) in [("docs-pr", "docs"), ("cfg-pr", "config")] {
+        let args = ["add", key, "--repo", plain.to_str().unwrap(), "--title", "No behaviour", "--shape", shape];
+        assert_eq!(fx.add_with_stubs("pay-1", &args).ok()["pr"]["shape"], shape);
+    }
+}
+
+#[test]
+fn add_refuses_a_tests_table_that_is_not_as_documented() {
+    let fx = fx("plan");
+    let bad = fx.env.keyed_repo("bad").canonicalize().unwrap();
+    fs::create_dir_all(bad.join(".config")).unwrap();
+    fs::write(bad.join(".config/cpd.toml"), "[tests]\nbuild = \"true\"\n").unwrap();
+    fx.env.git(&bad, &["add", "-A"]);
+    fx.env.git(&bad, &["commit", "-q", "-m", "a table without `run`"]);
+    fx.env.git(&bad, &["update-ref", "refs/remotes/origin/main", "main"]);
+    let writes = fx.writes();
+    let args = ["add", "api", "--repo", bad.to_str().unwrap(), "--title", "Add retries"];
+    let error = fx.refused(&fx.add_with_stubs("pay-1", &args), "config_invalid", 1, writes);
+    assert!(error["message"].as_str().unwrap().contains("run"), "{error}");
+}
+
+#[test]
+fn add_refuses_a_tdd_template_after_the_tests_table_before_the_job_keys() {
+    // §9.4's order: `tests_unconfigured` precedes `job_key_exists`.
+    let fx = fx("plan");
+    let bare = fx.env.keyed_repo("bare").canonicalize().unwrap();
+    fx.env.sql(
+        "INSERT INTO prs (plan, key, repo, base, title, status, lead_branch, created_txn, created_at) VALUES ('pay-1', 'other', '/x', 'main', 'T', 'waiting', 'cpd/pay-1/other', cpd_txn(), 't');
+         INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('pay-1', 'other', 'api-impl', 'T', 'draft', 0, cpd_txn(), 't')",
+    );
+    let writes = fx.writes();
+    let args = ["add", "api", "--repo", bare.to_str().unwrap(), "--title", "Add retries"];
+    fx.refused(&fx.add_with_stubs("pay-1", &args), "tests_unconfigured", 3, writes);
 }
 
 #[test]
