@@ -95,7 +95,8 @@ enum Action {
 enum Phase {
     Ask,
     Merging,
-    Merged,
+    /// Merged; the string is the reload's error, if the poll failed.
+    Merged(Option<String>),
     Failed(String),
 }
 
@@ -111,7 +112,7 @@ fn on_key(phase: &Phase, key: KeyEvent) -> Option<Action> {
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => Some(Action::Cancel),
             _ => None,
         },
-        Phase::Merged | Phase::Failed(_) => Some(Action::Close),
+        Phase::Merged(_) | Phase::Failed(_) => Some(Action::Close),
         Phase::Merging => None,
     }
 }
@@ -166,8 +167,12 @@ fn draw(f: &mut Frame, area: Rect, pull: &Pull, title: Option<&str>, phase: &Pha
             f.render_widget(Paragraph::new(CANCEL), cancel);
         }
         Phase::Merging => row(f, area, 2, Line::from(" merging…")),
-        Phase::Merged => {
+        Phase::Merged(reload) => {
             row(f, area, 2, Line::from(format!(" Merged {pull} ({METHOD}).")));
+            if let Some(message) = reload {
+                let line = Line::from(Span::styled(format!(" {}", cut(&format!("poll failed: {message}"), width)), palette::note()));
+                row(f, area, 3, line);
+            }
             row(f, area, 4, Line::from(" any key closes").style(Style::new().add_modifier(Modifier::DIM)));
         }
         Phase::Failed(message) => {
@@ -248,6 +253,13 @@ pub(super) fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdErro
     }
 }
 
+/// The cockpit's reload after an action changed a pull request (hs-d312): the full refresh the periodic poll runs,
+/// `cpd pr poll`, in process. Later actions call it too. The error is the command's message.
+fn reload(run_command: RunCommand) -> Result<(), String> {
+    let argv: Vec<OsString> = [PROGRAM, "pr", "poll"].map(OsString::from).into();
+    run_command(argv).map(drop).map_err(|e| e.message().to_owned())
+}
+
 /// Draws and takes input until the dialog closes.
 fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str>, run_command: RunCommand) -> std::io::Result<()> {
     let mut phase = Phase::Ask;
@@ -269,7 +281,7 @@ fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str
                 terminal.draw(|f| draw(f, f.area(), pull, title, &phase))?;
                 let argv: Vec<OsString> = [PROGRAM, "pr", "merge", &pull.to_string()].map(OsString::from).into();
                 phase = match run_command(argv) {
-                    Ok(_) => Phase::Merged,
+                    Ok(_) => Phase::Merged(reload(run_command).err()),
                     Err(e) => Phase::Failed(e.message().to_owned()),
                 };
             }
@@ -332,7 +344,10 @@ mod tests {
 
     #[test]
     fn the_result_and_the_error_show_until_a_key() {
-        assert_eq!(rows(&render(&Phase::Merged, Some("T"), 58, 5)), [" o/r#7", " T", " Merged o/r#7 (squash).", "", " any key closes"]);
+        assert_eq!(rows(&render(&Phase::Merged(None), Some("T"), 58, 5)), [" o/r#7", " T", " Merged o/r#7 (squash).", "", " any key closes"]);
+        let buf = render(&Phase::Merged(Some("gh said no".into())), Some("T"), 58, 5);
+        assert_eq!(rows(&buf)[2..4], [" Merged o/r#7 (squash).", " poll failed: gh said no"]);
+        assert_eq!(buf[(2, 3)].fg, palette::note().fg.unwrap());
         let buf = render(&Phase::Failed("o/r#7 is OPEN and BLOCKED.".into()), Some("T"), 58, 5);
         assert_eq!(rows(&buf)[2], " o/r#7 is OPEN and BLOCKED.");
         assert_eq!(buf[(2, 2)].fg, palette::note().fg.unwrap());
@@ -363,7 +378,7 @@ mod tests {
 
     #[test]
     fn after_a_merge_any_key_closes_and_while_merging_none_does() {
-        for phase in [Phase::Merged, Phase::Failed("x".into())] {
+        for phase in [Phase::Merged(None), Phase::Failed("x".into())] {
             for code in [KeyCode::Enter, KeyCode::Char('y'), KeyCode::Char('z'), KeyCode::Esc] {
                 assert_eq!(on_key(&phase, press(code)), Some(Action::Close), "{phase:?} {code:?}");
             }
@@ -388,7 +403,7 @@ mod tests {
         }
         let right = MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), ..click(2, 4) };
         assert_eq!(on_mouse(&Phase::Ask, area, right), None);
-        assert_eq!(on_mouse(&Phase::Merged, area, click(2, 4)), None);
+        assert_eq!(on_mouse(&Phase::Merged(None), area, click(2, 4)), None);
         // the buttons are where they are drawn
         let buf = render(&Phase::Ask, None, 58, 5);
         assert_eq!(buf[(merge.x, merge.y)].symbol(), "[");

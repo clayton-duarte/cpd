@@ -106,6 +106,7 @@ $CPD_HOME/
     tmux-restart.pending          a restart of the tmux server is pending (§6.1, hs-d294): JSON `{at, server, installed, failed}`; not in the store
     tmux-restart.log              the output of the detached tmux restart (§6.1)
     team-review.json              the pull requests posted in the team Slack channel as the helper last read them, `{version, polled_at, channel, read, posts}` (commands.md §21.5, §21.6), written by E11 (§3.7) and read for the Inbox kind `review-requested` (§2.2); derived, not in the store, rewritten whole by rename; a failed run leaves the last good copy
+    tmux-restart.pid              the pid of the detached tmux restart the engine started, one line; removed when the engine reaps it (an engine that dies first leaves it, its pid perhaps reused); what finds that process, which is in no process group of the engine's
     <plan>/plan.md                the last `plan render`
     <plan>/lead-message.md        the Lead's first message, written by `plan new`
     <plan>/plannotator-port       the Plan's plannotator port, one line, assigned by `session run` (§6.5)
@@ -127,6 +128,7 @@ $CPD_HOME/
     context-digests/<context>/repair-prompt.md, digest.md, missing.md, problem.md   the inputs of a repair turn, written by it (§4.6 step 5)
     context-digests/<context>/records.md         the records in force a run gives the distiller (§4.6)
     context-digests/<context>/distill.log        every distill run's stderr, appended; the engine's runs also their stdout (§3.7 E9)
+    context-digests/<context>/distill.pid        the pid of the distill run the engine started (§3.7 E9), one line, as `tmux-restart.pid`
     titles/<session>.log          the output of every retitle run the engine starts for that Session, appended (§3.7 E10)
 ```
 
