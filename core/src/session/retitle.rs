@@ -29,8 +29,14 @@ use crate::output::Output;
 const MESSAGES: usize = 30;
 const CHARACTERS: usize = 8000;
 
-/// The longest title (contract §2.2): a longer answer is cut to this, ending with `…`.
+/// The longest title the run writes (step 4): a longer answer is malformed, never cut.
 const TITLE_CHARS: usize = 60;
+
+/// The most words a title has (step 4).
+const TITLE_WORDS: usize = 10;
+
+/// The marker of the answer's one line (step 4).
+const MARKER: &str = "TITLE:";
 
 /// How many lines of pi's stderr a refusal carries.
 const TAIL_LINES: usize = 20;
@@ -39,7 +45,7 @@ const TAIL_LINES: usize = 20;
 /// is prepended to the first prompt).
 const PROMPT: &str = "The text above is a conversation between a user and an AI agent. \
 Write a title of 3 to 7 words for the conversation's current subject: what it is about now, not what it started with. \
-Answer with the title only: plain text, one line, no quotes.";
+Answer with one line, `TITLE: <3 to 7 words>`, and nothing else: plain text, no quotes, no sentences.";
 
 /// `locks/title-<session>.lock`: held by the Session's one retitle run (contract §1.4).
 pub(crate) fn lock_path(home: &CpdHome, session: &SessionId) -> PathBuf {
@@ -59,9 +65,7 @@ enum Reason {
     Exit,
     Empty,
     /// hs-d356: no single `TITLE:` line, or one that does not pass step 4.
-    #[cfg_attr(not(test), allow(dead_code))] // Stub of the red tests (hs-d356): the fix constructs it in `sanitise`.
     Malformed,
-    Invalid,
 }
 
 impl Reason {
@@ -72,7 +76,6 @@ impl Reason {
             Reason::Exit => "exit",
             Reason::Empty => "empty",
             Reason::Malformed => "malformed",
-            Reason::Invalid => "invalid",
         }
     }
 }
@@ -241,22 +244,36 @@ fn run_pi(env: &Env, id: &SessionId, text: &str) -> Result<Title, CpdError> {
     sanitise(&String::from_utf8_lossy(&out.stdout)).map_err(|(reason, why)| title_failed(id, reason, why).with("tail", tail))
 }
 
-/// Step 4: the first line, trimmed, its surrounding quotes stripped, cut to [`TITLE_CHARS`]
-/// characters with `…`; it must then be a [`Title`].
+/// Step 4: the title is the text after the marker of the only line that starts with `TITLE:` (leading
+/// spaces allowed), trimmed and unquoted; any other line is ignored. An answer that is blank is `empty`;
+/// one with no marked line or two, or whose title is empty, over [`TITLE_CHARS`] characters or
+/// [`TITLE_WORDS`] words, reads as sentences or is not a [`Title`] is `malformed`. Nothing is cut.
 fn sanitise(answer: &str) -> Result<Title, (Reason, String)> {
     const QUOTES: &[char] = &['"', '\'', '`', '“', '”', '‘', '’', '«', '»'];
-    let line = answer.trim().lines().next().unwrap_or_default();
-    let line = line.trim().trim_matches(QUOTES).trim();
-    if line.is_empty() {
+    if answer.trim().is_empty() {
         return Err((Reason::Empty, "pi's answer is empty".to_owned()));
     }
-    let title = if line.chars().count() > TITLE_CHARS {
-        let kept: String = line.chars().take(TITLE_CHARS - 1).collect();
-        format!("{}…", kept.trim_end())
-    } else {
-        line.to_owned()
+    let malformed = |why: String| (Reason::Malformed, why);
+    let mut marked = answer.lines().filter_map(|l| l.trim_start().strip_prefix(MARKER));
+    let (Some(text), None) = (marked.next(), marked.next()) else {
+        return Err(malformed(format!("pi's answer has no single line starting with {MARKER}")));
     };
-    title.parse::<Title>().map_err(|e| (Reason::Invalid, format!("pi's answer {title:?} is not a title: {}", e.message())))
+    let text = text.trim().trim_matches(QUOTES).trim();
+    let bad = if text.is_empty() {
+        Some("it is empty".to_owned())
+    } else if text.chars().count() > TITLE_CHARS {
+        Some(format!("it is over {TITLE_CHARS} characters"))
+    } else if text.split_whitespace().count() > TITLE_WORDS {
+        Some(format!("it has more than {TITLE_WORDS} words"))
+    } else if text.contains(". ") || text.ends_with(['.', '…', ':']) {
+        Some("it reads as sentences".to_owned())
+    } else {
+        None
+    };
+    if let Some(bad) = bad {
+        return Err(malformed(format!("pi's answer {text:?} is not a title: {bad}")));
+    }
+    text.parse::<Title>().map_err(|e| malformed(format!("pi's answer {text:?} is not a title: {}", e.message())))
 }
 
 /// The last [`TAIL_LINES`] lines of `bytes`.
