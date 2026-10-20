@@ -926,6 +926,74 @@ fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()), "the rebased branch was pushed");
 }
 
+/// The Lead Branch of `fx` is behind its base: `main` moved on `origin` after the Lead Branch was cut.
+fn behind(fx: &Fx) -> String {
+    fx.advance_base("base.txt", "base\n")
+}
+
+/// The refusal `base_behind`: its `details`, nothing pushed, no `gh pr create`, no Gate, nothing written.
+fn assert_base_behind(fx: &Fx, run: &Run, base_sha: &str) {
+    assert_eq!(code(run), ("base_behind".into(), 3));
+    let details = &run.error()["details"];
+    assert_eq!(
+        *details,
+        json!({"pr": "repo", "base": "main", "base_sha": base_sha, "sha": fx.lead_sha(),
+               "next": [format!("git -C {} merge --no-edit origin/main", fx.lead.display()), "cpd pr open --pr repo"]})
+    );
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
+    assert_eq!(fx.plan_row().0, "dispatch");
+    assert!(fx.events("pr-opened").is_empty());
+}
+
+#[test]
+fn open_refuses_a_lead_branch_behind_its_base_then_opens_after_the_merge() {
+    let fx = fx("dispatch");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}\"\n", marker.display()));
+    let base = behind(&fx);
+
+    let run = fx.pr("open");
+
+    assert_base_behind(&fx, &run, &base);
+    assert!(!marker.exists(), "the Gate ran before the base check refused");
+
+    // The Lead runs `next`: the merge in the Lead worktree, then `pr open` again.
+    fx.git(&fx.lead, &["merge", "-q", "--no-edit", "origin/main"]);
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["phase"], "deploy");
+    assert!(marker.exists(), "the Gate ran on the merged head");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
+    assert_eq!(fx.git(&fx.repo, &["merge-base", "--is-ancestor", &base, &fx.lead_sha()]), "");
+}
+
+#[test]
+fn open_under_gate_ci_applies_the_same_base_check_and_runs_no_gate() {
+    let (fx, marker) = ci_fx_with_failing_hook("dispatch");
+    let base = behind(&fx);
+
+    let run = fx.pr("open");
+
+    assert_base_behind(&fx, &run, &base);
+    assert!(!marker.exists());
+    fx.git(&fx.lead, &["merge", "-q", "--no-edit", "origin/main"]);
+    assert_eq!(fx.pr("open").ok()["phase"], "deploy");
+    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+}
+
+#[test]
+fn open_never_creates_a_draft_pull_request() {
+    let fx = fx("dispatch");
+
+    fx.pr("open").ok();
+
+    let calls = fx.gh_calls();
+    let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).expect("gh pr create ran");
+    assert!(!create.iter().any(|a| a.contains("draft")), "{create:?}");
+    assert!(calls.iter().all(|c| !c.iter().any(|a| a.contains("draft"))), "{calls:?}");
+}
+
 #[test]
 fn open_with_gate_local_runs_the_gate_that_the_ci_policy_skips() {
     let fx = fx("dispatch");
