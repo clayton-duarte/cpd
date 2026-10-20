@@ -10,7 +10,7 @@
 //! dismisses. No other key does anything. A right click opens the menu
 //! ([`super::menu`]), which then takes every key and click.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -37,10 +37,15 @@ use serde_json::Value;
 use crate::palette;
 use crate::read::{ContextNode, Dot, SessionNode, Tree};
 
-/// The tree tries `cpd watch --ensure` at most this often while the engine is down (commands.md §13.2, hs-d318).
-const ENSURE_EVERY: Duration = Duration::from_secs(60);
-/// The Managers hear the same failure code at most this often.
-const TELL_EVERY: Duration = Duration::from_secs(3600);
+/// The engine has been down this long, on every snapshot, when the tree speaks: past the supervisor's 15 s wait and its
+/// retries (contract §6.6, hs-d363).
+const DOWN_FOR: Duration = Duration::from_secs(60);
+/// What every note of a downtime starts with; it clears when the engine runs again.
+const DOWN_PREFIX: &str = "engine down 60 s+:";
+/// The note of a downtime the Managers were told of.
+const DOWN_NOTE: &str = "engine down 60 s+: Managers told";
+/// What the Managers hear of a downtime.
+const DOWN_TOLD: &str = "The cpd engine has been down for 60 s and its supervisor has not restarted it; see run/watch.log, start it with cpd watch --ensure.";
 
 /// The longest name of a Session (commands.md §1.4).
 /// Rows a wheel notch scrolls the tree or the Inbox section by.
@@ -143,10 +148,15 @@ pub struct View {
     pub error: Option<String>,
     /// `$CPD_HOME/policy/owners`: the owner policies New Context… chooses the owner from (none when the home is unresolved).
     owners_dir: Option<PathBuf>,
-    /// When the tree last tried `watch --ensure` for a stopped engine (view state only).
-    ensure_at: Option<Instant>,
-    /// When the Managers were last told each failure code of `watch --ensure` (view state only).
-    told: BTreeMap<String, Instant>,
+    /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
+    /// Managers were told of it (view state only).
+    down: Option<Down>,
+}
+
+/// One downtime of the engine (see [`View::down`]).
+struct Down {
+    since: Instant,
+    spoke: bool,
 }
 
 /// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
@@ -213,8 +223,7 @@ impl View {
             note: String::new(),
             error: None,
             owners_dir: CpdHome::from_env().ok().map(|h| h.root().join("policy").join("owners")),
-            ensure_at: None,
-            told: BTreeMap::new(),
+            down: None,
         };
         view.refresh(tree);
         view
@@ -290,64 +299,50 @@ impl View {
         }
     }
 
-    /// RED STUB (hs-d363, Job en-red2; Job en-impl replaces it): the tree never runs `watch --ensure`; after 60 s of a lock
-    /// read free on every snapshot it tells the live Manager of every Context once (`run` with [`Action::Tell`]) and sets the
-    /// note `engine down 60 s+: Managers told`, which clears when the engine runs again. For now it is today's restart, so the
-    /// tests below fail on their assertions.
-    #[allow(dead_code)] // en-impl calls it from the loop in place of `restart_engine`
+    /// The tree never runs `cpd watch --ensure` by itself: the supervisor restarts a stopped engine (contract §6.6,
+    /// hs-d328, hs-d363). It only speaks: when `locks/watch.lock` has been read free on every snapshot for [`DOWN_FOR`]
+    /// (`self.tree.engine_running` is false at each call since `now`), it tells the live Manager of every Context once
+    /// per downtime (`run` with [`Action::Tell`], `managers` lists them) and sets the note [`DOWN_NOTE`]; the note clears
+    /// when the engine runs again. A failure to list or tell is the note instead. Returns the lines for the view's log
+    /// (`run/tui/tree.log`); never writes to the terminal.
     pub fn watch_engine(
         &mut self,
         now: Instant,
         run: &mut dyn FnMut(&Action) -> Result<Value, Failure>,
         managers: &mut dyn FnMut() -> Result<Vec<SessionId>, String>,
-    ) {
-        let _ = self.restart_engine(now, run, managers);
-    }
-
-    /// A stopped engine restarts itself (commands.md §13.2, hs-d318): when the snapshot saw `locks/watch.lock` free, and
-    /// `now` is a minute after the last try, runs `watch --ensure` through `run`; a refusal is told to each live Manager
-    /// `managers` lists (`session send`, from the User's side), at most once per code per hour, and to none when there is
-    /// no Manager. Sets the note and returns the same line, which the caller writes to stderr; `None` when nothing was tried.
-    pub fn restart_engine(
-        &mut self,
-        now: Instant,
-        run: &mut dyn FnMut(&Action) -> Result<Value, Failure>,
-        managers: &mut dyn FnMut() -> Result<Vec<SessionId>, String>,
-    ) -> Option<String> {
-        if self.tree.engine_running || self.ensure_at.is_some_and(|at| now.saturating_duration_since(at) < ENSURE_EVERY) {
-            return None;
+    ) -> Vec<String> {
+        if self.tree.engine_running {
+            if self.down.take().is_some_and(|d| d.spoke) && self.note.starts_with(DOWN_PREFIX) {
+                self.note.clear();
+            }
+            return Vec::new();
         }
-        self.ensure_at = Some(now);
-        let line = match run(&Action::EnsureWatch) {
-            Ok(reply) if reply["already"] == true => "engine was down: cpd watch --ensure found it running".to_owned(),
-            Ok(_) => "engine was down: cpd watch --ensure started it".to_owned(),
-            Err(failure) => {
-                let (code, message) = (failure.code().to_owned(), failure.message().to_owned());
-                let due = self.told.get(&code).is_none_or(|at| now.saturating_duration_since(*at) >= TELL_EVERY);
-                let mut line = format!("engine was down: cpd watch --ensure failed: {code}: {message}");
-                if due {
-                    let text = format!(
-                        "The cpd engine is down and 'cpd watch --ensure' failed: {code}: {message}. Start it with cpd watch --ensure."
-                    );
-                    match managers() {
-                        Ok(ids) => {
-                            if !ids.is_empty() {
-                                self.told.insert(code, now);
-                            }
-                            for manager in ids {
-                                if let Err(why) = run(&Action::Tell { manager: manager.clone(), text: text.clone() }) {
-                                    line.push_str(&format!(" (telling {manager} failed: {})", why.message()));
-                                }
-                            }
+        let down = self.down.get_or_insert(Down { since: now, spoke: false });
+        if down.spoke || now.saturating_duration_since(down.since) < DOWN_FOR {
+            return Vec::new();
+        }
+        down.spoke = true;
+        let mut lines = vec![format!("engine down {} s+: telling the Managers", DOWN_FOR.as_secs())];
+        match managers() {
+            Err(why) => {
+                self.note = format!("{DOWN_PREFIX} listing the Managers failed: {why}");
+                lines.push(format!("listing the Managers failed: {why}"));
+            }
+            Ok(ids) if ids.is_empty() => lines.push("no live Manager to tell".to_owned()),
+            Ok(ids) => {
+                self.note = DOWN_NOTE.to_owned();
+                for manager in ids {
+                    match run(&Action::Tell { manager: manager.clone(), text: DOWN_TOLD.to_owned() }) {
+                        Ok(_) => lines.push(format!("told {manager}")),
+                        Err(why) => {
+                            self.note = format!("{DOWN_PREFIX} telling {manager} failed: {}", why.message());
+                            lines.push(format!("telling {manager} failed: {}: {}", why.code(), why.message()));
                         }
-                        Err(why) => line.push_str(&format!(" (listing the Managers failed: {why})")),
                     }
                 }
-                line
             }
-        };
-        self.note = line.clone();
-        Some(line)
+        }
+        lines
     }
 
     /// The result of an [`Effect::Run`] or [`Effect::Legend`].
@@ -2765,5 +2760,32 @@ mod tests {
         assert_eq!(view.note, "already running");
         view.done(Err(Action::EnsureWatch.failed("watch_start_failed", "no tmux")));
         assert_eq!(view.note, "watch_start_failed: no tmux");
+    
+    #[test]
+    fn a_downtime_with_no_live_manager_says_nothing_and_a_failure_to_tell_or_list_is_the_note_and_the_log() {
+        let t0 = Instant::now();
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        let mut run = |_: &Action| Ok(serde_json::json!({"ok": true}));
+        assert!(view.watch_engine(t0, &mut run, &mut || Ok(Vec::new())).is_empty());
+        let lines = view.watch_engine(secs(t0, 60), &mut run, &mut || Ok(Vec::new()));
+        assert!(lines.iter().any(|l| l.contains("no live Manager")), "{lines:?}");
+        assert!(view.note.is_empty(), "the Inbox's engine-down item is the User's: {:?}", view.note);
+
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        view.watch_engine(t0, &mut run, &mut || Ok(Vec::new()));
+        let lines = view.watch_engine(secs(t0, 60), &mut run, &mut || Err("store busy".to_owned()));
+        assert_eq!(view.note, "engine down 60 s+: listing the Managers failed: store busy");
+        assert!(lines.iter().any(|l| l.contains("store busy")), "{lines:?}");
+
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        let mut refuse = |_: &Action| Err(Failure::Broken("no tmux".to_owned()));
+        view.watch_engine(t0, &mut refuse, &mut || Ok(vec![SessionId::parse("m-alpha").unwrap()]));
+        let lines = view.watch_engine(secs(t0, 60), &mut refuse, &mut || Ok(vec![SessionId::parse("m-alpha").unwrap()]));
+        assert_eq!(view.note, "engine down 60 s+: telling m-alpha failed: no tmux");
+        assert!(lines.iter().any(|l| l.contains("no tmux")), "{lines:?}");
     }
+}
 }
