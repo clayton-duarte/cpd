@@ -651,12 +651,13 @@ fn a_refused_or_failed_merge_removes_the_marker_before_the_failure_dialog_opens(
     for (state, exit) in [("BLOCKED", 0), ("CLEAN", 1)] {
         let env = env();
         gh_noting(&env, state, exit, None);
-        // `display-popup` notes whether the marker exists when the dialog is opened, and fails (no client to show it on)
+        // the client is there (`display -p -c` answers its size), and `display-popup` notes whether the marker exists when the
+        // dialog is opened, and fails
         let marker = marker(&env);
         fake_tmux_before(
             &env,
             &format!(
-                "case \"$*\" in *display-popup*) if [ -e '{m}' ]; then echo present >> '{r}/saw-popup'; else echo absent >> '{r}/saw-popup'; fi; echo 'no popup' >&2; exit 1;; esac",
+                "case \"$*\" in *\"display -p -c\"*) echo '100 30'; exit 0;; *display-popup*) if [ -e '{m}' ]; then echo present >> '{r}/saw-popup'; else echo absent >> '{r}/saw-popup'; fi; echo 'no popup' >&2; exit 1;; esac",
                 m = marker.display(),
                 r = env.root().display()
             ),
