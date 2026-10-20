@@ -382,6 +382,11 @@ impl<'a> Pane<'a> {
         }
     }
 
+    /// One notch of the wheel down at 0-based `column` and `row`: SGR button 65.
+    fn wheel_down(&self, column: u16, row: u16) {
+        self.type_text(&format!("\x1b[<65;{};{}M", column + 1, row + 1));
+    }
+
     /// A right click at 0-based `column` and `row`: SGR button 2, which tmux calls button 3.
     fn right_click(&self, column: u16, row: u16) {
         for end in ['M', 'm'] {
@@ -404,6 +409,35 @@ impl<'a> Pane<'a> {
     fn footer_has(&self, text: &str) -> bool {
         self.screen().iter().any(|r| r.contains(text))
     }
+}
+
+/// The tree taller than its share of the column (hs-d307), end to end: forty Plans more under `gamma`, in a pane of 20
+/// rows with the Inbox's items. The tree keeps the top of the column and scrolls inside it, with the wheel, between a
+/// `▲` and a `▼` cue; the Inbox stays below it (the bug: the tree did not scroll, its rows past the column were lost).
+#[test]
+fn a_tree_taller_than_its_share_scrolls_with_the_wheel_between_its_cues() {
+    let env = env();
+    populate(&env);
+    let mut s = String::new();
+    for i in 0..40 {
+        let (plan, lead) = (format!("p{i:02}"), format!("l-p{i:02}"));
+        let created = format!("2026-01-03T00:00:{i:02}.000Z");
+        s += &plan_row(&plan, "gamma", "plan", &lead, &created, false);
+        s += &session_row(&lead, &plan, "gamma", &plan, "idle", None, &created);
+    }
+    sql(&mut open(&env), &s);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    let cue = |r: &String, glyph: char| r.trim_start().starts_with(glyph) && r.ends_with(" more");
+    let screen = pane.wait("the tree's ▼ cue above the Inbox", |s| {
+        let inbox = s.iter().position(|r| r.contains("Inbox"));
+        inbox.is_some_and(|i| i > 1 && cue(&s[i - 1], '▼'))
+    });
+    assert!(!screen.iter().any(|r| cue(r, '▲')), "nothing is hidden above yet: {screen:?}");
+    pane.wheel_down(10, 3);
+    let screen = pane.wait("the tree's ▲ cue after a notch", |s| s.get(1).is_some_and(|r| cue(r, '▲')));
+    assert!(!screen[1..].iter().any(|r| r.contains(" alpha")), "the top of the tree scrolled away: {screen:?}");
+    assert!(screen.iter().any(|r| r.contains("Inbox")), "the Inbox stays: {screen:?}");
 }
 
 /// A fake `cpd` that succeeds with `reply`.
