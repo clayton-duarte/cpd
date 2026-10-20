@@ -1744,6 +1744,56 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert_eq!(copies().len(), 2, "only the review page and the review request were copied: {:?}", copies());
 }
 
+/// The glyph cell of the Inbox row that shows `label`, on `screen`: the fifth cell of ` │  <glyph> <label>`.
+fn glyph_of(screen: &[String], label: &str) -> String {
+    let row = screen.iter().find(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n")));
+    row.chars().nth(4).map(String::from).unwrap_or_default()
+}
+
+#[test]
+fn a_pr_ready_item_whose_merge_runs_shows_the_spinner_and_a_click_on_it_does_nothing_until_the_marker_is_gone_or_stale() {
+    // commands.md §13.2 "A merge in progress" (hs-d495): the merge marker of `acme/api#3` makes its `pr-ready` item's glyph the
+    // spinner and its click nothing; a stale marker (a dead pid) is ignored, as no marker is.
+    let env = env();
+    populate(&env);
+    let mut store = open(&env);
+    let event = store.read(cpd_core::events::highest_id).unwrap();
+    reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
+    fake_cpd(&env, r#"{"ok":true,"manager":{"session":"m-alpha"}}"#);
+    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    env.fake(
+        "tmux",
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60 /dev/pts/9';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+    );
+    // the marker is there before the view starts: a restarted view reads the same file
+    crate::tui_merge::put_marker(&env, "acme__api__3.json", std::process::id());
+    let pane = Pane::start(&env, 60, 40);
+    pane.ready();
+    pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
+    pane.click(10, pane.screen().len() as u16 - 1);
+    pane.wait("the expanded list", |s| s.last().is_some_and(|r| *r == collapse()));
+    let ready = "acme/api#3 ready";
+    let screen = pane.wait("the spinner in the glyph cell", |s| s.iter().any(|r| r.contains(ready)) && SPINNER.contains(&glyph_of(s, ready).as_str()));
+    // the other items keep their tier glyph
+    assert_eq!(glyph_of(&screen, "acme/web#5 review requested"), palette::TIER_YELLOW, "{screen:?}");
+    assert_eq!(glyph_of(&screen, "acme/api#12 failing"), palette::TIER_YELLOW);
+
+    // a click on it does nothing: the popups are the legend's alone, which `settled_with_a_client` asks for last
+    let row = item_row(&pane, ready);
+    pane.click(10, row);
+    pane.click(4, row);
+    pane.settled_with_a_client();
+    assert_eq!(popups(&env).len(), 1, "no merge popup: {:?}", popups(&env));
+
+    // the same marker, stale: ignored as no marker is, and the click merges again
+    crate::tui_merge::put_marker(&env, "acme__api__3.json", crate::tui_merge::dead_pid());
+    let screen = pane.wait("the tier glyph back", |s| s.iter().any(|r| r.contains(ready)) && glyph_of(s, ready) == palette::TIER_WHITE);
+    assert_eq!(glyph_of(&screen, ready), palette::TIER_WHITE);
+    pane.click(10, item_row(&pane, ready));
+    common::wait_until("the merge popup", || popups(&env).len() == 2);
+    assert_eq!(popups(&env)[1].last().unwrap(), "cpd tui view merge 'acme/api#3' --client '/dev/pts/9'", "{:?}", popups(&env)[1]);
+}
+
 /// Every Manager archived: none is live (`populate` makes one per Context).
 fn archive_managers(env: &TestEnv) {
     sql(&mut open(env), "UPDATE sessions SET archived_at = '2026-01-04T00:00:00.000Z' WHERE role = 'manager'");

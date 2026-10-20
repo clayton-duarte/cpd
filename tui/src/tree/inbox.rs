@@ -234,14 +234,19 @@ fn is_link(kind: Kind) -> bool {
 
 /// An item's row: the fold's muted `│`, two spaces, the item's tier glyph in its urgency's colour, a space, the label cut with
 /// `…` so that it never reaches the age, and the age. Returns the line and the number of cells of the label.
-fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
+/// A merge of the item's pull request runs (hs-d495): `spin` is the spinner's frame, and the glyph cell shows it.
+fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line<'static>, usize) {
     let room = width.saturating_sub(LEAD_WIDTH + 1 + age.chars().count());
     let label = truncate(&item.label, room);
     let label_width = label.chars().count();
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
+    let mut glyph = palette::tier_span(item.urgency);
+    if let Some(frame) = spin {
+        glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();
+    }
     let line = fold::content(fold::BRANCH, Line::from(vec![
         "  ".into(),
-        palette::tier_span(item.urgency),
+        glyph,
         " ".into(),
         label.into(),
         " ".repeat(gap).into(),
@@ -258,8 +263,9 @@ fn cue_line(which: Cue, n: usize, width: usize) -> Line<'static> {
 /// Draws the section into `area`, the panel's full width (its first row is the empty one; rows that do not fit are cut;
 /// the title keeps the padding of one column on each side, the rows are drawn inside it): `items` are the
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
-/// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled.
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime) {
+/// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled. `spinning` says, of an
+/// item whose merge runs, the frame of the spinner its glyph cell shows instead of its tier glyph (hs-d495).
+pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) {
     let win = shape.window();
     let list = shape.list_rows();
     for dy in 0..area.height.min(shape.height()) {
@@ -273,7 +279,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
             }
             Some(Hit::Item(i)) => {
                 let item = &items[i];
-                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), width);
+                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), width, spinning(item));
                 f.render_widget(Paragraph::new(line), row);
                 if cursor == Some(i) {
                     f.buffer_mut().set_style(row, Modifier::REVERSED);
@@ -528,7 +534,7 @@ mod tests {
         let url = "https://github.com/acme/api/pull/12";
         let mut linked = item(1, Kind::ReviewRequested, Urgency::Red, "api#12 failing", OPENED);
         linked.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         let bytes = sink.0.borrow().clone();
         let pieces: String = ["ap", "i#", "12", " f", "ai", "li", "ng"]
             .iter()
@@ -547,7 +553,7 @@ mod tests {
         let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
         dialog.url = Some(url.into());
         let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
-        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
     }
 
@@ -586,7 +592,7 @@ mod tests {
     fn with_no_item_the_section_is_the_title_with_count_0_then_the_one_closing_row_and_it_is_no_click() {
         use ratatui::backend::TestBackend;
         let mut terminal = Terminal::new(TestBackend::new(41, 6)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"), &|_| None)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let row = |y: u16| (0..41).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
         let title = format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(39 - 2 - 2 - "Inbox".len() - 3));
