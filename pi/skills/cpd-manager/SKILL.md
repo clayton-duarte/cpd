@@ -93,7 +93,7 @@ Prevent conflicts between Leads' PRs before the work starts, and remedy them whe
 - **Oversee all-merged PRs.** Leads open a PR as soon as its last Job merges. Watch the PRs whose Jobs are all merged (`cpd context pending --context <c>` shows each PR's Jobs) and stack those that would conflict, so each PR can simply be merged.
 - **One PR in flight per area, the next stacked.** Tell the Leads the order and which branch the next PR builds on and targets:
   - The next PR is built on the previous PR's last commit (its Lead Branch head), never in parallel from the base.
-  - While the previous PR is open, the next PR targets the previous PR's branch (`gh pr edit <n> --base <branch>` right after `cpd pr open`, or `cpd pr add <key> --repo <path> --base <branch>` for a PR added later), so GitHub cannot land it first.
+  - While the previous PR is open, the next PR targets the previous PR's branch (`gh pr edit <n> --base <branch>` right after `cpd pr open`, or `cpd pr add <key> --repo <path> --base <branch> --title "<title>"` for a PR added later), so GitHub cannot land it first.
   - While stacked, its Lead takes the previous branch's new commits with a merge and pushes with `cpd pr push --pr <key>`, not `cpd pr rebase`.
   - When the previous PR lands, GitHub repoints the next PR to the base: tell its Lead with `cpd session send <lead-session>` to merge the base, run the Gate and push with `cpd pr push --pr <key>`.
 
