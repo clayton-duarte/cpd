@@ -163,7 +163,7 @@ cpd requires tmux >= 3.6 (contract §6.1: older versions can lose a pane's `SIGC
 
 ## The scoped loop
 
-The full suite is the Gate's (hs-d338): while you edit, run only the tests your change can reach. Measured on hs (docs/research/build-cycle.md §5), an edit and its scoped tests take 3.7-12 s, almost all of it rustc; the tests themselves take 0.01-0.04 s.
+The full suite is the Gate's (hs-d338): while you edit, run only the tests your change can reach. Measured on hs (docs/research/build-cycle.md §5), an edit and its scoped tests take 3.7-12 s, almost all of it rustc; the tests themselves take 0.01-0.04 s. With one binary per area, a module edit's scoped run (`scripts/test-changed`, build included) took 1.6-2.2 s on hs (Plan quality, lp-areas), against 10-11 s when all integration tests were one binary.
 
 - **`scripts/test-changed [--dry-run] [<base>]`** runs the tests that the changed files can reach, with `scripts/cargo.sh nextest run`. `<base>` is a git revision, `origin/main` by default; the changed files are those that differ between `<base>` (its merge base with `HEAD`) and the working tree: committed, staged, unstaged and untracked files. The selection:
   1. A changed file belongs to the crate whose directory holds it (`cargo metadata`: `core/` is `cpd-core`, `tui/` is `cpd-tui`, `cli/` is `cpd`). The run is those crates **and their reverse dependencies** (`-p <crate>` for each): a change in `core/` runs `cpd-core`, `cpd-tui` and `cpd`; a change in `tui/` runs `cpd-tui` and `cpd`; a change in `cli/` runs `cpd`.
