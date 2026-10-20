@@ -55,6 +55,9 @@ fn real_tmux() -> PathBuf {
 /// A fake `tmux` that records its calls, ends `attach` with exit 0 and otherwise
 /// runs the real one. `extra` is shell code run first.
 fn fake_tmux(env: &TestEnv, extra: &str) {
+    // TEMP-DELAY
+    let delay = format!("if [ -n \"$BRR_SUB\" ] && [ -e '{root}/adapter-reports' ]; then case \" $* \" in *\" $BRR_SUB \"*) sleep \"$BRR_DELAY\";; esac; fi\n", root = env.root().display());
+    let extra = format!("{delay}{extra}");
     env.fake("tmux", &format!("{extra}\ncase \" $* \" in *\" attach \"*) exit 0;; esac\nexec '{}' \"$@\"", real_tmux().display()));
 }
 
@@ -500,7 +503,7 @@ fn places() -> Vec<(String, String)> {
 }
 
 macro_rules! rstress { ($($n:ident),*) => { $( #[test] fn $n() { safe_restart_body() } )* } }
-rstress!(rstress_0, rstress_1, rstress_2, rstress_3, rstress_4, rstress_5, rstress_6, rstress_7);
+rstress!(rstress_0, rstress_1, rstress_2, rstress_3, rstress_4, rstress_5, rstress_6, rstress_7, rstress_8, rstress_9, rstress_10, rstress_11, rstress_12, rstress_13, rstress_14, rstress_15);
 #[test]
 fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_place_and_plain_tmux_attaches() {
     safe_restart_body()
