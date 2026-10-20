@@ -1296,7 +1296,7 @@ CREATE INDEX events_session ON events(session, id);
 -- ---------- Inbox items (§2.2) ----------
 CREATE TABLE inbox_items (
   id            INTEGER PRIMARY KEY,
-  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested')),  -- the last four: migration 0013
+  kind          TEXT NOT NULL CHECK (kind IN ('dialog', 'plan-review', 'review-waiting', 'unread', 'job-stuck', 'engine-error', 'question', 'pr-failing', 'pr-changes', 'pr-ready', 'review-requested')),  -- review-waiting: migration 0014; the last four: migration 0013
   urgency       TEXT NOT NULL CHECK (urgency IN ('red', 'yellow', 'magenta', 'white')),
   subject       TEXT NOT NULL CHECK (length(subject) >= 1),
   context       TEXT REFERENCES contexts(id),
@@ -1317,7 +1317,21 @@ CREATE TABLE inbox_items (
 CREATE UNIQUE INDEX inbox_items_open ON inbox_items(kind, subject, urgency) WHERE closed_at IS NULL;
 CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
 
--- ---------- Tier catalog cache (§9) ----------
+-- ---------- Plannotator sessions (hs-d496) ----------
+CREATE TABLE plannotator_reviews (
+  session       TEXT NOT NULL REFERENCES sessions(id),
+  pn_id         TEXT NOT NULL CHECK (pn_id GLOB 'pn-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'),
+  kind          TEXT NOT NULL CHECK (kind IN ('annotate', 'review', 'last', 'plan')),
+  subject       TEXT NOT NULL CHECK (length(subject) BETWEEN 1 AND 200),
+  port          INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+  opened_at     TEXT NOT NULL,
+  closed_at     TEXT,
+  ended         TEXT CHECK (ended IS NULL OR ended IN ('decided', 'lost')),
+  UNIQUE (session, pn_id),
+  CHECK ((closed_at IS NULL) = (ended IS NULL))
+) STRICT;
+
+-- ---------- Tier catalog cache (section 9) ----------
 CREATE TABLE tier_catalog (
   pi_version TEXT NOT NULL,
   letter     TEXT NOT NULL CHECK (letter IN ('O', 'S', 'H')),
