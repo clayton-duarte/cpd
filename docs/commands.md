@@ -2655,6 +2655,32 @@ cpd: a Manager never blocks: a wait over 30 s runs in the background or is the o
 
 **Not affected:** a Lead or a Worker, whatever it runs; every other tool; every `cpd` command's own timeout.
 
+### 15.12 A Worker runs targeted tests
+
+Decision (User, 2026-10-19). A Worker runs only the tests its change touches; the full suite is the Gate's, at `pr open`. Several full suites and Gates at once loaded a host to 205 on 16 cores, and every Gate failed on timing. The Spec's acceptance names the targeted tests (the files and modules the Job changes plus its new tests), never a green full suite, and the adapter enforces the rule, as §15.11 does for the Manager.
+
+**When.** At pi's `tool_call`, for a `bash` call (`event.toolName` is `bash`, `event.input.command`), of a Session of role `worker` only. It is the same handler as §15.11's, which consults each guard by role (`pi/lib/testguard.ts`, `unfilteredTestRun`); for a Lead, a Manager, or before `session_start` has read the role, this guard returns nothing.
+
+**What is refused.** The call is refused when a command of it runs a full unfiltered test suite, that is:
+
+- `cargo test` or `cargo nextest run`, also through `scripts/cargo.sh`, with or without `timeout N` in front, when it has `--workspace`, or has none of `-p` / `--package`, `--test`, `--lib`, `--bin`, `-E` / `--filterset`, or a positional test-name filter (also after `--`);
+- `npm test` or `npm run test` with no file argument (a word after `--`, or after the script name, that is not an option);
+- `npm run verify` (the Gate), whatever its arguments.
+
+**Allowed**, for example: `scripts/cargo.sh nextest run -p cpd --test plan_overlap`, `cargo test -p cpd-core spec::`, `node --test pi/test/x.test.ts`, `npm test -- pi/test/x.test.ts`, `npm run typecheck`, `cargo build`.
+
+A pattern counts where a command runs, as in §15.11 (a command word of a simple command, not an argument or quoted text: `grep "cargo test" f` passes).
+
+**The refusal** is `{block: true, reason}`, with the reason on one line naming the rule:
+
+```
+cpd: a Worker runs only the tests its change touches; the full suite is the Gate's, at pr open; refused: <what matched>
+```
+
+`<what matched>` is the command word and its subcommand, with `--workspace` when it was given (`cargo.sh test --workspace`, `cargo nextest run`, `npm test`, `npm run verify`).
+
+**Not affected:** a Lead or a Manager, whatever it runs; every other tool; the Gate itself.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
