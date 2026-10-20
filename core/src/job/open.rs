@@ -21,13 +21,14 @@ fn pr_title(pr: &PrRow) -> &str {
     pr.title.as_deref().unwrap_or(pr.key.as_str())
 }
 
-/// The key of a PR's `open` Job: the first free of `open-<pr>`, `open-<pr>-2`, … (at most 32 characters, the PR key having at most 24).
-fn free_key(taken: &[String], pr: &PrRow) -> Result<JobKey, CpdError> {
-    let stem = format!("open-{}", pr.key);
+/// The key of a PR's `open` or `update` Job: the first free of `<prefix>-<pr>`, `<prefix>-<pr>-2`, … (`open` or `up`; at most 32
+/// characters, the PR key having at most 24).
+fn free_key(taken: &[String], prefix: &str, pr: &PrRow) -> Result<JobKey, CpdError> {
+    let stem = format!("{prefix}-{}", pr.key);
     (1u32..)
         .map(|n| if n == 1 { stem.clone() } else { format!("{stem}-{n}") })
         .find(|key| !taken.contains(key))
-        .ok_or_else(|| CpdError::bad_row(format!("PR {} has no free open Job key", pr.key)))
+        .ok_or_else(|| CpdError::bad_row(format!("PR {} has no free {prefix} Job key", pr.key)))
         .and_then(|key| JobKey::parse(&key))
 }
 
@@ -64,27 +65,99 @@ fn spec(pr: &PrRow) -> JobSpec {
     }
 }
 
+/// The fixed Spec of an `update` Job of `pr` (§2.2 "Job kinds", §3.4 A3): the open Job's work for a pull request that exists.
+fn update_spec(pr: &PrRow) -> JobSpec {
+    let (base, lead) = (&pr.base, &pr.lead_branch);
+    let remote = format!("origin/{base}");
+    JobSpec {
+        goal: format!(
+            "Bring the pull request of PR {key} up to date with its base {base}, so that cpd can gate the Lead Branch {lead} and push it: merge {remote} into it only if the two conflict, resolve the conflicts, and submit.",
+            key = pr.key
+        ),
+        context: format!(
+            "The pull request of PR {key} exists already: {lead}, in the repo {repo}, is its head, and you work in a worktree cut from it. Either GitHub reports a conflict between it and {base}, or fix Jobs of the PR have merged into {lead} and only have to reach the pull request (then there may be nothing to merge). \
+             You push nothing, open nothing and run no Gate: when your submit passes, cpd runs the Gate in a test slot and pushes {lead}.\n\n\
+             1. `git fetch origin {base}`.\n\
+             2. Test for a conflict with `git merge-tree --write-tree --name-only {remote} HEAD`: exit 0 means none, and a base that merely moved ahead is no reason to merge it; exit 1 lists the conflicted files.\n\
+             3. Only on a conflict: `git merge --no-edit {remote}`, resolve every conflict keeping both sides' intent, and commit the merge with what it needs to build and pass the Gate (recomputed hashes, tests adapted to the base's new rules, a renumbered migration).\n\
+             4. Run the quick check and `cpd attempt submit` for your Attempt (the Worker Spec gives its id). With no conflict there is nothing to commit: submit as it is.\n\n\
+             A refused submit says what to fix: `base_conflict` (merge the base, as above), `lead_branch_moved` (a Job merged into {lead} since you began: merge it, `git merge --no-edit {lead}`), `gate_failed` (fix what the Gate reports, commit, submit again), `gate_error` or `pr_closed` (ask the Lead).",
+            key = pr.key,
+            repo = pr.repo,
+        ),
+        touches: json!([format!("The files {remote} conflicts with {lead} in, and what the merge needs in order to build and pass the Gate")]),
+        acceptance: json!([
+            format!("`cpd attempt submit` succeeds: {lead} has no conflict with {remote} and the Gate, which cpd runs at submit, passes"),
+            "Nothing was pushed by the Worker and no pull request was created or edited by it",
+        ]),
+        out_of_scope: json!([
+            "Pushing, `gh`, running the Gate or editing the pull request yourself: cpd does them",
+            format!("Merging {remote} when it does not conflict"),
+            "Features, refactors or fixes that the conflict does not need",
+        ]),
+    }
+}
+
 /// Inserts PR `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its
 /// fingerprint stored at once, with `job-added` (`kind` `open`, `by` `engine`) in the same transaction. Returns its key.
 pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier) -> Result<JobKey, CpdError> {
+    insert(tx, plan, pr, tier, "open", BY_ENGINE, None)
+}
+
+/// Why an `update` Job is queued (`job-added`'s `reason`, §5.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cause {
+    /// The poll saw the pull request conflict with its base.
+    Conflict,
+    /// A fix Job of the PR was queued: the PR's changes have to reach its pull request.
+    Feedback,
+}
+
+impl Cause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Cause::Conflict => "conflict",
+            Cause::Feedback => "feedback",
+        }
+    }
+}
+
+/// Queues PR `pr`'s `update` Job in `tx` (§2.2 "Job kinds", §3.7 E5), unless the PR has one `queued` or `running`: one transaction writes the
+/// cause and the Job, so a cause is told once. `by` is `job-added`'s `by` (`poll`, `job add`, `plan review`). Returns the key of the Job it
+/// inserted, none when one was live.
+pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by: &str, cause: Cause) -> Result<Option<JobKey>, CpdError> {
+    let live: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'update' AND status IN ('queued', 'running'))",
+        [plan.as_str(), pr.key.as_str()],
+        |r| r.get(0),
+    )?;
+    if live {
+        return Ok(None);
+    }
+    insert(tx, plan, pr, tier, "update", by, Some(cause.as_str())).map(Some)
+}
+
+/// The insert of an `open` or `update` Job: the same row, Spec apart, with `job-added` in the same transaction.
+fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, by: &str, reason: Option<&str>) -> Result<JobKey, CpdError> {
     let taken: Vec<String> = {
         let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
         stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
-    let key = free_key(&taken, pr)?;
+    let update = kind == "update";
+    let key = free_key(&taken, if update { "up" } else { "open" }, pr)?;
     let tier = tier.to_string();
-    let title = format!("Open the pull request: {}", pr_title(pr));
+    let title = if update { format!("Bring the pull request up to date: {}", pr_title(pr)) } else { format!("Open the pull request: {}", pr_title(pr)) };
     let mut job = Job {
         seq: 0,
         key: key.as_str().to_owned(),
         pr: pr.key.as_str().to_owned(),
         title,
         tier: Some(tier.clone()),
-        spec: Some(spec(pr)),
+        spec: Some(if update { update_spec(pr) } else { spec(pr) }),
         status: "queued".to_owned(),
         appended: true,
         review: false,
-        kind: "open".to_owned(),
+        kind: kind.to_owned(),
         tests: None,
         test_files: None,
         test_approved: None,
@@ -104,7 +177,7 @@ pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier) -> Result<J
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, kind, created_txn, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', 1, ?11, 'open', cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', 1, ?11, ?12, cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
         params![
             plan.as_str(),
             job.pr,
@@ -117,14 +190,24 @@ pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier) -> Result<J
             array(&spec.acceptance),
             array(&spec.out_of_scope),
             job.fingerprint,
+            kind,
         ],
     )?;
-    let text = format!(
-        "Job {key} added to Plan {plan} by the engine: it merges the base only on a conflict, and cpd gates, pushes and opens PR {pr}'s pull request when it is done. \
-         It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
-        pr = pr.key
-    );
-    append(tx, NewEvent::job_added_by_cpd(text, pr.key.as_str(), "open", &tier, BY_ENGINE, None).plan(plan.clone()).job(key.clone()))?;
+    let text = if update {
+        format!(
+            "Job {key} added to Plan {plan} by {by} ({why}): it merges the base only on a conflict, and cpd gates and pushes PR {pr}'s Lead Branch when it is done. \
+             It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
+            why = reason.unwrap_or("update"),
+            pr = pr.key
+        )
+    } else {
+        format!(
+            "Job {key} added to Plan {plan} by the engine: it merges the base only on a conflict, and cpd gates, pushes and opens PR {pr}'s pull request when it is done. \
+             It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
+            pr = pr.key
+        )
+    };
+    append(tx, NewEvent::job_added_by_cpd(text, pr.key.as_str(), kind, &tier, by, reason).plan(plan.clone()).job(key.clone()))?;
     Ok(key)
 }
 
@@ -194,14 +277,14 @@ mod tests {
 
     #[test]
     fn the_key_is_the_first_free_of_open_pr_and_its_numbered_successors() {
-        let key = |taken: &[&str]| free_key(&taken.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>(), &pr("api")).unwrap();
+        let key = |taken: &[&str]| free_key(&taken.iter().map(|k| (*k).to_owned()).collect::<Vec<_>>(), "open", &pr("api")).unwrap();
         assert_eq!(key(&[]).as_str(), "open-api");
         assert_eq!(key(&["open-api"]).as_str(), "open-api-2");
         assert_eq!(key(&["open-api", "open-api-2", "open-web"]).as_str(), "open-api-3");
         // A PR key of 24 characters leaves room for a suffix of up to two digits (32 characters).
         let long = PrKey::parse(&"a".repeat(24)).unwrap().to_string();
         let taken: Vec<String> = std::iter::once(format!("open-{long}")).chain((2..10).map(|n| format!("open-{long}-{n}"))).collect();
-        assert_eq!(free_key(&taken, &pr(&long)).unwrap().as_str().len(), 32);
+        assert_eq!(free_key(&taken, "open", &pr(&long)).unwrap().as_str().len(), 32);
     }
 
     #[test]

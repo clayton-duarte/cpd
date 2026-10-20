@@ -6,6 +6,7 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+use super::open;
 use super::spec::{self, Spec};
 use super::{
     AddArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows,
@@ -64,6 +65,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     if let Some(tier) = args.tier {
         env.check_tier(tier)?;
     }
+    let open_tier = env.config.open_tier;
     let wanted = Wanted {
         key: args.key,
         pr: args.pr,
@@ -101,6 +103,13 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     .plan(plan.clone())
                     .job(wanted.key.clone()),
                 )?;
+                // One path for every change to an open PR (hs-d497): a fix Job queued on it queues the PR's `update` Job.
+                if job.status == "queued" {
+                    let prs = load_prs(tx, &plan)?;
+                    if let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr && p.status == "open") {
+                        open::queue_update(tx, &plan, pr, open_tier, COMMAND, open::Cause::Feedback)?;
+                    }
+                }
                 Ok((job, false))
             }
         })?,
