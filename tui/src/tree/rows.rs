@@ -66,6 +66,9 @@ const INDENT: usize = 2;
 /// What a closing row's identifier starts with: the identifier of the fold it toggles, last element, behind this.
 const TOGGLE: &str = "╰─ ";
 
+/// What the identifier of the empty row after the Context whose own identifier is `id` starts with (hs-d476).
+const SPACER: &str = "  ";
+
 /// The columns a content row's branch takes (`fold::TREE_BRANCH`).
 const BRANCH_WIDTH: usize = 2;
 
@@ -325,6 +328,9 @@ fn fork_row(s: &SessionNode, width: u16, frame: usize, muted: bool) -> (Id, Line
 /// archived ones) and, right after it, its closing row. `opened` is the tree state's open set: the Context is expanded
 /// when it holds the closing row's identifier. The closing row is a sibling of the title row, not a child, so that it
 /// stays under the live rows (the tree widget draws a child only under an open item) and is drawn once.
+///
+/// A Context with nothing to fold (no archived row) has no closing row when it has rows: its last row's branch is the
+/// `╰─` instead of `├─` (hs-d477). With no row at all it keeps the plain `╰─` closing row.
 fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
     let id = c.id.to_string();
     let close = toggle_id(&id);
@@ -336,19 +342,46 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
         rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
         rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
     }
-    let children = rows.into_iter().map(|(id, line)| TreeItem::new_leaf(id, fold::content(fold::TREE_BRANCH, line))).collect();
+    let last = rows.len().saturating_sub(1);
+    let closes_in_a_row = !k.has_archived() && !rows.is_empty();
+    let children = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, (id, line))| {
+            let branch = if closes_in_a_row && i == last { fold::LAST_BRANCH } else { fold::TREE_BRANCH };
+            TreeItem::new_leaf(id, fold::content(branch, line))
+        })
+        .collect();
+    let title = TreeItem::new(id, fold::title(context_text(c, frame)), children).expect("Plan and Session ids are unique");
+    if closes_in_a_row {
+        return vec![title];
+    }
     let closing = if k.has_archived() { fold::toggle(expanded) } else { fold::plain() };
-    vec![
-        TreeItem::new(id, fold::title(context_text(c, frame)), children).expect("Plan and Session ids are unique"),
-        TreeItem::new_leaf(close, closing),
-    ]
+    vec![title, TreeItem::new_leaf(close, closing)]
+}
+
+/// The empty row between two Contexts: one, not two (the margins of two blocks collapse into one; hs-d476).
+fn spacer(c: &ContextNode) -> TreeItem<'static, Id> {
+    TreeItem::new_leaf(format!("{SPACER}{}", c.id), Line::default())
 }
 
 /// The tree's items for a column `width` wide: the live Contexts, then the archived ones. `opened` is the tree state's
 /// open set: a Context not in it is folded. `frame` is the animation frame of the working dots.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
     let (archived, live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
-    live.into_iter().chain(archived).flat_map(|c| context_items(c, opened, width, frame)).collect()
+    let contexts: Vec<&ContextNode> = live.into_iter().chain(archived).collect();
+    let last = contexts.len().saturating_sub(1);
+    contexts
+        .into_iter()
+        .enumerate()
+        .flat_map(|(i, c)| {
+            let mut block = context_items(c, opened, width, frame);
+            if i != last {
+                block.push(spacer(c));
+            }
+            block
+        })
+        .collect()
 }
 
 /// The tree's scroll (commands.md §13.2, hs-d307): the first row drawn, which the wheel and the cursor move. View state

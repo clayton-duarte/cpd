@@ -703,6 +703,8 @@ impl View {
             Constraint::Length(footer_height),
         ])
         .areas(inner);
+        // the section's title carries the padding itself, so the section is drawn across the panel (`inbox::draw`)
+        let inbox_area = Rect { x: f.area().x, width: f.area().width, ..inbox_area };
         self.inbox_area = inbox_area;
         let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
         inbox::draw(f, inbox_area, &self.tree.inbox, self.shape(), inbox_cursor, now);

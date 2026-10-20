@@ -2,11 +2,14 @@
 //! the cockpit that folds, drawn here and nowhere else. The tree's Contexts and the Inbox's list use it; a popup or a
 //! Plan view panel that folds would too.
 //!
+//! - **Margins** (hs-d476): the widget has **one empty row above and one below**, and none inside: [`Fold::drawn`]
+//!   draws them. The tree's Contexts and the Inbox each draw their own margins (two blocks share one empty row).
 //! - **Expanded:** the title row `╭` and the title's content (bold), for example `╭󰪥 building-cpd`; each content row
 //!   led by a muted branch with no indent, `├─` in the tree, which puts a glyph straight against it
 //!   (`├─󰪥 cross-repo`), or `│` (the Inbox's rows, `│ <icon> <item>`); then **one** closing row, `╰󰁣 collapse`.
 //! - **Folded:** the title row (`╭󰝦 dotfiles`), then `╰󰁋 expand`.
-//! - **Nothing to fold:** the closing row is a plain `╰─` ([`plain`]).
+//! - **Nothing to fold:** a block of rows has no closing row, its last row's branch is the `╰─` ([`LAST_BRANCH`]); a
+//!   block with no row at all, and the Inbox with 3 items or fewer, close with a plain `╰─` ([`plain`]).
 //! - **Muted** is `palette::fg(Meaning::Nothing)`: the lines (`╭`, `├─`, `│`, `╰`), the arrows and the words `expand`
 //!   and `collapse`. The content is not muted, and a row the widget wraps keeps its own glyphs and colours: the fold
 //!   only adds muted lines.
@@ -24,6 +27,9 @@ use crate::palette::{self, Meaning};
 pub const BRANCH: &str = "│";
 /// The branch of a content row in the tree, whose rows lead with their glyph.
 pub const TREE_BRANCH: &str = "├─";
+
+/// The branch of the last content row in the tree, in a block that has nothing to fold (hs-d477): it closes the block.
+pub const LAST_BRANCH: &str = "╰─";
 
 /// The start of the title row.
 const OPEN: &str = "╭";
@@ -54,8 +60,8 @@ pub fn toggle(expanded: bool) -> Line<'static> {
     Line::from(Span::styled(format!("{CLOSE}{arrow} {word}"), muted()))
 }
 
-/// The closing row of a block with nothing to fold (a Context with no archived rows; the Inbox with 3 items or fewer):
-/// a muted `╰─` and no word (commands.md §17, "Collapsible blocks"; hs-d349).
+/// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
+/// items or fewer): a muted `╰─` and no word (commands.md §17, "Collapsible blocks"; hs-d349, hs-d477).
 pub fn plain() -> Line<'static> {
     Line::from(Span::styled(PLAIN, muted()))
 }
@@ -78,9 +84,9 @@ pub struct Fold {
 /// The lines of a block, top to bottom.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawn {
-    /// The title, the content (only when expanded) and the toggle row.
+    /// The empty row above, the title, the content (only when expanded), the toggle row and the empty row below.
     pub lines: Vec<Line<'static>>,
-    /// The row, in `lines`, of the `╰󰁋 expand` / `╰󰁣 collapse` closing row: the only one that toggles.
+    /// The row, in `lines`, of the `╰󰁋 expand` / `╰󰁣 collapse` closing row: the only one that toggles (the empty row below follows).
     pub toggle: usize,
 }
 
@@ -95,14 +101,16 @@ impl Fold {
         Fold { branch, ..self }
     }
 
-    /// The lines to draw. Folded, the content is not drawn.
+    /// The lines to draw, between the margin rows. Folded, the content is not drawn.
     pub fn drawn(self) -> Drawn {
-        let mut lines = vec![title(self.title)];
+        let mut lines = vec![Line::default(), title(self.title)];
         if self.expanded {
             lines.extend(self.content.into_iter().map(|line| content(self.branch, line)));
         }
         lines.push(toggle(self.expanded));
-        Drawn { toggle: lines.len() - 1, lines }
+        let toggle = lines.len() - 1;
+        lines.push(Line::default());
+        Drawn { toggle, lines }
     }
 }
 
@@ -116,6 +124,14 @@ mod tests {
 
     fn words(drawn: &Drawn) -> Vec<String> {
         drawn.lines.iter().map(flat).collect()
+    }
+
+    /// `drawn` without its margin rows: the block itself.
+    fn bare(mut drawn: Drawn) -> Drawn {
+        drawn.lines.pop();
+        drawn.lines.remove(0);
+        drawn.toggle -= 1;
+        drawn
     }
 
     fn block(expanded: bool) -> Drawn {
@@ -132,21 +148,21 @@ mod tests {
 
     #[test]
     fn expanded_is_the_title_the_content_straight_against_its_branch_and_one_collapse() {
-        let drawn = block(true);
+        let drawn = bare(block(true));
         assert_eq!(words(&drawn), ["╭󰪥 building-cpd", "├─󰪥 cross-repo", "├─󰝦 other", "╰\u{F0063} collapse"]);
         assert_eq!(drawn.toggle, 3, "the toggle is the last row, and the only one");
     }
 
     #[test]
     fn folded_is_the_title_and_expand_and_the_content_is_not_drawn() {
-        let drawn = Fold::new(Line::from("󰝦 dotfiles"), vec![Line::from("one")], false).branch(TREE_BRANCH).drawn();
+        let drawn = bare(Fold::new(Line::from("󰝦 dotfiles"), vec![Line::from("one")], false).branch(TREE_BRANCH).drawn());
         assert_eq!(words(&drawn), ["╭󰝦 dotfiles", "╰\u{F004B} expand"]);
         assert_eq!(drawn.toggle, 1);
     }
 
     #[test]
     fn the_lines_and_the_words_are_muted_the_content_is_not_and_the_title_is_bold() {
-        let drawn = block(true);
+        let drawn = bare(block(true));
         let title = &drawn.lines[0].spans;
         assert_eq!(title[0].content, "╭");
         assert!(is_muted(&title[0]) && !bold(&title[0]), "the `╭` is muted");
@@ -159,19 +175,19 @@ mod tests {
         }
         assert!(drawn.lines[3].spans.iter().all(is_muted), "the closing row is muted, the lines and the word");
         assert!(!drawn.lines[3].spans.iter().any(bold));
-        assert!(Fold::new(Line::from("x"), vec![], false).drawn().lines[1].spans.iter().all(is_muted), "folded too");
+        assert!(bare(Fold::new(Line::from("x"), vec![], false).drawn()).lines[1].spans.iter().all(is_muted), "folded too");
     }
 
     #[test]
     fn a_block_with_no_glyph_leads_its_content_with_the_plain_line() {
-        let drawn = Fold::new(Line::from("t"), vec![Line::from(" one")], true).drawn();
+        let drawn = bare(Fold::new(Line::from("t"), vec![Line::from(" one")], true).drawn());
         assert_eq!(words(&drawn), ["╭t", "│ one", "╰\u{F0063} collapse"]);
         assert!(is_muted(&drawn.lines[1].spans[0]));
     }
 
     #[test]
     fn a_block_with_no_content_is_its_title_and_its_toggle() {
-        assert_eq!(words(&Fold::new(Line::from("x"), vec![], true).drawn()), ["╭x", "╰\u{F0063} collapse"]);
+        assert_eq!(words(&bare(Fold::new(Line::from("x"), vec![], true).drawn())), ["╭x", "╰\u{F0063} collapse"]);
     }
 
     #[test]
@@ -213,9 +229,9 @@ mod tests {
 
     #[test]
     fn a_block_drawn_by_the_widget_ends_in_one_arrow_row_and_the_toggle_is_that_row() {
-        let folded = Fold::new(Line::from("t"), vec![Line::from(" one")], false).drawn();
+        let folded = bare(Fold::new(Line::from("t"), vec![Line::from(" one")], false).drawn());
         assert_eq!(folded.lines.last().map(flat), Some(format!("╰{DOWN} expand")));
-        let open = Fold::new(Line::from("t"), vec![Line::from(" one")], true).drawn();
+        let open = bare(Fold::new(Line::from("t"), vec![Line::from(" one")], true).drawn());
         assert_eq!(open.lines.last().map(flat), Some(format!("╰{UP} collapse")));
         assert_eq!(open.toggle, open.lines.len() - 1);
         assert_eq!(open.lines.iter().filter(|l| flat(l).starts_with('╰')).count(), 1, "one closing row");
@@ -229,7 +245,7 @@ mod tests {
             Span::raw(" cpd#129 merge conflict"),
             Span::styled("  18m", palette::fg(Meaning::Nothing)),
         ]);
-        let drawn = Fold::new(Line::from("title"), vec![item.clone()], true).drawn();
+        let drawn = bare(Fold::new(Line::from("title"), vec![item.clone()], true).drawn());
         let row = &drawn.lines[1];
         assert_eq!(flat(row), format!("│ {} cpd#129 merge conflict  18m", palette::NEEDS_YOU));
         assert_eq!(row.spans[0].content, BRANCH);
