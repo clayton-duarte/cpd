@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::host::tmux::{SERVER_OPTIONS, STATUS_FORMAT};
+use cpd_core::host::tmux::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH, SERVER_OPTIONS, STATUS_FORMAT};
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
@@ -521,7 +521,7 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
         !client.is_empty()
     });
     // The status line is the client's last row: the three buttons at the left, one space apart.
-    wait_until("the buttons", || outer.screen().lines().nth(29).is_some_and(|l| l.starts_with(BUTTONS)));
+    wait_until("the buttons", || outer.screen().lines().nth(29).is_some_and(|l| l.starts_with(&buttons())));
     // It takes one row: the window has the other 29.
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{window_height}"]).trim(), "29");
     let chat = view(&main_panes(&env), "chat").clone();
@@ -540,12 +540,12 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     tmux_out(&env, &["display-popup", "-C", "-c", &client]);
     wait_until("the popup to close", || !outer.screen().contains(" legend "));
 
-    // ▤ opens the logs
+    // the logs button opens the logs
     outer.click(9, 29);
     wait_until("the logs popup", || outer.screen().contains(" logs "));
     tmux_out(&env, &["display-popup", "-C", "-c", &client]);
 
-    // ⧉ resets the layout
+    // the reset button resets the layout
     let tree = view(&main_panes(&env), "tree").clone();
     tmux_out(&env, &["resize-pane", "-t", &tree.id, "-x", "70"]);
     outer.click(1, 29);
@@ -794,7 +794,9 @@ fn env_with_workers() -> (TestEnv, Flock<File>) {
 }
 
 /// Each button is a pill: its glyph between the two caps, 3 cells, with one space between two buttons.
-const BUTTONS: &str = "\u{e0b6}⧉\u{e0b4} \u{e0b6}?\u{e0b4} \u{e0b6}▤\u{e0b4}";
+fn buttons() -> String {
+    format!("\u{e0b6}{RESET_GLYPH}\u{e0b4} \u{e0b6}{LEGEND_GLYPH}\u{e0b4} \u{e0b6}{LOGS_GLYPH}\u{e0b4}")
+}
 
 /// The right items in the long form: two pills (`inbox 2`, `workers 6/6 · 4 waiting · 9 queued`) with one space.
 const LONG_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4} \u{e0b6}workers 6/6 · 4 waiting · 9 queued\u{e0b4}";
@@ -806,9 +808,9 @@ const SHORT_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4} \u{e0b6}6/6·4·9\u{e0b4}";
 fn the_status_line_draws_the_inbox_counter_then_the_long_workers_form_on_a_client_wide_enough() {
     let (env, _engine) = env_with_workers();
     let (line, styled) = status_line(&env, 59, "queued");
-    assert!(line.starts_with(BUTTONS) && line.ends_with(LONG_ITEMS), "{line:?}");
+    assert!(line.starts_with(&buttons()) && line.ends_with(LONG_ITEMS), "{line:?}");
     // The 2 cells of air are the grey fill line, and the row is full: 11 + 2 + 46.
-    assert_eq!(line, format!("{BUTTONS}──{LONG_ITEMS}"));
+    assert_eq!(line, format!("{}──{LONG_ITEMS}", buttons()));
     assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
 }
 
@@ -816,9 +818,9 @@ fn the_status_line_draws_the_inbox_counter_then_the_long_workers_form_on_a_clien
 fn the_status_line_draws_the_inbox_counter_then_the_short_workers_form_on_a_narrow_client() {
     let (env, _engine) = env_with_workers();
     let (line, styled) = status_line(&env, 58, "6/6");
-    assert!(line.starts_with(BUTTONS) && line.ends_with(SHORT_ITEMS) && !line.contains("workers"), "{line:?}");
+    assert!(line.starts_with(&buttons()) && line.ends_with(SHORT_ITEMS) && !line.contains("workers"), "{line:?}");
     // The row is full: 11 + the fill line + 19.
-    assert_eq!(line, format!("{BUTTONS}{}{SHORT_ITEMS}", "─".repeat(58 - 11 - 19)));
+    assert_eq!(line, format!("{}{}{SHORT_ITEMS}", buttons(), "─".repeat(58 - 11 - 19)));
     assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
 }
 
