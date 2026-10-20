@@ -1,7 +1,7 @@
 //! The integration-test harness: runs the built `cpd` in an isolated
 //! environment and parses its JSON.
 //!
-//! Every `TestEnv` lives in its own temporary directory and holds:
+//! Every `TestEnv` lives in its own temporary directory, on a tmpfs ([`ENVS_DIR`]), and holds:
 //! - `$CPD_HOME` and `$HOME` there, never the real `~/.cpd` or home;
 //! - a private tmux server: its own `TMUX_TMPDIR` and socket name, killed on drop,
 //!   so the cockpit server `-L cpd` is never touched;
@@ -165,6 +165,11 @@ fn sh_quote(s: &str) -> String {
 fn run_quietly(cmd: &mut Command) -> std::io::Result<std::process::ExitStatus> {
     spawn(cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()))?.wait()
 }
+
+/// Where every env's directory is made: a tmpfs, so the `fsync`s of the store's writes (several per `cpd` command
+/// that writes) and git's cost no disk flush. On a disk shared with builds and other test runs one such `fsync` waits
+/// for their writeback, from tens of ms to seconds; no test claims durability across a power loss.
+const ENVS_DIR: &str = "/dev/shm";
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
@@ -400,7 +405,7 @@ impl TestEnv {
 
     /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
     pub fn empty() -> TestEnv {
-        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir().expect("temp dir");
+        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(ENVS_DIR).unwrap_or_else(|e| panic!("a temp dir in {ENVS_DIR}: {e}"));
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
         let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None), since: OnceLock::new(), reader: Mutex::new(None) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
