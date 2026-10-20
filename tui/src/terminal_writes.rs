@@ -1,6 +1,5 @@
 //! `no_write_to_the_terminal_outside_the_frame` (hs-d363): a view owns its terminal, so what it writes there outside
-//! its frame breaks the drawn frame (the tree's `engine was down: …` line did). A view's lines go to the note (inside
-//! the frame) and to its log file, `$CPD_HOME/run/tui/<view>.log` (commands.md §17).
+//! its frame breaks the drawn frame (the tree's `engine was down: …` line did). A view's lines go to its log file, `$CPD_HOME/run/tui/<view>.log` (commands.md §17).
 
 #[cfg(test)]
 mod tests {
@@ -97,7 +96,7 @@ mod tests {
         walk(&root, &root, &mut offenders, &mut used);
         assert!(
             offenders.is_empty(),
-            "a view's lines go to the note and to run/tui/<view>.log, not to its terminal:\n{}",
+            "a view's lines go to run/tui/<view>.log (and a dialog, when the User must see them), not to its terminal:\n{}",
             offenders.join("\n")
         );
         let stale: Vec<_> = EXEMPT.iter().zip(used).filter(|(_, used)| !used).map(|(e, _)| format!("{}: {}", e.file, e.why)).collect();
