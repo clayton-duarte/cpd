@@ -5,7 +5,7 @@
 //! checkout's short commit hash, so an installed binary reports exactly the commit it was built from.
 
 use crate::common;
-#[path = "common/checkout.rs"]
+#[path = "../common/checkout.rs"]
 mod checkout;
 
 use std::fs;

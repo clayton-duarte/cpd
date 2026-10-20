@@ -1,0 +1,9 @@
+//! The `store` integration-test binary of `cpd` (docs/implementing.md, Tests: the area table): every file of this
+//! directory is a module. The harness, `cli/tests/common/`, is shared by every area's binary.
+
+#[path = "../common/mod.rs"]
+mod common;
+
+mod events;
+mod store;
+mod store_window;
