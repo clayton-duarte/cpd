@@ -143,7 +143,7 @@ _Avoid_: frozen, final
 ## Runtime
 
 **Session** (new):
-A pi session cpd knows about, with a role (Lead, Worker or Manager), a Context, usually a Plan, a tmux pane, and an agent state: working, blocked, idle or stopped. A Session forked for a tangent the User starts (`cpd session fork`) is a sibling: drawn in the tree directly under its Context, after its Plans, never under a Plan or under the Session it came from (B1, B4). The other fork, a review Job's Worker, is hidden like every Worker.
+A pi session cpd knows about, with a role (Lead, Worker or Manager), a Context, usually a Plan, a tmux pane, and an agent state: working, waiting (an agent waits for another agent: a Worker for its Lead's answer), blocked (the User has to act: a dialog, a pending Plan review), idle or stopped. A Session forked for a tangent the User starts (`cpd session fork`) is a sibling: drawn in the tree directly under its Context, after its Plans, never under a Plan or under the Session it came from (B1, B4). The other fork, a review Job's Worker, is hidden like every Worker.
 _Avoid_: agent, pane, chat
 
 **Event** (new: replaces the Lead queue):

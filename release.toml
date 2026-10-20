@@ -1,0 +1,8 @@
+# cargo-release, run by scripts/release.sh (docs/release.md).
+# scripts/release.sh tags after the squash merge, on the squash commit, so cargo-release neither
+# tags nor pushes (the script passes --no-tag --no-push). The version is chosen by the User.
+pre-release-commit-message = "Release {{version}}"
+tag-name = "v{{version}}"
+# One commit for the three crates: Cargo.toml and Cargo.lock. scripts/release.sh runs git-cliff once
+# and amends CHANGELOG.md into it.
+consolidate-commits = true

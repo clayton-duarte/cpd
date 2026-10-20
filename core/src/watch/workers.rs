@@ -8,8 +8,11 @@
 //! `widgets` view), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
 //! `Q` the `queued` Jobs; the four options are set in one `tmux set` call only
 //! when one of them differs from what was last set (the first tick always
-//! sets them). No row, no Event, except an `error` when tmux fails while a
-//! server runs: with no server there is no status line to feed, and the step
+//! sets them, and so does the first tick after a tmux failure or a missing
+//! server: a new server starts without them). No row, no Event, except an `error` when tmux
+//! fails while a server runs and no tmux restart is pending (a pending restart
+//! takes the server away under the step: that failure is expected and not
+//! reported): with no server there is no status line to feed, and the step
 //! waits.
 
 use time::OffsetDateTime;
@@ -17,16 +20,22 @@ use time::OffsetDateTime;
 use super::engine::Engine;
 use crate::clock::timestamp;
 use super::report::{About, Step};
+use super::restart;
 use super::schedule::READY;
 use crate::error::CpdError;
 use crate::inbox::model::{self, Filter, State, Urgency};
 
 /// The options the status line draws: the Inbox counter, the long form, the short form, and the width in cells of
-/// the Inbox counter, one space and the long form.
+/// the right items (the Inbox counter's pill, one space and the workers' pill, each pill with its two caps) in the
+/// long form and in the short form.
 const INBOX: &str = "@cpd_inbox";
 const LONG: &str = "@cpd_workers";
 const SHORT: &str = "@cpd_workers_short";
 const WIDTH: &str = "@cpd_workers_width";
+const SHORT_WIDTH: &str = "@cpd_workers_short_width";
+
+/// The cells of a pill's two caps, which the status line's format draws around each text.
+const CAPS: usize = 2;
 
 /// The Attempts holding a slot (§3.4): the same query as the `widgets` view's slots.
 const HELD: &str = "SELECT count(*) FROM attempts WHERE status <> 'ended'";
@@ -125,6 +134,11 @@ impl Counts {
     fn width(self) -> usize {
         format!("workers {}/{} · {} waiting · {} queued", self.running, self.limit, self.waiting, self.queued).chars().count()
     }
+
+    /// The short form's visible width in cells.
+    fn short_width(self) -> usize {
+        format!("{}/{}·{}·{}", self.running, self.limit, self.waiting, self.queued).chars().count()
+    }
 }
 
 pub(super) fn run(engine: &mut Engine) {
@@ -136,21 +150,25 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
     };
     let (styled, long, short) = (inbox.styled(), counts.long(), counts.short());
-    // The status line puts one space between the counter and the workers text.
-    let width = (inbox.width() + 1 + counts.width()).to_string();
-    // What was last set: the four values, one string (no value holds a newline).
-    let state = format!("{styled}\n{long}\n{short}\n{width}");
+    // The status line draws each text in a pill and puts one space between the two pills.
+    let right = |workers: usize| (inbox.width() + CAPS + 1 + workers + CAPS).to_string();
+    let (width, short_width) = (right(counts.width()), right(counts.short_width()));
+    // What was last set: the five values, one string (no value holds a newline).
+    let state = format!("{styled}\n{long}\n{short}\n{width}\n{short_width}");
     if engine.workers.as_deref() == Some(state.as_str()) {
         return;
     }
     // No server, no status line: nothing is set or remembered, and it is set once a server appears.
     match engine.tmux.server_running() {
         Ok(true) => {}
-        Ok(false) => return engine.clear(Step::Workers, &About::Machine),
-        Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
+        Ok(false) => {
+            engine.workers = None;
+            return engine.clear(Step::Workers, &About::Machine);
+        }
+        Err(e) => return failed(engine, &e),
     }
     // One call, so a status line never draws a width that belongs to another text.
-    let args = ["set", "-g", INBOX, &styled, ";", "set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width]
+    let args = ["set", "-g", INBOX, &styled, ";", "set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width, ";", "set", "-g", SHORT_WIDTH, &short_width]
         .map(str::to_owned);
     let set: Result<String, CpdError> = engine.tmux.run(&args);
     match set {
@@ -158,9 +176,19 @@ pub(super) fn run(engine: &mut Engine) {
             engine.workers = Some(state);
             engine.clear(Step::Workers, &About::Machine);
         }
-        // Not remembered: the next tick tries again.
-        Err(e) => engine.fail(Step::Workers, About::Machine, &e),
+        Err(e) => failed(engine, &e),
     }
+}
+
+/// A tmux call of the step failed: nothing is remembered (a restarted server starts without the
+/// options), and the next tick tries again. While a tmux restart is pending and has not failed, the
+/// failure is expected, the restart takes the server away under the step, and is not reported.
+fn failed(engine: &mut Engine, error: &CpdError) {
+    engine.workers = None;
+    if restart::holding(&engine.home).unwrap_or(false) {
+        return;
+    }
+    engine.fail(Step::Workers, About::Machine, error);
 }
 
 #[cfg(test)]
@@ -217,6 +245,12 @@ mod tests {
         assert_eq!(counts(6, 6, 4, 9).width(), 34);
         assert_eq!(counts(0, 3, 0, 0).width(), 34);
         assert_eq!(counts(10, 12, 100, 1000).width(), 41);
+    }
+
+    #[test]
+    fn the_short_width_is_the_visible_width_of_the_short_form() {
+        assert_eq!(counts(6, 6, 4, 9).short_width(), "6/6·4·9".chars().count());
+        assert_eq!(counts(10, 12, 100, 1000).short_width(), 14);
     }
 
     /// The tables the Ready rule reads, with three Plans' worth of rows.

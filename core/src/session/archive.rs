@@ -39,12 +39,12 @@ impl Blocker {
 }
 
 /// The archive rule (contract §2.2 "Archived"): what is live among `sessions`
-/// and `plans`, read in `conn`'s one transaction. A Session `working` or
-/// `blocked`; a Job `queued` or `running`, an open Escalation and a pending
+/// and `plans`, read in `conn`'s one transaction. A Session `working`,
+/// `waiting` or `blocked`; a Job `queued` or `running`, an open Escalation and a pending
 /// Plan review of those Plans. Empty means the set may be archived.
 pub fn blockers(conn: &Connection, sessions: &[SessionId], plans: &[PlanId]) -> Result<Vec<Blocker>, CpdError> {
     let mut found = Vec::new();
-    let mut stmt = conn.prepare("SELECT name, state FROM sessions WHERE id = ?1 AND state IN ('working', 'blocked')")?;
+    let mut stmt = conn.prepare("SELECT name, state FROM sessions WHERE id = ?1 AND state IN ('working', 'waiting', 'blocked')")?;
     for id in sessions {
         let live: Option<(String, String)> = stmt.query_row([id.as_str()], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         if let Some((name, state)) = live {

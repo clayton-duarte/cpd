@@ -101,32 +101,63 @@ echo "installed $dest_dir/cpd and $adapter_dir" >&2
 
 # A running cockpit's views keep the old binary until restarted (commands.md
 # §13.1): when the configured server has a cockpit with its main window, restart
-# its views. No config, no server or no main: nothing to restart. Likewise a
-# running engine keeps running the old code (contract §3.7): when the work
-# session has its `watch` window, kill it and start the engine again.
-if config=$("$dest_dir/cpd" config 2>/dev/null); then
+# its views. No server or no main: nothing to restart. Likewise a running engine
+# keeps running the old code (contract §3.7): when the work session has its
+# `watch` window, kill it and start the engine again. No follow-up is skipped
+# silently (hs-n278): each failure prints what failed and why, the later
+# follow-ups still run, and the script exits non-zero at the end. cpd waits out a
+# migration holding the setup lock (contract §4.2), so these run after it.
+# How long to wait for the killed engine to release locks/watch.lock (tests set it).
+lock_wait_secs="${CPD_INSTALL_LOCK_WAIT_SECS:-60}"
+failed=0
+fail() {
+  echo "cpd install follow-up failed: $1" >&2
+  failed=1
+}
+errfile=$(mktemp)
+trap 'rm -f "$errfile"' EXIT
+
+if ! config=$("$dest_dir/cpd" config 2>"$errfile"); then
+  fail "cpd config: $config $(cat "$errfile"); the views were not respawned and the engine was not restarted"
+else
   tmux_conf=$(printf '%s' "$config" | sed -n 's/.*"tmux":{\([^}]*\)}.*/\1/p')
   socket=$(printf '%s' "$tmux_conf" | sed -n 's/.*"socket":"\([^"]*\)".*/\1/p')
   cockpit=$(printf '%s' "$tmux_conf" | sed -n 's/.*"cockpit_session":"\([^"]*\)".*/\1/p')
   work=$(printf '%s' "$tmux_conf" | sed -n 's/.*"work_session":"\([^"]*\)".*/\1/p')
   if [ -n "$socket" ] && [ -n "$cockpit" ] &&
     env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$cockpit" -F '#{window_name}' 2>/dev/null | grep -qx main; then
-    "$dest_dir/cpd" tui --respawn >&2
+    "$dest_dir/cpd" tui --respawn >&2 || fail "cpd tui --respawn exited $?: the views still run the old binary"
   fi
   if [ -n "$socket" ] && [ -n "$work" ] &&
     env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx watch; then
     echo "restarting the running engine (cpd watch) to run the new binary" >&2
-    env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null kill-window -t "=$work:watch" >&2
-    # The killed engine releases its lock a moment later; --ensure answers
-    # "already" until then.
-    tries=0
-    while :; do
-      out=$("$dest_dir/cpd" watch --ensure) || break
-      case $out in *'"already":true'*) ;; *) break ;; esac
-      tries=$((tries + 1))
-      [ "$tries" -lt 40 ] || break
-      sleep 0.25
-    done
-    echo "$out" >&2
+    if ! env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null kill-window -t "=$work:watch" >&2; then
+      fail "tmux kill-window $work:watch failed: the engine still runs the old binary"
+    else
+      # The killed engine releases its lock a moment later, possibly well after
+      # (it finishes its tick, waits for a store write): wait for the lock
+      # itself, bounded, then start the engine once and check that it holds the
+      # lock (hs-n288). Nothing gives up silently.
+      lock="${CPD_HOME:-$HOME/.cpd}/locks/watch.lock"
+      mkdir -p "$(dirname "$lock")"
+      waited=0
+      while ! flock -n "$lock" true; do
+        waited=$((waited + 1))
+        if [ "$waited" -gt $((lock_wait_secs * 4)) ]; then
+          break
+        fi
+        sleep 0.25
+      done
+      if ! flock -n "$lock" true; then
+        fail "the old engine still holds $lock after ${lock_wait_secs}s: the new engine was not started"
+      elif ! out=$("$dest_dir/cpd" watch --ensure 2>"$errfile"); then
+        fail "cpd watch --ensure: $out $(cat "$errfile"); the engine is not running"
+      elif flock -n "$lock" true; then
+        fail "cpd watch --ensure answered $out, but no engine holds $lock: the engine is not running"
+      else
+        echo "$out" >&2
+      fi
+    fi
   fi
 fi
+[ "$failed" -eq 0 ] || exit 1

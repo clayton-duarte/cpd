@@ -1,18 +1,53 @@
 # cargo-nextest (https://nexte.st/docs/configuration/): the Gate (`npm run
 # verify`) and CI run `cargo nextest run --workspace`, which runs every test in
-# a process of its own and the test binaries in parallel (docs/implementing.md).
+# a process of its own, all at once (docs/implementing.md).
 # Everything not set here is nextest's default.
 
 # No test group is needed: nothing in the tests shares process state. ETXTBSY
-# (a fork while a script is open for writing) is handled in `cli/tests/common`;
+# (a fork while a script is open for writing) is handled in `cli/tests/it/common`;
 # under nextest each test is a process of its own, so no fork can hold another
 # test's descriptors. A test that must not overlap others goes in a test group
 # here (`[test-groups]`, `max-threads = 1`, and a `[[profile.default.overrides]]`
-# with a `filter` and `test-group`), the reason beside it.
+# with a `filter` and `test-group`), the reason beside it. The integration tests are
+# one binary, `cpd::it`, a module per file: select a file's tests with
+# `filter = 'binary_id(cpd::it) and test(/^host::/)'`.
 
 # hs-d236: a red run lists every failing test, not only the first.
 [profile.default]
 fail-fast = false
+
+# The per-test limit: a test is reported slow after 30 s and killed, and so
+# failed, after 3 periods (90 s). Measured on hs with `scripts/test-time.sh`, 7
+# full runs at load 82-144 (1,899 tests; hs was never calm): the slowest test
+# took 12.1-27.1 s (14.5, 12.1, 21.7, 15.9, 21.5, 13.8, 27.1), so the limit is
+# 3.3 times the highest, which ran at load 102-144. It catches a hang; it is not
+# the speed target (hs-d284: the whole run in 30 s). A test that reaches it
+# fails the run: raise it only with a measurement that says the test needs it.
+slow-timeout = { period = "30s", terminate-after = 3 }
+
+# Start the tests that wait for a real limit of the product first. Without it
+# nextest starts tests in binary order and a long test that sits late in the
+# order runs alone at the end (docs/research/test-speed.md §3: wall - sum / 16
+# was 22.5-32.6 s with the 67-69 s session_watchdog tests last, 1.8 s with them
+# first). The list is what is still the longest after the speed Jobs
+# (sp-fixed ... sp-poll), 3.5-27 s at load 82-144: a whole plan (two
+# tests: e2e, and e2e_cross across two repos), the engine's quiet period, the
+# adapter watchdog's stall limit, the pi stop, the spawn back-off, the
+# stuck-Job minutes. `/::name$/` matches the test's last path segment in the one binary
+# (`cli/tests/it/`): a renamed test drops out of the list silently, so check the list with
+# `scripts/cargo.sh nextest list --workspace -E '<the filter>'` (one line per name).
+[[profile.default.overrides]]
+filter = '''
+  test(/::a_pi_alive_with_its_state_stopped_for_sixty_seconds_is_restarted_with_one_error_event$/)
+  | test(/::a_pi_whose_adapter_reports_idle_within_the_limit_is_left_alone$/)
+  | test(/::a_whole_plan_runs_from_context_new_to_pr_poll$/)
+  | test(/::a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job$/)
+  | test(/::the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once$/)
+  | test(/::a_pi_that_ignores_sigterm_is_killed_after_pi_stop_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi$/)
+  | test(/::e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off$/)
+  | test(/::a_failed_job_is_stuck_only_after_stuck_job_minutes$/)
+'''
+priority = 20
 
 # scripts/test-time.sh: the default profile plus a JUnit report
 # (target/nextest/timing/junit.xml), from which the script sums the test times.

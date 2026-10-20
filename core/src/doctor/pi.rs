@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use super::DEADLINE;
+use super::deadline;
 use super::check::{Check, Severity};
 use crate::config::catalog::read as read_catalog;
 use crate::config::{Config, locate_pi};
@@ -21,7 +21,7 @@ pub fn tiers(config: &Config) -> Check {
         Ok(pi) => pi,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };
-    let catalog = match read_catalog(&pi, config, DEADLINE) {
+    let catalog = match read_catalog(&pi, config, deadline()) {
         Ok(catalog) => catalog,
         Err(e) => return Check::from_error(name, Severity::Error, &e),
     };

@@ -8,8 +8,16 @@ use crate::home::CpdHome;
 use crate::store::{APPLICATION_ID, Store};
 
 /// A connection with a stand-in `cpd_txn()`, which the history triggers call.
+/// Fixtures only: no fsync (`synchronous = OFF`), since a
+/// crash loses a throwaway database nobody reads again; what the tests claim is
+/// the schema and the rows, not durability, and the fsyncs of every fixture
+/// commit were the larger part of the time on a loaded disk.
 fn connection(path: &std::path::Path) -> Connection {
-    let conn = Connection::open(path).unwrap();
+    prepared(Connection::open(path).unwrap())
+}
+
+fn prepared(conn: Connection) -> Connection {
+    conn.pragma_update(None, "synchronous", "OFF").unwrap();
     conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
     conn
 }
@@ -29,10 +37,14 @@ fn at_version(conn: &Connection, n: usize) {
 
 #[test]
 fn migrating_an_empty_database_gives_every_versions_schema_hash() {
-    let dir = tempfile::tempdir().unwrap();
+    // One database taken through the migrations one at a time: the schema after
+    // `n` of them is the same as one built from scratch to `n` (`at_version`).
+    let conn = prepared(Connection::open_in_memory().unwrap());
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
     for (n, expected) in SCHEMA_HASHES.iter().enumerate() {
-        let conn = connection(&dir.path().join(format!("v{}.db", n + 1)));
-        at_version(&conn, n + 1);
+        conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+        (LEGACY[n].apply)(&conn).unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
         assert_eq!(legacy_schema_hash(&conn).unwrap(), *expected, "version {}", n + 1);
     }
 }
@@ -940,12 +952,16 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
         // The history triggers list the rebuilt table's columns; every other keeps its text.
-        if name != "prs_hist_ins" && name != "prs_hist_upd" {
+        // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started` and `open>cancelled` since `pr-cancel-open`.
+        // `prs_locked` has a second exception since `stacked-prs`: a stacked or an open PR's `base` follows GitHub.
+        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" && name != "prs_locked" {
             assert_eq!(new, old, "{name}");
         }
     }
     let locked = &after.iter().find(|(name, _)| name == "prs_locked").unwrap().1;
     assert!(locked.contains("OLD.status = 'merged'"), "migration 5's prs_locked: {locked}");
+    let status = &after.iter().find(|(name, _)| name == "prs_status").unwrap().1;
+    assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled', 'open>cancelled'"), "prs_status: {status}");
 }
 
 #[test]
@@ -1395,7 +1411,7 @@ fn prs_status_refuses_a_transition_outside_3_8() {
     for sql in [
         "UPDATE prs SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 1, pr_url = 'u', pr_opened_at = 't' WHERE plan = 'gr'",
         "UPDATE prs SET status = 'waiting', lead_worktree = NULL, started_at = NULL WHERE plan = 'di'",
-        "UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'di'",
+        "UPDATE prs SET status = 'cancelled' WHERE plan = 'dn'",
         "UPDATE prs SET status = 'open', merged_at = NULL WHERE plan = 'dn'",
     ] {
         let err = refused(&mut store, sql);
@@ -1403,12 +1419,17 @@ fn prs_status_refuses_a_transition_outside_3_8() {
     }
     write(&mut store, "UPDATE prs SET status = 'dispatch', lead_worktree = '/w', started_at = 't' WHERE plan = 'gr';
                        UPDATE prs SET status = 'cancelled' WHERE plan = 'pl';
+                       UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'gr';
                        INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                          VALUES ('acme/di', 11, 'u', 'D', 0, 'open', 'none', 'none', 't', 't');
                        UPDATE prs SET status = 'open', pr_number = 11, pr_url = 'u', pr_opened_at = 't',
                               pull_request = (SELECT id FROM pull_requests WHERE number = 11) WHERE plan = 'di';
-                       UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pr'")
+                       UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pr';
+                       UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL, pr_number = NULL, pr_url = NULL,
+                              pr_opened_at = NULL, pull_request = NULL WHERE plan = 'di'")
         .unwrap();
+    let err = refused(&mut store, "UPDATE prs SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 11, pr_url = 'u', pr_opened_at = 't', pull_request = 1 WHERE plan = 'di'");
+    assert_eq!(err.code(), ErrorCode::IllegalTransition, "{err:?}");
 }
 
 #[test]
@@ -1417,7 +1438,8 @@ fn prs_locked_refuses_a_change_of_identity_repo_or_base_after_the_lock() {
     let mut store = migrated(&dir);
     for sql in [
         "UPDATE prs SET repo = '/src/other' WHERE plan = 'di'",
-        "UPDATE prs SET base = 'develop' WHERE plan = 'pr'",
+        "UPDATE prs SET base = 'develop' WHERE plan = 'di'",
+        "UPDATE prs SET base = 'develop' WHERE plan = 'dn'",
         "UPDATE prs SET key = 'other' WHERE plan = 'dn'",
         "UPDATE prs SET lead_branch = 'cpd/di/pr-2fa' WHERE plan = 'di'",
     ] {
@@ -1442,29 +1464,29 @@ fn pr_needs_locked_refuses_a_need_after_the_lock_unless_the_pr_is_new() {
         )
     };
     write(&mut store, &add("old")).unwrap();
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('di', 'old', 'pr-2fa')");
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('di', 'old', 'di', 'pr-2fa')");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     // `pr add` in dispatch: the PR and its needs in one transaction.
-    write(&mut store, &format!("{} INSERT INTO pr_needs (plan, pr, needs) VALUES ('di', 'new', 'pr-2fa');", add("new"))).unwrap();
+    write(&mut store, &format!("{} INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('di', 'new', 'di', 'pr-2fa');", add("new"))).unwrap();
     // Before the lock, any time.
     write(&mut store, WEB).unwrap();
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay')").unwrap();
+    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay')").unwrap();
 }
 
 #[test]
 fn pr_needs_no_delete_refuses_after_the_lock_and_history_records_a_delete() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
-    write(&mut store, &format!("{WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay');")).unwrap();
+    write(&mut store, &format!("{WEB} INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay');")).unwrap();
     write(&mut store, "DELETE FROM pr_needs WHERE plan = 'gr'").unwrap();
     assert_eq!(
         rows(&mut store, "SELECT pk, op, before, after FROM history WHERE tbl = 'pr_needs' ORDER BY id"),
         vec![
-            serde_json::json!([r#"["gr","web","pay"]"#, "insert", Value::Null, r#"{"plan":"gr","pr":"web","needs":"pay"}"#]),
-            serde_json::json!([r#"["gr","web","pay"]"#, "delete", r#"{"plan":"gr","pr":"web","needs":"pay"}"#, Value::Null]),
+            serde_json::json!([r#"["gr","web","gr","pay"]"#, "insert", Value::Null, r#"{"plan":"gr","pr":"web","needs_plan":"gr","needs":"pay"}"#]),
+            serde_json::json!([r#"["gr","web","gr","pay"]"#, "delete", r#"{"plan":"gr","pr":"web","needs_plan":"gr","needs":"pay"}"#, Value::Null]),
         ]
     );
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay');
+    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay');
                        UPDATE plans SET phase = 'plan' WHERE id = 'gr';
                        UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'gr'")
         .unwrap();
@@ -1581,50 +1603,73 @@ fn the_rebuilt_tables_history_triggers_list_their_new_columns() {
 
 // ---------- named migrations: the conversion (§4.5 C1–C6) ----------
 
-/// A legacy store at version `n` with a row in every table, as the
-/// integer-era binary left it: `version_2`'s rows (without the columns
-/// migration 2 adds, for version 1), taken through the legacy migrations
-/// to `n`, and a tier and a need.
-fn legacy_store(home: &CpdHome, n: usize) {
+/// The database files of the legacy stores of versions 1 to `upto` (index
+/// `n - 1`), each with a row in every table, as the integer-era binary left it:
+/// `version_2`'s rows (without the columns migration 2 adds, for version 1),
+/// taken through the legacy migrations to `n`, and a tier and a need. Built in
+/// one pass: the store of version `n` is the store of `n - 1` after one more
+/// migration, so the migrations run once each instead of `n` times (the extra
+/// rows are added to a copy, after the migration, as before).
+fn legacy_stores(upto: usize) -> Vec<Vec<u8>> {
     let tier = format!(
         "INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1.0', 'S', 'm', '[]', '{T}');"
     );
-    if n == 1 {
-        let sql = version_2_sql();
-        let v1 = sql
-            .replace("pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,", "pr_seen, pr_polled_at,")
-            .replace("'Open PR', 'approved', 'passed', ", "");
-        assert_ne!(v1, sql);
-        return database_at(home, 1, &format!("{v1}{tier}"));
-    }
-    database_at(home, 2, &format!("{}{tier}", version_2_sql()));
-    let conn = connection(&home.db());
+    let dir = tempfile::tempdir().unwrap();
+    let scratch = home(&dir);
+    let sql = version_2_sql();
+    let v1 = sql
+        .replace("pr_seen, pr_polled_at, pr_title, pr_review_decision, pr_checks,", "pr_seen, pr_polled_at,")
+        .replace("'Open PR', 'approved', 'passed', ", "");
+    assert_ne!(v1, sql);
+    database_at(&scratch, 1, &format!("{v1}{tier}"));
+    let mut stores = vec![std::fs::read(scratch.db()).unwrap()];
+
+    let chain_dir = tempfile::tempdir_in(dir.path()).unwrap();
+    let chain = home(&chain_dir);
+    database_at(&chain, 2, &format!("{sql}{tier}"));
+    stores.push(std::fs::read(chain.db()).unwrap());
+    let conn = connection(&chain.db());
     conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
-    conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
-    for legacy in &LEGACY[2..n] {
+    for n in 3..=upto {
+        conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
         conn.execute_batch("BEGIN IMMEDIATE").unwrap();
-        (legacy.apply)(&conn).unwrap();
+        (LEGACY[n - 1].apply)(&conn).unwrap();
         conn.execute_batch("COMMIT").unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
+        conn.pragma_update(None, "user_version", n as i64).unwrap();
+        // The chain is at rest: no open transaction and so no journal file, so the file is the database.
+        let mut bytes = std::fs::read(chain.db()).unwrap();
+        if n >= 4 {
+            std::fs::write(scratch.db(), &bytes).unwrap();
+            let copy = connection(&scratch.db());
+            copy.pragma_update(None, "foreign_keys", "ON").unwrap();
+            copy.execute_batch(&format!("BEGIN; {WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
+            if n >= 12 {
+                copy.execute_batch(&format!(
+                    "BEGIN; INSERT INTO inbox_items (kind, urgency, subject, plan, context, label, opened_at) VALUES ('dialog', 'red', 'plan:gr', 'gr', 'ctx', 'Answer', '{T}'); COMMIT;"
+                ))
+                .unwrap();
+            }
+            if n >= 14 {
+                // A stub draft: a title and no Tier or Spec (0014-register).
+                copy.execute_batch(&format!(
+                    "BEGIN; INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('gr', 'web', 'stub', 'Stub', 'draft', 1, 1, '{T}'); COMMIT;"
+                ))
+                .unwrap();
+            }
+            drop(copy);
+            bytes = std::fs::read(scratch.db()).unwrap();
+        }
+        stores.push(bytes);
     }
-    conn.pragma_update(None, "legacy_alter_table", "OFF").unwrap();
-    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-    conn.pragma_update(None, "user_version", n as i64).unwrap();
-    if n >= 4 {
-        conn.execute_batch(&format!("BEGIN; {WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay'); COMMIT;")).unwrap();
-    }
-    if n >= 12 {
-        conn.execute_batch(&format!(
-            "BEGIN; INSERT INTO inbox_items (kind, urgency, subject, plan, context, label, opened_at) VALUES ('dialog', 'red', 'plan:gr', 'gr', 'ctx', 'Answer', '{T}'); COMMIT;"
-        ))
-        .unwrap();
-    }
-    if n >= 14 {
-        // A stub draft: a title and no Tier or Spec (0014-register).
-        conn.execute_batch(&format!(
-            "BEGIN; INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('gr', 'web', 'stub', 'Stub', 'draft', 1, 1, '{T}'); COMMIT;"
-        ))
-        .unwrap();
-    }
+    stores.truncate(upto);
+    stores
+}
+
+/// `store` (one of [`legacy_stores`]) as `home`'s database.
+fn write_store(home: &CpdHome, store: &[u8]) {
+    std::fs::create_dir_all(home.db().parent().unwrap()).unwrap();
+    std::fs::write(home.db(), store).unwrap();
 }
 
 /// Every row of every table, as JSON text, by table, in rowid order.
@@ -1666,88 +1711,147 @@ fn fresh_canonical_hash() -> String {
     canonical_hash(&Connection::open(home.db()).unwrap()).unwrap()
 }
 
-#[test]
-fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
-    let fresh = fresh_canonical_hash();
-    for n in 1..=LEGACY.len() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = home(&dir);
-        legacy_store(&home, n);
-        let before = Connection::open(home.db()).unwrap();
-        let rows_before = dump(&before);
-        let ids_before: Vec<(String, Vec<i64>)> =
-            rows_before.keys().map(|t| (t.clone(), rowids(&before, t))).collect();
-        let empty: Vec<&String> = ids_before.iter().filter(|(_, ids)| ids.is_empty()).map(|(t, _)| t).collect();
-        assert!(empty.is_empty(), "version {n}: the fixture has no row in {empty:?}");
-        drop(before);
+/// The legacy store of version `n` converts keeping every row and id, records
+/// its migrations, converts twice to the same store, and ends with the schema
+/// of a fresh store. One test per version (below): each takes a fraction of
+/// what all of them take, and they run side by side.
+fn converts_keeping_every_row_and_id(n: usize) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    write_store(&home, &legacy_stores(n).pop().unwrap());
+    let before = Connection::open(home.db()).unwrap();
+    let rows_before = dump(&before);
+    let ids_before: Vec<(String, Vec<i64>)> =
+        rows_before.keys().map(|t| (t.clone(), rowids(&before, t))).collect();
+    let empty: Vec<&String> = ids_before.iter().filter(|(_, ids)| ids.is_empty()).map(|(t, _)| t).collect();
+    assert!(empty.is_empty(), "version {n}: the fixture has no row in {empty:?}");
+    drop(before);
 
-        let store = Store::open(&home, 5000).unwrap_or_else(|e| panic!("version {n}: {e:?}"));
-        assert!(store.schema_mismatch().is_none(), "version {n}: {:?}", store.schema_mismatch());
-        drop(store);
+    let store = Store::open(&home, 5000).unwrap_or_else(|e| panic!("version {n}: {e:?}"));
+    assert!(store.schema_mismatch().is_none(), "version {n}: {:?}", store.schema_mismatch());
+    drop(store);
 
-        let conn = Connection::open(home.db()).unwrap();
-        let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        assert_eq!(version, VERSION, "version {n}");
-        let violations: i64 =
-            conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
-        assert_eq!(violations, 0, "version {n}: foreign_key_check");
-        for (table, ids) in &ids_before {
-            let after = rowids(&conn, table);
-            assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
-        }
-        let recorded: Vec<(String, String, i64, i64)> = conn
-            .prepare("SELECT name, compat, seq, converted FROM schema_migrations ORDER BY seq")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-            .unwrap()
-            .collect::<Result<_>>()
-            .unwrap();
-        let legacy = LEGACY.iter().enumerate().map(|(i, l)| (l.name.to_owned(), l.compat.as_str().to_owned(), i as i64 + 1, 1));
-        let named = NAMED
-            .iter()
-            .enumerate()
-            .map(|(i, m)| (m.name.to_owned(), m.compat.as_str().to_owned(), (LEGACY.len() + i) as i64 + 1, 0));
-        let expected: Vec<(String, String, i64, i64)> = legacy.chain(named).collect();
-        assert_eq!(recorded, expected, "version {n}: one converted row per legacy migration, then the named ones as not converted");
-        assert_eq!(canonical_hash(&conn).unwrap(), fresh, "version {n}: the canonical hash of a fresh store");
-
-        if n == LEGACY.len() {
-            // Nothing but the runner's own rows changes in a store that is already at the last legacy version.
-            let mut rows_after = dump(&conn);
-            let mut rows_before = rows_before;
-            assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
-            // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(47));
-            assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
-            assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
-            let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
-            assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
-            assert_eq!(txns_after.len(), txns_before.len() + 1);
-            // `job-urgent` added the column `urgent`, last: every Job reads 0, the default.
-            for row in rows_before.get_mut("jobs").unwrap() {
-                *row = format!("{},0]", row.strip_suffix(']').unwrap());
-            }
-            // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
-            // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
-            assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
-            for table in ["contexts", "prs"] {
-                for row in rows_after.get_mut(table).unwrap() {
-                    let at = row.rfind(',').unwrap();
-                    *row = format!("{}]", &row[..at]);
-                }
-            }
-            let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
-            assert_eq!(history_after[..history_before.len()], history_before[..]);
-            assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
-            assert_eq!(rows_after, rows_before);
-        }
-
-        // Converting twice is a no-op.
-        let snapshot = dump(&conn);
-        drop(conn);
-        drop(Store::open(&home, 5000).unwrap());
-        assert_eq!(dump(&Connection::open(home.db()).unwrap()), snapshot, "version {n}: the second open writes nothing");
+    let conn = Connection::open(home.db()).unwrap();
+    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_eq!(version, VERSION, "version {n}");
+    let violations: i64 =
+        conn.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    assert_eq!(violations, 0, "version {n}: foreign_key_check");
+    for (table, ids) in &ids_before {
+        let after = rowids(&conn, table);
+        assert!(ids.iter().all(|id| after.contains(id)), "version {n}: {table} lost a row id");
     }
+    let recorded: Vec<(String, String, i64, i64)> = conn
+        .prepare("SELECT name, compat, seq, converted FROM schema_migrations ORDER BY seq")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .unwrap()
+        .collect::<Result<_>>()
+        .unwrap();
+    let legacy = LEGACY.iter().enumerate().map(|(i, l)| (l.name.to_owned(), l.compat.as_str().to_owned(), i as i64 + 1, 1));
+    let named = NAMED
+        .iter()
+        .enumerate()
+        .map(|(i, m)| (m.name.to_owned(), m.compat.as_str().to_owned(), (LEGACY.len() + i) as i64 + 1, 0));
+    let expected: Vec<(String, String, i64, i64)> = legacy.chain(named).collect();
+    assert_eq!(recorded, expected, "version {n}: one converted row per legacy migration, then the named ones as not converted");
+    // The pinned hash is a fresh store's (`a_fresh_store_has_the_pinned_canonical_hash`).
+    assert_eq!(canonical_hash(&conn).unwrap(), SCHEMA_HASH, "version {n}: the canonical hash of a fresh store");
+
+    if n == LEGACY.len() {
+        // Nothing but the runner's own rows changes in a store that is already at the last legacy version.
+        let mut rows_after = dump(&conn);
+        let mut rows_before = rows_before;
+        assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
+        // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
+        assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
+        assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
+        assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
+        let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
+        assert_eq!(txns_after[..txns_before.len()], txns_before[..], "the migrating transaction only adds a txns row");
+        assert_eq!(txns_after.len(), txns_before.len() + 1);
+        // `job-urgent` added the column `urgent`, last: every Job reads 0, the default.
+        for row in rows_before.get_mut("jobs").unwrap() {
+            *row = format!("{},0]", row.strip_suffix(']').unwrap());
+        }
+        // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
+        // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
+        assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
+        // The filled column is taken out by its position: a later additive migration (`pr-title`) adds a column after it.
+        for (table, column) in [("contexts", "owner"), ("prs", "name")] {
+            let at = table_columns(&conn, table).unwrap().iter().position(|(c, _)| c == column).unwrap();
+            for row in rows_after.get_mut(table).unwrap() {
+                let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
+                values.remove(at);
+                *row = Value::from(values).to_string();
+            }
+        }
+        // `stacked-prs` rebuilt `pr_needs` with `needs_plan` third: every need was a need of its own Plan.
+        for row in rows_before.get_mut("pr_needs").unwrap() {
+            let mut cells: Vec<Value> = serde_json::from_str(row).unwrap();
+            cells.insert(2, cells[0].clone());
+            *row = Value::from(cells).to_string();
+        }
+        let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
+        assert_eq!(history_after[..history_before.len()], history_before[..]);
+        assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
+        // The columns the other additive named migrations add come last and are null in every converted row.
+        for (table, rows) in rows_after.iter_mut() {
+            let width = rows_before.get(table).and_then(|r| r.first()).map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().len());
+            for row in rows.iter_mut() {
+                let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
+                let width = width.unwrap_or(values.len());
+                if values.len() == width {
+                    continue;
+                }
+                assert!(values[width..].iter().all(Value::is_null), "{table}: an added column is set: {row}");
+                values.truncate(width);
+                *row = Value::from(values).to_string();
+            }
+        }
+        assert_eq!(rows_after, rows_before);
+    }
+
+    // Converting twice is a no-op.
+    let snapshot = dump(&conn);
+    drop(conn);
+    drop(Store::open(&home, 5000).unwrap());
+    assert_eq!(dump(&Connection::open(home.db()).unwrap()), snapshot, "version {n}: the second open writes nothing");
+}
+
+macro_rules! conversion_tests {
+    ($($name:ident: $n:literal,)*) => {
+        $(
+            #[test]
+            fn $name() {
+                converts_keeping_every_row_and_id($n);
+            }
+        )*
+        // A version added to `LEGACY` without its test does not compile.
+        const _: () = assert!(LEGACY.len() == [$($n),*].len());
+    };
+}
+
+conversion_tests! {
+    a_version_1_legacy_store_converts_keeping_every_row_and_id: 1,
+    a_version_2_legacy_store_converts_keeping_every_row_and_id: 2,
+    a_version_3_legacy_store_converts_keeping_every_row_and_id: 3,
+    a_version_4_legacy_store_converts_keeping_every_row_and_id: 4,
+    a_version_5_legacy_store_converts_keeping_every_row_and_id: 5,
+    a_version_6_legacy_store_converts_keeping_every_row_and_id: 6,
+    a_version_7_legacy_store_converts_keeping_every_row_and_id: 7,
+    a_version_8_legacy_store_converts_keeping_every_row_and_id: 8,
+    a_version_9_legacy_store_converts_keeping_every_row_and_id: 9,
+    a_version_10_legacy_store_converts_keeping_every_row_and_id: 10,
+    a_version_11_legacy_store_converts_keeping_every_row_and_id: 11,
+    a_version_12_legacy_store_converts_keeping_every_row_and_id: 12,
+    a_version_13_legacy_store_converts_keeping_every_row_and_id: 13,
+    a_version_14_legacy_store_converts_keeping_every_row_and_id: 14,
+}
+
+#[test]
+fn a_fresh_store_has_the_pinned_canonical_hash() {
+    assert_eq!(fresh_canonical_hash(), SCHEMA_HASH);
 }
 
 #[test]
@@ -1771,11 +1875,12 @@ fn a_fresh_store_records_its_legacy_migrations_as_not_converted() {
 
 #[test]
 fn a_tampered_legacy_store_is_refused_and_left_as_it_was() {
+    let stores = legacy_stores(LEGACY.len());
     for n in [1, 3, LEGACY.len()] {
         for tamper in ["DROP TRIGGER contexts_no_delete", "CREATE INDEX stray ON contexts(title)"] {
             let dir = tempfile::tempdir().unwrap();
             let home = home(&dir);
-            legacy_store(&home, n);
+            write_store(&home, &stores[n - 1]);
             let conn = connection(&home.db());
             conn.execute_batch(tamper).unwrap();
             let before = (dump(&conn), legacy_schema_hash(&conn).unwrap());
@@ -1834,6 +1939,11 @@ fn add_column_in_either_order_gives_one_canonical_table() {
 #[test]
 fn a_changed_generated_trigger_or_object_is_a_schema_mismatch() {
     let dir = tempfile::tempdir().unwrap();
+    // One fresh store, copied for each case: its file is the whole database once it is closed.
+    let template_dir = tempfile::tempdir_in(dir.path()).unwrap();
+    let template = home(&template_dir);
+    drop(Store::open(&template, 5000).unwrap());
+    let fresh = std::fs::read(template.db()).unwrap();
     for (tamper, trigger) in [
         ("DROP TRIGGER plans_no_delete", Some("plans_no_delete")),
         ("DROP TRIGGER plans_hist_upd; CREATE TRIGGER plans_hist_upd AFTER UPDATE ON plans BEGIN SELECT 1; END", Some("plans_hist_upd")),
@@ -1842,7 +1952,7 @@ fn a_changed_generated_trigger_or_object_is_a_schema_mismatch() {
         ("CREATE TRIGGER stray AFTER INSERT ON contexts BEGIN SELECT 1; END", None),
     ] {
         let home = CpdHome::resolve(Some(dir.path().join(format!("{}", tamper.len())).into()), None).unwrap();
-        drop(Store::open(&home, 5000).unwrap());
+        write_store(&home, &fresh);
         connection(&home.db()).execute_batch(tamper).unwrap();
         let store = Store::open(&home, 5000).unwrap();
         let mismatch = store.schema_mismatch().unwrap_or_else(|| panic!("{tamper}: no mismatch"));
@@ -1938,6 +2048,84 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
         (serde_json::from_str::<Value>(&before).unwrap(), serde_json::from_str::<Value>(&after).unwrap()),
         (json!({"seq": seq, "urgent": 0}), json!({"seq": seq, "urgent": 1}))
     );
+    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+    drop(store);
+
+    // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
+    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+}
+
+// ---------- named migration `waiting-state` (§3.6, hs-d303) ----------
+
+/// Every column of every Session, as JSON, by id.
+fn session_rows(conn: &Connection) -> Vec<Value> {
+    let columns = table_columns(conn, "sessions").unwrap();
+    let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
+    let mut stmt = conn.prepare(&format!("SELECT json_object({}) FROM sessions ORDER BY id", pairs.join(", "))).unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| serde_json::from_str(&r.unwrap()).unwrap()).collect()
+}
+
+#[test]
+fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-waiting-state")).collect();
+    assert!(earlier.len() < NAMED.len(), "waiting-state is a built-in migration");
+    drop(crate::store::tests::open_named(&home, &earlier).unwrap());
+
+    // A Manager, a Plan's Lead, a fork, a Worker and a stopped Lead with no pane, in every state this schema has, each
+    // with a pane or an archive time here and there, so that no column is null in all of them.
+    let conn = connection(&home.db());
+    conn.execute_batch(
+        "BEGIN;
+         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pl', 'api', '/r/api', 'main', 'waiting', 'cpd/pl/api', 1, 't');
+         INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+           VALUES ('pl', 'api', 'j', 'J', 'draft', 1, 1, 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+           VALUES ('pl', 'j-a1', 'j', 1, 'S2', 'ladder', 'running', 'cpd/pl--j-a1', '/w', 't');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at)
+           VALUES ('mgr',    'manager', 'ctx', NULL, NULL,   'Manager', '/f/m', NULL,   '/', 'O3', '%1',  'idle',    NULL,      't1', 't', NULL),
+                  ('lead',   'lead',    'ctx', 'pl', NULL,   'Lead',    '/f/l', NULL,   '/', 'O3', '%2',  'blocked', 'dialog',  't2', 't', NULL),
+                  ('fork',   'lead',    'ctx', 'pl', NULL,   'Fork',    NULL,   'lead', '/', 'O3', NULL,  'working', NULL,      't3', 't', NULL),
+                  ('worker', 'worker',  'ctx', 'pl', 'j-a1', 'Worker',  NULL,   NULL,   '/', 'S2', '%3',  'blocked', 'cpd: question to the Lead', 't4', 't', NULL),
+                  ('old',    'lead',    'ctx', 'pl', NULL,   'Old',     '/f/o', NULL,   '/', 'O3', NULL,  'stopped', NULL,      't5', 't', 'a');
+         COMMIT;",
+    )
+    .unwrap();
+    let before = session_rows(&conn);
+    let history: i64 = conn.query_row("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap();
+    assert_eq!((before.len(), history), (5, 5));
+    drop(conn);
+
+    // This binary rebuilds `sessions`: every row and column as it was, the schema check passes, and the copy writes no history.
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
+    let conn = connection(&home.db());
+    assert_eq!(session_rows(&conn), before);
+    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap(), history);
+    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
+    let objects = names(&conn, "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    for expected in ["sessions_plan", "sessions_one_manager", "sessions_live", "sessions_hist_ins", "sessions_hist_upd", "sessions_no_delete"] {
+        assert!(objects.contains(expected), "{expected} in {objects:?}");
+    }
+    drop(conn);
+
+    // `waiting` is a state, and says why, as `blocked` does; no other state has a label.
+    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'cpd: Worker question' WHERE id = 'lead'").unwrap();
+    write(&mut store, "UPDATE sessions SET state = 'waiting', state_label = 'cpd: question to the Lead' WHERE id = 'worker'").unwrap();
+    for bad in [
+        "UPDATE sessions SET state = 'waiting', state_label = NULL WHERE id = 'fork'",
+        "UPDATE sessions SET state = 'blocked', state_label = NULL WHERE id = 'fork'",
+        "UPDATE sessions SET state = 'working', state_label = 'x' WHERE id = 'fork'",
+        "UPDATE sessions SET state = 'asleep', state_label = NULL WHERE id = 'fork'",
+    ] {
+        let message = sqlite_message(&refused(&mut store, bad));
+        assert!(message.starts_with("CHECK constraint failed"), "{bad}: {message}");
+    }
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
     drop(store);
 
@@ -2401,4 +2589,229 @@ fn a_version_9_database_with_no_grounded_lead_migrates_to_10_with_no_new_event()
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(count(&mut store, "SELECT count(*) FROM events"), 0);
     assert!(store.schema_mismatch().is_none());
+}
+
+// ---------- named migration `stacked-prs` (§4.5; §2.2 "The base PR", §3.8 "Stacked PRs") ----------
+
+/// A locked Plan `pl` of every kind of PR, and a Plan `other` in grounding with one; the PR `b` needs `c`.
+/// `b` and `e` are stacked on `a` (their `base` is its Lead Branch); `ms` and `xs` are too, but `merged` and `cancelled`.
+const STACK: &str = "
+  INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+    VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't'),
+           ('lead2', 'lead', 'ctx', 'other', 'Lead', '/', 'O3', 'idle', 't', 't');
+  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+    VALUES ('pl', 'ctx', 'Plan', 'dispatch', 'lead', 't', 't');
+  INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+    VALUES ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
+  INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+    VALUES ('acme/r', 7, 'u7', 'T', 0, 'open', 'none', 'none', 't', NULL, 't'),
+           ('acme/r', 8, 'u8', 'T', 0, 'merged', 'none', 'none', 't', 't', 't'),
+           ('acme/r', 9, 'u9', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
+  INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at) VALUES
+    ('pl', 'a',  '/r', 'main',     'waiting',  'cpd/pl/a',  NULL,   NULL, 1, 't'),
+    ('pl', 'b',  '/r', 'cpd/pl/a', 'waiting',  'cpd/pl/b',  NULL,   NULL, 1, 't'),
+    ('pl', 'c',  '/r', 'main',     'waiting',  'cpd/pl/c',  NULL,   NULL, 1, 't'),
+    ('pl', 'd',  '/r', 'main',     'dispatch', 'cpd/pl/d',  '/w/d', 't',  1, 't'),
+    ('pl', 'e',  '/r', 'cpd/pl/a', 'dispatch', 'cpd/pl/e',  '/w/e', 't',  1, 't'),
+    ('pl', 'xs', '/r', 'cpd/pl/a', 'cancelled', 'cpd/pl/xs', NULL,  NULL, 1, 't'),
+    ('pl', 'x',  '/r', 'main',     'cancelled', 'cpd/pl/x',  NULL,  NULL, 1, 't'),
+    ('other', 'o', '/r2', 'main',   'waiting',  'cpd/other/o', NULL, NULL, 1, 't');
+  INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pr_url, pr_opened_at,
+                   pull_request, merged_at, created_txn, created_at) VALUES
+    ('pl', 'op', '/r', 'main',     'open',   'cpd/pl/op', '/w/op', 't', 7, 'u7', 't', 1, NULL, 1, 't'),
+    ('pl', 'm',  '/r', 'main',     'merged', 'cpd/pl/m',  '/w/m',  't', 8, 'u8', 't', 2, 't',  1, 't'),
+    ('pl', 'ms', '/r', 'cpd/pl/a', 'merged', 'cpd/pl/ms', '/w/ms', 't', 9, 'u9', 't', 3, 't',  1, 't');
+";
+
+/// A named store as the binaries before `stacked-prs` left it, holding [`STACK`] and one need.
+fn store_before_stacked_prs(home: &CpdHome) -> Vec<Named> {
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-stacked-prs")).collect();
+    assert!(earlier.len() < NAMED.len(), "stacked-prs is a built-in migration");
+    drop(crate::store::tests::open_named(home, &earlier).unwrap());
+    let conn = connection(&home.db());
+    // The Plans and their Leads point at each other: the fixture is written with foreign keys off.
+    conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {STACK} INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'b', 'c');")).unwrap();
+    earlier
+}
+
+#[test]
+fn stacked_prs_is_breaking_after_the_names_before_it() {
+    let (index, migration) = NAMED.iter().enumerate().find(|(_, n)| n.name.ends_with("-stacked-prs")).unwrap();
+    assert_eq!(migration.compat, Compat::Breaking);
+    let after = LEGACY.len() + index;
+    assert_eq!(migration.sql.lines().next().unwrap(), format!("-- cpd-migration: breaking after {after}"));
+}
+
+#[test]
+fn stacked_prs_keeps_every_pr_and_need_and_gives_pr_needs_its_plan() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier = store_before_stacked_prs(&home);
+    let before = dump(&connection(&home.db()));
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-stacked-prs")));
+    let violations: i64 = connection(&home.db()).query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    assert_eq!(violations, 0);
+
+    // Every `pr_needs` row is a need of its own Plan; every `prs` row is as it was.
+    assert_eq!(
+        rows(&mut store, "SELECT plan, pr, needs_plan, needs FROM pr_needs"),
+        vec![serde_json::json!(["pl", "b", "pl", "c"])]
+    );
+    let after = dump(&connection(&home.db()));
+    assert_eq!(after["prs"], before["prs"]);
+    assert_eq!(after["pr_needs"].len(), 1);
+
+    // A need of another Plan is stored; one naming no PR is refused by the foreign key.
+    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'pl', 'd')").unwrap();
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'pl', 'nope')");
+    assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'nowhere', 'd')");
+    assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
+    // A PR does not need itself, in any Plan.
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'other', 'o')");
+    assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
+    // The history key and the generated triggers list the new column.
+    assert_eq!(
+        rows(&mut store, "SELECT pk, after FROM history WHERE tbl = 'pr_needs' ORDER BY id DESC LIMIT 1"),
+        vec![serde_json::json!([r#"["other","o","pl","d"]"#, r#"{"plan":"other","pr":"o","needs_plan":"pl","needs":"d"}"#])]
+    );
+
+    // pr_needs_locked: after the lock only a PR's own insert may add needs; the Plan `pl` is locked.
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pl', 'a', 'other', 'o')");
+    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    // pr_needs_no_delete: and its history row for a delete holds the key with `needs_plan`.
+    let err = refused(&mut store, "DELETE FROM pr_needs WHERE plan = 'pl'");
+    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    write(&mut store, "DELETE FROM pr_needs WHERE plan = 'other'").unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT pk, op, before FROM history WHERE tbl = 'pr_needs' ORDER BY id DESC LIMIT 1"),
+        vec![serde_json::json!([
+            r#"["other","o","pl","d"]"#,
+            "delete",
+            r#"{"plan":"other","pr":"o","needs_plan":"pl","needs":"d"}"#
+        ])]
+    );
+    drop(store);
+
+    // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
+    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+}
+
+#[test]
+fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    store_before_stacked_prs(&home);
+    // Before it, `base` is Locked for every status after the lock.
+    for key in ["a", "b", "c", "d", "e", "x", "xs", "op", "m", "ms"] {
+        let err = connection(&home.db()).execute_batch(&format!("UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'")).unwrap_err();
+        assert!(err.to_string().contains("pr_locked"), "{key}: {err}");
+    }
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    // After it, only an `open` PR and a PR whose `base` is the Lead Branch of a PR of its repo; `pl` is locked.
+    for key in ["a", "c", "d", "x", "m"] {
+        let err = refused(&mut store, &format!("UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'"));
+        assert_eq!(err.code(), ErrorCode::PrLocked, "{key}: {err:?}");
+    }
+    for key in ["xs", "ms"] {
+        let err = refused(&mut store, &format!("UPDATE prs SET base = 'main' WHERE plan = 'pl' AND key = '{key}'"));
+        assert_eq!(err.code(), ErrorCode::PrLocked, "a {key} PR is not followed: {err:?}");
+    }
+    // Nothing but `base` moves: not the identity, the repo or the Lead Branch, nor with the base.
+    for set in ["key = 'z'", "repo = '/x'", "lead_branch = 'cpd/pl/z'", "plan = 'other'", "base = 'main', repo = '/x'", "base = 'main', lead_branch = 'cpd/pl/z'"] {
+        for key in ["b", "e", "op"] {
+            let err = refused(&mut store, &format!("UPDATE prs SET {set} WHERE plan = 'pl' AND key = '{key}'"));
+            assert_eq!(err.code(), ErrorCode::PrLocked, "{set} on {key}: {err:?}");
+        }
+    }
+    write(
+        &mut store,
+        "UPDATE prs SET base = 'main' WHERE plan = 'pl' AND key IN ('b', 'e');
+         UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = 'op'",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT key, base FROM prs WHERE plan = 'pl' AND key IN ('b', 'e', 'op') ORDER BY key"),
+        vec![serde_json::json!(["b", "main"]), serde_json::json!(["e", "main"]), serde_json::json!(["op", "develop"])]
+    );
+    // `b` is no longer stacked, so its base is Locked again; the legacy rename of a merged PR is unchanged.
+    let err = refused(&mut store, "UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = 'b'");
+    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    // Before the lock any PR may change, as before.
+    write(&mut store, "UPDATE prs SET base = 'develop' WHERE plan = 'other'").unwrap();
+}
+
+// ---------- named migration `event-pr-base-changed` (§4.5, §5.2) ----------
+
+#[test]
+fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
+    let migration = NAMED.iter().find(|n| n.name.ends_with("-event-pr-base-changed")).unwrap();
+    assert_eq!(migration.compat, Compat::Additive);
+    assert_eq!(migration.sql.lines().next().unwrap(), "-- cpd-migration: additive");
+
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-event-pr-base-changed")).collect();
+    drop(crate::store::tests::open_named(&home, &earlier).unwrap());
+    let before: i64 = connection(&home.db()).query_row("SELECT count(*) FROM event_kinds", [], |r| r.get(0)).unwrap();
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1])]);
+}
+
+// ---------- named migration session-titles ----------
+
+#[test]
+fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_and_accepts_session_titled() {
+    let titles = NAMED.iter().position(|n| n.name.ends_with("-session-titles")).expect("the migration session-titles exists");
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    let mut before = crate::store::tests::open_named(&home, &NAMED[..titles]).unwrap();
+    write(
+        &mut before,
+        &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
+           ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
+           ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
+           ('w', 'worker', 'ctx', 'pay', 'api-a1', 'W', '/', 'S2', 'working', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'l', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+           VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', cpd_txn(), 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
+           VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'w', 't');"
+            .replace("{fp}", &"a".repeat(64)),
+    )
+    .unwrap();
+    let columns = "rowid, id, role, context, plan, attempt, name, cwd, tier, state";
+    let sessions = rows(&mut before, &format!("SELECT {columns} FROM sessions ORDER BY id"));
+    assert!(sqlite_message(&refused(&mut before, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{}')"))
+        .contains("FOREIGN KEY constraint failed"));
+    drop(before);
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert_eq!(rows(&mut store, &format!("SELECT {columns} FROM sessions ORDER BY id")), sessions);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM sessions WHERE title IS NOT NULL OR titled_at IS NOT NULL"), 0);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{\"title\":\"T\"}')").unwrap();
+    // The title is 1–60 characters, and the history lists both new columns.
+    write(&mut store, &format!("UPDATE sessions SET title = '{}', titled_at = 't' WHERE id = 'l'", "é".repeat(60))).unwrap();
+    for bad in [String::new(), "x".repeat(61)] {
+        let error = refused(&mut store, &format!("UPDATE sessions SET title = '{bad}' WHERE id = 'm'"));
+        assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{bad:?}: {error:?}");
+    }
+    assert_eq!(
+        rows(&mut store, "SELECT json_extract(after, '$.title') IS NOT NULL, json_extract(after, '$.titled_at') FROM history WHERE tbl = 'sessions' AND op = 'update'"),
+        vec![serde_json::json!([1, "t"])]
+    );
+    let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
+    assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
 }

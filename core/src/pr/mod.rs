@@ -33,9 +33,10 @@ mod view;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::args::{PlanArg, PrArg};
+use crate::args::{PlanArg, PrArg, PrTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
+use crate::git::gate::Slots;
 use crate::git::{self, GateHooks, HookOutcome, Refused, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName};
@@ -57,12 +58,12 @@ pub enum Command {
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
     Start(StartArgs),
-    /// Push the Lead Branch and open the PR (§9.1)
+    /// Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1)
     Open(Args),
     /// Poll every open pull request of the User (§9.2)
     Poll(PollArgs),
-    /// Rebase the Lead Branch onto the base and push (§9.3)
-    Rebase(Args),
+    /// Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3)
+    Rebase(RebaseArgs),
     /// Gate, then push the Lead Branch as it is, without a rebase (§9.9)
     Push(Args),
     /// Show the PR's checks, reviews and comments (§9.8)
@@ -80,6 +81,18 @@ pub struct Args {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct RebaseArgs {
+    #[command(flatten)]
+    args: Args,
+    /// Finish the rebase stopped at a conflict, then Gate and push
+    #[arg(long = "continue", conflicts_with = "abort")]
+    resume: bool,
+    /// Give up the rebase stopped at a conflict
+    #[arg(long)]
+    abort: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct PollArgs {
     #[command(flatten)]
     plan: PlanArg,
@@ -93,12 +106,15 @@ pub struct AddArgs {
     /// The PR's repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: PathBuf,
-    /// The branch the pull request targets [default: origin's HEAD branch, else main]
+    /// The PR's own title: names its change; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: PrTitle,
+    /// The branch the pull request targets [default: origin's HEAD branch, else main], or <plan>/<key> to stack on that PR
     #[arg(long, value_name = "branch")]
     base: Option<String>,
-    /// PRs of the Plan that must be merged before this one starts, comma-separated
-    #[arg(long, value_name = "k1,k2", value_delimiter = ',', conflicts_with = "no_needs")]
-    needs: Vec<PrKey>,
+    /// PRs that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
+    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
+    needs: Vec<add::PrRef>,
     /// No needs, even on a reopened Plan (default there: every merged PR of the Plan)
     #[arg(long = "no-needs")]
     no_needs: bool,
@@ -114,15 +130,18 @@ pub struct EditArgs {
     /// The new repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: Option<PathBuf>,
-    /// The new base branch
+    /// The new base branch, or <plan>/<key> to stack on that PR
     #[arg(long, value_name = "branch")]
     base: Option<String>,
-    /// The new needs, replacing the list, comma-separated
-    #[arg(long, value_name = "k1,k2", value_delimiter = ',', conflicts_with = "no_needs")]
-    needs: Option<Vec<PrKey>>,
+    /// The new needs, replacing the list, comma-separated: keys of the Plan or <plan>/<key>
+    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
+    needs: Option<Vec<add::PrRef>>,
     /// Remove every need
     #[arg(long = "no-needs")]
     no_needs: bool,
+    /// The new title, in any phase while the PR is not merged or cancelled; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: Option<PrTitle>,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -244,35 +263,6 @@ fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow
     })
 }
 
-/// `needs` as the sorted keys, refusing a repeat with `usage` (§9.4).
-fn sorted_needs(needs: &[PrKey]) -> Result<Vec<String>, CpdError> {
-    let mut keys: Vec<String> = needs.iter().map(|k| k.as_str().to_owned()).collect();
-    keys.sort();
-    if let Some(pair) = keys.windows(2).find(|w| w[0] == w[1]) {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("pr", pair[0].as_str()));
-    }
-    Ok(keys)
-}
-
-/// Every key of `needs` is a PR of the Plan other than `own` (`needs_unknown`)
-/// and none is `cancelled` (`needs_unavailable`) (§9.4, §9.5).
-fn check_needs(prs: &[PrRow], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
-    let unknown: Vec<String> =
-        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key.as_str() == n.as_str())).cloned().collect();
-    if !unknown.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no PR {} to need.", unknown.join(", ")))
-            .with("plan", plan.as_str())
-            .with("needs", unknown));
-    }
-    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key.as_str() == n.as_str() && p.status == "cancelled")).cloned().collect();
-    if !unavailable.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A PR cannot need the cancelled PR {}.", unavailable.join(", ")))
-            .with("plan", plan.as_str())
-            .with("needs", unavailable));
-    }
-    Ok(())
-}
-
 /// How the Gate runs for PR `pr` (contract §7.3, §7.6): `pre-start` with
 /// `setup_minutes`, `pre-merge` with `gate_minutes`, `branch` the Lead Branch.
 fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
@@ -282,6 +272,7 @@ fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
         base: &pr.base,
         pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreStart) },
         pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
+        slots: Slots::new(&env.home, env.config.test_concurrency),
     }
 }
 

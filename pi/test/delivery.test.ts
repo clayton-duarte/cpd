@@ -26,6 +26,7 @@ const LEAD: Record<string, "turn" | "no turn"> = {
   "attempt-retry": "no turn",
   "job-cancelled": "no turn",
   "pr-started": "no turn",
+  "pr-base-changed": "no turn",
   "pr-merged": "no turn",
 };
 
@@ -63,26 +64,27 @@ test("Plan Lead: every kind of §15.3's table", async (t) => {
     assert.equal(s.message.display, true);
     assert.equal(s.message.content, `text of ${d.kind} ${d.id}`, "content is the Event's text");
     assert.equal(d.delivered_to, ID);
-    const urgent = d.kind === "pr-feedback" || d.kind === "escalation";
+    const urgent = d.kind === "pr-feedback" || d.kind === "escalation" || d.kind === "all-merged";
     assert.deepEqual(s.options, { triggerTurn: LEAD[d.kind] === "turn", deliverAs: urgent ? "steer" : "followUp" }, d.kind);
   }
   // Silent kinds: no message, no turn, nothing else sent.
   assert.equal(f.pi.sent.length, expected.length);
 });
 
-test("Plan Lead: a busy Lead gets pr-feedback (every reason) and escalation steered, job-merged as a follow-up; each still triggers a turn (hs-d276)", async (t) => {
+test("Plan Lead: a busy Lead gets pr-feedback (every reason), escalation and all-merged (hs-d334) steered, job-merged as a follow-up; each still triggers a turn (hs-d276)", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f, "lead");
   await f.pi.busy();
   const reasons = ["checks-failed", "changes-requested", "closed", "conflict"];
-  f.emit(...reasons.map((reason, i) => event(101 + i, "pr-feedback", { data: { reason } })), event(105, "escalation"), event(106, "job-merged"));
-  await waitFor("six deliveries", () => f.pi.delivered().length === 6);
+  f.emit(...reasons.map((reason, i) => event(101 + i, "pr-feedback", { data: { reason } })), event(105, "escalation"), event(106, "all-merged"), event(107, "job-merged"));
+  await waitFor("seven deliveries", () => f.pi.delivered().length === 7);
   assert.deepEqual(
     f.pi.delivered().map((s) => [(s.message.details as any).kind, s.options]),
     [
       ...reasons.map((): [string, unknown] => ["pr-feedback", { triggerTurn: true, deliverAs: "steer" }]),
       ["escalation", { triggerTurn: true, deliverAs: "steer" }],
+      ["all-merged", { triggerTurn: true, deliverAs: "steer" }],
       ["job-merged", { triggerTurn: true, deliverAs: "followUp" }],
     ],
   );
@@ -107,21 +109,21 @@ test("Plan Lead: escalation opens `escalation:<id>`, answered and expired close 
   f.emit(event(101, "escalation"), event(102, "escalation", { text: "again" }));
   // The two lines may be read in different polls: `blocked` follows the first, the second is delivered on its own time.
   await waitFor("both escalations delivered", () => f.pi.delivered().length === 2);
-  await waitFor("blocked", () => stateCalls(f).length === 2);
-  assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question"]);
+  await waitFor("waiting", () => stateCalls(f).length === 2);
+  assert.deepEqual(stateCalls(f), ["idle", "waiting:cpd: Worker question"]);
   assert.equal(f.pi.delivered().length, 2, "both are messages with a turn");
 
   f.emit(event(103, "escalation-answered"), event(104, "escalation-answered"));
   await waitFor("idle again", () => stateCalls(f).length === 3);
   await f.drain();
-  assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question", "idle"]);
+  assert.deepEqual(stateCalls(f), ["idle", "waiting:cpd: Worker question", "idle"]);
   assert.equal(f.pi.delivered().length, 2, "answered is no message");
 
   // A state change wanted while a call is in flight replaces the one wanted before: let the last call finish first.
   await waitFor("no call in flight", () => f.pi.execsRunning.size === 0);
   f.emit(event(105, "escalation", { data: { escalation: "j-a1-q2", question: "?" } }), event(106, "escalation-expired", { data: { escalation: "j-a1-q2", reason: "timeout" } }));
   await waitFor("blocked and closed", () => stateCalls(f).length === 5);
-  assert.deepEqual(stateCalls(f).slice(3), ["blocked:cpd: Worker question", "idle"]);
+  assert.deepEqual(stateCalls(f).slice(3), ["waiting:cpd: Worker question", "idle"]);
   assert.equal(f.pi.delivered().length, 3, "expired is no message");
 });
 

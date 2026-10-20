@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 7;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -98,6 +98,7 @@ kinds! {
     PrEdited = "pr-edited",
     PrCancelled = "pr-cancelled",
     PrStarted = "pr-started",
+    PrBaseChanged = "pr-base-changed",
     PrOpened = "pr-opened",
     PrMerged = "pr-merged",
     Escalation = "escalation",
@@ -107,6 +108,7 @@ kinds! {
     SessionState = "session-state",
     SessionMoved = "session-moved",
     SessionRenamed = "session-renamed",
+    SessionTitled = "session-titled",
     ContextRenamed = "context-renamed",
     ContextOwner = "context-owner",
     PlanRenamed = "plan-renamed",
@@ -152,7 +154,7 @@ impl Kind {
             AttemptNudge => spec([Y, Y, Y, Y, Y], &["prompt"], &["turns"]),
             AllMerged => spec([Y, Y, N, N, N], &["pr", "merged", "cancelled"], &[]),
             PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
-            PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &[]),
+            PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &["title"]),
             PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
             PrCancelled => spec([Y, Y, N, N, N], &["pr"], &[]),
             PrStarted => spec(
@@ -160,6 +162,7 @@ impl Kind {
                 &["pr", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"],
                 &[],
             ),
+            PrBaseChanged => spec([Y, Y, N, N, N], &["pr", "from", "to", "from_pr", "to_pr", "by"], &["number", "url"]),
             PrOpened => spec([Y, Y, N, N, N], &["pr", "number", "url"], &[]),
             PrMerged => spec([Y, Y, N, N, N], &["pr", "number", "url", "merged_at"], &[]),
             Escalation => spec([Y, Y, Y, Y, N], &["escalation", "question"], &[]),
@@ -169,13 +172,14 @@ impl Kind {
             SessionState => spec([Y, M, N, N, Y], &["from", "to", "label"], &["reply"]),
             SessionMoved => spec([Y, M, N, N, Y], &["pane", "window", "place"], &[]),
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
+            SessionTitled => spec([Y, M, N, N, Y], &["title"], &[]),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
             ContextOwner => spec([Y, N, N, N, N], &["owner"], &[]),
             PlanRenamed => spec([Y, Y, N, N, N], &["title"], &[]),
             ContextArchived => spec([Y, N, N, N, N], &["archived"], &[]),
             PlanArchived => spec([Y, Y, N, N, N], &["archived"], &[]),
             SessionArchived => spec([Y, M, N, N, Y], &["archived"], &[]),
-            SessionMessage => spec([Y, M, N, N, Y], &["from", "text", "wake"], &[]),
+            SessionMessage => spec([Y, M, N, N, Y], &["from", "text", "wake"], &["escalation", "plan", "pr", "minutes"]),
             InboxOpened => spec([M, M, M, N, M], &["item", "kind", "urgency", "label"], &[]),
             InboxClosed => spec([M, M, M, N, M], &["item", "kind"], &[]),
             InboxSnoozed => spec([M, M, M, N, M], &["item", "until"], &[]),
@@ -210,7 +214,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (4, "04406fbf96c3625640c3b42f98ee4129f77cc74a8b27796bed7e30c0d1b7432e");
+    const PINNED: (u32, &str) = (7, "c96ee1a3bc1b33daa186960cbea25f5b23a02c56cc06e932f7aba1e0dd990d04");
 
     fn kinds_hash() -> String {
         let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
