@@ -171,3 +171,81 @@ fn the_binaries_are_those_of_the_area_table() {
     }
     assert!(problems.is_empty(), "the modules do not follow the area table:\n{}", problems.join("\n"));
 }
+
+/// The workspace's packages from `cargo metadata --no-deps`: package name to (its directory, the names it depends on).
+fn packages() -> BTreeMap<String, (PathBuf, Vec<String>)> {
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["metadata", "--format-version", "1", "--no-deps", "--offline", "--manifest-path"])
+        .arg(root().join("Cargo.toml"))
+        .output()
+        .expect("run cargo metadata");
+    assert!(out.status.success(), "cargo metadata failed: {}", String::from_utf8_lossy(&out.stderr));
+    let metadata: serde_json::Value = serde_json::from_slice(&out.stdout).expect("cargo metadata prints JSON");
+    metadata["packages"]
+        .as_array()
+        .expect("packages")
+        .iter()
+        .map(|p| {
+            let manifest = Path::new(p["manifest_path"].as_str().expect("manifest_path"));
+            let deps = p["dependencies"].as_array().expect("dependencies").iter().map(|d| d["name"].as_str().expect("name").to_owned()).collect();
+            (p["name"].as_str().expect("name").to_owned(), (manifest.parent().expect("manifest dir").to_owned(), deps))
+        })
+        .collect()
+}
+
+/// Whether `src` has the module `name`: `<name>.rs` or `<name>/mod.rs`.
+fn has_module(src: &Path, name: &str) -> bool {
+    src.join(format!("{name}.rs")).is_file() || src.join(name).join("mod.rs").is_file()
+}
+
+/// docs/implementing.md, Layout: four members; `cpd-engine` holds `watch` and `doctor` and depends on `cpd-core`;
+/// `cpd-tui` does not depend on `cpd-engine` (`watch::restart` is passed in); `cpd-core` has neither module.
+#[test]
+fn the_four_crates_cpd_engine_holds_watch_and_doctor_and_cpd_tui_does_not_depend_on_it() {
+    let packages = packages();
+    let mut problems = Vec::new();
+
+    let names: Vec<_> = packages.keys().map(String::as_str).collect();
+    if names != ["cpd", "cpd-core", "cpd-engine", "cpd-tui"] {
+        problems.push(format!("the workspace members are {names:?}, not cpd, cpd-core, cpd-engine and cpd-tui"));
+    }
+
+    match packages.get("cpd-engine") {
+        None => problems.push("cpd-engine is not a workspace member".to_owned()),
+        Some((dir, deps)) => {
+            if !dir.ends_with("engine") {
+                problems.push(format!("cpd-engine is in {}, not `engine/`", dir.display()));
+            }
+            for module in ["watch", "doctor"] {
+                if !has_module(&dir.join("src"), module) {
+                    problems.push(format!("engine/src/{module} does not exist"));
+                }
+            }
+            if !deps.iter().any(|d| d == "cpd-core") {
+                problems.push("cpd-engine does not depend on cpd-core".to_owned());
+            }
+        }
+    }
+
+    match packages.get("cpd-tui") {
+        None => problems.push("cpd-tui is not a workspace member".to_owned()),
+        Some((_, deps)) => {
+            if deps.iter().any(|d| d == "cpd-engine") {
+                problems.push("cpd-tui depends on cpd-engine".to_owned());
+            }
+        }
+    }
+
+    match packages.get("cpd-core") {
+        None => problems.push("cpd-core is not a workspace member".to_owned()),
+        Some((dir, _)) => {
+            for module in ["watch", "doctor"] {
+                if has_module(&dir.join("src"), module) {
+                    problems.push(format!("core/src/{module} exists: it belongs to cpd-engine"));
+                }
+            }
+        }
+    }
+
+    assert!(problems.is_empty(), "the crates are not those of docs/implementing.md's Layout:\n{}", problems.join("\n"));
+}

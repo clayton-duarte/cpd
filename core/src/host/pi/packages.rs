@@ -110,17 +110,17 @@ fn normalize(path: &Path) -> PathBuf {
 
 /// One package a settings file declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Declared {
-    pub(crate) settings: PathBuf,
-    pub(crate) source: String,
-    pub(crate) id: PackageId,
+pub struct Declared {
+    pub settings: PathBuf,
+    pub source: String,
+    pub id: PackageId,
 }
 
 /// The packages a settings file declares, each with its identity (relative
 /// paths resolve from the file's directory). A missing file declares none; so
 /// does an unreadable or invalid one, because pi then reads it as empty too
 /// (its `tryLoadFromStorage`), which is logged.
-pub(crate) fn declared(settings: &Path, home: &Path, log: &mut dyn Write) -> Vec<Declared> {
+pub fn declared(settings: &Path, home: &Path, log: &mut dyn Write) -> Vec<Declared> {
     let text = match std::fs::read_to_string(settings) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),

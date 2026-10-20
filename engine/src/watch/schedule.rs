@@ -11,10 +11,10 @@ use rusqlite::{Connection, params};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::driver::{self, StartCtx};
-use crate::error::{CpdError, ErrorCode};
-use crate::host::limit::limit;
-use crate::ids::{JobKey, PlanId};
+use cpd_core::driver::{self, StartCtx};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::host::limit::limit;
+use cpd_core::ids::{JobKey, PlanId};
 
 /// The longest back-off after Attempts whose driver never started (§3.7 E3).
 const BACKOFF_CAP_SECONDS: u64 = 300;

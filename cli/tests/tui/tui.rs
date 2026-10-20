@@ -136,13 +136,13 @@ fn assert_status_line(env: &TestEnv) {
         "#[range=user|logs]",
         "#[align=right]",
         "#{@cpd_inbox}",
-        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
-        "#{?#{@cpd_preview}, #[fg=yellow]",
+        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]",
         "#{R:\u{2500},",
     ] {
         assert!(format.contains(range), "{range} in {format}");
     }
-    // The buttons are one space apart, outside their ranges: no range starts where the one before it ends.
+    // The buttons are one `─` apart, outside their ranges: no range starts where the one before it ends.
     assert!(!format.contains("#[norange]#[range"), "{format}");
     // Set on the cockpit session only: the server default and cpd-work have no status row.
     assert_eq!(tmux_out(env, &["show", "-gv", "status"]).trim(), "off");
@@ -188,11 +188,12 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     }
     assert_eq!(tmux_out(&env, &["show", "-gv", "remain-on-exit"]).trim(), "on");
     let border = tmux_out(&env, &["show", "-gv", "pane-border-format"]);
-    assert!(border.contains("#{==:#{@cpd_view},tree}, Context "), "{border}");
+    assert!(border.contains("#{==:#{@cpd_view},tree},Context,"), "{border}");
     assert!(border.contains("#[reverse]") && border.contains("#[noreverse]"), "{border}");
     // tmux expands the format of the tree pane to its reversed title.
     let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
-    assert!(expanded.contains("\u{e0b6}#[reverse] Context #[noreverse]\u{e0b4}"), "{expanded}");
+    // (the colour, grey or blue, is the pane's focus: `pane_active`)
+    assert!(expanded.contains("━\u{e0b6}#[reverse]Context#[noreverse]\u{e0b4}"), "{expanded}");
     assert!(!border.contains("statusbar"), "{border}");
     // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
     assert_status_line(&env);
@@ -499,7 +500,12 @@ struct Outer<'a> {
 
 impl<'a> Outer<'a> {
     fn attach(env: &'a TestEnv, width: u16, height: u16) -> Outer<'a> {
-        let outer = Outer { env, socket: format!("{}-outer", env.tmux_socket()) };
+        // A socket of its own for each client: `kill-server` (on drop) returns before the server is gone, so a
+        // test that attaches again (one client per width) on the same socket could reach the dying server ("server
+        // exited unexpectedly").
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let outer = Outer { env, socket: format!("{}-outer{n}", env.tmux_socket()) };
         let attach = format!("env -u TMUX tmux -L {} attach -t cpd", env.tmux_socket());
         let (w, h) = (width.to_string(), height.to_string());
         // without its own status line, so the client is the whole window
@@ -587,38 +593,79 @@ fn styled_row(outer: &Outer, row: usize) -> String {
     outer.run(&["capture-pane", "-p", "-e", "-t", "o"]).lines().nth(row).unwrap_or("").to_owned()
 }
 
+/// `row` without its escape sequences: the cells as the client shows them.
+fn visible(row: &str) -> String {
+    let mut out = String::new();
+    let mut chars = row.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for e in chars.by_ref() {
+                if e.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Where the pill of `title` is in the styled `row`, its text reversed with no padding between the caps: the
+/// 0-based column of its left cap, the SGR parameters in force at that cap (`90` is colour 8, `34` blue) and those in
+/// force at the right cap.
+fn pill(row: &str, title: &str) -> (usize, String, String) {
+    let (before, after) = row.split_once(&format!("\u{e0b6}\x1b[7m{title}\x1b[0m")).unwrap_or_else(|| panic!("{title} in {row:?}"));
+    let in_force = |text: &str| text.rsplit("\x1b[").next().and_then(|s| s.split_once('m')).map_or(String::new(), |(p, _)| p.to_owned());
+    let right = after.strip_prefix("\x1b[").and_then(|s| s.split_once('m')).unwrap_or_else(|| panic!("a colour before the right cap in {after:?}"));
+    assert!(right.1.starts_with('\u{e0b4}'), "{title}: the right cap follows at once: {after:?}");
+    (visible(before).chars().count(), in_force(before), right.0.to_owned())
+}
+
 #[test]
-fn a_pane_header_is_a_title_pill_whose_caps_take_the_borders_colour() {
+fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_from_the_edge() {
     let env = env();
     env.cpd(&["tui"]).ok();
     let panes = main_panes(&env);
-    let (plan, chat) = (view(&panes, "plan").clone(), view(&panes, "chat").clone());
+    let (tree, plan, widgets, chat) =
+        (view(&panes, "tree").clone(), view(&panes, "plan").clone(), view(&panes, "widgets").clone(), view(&panes, "chat").clone());
     // A Lead in the chat slot, with a header (its Plan's title) and the keyboard focus.
     let lead = tmux_out(&env, &["new-window", "-d", "-t", "=cpd:", "-n", "park-pay", "-P", "-F", "#{pane_id}", "sleep", "3600"]);
     let lead = lead.trim();
     tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_session", "lead-a"]);
-    tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_title", "Retry payouts"]);
+    tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_title", "Retry Payouts"]);
     tmux_out(&env, &["swap-pane", "-d", "-s", lead, "-t", &chat.id]);
     tmux_out(&env, &["select-pane", "-t", lead]);
     let outer = Outer::attach(&env, 120, 30);
-    // The caps are in the border's colour: blue (SGR 34) on the focused pane, the border colour (default) elsewhere;
-    // the title between them is reversed.
-    wait_until("the Lead's header", || outer.screen().contains("\u{e0b6} Retry payouts \u{e0b4}"));
-    // The client's size is the window's now: the rows are those of the header above each pane.
-    let lead_row = usize::try_from(tmux_out(&env, &["display", "-p", "-t", lead, "#{pane_top}"]).trim().parse::<i32>().unwrap() - 1).unwrap();
-    let plan_row = usize::try_from(tmux_out(&env, &["display", "-p", "-t", &plan.id, "#{pane_top}"]).trim().parse::<i32>().unwrap() - 1).unwrap();
-    // The row up to the left cap and the text after the title: whether the colour in force there is blue.
-    let caps_blue = |row: &str, title: &str| -> (bool, bool) {
-        let (before, after) = row.split_once(&format!("\u{e0b6}\x1b[7m {title} ")).unwrap_or_else(|| panic!("{title} in {row:?}"));
-        let last_colour = before.rsplit("\x1b[").next().unwrap_or("");
-        (last_colour.starts_with("34m"), after.starts_with("\x1b[0m\x1b[34m\u{e0b4}"))
+    // No padding inside the caps: the title between them, nothing around it.
+    wait_until("the Lead's header", || outer.screen().contains("\u{e0b6}Retry Payouts\u{e0b4}"));
+    // The tree is wide enough for its whole pill on a client this size.
+    tmux_out(&env, &["resize-pane", "-t", &tree.id, "-x", "30"]);
+    for title in ["Context", "Plan", "Deploy"] {
+        wait_until(title, || outer.screen().contains(&format!("\u{e0b6}{title}\u{e0b4}")));
+    }
+    // The pane's header row (the client's size is the window's now) and its left edge.
+    let at = |pane: &str| -> (usize, usize) {
+        let out = tmux_out(&env, &["display", "-p", "-t", pane, "#{pane_top} #{pane_left}"]);
+        let (top, left) = out.trim().split_once(' ').unwrap();
+        (usize::try_from(top.parse::<i32>().unwrap() - 1).unwrap(), left.parse().unwrap())
     };
-    assert_eq!(caps_blue(&styled_row(&outer, lead_row), "Retry payouts"), (true, true));
-    assert_eq!(caps_blue(&styled_row(&outer, plan_row), "Plan"), (false, false));
-    // Focus the plan view: its caps turn blue, the Lead's do not.
+    let titled = [("Context", tree.id.as_str()), ("Plan", plan.id.as_str()), ("Deploy", widgets.id.as_str()), ("Retry Payouts", lead)];
+    // Every pill starts three columns from its pane's edge (hs-d478): three border cells, then the left cap. Its caps
+    // and block are grey (colour 8, SGR 90) and, on the focused pane, blue (SGR 34), whatever the border's colour is.
+    let check = |focused: &str| {
+        for (title, id) in titled {
+            let (row, left) = at(id);
+            let colour = if id == focused { "34" } else { "90" };
+            let (column, left_cap, right_cap) = pill(&styled_row(&outer, row), title);
+            assert_eq!((column, left_cap.as_str(), right_cap.as_str()), (left + 3, colour, colour), "{title} (focus on {focused})");
+        }
+    };
+    check(lead);
+    // Focus the plan view: its pill turns blue, the Lead's turns grey.
     tmux_out(&env, &["select-pane", "-t", &plan.id]);
-    wait_until("the focus to move", || caps_blue(&styled_row(&outer, plan_row), "Plan") == (true, true));
-    assert_eq!(caps_blue(&styled_row(&outer, lead_row), "Retry payouts"), (false, false));
+    wait_until("the focus to move", || pill(&styled_row(&outer, at(&plan.id).0), "Plan").1 == "34");
+    check(&plan.id);
 }
 
 /// Kills `gone` (views of `main`), runs `cpd tui`, and asserts the layout is whole again with the panes that were
@@ -884,9 +931,11 @@ fn tui_view_routes_by_name() {
 fn status_line(env: &TestEnv, width: u16, needle: &str) -> (String, String) {
     let outer = Outer::attach(env, width, 20);
     let mut line = String::new();
-    wait_until(&format!("{needle} on the status line"), || {
+    // The status line fills the row (hs-d479): wait for the whole of it, since a client can show a row mid-draw
+    // (frames arrive in pieces, hs-n206) with the needle already there and the fill not yet.
+    wait_until(&format!("{needle} on a whole status line"), || {
         line = outer.screen().lines().nth(19).unwrap_or("").trim_end().to_owned();
-        line.contains(needle)
+        line.contains(needle) && line.chars().count() == usize::from(width)
     });
     let styled = outer.run(&["capture-pane", "-p", "-e", "-t", "o"]).lines().nth(19).unwrap_or("").to_owned();
     (line, styled)
@@ -918,35 +967,72 @@ fn env_with_workers() -> (TestEnv, Flock<File>) {
     (env, engine)
 }
 
-/// Each button is a pill: its glyph between the two caps, 3 cells, with one space between two buttons.
+/// The left group (hs-d479): the leading `─`, then each button as a pill (its glyph between the two caps, 3 cells),
+/// joined by a single `─`. 12 cells.
 fn buttons() -> String {
-    format!("\u{e0b6}{RESET_GLYPH}\u{e0b4} \u{e0b6}{LEGEND_GLYPH}\u{e0b4} \u{e0b6}{LOGS_GLYPH}\u{e0b4}")
+    format!("\u{2500}\u{e0b6}{RESET_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LEGEND_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LOGS_GLYPH}\u{e0b4}")
 }
 
-/// The right items in the long form: two pills (`inbox 2`, `workers 6/6 · 4 waiting · 9 queued`) with one space.
-const LONG_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4} \u{e0b6}workers 6/6 · 4 waiting · 9 queued\u{e0b4}";
-const SHORT_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4} \u{e0b6}6/6·4·9\u{e0b4}";
+/// The right group in the long form: two pills (`inbox 2`, `workers 6/6 · 4 waiting · 9 queued`) joined by a single
+/// `─`, then the closing `─`: 46 cells (the engine's width, whose one space is now the join) plus 1.
+const LONG_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4}\u{2500}\u{e0b6}workers 6/6 · 4 waiting · 9 queued\u{e0b4}\u{2500}";
+/// The same in the short form: 19 + 1 cells.
+const SHORT_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4}\u{2500}\u{e0b6}6/6·4·9\u{e0b4}\u{2500}";
+const LONG_WIDTH: usize = 46 + 1;
+const SHORT_WIDTH: usize = 19 + 1;
+const LEFT_WIDTH: usize = 12;
 
-// The right items are 46 cells wide in the long form (two texts of 7 and 34 cells, 4 caps, one space): with the
-// buttons' 11 cells and 2 of air they need a client of 59 columns.
+/// The whole row of a client of `width` columns: the left group, `preview` (the pill with its join, or nothing), the
+/// fill `─` and the right group, exactly `width` cells.
+fn row(width: usize, preview: Option<&str>, items: &str, items_width: usize) -> String {
+    let (pill, pill_width) = match preview {
+        Some(value) => (format!("\u{2500}\u{e0b6}preview: {value}\u{e0b4}"), value.chars().count() + 12),
+        None => (String::new(), 0),
+    };
+    let fill = width - LEFT_WIDTH - pill_width - items_width;
+    format!("{}{pill}{}{items}", buttons(), "\u{2500}".repeat(fill))
+}
+
+// The right group is 47 cells wide in the long form (two texts of 7 and 34 cells, 4 caps, one join, the closing `─`):
+// with the left group's 12 and a fill of at least 1 it needs a client of 60 columns; one less gets the short form.
 #[test]
-fn the_status_line_draws_the_inbox_counter_then_the_long_workers_form_on_a_client_wide_enough() {
+fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_from_60_columns() {
     let (env, _engine) = env_with_workers();
-    let (line, styled) = status_line(&env, 59, "queued");
-    assert!(line.starts_with(&buttons()) && line.ends_with(LONG_ITEMS), "{line:?}");
-    // The 2 cells of air are the grey fill line, and the row is full: 11 + 2 + 46.
-    assert_eq!(line, format!("{}──{LONG_ITEMS}", buttons()));
-    assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
+    for width in [60usize, 80, 120, 200] {
+        let (line, styled) = status_line(&env, width as u16, "queued");
+        assert_eq!(line, row(width, None, LONG_ITEMS, LONG_WIDTH), "at {width}: {line:?}");
+        assert_eq!(line.chars().count(), width, "{line:?}");
+        assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
+    }
 }
 
 #[test]
-fn the_status_line_draws_the_inbox_counter_then_the_short_workers_form_on_a_narrow_client() {
+fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_below_60_columns() {
     let (env, _engine) = env_with_workers();
-    let (line, styled) = status_line(&env, 58, "6/6");
-    assert!(line.starts_with(&buttons()) && line.ends_with(SHORT_ITEMS) && !line.contains("workers"), "{line:?}");
-    // The row is full: 11 + the fill line + 19.
-    assert_eq!(line, format!("{}{}{SHORT_ITEMS}", buttons(), "─".repeat(58 - 11 - 19)));
-    assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
+    for width in [59usize, 40] {
+        let (line, styled) = status_line(&env, width as u16, "6/6");
+        assert!(!line.contains("workers"), "{line:?}");
+        assert_eq!(line, row(width, None, SHORT_ITEMS, SHORT_WIDTH), "at {width}: {line:?}");
+        assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
+    }
+}
+
+#[test]
+fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_with_one() {
+    let (env, _engine) = env_with_workers();
+    for width in [80u16, 120, 200] {
+        let (line, styled) = status_line(&env, width, "queued");
+        assert!(line.starts_with(&format!("\u{2500}\u{e0b6}{RESET_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LEGEND_GLYPH}")), "{line:?}");
+        assert!(line.ends_with("queued\u{e0b4}\u{2500}"), "{line:?}");
+        // The right pills are joined by one `─` (never a space), and the left group by the buttons' two.
+        assert!(line.contains("\u{e0b6}inbox 2\u{e0b4}\u{2500}\u{e0b6}workers"), "{line:?}");
+        assert!(line.starts_with(&buttons()), "{line:?}");
+        assert!(!line.contains("\u{e0b4} \u{e0b6}"), "no space between two pills: {line:?}");
+        // The leading `─`, the joins and the fill are colour 8 (bright black, SGR 90), the pills' caps too.
+        assert!(styled.contains("\x1b[90m\u{2500}\u{e0b6}"), "the leading line cell, grey: {styled:?}");
+        assert!(styled.contains("\u{e0b4}\u{2500}\u{e0b6}"), "{styled:?}");
+        assert!(styled.trim_end().ends_with("\u{e0b4}\x1b[90m\u{2500}"), "the closing line cell, grey: {styled:?}");
+    }
 }
 
 #[test]
@@ -955,28 +1041,29 @@ fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
     for width in [40u16, 100] {
         let (line, styled) = status_line(&env, width, "inbox 2");
         assert_eq!(line.chars().count(), usize::from(width), "{line:?}");
-        let used = if width >= 59 { 11 + 46 } else { 11 + 19 };
-        let fill = "─".repeat(usize::from(width) - used);
+        let used = LEFT_WIDTH + if width >= 60 { LONG_WIDTH } else { SHORT_WIDTH };
+        let fill = "\u{2500}".repeat(usize::from(width) - used);
+        // The last button's cap, the fill (the join is its first cell), then the Inbox counter's pill.
         assert!(line.contains(&format!("\u{e0b4}{fill}\u{e0b6}inbox")), "{line:?}");
-        // The caps of the buttons and the fill line are colour 8 (bright black, SGR 90).
-        assert!(styled.contains(&format!("\x1b[90m\u{e0b4}{fill}")), "{styled:?}");
+        assert!(styled.contains("\x1b[90m") && styled.contains(&format!("\u{e0b4}{fill}")), "{styled:?}");
     }
 }
 
 const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
 
+// The preview pill is `preview: <value>` between caps, no padding, joined to the buttons by a `─`: 45 cells with
+// 33 of value. With the left group's 12, the long form's 47 and a fill of 1 it needs 105 columns.
 #[test]
-fn the_status_line_shows_the_preview_in_yellow_after_the_buttons_while_the_option_is_set() {
+fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_option_is_set() {
     let (env, _engine) = env_with_workers();
     tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
-    let pill = format!("\u{e0b6} preview: {PREVIEW} \u{e0b4}");
-    // The pill is 47 cells (33 of value): with the buttons' 11, the long form's 46 and 2 of air it needs 106 columns.
-    for (width, items) in [(100, SHORT_ITEMS), (120, LONG_ITEMS)] {
-        let (line, styled) = status_line(&env, width, "preview:");
-        assert!(line.starts_with(&format!("{} {pill}\u{2500}", buttons())), "one plain space after the buttons, then the pill, then the line: {line:?}");
+    let pill = format!("\u{e0b6}preview: {PREVIEW}\u{e0b4}");
+    for (width, items, items_width) in [(104usize, SHORT_ITEMS, SHORT_WIDTH), (105, LONG_ITEMS, LONG_WIDTH), (120, LONG_ITEMS, LONG_WIDTH), (200, LONG_ITEMS, LONG_WIDTH)] {
+        let (line, styled) = status_line(&env, width as u16, "preview:");
+        assert!(line.starts_with(&format!("{}\u{2500}{pill}\u{2500}", buttons())), "a `─` join after the buttons, then the pill, then the line: {line:?}");
         assert!(line.ends_with(items), "at {width}: {line:?}");
-        assert_eq!(line.chars().count(), usize::from(width), "the line is shorter by the pill's width, so the row stays full: {line:?}");
-        assert!(styled.contains(&format!("\x1b[7m preview: {PREVIEW} ")) && styled.contains("\x1b[33m"), "yellow, reversed: {styled:?}");
+        assert_eq!(line, row(width, Some(PREVIEW), items, items_width), "the row stays full at {width}: {line:?}");
+        assert!(styled.contains(&format!("\x1b[7mpreview: {PREVIEW}")) && styled.contains("\x1b[33m"), "yellow, reversed, unpadded: {styled:?}");
     }
 }
 
@@ -989,7 +1076,7 @@ fn the_status_line_shows_no_preview_once_the_option_is_unset() {
     // The unset shows once a fresh client has drawn the whole line.
     let (line, _) = status_line(&env, 100, "queued");
     assert!(!line.contains("preview"), "{line:?}");
-    assert!(line.starts_with(&format!("{}\u{2500}", buttons())), "{line:?}");
+    assert_eq!(line, row(100, None, LONG_ITEMS, LONG_WIDTH), "{line:?}");
 }
 
 #[test]

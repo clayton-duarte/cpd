@@ -8,10 +8,11 @@ import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
- * Every cpd message in a pi pane is one fold, drawn like every block that folds: a bold title led by a muted `╭` and `⦁`; expanded, each
- * content line led by a muted `│ ` and a muted `╰─ collapse` line; folded, a muted `╰─ expand` line. Colours come from pi's theme (`muted`, bold).
+ * Every cpd message in a pi pane is one fold, drawn like every block that folds: a title row, `╭─` then the title as a pill: U+E0B6, the title, U+E0B4, no padding inside, no dot (contract §15, the fold language). It matches the cockpit's pill title, `title` in `tui/src/section.rs` (what `tui/src/dialog/view.rs` and `tui/src/logs/view.rs` test): the lead `╭─` muted, the text REVERSED. pi's theme has no inverse, so the caps are `theme.fg("muted")` and the text is muted then SGR-reversed (the muted colour becomes its background). Expanded, each
+ * content line led by a muted `│ ` and a muted `╰󰁣 collapse` line; folded, a muted `╰󰁋 expand` line (U+F0063 and U+F004B, the
+ * cockpit's own toggle, `toggle` in `tui/src/fold.rs`; glyphs `UP` / `DOWN` in `tui/src/tree/look.rs`; contract §5.3). Colours come from pi's theme (`muted`, bold).
  * Expanding is pi's own mechanism, the renderer's `expanded` option (Ctrl+O), plus a left click anywhere on the message: pi gives the
- * renderer one mouse region per message, so the click cannot be limited to the `╰─` line. Display only: the message's `content` and
+ * renderer one mouse region per message, so the click cannot be limited to the toggle line. Display only: the message's `content` and
  * `details` are read, never changed. The style `off` (pi-compact-tools' config) still hands the message to pi's own box.
  */
 
@@ -164,11 +165,14 @@ const withinWidth = (lines: string[], width: number): string[] => lines.map((l) 
 
 // ---- the fold ----
 
-const INDICATOR = "⦁";
+const CAP_LEFT = "\u{E0B6}";
+const CAP_RIGHT = "\u{E0B4}";
 const MARGIN = " ";
-const TOP = "╭";
+const TOP = "╭─";
 const RAIL = "│ ";
-const CLOSE = "╰─";
+const CLOSE = "╰";
+const DOWN = "\u{F004B}";
+const UP = "\u{F0063}";
 const EXPAND = "expand";
 const COLLAPSE = "collapse";
 
@@ -178,13 +182,20 @@ type Rows = { head: (width: number) => string[]; body: (width: number) => string
 function rowsOf(summary: string, content: string, theme: Theme): Rows {
   const muted = (text: string) => theme.fg("muted", text);
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${muted(TOP)}${theme.fg("customMessageLabel", INDICATOR)} `;
+  const lead = `${MARGIN}${muted(`${TOP}${CAP_LEFT}`)}`;
   const indent = " ".repeat(visibleWidth(lead));
+  const pill = (line: string) => `\x1b[7m${muted(line)}\x1b[27m`;
   const rail = `${MARGIN}${muted(RAIL)}`;
   return {
-    head: (width) => hardWrap(theme.bold(`cpd ${summary}`), width - visibleWidth(lead)).map((l, i) => `${i === 0 ? lead : indent}${l}`),
+    head: (width) => {
+      const room = width - visibleWidth(lead);
+      let lines = hardWrap(`cpd ${summary}`, room);
+      // The closing cap needs its own cell on the last row.
+      if (visibleWidth(lines[lines.length - 1]) + visibleWidth(CAP_RIGHT) > room) lines = hardWrap(`cpd ${summary}`, room - visibleWidth(CAP_RIGHT));
+      return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? muted(CAP_RIGHT) : ""}`);
+    },
     body: text === "" ? () => [] : prefixedText(text, rail),
-    toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE} ${expanded ? COLLAPSE : EXPAND}`)}`],
+    toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE}${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`)}`],
   };
 }
 

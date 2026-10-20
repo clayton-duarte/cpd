@@ -918,13 +918,16 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     assert!(hit.contains(ratatui::layout::Position::new(44, 11)));
 }
 
-/// The Deploy column in the cockpit with a fake `tmux` on `PATH`: `list-clients` says one client of 200x60, `display-popup`
-/// does nothing (the call is recorded), and the rest is the real tmux.
+/// The client `list-clients` of [`fake_tmux`] names.
+const CLIENT: &str = "/dev/pts/9";
+
+/// The Deploy column in the cockpit with a fake `tmux` on `PATH`: `list-clients` says one client [`CLIENT`] of 200x60,
+/// `display-popup` does nothing (the call is recorded), and the rest is the real tmux.
 fn fake_tmux(env: &TestEnv) {
     let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
     env.fake(
         "tmux",
-        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60 {CLIENT}';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
     );
 }
 
@@ -968,8 +971,8 @@ fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lea
         wait_until("the popup", || popups(&env).len() == n + 1);
         let popup = &popups(&env)[n];
         let at = popup.iter().position(|a| a == "display-popup").unwrap();
-        assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge '{pull}'"), "{popup:?}");
-        assert_eq!(popup[at + 1], "-E", "{popup:?}");
+        assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge '{pull}' --client '{CLIENT}'"), "{popup:?}");
+        assert_eq!(popup[at + 1..at + 4], ["-E", "-c", CLIENT], "{popup:?}");
     }
     // time-claim: over the next redraws after both clicks, no third popup opens and no `session open` runs.
     std::thread::sleep(std::time::Duration::from_millis(600));
@@ -1105,8 +1108,8 @@ fn merge_in_the_menu_opens_the_same_popup_as_the_merge_icon() {
     wait_until("the popup", || popups(&env).len() == 1);
     let popup = &popups(&env)[0];
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
-    assert_eq!(popup.last().unwrap(), "cpd tui view merge 'acme/repo#9'", "{popup:?}");
-    assert_eq!(popup[at + 1], "-E", "{popup:?}");
+    assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"), "{popup:?}");
+    assert_eq!(popup[at + 1..at + 4], ["-E", "-c", CLIENT], "{popup:?}");
 }
 
 // ---------- the legend ----------
@@ -1140,9 +1143,10 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         assert!(pill_at > x, "{name}: the pill follows the name");
         assert_eq!(buf[(pill_at, y)].bg, palette::color(m), "{name}: pill");
         assert_eq!(buf[(pill_at, y)].fg, palette::pill(m).fg.unwrap(), "{name}: pill text");
-        assert!(text.contains(" key │S1 "), "{name}: {text}");
+        // the compact pill (hs-d474): no padding inside the caps
+        assert!(text.contains(&format!("\u{e0b6}{icon} key│S1\u{e0b4}")), "{name}: {text}");
         // a rounded cap on each end, in the status colour on the default background
-        let (left, right) = (pill_at - 2, pill_at + " key │S1 ".chars().count() as u16 + 1);
+        let (left, right) = (pill_at - 1, pill_at + 1 + " key│S1".chars().count() as u16);
         for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
             let cap = &buf[(cap_at, y)];
             assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, palette::color(m), Color::Reset), "{name}: cap at {cap_at}: {text}");

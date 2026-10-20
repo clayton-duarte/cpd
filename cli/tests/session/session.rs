@@ -1195,9 +1195,9 @@ fn rename_sets_the_title_of_a_forks_live_pane_to_its_name() {
         let out = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
         String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
     };
-    assert_eq!(title(&env), "Lead one (fork)");
+    assert_eq!(title(&env), "Lead One (fork)");
     env.cpd(&["session", "rename", "side quest", "--session", &fork]).ok();
-    assert_eq!(title(&env), "side quest");
+    assert_eq!(title(&env), "Side Quest");
 
     // A Session with no pane has nothing to set.
     env.cpd(&["session", "rename", "Lead two renamed", "--session", "lead2"]).ok();
@@ -1218,7 +1218,7 @@ fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_f
     env.cpd(&["session", "open", LEAD1]).ok();
     assert_eq!(title(&env, LEAD1), "Pay");
     let fork = env.cpd(&["session", "fork", LEAD1, "--name", "side"]).ok()["session"]["id"].as_str().unwrap().to_owned();
-    assert_eq!(title(&env, &fork), "side");
+    assert_eq!(title(&env, &fork), "Side");
 }
 
 #[test]
@@ -1236,10 +1236,10 @@ fn open_resumes_a_titled_lead_with_its_dynamic_title_and_a_rename_keeps_it() {
     };
     // The Lead has no pane: opening resumes it in a new window, with the title.
     env.cpd(&["session", "open", LEAD1]).ok();
-    assert_eq!(title(&env, LEAD1), "Dynamic subject");
+    assert_eq!(title(&env, LEAD1), "Dynamic Subject");
     // A rename writes the name and leaves the header.
     env.cpd(&["session", "rename", "Lead one renamed", "--session", LEAD1]).ok();
-    assert_eq!(title(&env, LEAD1), "Dynamic subject");
+    assert_eq!(title(&env, LEAD1), "Dynamic Subject");
     assert_eq!(show(&env, LEAD1)["name"], "Lead one renamed");
 }
 

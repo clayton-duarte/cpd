@@ -7,9 +7,9 @@ use serde_json::{Value, json};
 
 use super::deadline;
 use super::check::{Check, Severity};
-use crate::config::catalog::read as read_catalog;
-use crate::config::{Config, locate_pi};
-use crate::host::pi::{PackageId, PiDirs, declared, package_identity, project_settings};
+use cpd_core::config::catalog::read as read_catalog;
+use cpd_core::config::{Config, locate_pi};
+use cpd_core::host::pi::{PackageId, PiDirs, declared, package_identity, project_settings};
 
 /// Each `tiers.*` model is in pi's catalog and `lead_tier` is valid for its model.
 ///

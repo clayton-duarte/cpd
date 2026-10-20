@@ -11,16 +11,16 @@ use serde_json::json;
 
 use super::lock;
 use super::log::Log;
-use crate::config::Config;
-use crate::error::{CpdError, ErrorCode};
-use crate::events::highest_id;
-use crate::home::CpdHome;
-use crate::host::layout::WATCH_WINDOW;
-use crate::host::tmux::{installed_version, supported_version};
-use crate::host::{PaneId, Spawn, Tmux};
-use crate::output::Output;
-use crate::session::PROGRAM;
-use crate::store::Store;
+use cpd_core::config::Config;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::highest_id;
+use cpd_core::home::CpdHome;
+use cpd_core::host::layout::WATCH_WINDOW;
+use cpd_core::host::tmux::{installed_version, supported_version};
+use cpd_core::host::{PaneId, Spawn, Tmux};
+use cpd_core::output::Output;
+use cpd_core::session::PROGRAM;
+use cpd_core::store::Store;
 
 /// How long the new engine has to take the lock (commands.md §12).
 const START_LIMIT: Duration = Duration::from_secs(10);
@@ -99,7 +99,7 @@ fn verify_store(home: &CpdHome) -> Result<(), CpdError> {
         return Ok(());
     }
     let conn = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| failed(&e))?;
-    match crate::store::verdict(&conn)?.refusal() {
+    match cpd_core::store::verdict(&conn)?.refusal() {
         Some(refusal) => Err(refusal.clone()),
         None => Ok(()),
     }
@@ -155,11 +155,11 @@ fn serialize(home: &CpdHome, wait: bool) -> Result<File, CpdError> {
     std::fs::create_dir_all(home.locks_dir()).map_err(failed)?;
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(failed)?;
     if wait {
-        crate::lock::blocking(&file).map_err(failed)?;
+        cpd_core::lock::blocking(&file).map_err(failed)?;
         return Ok(file);
     }
     let deadline = Instant::now() + PLAIN_LIMIT;
-    while !crate::lock::try_lock(&file).map_err(failed)? {
+    while !cpd_core::lock::try_lock(&file).map_err(failed)? {
         if Instant::now() >= deadline {
             return Err(CpdError::new(
                 ErrorCode::WatchStartFailed,
@@ -195,7 +195,7 @@ fn free(home: &CpdHome, tmux: &Tmux, work: &str, wait: bool) -> Result<bool, Cpd
 }
 
 /// The panes of the engine's window.
-fn engine_panes(tmux: &Tmux, work: &str) -> Result<Vec<crate::host::Pane>, CpdError> {
+fn engine_panes(tmux: &Tmux, work: &str) -> Result<Vec<cpd_core::host::Pane>, CpdError> {
     Ok(tmux.list_panes()?.into_iter().filter(|p| p.session_name == work && p.window_name == WATCH_WINDOW).collect())
 }
 

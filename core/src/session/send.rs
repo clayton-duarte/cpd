@@ -58,7 +58,7 @@ fn write(tx: &WriteTxn<'_>, target: &Row, from: &Option<SessionId>, text: &str, 
 /// The engine's report of an `error` Event (contract §3.7, hs-d314): `text` as a message from the User's side (`from` null,
 /// no wake: `session send` with no sender and no `--wake`) to the live Managers (role `manager`, not archived) of the
 /// Event's Context, or of every Context when the Event has none. Returns how many it sent; none when there is no Manager.
-pub(crate) fn tell_managers(tx: &WriteTxn<'_>, error: i64, text: &str) -> Result<usize, CpdError> {
+pub fn tell_managers(tx: &WriteTxn<'_>, error: i64, text: &str) -> Result<usize, CpdError> {
     let context: Option<String> = tx.query_row("SELECT context FROM events WHERE id = ?1", [error], |r| r.get(0))?;
     let ids = {
         let mut stmt = tx.prepare(

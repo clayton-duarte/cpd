@@ -125,7 +125,7 @@ pub(super) fn set_reply(
 /// `{pane: null, window: null, place: "none"}` when it had a pane. Returns
 /// false, writing nothing, when the row is no longer as read (it got a new
 /// pane, or changed state, meanwhile). `why` ends each Event's text.
-pub(crate) fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Option<&str>, why: &str) -> Result<bool, CpdError> {
+pub fn pane_gone(tx: &WriteTxn<'_>, id: &SessionId, state: &str, pane: Option<&str>, why: &str) -> Result<bool, CpdError> {
     let read = row::load(tx, id)?;
     if read.state.as_str() != state || read.tmux_pane.as_deref() != pane {
         return Ok(false);
