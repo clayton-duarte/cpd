@@ -485,7 +485,8 @@ fn exec_attach(tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
     let argv = tmux.argv(&["attach".to_owned(), "-t".to_owned(), cockpit.to_owned()]);
     let program = program.map_or_else(|| PathBuf::from(&argv[0]), Path::to_path_buf);
     // `client` puts `-u` first (hs-d463); `argv` is the same line, for the error.
-    let error = client(program).args(&argv[2..]).exec();
+    // The attach is interactive: it keeps this process's terminal as its stdin.
+    let error = client(program).args(&argv[2..]).stdin(std::process::Stdio::inherit()).exec();
     CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux attach: {error}."))
         .with("argv", argv)
         .with("exit", Value::Null)

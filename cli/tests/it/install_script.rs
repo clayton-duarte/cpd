@@ -274,13 +274,13 @@ fn a_failing_follow_up_is_printed_and_the_later_ones_still_run() {
     let env = TestEnv::new();
     let checkout = Checkout::new(&env, &[]);
     fake_tmux(&env);
-    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; tui) echo 'no cockpit' >&2; exit 3;; watch) {STARTS_ENGINE};; esac"#);
+    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; tui) echo 'no cockpit' >&2; exit 3;; watch) case "$2" in --check) echo '{{"ok":true}}';; *) {STARTS_ENGINE};; esac;; esac"#);
 
     let run = install_with(&env, &checkout, &version("null"), &extra);
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("cpd install follow-up failed: cpd tui --respawn exited 3"), "{}", run.stderr);
-    assert_eq!(follow_ups(&env), ["tui --respawn", "watch --ensure"]);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --ensure"]);
 }
 
 #[test]
@@ -289,16 +289,16 @@ fn the_follow_ups_run_after_a_slow_config() {
     let checkout = Checkout::new(&env, &[]);
     fake_tmux(&env);
     // A migration holds the setup lock: cpd config answers only after a while.
-    let extra = format!(r#"case "$1" in config) sleep 2; echo '{CONFIG}';; watch) {STARTS_ENGINE};; esac"#);
+    let extra = format!(r#"case "$1" in config) sleep 2; echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; *) {STARTS_ENGINE};; esac;; esac"#);
 
     let run = install_with(&env, &checkout, &version("null"), &extra);
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert_eq!(follow_ups(&env), ["tui --respawn", "watch --ensure"]);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --ensure"]);
 }
 
 fn engine_restart_extra() -> String {
-    format!(r#"case "$1" in config) echo '{CONFIG}';; watch) {STARTS_ENGINE};; esac"#)
+    format!(r#"case "$1" in config) echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; *) {STARTS_ENGINE};; esac;; esac"#)
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn an_old_engine_that_holds_its_lock_for_longer_than_ten_seconds_is_waited_for()
     let run = install_with(&env, &checkout, &version("null"), &engine_restart_extra());
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert_eq!(follow_ups(&env), ["tui --respawn", "watch --ensure"]);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --ensure"]);
     assert!(lock_held(&env), "the new engine holds the lock");
 }
 
@@ -330,8 +330,8 @@ fn an_old_engine_that_never_frees_its_lock_fails_the_install_with_the_reason() {
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("cpd install follow-up failed: the old engine still holds "), "{}", run.stderr);
-    assert!(run.stderr.contains("after 2s: the new engine was not started"), "{}", run.stderr);
-    assert_eq!(follow_ups(&env), ["tui --respawn"]);
+    assert!(run.stderr.contains("after 2s: it was told to stop and has not; the new engine was not started"), "{}", run.stderr);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn"]);
 }
 
 #[test]
@@ -340,13 +340,13 @@ fn a_new_engine_that_does_not_run_fails_the_install_with_the_reason() {
     let checkout = Checkout::new(&env, &[]);
     fake_tmux(&env);
     // --ensure answers, but no process holds the lock.
-    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; watch) echo '{{"ok":true,"started":true}}';; esac"#);
+    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; *) echo '{{"ok":true,"started":true}}';; esac;; esac"#);
 
     let run = install_with(&env, &checkout, &version("null"), &extra);
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("but no engine holds "), "{}", run.stderr);
-    assert!(run.stderr.contains("the engine is not running"), "{}", run.stderr);
+    assert!(run.stderr.contains("no engine is running"), "{}", run.stderr);
 }
 
 // ---- The install's engine order (hs-d463; contract §3.7 "The install's engine order", docs/implementing.md "The install's engine order") ----
@@ -401,8 +401,8 @@ fn running_old_engine(env: &TestEnv) {
     let lock = lock_path(env);
     fs::create_dir_all(lock.parent().unwrap()).unwrap();
     for args in [
-        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "cock".into(), "-n".into(), "main".into(), "sleep 600".into()],
-        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "work".into(), "-n".into(), "watch".into(), format!("exec flock --no-fork '{}' sleep 600", lock.display())],
+        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "cock".into(), "-n".into(), "main".into(), format!("sleep {SLEEP_SECONDS}")],
+        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "work".into(), "-n".into(), "watch".into(), format!("exec flock --no-fork '{}' sleep {SLEEP_SECONDS}", lock.display())],
     ] {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         let out = env.tmux(&args);
@@ -488,8 +488,8 @@ fn a_lock_the_old_engine_keeps_past_the_wait_means_the_new_engine_is_never_start
     let checkout = Checkout::new(&env, &[]);
     logging_tmux(&env, "");
     // The window is killed, but its process is not the one holding the lock: another process does, for longer than the wait.
-    env.tmux(&["new-session", "-d", "-s", "cock", "-n", "main", "sleep 600"]);
-    env.tmux(&["new-session", "-d", "-s", "work", "-n", "watch", "sleep 600"]);
+    env.tmux(&["new-session", "-d", "-s", "cock", "-n", "main", &format!("sleep {SLEEP_SECONDS}")]);
+    env.tmux(&["new-session", "-d", "-s", "work", "-n", "watch", &format!("sleep {SLEEP_SECONDS}")]);
     let old = old_engine(&env, "120");
     let _engines = Engines(vec![], vec![old]);
     let extra = new_cpd(&env, CHECK_OK, RESPAWN_OK, STARTS_ENGINE);
@@ -943,7 +943,7 @@ fn the_installer_goes_on_to_the_views_and_the_engine_after_migrating_on_a_python
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
     linked_version(&env);
-    assert_eq!(follow_ups(&env), ["tui --respawn", "watch --ensure"], "the views are respawned and the engine restarted: {}", run.stderr);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --ensure"], "the views are respawned and the engine restarted: {}", run.stderr);
     assert!(lock_held(&env), "the new engine holds the lock");
 }
 

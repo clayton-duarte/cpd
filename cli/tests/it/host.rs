@@ -408,7 +408,7 @@ fn a_failing_call_is_tmux_failed_with_argv_exit_and_stderr() {
     let err = t.kill_pane(&missing).unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     let d = err.details();
-    assert_eq!(d["argv"], serde_json::json!(["tmux", "-L", s.env.tmux_socket(), "-f", "/dev/null", "kill-pane", "-t", "%999"]));
+    assert_eq!(d["argv"], serde_json::json!(["tmux", "-u", "-L", s.env.tmux_socket(), "-f", "/dev/null", "kill-pane", "-t", "%999"]));
     assert_eq!(d["exit"], 1);
     assert!(d["stderr"].as_str().unwrap().contains("%999"), "{d:?}");
 }
@@ -427,7 +427,7 @@ fn set_pane_title_runs_set_p_on_cpd_title_and_a_missing_pane_fails_with_its_argv
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     assert_eq!(
         err.details()["argv"],
-        serde_json::json!(["tmux", "-L", s.env.tmux_socket(), "-f", "/dev/null", "set", "-p", "-t", "%999", "@cpd_title", "X"])
+        serde_json::json!(["tmux", "-u", "-L", s.env.tmux_socket(), "-f", "/dev/null", "set", "-p", "-t", "%999", "@cpd_title", "X"])
     );
 }
 

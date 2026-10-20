@@ -95,7 +95,7 @@ fn healthy_in(env: TestEnv) -> TestEnv {
 /// The fake git, tmux, gh and pi of [`healthy`], (re)installed in `env`.
 fn healthy_tools(env: &TestEnv) {
     env.fake("git", "echo 'git version 2.43.0'");
-    env.fake("tmux", "[ \"$1\" = -V ] && echo 'tmux 3.6'; exit 0");
+    env.fake("tmux", "case \" $* \" in *\" -V \"*) echo 'tmux 3.6';; esac; exit 0");
     env.fake_gh("[ \"$1\" = auth ] && exit 0; echo 'gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)'");
     install_pi(env, "1.2.0");
 }
