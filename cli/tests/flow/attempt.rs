@@ -41,6 +41,11 @@ fn fixture(files: &[(&str, &str)]) -> Fx {
 
 /// [`fixture`] with Job `api` of `kind` and, for a `test` Job, its `(tests, test_files)` as JSON arrays.
 fn fixture_kind(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>) -> Fx {
+    fixture_needing(files, kind, tests, None)
+}
+
+/// [`fixture_kind`] whose Job needs the merged `test` Job `t` naming `needs` (a JSON array), see [`Fx::attempt_needing`].
+fn fixture_needing(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>, needs: Option<&str>) -> Fx {
     let env = TestEnv::new();
     let repo = env.git_repo("pay").canonicalize().unwrap();
     // The worktrees are created in this process, whose environment is not the TestEnv's.
@@ -72,7 +77,7 @@ fn fixture_kind(files: &[(&str, &str)], kind: &str, tests: Option<(&str, &str)>)
         fx.repo.display(),
         fx.lead.display()
     ));
-    fx.work = fx.attempt_kind(&Pr { key: "repo".into(), repo: fx.repo.clone(), lead: fx.lead.clone() }, "api", "running", kind, tests);
+    fx.work = fx.attempt_needing(&Pr { key: "repo".into(), repo: fx.repo.clone(), lead: fx.lead.clone() }, "api", "running", kind, tests, needs);
     fx
 }
 
@@ -137,6 +142,12 @@ impl Fx {
 
     /// [`Fx::attempt_in`] for a Job of `kind` (`tests`: a `test` Job's `(tests, test_files)`, JSON arrays).
     fn attempt_kind(&self, pr: &Pr, key: &str, status: &str, kind: &str, tests: Option<(&str, &str)>) -> PathBuf {
+        self.attempt_needing(pr, key, status, kind, tests, None)
+    }
+
+    /// [`Fx::attempt_kind`] for a Job that needs the merged `test` Job `t` (its `tests` as a JSON array; `test_files` is `["tests/"]`): `t` and
+    /// the Dependency are written in the Job's own transaction, since a Dependency of a Locked Job is refused later (`dependencies_locked`).
+    fn attempt_needing(&self, pr: &Pr, key: &str, status: &str, kind: &str, tests: Option<(&str, &str)>, needs: Option<&str>) -> PathBuf {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
         let made = create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup).unwrap();
@@ -148,6 +159,16 @@ impl Fx {
                      VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't', ?5, ?6, ?7)",
                     params![key, "f".repeat(64), tx.id(), pr.key, kind, tests.map(|t| t.0), tests.map(|t| t.1)],
                 )?;
+                if let Some(names) = needs {
+                    tx.execute(
+                        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                                           created_txn, created_at, kind, tests, test_files, merged_sha)
+                           VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
+                                   ?2, 't', 'test', ?3, '[\"tests/\"]', 'c0ffee')",
+                        params![pr.key, tx.id(), names],
+                    )?;
+                    tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', ?1, 't')", params![key])?;
+                }
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
                      VALUES ('pay', ?1, ?2, 1, 'S2', 'ladder', ?6, ?3, ?4, ?5, 't')",
@@ -466,14 +487,12 @@ fn red(toml: &str) -> Fx {
 
 /// Job `api` is an `impl` Job that needs the merged `test` Job `t` (the tests `t::one` and `t::two`, in `tests/`).
 fn green(toml: &str, approved: Option<&str>) -> Fx {
-    let fx = fixture_kind(&[(".config/cpd.toml", toml)], "impl", None);
-    fx.env.sql(
-        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
-                           created_txn, created_at, kind, tests, test_files, merged_sha)
-           VALUES ('pay', 'repo', 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
-                   cpd_txn(), 't', 'test', '[\"t::one\",\"t::two\"]', '[\"tests/\"]', 'c0ffee');
-         INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'api', 't');",
-    );
+    green_naming(toml, approved, r#"["t::one","t::two"]"#)
+}
+
+/// [`green`] with the tests `t` names.
+fn green_naming(toml: &str, approved: Option<&str>, names: &str) -> Fx {
+    let fx = fixture_needing(&[(".config/cpd.toml", toml)], "impl", None, Some(names));
     if let Some(paths) = approved {
         fx.env.sql(&format!("UPDATE jobs SET test_approved = '{paths}' WHERE key = 'api'"));
     }
@@ -621,8 +640,7 @@ fn list_refuses_a_name_that_matches_no_test_before_run_for_a_test_job() {
 
 #[test]
 fn list_refuses_a_name_that_matches_no_test_for_an_impl_job_too_and_passes_when_every_name_exists() {
-    let fx = green(TESTS_LIST, None);
-    fx.env.sql("UPDATE jobs SET tests = '[\"t::one\",\"t::missing\"]' WHERE key = 't'");
+    let fx = green_naming(TESTS_LIST, None, r#"["t::one","t::missing"]"#);
     fx.commit("src/lib.rs", "// green\n");
     let error = refused(&fx.submit(), "tests_not_found", 3);
     assert_eq!(error["details"]["tests"], json!(["t::missing"]));

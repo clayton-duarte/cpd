@@ -171,6 +171,20 @@ impl NewEvent {
         make(Kind::AttemptStatus, text, json!({"from": from, "to": to}))
     }
 
+    /// The start of a check span of `attempt submit` (contract §7.7): `from` = `to` = `running`, `what` `tests` or `gate`.
+    pub fn attempt_check_start(text: impl Into<String>, what: &str) -> NewEvent {
+        make(Kind::AttemptStatus, text, json!({"from": "running", "to": "running", "check": "start", "what": what}))
+    }
+
+    /// The end of a check span; `died` (E2's `end` for a submit that died, §3.7) is present only when true.
+    pub fn attempt_check_end(text: impl Into<String>, what: &str, died: bool) -> NewEvent {
+        let mut data = json!({"from": "running", "to": "running", "check": "end", "what": what});
+        if died {
+            data["died"] = json!(true);
+        }
+        make(Kind::AttemptStatus, text, data)
+    }
+
     pub fn attempt_retry(text: impl Into<String>, outcome: &str, cause: &str, next_tier: &str, feedback: &str) -> NewEvent {
         make(
             Kind::AttemptRetry,
@@ -418,7 +432,12 @@ mod tests {
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
             Kind::JobCancelled => vec![NewEvent::job_cancelled(T, s)],
             Kind::AttemptStarted => vec![NewEvent::attempt_started(T, n, s, s)],
-            Kind::AttemptStatus => vec![NewEvent::attempt_status(T, s, s)],
+            Kind::AttemptStatus => vec![
+                NewEvent::attempt_status(T, s, s),
+                NewEvent::attempt_check_start(T, s),
+                NewEvent::attempt_check_end(T, s, false),
+                NewEvent::attempt_check_end(T, s, true),
+            ],
             Kind::AttemptRetry => vec![NewEvent::attempt_retry(T, s, s, s, s)],
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],

@@ -215,7 +215,7 @@ fn run_rendered(blocks: &[Vec<exec::Rendered>], cwd: &Path, env: &[(&str, &str)]
 
 /// One command of the repo's `[tests]` (contract §7.7), run as a hook is (§7.3): rendered with the hook's variables
 /// (`target` the Lead Branch) and `extra` (`tests`, a list, or `test`), in `worktree`, `sh -c`, the hook environment.
-/// Its output replaces `log`. `HookOutcome::Error(Invalid)` when the template does not render; nothing ran then.
+/// Its output goes to `log`, which `mode` truncates or appends to. `HookOutcome::Error(Invalid)` when the template does not render; nothing ran then.
 pub fn run_command(
     template: &str,
     extra: &[(&str, Value)],
@@ -223,6 +223,7 @@ pub fn run_command(
     operation: &Operation<'_>,
     timeout: Duration,
     log: &Path,
+    mode: Log,
 ) -> Result<HookResult, CpdError> {
     let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
     let mut vars = variables(Hook::PreCommit, &cwd, None, Some(operation))?;
@@ -234,7 +235,7 @@ pub fn run_command(
         Err(why) => return Ok(HookResult { outcome: HookOutcome::Error(HookError::Invalid(why)), tail: None }),
     };
     let rendered = exec::Rendered { name: None, command, context: exec::context_json(&vars) };
-    Ok(run_rendered(&[vec![rendered]], &cwd, &[], timeout, log, Log::Truncate))
+    Ok(run_rendered(&[vec![rendered]], &cwd, &[], timeout, log, mode))
 }
 
 /// The template variables of contract §7.3, as worktrunk defines them; also the
