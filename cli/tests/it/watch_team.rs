@@ -8,7 +8,7 @@ use crate::common;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, TestEnv, wait_until};
 use cpd_core::home::CpdHome;
@@ -21,10 +21,8 @@ struct Engine(Child);
 impl Drop for Engine {
     fn drop(&mut self) {
         let _ = nix::sys::signal::kill(nix::unistd::Pid::from_raw(self.0.id() as i32), nix::sys::signal::Signal::SIGTERM);
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while matches!(self.0.try_wait(), Ok(None)) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        // it stops at its next tick; killed if it has not within 10 s
+        let _ = common::poll(Duration::from_secs(10), || (!matches!(self.0.try_wait(), Ok(None))).then_some(()));
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
