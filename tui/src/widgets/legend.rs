@@ -25,6 +25,10 @@ use crate::read::{Dot, JobCounts};
 use crate::section;
 use crate::{Capture, run_view};
 
+/// The rounded caps of a Plan pill (powerline, U+E0B6 and U+E0B4), as the Plan view draws them (`plan/flow.rs`, which is
+/// private to its module).
+const CAP_L: &str = "\u{e0b6}";
+const CAP_R: &str = "\u{e0b4}";
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
 const POPUP_BORDER: u16 = 2;
@@ -114,7 +118,15 @@ fn sections() -> Vec<Section> {
             let (icon, meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                Line::from(Span::styled(format!(" {icon} key │S1 "), palette::pill(meaning))),
+                {
+                    let pill = palette::pill(meaning);
+                    let cap = Style::new().fg(pill.bg.expect("a pill has a colour"));
+                    Line::from(vec![
+                        Span::styled(CAP_L, cap),
+                        Span::styled(format!(" {icon} key │S1 "), pill),
+                        Span::styled(CAP_R, cap),
+                    ])
+                },
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })

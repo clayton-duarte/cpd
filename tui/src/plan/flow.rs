@@ -112,6 +112,10 @@ pub enum Dir {
     Right,
 }
 
+/// The rounded caps of a pill (powerline, U+E0B6 and U+E0B4), each one cell, drawn in the pill's status colour.
+pub const CAP_L: &str = "\u{e0b6}";
+pub const CAP_R: &str = "\u{e0b4}";
+
 /// Columns between a column's right bracket and the next column's left bracket: line, bus, line.
 const GAP: u16 = 3;
 
@@ -305,7 +309,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     // x: the left bracket column, then each column's pills, `GAP` + both bracket columns between columns
     let parts: Vec<(String, String)> = jobs.iter().map(|j| pill_parts(j, usize::MAX, frame)).collect();
     let pill_w = |i: usize| (Line::from(parts[i].0.as_str()).width() + Line::from(parts[i].1.as_str()).width()) as u16;
-    let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i)).max().unwrap_or(0)).collect();
+    let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i) + 2).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
     let xs: Vec<u16> = starts(1, col_w.iter().copied(), spacing);
@@ -405,15 +409,25 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
                 let rect = Rect::new(xs[l], top[c] + k as u16, col_w[l], 1);
                 let style = palette::pill(jobs[i].status.icon(frame).1);
-                // the icon and key to the left, the tier (and `aN`) to the right, whatever the column's width
-                Line::from(parts[i].0.as_str()).style(style).left_aligned().render(rect, &mut buf);
-                Line::from(parts[i].1.as_str()).style(style).right_aligned().render(rect, &mut buf);
+                // a cap on each side in the status colour, on the default background; between them the icon and key to
+                // the left, the tier (and `aN`) to the right, whatever the column's width
+                let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+                buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
+                buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
+                let body = body_of(rect);
+                Line::from(parts[i].0.as_str()).style(style).left_aligned().render(body, &mut buf);
+                Line::from(parts[i].1.as_str()).style(style).right_aligned().render(body, &mut buf);
                 pills[i] = Some(Pill { key: jobs[i].key.clone(), rect, column: l });
                 columns[l].push(i);
             }
         }
     }
     Chart { buf, pills: pills.into_iter().flatten().collect(), columns }
+}
+
+/// A pill's rectangle without its two caps.
+fn body_of(rect: Rect) -> Rect {
+    Rect { x: rect.x + 1, width: rect.width.saturating_sub(2), ..rect }
 }
 
 /// The User's selection in the Plan view: a Job key, held by key so a refresh keeps it. Nothing is selected until the User
@@ -518,7 +532,7 @@ impl Chart {
         (fit(ox, r.x.saturating_sub(1), r.right() + 1, w), fit(oy, r.y, r.bottom(), h))
     }
 
-    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill bold and reversed. Offsets are clamped to
+    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill's body bold and reversed (its caps keep the status colour). Offsets are clamped to
     /// the chart; the clamped offsets are returned. (Hand-written: ratatui has no widget that copies a window of a `Buffer`.)
     pub fn blit(&self, dst: &mut Buffer, area: Rect, (ox, oy): (u16, u16), selected: Option<usize>) -> (u16, u16) {
         let ox = ox.min(self.buf.area.width.saturating_sub(area.width));
@@ -528,7 +542,7 @@ impl Chart {
                 dst[(area.x + x, area.y + y)] = self.buf[(x + ox, y + oy)].clone();
             }
         }
-        if let Some(r) = selected.map(|i| self.pills[i].rect) {
+        if let Some(r) = selected.map(|i| body_of(self.pills[i].rect)) {
             let seen = Rect::new(ox, oy, area.width, area.height).intersection(r);
             if !seen.is_empty() {
                 let on_dst = Rect::new(area.x + seen.x - ox, area.y + seen.y - oy, seen.width, seen.height);
