@@ -60,7 +60,7 @@ const INDENT: usize = 2;
 /// The mark of the Session in the chat slot, in column 0 of its row.
 pub const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 
-/// What a toggle row's identifier starts with: the identifier of the fold it toggles, last element, behind this.
+/// What a closing row's identifier starts with: the identifier of the fold it toggles, last element, behind this.
 const TOGGLE: &str = "╰─ ";
 
 /// The columns a content row's branch takes (`fold::TREE_BRANCH`).
@@ -86,7 +86,7 @@ pub enum Row<'a> {
     Plan(&'a ContextNode, &'a PlanNode),
     /// A Session forked by `session fork`, with the Plan it belongs to.
     Fork(&'a ContextNode, &'a PlanNode, &'a SessionNode),
-    /// The `╰─ expand` / `╰─ collapse` row of a Context: the only row that folds it.
+    /// The closing row of a Context (`╰󰁋 expand`, `╰󰁣 collapse` or a plain `╰─`): the only row that folds its archived rows.
     Toggle,
 }
 

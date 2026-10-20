@@ -103,7 +103,7 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (header, items, `╰─ collapse`) are shown, not only the first three, in at most half the
+    /// The Inbox section's rows (title, items, `╰󰁣 collapse`) are shown, not only the first three, in at most half the
     /// column ([`View::inbox_cap`]). View state only.
     inbox_expanded: bool,
     /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
@@ -482,7 +482,7 @@ impl View {
             return self.click_inbox(at.y - self.inbox_area.y);
         }
         let Some(path) = self.row_at(at) else { return Effect::None };
-        // only a toggle row (`╰─ expand`, `╰─ collapse`) folds or unfolds a Context; the title row keeps its own action:
+        // only a closing row (`╰󰁋 expand`, `╰󰁣 collapse`) shows or hides a Context's archived rows; the title row keeps its own action:
         // a live Context's row opens its Manager (B3-A6), a live Session row opens it and an archived one shows its
         // history
         if rows::click_toggle(&mut self.state, &self.tree, &path) {
@@ -501,7 +501,7 @@ impl View {
         }
     }
 
-    /// A left click on the Inbox section, `row` rows below its header: `╰─ expand` and `╰─ collapse` toggle the inline
+    /// A left click on the Inbox section, `row` rows below its first (the empty one): `╰󰁋 expand` and `╰󰁣 collapse` toggle the inline
     /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
     fn click_inbox(&mut self, row: u16) -> Effect {
         match self.shape().hit(row) {
