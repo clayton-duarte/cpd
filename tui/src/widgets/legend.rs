@@ -449,6 +449,22 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_pill_is_cap_icon_key_bar_tier_cap_with_no_padding_like_the_charts() {
+        // hs-d474: the legend's sample follows the chart's compact pill
+        let jobs = &sections()[1];
+        let pills: Vec<_> = jobs.rows.iter().filter(|r| r[1].spans[0].content == CAP_L).collect();
+        assert_eq!(pills.len(), 7, "one sample per status, the stuck one too");
+        for row in pills {
+            let body = row[1].spans[1].content.as_ref();
+            assert_eq!(row[1].spans[2].content, CAP_R);
+            assert!(body.ends_with(" key│S1") && !body.starts_with(' ') && !body.contains(" │"), "{}: {body:?}", text(&row[0]));
+        }
+        let sample = |name: &str| text(&jobs.rows.iter().find(|r| text(&r[0]) == name).unwrap()[1]);
+        assert_eq!(sample("queued"), format!("{CAP_L}{} key│S1{CAP_R}", palette::QUEUED));
+        assert_eq!(sample("failed, stuck"), format!("{CAP_L}{} key│S1{CAP_R}", palette::JOB_STUCK.0));
+    }
+
+    #[test]
     fn the_job_statuses_listed_are_those_the_chart_draws_and_not_cancelled() {
         let jobs = &sections()[1];
         let names: Vec<String> = jobs.rows.iter().map(|r| text(&r[0])).collect();

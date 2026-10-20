@@ -391,14 +391,14 @@ mod tests {
         assert_eq!(levels(&prs), [0, 1]);
         let b = layout(&prs, &[], &NeedsUser::default(), 0);
         snap(&b.chart, "
-┌ api · api-repo 󱦰 main · merged ┐
+╭ api · api-repo 󱦰 main · merged ╮
 │ no Jobs                        │
-└───────────────┬────────────────┘
+╰───────────────┬────────────────╯
                 ╰╮
                  󱦳
-┌ web · web-repo 󱦰 main · dispatch ┐
+╭ web · web-repo 󱦰 main · dispatch ╮
 │ no Jobs                          │
-└──────────────────────────────────┘");
+╰──────────────────────────────────╯");
     }
 
     #[test]
@@ -440,9 +440,9 @@ mod tests {
         assert_eq!(c.columns, [vec![1], vec![0]], "alpha's column first");
         assert_eq!(b.row_of, [0, 0]);
         snap(c, "
-┌ alpha · alpha-repo 󱦰 main · dispatch ┐ ┌ zed · zed-repo 󱦰 main · dispatch ┐
-│  󰝦 a │S1                           │ │  󰝦 z │S1                       │
-└──────────────────────────────────────┘ └──────────────────────────────────┘");
+╭ alpha · alpha-repo 󱦰 main · dispatch ╮ ╭ zed · zed-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1                             │ │ 󰝦 z│S1                         │
+╰──────────────────────────────────────╯ ╰──────────────────────────────────╯");
     }
 
     #[test]
@@ -457,20 +457,51 @@ mod tests {
             assert_eq!(inside, want, "row {y}");
         }
         snap(&c, "
-┌ api · api-repo 󱦰 main · dispatch ┐
-│  󰝦 a │S1 ──╮                   │
-│              ├── 󰝦 c │S1       │
-│  󰝦 b │S1 ──╯                   │
-└──────────────────────────────────┘");
+╭ api · api-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1──╮                      │
+│           ├──󰝦 c│S1            │
+│ 󰝦 b│S1──╯                      │
+╰──────────────────────────────────╯");
+    }
+
+    /// The glyphs at the four corners of the buffer of a single box.
+    fn corners(c: &Chart) -> [&str; 4] {
+        let (w, h) = (c.buf.area.width, c.buf.area.height);
+        [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)].map(|(x, y)| c.buf[(x, y)].symbol())
+    }
+
+    #[test]
+    fn a_box_has_rounded_corners_and_straight_edges() {
+        // hs-d474: ╭ ╮ ╰ ╯, not ┌ ┐ └ ┘; the edges stay ─ and │
+        for jobs in [vec![], vec![job("api", "a", &[]), job("api", "b", &["a"])]] {
+            let c = layout(&[pr("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
+            assert_eq!(corners(&c), ["╭", "╮", "╰", "╯"], "{} Jobs", jobs.len());
+            let (w, h) = (c.buf.area.width, c.buf.area.height);
+            assert_eq!((c.buf[(w / 2, h - 1)].symbol(), c.buf[(0, 1)].symbol(), c.buf[(w - 1, 1)].symbol()), ("─", "│", "│"));
+            let shown = text(&c);
+            assert!(!shown.contains(['┌', '┐', '└', '┘']), "{shown}");
+        }
+    }
+
+    #[test]
+    fn every_box_of_a_canvas_is_rounded_and_the_links_still_join_with_t_junctions() {
+        let prs = [pr("api", &[]), pr("web", &["api"])];
+        let c = layout(&prs, &[job("api", "a", &[]), job("web", "c", &[])], &NeedsUser::default(), 0).chart;
+        let shown = text(&c);
+        assert_eq!([('╭', 2), ('╮', 2), ('╰', 2), ('╯', 2)].map(|(g, _)| shown.matches(g).count()), [2, 2, 2, 2], "two boxes, four corners each: {shown}");
+        assert!(!shown.contains(['┌', '┐', '└', '┘']), "{shown}");
+        // the needed box's bottom border leaves by a ┬, the needing box's top border has the arrowhead above it
+        assert_eq!(shown.matches('┬').count(), 1, "{shown}");
+        assert!(shown.lines().any(|l| l.starts_with("╰") && l.contains('┬') && l.ends_with('╯')), "{shown}");
     }
 
     #[test]
     fn a_pr_with_no_jobs_is_an_empty_box() {
         let c = layout(&[pr("api", &[])], &[], &NeedsUser::default(), 0).chart;
         snap(&c, "
-┌ api · api-repo 󱦰 main · dispatch ┐
+╭ api · api-repo 󱦰 main · dispatch ╮
 │ no Jobs                          │
-└──────────────────────────────────┘");
+╰──────────────────────────────────╯");
         assert!(c.buf[(1, 1)].modifier.contains(Modifier::DIM));
         assert!((c.pills.len(), c.columns.len()) == (0, 0));
         assert_eq!(layout(&[], &[], &NeedsUser::default(), 0).chart.buf.area.area(), 0);
@@ -656,9 +687,9 @@ mod tests {
         let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
-┌ api · api-repo 󱦰 main · #12 conflict 󰏌 ┐
+╭ api · api-repo 󱦰 main · #12 conflict 󰏌 ╮
 │ no Jobs                                │
-└────────────────────────────────────────┘");
+╰────────────────────────────────────────╯");
         let (covered, first, arrow) = link_cells(&c, &plain);
         assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict 󰏌` whole, not the key nor the separators");
     }
@@ -671,9 +702,9 @@ mod tests {
         let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
-┌ api · api-repo 󱦰 main · #12 open 󰏌 ┐
+╭ api · api-repo 󱦰 main · #12 open 󰏌 ╮
 │ no Jobs                            │
-└────────────────────────────────────┘");
+╰────────────────────────────────────╯");
         assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open 󰏌` is two cells longer than `dispatch`");
         let (covered, first, arrow) = link_cells(&c, &plain);
         assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `󰏌`, not the key nor the separators");
@@ -686,14 +717,14 @@ mod tests {
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("web", "c", &[])];
         let c = layout(&prs, &jobs, &NeedsUser::default(), 0).chart;
         snap(&c, "
-┌ api · api-repo 󱦰 main · dispatch ┐
-│  󰝦 a │S1 ───── 󰝦 b │S1       │
-└────────────────┬─────────────────┘
+╭ api · api-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1─────󰝦 b│S1            │
+╰────────────────┬─────────────────╯
                  │
                  󱦳
-┌ web · web-repo 󱦰 main · dispatch ┐
-│  󰝦 c │S1                       │
-└──────────────────────────────────┘");
+╭ web · web-repo 󱦰 main · dispatch ╮
+│ 󰝦 c│S1                         │
+╰──────────────────────────────────╯");
         // the arrow is in the lines' colour
         let exit = c.buf.content.iter().find(|cell| cell.symbol() == EXIT).unwrap();
         assert_eq!(Some(exit.fg), palette::fg(Meaning::Nothing).fg);
@@ -704,14 +735,14 @@ mod tests {
         let prs = [pr("docs", &["schema"]), pr("schema", &[]), pr("web", &["schema"])];
         let jobs = [job("schema", "types", &[]), job("schema", "gql", &["types"]), job("web", "page", &[]), job("docs", "readme", &[])];
         snap(&layout(&prs, &jobs, &NeedsUser::default(), 0).chart, "
-┌ schema · schema-repo 󱦰 main · dispatch ┐
-│  󰝦 types │S1 ───── 󰝦 gql │S1       │
-└───────────────────┬────────────────────┘
+╭ schema · schema-repo 󱦰 main · dispatch ╮
+│ 󰝦 types│S1─────󰝦 gql│S1            │
+╰───────────────────┬────────────────────╯
                   ╭─┴───────────────────────────────────╮
                   󱦳                                     󱦳
-┌ docs · docs-repo 󱦰 main · dispatch ┐ ┌ web · web-repo 󱦰 main · dispatch ┐
-│  󰝦 readme │S1                    │ │  󰝦 page │S1                    │
-└────────────────────────────────────┘ └──────────────────────────────────┘");
+╭ docs · docs-repo 󱦰 main · dispatch ╮ ╭ web · web-repo 󱦰 main · dispatch ╮
+│ 󰝦 readme│S1                      │ │ 󰝦 page│S1                      │
+╰────────────────────────────────────╯ ╰──────────────────────────────────╯");
     }
 
     #[test]
@@ -719,33 +750,33 @@ mod tests {
         let prs = [pr("api", &[]), pr("db", &[]), pr("web", &["api", "db"])];
         let jobs = [job("api", "a", &[]), job("db", "d", &[]), job("web", "w", &[])];
         snap(&layout(&prs, &jobs, &NeedsUser::default(), 0).chart, "
-┌ api · api-repo 󱦰 main · dispatch ┐ ┌ db · db-repo 󱦰 main · dispatch ┐
-│  󰝦 a │S1                       │ │  󰝦 d │S1                     │
-└────────────────┬─────────────────┘ └───────────────┬────────────────┘
+╭ api · api-repo 󱦰 main · dispatch ╮ ╭ db · db-repo 󱦰 main · dispatch ╮
+│ 󰝦 a│S1                         │ │ 󰝦 d│S1                       │
+╰────────────────┬─────────────────╯ ╰───────────────┬────────────────╯
                  ├───────────────────────────────────╯
                  󱦳
-┌ web · web-repo 󱦰 main · dispatch ┐
-│  󰝦 w │S1                       │
-└──────────────────────────────────┘");
+╭ web · web-repo 󱦰 main · dispatch ╮
+│ 󰝦 w│S1                         │
+╰──────────────────────────────────╯");
     }
 
     #[test]
     fn a_need_that_skips_a_row_rides_a_column_free_of_boxes() {
         let prs = [pr("a", &[]), pr("b", &["a"]), pr("c", &["a", "b"])];
         snap(&layout(&prs, &[], &NeedsUser::default(), 0).chart, "
-┌ a · a-repo 󱦰 main · dispatch ┐
+╭ a · a-repo 󱦰 main · dispatch ╮
 │ no Jobs                      │
-└──────────────┬───────────────┘
+╰──────────────┬───────────────╯
                ├─────────────────╮
                󱦳                 │
-┌ b · b-repo 󱦰 main · dispatch ┐ │
+╭ b · b-repo 󱦰 main · dispatch ╮ │
 │ no Jobs                      │ │
-└──────────────┬───────────────┘ │
+╰──────────────┬───────────────╯ │
                ├─────────────────╯
                󱦳
-┌ c · c-repo 󱦰 main · dispatch ┐
+╭ c · c-repo 󱦰 main · dispatch ╮
 │ no Jobs                      │
-└──────────────────────────────┘");
+╰──────────────────────────────╯");
     }
 
     /// The pill index of Job `key`.
@@ -769,7 +800,7 @@ mod tests {
         // a pill is found where it is drawn
         let r = b.chart.pills[at("w")].rect;
         assert_eq!(b.chart.pill_at(r.x, r.y), Some(at("w")));
-        assert_eq!(b.chart.buf[(r.x + 2, r.y)].symbol(), crate::palette::QUEUED);
+        assert_eq!(b.chart.buf[(r.x + 1, r.y)].symbol(), crate::palette::QUEUED);
         assert_eq!((b.chart.buf[(r.x, r.y)].symbol(), b.chart.buf[(r.right() - 1, r.y)].symbol()), ("\u{e0b6}", "\u{e0b4}"), "the caps are on the whole pill's rectangle");
     }
 
@@ -836,14 +867,14 @@ mod tests {
     fn at_scroll_zero_the_first_box_starts_two_columns_and_one_row_inside_the_body() {
         let rows = body(40, 6, (0, 0));
         assert_eq!(rows[0].trim(), "");
-        assert_eq!(rows[1], "  ┌ api · api-repo 󱦰 main · dispatch ┐  ");
+        assert_eq!(rows[1], "  ╭ api · api-repo 󱦰 main · dispatch ╮  ");
     }
 
     #[test]
     fn scrolled_the_box_is_drawn_up_to_every_edge_of_the_body() {
         // the box is 34 columns by 3 rows; the body is 10×3, scrolled to the box's top-left corner, then to its
         // bottom-right one (the margin is 2 columns and 1 row on every side of it)
-        assert_eq!(body(10, 3, (2, 1)), ["┌ api · ap", "│ no Jobs ", "└─────────"]);
-        assert_eq!(body(10, 3, (28, 1)), ["dispatch ┐", "         │", "─────────┘"]);
+        assert_eq!(body(10, 3, (2, 1)), ["╭ api · ap", "│ no Jobs ", "╰─────────"]);
+        assert_eq!(body(10, 3, (28, 1)), ["dispatch ╮", "         │", "─────────╯"]);
     }
 }

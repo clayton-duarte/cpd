@@ -592,7 +592,7 @@ mod tests {
         let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
             let (icon, meaning) = status.icon(0);
-            assert_eq!(c.buf[(p.rect.x + 2, p.rect.y)].symbol(), icon, "{status:?}");
+            assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status:?}");
             // the body keeps the pill's colours
             let cell = &c.buf[(p.rect.x + 1, p.rect.y)];
             assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status:?}");
@@ -602,6 +602,44 @@ mod tests {
                 assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, palette::pill(meaning).bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
             }
         }
+    }
+
+    /// The cells of the pill at `i`, caps included.
+    fn cells(c: &Chart, i: usize) -> String {
+        let r = c.pills[i].rect;
+        (r.x..r.right()).map(|x| c.buf[(x, r.y)].symbol()).collect()
+    }
+
+    #[test]
+    fn a_pill_is_cap_icon_key_bar_tier_cap_with_no_padding() {
+        // hs-d474: no space inside the caps and none before the `│`
+        let c = layout(&[job("titles-docs-2", &[])], 0);
+        let icon = Live::Queued.icon(0).0;
+        assert_eq!(cells(&c, 0), format!("{CAP_L}{icon} titles-docs-2│S1{CAP_R}"));
+        assert_eq!(c.pills[0].rect.width as usize, 2 + icon.chars().count() + " titles-docs-2│S1".chars().count());
+    }
+
+    #[test]
+    fn a_pill_from_the_second_attempt_has_the_attempt_after_the_tier() {
+        let icon = Live::Queued.icon(0).0;
+        for (attempt, tail) in [(1, ""), (2, "│a2"), (3, "│a3")] {
+            let c = layout(&[FlowJob { attempt, ..job("a", &[]) }], 0);
+            assert_eq!(cells(&c, 0), format!("{CAP_L}{icon} a│S1{tail}{CAP_R}"), "attempt {attempt}");
+        }
+    }
+
+    #[test]
+    fn a_stub_draft_pill_shows_a_dash_for_its_tier_with_no_padding() {
+        let c = layout(&[FlowJob { status: Live::Draft, tier: None, ..job("a", &[]) }], 0);
+        assert_eq!(cells(&c, 0), format!("{CAP_L}{} a│—{CAP_R}", Live::Draft.icon(0).0));
+    }
+
+    #[test]
+    fn the_widest_pill_of_a_column_fills_it_and_the_others_pad_between_key_and_bar() {
+        let c = layout(&[job("a", &[]), job("long", &[])], 0);
+        let icon = Live::Queued.icon(0).0;
+        assert_eq!(cells(&c, 0), format!("{CAP_L}{icon} a   │S1{CAP_R}"));
+        assert_eq!(cells(&c, 1), format!("{CAP_L}{icon} long│S1{CAP_R}"));
     }
 
     #[test]
@@ -618,7 +656,7 @@ mod tests {
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.
     fn icon_at(status: Live, frame: usize) -> String {
         let c = layout(&[FlowJob { status, ..job("a", &[]) }], frame);
-        c.buf[(c.pills[0].rect.x + 2, c.pills[0].rect.y)].symbol().to_string()
+        c.buf[(c.pills[0].rect.x + 1, c.pills[0].rect.y)].symbol().to_string()
     }
 
     #[test]
@@ -667,7 +705,7 @@ mod tests {
     fn columns_run_left_to_right() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1 ");
+ 󰝦 a│S1─────󰝦 b│S1─────󰝦 c│S1");
         assert_eq!(c.columns, vec![vec![0], vec![1], vec![2]]);
     }
 
@@ -676,7 +714,7 @@ mod tests {
         // c needs a through b, so its own need of a is dropped: a has one line out, to b
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])], 0);
         snap(&c, "
-  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1 ");
+ 󰝦 a│S1─────󰝦 b│S1─────󰝦 c│S1");
         // the same with the implied need listed first
         assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])], 0)), text(&c));
     }
@@ -685,9 +723,9 @@ mod tests {
     fn jobs_with_the_same_needs_share_a_card_stacked_with_no_space() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])], 0);
         snap(&c, "
-                ╭ 󰝦 b │S1 ╮
-  󰝦 a │S1 ────┤ 󰝦 c │S1 │
-                ╰ 󰝦 d │S1 ╯");
+             ╭󰝦 b│S1╮
+ 󰝦 a│S1────┤󰝦 c│S1│
+             ╰󰝦 d│S1╯");
         assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [1, 0, 1, 2]);
     }
 
@@ -696,23 +734,23 @@ mod tests {
         // three Jobs: both brackets are joined at the middle row, where the line in and the line out meet them
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])], 0);
         snap(&c, "
-                ╭ 󰝦 b │S1 ╮
-  󰝦 a │S1 ────┤ 󰝦 c │S1 ├──── 󰝦 d │S1 
-                ╰ 󰝦 e │S1 ╯");
+             ╭󰝦 b│S1╮
+ 󰝦 a│S1────┤󰝦 c│S1├────󰝦 d│S1
+             ╰󰝦 e│S1╯");
         // two Jobs: the middle row is the upper one
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])], 0);
         snap(&c, "
-  󰝦 a │S1 ────┬ 󰝦 b │S1 ╮
-                ╰ 󰝦 c │S1 ╯");
+ 󰝦 a│S1────┬󰝦 b│S1╮
+             ╰󰝦 c│S1╯");
     }
 
     #[test]
     fn single_cards_are_one_row_apart_and_have_plain_line_ends() {
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──┬── 󰝦 c │S1 
-              │
-  󰝦 b │S1 ──┴── 󰝦 d │S1 ");
+ 󰝦 a│S1──┬──󰝦 c│S1
+           │
+ 󰝦 b│S1──┴──󰝦 d│S1");
     }
 
     #[test]
@@ -721,11 +759,11 @@ mod tests {
         long.attempt = 2;
         let c = layout(&[job("a", &[]), long, job("b", &[])], 0);
         snap(&c, "
-  󰝦 a               │S1 
+ 󰝦 a              │S1
 
-  󰝦 a-longer-key │S1│a2 
+ 󰝦 a-longer-key│S1│a2
 
-  󰝦 b               │S1 ");
+ 󰝦 b              │S1");
         // the last cell of the widest pill is a hit, the one after it is not
         let r = c.pills[1].rect;
         assert_eq!((c.pill_at(r.right() - 1, r.y), c.pill_at(r.right(), r.y)), (Some(1), None));
@@ -742,18 +780,18 @@ mod tests {
         assert_eq!(glyphs, ["┬", "│", "┴"]);
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──╮
-              ├── 󰝦 c │S1 
-  󰝦 b │S1 ──╯");
+ 󰝦 a│S1──╮
+           ├──󰝦 c│S1
+ 󰝦 b│S1──╯");
     }
 
     #[test]
     fn a_line_that_skips_columns_rides_a_free_row() {
         let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──╮
-              ├── 󰝦 b │S1 ──┬── 󰝦 c │S1 
-  󰝦 x │S1 ──┴───────────────╯");
+ 󰝦 a│S1──╮
+           ├──󰝦 b│S1──┬──󰝦 c│S1
+ 󰝦 x│S1──┴────────────╯");
     }
 
     #[test]
