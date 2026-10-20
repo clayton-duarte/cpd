@@ -4,7 +4,21 @@
 # pi, offline, in an empty temporary agent dir (docs/implementing.md,
 # "Checking a pi version"). Exit 0 and one `pi-check: ok (<version>)` line,
 # or exit 1 and `pi-check: FAIL: <step and why>` with the tail of pi's output.
-# Needs tmux (step 2 runs pi's interactive mode, the only one that activates).
+# Needs tmux and node (step 3 runs pi's interactive mode, the only one that
+# activates); a machine without them fails step 0, never skips (hs-d355).
+#
+# hs-d355, docs/implementing.md "Checking a pi version":
+# - The Gate runs it: `npm run verify` calls `scripts/pi-check.sh
+#   node_modules/.bin/pi`, the pi package.json pins, against this checkout's adapter.
+# - The fake cpd holds no answers of its own: it records its argv, sleeps for
+#   `events follow`, and runs `node pi/test/answers.ts <argv>` for the rest,
+#   the same answers the adapter's tests use, so a field the adapter starts
+#   requiring fails `npm test` and this check together.
+# - It never starts a model turn: every pi command runs under `env -i` with an
+#   allow-list (PATH LANG LC_ALL LC_CTYPE TERM when set, plus HOME TMPDIR
+#   PI_CODING_AGENT_DIR PI_OFFLINE PI_SKIP_VERSION_CHECK CPD_SESSION CPD_HOME,
+#   which it sets itself): no provider key, no proxy, no base URL.
+# - It runs on macOS too: scripts/check-portable.sh covers this file.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)

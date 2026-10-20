@@ -3,6 +3,14 @@
 # the pi adapter pi/ as ~/.local/share/cpd/pi, where cpd finds it by
 # default: <dir of the binary>/../share/cpd/pi (contract §6.5, §8 pi_adapter).
 # Safe to rerun: the binary is replaced atomically, even while it runs.
+#
+# Runs on Linux and on macOS, the same lines (hs-d355; scripts/check-portable.sh
+# refuses Linux-only calls in this file, and the Gate runs it). The adapter
+# directory is a symlink, ~/.local/share/cpd/pi -> pi.<id>, swapped by one
+# rename(2) (python3 os.replace); a first install after hs-d355 migrates an
+# existing real directory to pi.legacy (two renames, not atomic, once). Layout,
+# migration, cleanup and what pi sees: contract §3.7 "The adapter swap";
+# algorithm and tests: docs/implementing.md "The adapter swap".
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -72,12 +80,19 @@ chmod 755 "$tmp"
 mv -f "$tmp" "$dest_dir/cpd"
 trap - EXIT
 
-# The adapter is replaced as a whole; tests are not part of the install. It is
-# built in a directory of its own name beside the old one ($$ keeps concurrent
-# installs apart) and swapped in with one rename, so the adapter directory is
-# never missing or half written: the first install renames it into place, a
-# later one exchanges the two directories (renameat2 RENAME_EXCHANGE, Linux,
-# glibc 2.28) and then deletes the old one, now under the temporary name.
+# The adapter is replaced as a whole; tests are not part of the install
+# (hs-d355, docs/implementing.md "The adapter swap"). A version is built in
+# pi.tmp.$$ ($$ keeps concurrent installs apart), renamed to pi.<id> (<id> =
+# UTC YYYYmmddTHHMMSS-$$) and linked as pi.link.$$ -> pi.<id>; one rename(2)
+# (python3 os.replace, never renameat2, mv or ln -sfn) puts the link over
+# $adapter_dir, so the path is always the old or the new version, whole. A real
+# directory there (installs before hs-d355) is first renamed to pi.legacy: that
+# one time $adapter_dir is missing for microseconds, and a failed second rename
+# puts it back. Afterwards $adapter_dir/package.json is checked, and versions
+# that are neither current, nor the displaced one, nor younger than 60 minutes
+# are removed, with the tmp directories and links of dead pids. Preflight,
+# before anything is replaced: python3 exists, $adapter_dir is absent, a
+# symlink or a directory.
 mkdir -p "$(dirname "$adapter_dir")"
 adapter_tmp="$adapter_dir.tmp.$$"
 trap 'rm -rf "$adapter_tmp"' EXIT
