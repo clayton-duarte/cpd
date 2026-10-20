@@ -58,6 +58,9 @@ enum Reason {
     Spawn,
     Exit,
     Empty,
+    /// hs-d356: no single `TITLE:` line, or one that does not pass step 4.
+    #[cfg_attr(not(test), allow(dead_code))] // Stub of the red tests (hs-d356): the fix constructs it in `sanitise`.
+    Malformed,
     Invalid,
 }
 
@@ -68,6 +71,7 @@ impl Reason {
             Reason::Spawn => "spawn",
             Reason::Exit => "exit",
             Reason::Empty => "empty",
+            Reason::Malformed => "malformed",
             Reason::Invalid => "invalid",
         }
     }
@@ -270,26 +274,93 @@ mod tests {
         sanitise(answer).map(|t| t.as_str().to_owned()).map_err(|(reason, _)| reason)
     }
 
-    #[test]
-    fn sanitise_keeps_the_first_line_trimmed_and_unquoted() {
-        assert_eq!(title("\"Plan the titles\"\nmore\n"), Ok("Plan the titles".to_owned()));
-        assert_eq!(title("\n  “Curly”  \n"), Ok("Curly".to_owned()));
-        assert_eq!(title(" `x` "), Ok("x".to_owned()));
-    }
+    /// The answer pi gave E10's retry of Session 4965bfc8 at 15:05:37Z: a preamble, no title (hs-d356).
+    const PREAMBLE: &str = "Now I understand. I need to output just the title to stdout…";
 
     #[test]
-    fn sanitise_cuts_at_60_characters_with_an_ellipsis() {
-        let cut = title(&"é".repeat(61)).unwrap();
-        assert_eq!((cut.chars().count(), cut.ends_with('…')), (60, true));
-        assert_eq!(title(&"é".repeat(60)).unwrap(), "é".repeat(60));
-    }
-
-    #[test]
-    fn sanitise_refuses_an_empty_answer_and_a_control_character() {
-        for empty in ["", " \n\n", "\"\"", "''\nsecond"] {
+    fn the_empty_answer_and_a_blank_one_are_empty() {
+        for empty in ["", " ", "\n", " \n\n  \n"] {
             assert_eq!(title(empty), Err(Reason::Empty), "{empty:?}");
         }
-        assert_eq!(title("a\tb"), Err(Reason::Invalid));
+    }
+
+    #[test]
+    fn the_real_preamble_has_no_marker_and_is_malformed_never_a_title() {
+        assert_eq!(title(PREAMBLE), Err(Reason::Malformed));
+        assert_eq!(title(&format!("{PREAMBLE}\n")), Err(Reason::Malformed));
+    }
+
+    #[test]
+    fn a_unmarked_line_is_malformed_even_when_it_would_pass_as_a_title() {
+        for unmarked in ["Dynamic session titles", "\"Plan the titles\"\nmore\n", "Title: Dynamic session titles", "title: x y z"] {
+            assert_eq!(title(unmarked), Err(Reason::Malformed), "{unmarked:?}");
+        }
+    }
+
+    #[test]
+    fn the_marked_line_is_the_title() {
+        assert_eq!(title("TITLE: Dynamic session titles"), Ok("Dynamic session titles".to_owned()));
+        assert_eq!(title("TITLE: Dynamic session titles\n"), Ok("Dynamic session titles".to_owned()));
+        assert_eq!(title("  TITLE:   Dynamic session titles  \n"), Ok("Dynamic session titles".to_owned()));
+    }
+
+    #[test]
+    fn lines_without_the_marker_are_ignored_so_a_preamble_does_no_harm() {
+        assert_eq!(title(&format!("{PREAMBLE}\nTITLE: Dynamic session titles")), Ok("Dynamic session titles".to_owned()));
+        assert_eq!(title(&format!("{PREAMBLE}\n\nTITLE: Dynamic session titles\nThat is all.\n")), Ok("Dynamic session titles".to_owned()));
+    }
+
+    #[test]
+    fn the_marked_text_is_unquoted() {
+        assert_eq!(title("TITLE: \"Plan the titles\""), Ok("Plan the titles".to_owned()));
+        assert_eq!(title("TITLE: “Curly quotes”"), Ok("Curly quotes".to_owned()));
+        assert_eq!(title("TITLE: 'Single quotes'"), Ok("Single quotes".to_owned()));
+    }
+
+    #[test]
+    fn two_marked_lines_are_malformed() {
+        assert_eq!(title("TITLE: First title\nTITLE: Second title"), Err(Reason::Malformed));
+        assert_eq!(title("TITLE: Same title\nsome words\n  TITLE: Same title"), Err(Reason::Malformed));
+    }
+
+    #[test]
+    fn an_empty_marked_text_is_malformed() {
+        for empty in ["TITLE:", "TITLE:   ", "TITLE: \"\"", "preamble\nTITLE:\n"] {
+            assert_eq!(title(empty), Err(Reason::Malformed), "{empty:?}");
+        }
+    }
+
+    #[test]
+    fn a_title_over_60_characters_is_malformed_and_never_cut() {
+        let sixty = "é".repeat(60);
+        assert_eq!(title(&format!("TITLE: {sixty}")), Ok(sixty));
+        assert_eq!(title(&format!("TITLE: {}", "é".repeat(61))), Err(Reason::Malformed));
+        assert_eq!(title(&format!("TITLE: {}", "é".repeat(300))), Err(Reason::Malformed));
+    }
+
+    #[test]
+    fn a_title_of_more_than_10_words_is_malformed() {
+        assert_eq!(title("TITLE: a b c d e f g h i j"), Ok("a b c d e f g h i j".to_owned()));
+        assert_eq!(title("TITLE: a b c d e f g h i j k"), Err(Reason::Malformed));
+    }
+
+    #[test]
+    fn a_title_that_reads_as_sentences_is_malformed() {
+        for sentences in [
+            "TITLE: Fixes the titles.",
+            "TITLE: Fixes the titles…",
+            "TITLE: The titles:",
+            "TITLE: Fixes it. Then more",
+            "TITLE: I need to output just the title.",
+        ] {
+            assert_eq!(title(sentences), Err(Reason::Malformed), "{sentences:?}");
+        }
+        assert_eq!(title("TITLE: Fix v1.2 titles"), Ok("Fix v1.2 titles".to_owned()), "a dot that is not `. ` or the end is fine");
+    }
+
+    #[test]
+    fn a_control_character_in_the_marked_text_is_no_title() {
+        assert!(title("TITLE: Tab\tinside").is_err());
     }
 
     #[test]
