@@ -224,9 +224,9 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     setup(&env);
     plan(&env, "pl", "plan");
     let out = job_add(&env, "pl", "a", "S2", &[]).ok();
-    assert_eq!(out["job"], json!({"key": "a", "pr": "repo", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "a", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
     let out = job_add(&env, "pl", "b", "O3", &["a"]).ok();
-    assert_eq!(out["job"], json!({"key": "b", "pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "b", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"], "review": false, "urgent": false}));
     assert!(out.get("already").is_none());
 
     assert_eq!(job_row(&env, "pl", "b", "title"), "Title of b");
@@ -246,7 +246,7 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     assert_eq!(added[1]["job"], "b");
     assert_eq!(added[1]["plan"], "pl");
     assert_eq!(added[1]["context"], "ctx");
-    assert_eq!(added[1]["data"], json!({"pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"], "review": false, "urgent": false}));
+    assert_eq!(added[1]["data"], json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"], "review": false, "urgent": false}));
     assert_eq!(env.query::<i64>("SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'insert'"), 2);
 }
 
@@ -271,7 +271,7 @@ fn add_in_phase_dispatch_or_deploy_appends_a_queued_job_with_its_fingerprint() {
             );
         }
         let out = job_add(&env, "pl", "late", "H1", &["a"]).ok();
-        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "status": "queued", "appended": true, "tier": "H1", "needs": ["a"], "review": false, "urgent": false}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "kind": "work", "status": "queued", "appended": true, "tier": "H1", "needs": ["a"], "review": false, "urgent": false}), "{phase}");
         assert_eq!(job_row(&env, "pl", "late", "appended"), 1);
         let id = PlanId::parse("pl").unwrap();
         let all = store(&env).read(|conn| jobs::load(conn, &id)).unwrap();
@@ -680,9 +680,9 @@ fn list_shows_every_job_in_creation_order_and_filters_by_status() {
     assert_eq!(keys, ["a", "b", "c"]);
     assert_eq!(
         jobs[0],
-        json!({"key": "a", "title": "Title of a", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee", "review": false, "urgent": false})
+        json!({"key": "a", "title": "Title of a", "kind": "work", "status": "merged", "tier": "S2", "appended": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee", "review": false, "urgent": false})
     );
-    assert_eq!(jobs[1], json!({"key": "b", "title": "Title of b", "status": "queued", "tier": "S2", "appended": false, "needs": ["a"], "attempts": 0, "merged_sha": null, "review": false, "urgent": false}));
+    assert_eq!(jobs[1], json!({"key": "b", "title": "Title of b", "kind": "work", "status": "queued", "tier": "S2", "appended": false, "needs": ["a"], "attempts": 0, "merged_sha": null, "review": false, "urgent": false}));
     assert_eq!(jobs[2]["attempts"], 1);
 
     let out = job(&env, &["list", "--status", "queued"], "pl").ok();
@@ -1021,12 +1021,12 @@ fn add_draft_after_the_lock_is_an_appended_draft_that_stays_editable_and_cancell
         job_add(&env, "pl", "a", "S2", &[]).ok();
 
         let out = job_add_draft(&env, "pl", "d", &["a"], &[]).ok();
-        assert_eq!(out["job"], json!({"key": "d", "pr": "repo", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "review": false, "urgent": false}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "d", "pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "review": false, "urgent": false}), "{phase}");
         assert_eq!((job_row(&env, "pl", "d", "status"), job_row(&env, "pl", "d", "appended")), (json!("draft"), json!(1)));
         assert_eq!(job_row(&env, "pl", "d", "fingerprint"), Value::Null);
         assert_eq!(
             events(&env, "job-added").last().unwrap()["data"],
-            json!({"pr": "repo", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "review": false, "urgent": false})
+            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": true, "tier": "S2", "needs": ["a"], "review": false, "urgent": false})
         );
         // Its needs may be drafts; an identical rerun is `already`, as for any add.
         job_add_draft(&env, "pl", "e", &["d"], &[]).ok();
@@ -1121,14 +1121,14 @@ fn add_draft_needs_only_a_title_and_stores_the_tier_and_the_spec_as_null() {
 
         let out = stub_add(&env, "pl", "k", &[]).ok();
         let appended = phase != "plan";
-        assert_eq!(out["job"], json!({"key": "k", "pr": "repo", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false, "urgent": false}), "{phase}");
+        assert_eq!(out["job"], json!({"key": "k", "pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false, "urgent": false}), "{phase}");
         for column in ["tier", "goal", "context", "touches", "acceptance", "out_of_scope", "fingerprint"] {
             assert_eq!(job_row(&env, "pl", "k", column), Value::Null, "{phase}: {column}");
         }
         assert_eq!((job_row(&env, "pl", "k", "title"), job_row(&env, "pl", "k", "status")), (json!("Title of k"), json!("draft")));
         assert_eq!(
             events(&env, "job-added").last().unwrap()["data"],
-            json!({"pr": "repo", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false, "urgent": false})
+            json!({"pr": "repo", "kind": "work", "status": "draft", "appended": appended, "tier": null, "needs": [], "review": false, "urgent": false})
         );
 
         // Either half may be given: the Tier alone, the Spec alone; needs work as for any draft.
@@ -1247,9 +1247,9 @@ fn a_job_is_not_urgent_unless_added_with_urgent() {
     assert_eq!(events(&env, "job-added")[0]["data"]["urgent"], false);
 
     let out = job_add_urgent(&env, "pl", "hot", &[]).ok();
-    assert_eq!(out["job"], json!({"key": "hot", "pr": "repo", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": true}));
+    assert_eq!(out["job"], json!({"key": "hot", "pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": true}));
     assert_eq!(job_row(&env, "pl", "hot", "urgent"), 1);
-    assert_eq!(events(&env, "job-added")[1]["data"], json!({"pr": "repo", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": true}));
+    assert_eq!(events(&env, "job-added")[1]["data"], json!({"pr": "repo", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": true}));
 
     // The flag is not a Locked field: the same add with or without it is `already`, as for `--draft`.
     assert_eq!(job_add_urgent(&env, "pl", "calm", &[]).ok()["already"], true);

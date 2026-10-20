@@ -87,7 +87,9 @@ fn setup(env: &TestEnv) -> (String, String) {
     let lead = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok()["lead"]["session"].as_str().unwrap().to_owned();
     for key in ["api", "web", "ui"] {
         let repo = env.keyed_repo(key);
-        env.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
+        env.cpd(&["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
+        // The stub the shape lays out is cancelled, as a Lead cancels a stub it does not need: these Jobs are the table's.
+        env.cpd(&["job", "cancel", &format!("{key}-config"), "--reason", "a stub of the template", "--plan", "pay"]).ok();
     }
     wait_for_pane(env, &lead);
     let fork = env.cpd(&["session", "fork", &lead]).ok()["session"]["id"].as_str().unwrap().to_owned();
@@ -136,7 +138,7 @@ fn setup(env: &TestEnv) -> (String, String) {
             "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
              {d}{q}{f}{r}{m}
              UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
-             UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE key <> 'd';
+             UPDATE jobs SET status = 'queued', fingerprint = '{fingerprint}' WHERE key <> 'd' AND status = 'draft';
              {start_api}{start_web}
              UPDATE jobs SET status = 'running' WHERE key IN ('f', 'r', 'm');
              {attempt_f}{attempt_r}

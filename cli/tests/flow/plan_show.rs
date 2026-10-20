@@ -146,7 +146,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
         json!({"key": "pay", "repo": "/r/pay", "base": "main", "base_pr": null, "needs": [], "status": "dispatch",
                "lead_branch": "cpd/pay-1/pay", "lead_worktree": "/r/pay.pay-1.pay",
                "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
-               "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null, "title": null,
+               "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null, "title": null, "shape": "free",
                "jobs": ["a", "b", "gone"]})
     );
     assert_eq!(keys(&show["jobs"]), ["a", "b", "gone"]);
@@ -178,7 +178,7 @@ fn render_with_one_pr_keeps_the_jobs_table_and_graph() {
     assert!(text.contains("| `pay` | `/r/pay` | `main` | none |"), "{text}");
     assert!(!text.contains("graph LR"), "one PR has no graph of PRs: {text}");
     assert!(text.contains("\n## PR pay\n\nRepo: `/r/pay` · Base: `main` · Needs: none\n"), "{text}");
-    assert!(text.contains("| `b` | Job b | S2 | draft | `a` | `src/b.rs` |"), "{text}");
+    assert!(text.contains("| `b` | Job b | work | S2 | draft | `a` | `src/b.rs` |"), "{text}");
     assert!(text.contains("```mermaid\ngraph TD\n  j1[\"a\"]\n  j2[\"b\"]\n  j1 --> j2\n```"), "{text}");
     assert!(text.contains("\n### `a`: Job a\n"), "{text}");
     assert!(text.contains("\n#### Goal\n\nGoal of b.\n"), "{text}");
@@ -280,10 +280,27 @@ fn a_pr_without_jobs_says_so_and_the_fingerprint_covers_the_prs() {
     let fx = fx("plan");
     fx.pr("api", "waiting", &[]);
     fx.job("api-1", "api", "draft", &[]);
-    fx.pr("web", "waiting", &["api"]);
+    fx.pr("web", "dispatch", &["api"]);
     let (out, text) = fx.render();
     assert!(text.contains("\n## PR web\n\nRepo: `/r/web` · Base: `main` · Needs: `api`\n\nNo Jobs yet.\n"), "{text}");
     let before = out["fingerprint"].clone();
     fx.env.sql("UPDATE prs SET base = 'develop' WHERE key = 'web'");
     assert_ne!(fx.render().0["fingerprint"], before);
+}
+
+/// A PR that has not started has no Job yet, and shows the `open` Job cpd will add (commands.md §4.5, hs-d497).
+#[test]
+fn a_waiting_pr_with_no_jobs_shows_the_open_job_placeholder_in_no_fingerprint() {
+    let fx = fx("plan");
+    fx.pr("web", "waiting", &[]);
+    let (out, text) = fx.render();
+    assert!(!text.contains("No Jobs yet."), "{text}");
+    assert!(text.contains("\n## PR web\n\nRepo: `/r/web` · Base: `main` · Needs: none\n\n### Jobs\n\n| Key | Title | Kind | Tier | Status | Needs | Touches |\n"), "{text}");
+    assert!(text.contains("| `open-web` | Open the pull request: web | open | S2 | — | every other Job of the PR | — |"), "{text}");
+    assert!(text.contains("\n### `open-web`: Open the pull request: web\n"), "{text}");
+    // `open_tier` is the config key; the placeholder is no row, so the fingerprint is that of a PR with no Job.
+    fx.env.write_config("version = 1\nmachine = \"t\"\nopen_tier = \"O3\"\n");
+    let (again, text) = fx.render();
+    assert!(text.contains("| open | O3 | — |"), "{text}");
+    assert_eq!(again["fingerprint"], out["fingerprint"]);
 }
