@@ -134,6 +134,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         return Err(no_draft_jobs(&id));
     }
     check_drafts_complete(&id, jobs)?;
+    super::shape::check(&id, &s.prs, jobs)?;
     if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
         return Ok(Output::success(json!({
             "review": {"id": r.id, "fingerprint": r.fingerprint, "status": r.status, "requested_at": r.requested_at},
