@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -98,6 +98,7 @@ kinds! {
     PrEdited = "pr-edited",
     PrCancelled = "pr-cancelled",
     PrStarted = "pr-started",
+    PrBaseChanged = "pr-base-changed",
     PrOpened = "pr-opened",
     PrMerged = "pr-merged",
     Escalation = "escalation",
@@ -160,6 +161,7 @@ impl Kind {
                 &["pr", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"],
                 &[],
             ),
+            PrBaseChanged => spec([Y, Y, N, N, N], &["pr", "from", "to", "from_pr", "to_pr", "by"], &["number", "url"]),
             PrOpened => spec([Y, Y, N, N, N], &["pr", "number", "url"], &[]),
             PrMerged => spec([Y, Y, N, N, N], &["pr", "number", "url", "merged_at"], &[]),
             Escalation => spec([Y, Y, Y, Y, N], &["escalation", "question"], &[]),

@@ -17,6 +17,7 @@ export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean; deliverAs: Sen
   "attempt-retry": { turn: false, deliverAs: "followUp" },
   "job-cancelled": { turn: false, deliverAs: "followUp" },
   "pr-started": { turn: false, deliverAs: "followUp" },
+  "pr-base-changed": { turn: false, deliverAs: "followUp" },
   "pr-merged": { turn: false, deliverAs: "followUp" },
 };
 

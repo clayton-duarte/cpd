@@ -26,6 +26,7 @@ const LEAD: Record<string, "turn" | "no turn"> = {
   "attempt-retry": "no turn",
   "job-cancelled": "no turn",
   "pr-started": "no turn",
+  "pr-base-changed": "no turn",
   "pr-merged": "no turn",
 };
 

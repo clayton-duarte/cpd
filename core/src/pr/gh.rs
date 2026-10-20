@@ -306,7 +306,7 @@ pub fn inline_comments(cwd: &Path, number: i64) -> Result<Vec<InlineComment>, Cp
 /// The fields of a pull request, as the search and the lookup both select them.
 macro_rules! pr_fields {
     () => {
-        "repository { nameWithOwner } number url title isDraft state createdAt mergedAt reviewDecision \
+        "repository { nameWithOwner } number url title isDraft state createdAt mergedAt baseRefName reviewDecision \
          mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }"
     };
 }
@@ -376,6 +376,10 @@ pub struct Rate {
 pub struct Search {
     pub issue_count: u32,
     pub prs: Vec<Listed>,
+    /// The base branch (`baseRefName`) each pull request of `prs` targets, by `(repo, number)`: what the poll's
+    /// base follow compares with the PR's `base` (§7.6 step 6). It is not stored in `pull_requests`. A pull request
+    /// whose reply has no `baseRefName` has no entry, so nothing is followed for it.
+    pub bases: Vec<((String, i64), String)>,
     pub rate: Rate,
 }
 
@@ -457,6 +461,9 @@ struct RawPr {
     created_at: String,
     #[serde(rename = "mergedAt")]
     merged_at: Option<String>,
+    /// The search always selects it; it is optional only so that a reply without it (a test's fake `gh`) follows nothing.
+    #[serde(rename = "baseRefName", default)]
+    base_ref: Option<String>,
     #[serde(rename = "reviewDecision")]
     review_decision: Option<String>,
     mergeable: String,
@@ -546,9 +553,15 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
     };
     let issue_count = authored.issue_count + requested.issue_count;
     let mut prs: Vec<Listed> = Vec::new();
+    let mut bases: Vec<((String, i64), String)> = Vec::new();
     for (nodes, is_authored) in [(authored.nodes, true), (requested.nodes, false)] {
         for raw in nodes {
+            let base = raw.base_ref.clone();
             let pr = reply.polled(raw)?;
+            let key = (pr.repo.clone(), pr.number);
+            if let Some(base) = base.filter(|_| !bases.iter().any(|(k, _)| *k == key)) {
+                bases.push((key, base));
+            }
             let at = match prs.iter().position(|l| (&l.pr.repo, l.pr.number) == (&pr.repo, pr.number)) {
                 Some(at) => at,
                 None => {
@@ -564,7 +577,7 @@ fn parse_search(reply: &Reply) -> Result<Search, CpdError> {
             }
         }
     }
-    Ok(Search { issue_count, prs, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
+    Ok(Search { issue_count, prs, bases, rate: Rate { cost: rate.cost, remaining: rate.remaining, reset_at: rate.reset_at } })
 }
 
 /// `owner/name` with each part of `[A-Za-z0-9_.-]+`: nothing else reaches a query text.
@@ -651,10 +664,10 @@ mod tests {
             SEARCH_QUERY,
             "query { search(type: ISSUE, query: \"is:pr is:open author:@me archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
-             reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              reviewRequests: search(type: ISSUE, query: \"review-requested:@me is:pr is:open archived:false sort:created-asc\", first: 100) { \
              issueCount nodes { ... on PullRequest { repository { nameWithOwner } number url title isDraft state createdAt mergedAt \
-             reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
+             baseRefName reviewDecision mergeable mergeStateStatus commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } } \
              rateLimit { cost remaining resetAt } }"
         );
     }

@@ -29,6 +29,9 @@ use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
 
+/// The `by` of the `pr-base-changed` Event the poll appends (§5.2).
+const COMMAND_BY: &str = "poll";
+
 /// How long `pr poll` waits for `locks/pr-poll.lock` (`lock_timeout`).
 const LOCK_WAIT: Duration = Duration::from_secs(60);
 
@@ -46,10 +49,21 @@ struct Unresolved {
     error: CpdError,
 }
 
+/// A PR whose pull request GitHub repointed: the PR's `base` follows it (§7.6 step 6, hs-d325).
+struct Follow {
+    plan: PlanId,
+    pr: PrKey,
+    from: String,
+    to: String,
+    number: i64,
+    url: String,
+}
+
 /// What the transaction did.
 #[derive(Default)]
 struct Outcome {
     changed: Vec<Value>,
+    base_changed: Vec<Value>,
     removed: usize,
     feedback: Vec<(PlanId, PrKey)>,
     merged: Vec<(PlanId, PrKey)>,
@@ -93,7 +107,10 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     // `OPEN` is "not decided yet", `None` a pull request GitHub cannot find: nothing changes.
     seen.extend(looked_up.into_iter().flatten().filter(|p| p.state != PrState::Open).map(|pr| Listed { pr, membership: Default::default() }));
 
-    let dirty = env.store.read(|conn| {
+    // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
+    let follows = env.store.read(|conn| follows(conn, &owned, &search.bases))?;
+
+    let dirty = !follows.is_empty() || env.store.read(|conn| {
         for listed in &seen {
             match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
                 Some(row) if row.holds(listed)? => {}
@@ -106,7 +123,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         Ok(unowned.iter().any(|row| !present.contains(row)))
     })?;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks, &follows))? } else { Outcome::default() };
 
     report_unresolved(&mut env, &unresolved)?;
 
@@ -124,6 +141,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let mut out = json!({
         "polled": search.prs.len(),
         "changed": outcome.changed,
+        "base_changed": outcome.base_changed,
         "removed": outcome.removed,
         "feedback": outcome.feedback.iter().map(pair).collect::<Vec<_>>(),
         "merged": outcome.merged.iter().map(pair).collect::<Vec<_>>(),
@@ -165,7 +183,14 @@ fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
 
 /// The one write transaction (D5, D7): every changed row, the Events of the
 /// owning Plans, the rows that left the search.
-fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned], checks: &[(PlanId, PrKey, Checks)]) -> Result<Outcome, CpdError> {
+fn apply(
+    tx: &WriteTxn<'_>,
+    seen: &[Listed],
+    present: &[(String, i64)],
+    owned: &[Owned],
+    checks: &[(PlanId, PrKey, Checks)],
+    follows: &[Follow],
+) -> Result<Outcome, CpdError> {
     let mut out = Outcome::default();
     for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
@@ -194,8 +219,57 @@ fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &
             }
         }
     }
+    for follow in follows {
+        out.base_changed.push(follow_base(tx, follow)?);
+    }
     out.removed = pulls::delete_unowned_absent(tx, present)?;
     Ok(out)
+}
+
+/// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
+/// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR with no entry in `bases` is not followed.
+fn follows(conn: &rusqlite::Connection, owned: &[Owned], bases: &[((String, i64), String)]) -> Result<Vec<Follow>, CpdError> {
+    let mut stored = conn.prepare("SELECT base FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
+    let mut found = Vec::new();
+    for (plan, key, row) in owned {
+        let Some((_, to)) = bases.iter().find(|((repo, number), _)| (repo, number) == (&row.repo, &row.number)) else { continue };
+        let from: Option<String> = stored.query_row([plan.as_str(), key.as_str()], |r| r.get(0)).optional()?;
+        if let Some(from) = from.filter(|from| from != to) {
+            found.push(Follow { plan: plan.clone(), pr: key.clone(), from, to: to.clone(), number: row.number, url: row.url.clone() });
+        }
+    }
+    Ok(found)
+}
+
+/// Sets the PR's `base` to the one GitHub reports and appends `pr-base-changed` for its Plan (§5.2). Nothing else
+/// changes: no Gate, no status, no `pr-feedback`, no `gh` call (hs-d326: the tree is unchanged, a ready PR stays ready).
+fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
+    let Follow { plan, pr, from, to, number, url } = follow;
+    let repo: String = tx.query_row("SELECT repo FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), pr.as_str()], |r| r.get(0))?;
+    let base_pr = |branch: &str| -> Result<Option<String>, CpdError> {
+        Ok(tx
+            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), branch], |r| r.get(0))
+            .optional()?)
+    };
+    let (from_pr, to_pr) = (base_pr(from)?, base_pr(to)?);
+    let moved = tx.execute(
+        "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status = 'open' AND base = ?4",
+        [plan.as_str(), pr.as_str(), to.as_str(), from.as_str()],
+    )?;
+    if moved == 0 {
+        return Err(cas_lost(plan, pr));
+    }
+    let reason = match (&from_pr, &to_pr) {
+        (Some(base), None) => format!("its base PR {base} merged and GitHub repointed the pull request"),
+        _ => "the base changed on GitHub".to_owned(),
+    };
+    let text = format!(
+        "PR {pr} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
+         Read it with cpd plan show --plan {plan}."
+    );
+    let event = NewEvent::pr_base_changed(text, pr, (from, to), (from_pr.as_deref(), to_pr.as_deref()), COMMAND_BY, Some((*number, url)));
+    append(tx, event.plan(plan.clone()))?;
+    Ok(json!({"plan": plan, "pr": pr, "from": from, "to": to}))
 }
 
 /// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
