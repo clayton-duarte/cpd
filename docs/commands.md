@@ -2818,6 +2818,28 @@ cpd: a Worker runs only the tests its change touches; the full suite is the Gate
 
 **Not affected:** a Lead or a Manager, whatever it runs; every other tool; the Gate itself.
 
+### 15.13 Plans go to plannotator
+
+Decision (User, 2026-10-20). A Lead presents a Plan, its drafts or a design for review only with `cpd_plan_review` (plannotator), never through `ask_user_question`. `ask_user_question` is for a few short choices; anything large goes through plannotator. The adapter enforces the rule with two guards, as §15.11 and §15.12 do for their rules.
+
+**When.** At pi's `tool_call`, for an `ask_user_question` call (`event.toolName`; the input is `{questions: [{question, header, options: [{label, description, preview?}], multiSelect?}]}`), in the same handler as §15.11 and §15.12, with each guard in its own module.
+
+**G1, a Plan with draft Jobs.** For a Session of role `lead` whose Plan has any Job in status `draft`, the call is refused. The adapter reads the Plan with `cpd plan show` when the call is made. A failed read refuses nothing (best effort; the failure is logged where the adapter logs). The reason, on one line:
+
+```
+cpd: a Plan with draft Jobs is presented for review with cpd_plan_review (plannotator), not ask_user_question; refused: <n> draft Jobs
+```
+
+**G2, a long question.** For any Session (Lead, Manager, side fork), the call is refused when its text is over **1500 characters**. The text counted is the sum of every question's `question` and `header` and every option's `label`, `description` and `preview`. The limit is one constant, with no config key. The reason, on one line:
+
+```
+cpd: ask_user_question is for a few short choices; put anything larger in plannotator; refused: <n> characters (limit 1500)
+```
+
+Each refusal is `{block: true, reason}`.
+
+**Not affected:** a Worker (it has no such tool); every other tool.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
