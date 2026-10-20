@@ -1697,12 +1697,12 @@ impl Fx {
         self.fixture(&format!("{} UPDATE prs SET pr_opened_at = '{}' WHERE plan = 'pay' AND key = 'repo';", opened("open"), ago(minutes)));
     }
 
-    /// The base PR `repo` `merged`, `pr_opened_at` `minutes` ago when given, `merged_at` `merged` minutes ago.
-    fn base_merged(&self, opened_ago: Option<i64>, merged_ago: i64) {
-        let opened_at = opened_ago.map_or("NULL".to_owned(), |m| format!("'{}'", ago(m)));
+    /// The base PR `repo` `merged`, `pr_opened_at` `opened_ago` minutes ago, `merged_at` `merged_ago` minutes ago.
+    fn base_merged(&self, opened_ago: i64, merged_ago: i64) {
         self.fixture(&format!(
-            "{} UPDATE prs SET pr_opened_at = {opened_at}, merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';",
+            "{} UPDATE prs SET pr_opened_at = '{}', merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';",
             opened("merged"),
+            ago(opened_ago),
             ago(merged_ago)
         ));
     }
@@ -1768,10 +1768,8 @@ fn e4_a_stacked_pr_is_escalated_ten_minutes_after_its_base_pr_opened_not_after_a
 
 #[test]
 fn e4_a_stacked_pr_counts_from_the_merge_of_a_merged_base_pr_and_from_its_pr_opened_at_when_it_has_one() {
-    // `pr_opened_at` wins when there is one (the merge was long after).
-    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_merged(Some(minutes), 1));
-    // No `pr_opened_at` (an adopted merged pull request): `merged_at`.
-    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_merged(None, minutes));
+    // `pr_opened_at`, not `merged_at` (the merge was long after): a merged PR always carries `pr_opened_at` (schema CHECK).
+    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_merged(minutes, 1));
 }
 
 #[test]

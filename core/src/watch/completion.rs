@@ -106,7 +106,7 @@ fn complete(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrKey) -> Result<bool, CpdErr
 /// The base PR `q` is the PR of the same repo whose Lead Branch is this PR's base (§2.2); the last column is the latest
 /// `pr-base-changed` of this PR that had a base PR before.
 const WAITING: &str = "SELECT r.plan, r.key, r.all_merged_at, p.title, p.context, p.lead_session,
-         q.key IS NOT NULL, CASE WHEN q.status IN ('open', 'merged') THEN COALESCE(q.pr_opened_at, q.merged_at) END,
+         q.key IS NOT NULL, CASE WHEN q.status IN ('open', 'merged') THEN q.pr_opened_at END,
          (SELECT e.at FROM events e WHERE e.kind = 'pr-base-changed' AND e.plan = r.plan AND json_extract(e.data, '$.pr') = r.key
             AND json_extract(e.data, '$.from_pr') IS NOT NULL ORDER BY e.id DESC LIMIT 1)
   FROM prs r JOIN plans p ON p.id = r.plan LEFT JOIN prs q ON q.repo = r.repo AND q.lead_branch = r.base
