@@ -188,7 +188,10 @@ function rowsOf(summary: string, content: string, theme: Theme): Rows {
   const rail = `${MARGIN}${muted(RAIL)}`;
   return {
     head: (width) => {
-      const lines = hardWrap(`cpd ${summary}`, width - visibleWidth(lead) - visibleWidth(CAP_RIGHT));
+      const room = width - visibleWidth(lead);
+      let lines = hardWrap(`cpd ${summary}`, room);
+      // The closing cap needs its own cell on the last row.
+      if (visibleWidth(lines[lines.length - 1]) + visibleWidth(CAP_RIGHT) > room) lines = hardWrap(`cpd ${summary}`, room - visibleWidth(CAP_RIGHT));
       return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? muted(CAP_RIGHT) : ""}`);
     },
     body: text === "" ? () => [] : prefixedText(text, rail),
