@@ -25,62 +25,86 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 adapter_dir="$root/pi"
 pi_cmd=${1:-pi}
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/pi-check.XXXXXX")
-socket="pi-check-$$"
-cleanup() {
-  tmux -L "$socket" kill-server >/dev/null 2>&1 || true
-  rm -rf "$tmp"
-}
-trap cleanup EXIT
-trap 'exit 130' INT TERM
-
 fail() {
   echo "pi-check: FAIL: $1" >&2
   if [ -n "${2:-}" ] && [ -s "$2" ]; then tail -n 20 "$2" >&2; fi
   exit 1
 }
 
-version=$($pi_cmd --version 2>&1) || fail "step 1 (version): '$pi_cmd --version' failed: $version"
-echo "$pi_cmd --version: $version"
+# Step 0, tools: step 3 needs tmux and the fake cpd needs node. A machine without them fails, never skips.
+for tool in tmux node; do
+  command -v "$tool" >/dev/null 2>&1 || fail "step 0 (tools): $tool is not installed (step 3 needs it)"
+done
+
+# The pane starts in another directory: a relative pi command (the Gate's node_modules/.bin/pi) is made absolute.
+pi_bin=${pi_cmd%% *}
+case $pi_bin in
+  /*) ;;
+  */*) pi_cmd="$(pwd)/$pi_bin${pi_cmd#"$pi_bin"}" ;;
+esac
+
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/pi-check.XXXXXX")
+socket="pi-check-$$"
+
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# The allow-list (no model turn): what every pi command and the tmux client see, under `env -i`.
+allow=
+for name in PATH LANG LC_ALL LC_CTYPE TERM; do
+  eval "isset=\${$name+1}"
+  [ -n "$isset" ] || continue
+  eval "value=\$$name"
+  allow="$allow $name=$(shq "$value")"
+done
+allow="$allow HOME=$(shq "$tmp/home") TMPDIR=$(shq "$tmp") PI_CODING_AGENT_DIR=$(shq "$tmp/agent") PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1"
+cleanenv() { eval "env -i $allow \"\$@\""; }
+tmx() { cleanenv tmux -L "$socket" "$@"; }
+
+cleanup() {
+  tmx kill-server >/dev/null 2>&1 || true
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 mkdir "$tmp/agent" "$tmp/bin" "$tmp/home"
 
+version=$(cleanenv $pi_cmd --version 2>&1) || fail "step 1 (version): '$pi_cmd --version' failed: $version"
+echo "$pi_cmd --version: $version"
+
 # Step 2, load: RPC mode, no session variables; an extension that throws at load exits 1.
-if ! env -u CPD_SESSION -u CPD_PLAN -u CPD_HOME -u CPD_ATTEMPT \
-  PI_CODING_AGENT_DIR="$tmp/agent" PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 \
-  $pi_cmd --no-extensions --no-session -e "$adapter_dir" --mode rpc </dev/null >"$tmp/load.out" 2>"$tmp/load.err"; then
+if ! cleanenv $pi_cmd --no-extensions --no-session -e "$adapter_dir" --mode rpc </dev/null >"$tmp/load.out" 2>"$tmp/load.err"; then
   fail "step 2 (load): pi exited non-zero loading $adapter_dir" "$tmp/load.err"
 fi
 
 # Step 3, activation: the adapter only activates in interactive mode (ctx.mode "tui"),
-# so pi runs in a private tmux server. A fake cpd answers what the adapter calls
-# at activation and records its argv; pass when it was called with `events follow`.
+# so pi runs in a private tmux server. A fake cpd records its argv, sleeps for
+# `events follow` and answers the rest from pi/test/answers.ts, the adapter's own test
+# answers; pass when it was called with `events follow`.
 calls="$tmp/calls"
 : >"$calls"
 cat >"$tmp/bin/cpd" <<FAKE
 #!/bin/sh
 echo "\$*" >>"$calls"
 case "\$1 \$2" in
-  "session show") echo '{"ok":true,"session":{"plan":null,"plan_lead":false,"registered_event":0,"name":null}}' ;;
   "events follow") exec sleep 60 ;;
-  *) echo '{"ok":true}' ;;
+  *) exec node "$adapter_dir/test/answers.ts" "\$@" ;;
 esac
 FAKE
 chmod 755 "$tmp/bin/cpd"
 
-session=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)
-session=$(echo "$session" | tr 'A-F' 'a-f')
+session=$(node -p 'crypto.randomUUID()')
 
-tmux -L "$socket" -f /dev/null new-session -d -x 120 -y 30 -c "$tmp/home" \
-  "env PATH='$tmp/bin':\"\$PATH\" PI_CODING_AGENT_DIR='$tmp/agent' PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 CPD_SESSION='$session' CPD_HOME='$tmp/home' \
+tmx -f /dev/null new-session -d -x 120 -y 30 -c "$tmp/home" \
+  "env -i $allow PATH=$(shq "$tmp/bin:$PATH") CPD_SESSION='$session' CPD_HOME=$(shq "$tmp/home") \
    $pi_cmd --no-extensions --no-session --session-id '$session' -e '$adapter_dir' 2>'$tmp/tui.err'; echo \"pi exited \$?\" >>'$tmp/tui.err'" \
   || fail "step 3 (activation): cannot start tmux"
 
 tries=0
 until grep -q '^events follow' "$calls"; do
   tries=$((tries + 1))
-  if [ "$tries" -gt 150 ] || ! tmux -L "$socket" has-session 2>/dev/null; then
-    tmux -L "$socket" capture-pane -p >>"$tmp/tui.err" 2>/dev/null || true
+  if [ "$tries" -gt 150 ] || ! tmx has-session 2>/dev/null; then
+    tmx capture-pane -p >>"$tmp/tui.err" 2>/dev/null || true
     {
       echo "fake cpd calls:"
       cat "$calls"
