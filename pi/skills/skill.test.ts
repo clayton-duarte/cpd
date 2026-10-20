@@ -503,7 +503,7 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
 
 test("cpd-manager splits work by area, maps files and sets the landing order", () => {
   const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Split by area/);
+  assert.match(manager, /Split by deliverable and area/);
   assert.match(manager, /cpd context pending --context <c>/);
   assert.match(manager, /Set the landing order/);
 });
@@ -612,4 +612,15 @@ test("open at once: cpd-lead opens a PR at its last Job's merge without waiting;
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Oversee all-merged PRs/);
   assert.match(manager, /stack those that would conflict/);
+});
+
+test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and folds small PRs; cpd-manager splits by deliverable and area", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /A PR is a substantial deliverable\./);
+  assert.match(lead, /parallelism from Jobs inside a PR, not from more PRs/);
+  assert.match(lead, /one small Job joins the PR of its area/);
+  assert.match(lead, /combine finished PRs into one before they open/);
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(manager, /Split by deliverable and area/);
+  assert.match(manager, /small follow-up goes into its area's existing PR, not a new one/);
 });

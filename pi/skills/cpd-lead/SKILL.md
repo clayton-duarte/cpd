@@ -102,6 +102,8 @@ Phases `plan` and `dispatch`. Steps: [Dividing](#dividing), [Sequencing](#sequen
 
 Before drafting each batch, read new records: `cpd context show --since <seq>`.
 
+**A PR is a substantial deliverable.** Get parallelism from Jobs inside a PR, not from more PRs. A PR that would hold one small Job joins the PR of its area instead: append the Job there, or combine finished PRs into one before they open (merge one Lead Branch into the other, one Gate, one PR, and cancel the emptied PR with `cpd pr cancel`).
+
 Add every PR first (it needs an existing repo path; a PR may need only PRs added before it):
 
 ```
