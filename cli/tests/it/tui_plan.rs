@@ -307,8 +307,8 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('┘'));
     // web below api, the arrow from api's bottom border into web's top border
     let (merged_row, queued_row) = (
-        format!("  │  {MERGED} a │O3 ───── {MERGED} b │S3               │"),
-        format!("  │  {QUEUED} c │S3                      │"),
+        format!("  │ \u{e0b6} {MERGED} a │O3 \u{e0b4}─────\u{e0b6} {MERGED} b │S3 \u{e0b4}          │"),
+        format!("  │ \u{e0b6} {QUEUED} c │S3 \u{e0b4}                   │"),
     );
     let want = [
         "  ┌ api · api-server 󱦰 main · #12 open 󰏌 ┐",
@@ -358,17 +358,17 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     // a column is as wide as its widest pill (the failed pill, `failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
     let want = format!(
         "
-  {DRAFT} draft     │S3
+ \u{e0b6} {DRAFT} draft     │S3 \u{e0b4}
 
-  {QUEUED} queued    │S3
+ \u{e0b6} {QUEUED} queued    │S3 \u{e0b4}
 
-  {} running   │S3
+ \u{e0b6} {} running   │S3 \u{e0b4}
 
-  {MERGING} merging   │S3
+ \u{e0b6} {MERGING} merging   │S3 \u{e0b4}
 
-  {MERGED} merged    │S3
+ \u{e0b6} {MERGED} merged    │S3 \u{e0b4}
 
-  {FAILED} failed │S3│a3",
+ \u{e0b6} {FAILED} failed │S3│a3 \u{e0b4}",
         SPINNER[0]
     );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
@@ -586,7 +586,7 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     // one row of margin, then the box's top border, its one chart row and its bottom border
     assert_eq!(screen[0], "", "{}", screen.join("\n"));
     assert_eq!(screen[1], "  ┌ repo · repo 󱦰 main · dispatch ┐");
-    assert!(screen[2].starts_with(&format!("  │  {QUEUED} a │S3")), "{:?}", screen[2]);
+    assert!(screen[2].starts_with(&format!("  │ \u{e0b6} {QUEUED} a │S3 \u{e0b4}")), "{:?}", screen[2]);
     assert!(screen[3].starts_with("  └─"), "{:?}", screen[3]);
     assert!(screen.iter().all(|l| !l.contains('\u{F0142}' /* md-chevron_right */) && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));
 }
@@ -609,12 +609,12 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
     );
     let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 2 && s[2].contains(" b "));
-    assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} a │S3 ───── {QUEUED} b │S3"));
+    assert_eq!(chart_rows(&screen, 1), format!(" \u{e0b6} {QUEUED} a │S3 \u{e0b4}─────\u{e0b6} {QUEUED} b │S3 \u{e0b4}"));
 
     // the other Lead moves into the chat slot: the view shows its Plan
     env.sql(&in_chat("ctx", "side", "lead-side"));
     let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
-    assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} other │O3"));
+    assert_eq!(chart_rows(&screen, 1), format!(" \u{e0b6} {QUEUED} other │O3 \u{e0b4}"));
     assert!(!screen.iter().any(|l| l.contains(&format!("{QUEUED} a "))), "{}", screen.join("\n"));
 }
 
