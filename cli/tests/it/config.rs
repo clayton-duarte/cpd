@@ -288,8 +288,9 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[tmux]\ncockpit_session = \"x\"\nwork_session = \"x\"\n", "tmux.work_session"),
         ("version = 1\nmachine = \"hs\"\n[tmux]\ncockpit_session = \"cpd-work\"\n", "tmux.work_session"),
     ];
+    // One env: `cpd config` reads the file and writes nothing, so each case sees only its own file.
+    let env = TestEnv::new();
     for (text, key) in bad {
-        let env = TestEnv::new();
         let run = config_with(&env, text);
         let err = run.error();
         assert_eq!(run.exit, 1, "{text}");
@@ -301,8 +302,9 @@ fn config_refuses_each_bad_file_with_its_key_path() {
 
 #[test]
 fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
+    let env = TestEnv::new();
     let message = |text: &str| {
-        let run = config_with(&TestEnv::new(), text);
+        let run = config_with(&env, text);
         assert_eq!(run.exit, 1, "{text}");
         run.error()["message"].as_str().unwrap().to_owned()
     };
@@ -351,7 +353,7 @@ fn config_leaves_cpd_1s_config_json_alone() {
 
 #[test]
 fn config_is_read_only_and_idempotent() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     env.write_config(MINIMAL);
     let first = env.cpd(&["config"]);
     let second = env.cpd(&["config"]);
@@ -601,18 +603,14 @@ fn tiers_with_a_broken_pi_install_is_pi_not_found() {
     assert_eq!(run.exit, 1);
 
     // A version that is not a plain name.
+    install_pi(&env, "1.2.0", "", "");
     for bad in ["", "..", "../x", "1 2"] {
-        let env = TestEnv::new();
-        env.write_config(TIERS_CONFIG);
-        install_pi(&env, "1.2.0", "", "");
         fs::write(env.root().join("install/current-version"), format!("{bad}\n")).unwrap();
         let run = cpd_isolated(&env, &["tiers"]);
         assert_eq!(run.error()["code"], "pi_not_found", "{bad:?}");
     }
 
     // A release without its entry points.
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     fs::remove_file(env.root().join("install/releases/1.2.0/node_modules/@earendil-works/pi-ai/dist/index.js")).unwrap();
     let run = cpd_isolated(&env, &["tiers"]);
@@ -653,20 +651,19 @@ fn tiers_catalog_failures_are_catalog_failed() {
         ("a model with no usable level", r#"echo '{"O":["off"],"S":["minimal"],"H":["off"]}'"#),
         ("levels that are not text", r#"echo '{"O":[1],"S":["off"],"H":["off"]}'"#),
     ];
-    for (name, body) in cases {
-        let env = TestEnv::new();
-        env.write_config(TIERS_CONFIG);
-        install_pi(&env, "1.2.0", "", "");
+    // One env: a failure caches nothing, so each case runs node again.
+    let env = TestEnv::new();
+    env.write_config(TIERS_CONFIG);
+    install_pi(&env, "1.2.0", "", "");
+    for (n, (name, body)) in cases.iter().enumerate() {
         env.fake("node", body);
         let run = cpd_isolated(&env, &["tiers"]);
         assert_eq!(run.error()["code"], "catalog_failed", "{name}");
         assert_eq!(run.exit, 1, "{name}");
+        assert_eq!(env.calls("node").len(), n + 1, "{name}: node ran");
     }
 
     // The failing node's exit and stderr are in `details`.
-    let env = TestEnv::new();
-    env.write_config(TIERS_CONFIG);
-    install_pi(&env, "1.2.0", "", "");
     env.fake("node", "echo 'boom: cannot import' >&2; exit 3");
     let err = cpd_isolated(&env, &["tiers"]).error();
     assert_eq!(err["details"]["exit"], 3);
@@ -738,7 +735,7 @@ fn row(version: &str, letter: &str, model: &str, efforts: &str) -> (String, Stri
 
 #[test]
 fn tiers_with_a_cold_cache_asks_pi_and_fills_the_cache() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
     env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));

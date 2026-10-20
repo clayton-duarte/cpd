@@ -486,18 +486,17 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 
 #[test]
 fn the_log_has_a_hooks_line_before_the_hook_ends() {
-    let h = hooks("pre-merge = \"echo first; sleep 3; echo last\"\n");
+    // The hook ends only once the test has read the log (`go`): its first line must be there before.
+    let h = hooks("pre-merge = \"echo first; until [ -e go ]; do sleep 0.05; done; echo last\"\n");
     let (repo, log) = (h.repo.clone(), h.log.clone());
     let runner = std::thread::spawn(move || {
         let op = Operation { branch: "main" };
         run_hook(Hook::PreMerge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
     });
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while fs::read_to_string(&h.log).unwrap_or_default() != "first\n" && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::poll(Duration::from_secs(2), || (fs::read_to_string(&h.log).unwrap_or_default() == "first\n").then_some(()));
     let seen = fs::read_to_string(&h.log).unwrap_or_default();
     let ended = runner.is_finished();
+    fs::write(h.repo.join("go"), "").unwrap();
     let result = runner.join().unwrap();
     assert_eq!(seen, "first\n", "the log before the hook ended");
     assert!(!ended, "the hook ended before the log was read");
@@ -656,7 +655,7 @@ fn a_hook_is_killed_with_its_process_group_at_the_timeout() {
     // The background child would touch survivor.txt after 10 s; the kill must end it long
     // before, and the test waits for its death rather than for the clock.
     let h = hooks("pre-merge = \"(sleep 10; touch survivor.txt) & echo $! > pid; wait\"\n");
-    let result = h.run_for(Hook::PreMerge, Duration::from_secs(2));
+    let result = h.run_for(Hook::PreMerge, Duration::from_secs(1));
     assert_eq!(result.outcome, HookOutcome::Error(HookError::Timeout));
     let pid = h.file("pid").trim().to_owned();
     common::wait_until("the background child to die with the hook's process group", || is_dead(&pid));
@@ -774,7 +773,7 @@ fn touched(repo: &Path) -> Vec<String> {
 
 #[test]
 fn each_protected_path_is_refused() {
-    for path in [
+    let paths = [
         ".config/wt.toml",
         ".config/cpd.toml",
         ".cpd/anything",
@@ -782,8 +781,11 @@ fn each_protected_path_is_refused() {
         "verify.sh",
         "scripts/ci/run.sh",
         "scripts/ci/new/nested.sh",
-    ] {
-        let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    ];
+    // One repo: each case starts `att` again at the Lead tip, so it holds that case's change only.
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    for path in paths {
+        env.git(&repo, &["branch", "-f", "att", "cpd/pay-4521"]);
         on_att(&env, &repo, |r| {
             let full = r.join(path);
             fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -871,15 +873,20 @@ fn no_list_file_means_only_the_fixed_protected_paths() {
 
 #[test]
 fn a_bad_list_file_is_config_invalid() {
-    for text in [
+    let texts = [
         "protected = \"verify.sh\"\n",
         "protected = [1]\n",
         "protect = [\"verify.sh\"]\n",
         "protected = [\"\"]\n",
         "protected = [\"/abs\"]\n",
         "protected = [\n",
-    ] {
-        let (_env, repo) = tamper_repo(Some(text));
+    ];
+    // One repo: each case commits its list on `main` and moves the Lead tip and `att` there.
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    for text in texts {
+        commit_file(&env, &repo, LIST, text);
+        env.git(&repo, &["branch", "-f", "cpd/pay-4521", "main"]);
+        env.git(&repo, &["branch", "-f", "att", "main"]);
         let err = protected_list(&repo, "cpd/pay-4521").unwrap_err();
         assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{text}");
         let err = touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap_err();

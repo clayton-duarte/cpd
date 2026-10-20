@@ -229,14 +229,14 @@ fn idle_tree_and_plan_read_next_to_nothing() {
     }
 }
 
-/// tui-F2: every `terminal.draw` writes to the terminal, even with an empty diff. The widgets view draws when the
-/// kernel updates the load average (every 5 s, and the value changed), which is a change: once per 5 s at most.
+/// tui-F2: every `terminal.draw` writes to the terminal, even with an empty diff. The widgets view draws when the CPU,
+/// GPU or memory % it shows changed, sampled every 2 s (hs-d257, hs-d333), which is a change: once per 2 s at most.
 #[test]
 fn idle_views_write_nothing_to_the_terminal() {
     let env = env();
     env.sql(&fixture());
     for (name, used) in idle(&env, &["tree", "plan", "widgets", "logs", "worker"]) {
-        let allowed = if name == "widgets" { 2 + window().as_secs() / 5 } else { 0 };
+        let allowed = if name == "widgets" { 2 + window().as_secs() / 2 } else { 0 };
         assert!(used.syscw <= allowed, "{name} wrote {} times while nothing changed", used.syscw);
     }
 }

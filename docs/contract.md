@@ -59,6 +59,22 @@ Exit codes (kept from cpd 1 §2):
 
 **`tool_timeout`** (exit 5): a subprocess cpd started ran past its deadline (the deadlines are listed in §7 for `git`, §6.3 for `tmux`, §9 for `node`, §3.7 for the engine's `cpd pr poll` child, `commands.md` §14.1 for `doctor`). `details`: `tool` (`git`, `tmux`, `node`, `cpd`, …), `argv` (the full argument vector) and `deadline_seconds`. Every subprocess cpd starts has a deadline (except tmux's `display-popup`, §6.3), a constant in the code with its reason, not a config key; `gh` keeps its own timeouts (§7.6) and hooks theirs (§7.3). At the deadline cpd kills the process **group** (`SIGTERM`, then `SIGKILL` after 5 s to those still alive) and the command fails with `tool_timeout`; it replaces `git_failed`, `tmux_failed` and the like for that call.
 
+**Test overrides.** Tests need not wait for cpd's real limits: a debug build (the one `cargo test` and `cargo nextest` build; never the installed release build, which ignores them) reads `CPD_TEST_<NAME>=<seconds>`, a decimal (`0.2`), in place of these constants of the code. A value that is not a number of seconds ≥ 0 fails loud (a panic naming the variable). They exist only for the tests; nothing else sets them.
+
+| Variable | Replaces (release value) |
+|---|---|
+| `CPD_TEST_DEADLINE_<TOOL>` | the deadline of every call of `<TOOL>` (upper-cased: `GIT`, `TMUX`, `NODE`, `CPD`, `GH`, …) through the deadline runner, above any caller's deadline; `deadline_seconds` is then the decimal set |
+| `CPD_TEST_DOCTOR_DEADLINE` | `doctor`'s probe deadline (10 s, `commands.md` §14.1) |
+| `CPD_TEST_ADAPTER_WATCHDOG` | the adapter watchdog's limit (60 s, §6.7) |
+| `CPD_TEST_WATCHDOG_POLL` | how often `session run` reads the Session's state for the watchdog (2 s) |
+| `CPD_TEST_FILE_POLL` | `session run`'s loop while pi runs (0.5 s) |
+| `CPD_TEST_SOURCE_POLL` | how often a fork looks at its source (2 s, §6.7 step 1) |
+| `CPD_TEST_DRIVER_POLL` | how often A4 looks at the Worker (0.5 s, §3.4) |
+| `CPD_TEST_LEAD_POLL` | how often a review Job's driver looks at its Lead (2 s, §3.4) |
+| `CPD_TEST_KILL_PAUSE` | the pause between A9's `kill-window` tries (1 s, §3.4) |
+| `CPD_TEST_BACKOFF_UNIT` | the unit of E3's spawn back-off, `min(2^k, 300)` units (1 s, §3.7) |
+| `CPD_TEST_PR_POLL` | E5's `watch.pr_poll_seconds`, the time from the end of one PR poll to the next (§3.7, §8.2) |
+
 `commands.md` introduces more codes, most of them cpd 1's (cpd 1 §11 and its `src/`); each is specified at the command that returns it, under the same exit meanings:
 
 | Exit | Codes |

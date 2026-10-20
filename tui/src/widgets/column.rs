@@ -1,6 +1,6 @@
 //! The Dispatch column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch` and `pr::render`
-//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the open pull requests (two lines each), git and Jira (the last two
-//! still future), under one blank row; each section but the first starts with a header. Pure: [`draw`] only writes to the frame.
+//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine (hostname, CPU %, one % per GPU, memory %) and the open pull
+//! requests (two lines each), under one blank row; each section but the first starts with a header. Pure: [`draw`] only writes to the frame.
 
 use cpd_core::ids::SessionId;
 use ratatui::Frame;
@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
+use super::host::Usage;
 use crate::link;
 use crate::palette::{self, Meaning};
 use crate::section;
@@ -87,11 +88,27 @@ impl PrRow {
     }
 }
 
-/// The machine the column names: its hostname and the first three fields of its load average.
+/// Nerd Font `nf-oct-cpu` and `nf-md-memory`: one cell each.
+const CPU_ICON: &str = "\u{F4BC}";
+const GPU_ICON: &str = "\u{E266}";
+const MEM_ICON: &str = "\u{EFC5}";
+
+/// The machine the column names: its hostname and its CPU % and memory %.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Machine {
     pub name: String,
-    pub load: Vec<String>,
+    pub usage: Usage,
+}
+
+impl Machine {
+    /// ` <cpu icon> N%  <gpu icon> A% B%  <mem icon> M%`, one % per GPU and no GPU part when there is none; a value not known (the
+    /// CPU until a second sample, or one that cannot be read) is `–`.
+    fn usage_line(&self) -> String {
+        let known = |v: Option<u8>| v.map_or("–".to_owned(), |v| v.to_string());
+        let gpus = &self.usage.gpus;
+        let gpu = if gpus.is_empty() { String::new() } else { format!("{GPU_ICON} {}  ", gpus.iter().map(|g| format!("{}%", known(*g))).collect::<Vec<_>>().join(" ")) };
+        format!(" {CPU_ICON} {}%  {gpu}{MEM_ICON} {}%", known(self.usage.cpu), known(self.usage.mem))
+    }
 }
 
 fn bold(text: impl Into<String>) -> Span<'static> {
@@ -221,35 +238,21 @@ pub struct Drawn {
     pub rows: Vec<PrRow>,
 }
 
-/// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header. The PRs section
+/// Draws the column in `area`: a blank row, the machine, then the PRs under their header. The PRs section
 /// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. A non-empty `note`
 /// replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR or a merge icon.
 pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note: &str, scroll: usize) -> Drawn {
-    let [_top, home, _above_prs, prs_header, _below_prs, prs, _above_git, git_header, _below_git, git, _above_jira, jira_header, _below_jira, jira] =
-        Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
+    let [_top, home, _above_prs, prs_header, _below_prs, prs] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
     .areas(area);
     render_header(f, prs_header, "PRs", Some(open.len()));
-    render_header(f, git_header, "git", None);
-    render_header(f, jira_header, "Jira", None);
-    f.render_widget(
-        Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(format!(" load {}", machine.load.join(" ")))]),
-        home,
-    );
+    f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(machine.usage_line())]), home);
     let height = usize::from(prs.height);
     let win = window(open.len(), height, 2, scroll);
     // The list sits under the `▲` row, if any; whole pull requests only.
@@ -293,8 +296,6 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
             link::link(f.buffer_mut(), Rect::new(x, *y, 1, 1), &pr.url);
         }
     }
-    f.render_widget(Paragraph::new(dim(" (future)")), git);
-    f.render_widget(Paragraph::new(dim(" (future)")), jira);
     if !note.is_empty() {
         let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
         f.render_widget(Clear, last);
@@ -316,7 +317,7 @@ mod tests {
     }
 
     fn scrolled(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize) -> (Buffer, Drawn) {
-        let machine = Machine { name: "homeserver".to_owned(), load: ["0.52", "0.41", "0.30"].map(str::to_owned).to_vec() };
+        let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
         terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, note, scroll))).unwrap();
@@ -368,30 +369,44 @@ mod tests {
     }
 
     #[test]
-    fn the_column_has_a_blank_row_an_untitled_machine_and_three_headers() {
-        let buf = buffer(20, 15);
-        let rule = |title: &str| format!("━━ {title} {}", "━".repeat(20 - 4 - title.chars().count()));
-        let got: Vec<String> = (0..15).map(|y| row(&buf, y)).collect();
+    fn the_column_has_a_blank_row_an_untitled_machine_with_cpu_and_memory_and_the_prs_header_only() {
+        let buf = buffer(20, 10);
+        let got: Vec<String> = (0..10).map(|y| row(&buf, y)).collect();
         let expected = [
             "".to_owned(),
             " homeserver".to_owned(),
-            " load 0.52 0.41 0.30".to_owned(),
+            " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
             "".to_owned(),
             "━━ PRs ━━━━━━━━ 0 ━━".to_owned(),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
-            rule("git"),
             "".to_owned(),
-            " (future)".to_owned(),
             "".to_owned(),
-            rule("Jira"),
-            "".to_owned(),
-            " (future)".to_owned(),
         ];
         assert_eq!(got, expected, "{got:#?}");
         assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
-        assert!(buf[(1, 10)].modifier.contains(Modifier::DIM), "(future) is dim");
+        for x in 0..20 {
+            let cell = &buf[(x, 2)];
+            assert!(!cell.modifier.contains(Modifier::BOLD | Modifier::DIM) && cell.fg == buf[(0, 0)].fg, "no style on the usage row, x={x}");
+        }
+        assert!(!got.iter().any(|r| r.contains("git") || r.contains("Jira") || r.contains("future") || r.contains("load")));
+    }
+
+    #[test]
+    fn a_value_not_known_is_a_dash() {
+        let usage = |cpu, mem| Machine { name: "homeserver".to_owned(), usage: Usage { cpu, gpus: vec![], mem } }.usage_line();
+        assert_eq!(usage(None, Some(100)), " \u{F4BC} –%  \u{EFC5} 100%", "the CPU until a second sample");
+        assert_eq!(usage(Some(7), None), " \u{F4BC} 7%  \u{EFC5} –%", "a memory that cannot be read");
+    }
+
+    #[test]
+    fn the_gpu_part_has_one_percent_per_gpu_and_is_absent_with_none() {
+        let row = |gpus: Vec<Option<u8>>| Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus, mem: Some(41) } }.usage_line();
+        assert_eq!(row(vec![]), " \u{F4BC} 23%  \u{EFC5} 41%", "no GPU, no GPU part");
+        assert_eq!(row(vec![Some(61)]), " \u{F4BC} 23%  \u{E266} 61%  \u{EFC5} 41%");
+        assert_eq!(row(vec![Some(61), Some(0)]), " \u{F4BC} 23%  \u{E266} 61% 0%  \u{EFC5} 41%");
+        assert_eq!(row(vec![None, Some(5)]), " \u{F4BC} 23%  \u{E266} –% 5%  \u{EFC5} 41%", "an unknown GPU is –%");
     }
 
     #[test]
@@ -432,7 +447,7 @@ mod tests {
         let (buf, _) = drawn(30, 15, &[], "no_cockpit: nothing here");
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
         assert_eq!(buf[(0, 14)].fg, palette::note().fg.unwrap());
-        assert_eq!(row(&buf, 10), " (future)", "the rest is as drawn");
+        assert_eq!(row(&buf, 6), " no open PRs", "the rest is as drawn");
     }
 
     fn second_line(pr: &OpenPr, width: u16) -> (String, Buffer) {
@@ -558,14 +573,14 @@ mod tests {
         (1..=count).map(|n| pr(n, Some(&format!("l-{n}")))).collect()
     }
 
-    /// The PRs section's rows: 14 rows of the rest of the column, and `lines` for the section.
+    /// The PRs section's rows: below the 6 rows of the rest of the column, to the bottom.
     fn section(buf: &Buffer) -> Vec<String> {
-        (6..buf.area.height - 8).map(|y| row(buf, y)).collect()
+        (6..buf.area.height).map(|y| row(buf, y)).collect()
     }
 
-    /// A column whose PRs section is `lines` rows tall (the rest of the column takes 14).
+    /// A column whose PRs section is `lines` rows tall (the rest of the column takes 6).
     fn height(lines: u16) -> u16 {
-        14 + lines
+        6 + lines
     }
 
     fn names(rows: &[String]) -> Vec<&str> {

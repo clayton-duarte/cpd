@@ -14,7 +14,7 @@ use crate::common;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, write_executable};
 use nix::sys::signal::{Signal, kill};
@@ -114,8 +114,9 @@ impl Fx {
                 "version = 1\nmachine = \"m1\"\n\
                  [tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
                  [timeouts]\nfork_quiet_seconds = 1\n\
-                 [watch]\ntick_seconds = 0.2\n\
+                 [watch]\ntick_seconds = {}\n\
                  [tmux]\nsocket = \"{}\"\n",
+                common::TICK_SECONDS,
                 env.tmux_socket()
             ),
         )
@@ -193,20 +194,20 @@ impl Fx {
     }
 
     /// Waits until `ready` gives a value, at most `secs` seconds.
-    fn wait<T>(&self, what: &str, secs: u64, mut ready: impl FnMut() -> Option<T>) -> T {
-        let deadline = Instant::now() + Duration::from_secs(secs);
-        loop {
-            if let Some(value) = ready() {
-                return value;
-            }
-            assert!(Instant::now() < deadline, "timed out waiting for {what}\n{}", self.diagnostics());
-            std::thread::sleep(Duration::from_millis(200));
-        }
+    fn wait<T>(&self, what: &str, secs: u64, ready: impl FnMut() -> Option<T>) -> T {
+        common::poll(Duration::from_secs(secs), ready).unwrap_or_else(|| panic!("timed out waiting for {what}\n{}", self.diagnostics()))
     }
 
-    /// Waits for the first Event of `kind` after `cursor` matching `filter`.
+    /// Waits for the first Event of `kind` after `cursor` matching `filter`, as `events list` gives it; listed again
+    /// only once the store has a new Event.
     fn wait_event(&self, cursor: i64, kind: &str, secs: u64, filter: impl Fn(&Value) -> bool) -> Value {
+        let mut listed_to = -1;
         self.wait(&format!("an Event {kind}"), secs, || {
+            let last: i64 = self.env.query("SELECT coalesce(max(id), 0) FROM events");
+            if last == listed_to {
+                return None;
+            }
+            listed_to = last;
             self.events_since(cursor).into_iter().find(|e| e["kind"] == kind && filter(e))
         })
     }
@@ -271,7 +272,13 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let mut cursor = fx.cursor();
 
     // ---------- 2. plan new: a fresh Lead in its parked window
-    let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--title", "Retry failed payouts"]);
+    // `plan new` starts the tmux server, for the Lead, with its own environment: every pane after it (the Lead's
+    // wrapper, the engine, the Workers) and the engine's drivers look every tick or 50 ms (`common::PLAN_POLLS`).
+    let out = fx.env.cpd_with(fx.env.root(), &["plan", "new", PLAN, "--context", CONTEXT, "--title", "Retry failed payouts"], &common::PLAN_POLLS).ok();
+    for (name, seconds) in common::PLAN_POLLS {
+        let out = fx.env.tmux(&["show-environment", "-g", name]);
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), format!("{name}={seconds}"), "the server's environment");
+    }
     let lead_session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
     assert_eq!(out["plan"]["phase"], "grounding");
     assert_eq!(out["plan"]["prs"], json!([]));
