@@ -10,7 +10,7 @@
 //! dismisses. No other key does anything. A right click opens the menu
 //! ([`super::menu`]), which then takes every key and click.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -37,10 +37,11 @@ use serde_json::Value;
 use crate::palette;
 use crate::read::{ContextNode, Dot, SessionNode, Tree};
 
-/// The tree tries `cpd watch --ensure` at most this often while the engine is down (commands.md §13.2, hs-d318).
-const ENSURE_EVERY: Duration = Duration::from_secs(60);
-/// The Managers hear the same failure code at most this often.
-const TELL_EVERY: Duration = Duration::from_secs(3600);
+/// The engine has been down this long, on every snapshot, when the tree speaks: past the supervisor's 15 s wait and its
+/// retries (contract §6.6, hs-d363).
+const DOWN_FOR: Duration = Duration::from_secs(60);
+/// What the Managers hear of a downtime.
+const DOWN_TOLD: &str = "The cpd engine has been down for 60 s and its supervisor has not restarted it; see run/watch.log, start it with cpd watch --ensure.";
 
 /// The longest name of a Session (commands.md §1.4).
 /// Rows a wheel notch scrolls the tree or the Inbox section by.
@@ -66,12 +67,15 @@ fn rename_of(row: &Row<'_>) -> Option<Question> {
     Some(Question::input("Rename", ask, row.label()))
 }
 
-/// What `x` and the menu's Close do on `row`: the confirmation, or the note that refuses it (the Session is in the
-/// chat slot); nothing on a row with no Session.
-fn close_of(row: Row<'_>) -> Option<Result<Question, &'static str>> {
+/// A refusal the User must see: the `(title, text)` of its `text` dialog.
+type Refusal = (&'static str, &'static str);
+
+/// What `x` and the menu's Close do on `row`: the confirmation, or the refusal (the Session is in the chat slot);
+/// nothing on a row with no Session.
+fn close_of(row: Row<'_>) -> Option<Result<Question, Refusal>> {
     let session = row.session()?;
     if session.is_active() {
-        return Some(Err(IN_CHAT_SLOT));
+        return Some(Err(("Close Session", IN_CHAT_SLOT)));
     }
     Some(Ok(Question::close(session.id.clone(), &row.label(), session.state == State::Working)))
 }
@@ -90,16 +94,25 @@ fn subject_of(row: &Row<'_>) -> Option<Subject> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
     None,
-    /// Run this command, then call [`View::done`] with the result.
+    /// Run this command, then call [`View::finished`] with the result.
     Run(Action),
-    /// Open this dialog popup, then run the command its answer makes, if any ([`Question::ask`]); a failure is the note.
+    /// Open this dialog popup, then run the command its answer makes, if any ([`Question::ask`]); a failure is logged.
     Ask(Question),
-    /// Open the legend popup (`?`); a failure is the note.
+    /// Open the legend popup (`?`); a failure is logged.
     Legend,
-    /// Run these actions in order, then call [`View::done`] with the result: a click on a `plan-review` item.
+    /// Run these actions in order, then call [`View::finished`] with the result: a click on a `plan-review` item.
     Steps(Vec<Action>),
-    /// Open the merge popup of this pull request: a click on a `pr-ready` item. A failure is the note.
+    /// Open the merge popup of this pull request: a click on a `pr-ready` item. A failure is logged.
     Merge(Pull),
+    /// Open a `text` dialog popup ([`crate::dialog::show_error`]): a failure or refusal the User must see (commands.md
+    /// §17 "No notes"). `title` says what failed, `text` why (`<code>: <message>`).
+    Text { title: String, text: String },
+}
+
+impl Effect {
+    fn text(title: impl Into<String>, text: impl Into<String>) -> Effect {
+        Effect::Text { title: title.into(), text: text.into() }
+    }
 }
 
 pub struct View {
@@ -137,16 +150,20 @@ pub struct View {
     /// The item row of the Inbox section the keyboard cursor is on (an index of the snapshot's Inbox, a shown one):
     /// the tree's cursor then rests on its last Session. Hidden like the tree's cursor ([`cursor::shown`]).
     inbox_cursor: Option<usize>,
-    /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
-    pub note: String,
-    /// The last failed snapshot's error (one row), until a snapshot succeeds; it hides the note meanwhile.
+    /// The last failed snapshot's error (one row), until a snapshot succeeds: a lasting state of the view, drawn as its
+    /// footer (commands.md §17 "No notes", rule (b)).
     pub error: Option<String>,
     /// `$CPD_HOME/policy/owners`: the owner policies New Context… chooses the owner from (none when the home is unresolved).
     owners_dir: Option<PathBuf>,
-    /// When the tree last tried `watch --ensure` for a stopped engine (view state only).
-    ensure_at: Option<Instant>,
-    /// When the Managers were last told each failure code of `watch --ensure` (view state only).
-    told: BTreeMap<String, Instant>,
+    /// The engine's downtime now: since when `locks/watch.lock` has been read free on every snapshot, and whether the
+    /// Managers were told of it (view state only).
+    down: Option<Down>,
+}
+
+/// One downtime of the engine (see [`View::down`]).
+struct Down {
+    since: Instant,
+    spoke: bool,
 }
 
 /// The most rows the Inbox section may take in a column of `column` rows (commands.md §13.2, hs-d307), for a tree of
@@ -210,11 +227,9 @@ impl View {
             follow_inbox_cursor: false,
             inbox_area: Rect::default(),
             inbox_cursor: None,
-            note: String::new(),
             error: None,
             owners_dir: CpdHome::from_env().ok().map(|h| h.root().join("policy").join("owners")),
-            ensure_at: None,
-            told: BTreeMap::new(),
+            down: None,
         };
         view.refresh(tree);
         view
@@ -255,23 +270,24 @@ impl View {
     }
 
     /// Starts from the folds in `file` and keeps them there from now on (commands.md §13.2, hs-d260). A file that cannot
-    /// be read or is not valid leaves the defaults and is the note `fold state reset: <reason>`; the next write replaces it.
-    pub fn keep_folds(&mut self, mut file: FoldsFile) {
+    /// be read or is not valid leaves the defaults and is the log line `fold state reset: <reason>` (returned; the view
+    /// draws nothing); the next write replaces it.
+    pub fn keep_folds(&mut self, mut file: FoldsFile) -> Vec<String> {
+        let mut lines = Vec::new();
         match file.load() {
             Ok(stored) => stored.merge(&mut self.state, &mut self.known),
-            Err(reason) => self.note = format!("fold state reset: {reason}"),
+            Err(reason) => lines.push(format!("fold state reset: {reason}")),
         }
         // the file is as it was until a fold changes
         file.assume(Folds::of(&self.state, &self.tree));
         self.folds = Some(file);
+        lines
     }
 
-    /// Writes the folds when they have changed (at most once a second); a failure is the note and is retried.
-    pub fn save_folds(&mut self) {
-        let Some(file) = self.folds.as_mut() else { return };
-        if let Err(why) = file.save(&Folds::of(&self.state, &self.tree)) {
-            self.note = why;
-        }
+    /// Writes the folds when they have changed (at most once a second); a failure is the log line returned, and is retried.
+    pub fn save_folds(&mut self) -> Option<String> {
+        let file = self.folds.as_mut()?;
+        file.save(&Folds::of(&self.state, &self.tree)).err()
     }
 
     fn cursor_shown(&self) -> bool {
@@ -290,55 +306,50 @@ impl View {
         }
     }
 
-    /// A stopped engine restarts itself (commands.md §13.2, hs-d318): when the snapshot saw `locks/watch.lock` free, and
-    /// `now` is a minute after the last try, runs `watch --ensure` through `run`; a refusal is told to each live Manager
-    /// `managers` lists (`session send`, from the User's side), at most once per code per hour, and to none when there is
-    /// no Manager. Sets the note and returns the same line, which the caller writes to stderr; `None` when nothing was tried.
-    pub fn restart_engine(
+    /// The tree never runs `cpd watch --ensure` by itself: the supervisor restarts a stopped engine (contract §6.6,
+    /// hs-d328, hs-d363). It only speaks: when `locks/watch.lock` has been read free on every snapshot for [`DOWN_FOR`]
+    /// (`self.tree.engine_running` is false at each call since `now`), it tells the live Manager of every Context once
+    /// per downtime (`run` with [`Action::Tell`], `managers` lists them). It draws nothing (commands.md §17 "No notes": the
+    /// Inbox's `engine-down` item and the Managers' message say it); it returns the lines for the view's log
+    /// (`run/tui/tree.log`), a failure to list or tell among them; never writes to the terminal.
+    pub fn watch_engine(
         &mut self,
         now: Instant,
         run: &mut dyn FnMut(&Action) -> Result<Value, Failure>,
         managers: &mut dyn FnMut() -> Result<Vec<SessionId>, String>,
-    ) -> Option<String> {
-        if self.tree.engine_running || self.ensure_at.is_some_and(|at| now.saturating_duration_since(at) < ENSURE_EVERY) {
-            return None;
+    ) -> Vec<String> {
+        if self.tree.engine_running {
+            self.down = None;
+            return Vec::new();
         }
-        self.ensure_at = Some(now);
-        let line = match run(&Action::EnsureWatch) {
-            Ok(reply) if reply["already"] == true => "engine was down: cpd watch --ensure found it running".to_owned(),
-            Ok(_) => "engine was down: cpd watch --ensure started it".to_owned(),
-            Err(failure) => {
-                let (code, message) = (failure.code().to_owned(), failure.message().to_owned());
-                let due = self.told.get(&code).is_none_or(|at| now.saturating_duration_since(*at) >= TELL_EVERY);
-                let mut line = format!("engine was down: cpd watch --ensure failed: {code}: {message}");
-                if due {
-                    let text = format!(
-                        "The cpd engine is down and 'cpd watch --ensure' failed: {code}: {message}. Start it with cpd watch --ensure."
-                    );
-                    match managers() {
-                        Ok(ids) => {
-                            if !ids.is_empty() {
-                                self.told.insert(code, now);
-                            }
-                            for manager in ids {
-                                if let Err(why) = run(&Action::Tell { manager: manager.clone(), text: text.clone() }) {
-                                    line.push_str(&format!(" (telling {manager} failed: {})", why.message()));
-                                }
-                            }
-                        }
-                        Err(why) => line.push_str(&format!(" (listing the Managers failed: {why})")),
+        let down = self.down.get_or_insert(Down { since: now, spoke: false });
+        if down.spoke || now.saturating_duration_since(down.since) < DOWN_FOR {
+            return Vec::new();
+        }
+        down.spoke = true;
+        let mut lines = vec![format!("engine down {} s+: telling the Managers", DOWN_FOR.as_secs())];
+        match managers() {
+            Err(why) => lines.push(format!("listing the Managers failed: {why}")),
+            Ok(ids) if ids.is_empty() => lines.push("no live Manager to tell".to_owned()),
+            Ok(ids) => {
+                for manager in ids {
+                    match run(&Action::Tell { manager: manager.clone(), text: DOWN_TOLD.to_owned() }) {
+                        Ok(_) => lines.push(format!("told {manager}")),
+                        Err(why) => lines.push(format!("telling {manager} failed: {}: {}", why.code(), why.message())),
                     }
                 }
-                line
             }
-        };
-        self.note = line.clone();
-        Some(line)
+        }
+        lines
     }
 
-    /// The result of an [`Effect::Run`] or [`Effect::Legend`].
-    pub fn done(&mut self, result: Result<String, String>) {
-        self.note = result.unwrap_or_else(|e| e);
+    /// What the view does with the `result` of `action` (commands.md §17 "No notes"): a success says nothing; a failure
+    /// is a `text` dialog, [`Effect::Text`]: the command is what failed, `<code>: <message>` is why.
+    pub fn finished(&mut self, action: &Action, result: Result<String, String>) -> Effect {
+        match result {
+            Ok(_) => Effect::None,
+            Err(why) => Effect::text(action.argv().join(" "), why),
+        }
     }
 
     /// The cursor's row, while the cursor shows: Enter, `n` and `x` act on it.
@@ -363,19 +374,16 @@ impl View {
         }
         match key.code {
             KeyCode::Char('n') => {
-                self.note.clear();
                 if let Some((row, plan)) = self.cursor_row().and_then(|r| r.session().and(r.plan()).map(|p| (r, p))) {
                     let ask = Ask::NamedPlan { context: plan.head.context.clone(), label: row.label() };
                     return Effect::Ask(Question::input("New Plan", ask, String::new()));
                 }
             }
             KeyCode::Char('x') => {
-                self.note.clear();
                 let asked = self.cursor_row().and_then(close_of);
                 return self.ask(asked);
             }
             KeyCode::Char('s') => {
-                self.note.clear();
                 if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
                     let row = self.inbox_cursor.and_then(|i| self.shape().row_of(i)).unwrap_or(1);
                     let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + row);
@@ -383,7 +391,6 @@ impl View {
                 }
             }
             KeyCode::Char('d') => {
-                self.note.clear();
                 if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
                     return Effect::Run(Action::Dismiss(item.id));
                 }
@@ -442,7 +449,6 @@ impl View {
         let at = Position::new(m.column, m.row);
         // a right click on the Inbox section: the menu of an item row; the header and the toggle row have none
         if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
-            self.note.clear();
             if let Some(Hit::Item(i)) = self.shape().hit(at.y - self.inbox_area.y) {
                 let item = &self.tree.inbox[i];
                 if item.kind != InboxKind::EngineDown {
@@ -486,16 +492,14 @@ impl View {
 
     /// A right click at `at`: the menu of the row there, of the empty area, or none (a toggle row).
     fn open_menu(&mut self, at: Position) {
-        self.note.clear();
         let path = self.row_at(at);
         let row = path.as_deref().and_then(|p| rows::row(&self.tree, p));
         self.menu = Kind::of(row).map(|kind| Menu::new(kind, path.unwrap_or_default(), at));
     }
 
-    /// The item picked in the menu, which is closed: the command to run, a popup to ask first, or the note.
+    /// The item picked in the menu, which is closed: the command to run, a popup to ask first, or the refusal.
     fn pick(&mut self, item: Item) -> Effect {
         let Some(menu) = self.menu.take() else { return Effect::None };
-        self.note.clear();
         if let Some(id) = menu.inbox {
             return match item {
                 Item::Snooze15 => Effect::Run(Action::Snooze { item: id, until: Until::Minutes15 }),
@@ -508,8 +512,7 @@ impl View {
         if item == Item::NewContext {
             let owners = self.owners_dir.as_deref().map(owners_in).unwrap_or_default();
             if owners.is_empty() {
-                self.note = NO_OWNER_POLICY.into();
-                return Effect::None;
+                return Effect::text("New Context", NO_OWNER_POLICY);
             }
             let taken = self.tree.contexts.iter().map(|c| c.id.to_string()).collect();
             return Effect::Ask(Question::input("New Context", Ask::NewContext { taken, owners }, String::new()));
@@ -581,21 +584,17 @@ impl View {
         Question::input("New Plan", Ask::NewPlan { context: context.id.clone(), taken }, String::new())
     }
 
-    /// The popup to open, or the note that says why not.
-    fn ask(&mut self, asked: Option<Result<Question, &'static str>>) -> Effect {
+    /// The popup to open, or the dialog that says why not.
+    fn ask(&mut self, asked: Option<Result<Question, Refusal>>) -> Effect {
         match asked {
             Some(Ok(question)) => Effect::Ask(question),
-            Some(Err(note)) => {
-                self.note = note.into();
-                Effect::None
-            }
+            Some(Err((title, text))) => Effect::text(title, text),
             None => Effect::None,
         }
     }
 
     /// A left click.
     fn click(&mut self, m: MouseEvent) -> Effect {
-        self.note.clear();
         self.last_input = Input::Click;
         let at = Position::new(m.column, m.row);
         if self.inbox_area.contains(at) {
@@ -637,11 +636,22 @@ impl View {
         }
     }
 
-    /// The jump of the Inbox item `i` ([`inbox::jump`]): a click on its row, or Enter on it.
+    /// Whether `action` opens the Session that is already in the chat slot: it does nothing, and says nothing.
+    fn in_focus(&self, action: &Action) -> bool {
+        let Action::Open(id) = action else { return false };
+        self.tree.contexts.iter().flat_map(|c| &c.plans).flat_map(|p| &p.sessions).any(|s| &s.id == id && s.is_active())
+    }
+
+    /// The jump of the Inbox item `i` ([`inbox::jump`]): a click on its row, or Enter on it. An item whose Session is
+    /// already in focus does nothing.
     fn jump(&self, i: usize) -> Effect {
         match inbox::jump(&self.tree, &self.tree.inbox[i]) {
+            Some(Jump::Run(action)) if self.in_focus(&action) => Effect::None,
             Some(Jump::Run(action)) => Effect::Run(action),
-            Some(Jump::Steps(steps)) => Effect::Steps(steps),
+            Some(Jump::Steps(steps)) => {
+                let steps: Vec<Action> = steps.into_iter().filter(|a| !self.in_focus(a)).collect();
+                if steps.is_empty() { Effect::None } else { Effect::Steps(steps) }
+            }
             Some(Jump::Merge(pull)) => Effect::Merge(pull),
             None => Effect::None,
         }
@@ -654,9 +664,9 @@ impl View {
         (above != Some(path.as_slice())).then_some(path)
     }
 
-    /// The text of the footer: the error of the last snapshot, else the note of the last action.
+    /// The text of the footer: the error of the last snapshot, if any (a lasting state, commands.md §17 "No notes").
     fn footer(&self) -> String {
-        self.error.clone().unwrap_or_else(|| self.note.clone())
+        self.error.clone().unwrap_or_default()
     }
 
     /// [`View::draw_at`] now.
@@ -664,8 +674,8 @@ impl View {
         self.draw_at(f, frame, OffsetDateTime::now_utc());
     }
 
-    /// Draw a blank row, the tree below it, the Inbox section pinned under the tree and (when there is something to
-    /// say) the note of the last action in the rows at the bottom: the reference's layout. One blank column is left on
+    /// Draw a blank row, the tree below it, the Inbox section pinned under the tree and (when the snapshot cannot be
+    /// read) its error in the rows at the bottom: the reference's layout. One blank column is left on
     /// each side of all of it. `frame` is the animation frame of the working dots (`palette::frame`); the Inbox items'
     /// ages are taken at `now`, from their `opened_at`, so they need no read.
     pub fn draw_at(&mut self, f: &mut Frame, frame: usize, now: OffsetDateTime) {
@@ -723,7 +733,6 @@ mod tests {
     use super::super::fixture::{archived, sample};
     use super::*;
     use super::super::ask::Dialogs;
-    use super::super::rows::ACTIVE_MARK;
     use crate::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED};
     use crate::dialog::validate::Validator;
     use cpd_core::ids::{ContextId, PlanId, SessionId};
@@ -877,8 +886,7 @@ mod tests {
     #[test]
     fn x_refuses_the_session_in_the_chat_slot() {
         let mut view = on(&["alpha", "ship"]);
-        assert_eq!(press(&mut view, KeyCode::Char('x')), Effect::None);
-        assert_eq!(view.note, "switch to another session first");
+        assert_eq!(press(&mut view, KeyCode::Char('x')), Effect::text("Close Session", "switch to another session first"));
     }
 
     #[test]
@@ -890,32 +898,17 @@ mod tests {
     }
 
     #[test]
-    fn the_note_stays_until_the_next_n_x_or_click() {
-        let mut view = on(&["alpha", "sketch"]);
-        view.done(Err("no_cockpit: No cockpit.".into()));
-        press(&mut view, KeyCode::Down);
-        assert_eq!(view.note, "no_cockpit: No cockpit.", "an arrow keeps it");
-        press(&mut view, KeyCode::Char('x'));
-        assert_eq!(view.note, "");
-        let mut view = on(&["alpha", "sketch"]);
-        view.done(Err("why".into()));
-        drawn(&mut view, 44, 10);
-        click(&mut view, 40, 9);
-        assert_eq!(view.note, "");
-    }
-
-    #[test]
-    fn the_footer_is_the_note_in_the_bottom_rows_and_no_prompt_row_is_drawn() {
+    fn the_footer_is_the_snapshot_error_in_the_bottom_rows_and_no_prompt_row_is_drawn() {
         let mut view = on(&["alpha", "sketch"]);
         press(&mut view, KeyCode::Char('n'));
         press(&mut view, KeyCode::Char('x'));
         let rows = drawn(&mut view, 44, 18);
         assert!(rows[14..17].iter().all(|r| r.is_empty()) && rows[17].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "no row for a prompt: {rows:?}");
         assert!(rows.iter().all(|r| !r.contains("Enter") && !r.contains("█") && !r.contains("(y/N)")), "{rows:?}");
-        view.done(Err("closed".into()));
+        view.error = Some("closed".into());
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[16].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "the Inbox section is above the note: {rows:?}");
-        assert_eq!(rows[17], " closed", "a note is one row at the bottom");
+        assert!(rows[16].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "the Inbox section is above the error: {rows:?}");
+        assert_eq!(rows[17], " closed", "an error is one row at the bottom");
         let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
         terminal.draw(|f| view.draw(f, 0)).unwrap();
         let cell = &terminal.backend().buffer()[(1, 13)];
@@ -926,7 +919,7 @@ mod tests {
     #[test]
     fn a_wide_footer_takes_the_rows_its_display_width_needs() {
         let mut view = on(&["alpha", "sketch"]);
-        view.done(Err("失敗失敗失敗失敗失敗失敗失敗失".into())); // 15 characters, 30 columns
+        view.error = Some("失敗失敗失敗失敗失敗失敗失敗失".into()); // 15 characters, 30 columns
         let rows = drawn(&mut view, 24, 14); // 22 columns inside the margin: two rows
         // (the buffer cell after a wide character is blank)
         assert_eq!(rows[11].replace(' ', ""), "失敗失敗失敗失敗失敗失");
@@ -1006,7 +999,7 @@ mod tests {
         let rows = drawn(&mut view, 44, 12);
         assert_eq!(rows[0], "", "the blank row at the top");
         assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"));
-        assert!(rows[2].starts_with(&format!(" {ACTIVE_MARK}─{WORKING} ship")), "{rows:?}");
+        assert!(rows[2].starts_with(&format!(" ├─{WORKING} ship")), "{rows:?}");
         assert_eq!(click(&mut view, 8, 0), Effect::None, "the blank row is no row: not the Context row below it, not the first Session");
         assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "alpha is not folded");
         assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))), "the first Session's row");
@@ -1042,8 +1035,8 @@ mod tests {
             let mut view = View::new(archived(), true);
             assert_margins_blank(&mut view, width, height, "archived rows");
             let mut view = on(&["alpha", "sketch"]);
-            view.done(Err("a note that is long enough to wrap onto several rows of the pane".into()));
-            assert_margins_blank(&mut view, width, height, "a wrapped note");
+            view.error = Some("an error that is long enough to wrap onto several rows of the pane".into());
+            assert_margins_blank(&mut view, width, height, "a wrapped error");
             let mut view = View::new(sample(), true);
             drawn(&mut view, width, height);
             right_click(&mut view, 5, 1);
@@ -1071,7 +1064,7 @@ mod tests {
     fn a_click_on_the_first_drawn_cell_of_a_row_acts_on_that_row_and_the_margins_are_no_row() {
         let mut view = View::new(sample(), true);
         drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 1, 2), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row's `{ACTIVE_MARK}`");
+        assert_eq!(click(&mut view, 1, 2), Effect::Run(Action::Open(sid("l-ship"))), "the Plan row's branch");
         assert_eq!(click(&mut view, 1, 3), Effect::Run(Action::Open(sid("l-sketch"))));
         assert_eq!(click(&mut view, 42, 3), Effect::Run(Action::Open(sid("l-sketch"))), "the last cell of the list");
         for row in [2, 3] {
@@ -1173,7 +1166,6 @@ mod tests {
         again.keep_folds(file_in(&dir));
         assert_eq!(drawn(&mut again, 44, 30), shown, "the folds are back");
         assert_ne!(again.state.selected(), ["beta", "rel"], "the cursor is not kept");
-        assert_eq!(again.note, "");
     }
 
     #[test]
@@ -1191,20 +1183,19 @@ mod tests {
     }
 
     #[test]
-    fn an_invalid_file_starts_with_the_defaults_says_so_once_and_the_next_write_replaces_it() {
+    fn an_invalid_file_starts_with_the_defaults_logs_it_and_the_next_write_replaces_it() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run/tui/tree-folds.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{not json").unwrap();
         let mut view = View::new(archived(), true);
-        view.keep_folds(file_in(&dir));
-        assert!(view.note.starts_with("fold state reset: ") && view.note.contains("tree-folds.json"), "{}", view.note);
+        let lines = view.keep_folds(file_in(&dir));
+        assert!(lines.iter().any(|l| l.starts_with("fold state reset: ") && l.contains("tree-folds.json")), "{lines:?}");
         assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "the defaults");
         let rows = drawn(&mut view, 44, 30);
         view.save_folds();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{not json", "nothing is written until a fold changes");
         click(&mut view, 4, row_of(&rows, 1, UP_COLLAPSE));
-        assert_eq!(view.note, "", "a click clears the note: it is said once");
         view.save_folds();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"collapsed":["alpha"],"expanded":[]}"#);
     }
@@ -1289,7 +1280,6 @@ mod tests {
         assert_eq!(menu_at(&mut view, 8, 5), ["Open", "Rename…", "Fork…", "Copy id", "Close", "Archive"], "a fork");
         assert_eq!(menu_at(&mut view, 8, 17), ["New Context…"], "the empty area");
         assert_eq!(menu_at(&mut view, 8, 13), ["New Context…"], "below the last row");
-        assert_eq!(view.note, "");
         let mut view = View::new(View::new(archived(), true).tree, true);
         assert_eq!(menu_at(&mut view, 8, 1), ["New Plan…", "Rename…", "Copy id", "Archive"], "a live row of a tree with archived ones");
     }
@@ -1359,7 +1349,6 @@ mod tests {
         right_click(&mut view, 8, 5);
         assert_eq!(press(&mut view, KeyCode::Esc), Effect::None);
         assert!(view.menu.is_none());
-        assert_eq!(view.note, "");
     }
 
     fn archive_of(subject: Subject) -> Effect {
@@ -1392,7 +1381,6 @@ mod tests {
         assert_eq!(answered(question.clone(), None), Ok(None), "a cancel runs nothing");
         assert_eq!(answered(question, Some("")), Ok(Some(Action::Archive { subject: Subject::Session(sid("f-idle")), free: None })));
         assert!(view.menu.is_none());
-        assert_eq!(view.note, "");
         // a click picks it as well
         right_click(&mut view, 8, 5);
         let effect = view.mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: 11, modifiers: KeyModifiers::NONE });
@@ -1518,8 +1506,7 @@ mod tests {
         for _ in 0..4 {
             press(&mut view, KeyCode::Down);
         }
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
-        assert_eq!(view.note, IN_CHAT_SLOT);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::text("Close Session", IN_CHAT_SLOT));
     }
 
     #[test]
@@ -1666,10 +1653,13 @@ mod tests {
     }
 
     #[test]
-    fn new_context_with_no_owner_policy_is_refused_and_runs_nothing() {
+    fn new_context_with_no_owner_policy_is_refused_in_a_dialog_and_runs_nothing() {
         let (mut view, _dir) = owned(sample(), &["notes.md"]);
-        assert_eq!(pick_at(&mut view, 8, 17, 0), Effect::None, "no popup opens");
-        assert_eq!(view.note, "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml");
+        assert_eq!(
+            pick_at(&mut view, 8, 17, 0),
+            Effect::text("New Context", "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml"),
+            "no input popup opens"
+        );
     }
 
     #[test]
@@ -2036,10 +2026,10 @@ mod tests {
         draw_now(&mut view, 43, 21);
         // rows 15.. are (the sample tree has 12 rows: one `└ collapse` per Context) the five items: dialog, pr-failing, job-stuck, engine-error, unread
         assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::Open(sid("f-blocked"))), "dialog: session open");
-        assert_eq!(click(&mut view, 10, 16), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing no Plan owns: copies its url");
+        assert_eq!(click(&mut view, 10, 16), Effect::None, "pr-failing (an old row, hs-d470): no click");
         assert_eq!(click(&mut view, 10, 17), Effect::None, "job-stuck (an old row, hs-d318): no click");
         assert_eq!(click(&mut view, 10, 18), Effect::None, "engine-error (an old row, hs-d314): no click");
-        assert_eq!(click(&mut view, 41, 19), Effect::Run(Action::Open(sid("l-ship"))), "unread: anywhere on the row, the age too");
+        assert_eq!(click(&mut view, 41, 19), Effect::None, "unread, its Lead in the chat slot already: nothing, anywhere on the row, the age too");
         assert_eq!(click(&mut view, 10, 14), Effect::None, "the header");
         // the section's rows are not the tree's: the Session row above is its own
         assert_eq!(click(&mut view, 8, 2), Effect::Run(Action::Open(sid("l-ship"))));
@@ -2061,7 +2051,8 @@ mod tests {
         assert_eq!(click(&mut view, 10, first), Effect::Merge(Pull::from_subject("pr:acme/api#3").unwrap()));
         assert_eq!(
             click(&mut view, 10, first + 1),
-            Effect::Steps(vec![Action::Open(sid("l-ship")), Action::CopyUrl("http://10.0.0.5:20000/".into())])
+            Effect::Steps(vec![Action::CopyUrl("http://10.0.0.5:20000/".into())]),
+            "the Lead is in the chat slot already (`sample`): only the copy is left"
         );
         assert_eq!(click(&mut view, 10, first + 2), Effect::None, "a subject that is no pull request: no popup");
     }
@@ -2072,7 +2063,7 @@ mod tests {
         draw_now(&mut view, 43, 16);
         let before = view.inbox_expanded;
         assert_eq!(click(&mut view, 10, 13), Effect::Run(Action::Open(sid("f-blocked"))));
-        assert_eq!(click(&mut view, 10, 14), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "a pr-failing's click copies its url");
+        assert_eq!(click(&mut view, 10, 14), Effect::None, "a pr-failing (an old row, hs-d470): no click, no url copy");
         assert_eq!(click(&mut view, 10, 12), Effect::None, "the header");
         assert_eq!(view.inbox_expanded, before);
         let mut question = item(6, InboxKind::Question, Urgency::Magenta, "alpha: a question", "2026-01-02T23:00:00.000Z");
@@ -2123,9 +2114,7 @@ mod tests {
         let mut view = with_inbox(3);
         draw_now(&mut view, 43, 16);
         let row = inbox_row(&view, 1); // the pr-failing, item 2
-        view.done(Err("why".into()));
         assert_eq!(right_click(&mut view, 10, row), Effect::None);
-        assert_eq!(view.note, "", "a right click clears the note");
         assert_eq!(menu_labels(&mut view), ["Snooze 15 min", "Snooze 1 h", "Snooze until tomorrow 09:00", "Dismiss"]);
         let expected = [
             Action::Snooze { item: 2, until: Until::Minutes15 },
@@ -2293,7 +2282,7 @@ mod tests {
     }
 
     #[test]
-    fn enter_on_an_item_jumps_as_a_click_does_and_the_refusal_shows_in_the_note() {
+    fn enter_on_an_item_jumps_as_a_click_does() {
         let mut view = with_inbox(5);
         view.inbox_expanded = true; // all five items, so that the cursor reaches the last
         draw_now(&mut view, 43, 18);
@@ -2303,16 +2292,12 @@ mod tests {
         }
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))), "dialog");
         press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing: Enter copies its url");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "pr-failing (an old row, hs-d470): no jump, no url copy");
         press(&mut view, KeyCode::Down);
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "job-stuck (an old row, hs-d318): no jump");
         press(&mut view, KeyCode::Down);
         press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))), "unread: the Lead");
-        view.done(Err(Action::Dismiss(2).failed("item_closed", "Item 2 is closed.")));
-        assert_eq!(view.note, "item_closed: Item 2 is closed.");
-        let rows = text_rows(&draw_now(&mut view, 43, 18));
-        assert_eq!(rows[17], " item_closed: Item 2 is closed.");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "unread: its Lead is in the chat slot already");
     }
 
     #[test]
@@ -2352,12 +2337,12 @@ mod tests {
         let mut view = with_inbox(5);
         let rows = text_rows(&draw_now(&mut view, 43, 5));
         assert_eq!(rows[0], "");
-        assert!(rows[1].starts_with(&format!(" {ACTIVE_MARK}─{WORKING} ship")), "one row for the tree, scrolled to the cursor: {rows:?}");
+        assert!(rows[1].starts_with(&format!(" ├─{WORKING} ship")), "one row for the tree, scrolled to the cursor: {rows:?}");
         assert_eq!((rows[2].as_str(), rows[3].as_str()), ("", header(5).as_str()), "{rows:?}");
-        view.done(Err("closed".into()));
+        view.error = Some("closed".into());
         let rows = text_rows(&draw_now(&mut view, 43, 8));
         assert_eq!(rows[7], " closed");
-        assert_eq!(rows[3], header(5), "the section is above the note: {rows:?}");
+        assert_eq!(rows[3], header(5), "the section is above the error: {rows:?}");
     }
 
     // ---------- the expanded section scrolls in the rows it is given (hs-n265, hs-d307) ----------
@@ -2626,119 +2611,329 @@ mod tests {
         assert_ne!(text_rows(&draw_now(&mut view, 43, 31)), before, "the wheel moved it, though the cursor is out of sight");
     }
 
-    /// A fake runner of the commands the tree's own restart runs, and the Managers it can list.
+    /// A fake runner of the commands the tree may run (`session send` to a Manager; never `watch --ensure`), and the live
+    /// Managers it can list. The clock is the `Instant`s the tests pass.
     struct Fake {
         calls: Vec<Vec<String>>,
-        ensure: Result<Value, Failure>,
         managers: Vec<SessionId>,
     }
 
     impl Fake {
-        fn started() -> Fake {
-            Fake { calls: Vec::new(), ensure: Ok(serde_json::json!({"ok": true, "started": true})), managers: Vec::new() }
+        fn with(managers: &[&str]) -> Fake {
+            Fake { calls: Vec::new(), managers: managers.iter().map(|m| SessionId::parse(m).unwrap()).collect() }
         }
 
-        fn refusing(code: &str, managers: &[&str]) -> Fake {
-            Fake {
-                calls: Vec::new(),
-                ensure: Err(Failure::Refused { code: code.to_owned(), message: "no tmux".to_owned() }),
-                managers: managers.iter().map(|m| SessionId::parse(m).unwrap()).collect(),
-            }
-        }
-
-        fn tick(&mut self, view: &mut View, now: Instant) -> Option<String> {
-            let (calls, ensure, managers) = (&mut self.calls, &self.ensure, &self.managers);
-            view.restart_engine(
+        /// One look at the engine at `now`: `running` is what the snapshot read of `locks/watch.lock`.
+        fn tick(&mut self, view: &mut View, now: Instant, running: bool) {
+            view.tree.engine_running = running;
+            let (calls, managers) = (&mut self.calls, &self.managers);
+            view.watch_engine(
                 now,
                 &mut |action| {
                     calls.push(action.argv());
-                    match action {
-                        Action::EnsureWatch => ensure.clone(),
-                        _ => Ok(serde_json::json!({"ok": true})),
-                    }
+                    Ok(serde_json::json!({"ok": true}))
                 },
                 &mut || Ok(managers.clone()),
-            )
+            );
         }
     }
 
-    fn engine_down_view() -> View {
+    const TOLD: &str = "The cpd engine has been down for 60 s and its supervisor has not restarted it; see run/watch.log, start it with cpd watch --ensure.";
+
+    fn secs(t0: Instant, s: u64) -> Instant {
+        t0 + Duration::from_secs(s)
+    }
+
+    /// The `session send` of `text` to each of `managers`: from null, no `--wake` (the path of the Inbox's Manager messages).
+    fn sends(managers: &[&str], text: &str) -> Vec<Vec<String>> {
+        managers.iter().map(|m| ["session", "send", m, text].map(str::to_owned).to_vec()).collect()
+    }
+
+    #[test]
+    fn a_lock_free_for_half_a_second_and_then_held_runs_nothing_and_shows_nothing() {
+        // the supervisor restarts the engine in about 0.5 s: the tree catches that window and must not act on it (hs-d363)
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha", "m-beta"]), Instant::now());
+        fake.tick(&mut view, t0, false);
+        fake.tick(&mut view, t0 + Duration::from_millis(500), true);
+        assert!(fake.calls.is_empty(), "no `watch --ensure`, no message: {:?}", fake.calls);
+    }
+
+    #[test]
+    fn a_lock_free_for_59_seconds_is_nothing() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha", "m-beta"]), Instant::now());
+        for s in 0..=59 {
+            fake.tick(&mut view, secs(t0, s), false);
+            assert!(fake.calls.is_empty(), "{s} s down: {:?}", fake.calls);
+        }
+    }
+
+    #[test]
+    fn a_lock_free_for_60_seconds_tells_each_live_manager_once_and_nothing_more_at_120() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha", "m-beta"]), Instant::now());
+        for s in 0..60 {
+            fake.tick(&mut view, secs(t0, s), false);
+        }
+        assert!(fake.calls.is_empty(), "59 s: {:?}", fake.calls);
+        fake.tick(&mut view, secs(t0, 60), false);
+        assert_eq!(fake.calls, sends(&["m-alpha", "m-beta"], TOLD), "one message per Manager, no `watch --ensure`");
+        for s in 61..=120 {
+            fake.tick(&mut view, secs(t0, s), false);
+        }
+        assert_eq!(fake.calls.len(), 2, "one message per downtime: {:?}", fake.calls);
+    }
+
+    #[test]
+    fn the_engine_running_again_and_down_again_tells_again() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha"]), Instant::now());
+        for s in 0..=60 {
+            fake.tick(&mut view, secs(t0, s), false);
+        }
+        assert_eq!(fake.calls.len(), 1, "told: {:?}", fake.calls);
+        fake.tick(&mut view, secs(t0, 61), true);
+        assert_eq!(fake.calls.len(), 1, "nothing is sent for its return: {:?}", fake.calls);
+        // down again: the 60 s count starts over, from the first snapshot that reads the lock free
+        for s in 62..=121 {
+            fake.tick(&mut view, secs(t0, s), false);
+        }
+        assert_eq!(fake.calls.len(), 1, "59 s into the second downtime: {:?}", fake.calls);
+        fake.tick(&mut view, secs(t0, 122), false);
+        assert_eq!(fake.calls, sends(&["m-alpha", "m-alpha"], TOLD), "told again");
+    }
+
+    #[test]
+    fn a_lock_held_once_in_the_minute_starts_the_count_over() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha"]), Instant::now());
+        for s in 0..40 {
+            fake.tick(&mut view, secs(t0, s), false);
+        }
+        fake.tick(&mut view, secs(t0, 40), true);
+        for s in 41..=80 {
+            fake.tick(&mut view, secs(t0, s), false);
+        }
+        assert!(fake.calls.is_empty(), "40 s down since the lock was held: {:?}", fake.calls);
+        fake.tick(&mut view, secs(t0, 101), false);
+        assert_eq!(fake.calls.len(), 1, "60 s since the lock was held: {:?}", fake.calls);
+    }
+
+    #[test]
+    fn a_click_on_the_engine_down_item_still_runs_watch_ensure_and_only_its_failure_is_said() {
         let mut view = View::new(sample(), true);
         view.tree.engine_running = false;
-        view
-    }
-
-    #[test]
-    fn a_stopped_engine_is_restarted_at_once_and_then_at_most_once_a_minute_and_the_note_says_so() {
-        let (mut view, mut fake, t0) = (engine_down_view(), Fake::started(), Instant::now());
-        let said = "engine was down: cpd watch --ensure started it";
-        assert_eq!(fake.tick(&mut view, t0).as_deref(), Some(said), "the line for stderr");
-        assert_eq!(view.note, said);
-        view.note.clear();
-        for secs in [0, 1, 30, 59] {
-            assert_eq!(fake.tick(&mut view, t0 + Duration::from_secs(secs)), None, "{secs}s later");
+        view.tree.inbox = vec![item(8, InboxKind::EngineDown, Urgency::Red, "engine is down", "2026-01-02T23:00:00.000Z")];
+        draw_now(&mut view, 43, 18);
+        let row = inbox_row(&view, 0);
+        assert_eq!(click(&mut view, 10, row), Effect::Run(Action::EnsureWatch), "the User's own explicit action");
+        // the reply is the log's (the loop's `said`), whether it started the engine or found it running
+        for started in [true, false] {
+            let said = Action::EnsureWatch.done(&serde_json::json!({"ok": true, "started": started, "already": !started}));
+            assert_eq!(view.finished(&Action::EnsureWatch, Ok(said)), Effect::None);
         }
-        assert!(view.note.is_empty());
-        assert_eq!(fake.calls, [["watch", "--ensure"]], "one run so far");
-        assert!(fake.tick(&mut view, t0 + Duration::from_secs(60)).is_some(), "a minute later, still down");
-        assert_eq!(fake.calls.len(), 2);
-    }
-
-    #[test]
-    fn a_running_engine_is_left_alone_and_one_already_running_is_said() {
-        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::started(), Instant::now());
-        assert_eq!(fake.tick(&mut view, t0), None);
-        assert!(fake.calls.is_empty());
-        let mut view = engine_down_view();
-        fake.ensure = Ok(serde_json::json!({"ok": true, "started": false, "already": true}));
-        assert_eq!(fake.tick(&mut view, t0).as_deref(), Some("engine was down: cpd watch --ensure found it running"));
-    }
-
-    #[test]
-    fn a_refused_restart_is_told_once_per_code_per_hour_to_each_live_manager_and_to_none_without() {
-        let (mut view, t0) = (engine_down_view(), Instant::now());
-        let at = |secs: u64| t0 + Duration::from_secs(secs);
-        let mut fake = Fake::refusing("watch_start_failed", &["m-alpha", "m-beta"]);
-        let text = "The cpd engine is down and 'cpd watch --ensure' failed: watch_start_failed: no tmux. Start it with cpd watch --ensure.";
-        let line = fake.tick(&mut view, at(0)).unwrap();
-        assert_eq!(line, "engine was down: cpd watch --ensure failed: watch_start_failed: no tmux");
-        assert_eq!(view.note, line);
         assert_eq!(
-            fake.calls,
-            [vec!["watch", "--ensure"], vec!["session", "send", "m-alpha", text], vec!["session", "send", "m-beta", text]],
-            "one message per Manager, no --wake"
+            view.finished(&Action::EnsureWatch, Err(Action::EnsureWatch.failed("watch_start_failed", "no tmux"))),
+            Effect::text("watch --ensure", "watch_start_failed: no tmux")
         );
-        // a minute later: tried again, same code, not told again
-        assert!(fake.tick(&mut view, at(60)).is_some());
-        assert_eq!(fake.calls.len(), 4, "only the second `watch --ensure`: {:?}", fake.calls);
-        // another code is told
-        fake.ensure = Err(Failure::Refused { code: "store_busy".to_owned(), message: "busy".to_owned() });
-        assert!(fake.tick(&mut view, at(120)).is_some());
-        assert_eq!(fake.calls.len(), 7);
-        assert_eq!(fake.calls[5][3], "The cpd engine is down and 'cpd watch --ensure' failed: store_busy: busy. Start it with cpd watch --ensure.");
-        // the first code again, an hour after it was told
-        fake.ensure = Err(Failure::Refused { code: "watch_start_failed".to_owned(), message: "no tmux".to_owned() });
-        assert!(fake.tick(&mut view, at(3599)).is_some());
-        assert_eq!(fake.calls.len(), 8, "not yet: {:?}", fake.calls);
-        assert!(fake.tick(&mut view, at(3659)).is_some());
-        assert_eq!(fake.calls.len(), 11, "told again");
-
-        // no Manager: nothing is sent, and the code is not used up for the Manager that comes later
-        let (mut view, mut none) = (engine_down_view(), Fake::refusing("watch_start_failed", &[]));
-        assert!(none.tick(&mut view, at(0)).is_some());
-        assert_eq!(none.calls, [["watch", "--ensure"]]);
-        none.managers = vec![sid("m-alpha")];
-        assert!(none.tick(&mut view, at(60)).is_some());
-        assert_eq!(none.calls.len(), 3);
     }
 
     #[test]
-    fn a_command_that_cannot_run_counts_as_the_code_error() {
-        let (mut view, t0) = (engine_down_view(), Instant::now());
-        let mut fake = Fake::refusing("x", &["m-alpha"]);
-        fake.ensure = Err(Failure::Broken("cannot run cpd: gone".to_owned()));
-        let line = fake.tick(&mut view, t0).unwrap();
-        assert_eq!(line, "engine was down: cpd watch --ensure failed: error: cannot run cpd: gone");
-        assert_eq!(fake.calls.len(), 2);
+    fn a_downtime_with_no_live_manager_says_nothing_and_a_failure_to_tell_or_list_is_the_log() {
+        let t0 = Instant::now();
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        let mut run = |_: &Action| Ok(serde_json::json!({"ok": true}));
+        assert!(view.watch_engine(t0, &mut run, &mut || Ok(Vec::new())).is_empty());
+        let lines = view.watch_engine(secs(t0, 60), &mut run, &mut || Ok(Vec::new()));
+        assert!(lines.iter().any(|l| l.contains("no live Manager")), "{lines:?}");
+
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        view.watch_engine(t0, &mut run, &mut || Ok(Vec::new()));
+        let lines = view.watch_engine(secs(t0, 60), &mut run, &mut || Err("store busy".to_owned()));
+        assert!(lines.iter().any(|l| l.contains("store busy")), "{lines:?}");
+
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        let mut refuse = |_: &Action| Err(Failure::Broken("no tmux".to_owned()));
+        view.watch_engine(t0, &mut refuse, &mut || Ok(vec![SessionId::parse("m-alpha").unwrap()]));
+        let lines = view.watch_engine(secs(t0, 60), &mut refuse, &mut || Ok(vec![SessionId::parse("m-alpha").unwrap()]));
+        assert!(lines.iter().any(|l| l.contains("no tmux")), "{lines:?}");
+    }
+
+    // ---------- no notes (commands.md §17 "No notes", hs-d469) ----------
+    //
+    // The view draws no transient note line: what the User must see is a `text` dialog (`Effect::Text`), the rest is
+    // nothing on the screen and a line in `run/tui/tree.log`. Every test below compares frames, so none names how the
+    // implementation keeps its state.
+
+    /// The Inbox's item `id` of `kind` for the Session `session`, at [`now`].
+    fn session_item(id: i64, kind: InboxKind, session: &str) -> Item {
+        let mut it = item(id, kind, Urgency::White, "ship lead has a reply", "2026-01-02T23:50:00.000Z");
+        it.session = Some(sid(session));
+        it
+    }
+
+    /// The frame of `view` at 43 × 18, as text.
+    fn frame(view: &mut View) -> Vec<String> {
+        text_rows(&draw_now(view, 43, 18))
+    }
+
+    #[test]
+    fn a_click_on_an_inbox_item_already_in_focus_does_nothing_and_says_nothing() {
+        // `l-ship` is in the chat slot (`Place::Chat` in the sample), so its item is already in focus
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![session_item(5, InboxKind::Unread, "l-ship")];
+        let before = frame(&mut view);
+        let row = inbox_row(&view, 0);
+        assert_eq!(click(&mut view, 10, row), Effect::None, "no `session open` for the Session that is in focus");
+        assert_eq!(frame(&mut view), before, "and nothing is drawn");
+    }
+
+    #[test]
+    fn enter_on_an_inbox_item_already_in_focus_does_nothing_too() {
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![session_item(5, InboxKind::Unread, "l-ship")];
+        into_the_inbox(&mut view);
+        let before = frame(&mut view);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(frame(&mut view), before);
+    }
+
+    #[test]
+    fn a_click_on_an_inbox_item_that_is_not_in_focus_still_opens_its_session() {
+        // the other side of the rule above: `f-blocked` is parked
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![session_item(1, InboxKind::Dialog, "f-blocked")];
+        draw_now(&mut view, 43, 18);
+        let row = inbox_row(&view, 0);
+        assert_eq!(click(&mut view, 10, row), Effect::Run(Action::Open(sid("f-blocked"))));
+    }
+
+    #[test]
+    fn a_copy_click_draws_no_note_when_the_copy_is_done() {
+        let url = "https://github.com/acme/api/pull/12";
+        let mut failing = item(2, InboxKind::ReviewRequested, Urgency::Yellow, "review acme/api#12", "2026-01-02T23:55:00.000Z");
+        failing.url = Some(url.into());
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![failing];
+        let before = frame(&mut view);
+        let row = inbox_row(&view, 0);
+        let action = Action::CopyUrl(url.into());
+        assert_eq!(click(&mut view, 10, row), Effect::Run(action.clone()), "the click still copies");
+        // what the command's success used to say
+        let done = view.finished(&action, Ok(format!("copied {url}: Cmd-click the row to open it")));
+        assert_eq!(done, Effect::None, "a success opens nothing");
+        let after = frame(&mut view);
+        assert!(after.iter().all(|r| !r.contains("copied")), "no `copied <url>: …` line: {after:?}");
+        assert_eq!(after, before, "the frame is the one before the click");
+    }
+
+    #[test]
+    fn a_success_of_any_action_draws_nothing_and_opens_nothing() {
+        for (action, said) in [
+            (Action::Open(sid("l-sketch")), ""),
+            (Action::Dismiss(2), "dismissed"),
+            (Action::EnsureWatch, "already running"),
+            (Action::CopyId("l-sketch".into()), "copied l-sketch"),
+        ] {
+            let mut view = on(&["alpha", "sketch"]);
+            let before = frame(&mut view);
+            assert_eq!(view.finished(&action, Ok(said.into())), Effect::None, "{action:?}");
+            assert_eq!(frame(&mut view), before, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_plan_review_item_with_no_review_page_yet_opens_the_lead_and_says_nothing_else() {
+        // a step with no command was the note `no review page yet`
+        let mut review = item(6, InboxKind::PlanReview, Urgency::Yellow, "ship: Plan review r1", "2026-01-02T23:50:00.000Z");
+        review.plan = Some(PlanId::parse("ship").unwrap());
+        review.url = None;
+        let tree = sample();
+        let steps = match super::super::inbox::jump(&tree, &review) {
+            Some(super::super::inbox::Jump::Run(action)) => vec![action],
+            Some(super::super::inbox::Jump::Steps(steps)) => steps,
+            other => panic!("the Lead opens: {other:?}"),
+        };
+        assert_eq!(steps.first(), Some(&Action::Open(sid("l-ship"))));
+        assert!(steps.iter().all(|a| !a.argv().is_empty()), "every step is a command, none is only a line to say: {steps:?}");
+    }
+
+    #[test]
+    fn a_failed_action_is_a_text_dialog_with_what_failed_its_code_and_its_message_and_draws_no_note() {
+        for (action, why) in [
+            (Action::Open(sid("l-sketch")), "no_cockpit: No cockpit."),
+            (Action::EnsureWatch, "watch_start_failed: no tmux"),
+            (Action::Dismiss(2), "item_closed: Item 2 is closed."),
+        ] {
+            let mut view = on(&["alpha", "sketch"]);
+            let before = frame(&mut view);
+            let Effect::Text { title, text } = view.finished(&action, Err(why.into())) else { panic!("{action:?}: a text dialog") };
+            assert_eq!(text, why, "`<code>: <message>`");
+            assert_eq!(title, action.argv().join(" "), "it says what failed, the command");
+            assert_eq!(frame(&mut view), before, "{action:?}: no note behind the dialog");
+        }
+    }
+
+    #[test]
+    fn a_refusal_of_a_key_or_an_item_is_a_text_dialog_not_a_note() {
+        // `x` on the Session in the chat slot
+        let mut view = on(&["alpha", "ship"]);
+        let before = frame(&mut view);
+        let Effect::Text { title, text } = press(&mut view, KeyCode::Char('x')) else { panic!("a text dialog") };
+        assert_eq!((title.as_str(), text.as_str()), ("Close Session", "switch to another session first"));
+        assert_eq!(frame(&mut view), before);
+        // New Context… with no owner policy
+        let (mut view, _dir) = owned(sample(), &["notes.md"]);
+        let before = frame(&mut view);
+        let Effect::Text { title, text } = pick_at(&mut view, 8, 17, 0) else { panic!("a text dialog") };
+        assert!((title.as_str(), text.contains("No owner policy")) == ("New Context", true), "{title:?} {text:?}");
+        assert_eq!(frame(&mut view), before);
+    }
+
+    #[test]
+    fn an_engine_down_for_60_seconds_tells_the_managers_and_draws_no_note() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha", "m-beta"]), Instant::now());
+        fake.tick(&mut view, t0, false);
+        let before = frame(&mut view);
+        for s in 1..=60 {
+            fake.tick(&mut view, secs(t0, s), false);
+        }
+        assert_eq!(fake.calls, sends(&["m-alpha", "m-beta"], TOLD), "the Managers are told");
+        assert_eq!(frame(&mut view), before, "and the view says nothing: no `engine down 60 s+: Managers told`");
+    }
+
+    #[test]
+    fn a_failure_to_tell_or_list_the_managers_is_logged_and_draws_no_note() {
+        let t0 = Instant::now();
+        let mut run = |_: &Action| Ok(serde_json::json!({"ok": true}));
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        let before = frame(&mut view);
+        view.watch_engine(t0, &mut run, &mut || Ok(Vec::new()));
+        let lines = view.watch_engine(secs(t0, 60), &mut run, &mut || Err("store busy".to_owned()));
+        assert!(lines.iter().any(|l| l.contains("store busy")), "logged: {lines:?}");
+        assert_eq!(frame(&mut view), before, "listing failed");
+
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        let mut refuse = |_: &Action| Err(Failure::Broken("no tmux".to_owned()));
+        let manager = || -> Result<Vec<SessionId>, String> { Ok(vec![SessionId::parse("m-alpha").unwrap()]) };
+        view.watch_engine(t0, &mut refuse, &mut manager.clone());
+        let lines = view.watch_engine(secs(t0, 60), &mut refuse, &mut manager.clone());
+        assert!(lines.iter().any(|l| l.contains("no tmux")), "logged: {lines:?}");
+        assert_eq!(frame(&mut view), before, "telling failed");
+    }
+
+    #[test]
+    fn a_fold_file_that_is_reset_draws_nothing_and_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/tree-folds.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{not json").unwrap();
+        let mut clean = View::new(archived(), true);
+        let plain = drawn(&mut clean, 44, 30);
+        let mut view = View::new(archived(), true);
+        let lines = view.keep_folds(file_in(&dir));
+        assert_eq!(drawn(&mut view, 44, 30), plain, "no `fold state reset: …` line");
+        assert!(lines.iter().any(|l| l.starts_with("fold state reset: ") && l.contains("tree-folds.json")), "logged: {lines:?}");
     }
 }
