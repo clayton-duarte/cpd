@@ -92,7 +92,7 @@ pub enum Row<'a> {
     Plan(&'a ContextNode, &'a PlanNode),
     /// A Session forked by `session fork`, with the Plan it belongs to.
     Fork(&'a ContextNode, &'a PlanNode, &'a SessionNode),
-    /// The closing row of a Context (`╰󰁋 expand`, `╰󰁣 collapse` or a plain `╰─`): the only row that folds its archived rows.
+    /// The closing row of a Context (`╰󰁋 expand`, `╰󰁣 collapse`, or the plain `╰─` of a Context with no row): the only row that folds its archived rows.
     Toggle,
 }
 
@@ -550,8 +550,8 @@ pub fn move_cursor(state: &mut TreeState<Id>, tree: &Tree, delta: isize) {
 }
 
 /// A click on a closing row (`╰󰁋 expand`, `╰󰁣 collapse`) shows or hides its Context's archived rows; it selects nothing.
-/// Returns whether `path` was a closing row: the only row that folds. A plain `╰─` (nothing to fold) is one, and folds
-/// nothing.
+/// Returns whether `path` was a closing row: the only row that folds. The plain `╰─` of a Context with no row (nothing to fold)
+/// is one, and folds nothing.
 pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
     let Some(Row::Context(c)) = toggle_owner(path).and_then(|owner| row(tree, &owner)) else { return false };
     if kids(c).has_archived() {
