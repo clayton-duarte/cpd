@@ -10,7 +10,7 @@
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
 //! - [`workers`]: the `@cpd_workers` step, which sets the StatusBar's `workers N/M` text;
 //! - [`report`]: an unexpected failure as an `error` Event, once until it clears;
-//! - [`ensure`]: `watch --ensure`, which starts the engine in `cpd-work:watch`;
+//! - [`ensure`]: `watch --ensure`, which starts the engine in `cpd-work:watch`, and `watch --check`, which verifies what that start depends on without touching anything;
 //! - [`restart`]: the tmux server's restart: E3's hold while it is pending, the drain, the detached run;
 //! - [`lock`]: `locks/watch.lock`; [`log`]: stderr and `run/watch.log`.
 
@@ -46,6 +46,9 @@ const SOURCE: &str = "watch";
 /// The arguments of `cpd watch` (commands.md §12).
 #[derive(clap::Args, Debug)]
 pub struct Args {
+    /// Check, read-only, what starting the engine depends on (config, store, tmux, its listing, the home) and print what was checked
+    #[arg(long, conflicts_with_all = ["ensure", "restart_tmux"])]
+    check: bool,
     /// Start the engine in cpd-work:watch when it is not running, and return at once
     #[arg(long)]
     ensure: bool,
@@ -55,14 +58,21 @@ pub struct Args {
     /// Restart the tmux server onto the installed tmux (internal: the engine starts it, contract §6.1)
     #[arg(long, hide = true, conflicts_with = "ensure")]
     restart_tmux: bool,
+    /// Write run/install-restart.json for the engine about to be retired (internal: scripts/install-cpd.sh, contract §3.7 "A planned restart")
+    #[arg(long, hide = true, conflicts_with_all = ["ensure", "restart_tmux"])]
+    mark_restart: bool,
 }
 
 /// `cpd watch [--ensure]`.
 pub fn run(args: Args) -> Result<Output, CpdError> {
-    if args.ensure {
+    if args.check {
+        ensure::check()
+    } else if args.ensure {
         ensure::ensure(args.wait)
     } else if args.restart_tmux {
         restart::detached()
+    } else if args.mark_restart {
+        engine::mark_restart()
     } else {
         engine::run()
     }

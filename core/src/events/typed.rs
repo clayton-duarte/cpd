@@ -15,6 +15,15 @@ use serde_json::{Value, json};
 use super::NewEvent;
 use super::kind::Kind;
 
+/// The `number` and `url` of a `pr-base-changed` Event (§5.2): the pull request's, for the poll's follow of GitHub's
+/// repoint; explicit nulls for the poll's unstack of a PR with no pull request (hs-d301); absent for every other `by`.
+#[derive(Clone, Copy, Debug)]
+pub enum BasePull<'a> {
+    Absent,
+    Of(i64, &'a str),
+    Null,
+}
+
 /// An Event about `kind`: only this file calls it.
 fn make(kind: Kind, text: impl Into<String>, data: Value) -> NewEvent {
     NewEvent::new(kind, text, data)
@@ -222,19 +231,26 @@ impl NewEvent {
         )
     }
 
-    /// `pr-base-changed` (§5.2): `number` and `url` are the pull request's, set by the poll (`by` `poll`) only.
+    /// `pr-base-changed` (§5.2): `number` and `url` are in `data` for `by` `poll` only, see [`BasePull`].
     pub fn pr_base_changed(
         text: impl Into<String>,
         pr: impl Serialize,
         (from, to): (&str, &str),
         (from_pr, to_pr): (Option<&str>, Option<&str>),
         by: &str,
-        pull_request: Option<(i64, &str)>,
+        pull_request: BasePull<'_>,
     ) -> NewEvent {
         let mut data = json!({"pr": pr, "from": from, "to": to, "from_pr": from_pr, "to_pr": to_pr, "by": by});
-        if let Some((number, url)) = pull_request {
-            data["number"] = json!(number);
-            data["url"] = json!(url);
+        match pull_request {
+            BasePull::Absent => {}
+            BasePull::Of(number, url) => {
+                data["number"] = json!(number);
+                data["url"] = json!(url);
+            }
+            BasePull::Null => {
+                data["number"] = Value::Null;
+                data["url"] = Value::Null;
+            }
         }
         make(Kind::PrBaseChanged, text, data)
     }
@@ -398,8 +414,9 @@ mod tests {
             Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s), NewEvent::pr_cancelled_superseded(T, s, s)],
             Kind::PrStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
             Kind::PrBaseChanged => vec![
-                NewEvent::pr_base_changed(T, s, (s, s), (None, Some(s)), s, None),
-                NewEvent::pr_base_changed(T, s, (s, s), (Some(s), None), s, Some((1, s))),
+                NewEvent::pr_base_changed(T, s, (s, s), (None, Some(s)), s, BasePull::Absent),
+                NewEvent::pr_base_changed(T, s, (s, s), (Some(s), None), s, BasePull::Of(1, s)),
+                NewEvent::pr_base_changed(T, s, (s, s), (Some(s), None), s, BasePull::Null),
             ],
             Kind::PrOpened => vec![NewEvent::pr_opened(T, s, n, s)],
             Kind::PrMerged => vec![NewEvent::pr_merged(T, s, n, s, None)],
