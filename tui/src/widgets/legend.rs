@@ -16,6 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 
 use cpd_core::error::CpdError;
+use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
@@ -203,6 +204,17 @@ fn sections() -> Vec<Section> {
                 .collect(),
         ],
     };
+    let tier = |urgency, meaning: &'static str| vec![Line::from(palette::tier_span(urgency)), plain(meaning)];
+    let inbox = Section {
+        title: "Inbox",
+        header: None,
+        rows: vec![
+            tier(Urgency::Red, "a blocker only you can clear"),
+            tier(Urgency::Yellow, "pull-request work"),
+            tier(Urgency::Magenta, "a decision before the work runs"),
+            tier(Urgency::White, "an unread reply"),
+        ],
+    };
     let pulse = Section {
         title: "Pulse",
         header: None,
@@ -212,7 +224,7 @@ fn sections() -> Vec<Section> {
             .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
             .collect(),
     };
-    vec![meanings, jobs, dots, prs, pulse, checks]
+    vec![meanings, jobs, dots, prs, inbox, pulse, checks]
 }
 
 /// The vertical constraints of the body: each section after a gap.
@@ -335,6 +347,7 @@ mod tests {
                 "Jobs: Plan Pills And Context Counters",
                 "Session Dots",
                 "PRs (Dispatch)",
+                "Inbox",
                 "Pulse",
                 "PR Checks",
             ]
@@ -343,7 +356,7 @@ mod tests {
 
     #[test]
     fn the_pulse_section_lists_the_kind_colours_in_precedence_order_the_grey_zero_and_quiet() {
-        let pulse = &sections()[4];
+        let pulse = &sections()[5];
         let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();
         assert_eq!(
             cells,
@@ -605,5 +618,32 @@ mod tests {
         assert_eq!((buf[(2, 1)].symbol(), buf[(3, 1)].symbol(), buf[(4, 1)].symbol()), ("─", "\u{E0B6}", "L"), "{}", row(&buf, 1));
         let text: String = (4..).map(|x| buf[(x, 1)].symbol()).take_while(|s| *s != "\u{E0B4}").collect();
         section::check::grey_pill(&buf, 3, 1, &text);
+    }
+
+    // ---- the Inbox section (hs-d483): the four tiers, red to white, each glyph in its colour with its meaning; red until it exists ----
+
+    #[test]
+    fn the_inbox_section_lists_the_four_tiers_red_to_white_each_glyph_in_its_colour_with_its_meaning() {
+        let all = sections();
+        let at = all.iter().position(|s| s.title == "Inbox").unwrap_or_else(|| panic!("no Inbox section: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>()));
+        let inbox = &all[at];
+        let cells: Vec<String> = inbox.rows.iter().flatten().map(text).collect();
+        assert_eq!(
+            cells,
+            [
+                "\u{F0362}", "a blocker only you can clear",
+                "\u{F069A}", "pull-request work",
+                "\u{F173A}", "a decision before the work runs",
+                "\u{F0366}", "an unread reply",
+            ]
+        );
+        let colours: Vec<_> = inbox.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
+        let c = |m| Some(palette::color(m));
+        assert_eq!(colours, [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::NotStarted)], "red, yellow, magenta, white");
+        let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
+        let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();
+        assert!(dots < at && at < pulse, "between the Session Dots and the Pulse: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>());
+        let shown: String = cells.concat();
+        assert!(palette::SPINNER.iter().all(|frame| !shown.contains(frame)), "the Inbox section draws no state dot: {shown:?}");
     }
 }

@@ -16,6 +16,7 @@ use ratatui::{
 };
 
 use super::read::{AttemptStatus, Checks, Dot, JobStatus, Kind, PrState};
+use cpd_core::inbox::model::Urgency;
 use cpd_core::plan::Phase;
 
 /// What a colour stands for. One colour per meaning, whatever view shows it.
@@ -234,6 +235,27 @@ pub const STOPPED: &str = IDLE;
 pub const WAITING: &str = SPINNER[4];
 /// A Session that needs the User (coloured by case): the last frame.
 pub const NEEDS_YOU: &str = SPINNER[8];
+
+/// The Inbox's tier glyphs (hs-d483), one per [`Urgency`], drawn in that urgency's colour; the state dots stay the Context tree's.
+/// White: an unread reply.
+pub const TIER_WHITE: &str = "\u{F0366}";
+/// Magenta: a decision before the work runs.
+pub const TIER_MAGENTA: &str = "\u{F173A}";
+/// Yellow: pull-request work.
+pub const TIER_YELLOW: &str = "\u{F069A}";
+/// Red: a blocker only the User can clear.
+pub const TIER_RED: &str = "\u{F0362}";
+
+/// The tier glyph of `urgency`, in the colour of its urgency (the colours of the tree's dots).
+pub fn tier_span(urgency: Urgency) -> Span<'static> {
+    let (glyph, meaning) = match urgency {
+        Urgency::Red => (TIER_RED, Meaning::Failed),
+        Urgency::Yellow => (TIER_YELLOW, Meaning::Review),
+        Urgency::Magenta => (TIER_MAGENTA, Meaning::Planning),
+        Urgency::White => (TIER_WHITE, Meaning::NotStarted),
+    };
+    Span::styled(glyph, fg(meaning))
+}
 
 /// How long one frame of the spinner lasts, in milliseconds.
 const FRAME_MS: u128 = 100;

@@ -907,11 +907,11 @@ mod tests {
         press(&mut view, KeyCode::Char('n'));
         press(&mut view, KeyCode::Char('x'));
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[13..16].iter().all(|r| r.is_empty()) && rows[16].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[17].is_empty(), "no row for a prompt: {rows:?}");
+        assert!(rows[13..15].iter().all(|r| r.is_empty()) && rows[15].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[16] == " ╰\u{F005A} up to date, drink some water" && rows[17].is_empty(), "no row for a prompt: {rows:?}");
         assert!(rows.iter().all(|r| !r.contains("Enter") && !r.contains("█") && !r.contains("(y/N)")), "{rows:?}");
         view.error = Some("closed".into());
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[15].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[16].is_empty(), "the Inbox section is above the error: {rows:?}");
+        assert!(rows[14].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[15] == " ╰\u{F005A} up to date, drink some water" && rows[16].is_empty(), "the Inbox section is above the error: {rows:?}");
         assert_eq!(rows[17], " closed", "an error is one row at the bottom");
         let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
         terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -984,17 +984,17 @@ mod tests {
     #[test]
     fn an_archived_context_starts_folded_unfolds_at_its_closing_row_and_opens_no_manager() {
         let mut view = View::new(archived(), true);
-        let rows = drawn(&mut view, 44, 22);
+        let rows = drawn(&mut view, 44, 23);
         assert_eq!((rows[15].as_str(), rows[16].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), EXPAND), "{rows:?}");
         assert_eq!(click(&mut view, 6, 15), Effect::None, "its title: no Manager for an archived Context");
-        assert_eq!(drawn(&mut view, 44, 22), rows, "its title folds and unfolds nothing");
+        assert_eq!(drawn(&mut view, 44, 23), rows, "its title folds and unfolds nothing");
         click(&mut view, 3, 16);
-        let rows = drawn(&mut view, 44, 22);
+        let rows = drawn(&mut view, 44, 23);
         assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
         assert_eq!(rows[18], COLLAPSE, "its closing row unfolds it");
         assert_eq!(click(&mut view, 6, 15), Effect::None);
         assert_eq!(click(&mut view, 8, 18), Effect::None);
-        assert_eq!(drawn(&mut view, 44, 22)[16], EXPAND, "and folds it");
+        assert_eq!(drawn(&mut view, 44, 23)[16], EXPAND, "and folds it");
     }
 
     #[test]
@@ -1115,7 +1115,7 @@ mod tests {
     #[test]
     fn the_archived_rows_are_inside_the_expanded_block_with_one_toggle_row_that_folds_them_and_a_click_on_one_shows_its_history() {
         let mut view = View::new(archived(), true);
-        let rows = drawn(&mut view, 44, 22);
+        let rows = drawn(&mut view, 44, 23);
         assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")), "{rows:?}");
         assert_eq!(rows[6], format!(" ├─{NEEDS_YOU} ship·f-bl"));
         assert_eq!(rows[7], COLLAPSE, "one closing row for alpha, its archived rows included");
@@ -1125,15 +1125,15 @@ mod tests {
         // a click on an archived row is a click on its row: its history
         assert_eq!(click(&mut view, 3, 5), Effect::Run(Action::History(sid("l-old"))));
         assert_eq!(click(&mut view, 3, 6), Effect::Run(Action::History(sid("f-blocked"))));
-        assert_eq!(drawn(&mut view, 44, 22), rows, "a click on an archived row changes nothing");
+        assert_eq!(drawn(&mut view, 44, 23), rows, "a click on an archived row changes nothing");
         // the closing row folds the archived rows only: the live ones stay
         assert_eq!(click(&mut view, 3, 7), Effect::None);
-        let rows = drawn(&mut view, 44, 22);
+        let rows = drawn(&mut view, 44, 23);
         assert_eq!((rows[4].as_str(), rows[5].as_str(), rows[6].as_str(), rows[7].as_str()), (format!(" ├─{IDLE} ship·f-id").as_str(), EXPAND, "", format!(" ╭{NEEDS_YOU} beta").as_str()));
         assert!(!rows.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "{rows:?}");
         // an archived Context unfolds at its own closing row
         assert_eq!(click(&mut view, 1, 14), Effect::None);
-        let rows = drawn(&mut view, 44, 22);
+        let rows = drawn(&mut view, 44, 23);
         assert_eq!((rows[13].as_str(), rows[16].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), COLLAPSE), "{rows:?}");
     }
 
@@ -1208,28 +1208,28 @@ mod tests {
     #[test]
     fn a_click_below_the_last_row_does_nothing() {
         let mut view = View::new(archived(), true);
-        let rows = drawn(&mut view, 44, 22);
+        let rows = drawn(&mut view, 44, 23);
         assert_eq!(rows[16], EXPAND);
         assert_eq!(click(&mut view, 1, 17), Effect::None, "the row right below the last");
         assert_eq!(click(&mut view, 3, 18), Effect::None);
-        assert_eq!(drawn(&mut view, 44, 22), rows);
+        assert_eq!(drawn(&mut view, 44, 23), rows);
         let _ = right_click(&mut view, 1, 17);
-        assert_eq!(drawn(&mut view, 44, 22).len(), rows.len());
-        assert_eq!(drawn(&mut view, 44, 22)[16], EXPAND, "only the left button clicks, and no row was hit");
+        assert_eq!(drawn(&mut view, 44, 23).len(), rows.len());
+        assert_eq!(drawn(&mut view, 44, 23)[16], EXPAND, "only the left button clicks, and no row was hit");
     }
 
     #[test]
     fn a_click_on_an_archived_session_shows_its_history_and_enter_n_and_x_never_act_on_one() {
         let mut view = View::new(archived(), true);
-        drawn(&mut view, 44, 22);
+        drawn(&mut view, 44, 23);
         click(&mut view, 1, 16);
-        let rows = drawn(&mut view, 44, 22);
+        let rows = drawn(&mut view, 44, 23);
         assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
         // the archived Plan (its Lead), the archived fork of a live Plan, the Plan of the archived Context and its
         // fork: each shows the history of its Session
         for ((column, row), id) in [((8, 5), "l-old"), ((8, 6), "f-blocked"), ((8, 16), "l-zp"), ((8, 17), "f-zp")] {
             assert_eq!(click(&mut view, column, row), Effect::Run(Action::History(sid(id))), "({column}, {row})");
-            assert_eq!(drawn(&mut view, 44, 22), rows, "({column}, {row}) changes nothing");
+            assert_eq!(drawn(&mut view, 44, 23), rows, "({column}, {row}) changes nothing");
         }
         // the archived Context's title does nothing
         assert_eq!(click(&mut view, 5, 15), Effect::None);
@@ -1310,9 +1310,9 @@ mod tests {
         }
         // the closing rows have none, the empty area has one
         drawn(&mut view, 44, 24);
-        for (column, row) in [(3, 7), (3, 13), (3, 18), (1, 20)] {
+        for (column, row) in [(3, 7), (3, 13), (3, 18), (1, 19)] {
             let _ = right_click(&mut view, column, row);
-            assert_eq!(view.menu.is_some(), row == 20, "({column}, {row}): a closing row has none, the empty area has one");
+            assert_eq!(view.menu.is_some(), row == 19, "({column}, {row}): a closing row has none, the empty area has one");
             view.menu = None;
         }
     }
@@ -1326,7 +1326,7 @@ mod tests {
         assert_eq!(rows[5], format!(" ├─{IDLE} shi┌─────────┐"), "{rows:?}");
         assert_eq!(rows[6], format!(" ╰─{NEEDS_YOU} shi│ Open    │"));
         assert_eq!(rows[7], "        │ Rename… │", "drawn over the tree, an empty row too: {rows:?}");
-        assert_eq!(rows[12], " ╰─     └─────────┘");
+        assert_eq!(rows[12], "        └─────────┘", "over the empty row below the tree");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
             terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -1339,9 +1339,10 @@ mod tests {
         right_click(&mut view, 43, 15);
         let rows = drawn(&mut view, 44, 16);
         let box_row = |left: char, fill: &str, right: char| format!("{}{left}{fill}{right}", " ".repeat(27));
-        assert_eq!((rows[13].clone(), rows[15].clone()), (box_row('┌', &"─".repeat(14), '┐'), box_row('└', &"─".repeat(14), '┘')));
-        // the menu is drawn over the Inbox title, which shows to its left
-        assert!(rows[14].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[14].ends_with("│ New Context… │"), "{rows:?}");
+        assert_eq!((rows[13].ends_with(&box_row('┌', &"─".repeat(14), '┐')[27..]), rows[15].clone()), (true, box_row('└', &"─".repeat(14), '┘')));
+        // the menu is drawn over the Inbox title and its closing row, which show to its left
+        assert!(rows[13].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "{rows:?}");
+        assert!(rows[14].starts_with(" ╰\u{F005A} up to date") && rows[14].ends_with("│ New Context… │"), "{rows:?}");
     }
 
     #[test]
@@ -1891,10 +1892,13 @@ mod tests {
         y as u16
     }
 
-    /// An item row at 43 columns: the margin, the fold's `│`, a space, the icon, a space, the label, the age ending at the last column of the inner area.
-    fn item_row(label: &str, age: &str) -> String {
-        format!(" │ {NEEDS_YOU} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
+    /// An item row at 43 columns: the margin, the fold's `│`, two spaces, the tier glyph, a space, the label, the age ending at the last column of the inner area.
+    fn item_row(glyph: &str, label: &str, age: &str) -> String {
+        format!(" │  {glyph} {label}{}{age}", " ".repeat(41 - 5 - label.chars().count() - age.chars().count()))
     }
+
+    /// The empty Inbox's one closing row (hs-d487): the margin, `╰`, U+F005A, the words.
+    const EMPTY_CLOSE: &str = " ╰\u{F005A} up to date, drink some water";
 
     /// A scroll cue row at 43 columns: the margin, the fold's `│`, the cue right-aligned.
     fn cue_row(arrow: char, n: usize) -> String {
@@ -1907,13 +1911,24 @@ mod tests {
     }
 
     #[test]
+    fn with_no_item_the_section_is_its_header_pinned_to_the_bottom() {
+        let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
+        let title = rows.iter().position(|r| *r == header(0)).expect("the title row with count 0");
+        assert_eq!(rows.get(title + 1).map(String::as_str), Some(EMPTY_CLOSE), "hs-d487: the one closing row follows the title");
+        assert_eq!(rows[title - 1], "", "the empty row above the title");
+        assert_eq!(rows[title + 2], "", "the empty row below the closing row");
+        assert_eq!(rows.len(), title + 3, "and it is the last: no row below it");
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"), "the tree above is where it was");
+    }
+
+    #[test]
     fn three_items_are_three_rows_with_the_age_at_the_right_edge_and_a_plain_close() {
         let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 16));
         assert_eq!(rows[9], "", "the empty row above the title");
         assert_eq!(rows[10], header(3));
-        assert_eq!(rows[11], item_row("f-blocked: Worker question", "42s"));
-        assert_eq!(rows[12], item_row("acme/api#12 checks failed", "5m"));
-        assert_eq!(rows[13], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[11], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
+        assert_eq!(rows[12], item_row(palette::TIER_RED, "acme/api#12 checks failed", "5m"));
+        assert_eq!(rows[13], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[14], " ╰─", "nothing to fold");
         assert_eq!(rows[15], "", "the empty row below the section");
         assert_eq!(rows[11].chars().count(), 42, "the age ends in column 41, the last of the inner area");
@@ -1926,14 +1941,14 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 22));
         assert_eq!(rows[15], "", "the empty row above the title");
         assert_eq!(rows[16], header(5));
-        assert_eq!(rows[19], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[19], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[20], EXPAND);
         assert_eq!(click(&mut view, 20, 20), Effect::None, "a view-state change: no command");
         let rows = text_rows(&draw_now(&mut view, 43, 22));
         assert_eq!(rows[13], "", "the empty row above the title");
         assert_eq!(rows[14], header(5));
-        assert_eq!(rows[18], item_row("engine: store busy", "2d"));
-        assert_eq!(rows[19], item_row("ship lead has a reply", "10m"));
+        assert_eq!(rows[18], item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"));
+        assert_eq!(rows[19], item_row(palette::TIER_WHITE, "ship lead has a reply", "10m"));
         assert_eq!(rows[20], COLLAPSE);
         assert_eq!(click(&mut view, 3, 20), Effect::None);
         let rows = text_rows(&draw_now(&mut view, 43, 22));
@@ -1985,12 +2000,12 @@ mod tests {
         let mut view = with_inbox(1);
         view.tree.inbox[0].label = "f-blocked: a very long question that cannot fit the row".into();
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        let label = "f-blocked: a very long question …"; // 41 - 4 (`│`, a space, the icon, a space) - 1 (space) - 3 (age) = 33 columns
-        assert_eq!(label.chars().count(), 33);
-        assert_eq!(rows[13], format!(" │ {NEEDS_YOU} {label} 42s"));
-        view.tree.inbox[0].label = "x".repeat(33);
+        let label = "f-blocked: a very long question…"; // 41 - 5 (`│`, two spaces, the glyph, a space) - 1 (space) - 3 (age) = 32 columns
+        assert_eq!(label.chars().count(), 32);
+        assert_eq!(rows[13], format!(" │  {} {label} 42s", palette::TIER_RED));
+        view.tree.inbox[0].label = "x".repeat(32);
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[13], format!(" │ {NEEDS_YOU} {} 42s", "x".repeat(33)), "a label that fits is not cut");
+        assert_eq!(rows[13], format!(" │  {} {} 42s", palette::TIER_RED, "x".repeat(32)), "a label that fits is not cut");
     }
 
     #[test]
@@ -2010,15 +2025,15 @@ mod tests {
     }
 
     #[test]
-    fn the_item_rows_keep_their_icon_in_its_colour_a_muted_branch_and_a_grey_age() {
+    fn the_item_rows_keep_their_tier_glyph_in_its_colour_a_muted_branch_and_a_grey_age() {
         let buf = draw_now(&mut with_inbox(5), 43, 16);
         let rows = text_rows(&buf);
         let muted = palette::color(palette::Meaning::Nothing);
-        for (y, colour) in [(11, palette::Meaning::Failed), (12, palette::Meaning::Failed), (13, palette::Meaning::Review)].map(|(y, m)| (y, palette::color(m))) {
-            assert!(rows[y].starts_with(&format!(" │ {NEEDS_YOU} ")), "the icon in row {y}: {rows:?}");
+        for (y, glyph, colour) in [(11, palette::TIER_RED, palette::Meaning::Failed), (12, palette::TIER_RED, palette::Meaning::Failed), (13, palette::TIER_YELLOW, palette::Meaning::Review)].map(|(y, g, m)| (y, g, palette::color(m))) {
+            assert!(rows[y].starts_with(&format!(" │  {glyph} ")), "the glyph in row {y}: {rows:?}");
             assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted), "the branch of row {y}");
-            assert_eq!((buf[(3, y as u16)].symbol(), buf[(3, y as u16)].fg), (NEEDS_YOU, colour), "the icon of row {y}");
-            assert_ne!(buf[(5, y as u16)].fg, muted, "the label of row {y} is not muted");
+            assert_eq!((buf[(4, y as u16)].symbol(), buf[(4, y as u16)].fg), (glyph, colour), "the glyph of row {y}");
+            assert_ne!(buf[(6, y as u16)].fg, muted, "the label of row {y} is not muted");
         }
         assert_eq!(buf[(40, 11)].fg, muted, "the age");
     }
@@ -2818,9 +2833,11 @@ mod tests {
     #[test]
     fn with_no_item_the_section_is_an_empty_row_the_title_and_an_empty_row_pinned_to_the_bottom() {
         let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
-        assert_eq!(rows[13], "", "the empty row above the title");
-        assert_eq!(rows[14], header(0));
-        assert_eq!(rows[15], "", "the empty row below it");
+        let title = rows.iter().position(|r| *r == header(0)).expect("the title row with count 0");
+        assert_eq!(rows[title - 1], "", "the empty row above the title");
+        assert_eq!(rows.get(title + 1).map(String::as_str), Some(EMPTY_CLOSE), "hs-d487: the one closing row follows the title");
+        assert_eq!(rows.get(title + 2).map(String::as_str), Some(""), "the empty row below it");
+        assert_eq!(rows.len(), title + 3, "pinned to the bottom");
     }
 
     #[test]
@@ -2828,8 +2845,8 @@ mod tests {
         let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 22));
         assert_eq!(rows[15], "", "the empty row above the title");
         assert_eq!(rows[16], header(3));
-        assert_eq!(rows[17], item_row("f-blocked: Worker question", "42s"));
-        assert_eq!(rows[19], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[17], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
+        assert_eq!(rows[19], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[20], " ╰─", "nothing to fold");
         assert_eq!(rows[21], "", "the empty row below the section");
     }
@@ -2842,8 +2859,8 @@ mod tests {
         assert_eq!(rows[12], " ╰─");
         assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
         assert_eq!(rows[14], header(5));
-        assert_eq!(rows[15], item_row("f-blocked: Worker question", "42s"));
-        assert_eq!(rows[17], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[15], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
+        assert_eq!(rows[17], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[18], EXPAND);
         assert_eq!(rows[19], "", "the empty row below the section");
     }
@@ -2857,7 +2874,7 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 22));
         assert_eq!(rows[13], "");
         assert_eq!(rows[14], header(5));
-        assert_eq!(rows[19], item_row("ship lead has a reply", "10m"));
+        assert_eq!(rows[19], item_row(palette::TIER_WHITE, "ship lead has a reply", "10m"));
         assert_eq!(rows[20], COLLAPSE);
         assert_eq!(rows[21], "");
     }

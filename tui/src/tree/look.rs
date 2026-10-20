@@ -218,9 +218,9 @@ fn pill(inner: usize, count: usize) -> String {
     format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{CAP_LEFT}{count}{CAP_RIGHT}", "─".repeat(inner - 2 - 7 - (count.to_string().len() + 2)))
 }
 
-/// An item row at 41 inner columns: `│`, a space, the icon, a space, the label, the age at the last column.
-fn item_row(label: &str, age: &str) -> String {
-    format!(" │ {NEEDS_YOU} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
+/// An item row at 41 inner columns: `│`, two spaces, the tier glyph, a space, the label, the age at the last column.
+fn item_row(glyph: &str, label: &str, age: &str) -> String {
+    format!(" │  {glyph} {label}{}{age}", " ".repeat(41 - 5 - label.chars().count() - age.chars().count()))
 }
 
 #[test]
@@ -230,9 +230,9 @@ fn the_inbox_title_is_the_pill_under_one_empty_row_and_the_rows_follow_at_once()
     let want = [
         String::new(),
         pill(41, 3),
-        item_row("f-blocked: Worker question", "42s"),
-        item_row("ship: Job c is stuck", "3h"),
-        item_row("engine: store busy", "2d"),
+        item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"),
+        item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"),
+        item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"),
         " ╰─".to_owned(),
         String::new(),
     ];
@@ -253,7 +253,7 @@ fn the_empty_row_above_the_inbox_title_is_never_a_tree_row_in_a_short_pane() {
 fn with_no_item_the_section_is_the_empty_row_and_the_pill_with_a_zero() {
     let mut view = with_inbox(Vec::new());
     let got = rows(&draw(&mut view, 43, 16));
-    assert_eq!(&got[13..], [String::new(), pill(41, 0), String::new()], "{got:#?}");
+    assert_eq!(&got[12..], [String::new(), pill(41, 0), " ╰\u{F005A} up to date, drink some water".to_owned(), String::new()], "the empty row, the pill with a zero, the closing row, the empty row: {got:#?}");
 }
 
 #[test]
@@ -269,48 +269,20 @@ fn the_pill_is_grey_the_caps_and_lines_muted_and_the_text_inverted() {
 }
 
 #[test]
-fn an_item_row_keeps_its_icon_in_its_urgency_colour_between_the_muted_line_and_the_text() {
-    let mut view = with_inbox(inbox_items(4));
-    let buf = draw(&mut view, 43, 24);
-    let got = rows(&buf);
-    let first = find(&got, "f-blocked: Worker") as u16;
-    for (i, colour) in [Meaning::Failed, Meaning::Review, Meaning::Planning].map(palette::color).into_iter().enumerate() {
-        let y = first + i as u16;
-        assert_eq!((buf[(1, y)].symbol(), buf[(1, y)].fg), ("│", muted()), "row {y}: the line");
-        assert_eq!(buf[(2, y)].symbol(), " ");
-        assert_eq!((buf[(3, y)].symbol(), buf[(3, y)].fg), (NEEDS_YOU, colour), "row {y}: the icon in its colour");
-        assert_eq!(buf[(4, y)].symbol(), " ");
-        assert_ne!(buf[(5, y)].fg, muted(), "row {y}: the text is not muted");
-        assert_eq!(buf[(40, y)].fg, muted(), "row {y}: the age");
-    }
-    assert_eq!(got[first as usize], item_row("f-blocked: Worker question", "42s"));
-}
-
-#[test]
-fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_icon() {
-    let mut items = inbox_items(1);
-    items[0].label = "x".repeat(60);
-    let mut view = with_inbox(items);
-    let got = rows(&draw(&mut view, 43, 24));
-    // 41 columns: `│`, a space, the icon and a space (4), the label, a space, `42s` (3): 33 for the label
-    assert_eq!(got[find(&got, "xxx")], format!(" │ {NEEDS_YOU} {}… 42s", "x".repeat(32)));
-}
-
-#[test]
 fn four_items_show_three_and_the_down_arrow_a_click_expands_to_the_up_arrow_and_folds_again() {
     let mut view = with_inbox(inbox_items(4));
     let buf = draw(&mut view, 43, 24);
     let got = rows(&buf);
     assert_eq!(got[got.len() - 2], format!(" ╰{DOWN} expand"), "{got:#?}");
     assert_eq!(got[got.len() - 1], "", "the empty row below the closing row");
-    assert_eq!(got[got.len() - 5], item_row("f-blocked: Worker question", "42s"));
-    assert_eq!(got[got.len() - 3], item_row("engine: store busy", "2d"), "the third is the last shown");
+    assert_eq!(got[got.len() - 5], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
+    assert_eq!(got[got.len() - 3], item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"), "the third is the last shown");
     assert!(!got.iter().any(|r| r.contains("ship lead has a reply")), "the fourth is behind the toggle: {got:#?}");
     is_muted_line(&buf, 22, 1, 12);
     assert_eq!(click(&mut view, 3, 22), Effect::None, "view state only");
     let got = rows(&draw(&mut view, 43, 24));
     assert_eq!(got[got.len() - 2], format!(" ╰{UP} collapse"), "{got:#?}");
-    assert_eq!(got[got.len() - 3], item_row("ship lead has a reply", "10m"), "the fourth row is shown, at the bottom");
+    assert_eq!(got[got.len() - 3], item_row(palette::TIER_WHITE, "ship lead has a reply", "10m"), "the fourth row is shown, at the bottom");
     assert_eq!(click(&mut view, 3, 22), Effect::None);
     assert_eq!(rows(&draw(&mut view, 43, 24))[22], format!(" ╰{DOWN} expand"), "folded again");
 }
@@ -384,4 +356,92 @@ fn a_scrolled_inbox_has_both_cues_right_aligned_and_every_row_of_the_block_keeps
         assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted()), "row {y} keeps the line: {:?}", got[y]);
     }
     assert_eq!(got[close], format!(" ╰{UP} collapse"), "the closing row stays in view");
+}
+
+// ---------- the Inbox's tier glyphs (hs-d483): red until the rows draw them ----------
+
+/// The four tiers, red to white (the order of `cpd inbox list`): urgency, glyph (code point, never a copied glyph) and the
+/// colour of its urgency, through the palette.
+fn tiers() -> [(Urgency, &'static str, Color); 4] {
+    [
+        (Urgency::Red, "\u{F0362}", palette::color(Meaning::Failed)),
+        (Urgency::Yellow, "\u{F069A}", palette::color(Meaning::Review)),
+        (Urgency::Magenta, "\u{F173A}", palette::color(Meaning::Planning)),
+        (Urgency::White, "\u{F0366}", palette::color(Meaning::NotStarted)),
+    ]
+}
+
+/// A view whose Inbox holds the one item `kind` and `urgency`, drawn in 43 columns: its buffer and the row of its label.
+fn one_item(kind: Kind, urgency: Urgency) -> (Buffer, u16) {
+    let mut view = with_inbox(vec![item(1, kind, urgency, "the label", "2026-01-02T23:59:18.000Z")]);
+    let buf = draw(&mut view, 43, 24);
+    let y = find(&rows(&buf), "the label") as u16;
+    (buf, y)
+}
+
+#[test]
+fn an_item_row_is_the_muted_line_two_spaces_its_tier_glyph_in_its_colour_a_space_and_the_text() {
+    for (urgency, glyph, colour) in tiers() {
+        let (buf, y) = one_item(Kind::Unread, urgency);
+        assert_eq!((buf[(1, y)].symbol(), buf[(1, y)].fg), ("│", muted()), "{urgency:?}: the line");
+        assert_eq!((buf[(4, y)].symbol(), buf[(4, y)].fg), (glyph, colour), "{urgency:?}: the tier glyph in its colour");
+        assert_eq!((buf[(2, y)].symbol(), buf[(3, y)].symbol()), (" ", " "), "{urgency:?}: two spaces after the line");
+        assert_eq!(buf[(5, y)].symbol(), " ", "{urgency:?}");
+        assert_eq!(buf[(6, y)].symbol(), "t", "{urgency:?}: the text starts at column 6");
+        assert_ne!(buf[(6, y)].fg, muted(), "{urgency:?}: the text is not muted");
+        assert_eq!(buf[(40, y)].fg, muted(), "{urgency:?}: the age");
+        assert_eq!(rows(&buf)[y as usize], format!(" │  {glyph} the label{}42s", " ".repeat(41 - 5 - "the label".len() - 3)), "{urgency:?}");
+    }
+}
+
+#[test]
+fn the_glyph_is_its_urgencys_never_its_kinds() {
+    let kinds = [
+        Kind::Dialog,
+        Kind::Unread,
+        Kind::EngineError,
+        Kind::EngineDown,
+        Kind::JobStuck,
+        Kind::Question,
+        Kind::PlanReview,
+        Kind::PrReady,
+        Kind::PrFailing,
+        Kind::PrChanges,
+        Kind::ReviewRequested,
+    ];
+    for (urgency, glyph, colour) in tiers() {
+        for kind in kinds {
+            let (buf, y) = one_item(kind, urgency);
+            assert_eq!((buf[(4, y)].symbol(), buf[(4, y)].fg), (glyph, colour), "{kind:?} at {urgency:?}");
+        }
+    }
+}
+
+#[test]
+fn no_inbox_row_draws_a_state_dot() {
+    let items = inbox_items(4);
+    let mut view = with_inbox(items);
+    let got = rows(&draw(&mut view, 43, 24));
+    let section = &got[find(&got, "f-blocked: Worker question")..find(&got, "engine: store busy") + 1];
+    assert_eq!(section.len(), 3, "{got:#?}");
+    for row in section {
+        for frame in SPINNER {
+            assert!(!row.contains(frame), "{frame:?} is a state dot, reserved for the Context tree: {row:?}");
+        }
+    }
+    for (urgency, _, _) in tiers() {
+        let (buf, y) = one_item(Kind::Dialog, urgency);
+        let row = &rows(&buf)[y as usize];
+        assert!(SPINNER.iter().all(|frame| !row.contains(frame)), "{urgency:?}: {row:?}");
+    }
+}
+
+#[test]
+fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_tier_glyph() {
+    let mut items = inbox_items(1);
+    items[0].label = "x".repeat(60);
+    let mut view = with_inbox(items);
+    let got = rows(&draw(&mut view, 43, 24));
+    // 41 columns: `│`, two spaces, the glyph and a space (5), the label, a space, `42s` (3): 32 for the label
+    assert_eq!(got[find(&got, "xxx")], format!(" │  \u{F0362} {}… 42s", "x".repeat(31)));
 }

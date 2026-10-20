@@ -1,7 +1,7 @@
 //! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
 //! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
-//! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│ <icon> <label>` (each keeps
-//! its icon and colour) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
+//! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│  <glyph> <label>` (each with
+//! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
 //! the muted `╰󰁋 expand` that expands the list inline and becomes `╰󰁣 collapse`, with fewer a plain `╰─`, with none no
 //! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
 //! column's split gives it (the tree has two thirds, hs-d307; `View::draw_at`) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
@@ -28,7 +28,6 @@ use crate::palette::{self, Meaning};
 use crate::read::Tree;
 use crate::section;
 use crate::dialog::scroll::{Cue, cue};
-use crate::read::Dot;
 use crate::widgets::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
@@ -36,8 +35,8 @@ use cpd_core::inbox::model::{Item, Kind};
 /// How many item rows the section shows before the `╰󰁋 expand` row.
 pub const SHOWN: usize = 3;
 
-/// The columns before the label: the fold's `│`, a space, the item's icon and a space.
-const LEAD_WIDTH: usize = 4;
+/// The columns before the label: the fold's `│`, two spaces, the item's tier glyph and a space.
+const LEAD_WIDTH: usize = 5;
 
 /// The rows above the items: the empty row (hs-d346) and the title.
 const TOP: usize = 2;
@@ -91,15 +90,11 @@ impl Shape {
         self.count > SHOWN
     }
 
-    /// The section ends in a closing row: the toggle, or a plain `╰─` when there is nothing to fold. None with no item.
-    fn has_close(self) -> bool {
-        self.count > 0
-    }
-
-    /// The rows the section wants: the empty row, the title, the items, the closing row and the empty row below;
-    /// expanded, at most the cap, but not less than collapsed.
+    /// The rows the section wants: the empty row, the title, the items, the closing row (the toggle, a plain `╰─`, or
+    /// with no item the up-to-date row, hs-d487) and the empty row below; expanded, at most the cap, but not less than
+    /// collapsed.
     pub fn height(self) -> u16 {
-        let close = usize::from(self.has_close());
+        let close = 1;
         let collapsed = TOP + self.count.min(SHOWN) + close + BOTTOM;
         let full = TOP + self.count + close + BOTTOM;
         let height = if self.expanded { full.min(usize::from(self.cap)).max(collapsed) } else { collapsed };
@@ -108,7 +103,7 @@ impl Shape {
 
     /// The rows between the title and the closing row: the items and their cues.
     fn list_rows(self) -> usize {
-        usize::from(self.height()) - TOP - usize::from(self.has_close()) - BOTTOM
+        usize::from(self.height()) - TOP - 1 - BOTTOM
     }
 
     /// The items drawn and the cues: all of the first three when collapsed, else the window at the scroll offset.
@@ -237,7 +232,7 @@ fn is_link(kind: Kind) -> bool {
     matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::ReviewRequested)
 }
 
-/// An item's row: the fold's muted `│`, a space, the item's icon in its urgency's colour, a space, the label cut with
+/// An item's row: the fold's muted `│`, two spaces, the item's tier glyph in its urgency's colour, a space, the label cut with
 /// `…` so that it never reaches the age, and the age. Returns the line and the number of cells of the label.
 fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
     let room = width.saturating_sub(LEAD_WIDTH + 1 + age.chars().count());
@@ -245,8 +240,8 @@ fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
     let label_width = label.chars().count();
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
     let line = fold::content(fold::BRANCH, Line::from(vec![
-        " ".into(),
-        palette::dot_span(Dot::from(item.urgency), 0, false),
+        "  ".into(),
+        palette::tier_span(item.urgency),
         " ".into(),
         label.into(),
         " ".repeat(gap).into(),
@@ -297,8 +292,9 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
             None if win.below > 0 && at == TOP + list - 1 => {
                 f.render_widget(Paragraph::new(cue_line(Cue::Below, win.below, width)), row);
             }
-            None if shape.has_close() && at == TOP + list => {
-                f.render_widget(Paragraph::new(fold::plain()), row);
+            None if at == TOP + list => {
+                let close = if items.is_empty() { fold::done("up to date, drink some water") } else { fold::plain() };
+                f.render_widget(Paragraph::new(close), row);
             }
             None => {}
         }
@@ -539,7 +535,7 @@ mod tests {
             .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
             .collect();
         let text = printed(&bytes);
-        assert!(text.contains(&format!("│{}{pieces}3m", palette::NEEDS_YOU)), "the branch, the icon (the spaces around it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
+        assert!(text.contains(&format!("│{}{pieces}3m", palette::TIER_RED)), "the branch, the icon (the spaces around it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
         assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead (branch and icon) or the age");
         // an item with no url, or of a kind that jumps, has no link
         let sink = Sink::default();
@@ -563,7 +559,7 @@ mod tests {
             let shape = Shape::new(count, expanded);
             (0..shape.height()).map(|r| shape.hit(r)).collect::<Vec<_>>()
         };
-        assert_eq!(rows(0, false), [None, Some(Hit::Header), None], "no item: the title between its two empty rows");
+        assert_eq!(rows(0, false), [None, Some(Hit::Header), None, None], "no item: the up-to-date closing row (no hit, hs-d487), then the empty row");
         assert_eq!(rows(2, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None, None], "a plain closing row, then the empty row");
         assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
         assert_eq!(rows(5, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
@@ -571,7 +567,7 @@ mod tests {
             rows(5, true),
             [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle), None]
         );
-        assert_eq!((Shape::new(0, false).height(), Shape::new(3, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (3, 7, 7, 9));
+        assert_eq!((Shape::new(0, false).height(), Shape::new(3, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (4, 7, 7, 9));
     }
 
     #[test]
@@ -582,5 +578,28 @@ mod tests {
         let bottom = Shape::new(50, true).capped(20);
         assert_eq!(bottom.hit(18), Some(Hit::Toggle), "the closing row is the last but one");
         assert_eq!(bottom.hit(19), None, "and the last is the empty row");
+    }
+
+    // ---- the empty Inbox (hs-d487): the title with count 0, then one muted closing row, no toggle ----
+
+    #[test]
+    fn with_no_item_the_section_is_the_title_with_count_0_then_the_one_closing_row_and_it_is_no_click() {
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(41, 6)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"))).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row = |y: u16| (0..41).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
+        let title = format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(39 - 2 - 2 - "Inbox".len() - 3));
+        let close = " ╰\u{F005A} up to date, drink some water";
+        let rows: Vec<String> = (0..6).map(row).collect();
+        assert_eq!(rows[..3], ["".to_owned(), title, close.to_owned()], "the empty row, the title with count 0, the closing row: {rows:?}");
+        assert!(rows[3..].iter().all(String::is_empty), "no other row: {rows:?}");
+        let muted = palette::fg(Meaning::Nothing).fg.unwrap();
+        for x in 1..close.chars().count() as u16 {
+            assert_eq!(buffer[(x, 2)].fg, muted, "cell {x} of the closing row is muted");
+        }
+        for y in 0..4 {
+            assert_eq!(Shape::new(0, false).hit(y), if y == 1 { Some(Hit::Header) } else { None }, "row {y}: only the title is a hit, the closing row is no toggle");
+        }
     }
 }
