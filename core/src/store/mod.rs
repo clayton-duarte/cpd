@@ -28,7 +28,7 @@ use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 
-use lock::{SetupLock, setup_lock};
+use lock::{MIGRATION_SETTLE_MS, SetupLock, setup_lock};
 pub use lock::MIGRATION_WAIT_CEILING;
 use schema::{LEGACY, Named};
 pub use schema::{SCHEMA_HASH, VERSION, canonical_hash};
@@ -201,9 +201,13 @@ impl Store {
     fn open_with(home: &CpdHome, busy_ms: u64, catalog: &Catalog<'_>) -> Result<Store, CpdError> {
         let path = home.db();
         let setup = setup_lock(home, busy_ms)?;
-        let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
+        // An opener that waited out a migration may meet its holder still finishing (closing its connection, which
+        // checkpoints): its own setup waits for SQLite at least `MIGRATION_SETTLE_MS`, whatever `busy_ms` (§4.2).
+        let setup_ms = if setup.waited_for_migration() { busy_ms.max(MIGRATION_SETTLE_MS) } else { busy_ms };
+        let mut store = Store::connect(&path, busy_ms, setup_ms).map_err(|e| enrich(e, &path, busy_ms))?;
         store.migrate(home, catalog, &setup).map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
+        store.conn.busy_timeout(Duration::from_millis(busy_ms)).map_err(|e| enrich(e.into(), &path, busy_ms))?;
         store.schema = schema_mismatch(&store.conn, home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         Ok(store)
     }
@@ -228,7 +232,9 @@ impl Store {
         self.persist = Some(persist);
     }
 
-    fn connect(path: &Path, busy_ms: u64) -> Result<Store, CpdError> {
+    /// `setup_ms` is the connection's busy timeout until the caller sets it back to `busy_ms` (the setup's, see
+    /// [`MIGRATION_SETTLE_MS`]).
+    fn connect(path: &Path, busy_ms: u64, setup_ms: u64) -> Result<Store, CpdError> {
         let conn = Connection::open(path)?;
         let txn = Arc::new(AtomicI64::new(0));
         let current = Arc::clone(&txn);
@@ -241,7 +247,7 @@ impl Store {
                 id => Ok(id),
             }
         })?;
-        conn.busy_timeout(Duration::from_millis(busy_ms))?;
+        conn.busy_timeout(Duration::from_millis(setup_ms))?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
 
@@ -948,7 +954,7 @@ mod tests {
         // Migration 1 cannot apply: a table `history` already exists.
         Connection::open(dir.path().join("cpd.db")).unwrap().execute_batch("CREATE TABLE history (x)").unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        let mut store = Store::connect(&dir.path().join("cpd.db"), 5000).unwrap();
+        let mut store = Store::connect(&dir.path().join("cpd.db"), 5000, 5000).unwrap();
         let setup = setup_lock(&home, 5000).unwrap();
         let err = store.migrate(&home, &Catalog::BUILT_IN, &setup).unwrap_err();
         assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
@@ -1321,7 +1327,7 @@ mod tests {
     /// Converts the store of [`big_legacy_store`] as `Store::open` does, on a connection that counts SQLite's
     /// virtual machine steps (in thousands). Returns the converted store and the steps.
     fn convert_counting_steps(home: &CpdHome) -> (Store, u64) {
-        let mut store = Store::connect(&home.db(), 5000).unwrap();
+        let mut store = Store::connect(&home.db(), 5000, 5000).unwrap();
         let steps = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let counter = Arc::clone(&steps);
         store
