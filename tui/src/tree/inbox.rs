@@ -1,7 +1,7 @@
 //! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a title
-//! `┯━━ Inbox ━━━…━━ <n> ━━`, up to [`SHOWN`] item rows `<dot> <label>` with the age right-aligned, and, with more items, the fold
-//! widget's muted `└ expand` row (`crate::fold`) that expands the list inline and becomes `└ collapse`. Only that row
-//! toggles. Whether it is expanded is view state only. Expanded, it is
+//! `┯━━ Inbox ━━━…━━ <n> ━━`, up to [`SHOWN`] item rows `│  <label>` (no dots) with the age right-aligned, and, with more
+//! items, the fold widget's muted `╰─ expand` row (`crate::fold`) that expands the list inline and becomes `╰─ collapse`.
+//! Only that row toggles. Whether it is expanded is view state only. Expanded, it is
 //! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
 //!
 //! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, or the copy of its
@@ -21,17 +21,17 @@ use super::rows::truncate;
 use crate::fold;
 use crate::link::link;
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, Tree};
+use crate::read::Tree;
 use crate::section;
 use crate::widgets::{Window, dim, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 
-/// How many item rows the section shows before the `└ expand` row.
+/// How many item rows the section shows before the `╰─ expand` row.
 pub const SHOWN: usize = 3;
 
-/// The dot and a space before the label.
-const DOT_WIDTH: usize = 2;
+/// The columns before the label: the fold's `│` and two spaces.
+const LEAD_WIDTH: usize = 3;
 
 /// What a row of the section is, by its offset from the header's row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub enum Hit {
     Header,
     /// The item at this index of the snapshot's Inbox.
     Item(usize),
-    /// `└ expand` or `└ collapse`.
+    /// `╰─ expand` or `╰─ collapse`.
     Toggle,
 }
 
@@ -208,27 +208,26 @@ fn is_link(kind: Kind) -> bool {
     matches!(kind, Kind::PlanReview | Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested)
 }
 
-/// An item's row text: `<dot> <label>`, the label cut with `…` so that it never reaches the age, and the age. Returns the
-/// line and the number of cells of the label.
-fn item_line(item: &Item, age: &str, width: usize, frame: usize) -> (Line<'static>, usize) {
-    let room = width.saturating_sub(DOT_WIDTH + 1 + age.chars().count());
+/// An item's row: the fold's muted `│`, two spaces, the label cut with `…` so that it never reaches the age, and the
+/// age. Returns the line and the number of cells of the label.
+fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
+    let room = width.saturating_sub(LEAD_WIDTH + 1 + age.chars().count());
     let label = truncate(&item.label, room);
     let label_width = label.chars().count();
-    let gap = width.saturating_sub(DOT_WIDTH + label_width + age.chars().count());
-    let line = Line::from(vec![
-        palette::dot_span(Dot::from(item.urgency), frame, false),
-        " ".into(),
+    let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
+    let line = fold::content(fold::BRANCH, Line::from(vec![
+        "  ".into(),
         label.into(),
         " ".repeat(gap).into(),
         Span::styled(age.to_owned(), palette::fg(Meaning::Nothing)),
-    ]);
+    ]));
     (line, label_width)
 }
 
 /// Draws the section into `area` (its first row is the header; rows that do not fit are cut): `items` are the
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
 /// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled.
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, frame: usize) {
+pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime) {
     let win = shape.window();
     let list = usize::from(shape.height()) - 1 - usize::from(shape.has_toggle());
     for dy in 0..area.height.min(shape.height()) {
@@ -239,13 +238,13 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
             }
             Some(Hit::Item(i)) => {
                 let item = &items[i];
-                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), usize::from(row.width), frame);
+                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), usize::from(row.width));
                 f.render_widget(Paragraph::new(line), row);
                 if cursor == Some(i) {
                     f.buffer_mut().set_style(row, Modifier::REVERSED);
                 }
                 if let (true, Some(url)) = (is_link(item.kind), &item.url) {
-                    let label = Rect::new(row.x + DOT_WIDTH as u16, row.y, label_width as u16, 1);
+                    let label = Rect::new(row.x + LEAD_WIDTH as u16, row.y, label_width as u16, 1);
                     link(f.buffer_mut(), label, url);
                 }
             }
@@ -476,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    fn a_link_kinds_label_is_written_as_an_osc_8_link_and_its_dot_and_age_are_not() {
+    fn a_link_kinds_label_is_written_as_an_osc_8_link_and_its_lead_and_age_are_not() {
         let sink = Sink::default();
         let mut terminal = Terminal::with_options(
             CrosstermBackend::new(sink.clone()),
@@ -486,15 +485,15 @@ mod tests {
         let url = "https://github.com/acme/api/pull/12";
         let mut linked = item(1, Kind::PrFailing, Urgency::Red, "api#12 failing", OPENED);
         linked.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
         let bytes = sink.0.borrow().clone();
         let pieces: String = ["ap", "i#", "12", " f", "ai", "li", "ng"]
             .iter()
             .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
             .collect();
         let text = printed(&bytes);
-        assert!(text.contains(&format!("{}{pieces}3m", palette::NEEDS_YOU)), "the dot, the label in pieces of two cells, the age: {text:?}");
-        assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the dot or the age");
+        assert!(text.contains(&format!("│  {pieces}3m")), "the lead, the label in pieces of two cells, the age: {text:?}");
+        assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead or the age");
         // an item with no url, or of a kind that jumps, has no link
         let sink = Sink::default();
         let mut terminal = Terminal::with_options(
@@ -505,7 +504,7 @@ mod tests {
         let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
         dialog.url = Some(url.into());
         let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
-        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"), 0)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
     }
 }

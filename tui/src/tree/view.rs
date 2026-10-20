@@ -51,7 +51,7 @@ fn rename_of(row: &Row<'_>) -> Option<Question> {
         Row::Context(c) => Ask::RenameContext(c.id.clone()),
         Row::Plan(_, p) => Ask::RenamePlan(p.head.id.clone()),
         Row::Fork(_, _, s) => Ask::RenameSession(s.id.clone()),
-        Row::More | Row::Toggle => return None,
+        Row::Toggle => return None,
     };
     Some(Question::input("Rename", ask, row.label()))
 }
@@ -66,13 +66,13 @@ fn close_of(row: Row<'_>) -> Option<Result<Question, &'static str>> {
     Some(Ok(Question::close(session.id.clone(), &row.label(), session.state == State::Working)))
 }
 
-/// The object an archive command of the row names: the Context, the Plan, or the fork; none for a `…` row.
+/// The object an archive command of the row names: the Context, the Plan, or the fork; none for a toggle row.
 fn subject_of(row: &Row<'_>) -> Option<Subject> {
     match *row {
         Row::Context(c) => Some(Subject::Context(c.id.clone())),
         Row::Plan(_, p) => Some(Subject::Plan(p.head.id.clone())),
         Row::Fork(_, _, s) => Some(Subject::Session(s.id.clone())),
-        Row::More | Row::Toggle => None,
+        Row::Toggle => None,
     }
 }
 
@@ -103,7 +103,7 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (header, items, `└ collapse`) are shown, not only the first three, in at most half the
+    /// The Inbox section's rows (header, items, `╰─ collapse`) are shown, not only the first three, in at most half the
     /// column ([`View::inbox_cap`]). View state only.
     inbox_expanded: bool,
     /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
@@ -366,7 +366,7 @@ impl View {
         }
     }
 
-    /// A right click at `at`: the menu of the row there, of the empty area, or none (a `…` row).
+    /// A right click at `at`: the menu of the row there, of the empty area, or none (a toggle row).
     fn open_menu(&mut self, at: Position) {
         self.note.clear();
         let path = self.row_at(at);
@@ -429,14 +429,14 @@ impl View {
 
     /// How the archive of `row` (drawn at `path`) frees the chat slot (F3, §13.2): `Some(None)` when none of the
     /// Sessions it archives holds it. Else the next live Session in tree order (the rows as drawn, the archived ones
-    /// and the `…` rows skipped, and those the archive closes), else the previous one, else a park. `None` when the
+    /// and the toggle rows skipped, and those the archive closes), else the previous one, else a park. `None` when the
     /// row is not drawn (a snapshot took it away while the menu was open).
     fn free_for(&self, row: &Row<'_>, path: &[Id]) -> Option<Option<Free>> {
         let archiving: Vec<&SessionNode> = match *row {
             Row::Context(c) => c.plans.iter().flat_map(|p| &p.sessions).collect(),
             Row::Plan(_, p) => p.sessions.iter().collect(),
             Row::Fork(_, _, s) => vec![s],
-            Row::More | Row::Toggle => return Some(None),
+            Row::Toggle => return Some(None),
         };
         if !archiving.iter().any(|s| s.is_active()) {
             return Some(None);
@@ -484,9 +484,9 @@ impl View {
             return self.click_inbox(at.y - self.inbox_area.y);
         }
         let Some(path) = self.row_at(at) else { return Effect::None };
-        // only a toggle row (`└ expand`, `└ collapse`) folds or unfolds a Context or a `…` group; the title row keeps its
-        // own action: a live Context's row opens its Manager (B3-A6), a `…` row does nothing, a live Session row opens
-        // it and an archived one shows its history
+        // only a toggle row (`╰─ expand`, `╰─ collapse`) folds or unfolds a Context; the title row keeps its own action:
+        // a live Context's row opens its Manager (B3-A6), a live Session row opens it and an archived one shows its
+        // history
         if rows::click_toggle(&mut self.state, &self.tree, &path) {
             return Effect::None;
         }
@@ -503,7 +503,7 @@ impl View {
         }
     }
 
-    /// A left click on the Inbox section, `row` rows below its header: `└ expand` and `└ collapse` toggle the inline
+    /// A left click on the Inbox section, `row` rows below its header: `╰─ expand` and `╰─ collapse` toggle the inline
     /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
     fn click_inbox(&mut self, row: u16) -> Effect {
         match self.shape().hit(row) {
@@ -582,7 +582,7 @@ impl View {
         }
         self.inbox_area = inbox_area;
         let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
-        inbox::draw(f, inbox_area, &self.tree.inbox, self.shape(), inbox_cursor, now, frame);
+        inbox::draw(f, inbox_area, &self.tree.inbox, self.shape(), inbox_cursor, now);
         if footer_height > 0 {
             f.render_widget(Paragraph::new(footer).style(palette::note()).wrap(Wrap { trim: false }), footer_area);
         }
