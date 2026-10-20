@@ -580,8 +580,8 @@ fn the_tree_leaves_the_first_and_the_last_column_blank() {
 fn an_empty_store_says_so() {
     let env = env();
     drop(open(&env));
-    let pane = Pane::start(&env, 30, 5);
-    let header = pill(28, 0);
+    let pane = Pane::start(&env, 40, 5);
+    let header = pill(38, 0);
     let close = " ╰\u{F005A} up to date, drink some water"; // hs-d487: the empty Inbox's one closing row, below its title
     assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", header.as_str(), close], "the section is there with no item: the title (count 0), then the one closing row");
 }
