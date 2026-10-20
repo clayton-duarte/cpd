@@ -102,6 +102,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   - `env.tmux(&[…])` and `env.tmux_socket()`: a private tmux server (own `TMUX_TMPDIR` and socket name, killed when the `TestEnv` drops). Put the socket name in the test's `config.toml` as `tmux.socket`.
   - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
   - `env.command(program)`: any other program in the same environment.
+- The harness needs the `sqlite3` CLI on `PATH`: its teardown reads the env's store for the drivers' pids (the first `TestEnv::new()` panics without it).
 - Never touch the real `~/.cpd`, the tmux server `-L cpd`, pi, or the network.
 - nextest runs every test in a process of its own, so a `static` or a lock that the tests of a file share coordinates nothing there: do not write one. Never `set_var`/`remove_var` in a test (`harness.rs` fails on it): put the variable on the `Command` (`env.command(..).env(..)`), or `Tmux::with_tmpdir` for tmux. Write and copy executables with `common::write_executable`/`copy_executable` (ETXTBSY, `harness.rs` checks it). Tests that must not overlap go in a test group of `.config/nextest.toml` (`max-threads = 1`, the reason beside it).
 - A test must fail first, for the right reason.
