@@ -107,7 +107,8 @@ fn an_expanded_context_shows_its_live_rows_then_its_archived_rows_and_closes_wit
     let want = [alpha_live(), alpha_archived()].concat();
     assert_prefixes(&got, 1, &want);
     assert_eq!(got[1 + want.len()], format!(" ╰{UP} collapse"), "one closing row, the arrow and the word: {got:#?}");
-    assert!(got[2 + want.len()].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "the next Context follows at once: {got:#?}");
+    assert_eq!(got[2 + want.len()], "", "one empty row between two Contexts: {got:#?}");
+    assert!(got[3 + want.len()].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "the next Context follows: {got:#?}");
 }
 
 #[test]
@@ -137,7 +138,8 @@ fn folding_a_context_hides_only_its_archived_rows_and_the_live_ones_stay_above_t
     assert_prefixes(&got, 1, &alpha_live());
     assert_eq!(got[5], format!(" ╰{DOWN} expand"), "the live rows, then the toggle: {got:#?}");
     assert!(!got.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "the archived rows are hidden: {got:#?}");
-    assert!(got[6].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "{got:#?}");
+    assert_eq!(got[6], "", "{got:#?}");
+    assert!(got[7].starts_with(&format!(" ╭{NEEDS_YOU} beta")), "{got:#?}");
     // and the same click unfolds it
     assert_eq!(click(&mut view, 3, 5), Effect::None);
     assert_prefixes(&rows(&draw(&mut view, 44, 24)), 1, &[alpha_live(), alpha_archived()].concat());
@@ -171,21 +173,22 @@ fn an_archived_context_is_all_archived_rows_folded_it_shows_its_title_and_the_do
 }
 
 #[test]
-fn a_context_with_no_archived_rows_closes_with_a_plain_muted_corner_and_line_and_has_no_toggle() {
+fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_toggle() {
     let mut view = View::new(sample(), true);
     let buf = draw(&mut view, 44, 24);
     let got = rows(&buf);
-    // alpha (five live rows), beta (one) and gamma (none): no archived row anywhere
-    assert_eq!(got[7], " ╰─", "alpha: {got:#?}");
-    assert_eq!(got[10], " ╰─", "beta: {got:#?}");
-    assert_eq!(got[12], " ╰─", "gamma, with no row at all: {got:#?}");
+    // alpha (five live rows), beta (one) and gamma (none): no archived row anywhere, so no closing row but gamma's
+    assert!(got[6].starts_with(&format!(" ╰─{NEEDS_YOU} ship·f-bl")), "alpha's last row ends the block: {got:#?}");
+    assert!(got[9].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
+    assert_eq!(got[12], " ╰─", "gamma, with no row at all, keeps its plain closing row: {got:#?}");
     assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no word, no arrow: {got:#?}");
-    for y in [7, 10, 12] {
-        is_muted_line(&buf, y, 1, 4);
+    for y in [6, 9] {
+        is_muted_line(&buf, y, 1, 3);
     }
+    is_muted_line(&buf, 12, 1, 4);
     // nothing to fold: a click on the plain row changes nothing
-    assert_eq!(click(&mut view, 2, 7), Effect::None);
-    assert_eq!(rows(&draw(&mut view, 44, 24)), got, "alpha did not fold");
+    assert_eq!(click(&mut view, 2, 12), Effect::None);
+    assert_eq!(rows(&draw(&mut view, 44, 24)), got, "nothing folded");
 }
 
 // ---------- the Inbox section ----------
@@ -231,8 +234,9 @@ fn the_inbox_title_is_the_pill_under_one_empty_row_and_the_rows_follow_at_once()
         item_row("ship: Job c is stuck", "3h"),
         item_row("engine: store busy", "2d"),
         " ╰─".to_owned(),
+        String::new(),
     ];
-    assert_eq!(&got[got.len() - want.len()..], &want[..], "one empty row, the title, three rows, and a plain close (nothing to fold): {got:#?}");
+    assert_eq!(&got[got.len() - want.len()..], &want[..], "one empty row, the title, three rows, a plain close (nothing to fold) and one empty row: {got:#?}");
 }
 
 #[test]
@@ -249,23 +253,17 @@ fn the_empty_row_above_the_inbox_title_is_never_a_tree_row_in_a_short_pane() {
 fn with_no_item_the_section_is_the_empty_row_and_the_pill_with_a_zero() {
     let mut view = with_inbox(Vec::new());
     let got = rows(&draw(&mut view, 43, 16));
-    assert_eq!(&got[14..], [String::new(), pill(41, 0)], "{got:#?}");
+    assert_eq!(&got[13..], [String::new(), pill(41, 0), String::new()], "{got:#?}");
 }
 
 #[test]
-fn the_pill_text_is_inverted_its_lines_are_muted_and_the_caps_are_not() {
+fn the_pill_is_grey_the_caps_and_lines_muted_and_the_text_inverted() {
     let mut view = with_inbox(inbox_items(3));
     let buf = draw(&mut view, 43, 24);
     let y = find(&rows(&buf), "Inbox") as u16;
     assert_eq!((buf[(1, y)].symbol(), buf[(1, y)].fg), ("╭", muted()));
     assert_eq!((buf[(2, y)].symbol(), buf[(2, y)].fg), ("─", muted()));
-    assert_eq!(buf[(3, y)].symbol(), CAP_LEFT);
-    assert_ne!(buf[(3, y)].fg, muted(), "the cap belongs to the pill");
-    for x in 4..9 {
-        assert!(buf[(x, y)].modifier.contains(Modifier::REVERSED), "`Inbox` is inverted: column {x} {:?}", buf[(x, y)]);
-    }
-    assert_eq!(buf[(9, y)].symbol(), CAP_RIGHT);
-    assert_ne!(buf[(9, y)].fg, muted());
+    crate::section::check::grey_pill(&buf, 3, y, "Inbox");
     assert_eq!((buf[(10, y)].symbol(), buf[(10, y)].fg), ("─", muted()), "the line to the right edge");
 }
 
@@ -302,17 +300,18 @@ fn four_items_show_three_and_the_down_arrow_a_click_expands_to_the_up_arrow_and_
     let mut view = with_inbox(inbox_items(4));
     let buf = draw(&mut view, 43, 24);
     let got = rows(&buf);
-    assert_eq!(got[got.len() - 1], format!(" ╰{DOWN} expand"), "{got:#?}");
-    assert_eq!(got[got.len() - 4], item_row("f-blocked: Worker question", "42s"));
-    assert_eq!(got[got.len() - 2], item_row("engine: store busy", "2d"), "the third is the last shown");
+    assert_eq!(got[got.len() - 2], format!(" ╰{DOWN} expand"), "{got:#?}");
+    assert_eq!(got[got.len() - 1], "", "the empty row below the closing row");
+    assert_eq!(got[got.len() - 5], item_row("f-blocked: Worker question", "42s"));
+    assert_eq!(got[got.len() - 3], item_row("engine: store busy", "2d"), "the third is the last shown");
     assert!(!got.iter().any(|r| r.contains("ship lead has a reply")), "the fourth is behind the toggle: {got:#?}");
-    is_muted_line(&buf, 23, 1, 12);
-    assert_eq!(click(&mut view, 3, 23), Effect::None, "view state only");
+    is_muted_line(&buf, 22, 1, 12);
+    assert_eq!(click(&mut view, 3, 22), Effect::None, "view state only");
     let got = rows(&draw(&mut view, 43, 24));
-    assert_eq!(got[got.len() - 1], format!(" ╰{UP} collapse"), "{got:#?}");
-    assert_eq!(got[got.len() - 2], item_row("ship lead has a reply", "10m"), "the fourth row is shown, at the bottom");
-    assert_eq!(click(&mut view, 3, 23), Effect::None);
-    assert_eq!(rows(&draw(&mut view, 43, 24))[23], format!(" ╰{DOWN} expand"), "folded again");
+    assert_eq!(got[got.len() - 2], format!(" ╰{UP} collapse"), "{got:#?}");
+    assert_eq!(got[got.len() - 3], item_row("ship lead has a reply", "10m"), "the fourth row is shown, at the bottom");
+    assert_eq!(click(&mut view, 3, 22), Effect::None);
+    assert_eq!(rows(&draw(&mut view, 43, 24))[22], format!(" ╰{DOWN} expand"), "folded again");
 }
 
 // ---------- scroll cues in the Inbox: right-aligned, and the line on their left unbroken (hs-d348) ----------
