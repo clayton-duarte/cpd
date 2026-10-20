@@ -704,14 +704,8 @@ impl Follower {
     }
 
     fn exit(&mut self) -> i32 {
-        let deadline = Instant::now() + Duration::from_secs(20);
-        loop {
-            if let Some(status) = self.child.try_wait().unwrap() {
-                return status.code().expect("not killed");
-            }
-            assert!(Instant::now() < deadline, "the follower did not exit");
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let status = common::poll(Duration::from_secs(20), || self.child.try_wait().unwrap()).expect("the follower did not exit");
+        status.code().expect("not killed")
     }
 }
 
@@ -780,14 +774,11 @@ fn follow_without_since_prints_only_events_committed_after_it_started() {
         let _ = tx.send(line);
     });
     // The follower's start is asynchronous: write probes until its first line arrives.
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let line = loop {
+    let line = common::poll(Duration::from_secs(20), || {
         let probe = append_watch(&mut store, 7);
-        if let Ok(line) = rx.recv_timeout(Duration::from_millis(100)) {
-            break (probe, line);
-        }
-        assert!(Instant::now() < deadline, "the follower printed nothing");
-    };
+        rx.recv_timeout(Duration::from_millis(100)).ok().map(|line| (probe, line))
+    })
+    .expect("the follower printed nothing");
     let first: Value = serde_json::from_str(&line.1).unwrap();
     // Nothing of the eleven seeded Events, which were committed before it started.
     assert!(first["id"].as_i64().unwrap() > 11, "{first}");
@@ -921,11 +912,7 @@ fn follow_re_execs_when_its_binary_is_replaced_and_loses_and_repeats_no_event() 
     let wrapper = env.root().join("cpd-wrapper");
     write_executable(&wrapper, &format!("#!/bin/sh\necho \"$@\" > '{}'\nexec '{CPD}' \"$@\"\n", recorded.display()));
     fs::rename(&wrapper, &copy).unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !recorded.exists() {
-        assert!(Instant::now() < deadline, "the follower did not re-exec");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until_for("the follower to re-exec", Duration::from_secs(20), || recorded.exists());
     let b = append_edit(&mut store, "tier");
     let c = append_edit(&mut store, "touches");
     assert_eq!(follower.next().unwrap()["id"].as_i64().unwrap(), b);

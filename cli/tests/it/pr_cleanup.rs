@@ -7,7 +7,7 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, TestEnv};
 use cpd_core::git::{Setup, create_attempt_worktree, gate_worktree_path, prepare_lead_worktree, pr_lead_worktree_path};
@@ -539,11 +539,7 @@ fn paused_gate(root: &Path) -> String {
 
 /// Waits until the [`paused_gate`] has started.
 fn await_gate(root: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !root.join("gate-started").exists() {
-        assert!(Instant::now() < deadline, "the Gate never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until_for("the Gate to start", Duration::from_secs(120), || root.join("gate-started").exists());
 }
 
 /// Lets the [`paused_gate`] finish.

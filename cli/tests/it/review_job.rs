@@ -8,7 +8,7 @@ use crate::common;
 
 use std::fs::{self, File};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, Run, TestEnv, refused, wait_until};
 use cpd_core::error::CpdError;
@@ -19,6 +19,13 @@ use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 
 const PLAN: &str = "pay";
+
+/// The driver's polls as these tests set them (contract §1.2 "Test overrides"): its wait for the Lead
+/// (`LEAD_POLL`, 2 s), A4's look at the Worker (`DRIVER_POLL`, 0.5 s) and A9's pause between `kill-window` tries
+/// (`KILL_PAUSE`, 1 s).
+const POLL: Duration = Duration::from_millis(50);
+const DRIVER_ENV: [(&str, &str); 3] =
+    [("CPD_TEST_LEAD_POLL", "0.05"), ("CPD_TEST_DRIVER_POLL", "0.05"), ("CPD_TEST_KILL_PAUSE", "0.05")];
 
 /// O supports efforts 0–5, S 1–5, H 0–3.
 const EFFORTS: [(&str, &str, &str); 3] =
@@ -116,10 +123,6 @@ impl Fx {
         self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
     }
 
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     /// A Job of PR `repo` as the engine leaves it in `status` (no Attempt; a made-up fingerprint).
     fn insert_job(&self, key: &str, status: &str) {
         let (columns, values) = match status {
@@ -161,8 +164,16 @@ impl Fx {
         self.env.cpd(&["job", "show", key, "--plan", PLAN]).ok()["job"].clone()
     }
 
+    /// `job dispatch <key>`, its driver with [`DRIVER_ENV`].
     fn dispatch(&self, key: &str) -> Run {
-        self.env.cpd(&["job", "dispatch", key, "--plan", PLAN])
+        let mut cmd = self.env.command(CPD);
+        cmd.envs(DRIVER_ENV).args(["job", "dispatch", key, "--plan", PLAN]).current_dir(self.env.root());
+        let out = common::output(&mut cmd).expect("run cpd");
+        Run {
+            exit: out.status.code().expect("cpd was killed by a signal"),
+            stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
     }
 
     fn attempt(&self, id: &str) -> Value {
@@ -171,9 +182,10 @@ impl Fx {
 
     fn wait_status(&self, id: &str, status: &str) -> Value {
         common::wait_some(&format!("Attempt {id} to become {status}"), Duration::from_secs(60), || {
-            let attempt = self.attempt(id);
-            if attempt["status"] == status { Ok(attempt) } else { Err(format!("{attempt}\nlog: {}", self.log(id))) }
-        })
+            let now: Option<String> = self.env.query(&format!("SELECT (SELECT status FROM attempts WHERE plan = '{PLAN}' AND id = '{id}')"));
+            if now.as_deref() == Some(status) { Ok(()) } else { Err(format!("status {now:?}\nlog: {}", self.log(id))) }
+        });
+        self.attempt(id)
     }
 
     /// Waits until the Attempt has ended and its driver has exited.
@@ -198,11 +210,7 @@ impl Fx {
     /// that the file exists only with all of it.
     fn submitted(&self, name: &str) -> Value {
         let path = self.repo.parent().unwrap().join(name);
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while !path.exists() {
-            assert!(Instant::now() < deadline, "the Worker never wrote {name}");
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        common::wait_until_for(&format!("the Worker to write {name}"), Duration::from_secs(60), || path.exists());
         let text = fs::read_to_string(&path).unwrap();
         serde_json::from_str(text.trim()).unwrap_or_else(|e| panic!("{name}: {e}: {text}"))
     }
@@ -243,8 +251,8 @@ fn a_review_job_needs_every_existing_job_of_its_pr_that_is_not_cancelled() {
     let shown = fx.env.cpd(&["plan", "show", "--plan", PLAN]).ok()["jobs"].clone();
     let flag = |k: &str| shown.as_array().unwrap().iter().find(|j| j["key"] == k).unwrap()["review"].clone();
     assert_eq!((flag("final"), flag("api")), (json!(true), json!(false)));
-    assert_eq!(fx.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'final'"), 1);
-    assert_eq!(fx.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'api'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'final'"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT review FROM jobs WHERE plan = 'pay' AND key = 'api'"), 0);
     let events = fx.env.cpd(&["events", "list", "--kind", "job-added", "--plan", PLAN]).ok()["events"].as_array().unwrap().clone();
     let added = events.iter().find(|e| e["job"] == "final").expect("job-added");
     assert_eq!(added["data"]["review"], true);
@@ -266,12 +274,12 @@ fn a_job_added_later_does_not_become_a_dependency_of_the_review_job() {
 fn a_review_add_is_idempotent_until_another_job_is_added() {
     let fx = fx();
     fx.add("final", &["--review"]).ok();
-    let before: i64 = fx.query("SELECT count(*) FROM txns");
+    let before: i64 = fx.env.query("SELECT count(*) FROM txns");
 
     let again = fx.add("final", &["--review"]).ok();
 
     assert_eq!(again["already"], true);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM txns"), before, "a rerun writes nothing");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), before, "a rerun writes nothing");
     fx.add("fix", &[]).ok();
     refused(&fx.add("final", &["--review"]), "job_key_exists", 3);
     // The same key without --review is another Job.
@@ -287,7 +295,7 @@ fn a_review_job_takes_no_needs_and_refuses_a_failed_job_of_its_pr() {
     fx.insert_job("broken", "failed");
     let error = refused(&fx.add("final", &["--review"]), "needs_unavailable", 3);
     assert_eq!(error["details"]["jobs"], json!(["broken"]));
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE key = 'final'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE key = 'final'"), 0);
 }
 
 // ---------- the Worker ----------
@@ -401,14 +409,14 @@ fn the_worker_starts_only_once_the_lead_is_idle() {
 
     let out = fx.dispatch("final").ok();
     wait_until("the driver to wait for the Lead", || fx.log("final-a1").contains("A3: waiting for the Lead to be idle"));
-    // time-claim: the driver forks nothing while the Lead works, over a whole 2 s poll of the Lead (LEAD_POLL); no
+    // time-claim: the driver forks nothing while the Lead works, over five polls of the Lead (LEAD_POLL); no
     // per-poll signal from the driver (its log says only that it waits).
-    std::thread::sleep(Duration::from_millis(2500));
+    std::thread::sleep(POLL * 5);
 
     // Still waiting: `starting`, no Worker, no Session, nothing forked.
     assert_eq!(fx.attempt("final-a1")["status"], "starting");
     assert!(fx.env.calls("pi").is_empty());
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM sessions WHERE role = 'worker'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM sessions WHERE role = 'worker'"), 0);
 
     fx.fixture("UPDATE sessions SET state = 'idle' WHERE id = 'lead1';");
     let attempt = fx.wait_end("final-a1", &out["pid"]);
