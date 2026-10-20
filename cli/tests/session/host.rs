@@ -110,6 +110,17 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
     }
 }
 
+/// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478): every title is a pill with no padding, grey
+/// (colour 8) and blue on the focused pane, set in the format itself; one `━` in the pill's colour before the left
+/// cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
+const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]\
+#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
+#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
+#[noreverse]\u{e0b4}}}}";
+
 /// Every option, binding and hook of contract §6.1: the reference's
 /// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.
 fn assert_server_options(s: &Server) {
@@ -124,9 +135,7 @@ fn assert_server_options(s: &Server) {
         ("pane-border-lines", "heavy"),
         (
             "pane-border-format",
-            "#{?#{@cpd_session},#{?#{@cpd_title},\u{e0b6}#[reverse] #{@cpd_title} #[noreverse]\u{e0b4},},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-             \u{e0b6}#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]\u{e0b4}}}}",
+            BORDER_FORMAT_WANT,
         ),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
@@ -142,7 +151,7 @@ fn assert_server_options(s: &Server) {
     } else {
         eprintln!("extended-keys-format not asserted: this tmux does not know the option");
     }
-    assert!(s.tmux.global_option("pane-border-format").unwrap().contains(", Deploy ,"));
+    assert!(s.tmux.global_option("pane-border-format").unwrap().contains(",Deploy,"));
     let features = s.tmux.global_option("terminal-features").unwrap();
     for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
         assert_eq!(features.matches(feature).count(), 1, "{feature} in {features}");
@@ -420,7 +429,7 @@ fn set_pane_title_runs_set_p_on_cpd_title_and_a_missing_pane_fails_with_its_argv
     let (_, pane_id) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap().unwrap();
     t.set_pane_title(&pane_id, "Retry #{x} payouts; ok").unwrap();
     let shown = s.env.tmux(&["show", "-pv", "-t", pane_id.as_str(), "@cpd_title"]);
-    assert_eq!(String::from_utf8_lossy(&shown.stdout), "Retry #{x} payouts; ok\n");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "Retry #{x} Payouts; Ok\n");
 
     let missing = PaneId::parse("%999").unwrap();
     let err = t.set_pane_title(&missing, "X").unwrap_err();
@@ -442,31 +451,40 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
     };
     t.set_pane_session(&pane_id, &SessionId::new_v4()).unwrap();
     assert_eq!(border(), "");
+    // Title Case, no padding, the pill in blue (this pane is the active one), one border line character before the
+    // left cap (hs-d475, hs-d478)
     t.set_pane_title(&pane_id, "Retry payouts").unwrap();
-    assert_eq!(border(), "\u{e0b6}#[reverse] Retry payouts #[noreverse]\u{e0b4}");
+    assert_eq!(border(), "#[fg=blue]━\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
 }
 
-/// The status line's format, exactly: three button pills each in its own range and one space apart, the grey fill
-/// line, then the Inbox counter's pill, one space, the workers' pill (long form from `@cpd_workers_width` + 13).
+/// The status line's format, exactly (hs-d479): one grey `─` line across the row, starting and ending with a `─`; the
+/// three button pills each in its own range, joined by a single `─` outside the ranges; the optional unpadded
+/// preview pill after a join; the fill; then the Inbox counter's pill, a join, the workers' pill and the closing `─`
+/// (long form from `@cpd_workers_width` + 14: the left group's 12, the closing `─` and a fill of 1).
 #[test]
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     assert_eq!(
         cpd_core::host::tmux::STATUS_FORMAT,
         format!(
-            "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange] \
-             #[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange] \
+            "#[fg=colour8]\u{2500}#[default]\
+             #[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[fg=colour8]\u{2500}#[default]\
+             #[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[fg=colour8]\u{2500}#[default]\
              #[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
             cpd_core::host::tmux::RESET_GLYPH,
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
-        ) + "#{?#{@cpd_preview}, #[fg=yellow]\u{e0b6}#[reverse] preview: #{@cpd_preview} #[noreverse]\u{e0b4}#[default],}\
-         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{client_width},11},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}},\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}}}}\
+        ) + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
+         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},\
+         #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
          #[default]#[align=right]\
-         #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default] \
+         #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]\
+         #[fg=colour8]\u{2500}#[default]\
          #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
-         #[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]"
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]\
+         #[fg=colour8]\u{2500}#[default]"
     );
 }
 

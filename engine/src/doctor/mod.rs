@@ -11,12 +11,12 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::config::Config;
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::host::limit::limit;
-use crate::output::Output;
-use crate::store::Store;
+use cpd_core::config::Config;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::host::limit::limit;
+use cpd_core::output::Output;
+use cpd_core::store::Store;
 use crate::watch;
 use check::{Check, Severity};
 

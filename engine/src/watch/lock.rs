@@ -6,9 +6,9 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::lock;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::lock;
 
 /// The engine's lock, held while this value lives.
 pub(super) struct WatchLock {

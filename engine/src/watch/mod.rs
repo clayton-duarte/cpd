@@ -36,8 +36,8 @@ use std::io;
 use std::path::PathBuf;
 use std::process::Child;
 
-use crate::error::CpdError;
-use crate::output::Output;
+use cpd_core::error::CpdError;
+use cpd_core::output::Output;
 
 /// The `txns.command` of the engine's transactions and the `source` of its
 /// `error` Events (commands.md §12).

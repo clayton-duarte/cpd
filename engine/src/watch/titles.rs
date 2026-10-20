@@ -18,10 +18,10 @@ use time::format_description::well_known::Rfc3339;
 
 use super::engine::{Engine, stopping};
 use super::report::{About, Failure, Step};
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::host::limit::limit;
-use crate::ids::SessionId;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::host::limit::limit;
+use cpd_core::ids::SessionId;
 
 /// A title is rewritten at most this often per Session.
 const THROTTLE: time::Duration = time::Duration::minutes(10);
@@ -160,7 +160,7 @@ fn held(engine: &Engine) -> Result<HashSet<String>, CpdError> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(failed("open", &e)),
         };
-        match crate::lock::shared(&file) {
+        match cpd_core::lock::shared(&file) {
             // Free: shared and dropped at once. (A run takes it exclusive, so a shared hold is only ours.)
             Ok(true) => {}
             Ok(false) => {
@@ -241,7 +241,7 @@ fn spawn(engine: &Engine, session: &SessionId) -> Result<Run, CpdError> {
     let failed = |why: String| {
         CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the retitle run of Session {session}: {why}.")).with("session", session.as_str())
     };
-    let exe = crate::host::exe::started_as()?;
+    let exe = cpd_core::host::exe::started_as()?;
     let log_path = log_path(&engine.home, session);
     let dir = log_path.parent().expect("a log lives in a directory");
     fs::create_dir_all(dir).map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;

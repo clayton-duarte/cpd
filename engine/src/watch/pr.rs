@@ -21,11 +21,11 @@ use time::format_description::well_known::Rfc3339;
 
 use super::engine::Engine;
 use super::report::{About, Failure, Step};
-use crate::error::{CpdError, ErrorCode};
-use crate::git::{TAIL_LINES, tail};
-use crate::host::deadline::{self, Failed};
-use crate::host::exe::started_as;
-use crate::host::limit::limit;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::git::{TAIL_LINES, tail};
+use cpd_core::host::deadline::{self, Failed};
+use cpd_core::host::exe::started_as;
+use cpd_core::host::limit::limit;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;

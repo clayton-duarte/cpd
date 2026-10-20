@@ -18,12 +18,12 @@ use serde_json::Value;
 
 use super::SOURCE;
 use super::log::Log;
-use crate::error::CpdError;
-use crate::events::{self, NewEvent};
-use crate::ids::{AttemptId, JobKey, PlanId, SessionId};
-use crate::inbox::rules::StuckJob;
-use crate::session::tell_managers;
-use crate::store::Store;
+use cpd_core::error::CpdError;
+use cpd_core::events::{self, NewEvent};
+use cpd_core::ids::{AttemptId, JobKey, PlanId, SessionId};
+use cpd_core::inbox::rules::StuckJob;
+use cpd_core::session::tell_managers;
+use cpd_core::store::Store;
 
 /// The step that failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -256,8 +256,8 @@ impl Report {
 mod tests {
     use super::*;
     use serde_json::json;
-    use crate::home::CpdHome;
-    use crate::ids::ContextId;
+    use cpd_core::home::CpdHome;
+    use cpd_core::ids::ContextId;
 
     fn failure(code: &str) -> Failure {
         Failure { code: code.to_owned(), message: "It failed.".to_owned(), details: json!({}) }

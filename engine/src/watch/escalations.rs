@@ -9,9 +9,9 @@ use nix::unistd::Pid;
 use super::SOURCE;
 use super::engine::Engine;
 use super::report::{About, Step};
-use crate::error::CpdError;
-use crate::events::{self, NewEvent};
-use crate::ids::{EscalationId, PlanId};
+use cpd_core::error::CpdError;
+use cpd_core::events::{self, NewEvent};
+use cpd_core::ids::{EscalationId, PlanId};
 
 struct Open {
     plan: PlanId,
