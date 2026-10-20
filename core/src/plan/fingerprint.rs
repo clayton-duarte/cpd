@@ -5,6 +5,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use super::jobs::{self, Job, sha256_of};
+use super::outline::Outline;
 use super::prs::PrRow;
 use crate::error::CpdError;
 use crate::ids::PlanId;
@@ -12,13 +13,13 @@ use crate::ids::PlanId;
 pub use super::prs::load_prs;
 
 /// The plan fingerprint of `plan` as it is now: `sha256` of the canonical JSON
-/// `{jobs, prs}` of [`of`]. In a phase after `plan` the review covers the
+/// `{jobs, prs}` of [`of`], plus `outline` when the Plan's outline is set (hs-d502, D2). In a phase after `plan` the review covers the
 /// drafts only, so `prs` is the empty array there: a PR appended after the
 /// lock must not void a review of the drafts (§2.3).
 pub fn plan_fingerprint(conn: &Connection, plan: &PlanId) -> Result<String, CpdError> {
     let phase: Option<String> = conn.query_row("SELECT phase FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0)).optional()?;
     let prs = if reviews_prs(phase.as_deref()) { load_prs(conn, plan)? } else { Vec::new() };
-    Ok(of(&jobs::load(conn, plan)?, &prs))
+    Ok(of_with(&jobs::load(conn, plan)?, &prs, super::outline::load(conn, plan)?.as_ref()))
 }
 
 /// Whether the review of a Plan in `phase` (none: not found) covers its PRs: before the lock only.
@@ -32,6 +33,12 @@ pub(super) fn reviews_prs(phase: Option<&str>) -> bool {
 /// `null` (hs-d241); `prs` is `{key, repo, base, needs}` of
 /// every PR in `prs` that is not `cancelled`, ordered by key, `needs` sorted.
 pub fn of(jobs: &[Job], prs: &[PrRow]) -> String {
+    of_with(jobs, prs, None)
+}
+
+/// [`of`] with the Plan's outline: when it is set, the object is `{jobs, outline, prs}`, `outline` being its object
+/// (contract §2.3, hs-d502); when it is not, `{jobs, prs}` exactly, so a review made before the outline existed stays current.
+pub fn of_with(jobs: &[Job], prs: &[PrRow], outline: Option<&Outline>) -> String {
     let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_draft()).collect();
     drafts.sort_by(|a, b| a.key.cmp(&b.key));
     let jobs: Vec<Value> = drafts
@@ -54,7 +61,11 @@ pub fn of(jobs: &[Job], prs: &[PrRow]) -> String {
             json!({"key": p.key, "repo": p.repo, "base": p.base, "needs": needs})
         })
         .collect();
-    sha256_of(&json!({"jobs": jobs, "prs": prs}))
+    let mut plan = json!({"jobs": jobs, "prs": prs});
+    if let Some(outline) = outline {
+        plan["outline"] = outline.to_value();
+    }
+    sha256_of(&plan)
 }
 
 #[cfg(test)]

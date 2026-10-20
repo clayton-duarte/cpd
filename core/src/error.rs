@@ -119,6 +119,7 @@ error_codes! {
     InvalidName = "invalid_name" => Usage,
     FileUnreadable = "file_unreadable" => Usage,
     SpecInvalid = "spec_invalid" => Usage,
+    OutlineInvalid = "outline_invalid" => Usage,
     TierInvalid = "tier_invalid" => Usage,
     NothingToEdit = "nothing_to_edit" => Usage,
 
@@ -147,6 +148,8 @@ error_codes! {
     WorktreeExists = "worktree_exists" => Refused,
     JobKeyExists = "job_key_exists" => Refused,
     DraftIncomplete = "draft_incomplete" => Refused,
+    OutlineMissing = "outline_missing" => Refused,
+    OutlineIncomplete = "outline_incomplete" => Refused,
     NeedsUnknown = "needs_unknown" => Refused,
     NeedsUnavailable = "needs_unavailable" => Refused,
     JobLocked = "job_locked" => Refused,
