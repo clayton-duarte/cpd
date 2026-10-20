@@ -20,12 +20,12 @@ use time::OffsetDateTime;
 use super::engine::Engine;
 use super::pr::printed;
 use super::report::{About, Failure, Step};
-use crate::clock::timestamp;
-use crate::config::catalog::node;
-use crate::config::locate_pi;
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::host::deadline::{self, Failed};
+use cpd_core::clock::timestamp;
+use cpd_core::config::catalog::node;
+use cpd_core::config::locate_pi;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::host::deadline::{self, Failed};
 
 /// The helper's deadline (contract §3.7): above its 45 s channel read and its thread reads of 30 s, eight at a time.
 const DEADLINE: Duration = Duration::from_secs(120);

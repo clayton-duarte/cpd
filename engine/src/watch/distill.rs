@@ -14,11 +14,11 @@ use time::format_description::well_known::Rfc3339;
 use super::engine::{Engine, stopping};
 use super::record_detached;
 use super::report::{About, Step};
-use crate::context::digest;
-use crate::context::distill::{log_path, running};
-use crate::context::{Record, inforce};
-use crate::error::{CpdError, ErrorCode};
-use crate::ids::ContextId;
+use cpd_core::context::digest;
+use cpd_core::context::distill::{log_path, running};
+use cpd_core::context::{Record, inforce};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::ids::ContextId;
 
 /// How old a Context's newest record must be before its digest is rebuilt (§3.7 E9).
 const QUIET: time::Duration = time::Duration::minutes(10);
@@ -112,7 +112,7 @@ fn start_if_due(engine: &mut Engine, context: &ContextId, seq: i64, at: &str, no
 /// Returns its pid.
 fn spawn(engine: &Engine, context: &ContextId) -> Result<u32, CpdError> {
     let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the distill run of Context {context}: {why}.")).with("context", context.as_str());
-    let exe = crate::host::exe::started_as()?;
+    let exe = cpd_core::host::exe::started_as()?;
     let log_path = log_path(&engine.home, context);
     let dir = log_path.parent().expect("a log lives in a directory");
     fs::create_dir_all(dir).map_err(|e| failed(format!("cannot create {}: {e}", dir.display())))?;

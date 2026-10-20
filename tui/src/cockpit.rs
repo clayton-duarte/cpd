@@ -4,7 +4,7 @@
 //! gone, sets §6.1's server options and the cockpit session's status line (the StatusBar) again, with
 //! `--respawn` restarts every live view, starts the engine, and with
 //! `--attach` replaces itself with `tmux attach`. When the server runs an older tmux than the
-//! installed one it marks a restart pending (contract §6.1; [`cpd_core::watch::restart`]).
+//! installed one it marks a restart pending (contract §6.1; the engine's restart, passed in as [`Restart`]).
 //! Also reset-layout (commands.md §13.2), and `cpd tui action`, what a click on a StatusBar
 //! button runs.
 //!
@@ -36,7 +36,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
 use super::widgets::legend;
-use super::{RunCommand, logs, merge, not_a_terminal, on_a_terminal};
+use super::{Restart, RestartOutcome, RunCommand, logs, merge, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
@@ -48,13 +48,12 @@ use cpd_core::ids::SessionId;
 use cpd_core::output::Output;
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
-use cpd_core::watch::restart;
 
 /// The views of `main`'s layout: a dead one is respawned (amendment 9). The
 /// `worker` view is not part of it: it is opened and closed by the plan view.
 const LAYOUT: [View; 4] = [View::Tree, View::Plan, View::Widgets, View::Chat];
 
-pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Result<Output, CpdError> {
+pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
     if attach && !on_a_terminal() {
         return Err(not_a_terminal("tui --attach"));
     }
@@ -74,7 +73,7 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
         }
     }
     // An older server is restarted by the engine once nothing is in the way (contract §6.1).
-    let after = match mark_if_older(&home, &tmux) {
+    let after = match mark_if_older(&home, &tmux, restart) {
         Ok(Some(why)) => {
             if !attach {
                 eprintln!("cpd tui: the tmux server runs an older tmux than the installed one{why}.");
@@ -508,7 +507,7 @@ fn exec_attach(tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
 /// then attaches this terminal to the cockpit. Each follow-up's failure is one
 /// line on stderr and the attach still happens when the cockpit exists (A3).
 /// Inside the cockpit's own server it attaches nothing (A2).
-pub(super) fn bare(run_command: RunCommand) -> Result<Output, CpdError> {
+pub(super) fn bare(run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
@@ -542,7 +541,7 @@ pub(super) fn bare(run_command: RunCommand) -> Result<Output, CpdError> {
     }
     // 4. The tmux version: an older server is restarted when it is safe, else the restart is marked
     // pending; the server's own tmux attaches while it runs another version than the installed one.
-    let after = tmux_version(&home, &config, &mut store, &tmux);
+    let after = tmux_version(&home, &config, &mut store, &tmux, restart);
     let program = server_tmux(&tmux, &after).unwrap_or_else(|e| {
         eprintln!("cpd: cannot compare the tmux server's version with the installed tmux: {}", e.message());
         None
@@ -554,7 +553,7 @@ pub(super) fn bare(run_command: RunCommand) -> Result<Output, CpdError> {
 /// tmux is restarted now when it is safe, else the restart is marked pending (the engine holds new
 /// Attempts, then restarts it, contract §6.1). Returns what to add to the attach line about a restart
 /// still to come; a failure is one line on stderr.
-fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux) -> String {
+fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux, restart: Restart) -> String {
     let (server, installed) = match (tmux.server_version(), installed_version()) {
         (Ok(server), Ok(installed)) => (server, installed),
         // `server_tmux` says why it cannot compare.
@@ -563,31 +562,31 @@ fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux)
     if !older_version(&server, &installed) {
         // A restart that is no longer needed (done by hand, or by the engine): a failure it left is said once.
         if server == installed {
-            match restart::read(home) {
-                Ok(Some(pending)) if pending.failed.is_some() => eprintln!("cpd: {}", pending.describe()),
-                Ok(_) => {}
+            match (restart.failed)(home) {
+                Ok(Some(failed)) => eprintln!("cpd: {failed}"),
+                Ok(None) => {}
                 Err(e) => eprintln!("cpd: {}", e.message()),
             }
-            if let Err(e) = restart::clear(home) {
+            if let Err(e) = (restart.clear)(home) {
                 eprintln!("cpd: {}", e.message());
             }
         }
         return String::new();
     }
-    match restart::restart(home, config, store, &mut |_| ()) {
-        Ok(restart::Outcome::Restarted { reopened }) => {
+    match (restart.now)(home, config, store) {
+        Ok(RestartOutcome::Restarted { reopened }) => {
             eprintln!("cpd: restarted the tmux server onto tmux {installed}; {reopened} Session(s) reopened.");
             String::new()
         }
-        Ok(restart::Outcome::Busy(why)) => match restart::mark(home, &server, &installed) {
+        Ok(RestartOutcome::Busy(why)) => match (restart.mark)(home, &server, &installed) {
             Ok(_) => format!("; the restart happens once nothing is in the way ({})", why.join("; ")),
             Err(e) => {
                 eprintln!("cpd: cannot mark the tmux restart pending: {}", e.message());
                 String::new()
             }
         },
-        Ok(restart::Outcome::Running) => "; a restart is running".to_owned(),
-        Ok(restart::Outcome::NotNeeded) => String::new(),
+        Ok(RestartOutcome::Running) => "; a restart is running".to_owned(),
+        Ok(RestartOutcome::NotNeeded) => String::new(),
         Err(e) => {
             eprintln!("cpd: the tmux restart failed: {} It is tried again at the next cpd.", e.message());
             String::new()
@@ -597,12 +596,12 @@ fn tmux_version(home: &CpdHome, config: &Config, store: &mut Store, tmux: &Tmux)
 
 /// `cpd tui`: when the server runs an older tmux than the installed one, marks a restart pending.
 /// Returns what to say on the attach line.
-fn mark_if_older(home: &CpdHome, tmux: &Tmux) -> Result<Option<String>, CpdError> {
+fn mark_if_older(home: &CpdHome, tmux: &Tmux, restart: Restart) -> Result<Option<String>, CpdError> {
     let (server, installed) = (tmux.server_version()?, installed_version()?);
     if !older_version(&server, &installed) {
         return Ok(None);
     }
-    restart::mark(home, &server, &installed)?;
+    (restart.mark)(home, &server, &installed)?;
     Ok(Some("; the restart happens once no Attempt runs".to_owned()))
 }
 

@@ -43,11 +43,43 @@ pub use runner::{Capture, ViewError, run_view};
 
 use std::ffi::OsString;
 
+use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
+use cpd_core::store::Store;
 
 /// Runs `cpd <argv>` in this process, through the root command tree. `cli` owns that tree, so it passes the runner in.
 pub type RunCommand = fn(Vec<OsString>) -> Result<Output, CpdError>;
+
+/// The engine's restart of the tmux server onto the installed tmux (contract §6.1), which `cpd-engine` owns
+/// (`cpd_engine::watch::restart`). `cpd-tui` does not depend on `cpd-engine`, so `cli` passes it in, as it passes
+/// [`RunCommand`].
+#[derive(Clone, Copy)]
+pub struct Restart {
+    /// The one line about a pending restart that failed (`restart::read`, then `Pending::describe`); `None` when
+    /// none is pending or the pending one has not failed.
+    pub failed: fn(&CpdHome) -> Result<Option<String>, CpdError>,
+    /// Removes the pending restart (`restart::clear`).
+    pub clear: fn(&CpdHome) -> Result<(), CpdError>,
+    /// Marks a restart pending, from the server's tmux to the installed one; whether it newly marked (`restart::mark`).
+    pub mark: fn(&CpdHome, &str, &str) -> Result<bool, CpdError>,
+    /// Restarts the server now when it is older and it is safe (`restart::restart`, logging nothing).
+    pub now: fn(&CpdHome, &Config, &mut Store) -> Result<RestartOutcome, CpdError>,
+}
+
+/// What [`Restart::now`] did: `restart::Outcome`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RestartOutcome {
+    /// There is no server, or it does not run an older tmux than the installed one: nothing to do.
+    NotNeeded,
+    /// Another run of the restart holds `locks/tmux-restart.lock`.
+    Running,
+    /// Not safe now: nothing was touched; each line says what is in the way.
+    Busy(Vec<String>),
+    /// The server was restarted and `reopened` Sessions are back in their places.
+    Restarted { reopened: usize },
+}
 
 /// `cpd tui [--attach] [--respawn]`, or `cpd tui view …`.
 #[derive(clap::Args, Debug)]
@@ -113,9 +145,9 @@ pub enum View {
     Chat,
 }
 
-pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
+pub fn run(args: Args, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
     match args.command {
-        None => cockpit::run(args.attach, args.respawn, run_command),
+        None => cockpit::run(args.attach, args.respawn, run_command, restart),
         Some(Command::View(view)) => backed_off(match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),
@@ -149,8 +181,8 @@ fn backed_off(result: Result<Output, CpdError>) -> Result<Output, CpdError> {
 }
 
 /// `cpd` with no arguments, in a terminal (commands.md §13.3): the follow-ups of an update, then attach.
-pub fn bare(run_command: RunCommand) -> Result<Output, CpdError> {
-    cockpit::bare(run_command)
+pub fn bare(run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+    cockpit::bare(run_command, restart)
 }
 
 /// `not_a_terminal`: a command that owns its terminal was not given one.

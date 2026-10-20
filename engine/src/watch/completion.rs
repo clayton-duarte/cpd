@@ -10,10 +10,10 @@
 use super::SOURCE;
 use super::engine::Engine;
 use super::report::{About, Failure, Step};
-use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, NewEvent};
-use crate::ids::{ContextId, PlanId, PrKey, SessionId};
-use crate::store::WriteTxn;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{self, NewEvent};
+use cpd_core::ids::{ContextId, PlanId, PrKey, SessionId};
+use cpd_core::store::WriteTxn;
 use rusqlite::OptionalExtension;
 use serde_json::json;
 use time::OffsetDateTime;

@@ -18,12 +18,12 @@
 use time::OffsetDateTime;
 
 use super::engine::Engine;
-use crate::clock::timestamp;
+use cpd_core::clock::timestamp;
 use super::report::{About, Step};
 use super::restart;
 use super::schedule::READY;
-use crate::error::CpdError;
-use crate::inbox::model::{self, Filter, State, Urgency};
+use cpd_core::error::CpdError;
+use cpd_core::inbox::model::{self, Filter, State, Urgency};
 
 /// The options the status line draws: the Inbox counter, the long form, the short form, and the width in cells of
 /// the right items (the Inbox counter's pill, one space and the workers' pill, each pill with its two caps) in the
@@ -194,7 +194,7 @@ fn failed(engine: &mut Engine, error: &CpdError) {
 #[cfg(test)]
 mod tests {
     use super::{Counts, Inbox};
-    use crate::inbox::model::Urgency;
+    use cpd_core::inbox::model::Urgency;
     use rusqlite::Connection;
 
     #[test]

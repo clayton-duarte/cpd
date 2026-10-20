@@ -31,18 +31,18 @@ use time::OffsetDateTime;
 use super::engine::Engine;
 use super::lock;
 use super::record_detached;
-use crate::clock::timestamp;
+use cpd_core::clock::timestamp;
 use super::report::{About, Step};
 use super::SOURCE;
-use crate::config::Config;
-use crate::error::{CpdError, ErrorCode};
-use crate::env::Env;
-use crate::events::{self, NewEvent};
-use crate::home::CpdHome;
-use crate::host::tmux::{installed_version, older_version};
-use crate::host::{Tmux, exe};
-use crate::session;
-use crate::store::Store;
+use cpd_core::config::Config;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::env::Env;
+use cpd_core::events::{self, NewEvent};
+use cpd_core::home::CpdHome;
+use cpd_core::host::tmux::{installed_version, older_version};
+use cpd_core::host::{Tmux, exe};
+use cpd_core::session;
+use cpd_core::store::Store;
 
 /// How long the old engine has to let go of its lock after the server was killed.
 const ENGINE_EXIT_LIMIT: Duration = Duration::from_secs(20);
@@ -180,13 +180,13 @@ pub enum Outcome {
     Restarted { reopened: usize },
 }
 
-/// The lock of the one run of the restart: `flock` (through `crate::lock`), so a run that dies
+/// The lock of the one run of the restart: `flock` (through `cpd_core::lock`), so a run that dies
 /// frees it. The open file holds the lock while it lives.
 fn take_lock(home: &CpdHome) -> Result<Option<File>, CpdError> {
     let path = home.tmux_restart_lock();
     fs::create_dir_all(home.locks_dir()).map_err(|e| file_failed(&path, e))?;
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(|e| file_failed(&path, e))?;
-    match crate::lock::try_lock(&file) {
+    match cpd_core::lock::try_lock(&file) {
         Ok(true) => Ok(Some(file)),
         Ok(false) => Ok(None),
         Err(e) => Err(file_failed(&path, format!("flock failed: {e}"))),
@@ -302,7 +302,7 @@ fn wait_engine_gone(home: &CpdHome) -> Result<(), CpdError> {
 
 /// `cpd watch --restart-tmux` (internal): the restart, started detached by the engine; its output
 /// is `run/tmux-restart.log`. Exits 0 when it did nothing (not needed, not safe, another run).
-pub(super) fn detached() -> Result<crate::output::Output, CpdError> {
+pub(super) fn detached() -> Result<cpd_core::output::Output, CpdError> {
     let Env { home, config, mut store } = Env::open()?;
     let mut log = |line: &str| {
         let _ = writeln!(std::io::stderr(), "{} cpd tmux restart: {line}", now());
@@ -314,7 +314,7 @@ pub(super) fn detached() -> Result<crate::output::Output, CpdError> {
         Outcome::NotNeeded => log("the server needs no restart"),
         Outcome::Restarted { .. } => {}
     }
-    Ok(crate::output::Output::success(json!({"outcome": format!("{outcome:?}")})))
+    Ok(cpd_core::output::Output::success(json!({"outcome": format!("{outcome:?}")})))
 }
 
 /// The engine's step before E1: reports a failed restart once, and starts the detached restart once
