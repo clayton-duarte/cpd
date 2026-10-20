@@ -102,6 +102,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `usage` | 2 | unknown flag, missing argument, flag value of the wrong shape, exclusive flags together |
 | `plan_required`, `context_required`, `session_required` | 2 | the command needs one and none was selected |
 | `pr_required` | 2 | the command needs a PR, `--pr` is omitted, and the Plan does not have exactly one PR that is not `cancelled` (R34) |
+| `supersedes_invalid` | 3 | `context decide` or `context note` named, in `--supersedes`, a record whose kind it may not supersede (§3.4); `details: {record, kind, allowed}` |
 | `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
 | `push_rejected` | 3 | `pr push` found the remote branch moved (§9.9); `details.stderr` is git's |
 | `base_not_found` | 4 | `pr add`, `pr edit` (§9.4): the base branch does not exist; `pr open` (§9.1): the base branch of a stacked PR, its base PR's Lead Branch, is not on the remote; `details` `{pr, base, base_pr}` (hs-d324) |
@@ -241,7 +242,7 @@ cpd context show [--context <id>] [--since <seq>] [--record <id>] [--digest]
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
 | `--digest` | print the Context's latest digest (contract §4.6, hs-d194), below. Exclusive with `--since` and `--record` (`usage`) |
 
-Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; notes; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
+Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
 
 **Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
 
@@ -268,18 +269,21 @@ Idempotent: read-only.
 
 ```
 cpd context decide <text> [--supersedes <record>] [--context <id>]
-cpd context note <text> [--context <id>]
+cpd context note <text> [--supersedes <record>] [--context <id>]
 cpd context ask <question> [--context <id>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `<text>`, `<question>` | the record's `text` (§1.5) |
-| `--supersedes <record>` | `decide` only: the id of the decision this one replaces |
+| `--supersedes <record>` | `decide` and `note`: the id of the earlier record this one replaces (recency wins, contract §2.2). A decision may replace a decision or a note of the Context; a note may replace a note only |
 
 | Precondition | Code | Exit |
 |---|---|---|
-| `--supersedes` names a record of this Context whose kind is `decision` | `record_not_found` | 3 |
+| `--supersedes` names a record of this Context | `record_not_found` | 3 |
+| `--supersedes` on a `note` names a record that is not a `note`, or on a `decide` names a record that is neither a `decision` nor a `note` | `supersedes_invalid` | 3 |
+
+`supersedes_invalid` has `details: {record, kind, allowed}`: the id named, its kind, and the kinds the writing record may supersede (`["decision", "note"]` for `decide`, `["note"]` for `note`). Nothing is written. A record superseded by a decision or note leaves force and every digest, stays readable, and `context show` labels it superseded, naming its successor (§3.3).
 
 Effects: the record write above (one transaction), with kind `decision` (letter `d`), `note` (`n`) or `question` (`q`); `by` = `{session: CPD_SESSION or PI_SESSION_ID or null, plan: the selected Plan or null}`. **Event** `context-record`. No tmux.
 
@@ -463,7 +467,8 @@ Effects (contract §4.6 "The distill run", steps 1–5):
 - **Carried forward**: only `plan` and `brief` records came after the latest digest, so the records in force are the same; its text is written as the new `<upto_seq>.md` without pi (`"distilled": false`).
 - **Otherwise**: files `prompt.md` and `records.md`, then the distiller, `pi --mode json …` at Tier `context_distill_tier` (contract §6.5 "Distiller", §8.2), JSON mode (`--mode json`), read by cpd, which writes the final assistant text to `<upto_seq>.md.tmp`, killed after `timeouts.distill_minutes`; then the validation of that text, and on success cpd's `## Record index` is appended, the file renamed to `<upto_seq>.md` and the directory's older digests, temporary files and kept `.md.invalid` removed. `"distilled": true` and `run` (below). An invalid digest is kept as `<upto_seq>.md.invalid`, one per Context, replacing the previous one (contract §4.6, hs-d244 D-b).
 - **Repair**: a digest invalid only because 1 to 16 decisions or open questions in force are uncited (no `stray` id, within the limit) gets **one** more pi run, the repair turn (contract §4.6 step 5, hs-d244 D-c): pi is given the invalid topic sections and the missing records and answers only `## Additions`, which cpd appends to the topic sections before it validates again. Valid, the run succeeds and `repair` (below) is in its output; invalid, it fails with `distill_invalid` and `.md.invalid` holds the repaired text. No repair for a stray id, a digest over the limit, more than 16 missing or a carried-forward digest.
-- **Run log**: every run that started pi appends a line to `run/context-digests/<context>/runs.jsonl` (`started_at`, `seconds`, `model`, `tokens_in`, `tokens_out`, `cost`, `context`, `upto_seq`, `result`, `kind`: `distill` or `repair`; contract §4.6 "The run log"), also when it failed; a repaired run has two lines.
+- **Run log**: every run that started pi appends a line to `run/context-digests/<context>/runs.jsonl` (`started_at`, `seconds`, `model`, `tokens_in`, `tokens_out`, `cost`, `context`, `upto_seq`, `result`, `kind`: `distill` or `repair`, and `contradictions`, `contradictions_dropped`; contract §4.6 "The run log"), also when it failed; a repaired run has two lines.
+- **Contradictions** (recency wins, contract §4.6 "The contradictions report"): the distiller ends its text with `## Contradictions`, one line `- [<older>] -> [<newer>]: <why>` per pair of records it found contradicting. cpd removes the section before validation and from the digest, keeps each pair whose two ids are headers of `records.md` with the older `seq` lower than the newer, and writes them in the run's line as `"contradictions": [{"older", "newer", "why"}]` with `"contradictions_dropped": <n>` (the dropped pairs); both are on every pi run's line, `[]` and `0` when none. A missing section means no pairs.
 - **Rows and Events**: none on success; no database write ever, except the one `error` Event of a failure (below).
 - **tmux:** none. **git:** none.
 
