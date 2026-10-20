@@ -1,6 +1,18 @@
 //! The Pulse view's snapshot: one Context's Plans, each with its Lead's dot, its 5-minute activity
 //! buckets, merges, age and quiet. Everything is read from events, plans, jobs, attempts and sessions,
 //! in one read transaction with a fixed number of queries (events are grouped by SQL, never read one by one).
+//!
+//! Each counted Event has a [`Kind`] (commands.md §13.2, Kinds; User, hs-d327), by its Event kind, and a bucket takes the
+//! first kind present in the order of the enum's variants (the precedence of the bar's colour):
+//!
+//! | Kind | Colour | Event kinds |
+//! |---|---|---|
+//! | [`Kind::Error`] | red | `error`, `job-failed` |
+//! | [`Kind::Plan`] | magenta | `plan-phase`, `plan-review`, `plan-done` |
+//! | [`Kind::PrOpened`] | yellow | `pr-opened` |
+//! | [`Kind::Escalation`] | blue | `escalation`, `escalation-answered`, `escalation-expired` |
+//! | [`Kind::Merged`] | green | `job-merged`, `pr-merged` |
+//! | [`Kind::Other`] | white | every other counted Event, the Lead turns included |
 
 use std::collections::BTreeMap;
 
@@ -77,12 +89,50 @@ pub struct PulseRow {
     pub quiet: bool,
 }
 
+/// The kind of activity of an Event. The variants are in the order of precedence: a bucket takes the smallest (`min`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Kind {
+    Error,
+    Plan,
+    PrOpened,
+    Escalation,
+    Merged,
+    Other,
+}
+
+impl Kind {
+    /// The kind of a counted Event of Event kind `event` (the table in the module doc).
+    pub fn of(event: &str) -> Kind {
+        match event {
+            "error" | "job-failed" => Kind::Error,
+            "plan-phase" | "plan-review" | "plan-done" => Kind::Plan,
+            "pr-opened" => Kind::PrOpened,
+            "escalation" | "escalation-answered" | "escalation-expired" => Kind::Escalation,
+            "job-merged" | "pr-merged" => Kind::Merged,
+            _ => Kind::Other,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Bucket {
     pub count: u32,
+    /// The first [`Kind`] among the bucket's Events; `None` when `count` is 0.
+    pub kind: Option<Kind>,
     pub job_merged: bool,
     pub pr_merged: bool,
     pub worker_ran: bool,
+}
+
+impl Bucket {
+    /// Counts `count` Events of Event kind `event` in the bucket: the count adds up and the kind is the first in precedence.
+    fn add(&mut self, event: &str, count: u32) {
+        let kind = Kind::of(event);
+        self.count += count;
+        self.kind = Some(self.kind.map_or(kind, |k| k.min(kind)));
+        self.job_merged |= event == "job-merged";
+        self.pr_merged |= event == "pr-merged";
+    }
 }
 
 /// The Events that count as a Plan's activity: these kinds, and the Lead turns (`session-state` to `working` of a `lead` Session).
@@ -113,24 +163,24 @@ pub fn pulse(store: &mut Store, context: &ContextId, now_ms: i64, buckets: usize
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
         super::tree::fill_dots(&super::tree::visible_items(conn, &now)?, &mut leads);
 
-        // Window: count, merges per (plan, bucket).
+        // Window: count, kind, merges per (plan, bucket), from the counts of each Event kind.
         let mut window: BTreeMap<(String, usize), Bucket> = BTreeMap::new();
         let mut merged: BTreeMap<String, u32> = BTreeMap::new();
         let mut stmt = conn.prepare(&format!(
-            "SELECT e.plan, ({ms} - ?2) / ?3, count(*), max(e.kind = 'job-merged'), max(e.kind = 'pr-merged'),
-                    sum(e.kind IN ('job-merged', 'pr-merged'))
+            "SELECT e.plan, ({ms} - ?2) / ?3, e.kind, count(*)
                FROM events e LEFT JOIN sessions s ON s.id = e.session
               WHERE e.context = ?1 AND e.plan IS NOT NULL AND {ms} >= ?2 AND {ACTIVITY}
-              GROUP BY e.plan, 2",
+              GROUP BY e.plan, 2, e.kind",
             ms = ms("e.at")
         ))?;
         let mut rows = stmt.query(rusqlite::params![context.as_str(), start_ms, BUCKET_MS])?;
         while let Some(r) = rows.next()? {
-            let (plan, index, count, job_merged, pr_merged, merges): (String, i64, i64, bool, bool, i64) =
-                (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?);
+            let (plan, index, event, count): (String, i64, String, i64) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
             if (0..buckets as i64).contains(&index) {
-                *merged.entry(plan.clone()).or_default() += merges as u32;
-                window.insert((plan, index as usize), Bucket { count: count as u32, job_merged, pr_merged, worker_ran: false });
+                window.entry((plan.clone(), index as usize)).or_default().add(&event, count as u32);
+                if Kind::of(&event) == Kind::Merged {
+                    *merged.entry(plan).or_default() += count as u32;
+                }
             }
         }
 
@@ -195,4 +245,55 @@ pub fn pulse(store: &mut Store, context: &ContextId, now_ms: i64, buckets: usize
         }
         Ok(Pulse { context: context.clone(), rows: out, max, events_cursor: highest_id(conn)? })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_counted_event_kind_has_its_kind_of_activity() {
+        for (events, kind) in [
+            (&["error", "job-failed"][..], Kind::Error),
+            (&["plan-phase", "plan-review", "plan-done"], Kind::Plan),
+            (&["pr-opened"], Kind::PrOpened),
+            (&["escalation", "escalation-answered", "escalation-expired"], Kind::Escalation),
+            (&["job-merged", "pr-merged"], Kind::Merged),
+            (&["job-added", "job-retried", "attempt-started", "attempt-status", "all-merged", "pr-feedback", "pr-started", "session-state"], Kind::Other),
+        ] {
+            for event in events {
+                assert_eq!(Kind::of(event), kind, "{event}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_bucket_with_several_kinds_takes_red_magenta_yellow_blue_green_white_in_that_order() {
+        let order = ["error", "plan-phase", "pr-opened", "escalation", "job-merged", "job-added"];
+        for first in 0..order.len() {
+            // every kind from `first` on, added in any order: the first of them wins
+            for reversed in [false, true] {
+                let mut events: Vec<&str> = order[first..].to_vec();
+                if reversed {
+                    events.reverse();
+                }
+                let mut bucket = Bucket::default();
+                for event in events {
+                    bucket.add(event, 2);
+                }
+                assert_eq!(bucket.kind, Some(Kind::of(order[first])), "from {}", order[first]);
+                assert_eq!(bucket.count, 2 * (order.len() - first) as u32, "the count is the sum: the scale does not change");
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_bucket_has_no_kind_and_the_merge_flags_follow_the_event_kinds() {
+        assert_eq!(Bucket::default().kind, None);
+        let mut bucket = Bucket::default();
+        bucket.add("job-merged", 1);
+        assert_eq!((bucket.job_merged, bucket.pr_merged), (true, false));
+        bucket.add("pr-merged", 1);
+        assert_eq!((bucket.job_merged, bucket.pr_merged), (true, true));
+    }
 }

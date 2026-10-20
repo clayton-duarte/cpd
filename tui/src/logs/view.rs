@@ -327,7 +327,7 @@ mod tests {
         let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
         // an empty row, the title, an empty row, then the Events
         assert_eq!(row(0).trim_end(), "");
-        assert_eq!(row(1), format!("━━ logs {}", "━".repeat(16)));
+        assert_eq!(row(1), format!("╭─\u{E0B6}logs\u{E0B4}{}", "─".repeat(16)));
         assert_eq!(row(2).trim_end(), "");
         assert!(row(3).starts_with(" 00:00:08 event 8"), "{}", row(3));
         // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows

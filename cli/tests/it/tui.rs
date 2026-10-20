@@ -136,7 +136,8 @@ fn assert_status_line(env: &TestEnv) {
         "#[range=user|logs]",
         "#[align=right]",
         "#{@cpd_inbox}",
-        "#{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{@cpd_preview}, #[fg=yellow]",
         "#{R:\u{2500},",
     ] {
         assert!(format.contains(range), "{range} in {format}");
@@ -960,6 +961,58 @@ fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
         // The caps of the buttons and the fill line are colour 8 (bright black, SGR 90).
         assert!(styled.contains(&format!("\x1b[90m\u{e0b4}{fill}")), "{styled:?}");
     }
+}
+
+const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
+
+#[test]
+fn the_status_line_shows_the_preview_in_yellow_after_the_buttons_while_the_option_is_set() {
+    let (env, _engine) = env_with_workers();
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    let pill = format!("\u{e0b6} preview: {PREVIEW} \u{e0b4}");
+    // The pill is 47 cells (33 of value): with the buttons' 11, the long form's 46 and 2 of air it needs 106 columns.
+    for (width, items) in [(100, SHORT_ITEMS), (120, LONG_ITEMS)] {
+        let (line, styled) = status_line(&env, width, "preview:");
+        assert!(line.starts_with(&format!("{} {pill}\u{2500}", buttons())), "one plain space after the buttons, then the pill, then the line: {line:?}");
+        assert!(line.ends_with(items), "at {width}: {line:?}");
+        assert_eq!(line.chars().count(), usize::from(width), "the line is shorter by the pill's width, so the row stays full: {line:?}");
+        assert!(styled.contains(&format!("\x1b[7m preview: {PREVIEW} ")) && styled.contains("\x1b[33m"), "yellow, reversed: {styled:?}");
+    }
+}
+
+#[test]
+fn the_status_line_shows_no_preview_once_the_option_is_unset() {
+    let (env, _engine) = env_with_workers();
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    status_line(&env, 100, "preview:");
+    tmux_out(&env, &["set", "-gu", "@cpd_preview"]);
+    // The unset shows once a fresh client has drawn the whole line.
+    let (line, _) = status_line(&env, 100, "queued");
+    assert!(!line.contains("preview"), "{line:?}");
+    assert!(line.starts_with(&format!("{}\u{2500}", buttons())), "{line:?}");
+}
+
+#[test]
+fn tui_respawn_warns_on_stderr_while_a_preview_is_on_and_not_otherwise() {
+    let env = env();
+    let quiet = env.cpd(&["tui", "--respawn"]);
+    assert_eq!(quiet.exit, 0, "{quiet:?}");
+    assert!(!quiet.stderr.contains("preview"), "{quiet:?}");
+
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    let warned = env.cpd(&["tui", "--respawn"]);
+    assert_eq!(warned.exit, 0, "{warned:?}");
+    assert!(
+        warned.stderr.contains(&format!(
+            "a preview is on ({PREVIEW}); its views keep the preview build until 'preview-tui.sh off'"
+        )),
+        "{warned:?}"
+    );
+    // Without --respawn nothing is said; the option's JSON does not change.
+    assert!(!env.cpd(&["tui"]).stderr.contains("preview"));
+
+    tmux_out(&env, &["set", "-gu", "@cpd_preview"]);
+    assert!(!env.cpd(&["tui", "--respawn"]).stderr.contains("preview"));
 }
 
 #[test]
