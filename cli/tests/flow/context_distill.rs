@@ -241,7 +241,9 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     time::OffsetDateTime::parse(started, &time::format_description::well_known::Rfc3339).expect("started_at is RFC 3339");
     assert!(started.ends_with('Z'), "{started}");
     assert_eq!(line["kind"], "distill");
-    assert_eq!(line.as_object().unwrap().len(), 10, "{line}");
+    // The two contradiction fields are on every pi run's line (contract §4.6 "The run log").
+    assert_eq!((line["contradictions"].clone(), line["contradictions_dropped"].clone()), (json!([]), json!(0)), "{line}");
+    assert_eq!(line.as_object().unwrap().len(), 12, "{line}");
 }
 
 #[test]
@@ -444,6 +446,96 @@ fn fx_with_decisions(n: u32) -> Fx {
         fx.insert(CONTEXT, &format!("hs-d{i}"), &ago(60), &format!("Decision {i}."), Draft::Decision { supersedes: None });
     }
     fx
+}
+
+/// A fake `pi` that cites every record (`CITES_ALL`), then ends its text with the section `## Contradictions` and `pairs`
+/// (one `echo`ed line each).
+fn says_with_contradictions(pairs: &[String]) -> String {
+    let lines: String = pairs.iter().map(|p| format!("echo '{p}'\n")).collect();
+    says(&format!("{CITES_ALL}\necho\necho '## Contradictions'\n{lines}"))
+}
+
+/// A Context of three decisions, oldest first.
+fn three_decisions(fx: &Fx) -> [String; 3] {
+    [fx.decide("Use sqlite."), fx.decide("Use postgres."), fx.decide("Use sqlite again.")]
+}
+
+#[test]
+fn the_contradictions_report_is_taken_out_of_the_digest_and_logged_with_the_valid_pairs() {
+    let fx = fx();
+    let [d1, d2, d3] = three_decisions(&fx);
+    fx.env.fake_pi(&says_with_contradictions(&[
+        format!("- [{d1}] -> [{d2}]: storage changed to postgres"),
+        format!("- [{d2}] -> [{d3}]: and back to sqlite"),
+        format!("- [{d3}] -> [{d1}]: reversed, the older is named newer"),
+    ]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["distilled"], true, "the digest is accepted: {out}");
+    let text = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
+    assert!(!text.contains("Contradictions") && !text.contains("->"), "the section is not in the stored digest: {text}");
+    assert!(text.starts_with("# Digest\n") && text.contains(&format!("- [{d3}] decision (")), "the rest of the text is kept: {text}");
+    assert_eq!(fx.pi_calls(), 1, "a report is no missing citation, so no repair");
+    let runs = fx.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(
+        runs[0]["contradictions"],
+        json!([
+            {"older": d1, "newer": d2, "why": "storage changed to postgres"},
+            {"older": d2, "newer": d3, "why": "and back to sqlite"},
+        ]),
+        "{}",
+        runs[0]
+    );
+    assert_eq!(runs[0]["contradictions_dropped"], 1, "the reversed pair is dropped and counted: {}", runs[0]);
+}
+
+#[test]
+fn a_pair_naming_an_unknown_record_is_dropped_and_counted() {
+    let fx = fx();
+    let [d1, d2, _] = three_decisions(&fx);
+    fx.env.fake_pi(&says_with_contradictions(&[format!("- [{d1}] -> [{d2}]: changed"), format!("- [{d1}] -> [hs-d9999]: a ghost")]));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let text = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
+    assert!(!text.contains("Contradictions") && !text.contains("hs-d9999"), "the section is not in the digest, and the ghost id is no stray citation: {text}");
+    let runs = fx.runs();
+    assert_eq!(runs[0]["contradictions"], json!([{"older": d1, "newer": d2, "why": "changed"}]), "{}", runs[0]);
+    assert_eq!(runs[0]["contradictions_dropped"], 1, "{}", runs[0]);
+}
+
+#[test]
+fn a_digest_without_the_section_logs_no_pairs() {
+    let fx = fx();
+    fx.decide("Use sqlite.");
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let runs = fx.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!((runs[0]["contradictions"].clone(), runs[0]["contradictions_dropped"].clone()), (json!([]), json!(0)), "{}", runs[0]);
+}
+
+#[test]
+fn ids_inside_the_contradictions_section_are_not_citations() {
+    let fx = fx();
+    let d = fx.decide("Use sqlite.");
+    let n = fx.cpd(&["context", "note", "A note.", "--context", CONTEXT]).ok()["record"]["id"].as_str().unwrap().to_owned();
+    // The only mention of the decision is in the report.
+    fx.env.fake_pi(&says(&format!("echo '# Digest'; echo 'Nothing cited.'; echo; echo '## Contradictions'; echo '- [{n}] -> [{d}]: x'")));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    assert_eq!(error["details"]["missing"], json!([d]), "{error}");
+    assert_eq!(error["details"]["stray"], json!([]), "{error}");
+    let kept = fs::read_to_string(error["details"]["invalid"].as_str().unwrap()).unwrap();
+    assert!(!kept.contains("Contradictions"), "the section is not in the kept text either: {kept}");
+}
+
+#[test]
+fn the_prompt_asks_for_the_contradictions_section_and_states_recency() {
+    let fx = fx();
+    fx.decide("Use sqlite.");
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let prompt = fs::read_to_string(fx.digests().join("prompt.md")).unwrap();
+    assert!(prompt.to_lowercase().contains("recency"), "the prompt states the rule: {prompt}");
+    assert!(prompt.contains("[newer, older]"), "an overruled decision is cited in the newer bullet: {prompt}");
+    assert!(prompt.contains("## Contradictions"), "the prompt asks for the section: {prompt}");
+    assert!(prompt.contains("- [<older>] -> [<newer>]: "), "the prompt gives the line format: {prompt}");
 }
 
 #[test]
