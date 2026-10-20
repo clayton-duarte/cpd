@@ -593,8 +593,7 @@ use std::time::{Duration, SystemTime};
 
 /// The first `python3` of the real `PATH`.
 fn real_python3() -> PathBuf {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).map(|dir| dir.join("python3")).find(|p| p.is_file()).expect("python3 on PATH")
+    std::env::split_paths(common::inherited_path()).map(|dir| dir.join("python3")).find(|p| p.is_file()).expect("python3 on PATH")
 }
 
 /// A `python3` first on `PATH` that behaves as macOS's: `ctypes.CDLL(None).renameat2` raises
@@ -900,12 +899,12 @@ fn a_pi_that_is_a_regular_file_is_refused_before_the_binary_is_replaced() {
 fn path_without_python3(env: &TestEnv) -> String {
     let tools = env.root().join("tools");
     fs::create_dir_all(&tools).unwrap();
-    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = common::inherited_path();
     for tool in [
         "git", "sed", "grep", "cmp", "basename", "dirname", "cp", "mv", "rm", "mkdir", "mktemp", "cat", "chmod", "date", "find", "ln", "readlink", "sleep", "kill", "tr",
         "uname", "env", "tmux", "flock", "touch", "true", "false", "test", "head", "tail", "id", "wc", "sort", "awk", "sh", "printf", "echo", "ls", "pwd", "expr",
     ] {
-        if let Some(found) = std::env::split_paths(&path).map(|d| d.join(tool)).find(|p| p.is_file()) {
+        if let Some(found) = std::env::split_paths(path).map(|d| d.join(tool)).find(|p| p.is_file()) {
             let _ = symlink(found, tools.join(tool));
         }
     }
