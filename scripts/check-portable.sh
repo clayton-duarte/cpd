@@ -15,7 +15,7 @@ set -eu
 dir=$(cd "$(dirname "$0")" && pwd)
 
 # What a Mac runs (dotfiles' install and sync, bare cpd, a Worker or Lead there, the Gate there).
-covered="install-cpd.sh pi-check.sh check-portable.sh check-migrations-frozen.sh cargo.sh npm-fresh.sh new-migration.sh preview-tui.sh"
+covered="install-cpd.sh pi-check.sh check-portable.sh check-migrations-frozen.sh cargo.sh npm-fresh.sh new-migration.sh preview-tui.sh repin.sh"
 
 # Linux-only, not covered, each with its reason; a script in neither list fails.
 linux_only="release.sh: hs only, its header says so
