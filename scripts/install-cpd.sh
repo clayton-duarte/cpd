@@ -3,11 +3,21 @@
 # the pi adapter pi/ as ~/.local/share/cpd/pi, where cpd finds it by
 # default: <dir of the binary>/../share/cpd/pi (contract §6.5, §8 pi_adapter).
 # Safe to rerun: the binary is replaced atomically, even while it runs.
+#
+# Runs on Linux and on macOS, the same lines (hs-d355; scripts/check-portable.sh
+# refuses Linux-only calls in this file, and the Gate runs it). The adapter
+# directory is a symlink, ~/.local/share/cpd/pi -> pi.<id>, swapped by one
+# rename(2) (python3 os.replace); a first install after hs-d355 migrates an
+# existing real directory to pi.legacy (two renames in one process, not atomic, once). Layout,
+# migration, cleanup and what pi sees: contract §3.7 "The adapter swap";
+# algorithm and tests: docs/implementing.md "The adapter swap".
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 dest_dir="${HOME:?HOME is not set}/.local/bin"
-adapter_dir="$dest_dir/../share/cpd/pi"
+# <dir of the binary>/../share/cpd, where cpd finds the adapter; $adapter_dir is the symlink.
+share="$HOME/.local/share/cpd"
+adapter_dir="$share/pi"
 
 db="${CPD_HOME:-$HOME/.cpd}/cpd.db"
 
@@ -32,6 +42,16 @@ for file in "$root/$migrations"/*; do
 done
 if [ -n "$unmerged" ]; then
   echo "cpd install refused: this build carries migration $unmerged that is not on origin/main, and a preview would apply it to $db before the PR merges. Merge main into this branch, or wait until the PR merges, then install again." >&2
+  exit 1
+fi
+
+# Preflight for the adapter swap, before anything is built or replaced (docs/implementing.md "The adapter swap", step 1).
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "cpd install refused: python3 is required for the atomic adapter swap" >&2
+  exit 1
+fi
+if { [ -e "$adapter_dir" ] || [ -L "$adapter_dir" ]; } && [ ! -L "$adapter_dir" ] && [ ! -d "$adapter_dir" ]; then
+  echo "cpd install refused: $adapter_dir is neither a symlink nor a directory" >&2
   exit 1
 fi
 
@@ -72,30 +92,78 @@ chmod 755 "$tmp"
 mv -f "$tmp" "$dest_dir/cpd"
 trap - EXIT
 
-# The adapter is replaced as a whole; tests are not part of the install. It is
-# built in a directory of its own name beside the old one ($$ keeps concurrent
-# installs apart) and swapped in with one rename, so the adapter directory is
-# never missing or half written: the first install renames it into place, a
-# later one exchanges the two directories (renameat2 RENAME_EXCHANGE, Linux,
-# glibc 2.28) and then deletes the old one, now under the temporary name.
-mkdir -p "$(dirname "$adapter_dir")"
-adapter_tmp="$adapter_dir.tmp.$$"
-trap 'rm -rf "$adapter_tmp"' EXIT
-mkdir -p "$adapter_tmp"
+# The adapter is replaced as a whole; tests are not part of the install
+# (hs-d355, docs/implementing.md "The adapter swap"). A version is built in
+# pi.tmp.$$ ($$ keeps concurrent installs apart), renamed to pi.<id> (<id> =
+# UTC YYYYmmddTHHMMSS-$$) and linked as pi.link.$$ -> pi.<id>; one rename(2)
+# (python3 os.replace, never renameat2, mv or ln -sfn) puts the link over
+# $adapter_dir, so the path is always the old or the new version, whole. A real
+# directory there (installs before hs-d355) is first renamed to pi.legacy: that
+# one time $adapter_dir is missing between two renames in one python3 process
+# (microseconds), and a failed second rename puts it back in that process. Afterwards $adapter_dir/package.json is checked, and versions
+# that are neither current, nor the displaced one, nor younger than 60 minutes
+# are removed, with the tmp directories and links of dead pids.
+mkdir -p "$share"
+adapter_tmp="$share/pi.tmp.$$"
+adapter_link="$share/pi.link.$$"
+version_name="pi.$(date -u +%Y%m%dT%H%M%S)-$$"
+trap 'rm -rf "$adapter_tmp" "$adapter_link"' EXIT
+mkdir "$adapter_tmp"
 cp -R "$root/pi/." "$adapter_tmp/"
 rm -rf "$adapter_tmp/test"
-if [ -d "$adapter_dir" ]; then
-  python3 -c 'import ctypes, sys
-RENAME_EXCHANGE, AT_FDCWD = 2, -100
-a, b = (p.encode() for p in sys.argv[1:])
-if ctypes.CDLL(None, use_errno=True).renameat2(AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE) != 0:
-    e = ctypes.get_errno()
-    sys.exit("renameat2 %s <-> %s: errno %d" % (sys.argv[1], sys.argv[2], e))' "$adapter_tmp" "$adapter_dir"
-else
-  mv "$adapter_tmp" "$adapter_dir"
+mv "$adapter_tmp" "$share/$version_name"
+ln -s "$version_name" "$adapter_link"
+
+displaced=
+if [ -L "$adapter_dir" ]; then
+  displaced=$(readlink "$adapter_dir")
+elif [ -d "$adapter_dir" ]; then
+  displaced=pi.legacy
 fi
-rm -rf "$adapter_tmp"
+
+# One python3 process does the renames, so the migration's window is two system calls apart, not a process start-up.
+if [ -L "$adapter_dir" ] || [ ! -e "$adapter_dir" ]; then
+  swap_py='import os, sys; os.replace(sys.argv[1], sys.argv[2])'
+  swap_failed="cannot swap the adapter link over $adapter_dir"
+else
+  # The migration: a rename of a symlink over a directory fails, and no portable call exchanges the two.
+  rm -rf "$share/pi.legacy"
+  swap_py='import os, sys
+link, adapter, legacy = sys.argv[1:4]
+os.rename(adapter, legacy)
+try:
+    os.replace(link, adapter)
+except BaseException:
+    os.rename(legacy, adapter)
+    raise'
+  swap_failed="cannot swap the adapter link over $adapter_dir; the old directory is back"
+fi
+if ! python3 -c "$swap_py" "$adapter_link" "$adapter_dir" "$share/pi.legacy"; then
+  echo "cpd install failed: $swap_failed" >&2
+  exit 1
+fi
 trap - EXIT
+
+if [ ! -f "$adapter_dir/package.json" ]; then
+  echo "cpd install failed: $adapter_dir has no package.json after the swap" >&2
+  exit 1
+fi
+
+# Clean up (a failure is a warning, not a failed install): versions that are not current, not
+# the displaced one and not modified in the last 60 minutes; scratch of pids that are gone.
+current=$(readlink "$adapter_dir")
+cleaned=1
+for old in $(find "$share" -maxdepth 1 \( -name 'pi.legacy' -o -name 'pi.[0-9]*-[0-9]*' \) -mmin +60 2>/dev/null); do
+  name=$(basename "$old")
+  [ "$name" != "$current" ] && [ "$name" != "$displaced" ] || continue
+  rm -rf "$old" || cleaned=0
+done
+for scratch in "$share"/pi.tmp.* "$share"/pi.link.*; do
+  [ -e "$scratch" ] || [ -L "$scratch" ] || continue
+  pid=${scratch##*.}
+  kill -0 "$pid" 2>/dev/null || rm -rf "$scratch" || cleaned=0
+done
+[ "$cleaned" -eq 1 ] || echo "cpd install warning: could not remove every old adapter version under $share" >&2
 
 echo "installed $dest_dir/cpd and $adapter_dir" >&2
 
@@ -110,6 +178,14 @@ echo "installed $dest_dir/cpd and $adapter_dir" >&2
 # How long to wait for the killed engine to release locks/watch.lock (tests set it).
 lock_wait_secs="${CPD_INSTALL_LOCK_WAIT_SECS:-60}"
 failed=0
+# True when nobody holds the flock(2) lock on $1 (the lock cpd takes, core/src/lock.rs); macOS ships no flock command.
+lock_free() {
+  python3 -c 'import fcntl, sys
+try:
+    fcntl.flock(open(sys.argv[1], "a"), fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(1)' "$1"
+}
 fail() {
   echo "cpd install follow-up failed: $1" >&2
   failed=1
@@ -141,18 +217,18 @@ else
       lock="${CPD_HOME:-$HOME/.cpd}/locks/watch.lock"
       mkdir -p "$(dirname "$lock")"
       waited=0
-      while ! flock -n "$lock" true; do
+      while ! lock_free "$lock"; do
         waited=$((waited + 1))
         if [ "$waited" -gt $((lock_wait_secs * 4)) ]; then
           break
         fi
         sleep 0.25
       done
-      if ! flock -n "$lock" true; then
+      if ! lock_free "$lock"; then
         fail "the old engine still holds $lock after ${lock_wait_secs}s: the new engine was not started"
       elif ! out=$("$dest_dir/cpd" watch --ensure 2>"$errfile"); then
         fail "cpd watch --ensure: $out $(cat "$errfile"); the engine is not running"
-      elif flock -n "$lock" true; then
+      elif lock_free "$lock"; then
         fail "cpd watch --ensure answered $out, but no engine holds $lock: the engine is not running"
       else
         echo "$out" >&2
