@@ -1135,3 +1135,56 @@ fn the_ambient_gh_ssh_and_proxy_variables_do_not_reach_a_command() {
     let leaked: Vec<&str> = text.lines().filter(|l| AMBIENT.iter().any(|n| l.starts_with(&format!("{n}=")))).collect();
     assert!(leaked.is_empty(), "{leaked:?}");
 }
+
+// ---- A caller with no UTF-8 locale (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----
+//
+// The incident: mac-pro's install ran `cpd tui --respawn` from a launchd agent that sets only `PATH`; tmux printed the tabs
+// of cpd's `-F` formats as `_` and every call failed `tmux_failed: tmux list-panes printed unexpected output`.
+
+/// `cpd <args>` for a caller whose locale is `locale`: its exit code and its stdout and stderr.
+fn cpd_as(env: &TestEnv, locale: crate::common::Locale, args: &[&str]) -> (i32, String, String) {
+    let mut cmd = env.command(CPD);
+    locale.apply(&mut cmd).args(args);
+    let out = common::output(&mut cmd).unwrap();
+    (out.status.code().unwrap(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+#[test]
+fn tui_builds_and_respawns_the_cockpit_for_a_caller_without_a_utf8_locale() {
+    let mut failures = Vec::new();
+    for locale in crate::common::LOCALES {
+        let env = env();
+        let (exit, stdout, stderr) = cpd_as(&env, locale, &["tui"]);
+        if exit != 0 {
+            failures.push(format!("{locale:?}: cpd tui exited {exit}: {stdout}{stderr}"));
+            continue;
+        }
+        let (exit, stdout, stderr) = cpd_as(&env, locale, &["tui", "--respawn"]);
+        if exit != 0 {
+            failures.push(format!("{locale:?}: cpd tui --respawn exited {exit}: {stdout}{stderr}"));
+        }
+    }
+    assert!(failures.is_empty(), "cpd's tmux calls fail without a UTF-8 locale:\n{}", failures.join("\n"));
+}
+
+/// The install's case: the cockpit was built by a caller with a locale (a login shell), and `cpd tui --respawn` runs
+/// later from an agent without one. The views are restarted.
+#[test]
+fn tui_respawn_restarts_the_views_of_a_cockpit_for_a_caller_without_a_utf8_locale() {
+    let mut failures = Vec::new();
+    for locale in crate::common::LOCALES {
+        let env = env();
+        env.cpd(&["tui"]).ok();
+        let before: Vec<Option<u32>> = main_panes(&env).iter().map(|p| p.pid).collect();
+        let (exit, stdout, stderr) = cpd_as(&env, locale, &["tui", "--respawn"]);
+        if exit != 0 {
+            failures.push(format!("{locale:?}: cpd tui --respawn exited {exit}: {stdout}{stderr}"));
+            continue;
+        }
+        let after: Vec<Option<u32>> = main_panes(&env).iter().map(|p| p.pid).collect();
+        if before == after {
+            failures.push(format!("{locale:?}: no view was restarted: {stdout}"));
+        }
+    }
+    assert!(failures.is_empty(), "cpd tui --respawn fails without a UTF-8 locale:\n{}", failures.join("\n"));
+}

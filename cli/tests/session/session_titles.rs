@@ -80,7 +80,7 @@ fn setup(env: &TestEnv) {
     )
     .unwrap();
     env.fake_pi(FAKE_PI);
-    answer(env, "Dynamic session titles\n", 0);
+    answer(env, "TITLE: Dynamic session titles\n", 0);
     fs::create_dir_all(env.root().join("install")).unwrap();
     fs::write(env.root().join("install/current-version"), "1.0.0\n").unwrap();
     let scope = env.root().join("install/releases/1.0.0/node_modules/@earendil-works");
@@ -203,37 +203,51 @@ fn stdin_is_cut_to_the_newest_8000_characters() {
 // ---------- the answer ----------
 
 #[test]
-fn the_answer_is_sanitised_to_its_first_line_trimmed_without_quotes_and_at_most_60_characters() {
+fn the_answer_is_the_only_marked_line_unquoted_and_anything_else_is_malformed_and_never_cut() {
     let env = TestEnv::new();
     setup(&env);
-    let long = format!("{} end", "word ".repeat(15));
-    let cut = format!("{}…", long.chars().take(59).collect::<String>().trim_end());
-    for (said, title) in [
-        ("\"Quoted session title\"\n", "Quoted session title".to_owned()),
-        ("  'Single quoted'  \n", "Single quoted".to_owned()),
-        ("“Curly quotes”", "Curly quotes".to_owned()),
-        ("First line here\nSecond line\nThird\n", "First line here".to_owned()),
-        ("\n\nAfter blank lines\n", "After blank lines".to_owned()),
-        (long.as_str(), cut),
+    let over_long = format!("TITLE: {} end", "word ".repeat(15));
+    let sixty_one = format!("TITLE: {}", "a".repeat(61));
+    // Not one checked `TITLE:` line (§10.14 step 4): `malformed`, nothing written, nothing cut.
+    for said in [
+        over_long.as_str(),
+        sixty_one.as_str(),
+        "Dynamic session titles\n",
+        "TITLE: First title\nTITLE: Second title\n",
+        "TITLE:\n",
+        "TITLE: \"\"\n",
+        "TITLE: one two three four five six seven eight nine ten eleven\n",
+        "TITLE: A title that reads. As sentences\n",
+        "TITLE: Ends with a full stop.\n",
     ] {
         answer(&env, said, 0);
+        let error = refused(&retitle(&env, LEAD), "title_failed", 1);
+        assert_eq!(error["details"]["reason"], "malformed", "{said:?}");
+        nothing_written(&env, LEAD);
+    }
+    // The title is 60 characters at most, and exactly 60 passes.
+    let sixty = "a".repeat(60);
+    for (said, title) in [
+        ("TITLE: \"Quoted session title\"\n".to_owned(), "Quoted session title".to_owned()),
+        ("  TITLE:   'Single quoted'  \n".to_owned(), "Single quoted".to_owned()),
+        ("TITLE: “Curly quotes”".to_owned(), "Curly quotes".to_owned()),
+        ("  TITLE: Leading spaces\n".to_owned(), "Leading spaces".to_owned()),
+        ("Now I understand the task.\nTITLE: After a preamble\n".to_owned(), "After a preamble".to_owned()),
+        ("\n\nTITLE: After blank lines\nand a closing line\n".to_owned(), "After blank lines".to_owned()),
+        (format!("TITLE: {sixty}"), sixty.clone()),
+    ] {
+        answer(&env, &said, 0);
         let out = retitle(&env, LEAD).ok();
         assert_eq!(out["title"], json!(title), "{said:?}");
-        assert!(title.chars().count() <= 60);
         assert_eq!(show(&env, LEAD)["title"], json!(title));
     }
-    assert_eq!(cut_len(&env), 60, "a cut title is 60 characters, ending with …");
-}
-
-fn cut_len(env: &TestEnv) -> usize {
-    show(env, LEAD)["title"].as_str().unwrap().chars().count()
 }
 
 #[test]
 fn an_empty_answer_is_title_failed_and_writes_nothing() {
     let env = TestEnv::new();
     setup(&env);
-    for said in ["", "\n\n", "   \n", "\"\"\n", "''"] {
+    for said in ["", "\n\n", "   \n"] {
         answer(&env, said, 0);
         let error = refused(&retitle(&env, LEAD), "title_failed", 1);
         assert_eq!((error["details"]["session"].as_str(), error["details"]["reason"].as_str()), (Some(LEAD), Some("empty")), "{said:?}");
@@ -242,12 +256,13 @@ fn an_empty_answer_is_title_failed_and_writes_nothing() {
 }
 
 #[test]
-fn an_answer_the_title_type_refuses_is_title_failed_invalid_and_writes_nothing() {
+fn an_answer_the_title_type_refuses_is_title_failed_malformed_and_writes_nothing() {
     let env = TestEnv::new();
     setup(&env);
-    answer(&env, "Tab\tinside\n", 0);
+    // §10.14 step 4: an answer that is not a Title (a control character) is `malformed`, not `invalid`.
+    answer(&env, "TITLE: Tab\tinside\n", 0);
     let error = refused(&retitle(&env, LEAD), "title_failed", 1);
-    assert_eq!(error["details"]["reason"], "invalid");
+    assert_eq!(error["details"]["reason"], "malformed");
     nothing_written(&env, LEAD);
 }
 
@@ -256,7 +271,7 @@ fn a_pi_that_fails_is_title_failed_with_its_stderr_tail_and_writes_nothing() {
     let env = TestEnv::new();
     setup(&env);
     fs::write(env.root().join("stderr"), "model overloaded\n").unwrap();
-    answer(&env, "A title anyway\n", 3);
+    answer(&env, "TITLE: A title anyway\n", 3);
     let error = refused(&retitle(&env, LEAD), "title_failed", 1);
     let details = &error["details"];
     assert_eq!((details["reason"].as_str(), details["exit"].as_i64()), (Some("exit"), Some(3)), "{error}");
@@ -308,7 +323,7 @@ fn one_transaction_writes_title_titled_at_and_the_session_titled_event_and_a_rer
         .unwrap();
     assert_eq!(same, 1);
 
-    answer(&env, "Another subject now\n", 0);
+    answer(&env, "TITLE: Another subject now\n", 0);
     let again = retitle(&env, LEAD).ok();
     assert_eq!(again["title"], "Another subject now");
     assert!(again.get("already").is_none());

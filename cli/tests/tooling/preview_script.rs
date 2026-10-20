@@ -43,8 +43,8 @@ impl Preview {
             "tmux",
             &format!(
                 r#"echo "tmux $*" >> "$LOG"
-[ "$1 $2 $3 $4" = "-L cpdsock -f /dev/null" ] || {{ echo "bad tmux prefix: $*" >&2; exit 98; }}
-case "$5" in
+[ "$1 $2 $3 $4 $5" = "-u -L cpdsock -f /dev/null" ] || {{ echo "bad tmux prefix: $*" >&2; exit 98; }}
+case "$6" in
   list-windows) [ -z "${{NO_COCKPIT:-}}" ] && echo main ;;
   list-panes) printf '%b' '{}' ;;
 esac
@@ -110,14 +110,14 @@ chmod 755 "$CARGO_TARGET_DIR/release/cpd"
         self.env
             .calls("tmux")
             .into_iter()
-            .filter(|c| c[4] == "respawn-pane")
-            .map(|c| c[5..].to_vec())
+            .filter(|c| c[5] == "respawn-pane")
+            .map(|c| c[6..].to_vec())
             .collect()
     }
 
     /// The `set` calls of the fake tmux, as argv after the tmux prefix.
     fn sets(&self) -> Vec<Vec<String>> {
-        self.env.calls("tmux").into_iter().filter(|c| c[4] == "set").map(|c| c[4..].to_vec()).collect()
+        self.env.calls("tmux").into_iter().filter(|c| c[5] == "set").map(|c| c[5..].to_vec()).collect()
     }
 
     fn state(&self) -> PathBuf {
@@ -164,7 +164,7 @@ fn on_sets_the_preview_option_to_the_worktree_and_sha_after_the_views_are_respaw
     let sets = p.sets();
     assert_eq!(sets, [vec!["set", "-g", "@cpd_preview", &format!("{name} {sha}")]], "{sets:?}");
     let calls = p.env.calls("tmux");
-    let at = |verb: &str| calls.iter().rposition(|c| c[4] == verb).unwrap();
+    let at = |verb: &str| calls.iter().rposition(|c| c[5] == verb).unwrap();
     assert!(at("respawn-pane") < at("set"), "{calls:?}");
     // Twice is the same: the option is set again to the same value.
     assert_eq!(p.on(&[]).exit, 0);
@@ -213,7 +213,7 @@ fn on_starts_the_engine_on_the_installed_cpd_before_the_previews_tui() {
     let at = |line: &str| log.iter().position(|l| l == line).unwrap_or_else(|| panic!("{line} not in {log:?}"));
     assert!(at("installed watch --ensure") < at("preview tui"));
     assert!(at("preview plan list") < at("installed watch --ensure"));
-    assert!(at("preview tui") < at(&format!("tmux -L cpdsock -f /dev/null list-panes -t =cockpit:main -F #{{pane_id}}|#{{pane_dead}}|#{{@cpd_view}}|#{{@cpd_session}}")));
+    assert!(at("preview tui") < at(&format!("tmux -u -L cpdsock -f /dev/null list-panes -t =cockpit:main -F #{{pane_id}}|#{{pane_dead}}|#{{@cpd_view}}|#{{@cpd_session}}")));
     assert!(!log.contains(&"installed tui".to_owned()));
 }
 

@@ -152,9 +152,11 @@ pub(super) fn fork(args: ForkArgs) -> Result<Output, CpdError> {
     let spawn = lead_spawn(&env.home, &id, Some(&plan), Path::new(&source.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &park_window(&id, Some(&plan)), &spawn)?;
     kill_window_on_error(&tmux, &window, || {
-        tmux.set_pane_session(&pane, &id)?;
         tmux.set_pane_title(&pane, &name)?;
-        env.store.write("session fork", |tx| moved(tx, &row, &pane, &window, "parked"))
+        env.store.write("session fork", |tx| moved(tx, &row, &pane, &window, "parked"))?;
+        // The go signal only once the store knows the pane (contract §6.4). When it fails the window is killed
+        // below and the row's pane is gone: engine E2 stops it (§3.6).
+        tmux.set_pane_session(&pane, &id)
     })?;
     Ok(Output::success(json!({"session": {
         "id": id, "name": name, "plan": plan, "forked_from": source.id, "pane": pane.as_str(), "window": window.as_str(),
@@ -216,8 +218,15 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
             let spawn = lead_spawn(&env.home, &lead.id, lead.plan.as_ref(), Path::new(&lead.cwd));
             let (window, pane) = tmux.new_window(&cockpit, &parked_window(&lead), &spawn)?;
             kill_window_on_error(&tmux, &window, || {
-                tmux.set_pane_session(&pane, &lead.id)?;
-                tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)
+                tmux.set_pane_title(&pane, &env.store.read(|conn| lead.title(conn))?)?;
+                // The store records the pane (no event: the one `session-moved` follows the swap, below) before the
+                // go signal (contract §6.4). When the signal fails the window is killed here and the row's pane is
+                // gone: engine E2 stops it (§3.6).
+                env.store.write("session open", |tx| {
+                    tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [pane.as_str(), lead.id.as_str()])?;
+                    Ok(())
+                })?;
+                tmux.set_pane_session(&pane, &lead.id)
             })?;
             (pane, window)
         }
@@ -401,9 +410,10 @@ fn reopen_one(item: &Placed) -> Result<(), CpdError> {
     let spawn = lead_spawn(&env.home, &row.id, row.plan.as_ref(), Path::new(&row.cwd));
     let (window, pane) = tmux.new_window(&cockpit, &parked_window(&row), &spawn)?;
     kill_window_on_error(&tmux, &window, || {
-        tmux.set_pane_session(&pane, &row.id)?;
         tmux.set_pane_title(&pane, &env.store.read(|conn| row.title(conn))?)?;
-        env.store.write("tmux restart", |tx| moved(tx, &row, &pane, &window, "parked"))
+        env.store.write("tmux restart", |tx| moved(tx, &row, &pane, &window, "parked"))?;
+        // The go signal only once the store knows the pane (contract §6.4); on failure the window is killed and E2 stops the row.
+        tmux.set_pane_session(&pane, &row.id)
     })
 }
 
