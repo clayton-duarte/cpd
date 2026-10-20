@@ -20,6 +20,7 @@ use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, E
 use serde::{Deserialize, Serialize};
 
 use super::widgets::newest_client;
+use super::viewlog::ViewLog;
 use super::{not_a_terminal, on_a_terminal};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::host::Tmux;
@@ -298,15 +299,85 @@ pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, valid
 }
 
 /// Read-only `body`, scrollable, in a popup, until the User closes it.
-#[allow(dead_code)] // the callers of Jobs kit-tree and kit-scroll
 pub(crate) fn text(tmux: &Tmux, title: &str, body: &str) -> Result<(), CpdError> {
     let size = |client, title: &str| popup_size(client, title, widest(body), |width| wrap(body, width).len());
     ask(tmux, title, "text", &[("body", body)], size).map(drop)
 }
 
+/// A failure the User must see (commands.md §17 "No notes"): `title` says what failed, `text` why
+/// (`<code>: <message>`), in a `text` popup until the User closes it. The one entry point every view and command opens
+/// a failure with, so that no view draws a note.
+pub(crate) fn show_error(tmux: &Tmux, title: &str, text: &str) -> Result<(), CpdError> {
+    self::text(tmux, title, text)
+}
+
+/// A command of a view failed (commands.md §17 "No notes"): a line of the view's `log`, and the error dialog, `what`
+/// failed and `err` says why. A log that cannot be written is said in the dialog; a dialog that cannot open is
+/// logged: there is nothing else to show it with.
+pub(crate) fn report(tmux: &Tmux, log: &ViewLog, what: &str, err: &CpdError) {
+    let mut why = format!("{}: {}", err.code(), err.message());
+    if let Err(unwritten) = log.append(&format!("failed: {what}: {why}")) {
+        why = format!("{why}\n{unwritten}");
+    }
+    if let Err(unshown) = show_error(tmux, what, &why) {
+        let _ = log.append(&format!("failed: dialog: {}", unshown.message()));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `tmux` that records its arguments, one per line, in `<dir>/calls` and lists one attached client of 100 x 30. It
+    /// writes no dialog outcome, so a dialog's result is the "no usable result" error of a popup closed some other way.
+    fn recording_tmux(dir: &tempfile::TempDir) -> (Tmux, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let calls = dir.path().join("calls");
+        let program = dir.path().join("tmux");
+        let script = format!(
+            "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{calls}'; done\n\
+             case \"$5\" in list-clients) echo '1 100 30';; esac\n",
+            calls = calls.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (Tmux::new("test").with_program(&program), calls)
+    }
+
+    /// The arguments of the `display-popup` call in `calls`.
+    fn popup_of(calls: &Path) -> Vec<String> {
+        let text = std::fs::read_to_string(calls).unwrap();
+        let popup: Vec<String> = text.lines().skip_while(|l| *l != "display-popup").map(str::to_owned).collect();
+        assert_eq!(popup.first().map(String::as_str), Some("display-popup"), "{text}");
+        popup
+    }
+
+    #[test]
+    fn show_error_opens_a_text_popup_titled_with_what_failed_and_saying_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, calls) = recording_tmux(&dir);
+        let _ = show_error(&tmux, "session open l-ship", "no_cockpit: No cockpit.");
+        let popup = popup_of(&calls);
+        assert!(popup.contains(&" session open l-ship ".to_owned()), "the popup's title is what failed: {popup:?}");
+        let command = popup.last().unwrap();
+        assert!(command.starts_with("cpd tui view dialog text --title='session open l-ship' --out="), "{command}");
+        assert!(command.ends_with("--body='no_cockpit: No cockpit.'"), "the body is why: {command}");
+    }
+
+    #[test]
+    fn a_failed_command_of_a_view_is_a_log_line_and_the_error_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, calls) = recording_tmux(&dir);
+        let home = cpd_core::home::CpdHome::resolve(Some(dir.path().join("home").into()), None).unwrap();
+        let log = ViewLog::of(&home, "plan");
+        let err = CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached.");
+        report(&tmux, &log, "Open Worker", &err);
+        let logged = std::fs::read_to_string(dir.path().join("home/run/tui/plan.log")).unwrap();
+        let first = logged.lines().next().unwrap();
+        assert!(first.ends_with(" failed: Open Worker: tmux_failed: No tmux client is attached."), "{logged}");
+        let popup = popup_of(&calls);
+        assert!(popup.last().unwrap().ends_with("--body='tmux_failed: No tmux client is attached.'"), "{popup:?}");
+    }
 
     #[test]
     fn the_outcome_is_a_small_json_value() {

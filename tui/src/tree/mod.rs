@@ -18,7 +18,8 @@
 //!
 //! It never restarts a stopped engine (the supervisor does, contract §6.6); it tells the live Managers when the engine has
 //! been down for 60 s ([`view::View::watch_engine`], hs-d363). It writes nothing to its terminal outside the frame: its
-//! lines go to the note and to `run/tui/tree.log` ([`super::viewlog`]).
+//! lines go to `run/tui/tree.log` ([`super::viewlog`]), and a failure the User must see opens a `text` dialog
+//! ([`crate::dialog::show_error`]); no view draws a note (commands.md §17 "No notes").
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
@@ -58,7 +59,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::inbox::model;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
-use actions::Runner;
+use actions::{Failed, Runner};
 use folds::FoldsFile;
 use kinds::KINDS;
 use view::{Effect, View};
@@ -86,8 +87,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let snooze_end = read::snooze_end(&mut store)?;
-            let mut view = View::new(read::tree(&mut store)?, false);
-            view.keep_folds(FoldsFile::at(&home));
+            let view = View::new(read::tree(&mut store)?, false);
             let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
             let runner = Arc::new(Runner::new(home.clone(), &config));
@@ -108,7 +108,7 @@ fn event_loop(
     poll: Duration,
     runner: &Arc<Runner>,
 ) -> std::io::Result<()> {
-    let log = ViewLog::of(home, "tree");
+    let mut log = Log { file: ViewLog::of(home, "tree"), unwritable_said: false };
     let mut dirty = false;
     let mut last_snapshot = Instant::now();
     let mut last_poll = Instant::now();
@@ -121,22 +121,23 @@ fn event_loop(
     let (mut redraw, mut drawn_frame, mut drawn_second) = (true, palette::frame(SystemTime::now()), unix_second());
     // the commands and the popup run off this thread (tui-W7): the loop goes on drawing, reading keys and the follower
     // meanwhile. A popup returns when it closes, so it does not hold up the commands.
-    let mut actions = Background::<Result<String, String>>::new();
+    let mut actions = Background::<Result<String, Failed>>::new();
     let mut popups = Background::<Result<(), String>>::new();
+    for line in view.keep_folds(FoldsFile::at(home)) {
+        show(log.line(&line), &mut popups, runner);
+    }
     loop {
         let error = view.error.clone();
         while let Some(result) = actions.finished() {
-            said(&mut view, &log, result);
-            redraw = true;
+            show(said(&mut view, &mut log, result), &mut popups, runner);
             // the tree shows the result on this loop's snapshot
             dirty = true;
             last_snapshot = Instant::now() - SNAPSHOT_EVERY;
         }
         while let Some(result) = popups.finished() {
-            // only a failure is said
+            // only a failure is logged: a popup that failed cannot be asked to say so
             if let Err(why) = result {
-                view.done(Err(why));
-                redraw = true;
+                show(log.line(&format!("failed: popup: {why}")), &mut popups, runner);
             }
         }
         if last_poll.elapsed() >= poll {
@@ -162,18 +163,15 @@ fn event_loop(
             view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone());
         }
         // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
-        // lines go to the log, never to the terminal; a log that cannot be written is the note.
+        // lines go to the log, never to the terminal or the frame; a log that cannot be written is a dialog.
         let lines = view.watch_engine(Instant::now(), &mut |action| actions::call(action), &mut || runner.live_managers());
-        if !lines.is_empty() {
-            for line in lines {
-                if let Err(why) = log.append(&line) {
-                    view.note = why;
-                }
-            }
-            redraw = true; // the note
+        for line in lines {
+            show(log.line(&line), &mut popups, runner);
         }
         // the folds file follows every change of the folds (a write only when they changed)
-        view.save_folds();
+        if let Some(line) = view.save_folds() {
+            show(log.line(&line), &mut popups, runner);
+        }
         let (frame, second) = (palette::frame(SystemTime::now()), unix_second());
         redraw |= view.error != error || (view.animated() && frame != drawn_frame);
         // the Inbox items' ages are redrawn every second, from `opened_at`
@@ -211,12 +209,12 @@ fn event_loop(
                 match runner.ask(question) {
                     Ok(None) => {}
                     Ok(Some(action)) => {
-                        said(&mut view, &log, runner.run(&action));
+                        show(said(&mut view, &mut log, runner.run(&action)), &mut popups, runner);
                         // the tree shows the result on this loop's snapshot
                         dirty = true;
                         last_snapshot = Instant::now() - SNAPSHOT_EVERY;
                     }
-                    Err(why) => view.done(Err(why)),
+                    Err(why) => show(log.line(&format!("failed: dialog: {why}")), &mut popups, runner),
                 }
             }
             Effect::Legend => {
@@ -230,13 +228,12 @@ fn event_loop(
                 dirty = true;
             }
             Effect::Run(action) => {
-                view.done(Ok(format!("running: {}", action.argv().join(" "))));
                 let runner = Arc::clone(runner);
                 actions.submit(move || runner.run(&action));
             }
-            Effect::Text(_) => {} // red stub: nothing returns it yet
+            text @ Effect::Text { .. } => show(text, &mut popups, runner),
             Effect::Steps(steps) => {
-                said(&mut view, &log, runner.run_all(&steps));
+                show(said(&mut view, &mut log, runner.run_all(&steps)), &mut popups, runner);
                 dirty = true;
                 last_snapshot = Instant::now() - SNAPSHOT_EVERY;
             }
@@ -244,15 +241,41 @@ fn event_loop(
     }
 }
 
-/// The result of an action: the note, and a line of the log. A log that cannot be written is added to the note.
-fn said(view: &mut View, log: &ViewLog, result: Result<String, String>) {
-    let line = match &result {
-        Ok(note) => format!("ok: {note}"),
-        Err(why) => format!("failed: {why}"),
-    };
-    view.done(result);
-    if let Err(why) = log.append(&line) {
-        view.note = format!("{}; {why}", view.note);
+/// The view's log, `run/tui/tree.log`. A log that cannot be written is a failure the User must see, said once.
+struct Log {
+    file: ViewLog,
+    unwritable_said: bool,
+}
+
+impl Log {
+    /// Appends `line`; the dialog to open when the log cannot be written (the first time only), else [`Effect::None`].
+    fn line(&mut self, line: &str) -> Effect {
+        match self.file.append(line) {
+            Err(why) if !std::mem::replace(&mut self.unwritable_said, true) => Effect::Text { title: "Tree Log".into(), text: why },
+            _ => Effect::None,
+        }
+    }
+}
+
+/// The result of an action: a line of the log, and the dialog of a failure (a success says nothing).
+fn said(view: &mut View, log: &mut Log, result: Result<String, Failed>) -> Effect {
+    match result {
+        Ok(said) => log.line(&format!("ok: {said}")),
+        Err(Failed { step, why }) => {
+            let logged = log.line(&format!("failed: {}: {why}", step.argv().join(" ")));
+            match view.finished(&step, Err(why)) {
+                Effect::None => logged,
+                dialog => dialog,
+            }
+        }
+    }
+}
+
+/// Opens the `text` dialog of `effect`, if it is one, off this thread: the loop goes on drawing while it is open.
+fn show(effect: Effect, popups: &mut Background<Result<(), String>>, runner: &Arc<Runner>) {
+    if let Effect::Text { title, text } = effect {
+        let runner = Arc::clone(runner);
+        popups.submit(move || runner.error(&title, &text));
     }
 }
 
