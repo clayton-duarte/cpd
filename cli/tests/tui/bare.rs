@@ -372,13 +372,23 @@ fn states(env: &TestEnv) -> Vec<(String, String, Option<String>)> {
 /// Waits until every one of `ids` is `idle` with a pane that exists in the server, as the adapter of
 /// the pi of its new pane reports it.
 fn wait_idle_in_live_panes(env: &TestEnv, ids: &[&str]) {
-    wait_until(&format!("{ids:?} to be idle in live panes"), || {
-        let panes = tmux_out(env, &["list-panes", "-a", "-F", "#{pane_id}"]);
-        states(env)
+    let mut seen = (Vec::new(), String::new());
+    let done = common::poll(common::WAIT, || {
+        seen = (states(env), tmux_out(env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]));
+        let live = |p: &str| seen.1.lines().any(|l| l.split(' ').next() == Some(p));
+        seen.0
             .iter()
             .filter(|(id, _, _)| ids.contains(&id.as_str()))
-            .all(|(_, state, pane)| state == "idle" && pane.as_deref().is_some_and(|p| panes.lines().any(|l| l == p)))
+            .all(|(_, state, pane)| state == "idle" && pane.as_deref().is_some_and(live))
+            .then_some(())
     });
+    assert!(
+        done.is_some(),
+        "timed out waiting for {ids:?} to be idle in live panes: rows {:?}, panes {:?}\nsession-state and session-moved Events: {}",
+        seen.0,
+        seen.1,
+        env.cpd(&["events", "list", "--kind", "session-state", "--kind", "session-moved"]).stdout
+    );
 }
 
 fn home_of(env: &TestEnv) -> CpdHome {
