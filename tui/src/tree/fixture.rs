@@ -79,6 +79,7 @@ pub fn plan(id: &str, context: &str, phase: Phase, counts: [usize; 6], mut lead:
 pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
     ContextNode {
         dot: Dot::Stopped, // no Manager; `managed` gives it one
+        manager_place: None,
         id: ContextId::parse(id).unwrap(),
         title: titled(id),
         jira: None,
@@ -92,6 +93,7 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
 /// `c` with a Manager whose own dot is `dot`: the dot of the Context row (commands.md §17, hs-d215).
 pub fn managed(mut c: ContextNode, dot: Dot) -> ContextNode {
     c.dot = dot;
+    c.manager_place = Some(Place::Parked);
     c
 }
 

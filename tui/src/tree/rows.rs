@@ -3,10 +3,12 @@
 //!
 //! The widget draws one text per row (guide, dot, name). It has no
 //! right-aligned column, so each Plan's five Job counters are drawn as a
-//! right-aligned `Line` into the row's `Rect` after the tree. The `󰐊` of the
-//! Session in the chat slot is drawn over the indent of its row for the same
-//! reason (the widget owns the indent). Context rows are not selectable: the cursor moves between Sessions
-//! only, and is inverted over its row's whole width, only while the pane has keyboard focus.
+//! right-aligned `Line` into the row's `Rect` after the tree. Context rows are not selectable: the cursor moves between
+//! Sessions only, and is inverted over its row's whole width, only while the pane has keyboard focus.
+//!
+//! **Selected** (hs-d351): the Context or Plan whose Session is in the chat slot (a Context row when its Manager is)
+//! draws its name in the palette's focus blue, the muted colour of an archived row included; the rest of its row keeps
+//! its colours.
 //!
 //! **Folds** (decisions hs-d337, hs-d339, hs-d344, hs-d349; `crate::fold`, the one widget). A Context is a collapsible
 //! block: the title row `╭` + the Context's dot + its id, each content row `├─` + the row's dot + its name, straight
@@ -49,16 +51,13 @@ use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 use crate::fold;
 use crate::palette::{self, Meaning};
 use cpd_core::plan::Phase;
-use crate::read::{ContextNode, Dot, JobStatus, PlanNode, SessionNode, Tree};
+use crate::read::{ContextNode, Dot, JobStatus, Place, PlanNode, SessionNode, Tree};
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
 pub type Id = String;
 
 /// One tree level is indented by two columns (`tui-tree-widget`'s own indentation, which [`draw`] takes back).
 const INDENT: usize = 2;
-
-/// The mark of the Session in the chat slot, in column 0 of its row.
-pub const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 
 /// What a closing row's identifier starts with: the identifier of the fold it toggles, last element, behind this.
 const TOGGLE: &str = "╰─ ";
@@ -259,7 +258,7 @@ pub fn truncate(text: &str, width: usize) -> String {
 
 /// What a Plan's or fork's row says (both are one level under their Context).
 struct RowText<'a> {
-    /// The Session of the row: its chat is marked with `󰐊`, and its name is bold, when it is in the chat slot.
+    /// The Session of the row: its name is blue when it is in the chat slot (selected).
     session: Option<&'a SessionNode>,
     name: String,
     /// How deep the row is: 1 for a Plan or fork of a live Context.
@@ -268,7 +267,7 @@ struct RowText<'a> {
     frame: usize,
     /// The width of the counters drawn at the right (0: none).
     counters_width: usize,
-    /// Archived: its dot is grey and never turns, and its name is not bold (the colours are muted when drawn).
+    /// Archived: its dot is grey and never turns (the colours are muted when drawn, but the selected name stays blue).
     muted: bool,
 }
 
@@ -279,15 +278,20 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
     let mut spans = vec![palette::dot_span(dot, r.frame, r.muted), " ".into()];
     let used = r.depth * INDENT + BRANCH_WIDTH + Line::from(spans.clone()).width() + if r.counters_width > 0 { r.counters_width + 1 } else { 0 };
     let name = truncate(&r.name, (width as usize).saturating_sub(used));
-    let active = r.session.is_some_and(SessionNode::is_active) && !r.muted;
-    spans.push(if active { Span::styled(name, Style::new().add_modifier(Modifier::BOLD)) } else { name.into() });
+    spans.push(selectable_name(name, r.session.is_some_and(SessionNode::is_active)));
     Line::from(spans)
 }
 
+/// A row's name: blue when `selected` (hs-d351), else the terminal's own colour.
+fn selectable_name(name: String, selected: bool) -> Span<'static> {
+    if selected { Span::styled(name, palette::selected()) } else { name.into() }
+}
+
 /// A Context's title (after the `╭`): its dot (the most urgent of its live Sessions, grey when the Context is
-/// archived) and id. The fold makes it bold.
+/// archived) and id, blue when its Manager is in the chat slot. The fold makes it bold.
 fn context_text(c: &ContextNode, frame: usize) -> Line<'static> {
-    Line::from(vec![palette::dot_span(c.dot, frame, c.is_archived()), " ".into(), c.id.to_string().into()])
+    let selected = c.manager_place == Some(Place::Chat);
+    Line::from(vec![palette::dot_span(c.dot, frame, c.is_archived()), " ".into(), selectable_name(c.id.to_string(), selected)])
 }
 
 /// A Plan's row text, one level under its Context.
@@ -336,7 +340,7 @@ pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -
     live.into_iter().chain(archived).flat_map(|c| context_items(c, opened, width, frame)).collect()
 }
 
-/// Draw the column into `area`: the tree, then the counters, the guides and the active mark of each visible
+/// Draw the column into `area`: the tree, then the counters and the guides of each visible
 /// row, the archived rows muted, then the cursor's Session row inverted when
 /// `cursor` says it is shown (a Context row never is). `frame` is the animation frame of the working dots.
 pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize) {
@@ -359,23 +363,16 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
             let cell = if x + shift < rect.right() { buf[(x + shift, y)].clone() } else { Cell::EMPTY };
             buf[(x, y)] = cell;
         }
-        let muted = row.archived();
-        match row {
-            Row::Plan(_, plan) => {
-                counters(plan).right_aligned().render(rect, buf);
-                if plan.lead().is_some_and(SessionNode::is_active) && !muted {
-                    Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
-                }
-            }
-            Row::Fork(_, _, fork) => {
-                if fork.is_active() && !muted {
-                    Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
-                }
-            }
-            Row::Context(_) | Row::Toggle => {}
+        if let Row::Plan(_, plan) = row {
+            counters(plan).right_aligned().render(rect, buf);
         }
-        if muted {
-            buf.set_style(rect, palette::fg(Meaning::Nothing));
+        if row.archived() {
+            // muted, except the selected name: selection beats the muted colour
+            for x in rect.x..rect.right() {
+                if buf[(x, y)].fg != palette::selected().fg.unwrap_or_default() {
+                    buf[(x, y)].set_style(palette::fg(Meaning::Nothing));
+                }
+            }
         }
         if cursor && row.selectable() && path.as_slice() == state.selected() {
             buf.set_style(rect, Modifier::REVERSED);
@@ -449,12 +446,8 @@ pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn the_glyphs_are_one_cell_wide() {
-        for glyph in [ACTIVE_MARK] {
-            assert_eq!(ratatui::text::Span::raw(glyph).width(), 1, "{glyph:?}");
-        }
-    }
+    /// The dropped mark of the Session in the chat slot (md-play): only the tests that it is gone name it.
+    const ACTIVE_MARK: &str = "\u{F040A}";
 
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -552,13 +545,13 @@ mod tests {
             [
                 format!("╭{NEEDS_YOU} cpd"),
                 row_of(&format!("├─{IDLE} v1"), "36⋅0⋅0⋅1⋅5", 31),
-                row_of(&format!("{ACTIVE_MARK}─{NEEDS_YOU} rust"), "0⋅1⋅0⋅0⋅1", 31),
+                row_of(&format!("├─{NEEDS_YOU} rust"), "0⋅1⋅0⋅0⋅1", 31),
                 row_of(&format!("├─{IDLE} ui"), "1⋅0⋅2⋅0⋅3", 31),
                 PLAIN.to_owned(),
             ]
         );
-        assert!(buf[(4, 2)].modifier.contains(Modifier::BOLD), "the name of the centre row is bold");
-        assert!(buf[(0, 2)].modifier.contains(Modifier::BOLD), "so is its {ACTIVE_MARK}");
+        assert_eq!(buf[(4, 2)].fg, palette::selected().fg.unwrap(), "the name of the centre row is blue");
+        assert!(!buf[(4, 2)].modifier.contains(Modifier::BOLD), "not bold");
         assert!(buf[(2, 0)].modifier.contains(Modifier::BOLD), "and a Context's title");
         assert!(!buf[(4, 1)].modifier.contains(Modifier::BOLD));
     }
@@ -571,7 +564,7 @@ mod tests {
             lines(&buf),
             [
                 format!("╭{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
+                row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
                 row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
                 row_of(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
                 format!("├─{IDLE} ship·f-id").to_owned(),
@@ -629,7 +622,7 @@ mod tests {
         assert!(!state.opened().contains(&toggle_of(&["alpha"])), "folded");
         assert!(state.opened().contains(&path(&["alpha"])), "the live rows stay open");
         let folded = lines(&render(&tree, &mut state, 44, 6, false));
-        assert_eq!(folded[..5], [format!("╭{NEEDS_YOU} alpha"), row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44), format!("├─{IDLE} ship·f-id"), EXPAND.to_owned()]);
+        assert_eq!(folded[..5], [format!("╭{NEEDS_YOU} alpha"), row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44), format!("├─{IDLE} ship·f-id"), EXPAND.to_owned()]);
         assert!(!click_toggle(&mut state, &tree, &toggle_of(&["nope"])), "no Context, no closing row");
         assert!(click_toggle(&mut state, &tree, &toggle_of(&["alpha"])));
         assert!(state.opened().contains(&toggle_of(&["alpha"])), "the closing row unfolds it");
@@ -650,7 +643,7 @@ mod tests {
             lines(&buf),
             [
                 format!("╭{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
+                row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
                 row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
                 format!("├─{IDLE} ship·f-id").to_owned(),
                 EXPAND.to_owned(),
@@ -879,21 +872,6 @@ mod tests {
         assert!((0..3).all(|y| reversed(&buf, y) == vec![false; 44]));
     }
 
-    #[test]
-    fn the_active_session_has_the_mark_in_column_0_and_is_bold_and_no_other_row() {
-        let mut tree = sample();
-        // the fork is in the chat slot, not the Lead
-        tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
-        tree.contexts[0].plans[0].sessions[1].place = Place::Chat;
-        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
-        assert_eq!(text(&buf, 4), format!("{ACTIVE_MARK}─{IDLE} ship·f-id"));
-        for y in [0, 1, 2, 3, 5, 6, 7] {
-            assert!(!text(&buf, y).contains(ACTIVE_MARK), "row {y}");
-        }
-        assert!(buf[(6, 4)].modifier.contains(Modifier::BOLD));
-        assert!(!buf[(8, 1)].modifier.contains(Modifier::BOLD));
-    }
-
     // ---- hs-d351: the selected row's name is blue, the chat-slot mark is dropped (commands.md §13.2 "Rows", §17 "Blue") ----
 
     /// The one colour for in focus and selected. Parsed, not named, so that no colour is spelled outside the palette
@@ -1117,7 +1095,7 @@ mod tests {
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 6, false);
         assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha"), "not its title `Payments`");
-        assert_eq!(text(&buf, 1), row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
+        assert_eq!(text(&buf, 1), row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
         assert_eq!(text(&buf, 5), format!("├─{NEEDS_YOU} ship·f-bl"), "the Plan id, `·`, the first 4 characters of the Session id; not its name");
         // the prompts word a row by its title or name: Rename… edits those, not the id
         assert_eq!(row(&tree, &path(&["alpha"])).unwrap().label(), "Payments");
@@ -1179,7 +1157,7 @@ mod tests {
             lines(&buf)[..12],
             [
                 format!("╭{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
+                row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
                 row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
                 format!("├─{IDLE} ship·f-id").to_owned(),
                 row_of(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),

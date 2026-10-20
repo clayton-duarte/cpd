@@ -107,6 +107,14 @@ pub fn ui(u: Ui) -> Color {
     }
 }
 
+/// The one colour for in focus and selected (hs-d351), as the cockpit's `pane-active-border-style fg=blue`.
+const FOCUS: Color = Color::Blue;
+
+/// The selected row's name in the tree (hs-d351).
+pub fn selected() -> Style {
+    Style::new().fg(FOCUS)
+}
+
 /// Notes and prompts at the foot of a view.
 pub fn note() -> Style {
     Style::new().fg(ui(Ui::Note))
