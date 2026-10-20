@@ -119,8 +119,14 @@ impl Fx {
         self.git(&self.origin, &["rev-parse", "refs/heads/cpd/pay"])
     }
 
+    /// The `pre-merge` hook's output: the log without the Gate's own `gate: ...` lines at its head (the slot's, §7.6).
     fn gate_log(&self) -> String {
-        fs::read_to_string(self.home.plan_dir(&plan()).join("logs/pr-repo.pre-merge.log")).unwrap_or_default()
+        let log = fs::read_to_string(self.home.plan_dir(&plan()).join("logs/pr-repo.pre-merge.log")).unwrap_or_default();
+        let mut rest = log.as_str();
+        while let Some(line) = rest.lines().next().filter(|l| l.starts_with("gate: ")) {
+            rest = &rest[line.len() + 1..];
+        }
+        rest.to_owned()
     }
 
     /// `cpd pr push --plan pay`, started in the background.

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
@@ -184,6 +184,12 @@ impl Fx {
         fs::write(self.env.root().join("gh").join(file), format!("{text}\n")).unwrap();
     }
 
+    /// Sets `test_concurrency` (a top-level key, so before the tables) in `config.toml`.
+    fn test_concurrency(&self, n: u32) {
+        let config = fs::read_to_string(self.home.config()).unwrap();
+        fs::write(self.home.config(), config.replacen("machine = \"t\"\n", &format!("machine = \"t\"\ntest_concurrency = {n}\n"), 1)).unwrap();
+    }
+
     /// Commits the Lead worktree's `.config/wt.toml`.
     fn hooks(&self, toml: &str) {
         fs::create_dir_all(self.lead.join(".config")).unwrap();
@@ -256,8 +262,14 @@ impl Fx {
         self.env.calls("gh")
     }
 
+    /// The `pre-merge` hook's output: the log without the Gate's own `gate: ...` lines at its head (the slot's, §7.6).
     fn gate_log(&self) -> String {
-        self.pr_log("pre-merge")
+        let log = self.pr_log("pre-merge");
+        let mut rest = log.as_str();
+        while let Some(line) = rest.lines().next().filter(|l| l.starts_with("gate: ")) {
+            rest = &rest[line.len() + 1..];
+        }
+        rest.to_owned()
     }
 
     /// `run/pay/logs/pr-repo.<hook>.log`.
@@ -2743,7 +2755,7 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     assert_eq!(out["pr"]["pr"]["url"], WEB_URL);
     assert_eq!(fx.phase(), "deploy");
     let log = fs::read_to_string(fx.home.plan_dir(&plan()).join("logs/pr-web.pre-merge.log")).unwrap();
-    assert!(log.trim().starts_with("gate ran in web.pay.web.gate-"), "{log}");
+    assert!(log.starts_with("gate: slot 0 taken after 0 s\ngate ran in web.pay.web.gate-"), "{log}");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
     assert_eq!(fx.git(&web.parent().unwrap().join("web"), &["rev-parse", "refs/heads/cpd/pay/web"]), fx.git(&web, &["rev-parse", "HEAD"]));
     let calls = fx.gh_calls();
@@ -3189,4 +3201,136 @@ fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_it_is_behind
     // The stacked Lead takes the new commits by merge, as `next` says, and opens.
     fx.git(&web.lead, &["merge", "-q", "--no-edit", "origin/cpd/pay"]);
     assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
+}
+
+// ------------------------------------------------------------ the test slots
+
+/// Holds the test slot file `path` as another Gate would.
+fn hold_slot(path: &Path) -> Flock<fs::File> {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap();
+    Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
+}
+
+/// Whether some process holds the test slot file `path`.
+fn slot_is_held(path: &Path) -> bool {
+    let file = fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
+    Flock::lock(file, FlockArg::LockExclusiveNonblock).is_err()
+}
+
+#[test]
+fn with_one_slot_a_second_gate_waits_until_the_first_lets_go_and_logs_the_wait() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(1);
+    let ran = fx.env.root().join("pre-start-ran");
+    fx.hooks(&format!("pre-start = \"touch {}\"\npre-merge = \"echo gate ran\"\n", ran.display()));
+    let held = hold_slot(&fx.home.test_slot(0));
+
+    let child = fx.spawn_pr("open");
+    let waiting = "gate: waiting for a slot (1 of 1 busy; test_concurrency 1)\n";
+    wait_until("the Gate to log that it waits", || fx.pr_log("pre-merge").contains(waiting));
+    assert!(!ran.exists(), "pre-start ran while the only slot was held");
+    drop(held);
+    let out = child.finish();
+
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(ran.exists());
+    let log = fx.pr_log("pre-merge");
+    let mut lines = log.lines();
+    assert_eq!(lines.next(), Some(waiting.trim_end()), "{log}");
+    let taken = lines.next().unwrap();
+    assert!(taken.starts_with("gate: slot 0 taken after ") && taken.ends_with(" s"), "{log}");
+    assert_eq!(lines.collect::<Vec<_>>(), ["gate ran"], "the hook's output follows the lines: {log}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(waiting) && stderr.contains(taken), "the wait is on stderr too: {stderr}");
+    fx.assert_no_gate_worktree();
+}
+
+#[test]
+fn both_hooks_see_the_slot_the_gate_holds_and_no_other_cpd_variable() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(1);
+    let seen = fx.env.root().join("seen");
+    // `cpd` is run with CPD_HOME and more in its environment, and none of it reaches a hook.
+    fx.hooks(&format!(
+        "pre-start = \"env | grep '^CPD_' | sort > {seen}.start\"\npre-merge = \"env | grep '^CPD_' | sort > {seen}.merge\"\n",
+        seen = seen.display()
+    ));
+
+    fx.pr("open").ok();
+
+    for hook in ["start", "merge"] {
+        let path = fx.env.root().join(format!("seen.{hook}"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "CPD_TEST_SLOT=0\n", "pre-{hook}");
+    }
+}
+
+#[test]
+fn a_gate_that_finds_a_free_slot_logs_it_in_the_log_only() {
+    let fx = fx("dispatch");
+    fx.hooks("pre-merge = \"echo gate ran\"\n");
+
+    let child = fx.spawn_pr("open");
+    let out = child.finish();
+
+    assert!(out.status.success());
+    assert_eq!(fx.pr_log("pre-merge"), "gate: slot 0 taken after 0 s\ngate ran\n");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("gate: "), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!slot_is_held(&fx.home.test_slot(0)), "the slot is released when the Gate ends");
+}
+
+#[test]
+fn a_slot_held_by_a_killed_gate_is_free_at_once() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(1);
+    let root = fx.env.root().to_path_buf();
+    fx.hooks(&paused_gate(&root));
+
+    let first = fx.spawn_pr("open");
+    await_gate(&root);
+    assert!(slot_is_held(&fx.home.test_slot(0)), "the running Gate holds the only slot");
+    // SIGKILL: no clean-up runs; its hook (a child) outlives it, and must not keep the slot.
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(first.pid() as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+    first.finish();
+    release_gate(&root);
+
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["pr"]["status"], "open");
+    let log = fx.pr_log("pre-merge");
+    assert!(log.starts_with("gate: slot 0 taken after 0 s\n") && !log.contains("waiting"), "{log}");
+}
+
+#[test]
+fn with_two_slots_two_gates_run_together_and_a_third_waits() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(2);
+    let root = fx.env.root().to_path_buf();
+    // Each Gate marks itself `in-<pid of its shell>`, waits for `gate-go`, and fails, so no Gate changes the PR.
+    let go = root.join("gate-go");
+    fx.hooks(&format!(
+        "pre-merge = \"touch {root}/in-$$; i=0; while [ ! -e {go} ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done; exit 1\"\n",
+        root = root.display(),
+        go = go.display()
+    ));
+    let running = || fs::read_dir(&root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("in-")).count();
+
+    let (a, b) = (fx.spawn_pr("open"), fx.spawn_pr("open"));
+    wait_until("two Gates to run together", || running() == 2);
+    let third = fx.spawn_pr("open");
+    wait_until("the third Gate to log that it waits", || {
+        fx.pr_log("pre-merge").contains("gate: waiting for a slot (2 of 2 busy; test_concurrency 2)\n")
+    });
+    assert_eq!(running(), 2, "the third Gate runs nothing while both slots are held");
+    assert!(slot_is_held(&fx.home.test_slot(0)) && slot_is_held(&fx.home.test_slot(1)));
+    release_gate(&root);
+
+    let outs = [a.finish(), b.finish(), third.finish()];
+
+    assert_eq!(running(), 3, "the third Gate ran once a slot was free");
+    for out in &outs {
+        assert_eq!(out.status.code(), Some(3), "gate_failed: {}", String::from_utf8_lossy(&out.stdout));
+    }
+    let waited = outs.iter().filter(|o| String::from_utf8_lossy(&o.stderr).contains("gate: waiting for a slot (2 of 2 busy")).count();
+    assert_eq!(waited, 1, "only the third Gate waited");
 }
