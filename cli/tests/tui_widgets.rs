@@ -569,7 +569,7 @@ fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
 /// The column drawn at spinner frame `frame`.
 fn render_at(width: u16, height: u16, w: &Widgets, frame: usize) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), w, &machine(), "", 0, frame))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0, frame))).unwrap();
     terminal.backend().buffer().clone()
 }
 

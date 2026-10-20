@@ -370,23 +370,11 @@ mod tests {
         }
     }
 
-    fn widgets(prs: Vec<read::OpenPr>) -> Widgets {
-        Widgets {
-            slots: read::Slots { limit: 3, held: vec![] },
-            engine: read::Engine::Never,
-            plans: vec![],
-            prs,
-            escalations: vec![],
-            events: vec![],
-            events_cursor: 0,
-        }
-    }
-
     #[test]
     fn the_view_redraws_every_spinner_frame_while_a_shown_leads_works_and_every_tick_otherwise() {
-        assert_eq!(tick(&widgets(vec![])), TICK);
-        assert_eq!(tick(&widgets(vec![pr(false), pr(false)])), TICK);
-        assert_eq!(tick(&widgets(vec![pr(false), pr(true)])), FRAME);
+        assert_eq!(tick(&[]), TICK);
+        assert_eq!(tick(&[pr(false), pr(false)]), TICK);
+        assert_eq!(tick(&[pr(false), pr(true)]), FRAME);
         assert_eq!(FRAME, Duration::from_millis(100), "one frame of `palette::frame`");
     }
 

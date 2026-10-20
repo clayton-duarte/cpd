@@ -286,10 +286,10 @@ mod tests {
     }
 
     fn scrolled(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize) -> (Buffer, Drawn) {
-        at_frame(width, height, w, note, scroll, 0)
+        at_frame(width, height, open, note, scroll, 0)
     }
 
-    fn at_frame(width: u16, height: u16, w: &Widgets, note: &str, scroll: usize, frame: usize) -> (Buffer, Drawn) {
+    fn at_frame(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize, frame: usize) -> (Buffer, Drawn) {
         let machine = Machine { name: "homeserver".to_owned(), load: ["0.52", "0.41", "0.30"].map(str::to_owned).to_vec() };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
@@ -484,7 +484,7 @@ mod tests {
     }
 
     fn second_at(pr: &OpenPr, width: u16, frame: usize) -> (String, Buffer) {
-        let (buf, _) = at_frame(width, 20, &widgets(vec![pr.clone()]), "", 0, frame);
+        let (buf, _) = at_frame(width, 20, &[pr.clone()], "", 0, frame);
         (row(&buf, 7), buf)
     }
 
