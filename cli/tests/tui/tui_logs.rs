@@ -222,7 +222,7 @@ fn start_log(env: &TestEnv, args: &[&str], width: u16, events: u16) -> String {
 fn wait_log(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
     let rows = common::wait_screen(what, || screen(env, pane), |r| r.len() > 3 && done(&r[3..]));
     assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "an empty row above and below the title: {rows:?}");
-    assert!(rows[1].starts_with(" ╭─\u{E0B6}Logs\u{E0B4}─"), "the title is a section title: {:?}", rows[1]);
+    assert!(rows[1].starts_with(" ──\u{E0B6}Logs\u{E0B4}─"), "the title is a section title: {:?}", rows[1]);
     rows[3..].to_vec()
 }
 
@@ -334,13 +334,13 @@ fn the_logs_view_needs_a_terminal() {
 fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes_it() {
     let env = env();
     let pane = start(&env, &["legend"], 100, 10);
-    let rows = wait_screen(&env, &pane, "the legend", |r| r.get(1).is_some_and(|l| l.starts_with(" ╭─\u{E0B6}Legend: What")));
+    let rows = wait_screen(&env, &pane, "the legend", |r| r.get(1).is_some_and(|l| l.starts_with(" ──\u{E0B6}Legend: What")));
     assert!(rows[1].contains(" 1-8/"), "{:?}", rows[1]);
     assert_eq!(rows[0], "", "an empty row above the title");
     assert!(rows[3].contains("Meanings"), "{rows:?}");
     wheel(&env, &pane, false, 5, 5);
     let rows = wait_screen(&env, &pane, "the wheel down", |r| r.get(1).is_some_and(|l| l.contains(" 4-11/")));
-    assert!(rows[1].starts_with(" ╭─\u{E0B6}Legend: What"), "the title stays");
+    assert!(rows[1].starts_with(" ──\u{E0B6}Legend: What"), "the title stays");
     assert!(!rows.iter().any(|l| l.contains("Meanings")), "{rows:?}");
     wheel(&env, &pane, true, 5, 5);
     wait_screen(&env, &pane, "the wheel up", |r| r.get(1).is_some_and(|l| l.contains(" 1-8/")));

@@ -19,4 +19,5 @@ mod tui;
 mod tui_runner;
 mod tui_tree;
 mod tui_widgets;
+mod titles;
 mod tui_worker;

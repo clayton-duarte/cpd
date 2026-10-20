@@ -4,7 +4,7 @@
 //! their areas), and the palette the two share.
 
 use crate::common;
-
+use crate::titles::{self, CAP_LEFT};
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
 use cpd_core::home::CpdHome;
@@ -188,18 +188,9 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 
 // ---------- the Dispatch column ----------
 
-/// The pill's caps, U+E0B6 and U+E0B4.
-const CAP_LEFT: &str = "\u{E0B6}";
-const CAP_RIGHT: &str = "\u{E0B4}";
-
-/// A section title on a `width`-column pane (hs-d475, hs-d476): a blank column, `╭─`, the pill (the title between its caps), then
-/// `─` to the count or to the blank last column (the rows read back are trimmed).
+/// A section title on a `width`-column pane (hs-d475, hs-d476, hs-d478, hs-d480): the Deploy column's titles are not collapsible.
 fn pill(width: usize, title: &str, count: Option<usize>) -> String {
-    let used = 4 + title.chars().count() + 2;
-    match count {
-        None => format!(" ╭─{CAP_LEFT}{title}{CAP_RIGHT}{}", "─".repeat(width - used)),
-        Some(n) => format!(" ╭─{CAP_LEFT}{title}{CAP_RIGHT}{}{n}", "─".repeat(width - used - n.to_string().len())),
-    }
+    titles::title(width, title, count)
 }
 
 /// A section title on the 46-column test pane.
@@ -476,7 +467,7 @@ fn the_column_takes_every_colour_from_the_palette() {
     assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
     // The titles: the corner and the line grey, the title inverted inside its caps.
     for title in ["PRs"] {
-        let (x, y) = find(&buf, &format!("╭─{CAP_LEFT}{title}"));
+        let (x, y) = find(&buf, &format!("──{CAP_LEFT}{title}"));
         assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
         assert_eq!(buf[(x + 1, y)].fg, c(Meaning::Nothing), "{title}");
         let word = buf[(x + 3, y)].clone();

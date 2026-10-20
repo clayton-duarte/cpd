@@ -6,6 +6,7 @@
 //! in `tui/src/tree/`.
 
 use crate::common;
+use crate::titles;
 
 use std::time::{Duration, Instant};
 
@@ -24,8 +25,6 @@ const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 /// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline) and the pill's caps.
 const DOWN: &str = "\u{F004B}";
 const UP: &str = "\u{F0063}";
-const CAP_LEFT: &str = "\u{E0B6}";
-const CAP_RIGHT: &str = "\u{E0B4}";
 
 /// The closing row of a block that folds, folded, after the pane's margin.
 fn expand() -> String {
@@ -37,9 +36,10 @@ fn collapse() -> String {
     format!(" ╰{UP} collapse")
 }
 
-/// The Inbox's pill title for `count` items in `inner` columns (the pane less its margins), after the margin.
+/// The Inbox's pill title for `count` items in `inner` columns (the pane less its margins), after the margin: the collapsible form
+/// (hs-d478), the count a pill too (hs-d480).
 fn pill(inner: usize, count: usize) -> String {
-    format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{count}", "─".repeat(inner - 2 - "Inbox".len() - 2 - count.to_string().len()))
+    titles::collapsible_title(inner + 2, "Inbox", Some(count))
 }
 
 /// An Inbox item row in `inner` columns: the muted `│`, the icon, the label and the age (`5m`) at the last column.
