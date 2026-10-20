@@ -253,7 +253,7 @@ fn the_empty_row_above_the_inbox_title_is_never_a_tree_row_in_a_short_pane() {
 fn with_no_item_the_section_is_the_empty_row_and_the_pill_with_a_zero() {
     let mut view = with_inbox(Vec::new());
     let got = rows(&draw(&mut view, 43, 16));
-    assert_eq!(&got[13..], [String::new(), pill(41, 0), String::new()], "{got:#?}");
+    assert_eq!(&got[12..], [String::new(), pill(41, 0), " ╰\u{F005A} up to date, drink some water".to_owned(), String::new()], "the empty row, the pill with a zero, the closing row, the empty row: {got:#?}");
 }
 
 #[test]
