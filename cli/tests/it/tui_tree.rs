@@ -491,7 +491,7 @@ fn the_tree_of_a_prepared_store() {
     let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("{ACTIVE_MARK}─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
         row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!(" ├─{IDLE} ship·f-id"),
         format!(" ├─{NEEDS_YOU} ship·f-bl"),
@@ -921,7 +921,7 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
     let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("{ACTIVE_MARK}─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
         row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!(" ├─{IDLE} ship·f-id"),
         format!(" ├─{NEEDS_YOU} ship·f-bl"),
