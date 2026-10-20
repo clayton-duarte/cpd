@@ -560,6 +560,42 @@ fn list_limit_5000_is_accepted() {
 
 // ----------------------------------------------------------- events follow
 
+/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
+/// marker in the file) and releases it after `hold`. Returns once the lock is held.
+fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
+    use nix::fcntl::{Flock, FlockArg};
+    use std::io::Write;
+    let locks = env.cpd_home().join("locks");
+    fs::create_dir_all(&locks).unwrap();
+    let file = fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
+    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
+    lock.write_all(marker.to_string().as_bytes()).unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        let _ = lock.set_len(0);
+        drop(lock);
+    })
+}
+
+/// hs-n278: a follower that opens the store while another cpd migrates it waits (stderr says so once), and
+/// does not fail `lock_timeout` after `store_busy_ms`.
+#[test]
+fn follow_waits_out_a_migration_longer_than_store_busy_ms() {
+    let env = seeded();
+    env.write_config(&format!("{CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
+    let release = migrating_for(&env, Duration::from_millis(1500));
+    let start = Instant::now();
+    let run = env.cpd(&["events", "follow", "--until-idle", "--since", "0"]);
+    let waited = start.elapsed();
+    release.join().unwrap();
+    assert_eq!(follow_lines(&run).len(), 11, "{run:?}");
+    assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
+    assert_eq!(run.stderr.matches("waiting for cpd pid").count(), 1, "{run:?}");
+    assert!(run.stderr.contains("3 -> 20"), "{run:?}");
+}
+
 #[test]
 fn follow_until_idle_replays_since_zero_one_event_per_line() {
     let env = seeded();

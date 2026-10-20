@@ -5,6 +5,7 @@ use crate::common;
 
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use common::{CPD, Run, TestEnv, write_executable};
 use serde_json::{Value, json};
@@ -487,6 +488,59 @@ fn tiers_runs_the_catalog_module_from_argv() {
             "H=p/m-low".to_owned(),
         ]
     );
+}
+
+/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
+/// marker in the file) and releases it after `hold`. Returns once the lock is held.
+fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
+    use nix::fcntl::{Flock, FlockArg};
+    use std::io::Write;
+    let locks = env.cpd_home().join("locks");
+    fs::create_dir_all(&locks).unwrap();
+    let file = fs::OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
+    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+    let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
+    lock.write_all(marker.to_string().as_bytes()).unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        let _ = lock.set_len(0);
+        drop(lock);
+    })
+}
+
+/// hs-n278: `cpd tiers` opens the store (`catalog::load`): it waits out a migration in progress for longer than
+/// `store_busy_ms`, says so once on stderr, and prints its one JSON value at the end.
+#[test]
+fn tiers_waits_out_a_migration_longer_than_store_busy_ms() {
+    let env = TestEnv::new();
+    env.write_config(&format!("{TIERS_CONFIG}[timeouts]\nstore_busy_ms = 300\n"));
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    let release = migrating_for(&env, Duration::from_millis(1500));
+    let start = Instant::now();
+    let run = cpd_isolated(&env, &["tiers"]);
+    let waited = start.elapsed();
+    release.join().unwrap();
+    assert_eq!(run.ok()["pi_version"], "1.2.0");
+    assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
+    assert_eq!(run.stderr.matches("waiting for cpd pid").count(), 1, "{run:?}");
+}
+
+/// `cpd config` reads only the config files: a migration in progress does not delay it, and it says nothing.
+#[test]
+fn config_does_not_wait_for_a_migration() {
+    let env = TestEnv::new();
+    env.write_config(MINIMAL);
+    let release = migrating_for(&env, Duration::from_millis(3000));
+    let start = Instant::now();
+    let run = env.cpd(&["config"]);
+    let waited = start.elapsed();
+    run.ok();
+    // time-claim: `cpd config` does not wait for a 3 s migration; no per-poll signal from a command that never polls.
+    assert!(waited < Duration::from_millis(2500), "waited {waited:?}");
+    assert_eq!(run.stderr, "");
+    release.join().unwrap();
 }
 
 #[test]
