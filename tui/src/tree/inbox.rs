@@ -598,7 +598,7 @@ mod tests {
         let url = "http://review.example:20000/";
         let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "ab", OPENED);
         waiting.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[waiting], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[waiting], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         let text = printed(&sink.0.borrow());
         assert!(text.contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "the label is a link to the review page: {text:?}");
     }

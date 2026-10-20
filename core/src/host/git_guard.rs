@@ -21,8 +21,12 @@ pub const REFUSAL: &str = "git stash is refused in cpd Sessions (hs-d310): refs/
 /// What the wrapper prints on stderr when no other `git` is on `PATH` (contract §6.5).
 pub const NO_GIT: &str = "git: no git on PATH besides the cpd wrapper";
 
+/// What every version of the wrapper starts with: a program that looks for a real `git` (a test harness) tells a
+/// wrapper by it.
+pub const SIGNATURE: &str = "#!/bin/sh\n# cpd's git wrapper (hs-d310)";
+
 /// The wrapper, an `sh` script (contract §6.5): refuses `stash` after git's global options,
-/// else `exec`s the first `git` on `PATH` without the wrapper's own directory.
+/// else `exec`s the first `git` on `PATH` outside the directories of cpd's wrappers (its own and those that `exec`'d it).
 pub const WRAPPER: &str = r#"#!/bin/sh
 # cpd's git wrapper (hs-d310): refuses `git stash`, runs the real git otherwise.
 
@@ -46,17 +50,27 @@ if is_stash "$@"; then
   exit 1
 fi
 
-# The real git: the first git on PATH once this wrapper's own directory is out of it.
+# The real git: the first git on PATH once the directories of cpd's wrappers are out of it: this wrapper's own and
+# those of the wrappers that exec'd it, kept in CPD_GIT_WRAPPERS (physical paths, ':' apart). Another wrapper on PATH
+# (the $CPD_HOME/bin of another home) is thus passed over, and a chain of wrappers ends at the real git instead of
+# exec'ing each other for ever. PATH itself goes on as it was given.
 # Only builtins: a PATH without coreutils must not break it.
 case $0 in */*) self_raw=${0%/*} ;; *) self_raw=. ;; esac
 self=$(cd "$self_raw" 2>/dev/null && pwd -P)
+CPD_GIT_WRAPPERS=${CPD_GIT_WRAPPERS:+$CPD_GIT_WRAPPERS:}$self
+export CPD_GIT_WRAPPERS
 rest=
 set -f
 old_ifs=$IFS
 IFS=:
 for dir in $PATH; do
   [ "$dir" = "$self_raw" ] && continue
-  if [ -n "$dir" ] && [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$self" ]; then continue; fi
+  if [ -n "$dir" ]; then
+    phys=$(cd "$dir" 2>/dev/null && pwd -P)
+    if [ -n "$phys" ]; then
+      case :$CPD_GIT_WRAPPERS: in *:"$phys":*) continue ;; esac
+    fi
+  fi
   rest=${rest:+$rest:}$dir
 done
 IFS=$old_ifs
@@ -130,6 +144,11 @@ mod tests {
         let h = CpdHome::resolve(Some("/cpd-home".into()), None).unwrap();
         assert_eq!(path_with_bin(&h, Some("/usr/bin:/bin".into())), "/cpd-home/bin:/usr/bin:/bin");
         assert_eq!(path_with_bin(&h, None), "/cpd-home/bin");
+    }
+
+    #[test]
+    fn the_wrapper_starts_with_its_signature() {
+        assert!(WRAPPER.starts_with(SIGNATURE));
     }
 
     #[test]
