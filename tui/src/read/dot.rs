@@ -7,13 +7,16 @@ use cpd_core::inbox::model::{Item, Kind, Urgency};
 use cpd_core::session::State;
 
 /// The dot of a row, ordered by urgency: the greatest is the most urgent, `Red > Yellow > Magenta > White >
-/// Working > Idle > Stopped` (§17, Precedence).
+/// Working > Waiting > Idle > Stopped` (§17, Precedence).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dot {
     /// `palette::STOPPED`: pi stopped.
     Stopped,
     /// `palette::IDLE`: idle, nothing needed.
     Idle,
+    /// `palette::WAITING` in `Meaning::Waiting`: the Session waits for another agent (a Worker for its Lead, a Lead
+    /// for a Worker), not for the User (hs-d303). Never red, never a filled dot.
+    Waiting,
     /// `palette::SPINNER`: the Lead is working.
     Working,
     /// `palette::NEEDS_YOU` white: an Inbox item of urgency `white`.
@@ -32,11 +35,13 @@ impl Dot {
         self >= Dot::White
     }
 
-    /// The glyph of a state, for a row with no item: the spinner, `palette::IDLE` or `palette::STOPPED`.
+    /// The glyph of a state, for a row with no item: the spinner, `palette::WAITING`, `palette::IDLE` or
+    /// `palette::STOPPED`.
     pub fn glyph(state: State) -> Dot {
         match state {
             State::Working => Dot::Working,
             State::Stopped => Dot::Stopped,
+            State::Waiting => Dot::Waiting,
             State::Idle | State::Blocked => Dot::Idle,
         }
     }
@@ -64,11 +69,11 @@ impl From<Urgency> for Dot {
 }
 
 /// The kinds a Plan's own Lead shows besides the ones linked to it (§17, "Which items fill which row").
-const PLAN_KINDS: [Kind; 5] = [Kind::PlanReview, Kind::JobStuck, Kind::PrFailing, Kind::PrChanges, Kind::PrReady];
+const PLAN_KINDS: [Kind; 3] = [Kind::PlanReview, Kind::JobStuck, Kind::PrReady];
 
 /// The urgency of the most urgent of the `visible` items that fill the dot of `session`: its `dialog` and `unread`
 /// items (`inbox_items.session`) and, when it is the Lead of `lead_of`, the Plan's `plan-review`, `job-stuck` and
-/// `pr-*` items (§17). `visible` is the open items that are neither snoozed nor dismissed.
+/// `pr-ready` items (§17; `pr-failing` and `pr-changes` are only for pull requests no Plan owns, hs-d302). `visible` is the open items that are neither snoozed nor dismissed.
 pub fn urgency(visible: &[Item], session: &SessionId, lead_of: Option<&PlanId>) -> Option<Urgency> {
     visible
         .iter()
@@ -119,7 +124,8 @@ mod tests {
         assert_eq!(Dot::of(State::Idle, None), Dot::Idle);
         assert_eq!(Dot::of(State::Stopped, None), Dot::Stopped);
         assert_eq!(Dot::of(State::Blocked, None), Dot::Idle, "blocked is no dot of its own: its dialog item is");
-        for state in [State::Working, State::Idle, State::Blocked, State::Stopped] {
+        assert_eq!(Dot::of(State::Waiting, None), Dot::Waiting, "a Session waiting for an agent shows the waiting dot, not idle");
+        for state in [State::Working, State::Idle, State::Waiting, State::Blocked, State::Stopped] {
             assert!(!Dot::of(state, None).needs_you(), "no item, never a filled dot: {state:?}");
         }
     }
@@ -129,7 +135,7 @@ mod tests {
         for urgency in [Urgency::Red, Urgency::Yellow, Urgency::Magenta, Urgency::White] {
             assert_eq!(Dot::of(State::Working, Some(urgency)), Dot::Working, "own state first (hs-d183): {urgency:?}");
         }
-        for state in [State::Idle, State::Blocked, State::Stopped] {
+        for state in [State::Idle, State::Waiting, State::Blocked, State::Stopped] {
             for (urgency, dot) in
                 [(Urgency::Red, Dot::Red), (Urgency::Yellow, Dot::Yellow), (Urgency::Magenta, Dot::Magenta), (Urgency::White, Dot::White)]
             {
@@ -167,8 +173,6 @@ mod tests {
         let kinds = [
             (Kind::PlanReview, Urgency::Magenta),
             (Kind::JobStuck, Urgency::Red),
-            (Kind::PrFailing, Urgency::Red),
-            (Kind::PrChanges, Urgency::Red),
             (Kind::PrReady, Urgency::Yellow),
         ];
         for (kind, u) in kinds {
@@ -176,6 +180,16 @@ mod tests {
             assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), Some(u), "the Lead of pp: {kind:?}");
             assert_eq!(urgency(&items, &id("s-fork"), None), None, "a fork: {kind:?}");
             assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("qq"))), None, "the Lead of another Plan: {kind:?}");
+        }
+    }
+
+    /// A Plan-owned pull request's failure reaches its Lead as `pr-feedback`, never red (hs-d302); the kinds are for
+    /// the ones no Plan owns, which belong to no Plan.
+    #[test]
+    fn pr_failing_and_pr_changes_never_fill_a_plans_lead() {
+        for kind in [Kind::PrFailing, Kind::PrChanges] {
+            let items = [item(kind, Urgency::Red, None, Some("pp"))];
+            assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), None, "{kind:?}");
         }
     }
 
@@ -191,8 +205,8 @@ mod tests {
 
     #[test]
     fn the_order_is_the_precedence() {
-        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White, Dot::Working, Dot::Idle, Dot::Stopped];
-        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > white > working > idle > stopped");
+        let order = [Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White, Dot::Working, Dot::Waiting, Dot::Idle, Dot::Stopped];
+        assert!(order.windows(2).all(|w| w[0] > w[1]), "red > yellow > magenta > white > working > waiting > idle > stopped");
         assert_eq!(order.iter().copied().max(), Some(Dot::Red));
         assert_eq!(order.iter().filter(|d| d.needs_you()).count(), 4, "the needs-you dots are the four colours");
     }

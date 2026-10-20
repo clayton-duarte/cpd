@@ -51,6 +51,11 @@ pub struct Pull {
 }
 
 impl Pull {
+    /// The pull request of an Inbox item's subject, `pr:<owner>/<repo>#<n>`; none for any other subject.
+    pub fn from_subject(subject: &str) -> Option<Pull> {
+        Pull::parse(subject.strip_prefix("pr:")?).ok()
+    }
+
     fn parse(text: &str) -> Result<Pull, String> {
         let bad = || format!("{text:?} is not <owner>/<repo>#<n>, with n a positive integer.");
         let (repo, number) = text.split_once('#').ok_or_else(bad)?;
@@ -209,7 +214,7 @@ pub fn popup_args(client: (u16, u16), arg: &str) -> Vec<String> {
     .to_vec()
 }
 
-/// The merge icon's click: the dialog for `arg` in a tmux popup over the cockpit.
+/// The merge icon's click, and an Inbox `pr-ready` item's: the dialog for `arg` in a tmux popup over the cockpit.
 pub(crate) fn open(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
     let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
     let client = newest_client(&clients).ok_or_else(|| {

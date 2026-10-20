@@ -46,7 +46,7 @@ export async function openReview(host: Host, r: Run, review: string, via: "event
     const entry: ReviewEntry = { plan, review, plannotator_id: plannotatorId, status: "pending" };
     r.reviews.set(review, entry);
     pi.appendEntry(ENTRY_TYPE, entry);
-    r.facts.open(`plan-review:${review}`, REVIEW_LABEL);
+    r.facts.open(`plan-review:${review}`, REVIEW_LABEL, "human");
     host.refresh(r);
   } catch (e) {
     host.deliver(`plan review ${review}`, e);

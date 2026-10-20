@@ -186,12 +186,9 @@ fn escalate_all(engine: &mut Engine) {
     }
     // A Plan that no longer has a PR waiting without a Manager has recovered.
     let recovered: Vec<About> = engine
-        .errors()
+        .open_failures(Step::E4, "pr_unopened")
         .into_iter()
-        .filter(|e| e.step == "E4" && e.code == "pr_unopened")
-        .filter_map(|e| e.scope.strip_prefix("plan:").and_then(|p| PlanId::parse(p).ok()))
-        .filter(|plan| !unreported.contains(plan))
-        .map(About::Plan)
+        .filter(|about| matches!(about, About::Plan(plan) if !unreported.contains(plan)))
         .collect();
     for about in recovered {
         engine.clear(Step::E4, &about);

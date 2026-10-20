@@ -19,10 +19,13 @@ use std::process::{Command, Stdio};
 use serde_json::Value;
 
 use cpd_core::config::Config;
+use cpd_core::home::CpdHome;
 use cpd_core::host::layout::MAIN_WINDOW;
 use cpd_core::host::{Tmux, chat_slot};
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
+use cpd_core::store::Store;
+use crate::merge::Pull;
 use super::ask::{Dialogs, Question};
 use crate::dialog::{self, validate::Validator};
 use crate::widgets::open_legend;
@@ -114,6 +117,13 @@ pub enum Action {
     /// `tmux set-buffer -w -- <url>`: a click on an Inbox item that only has a link (no Plan to open). The note says
     /// the modifier-click opens it.
     CopyUrl(String),
+    /// `watch --ensure` (§12): a click on an `engine-down` item starts the engine; idempotent.
+    EnsureWatch,
+    /// `session send <manager> <text>` (§10.13): the engine's failure to start, to a live Manager. No sender, so `from` is the
+    /// User's side, and no `--wake`. Only a step of the tree's own restart of the engine.
+    Tell { manager: SessionId, text: String },
+    /// No command: only the note, as a step of a flow (`plan-review` with no review page yet).
+    Note(String),
     /// `inbox snooze <id> <15m|1h|tomorrow>` (§21.3): the Inbox menu's and `s`'s Snooze entries.
     Snooze { item: i64, until: Until },
     /// `inbox dismiss <id>` (§21.4): the Inbox menu's Dismiss and `d`.
@@ -151,6 +161,9 @@ impl Action {
             Action::Archive { subject, .. } => subject.command("archive"),
             Action::Unarchive(subject) => subject.command("unarchive"),
             Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
+            Action::EnsureWatch => words(&["watch", "--ensure"]),
+            Action::Tell { manager, text } => vec!["session".into(), "send".into(), manager.to_string(), text.clone()],
+            Action::Note(_) => Vec::new(),
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
         }
@@ -205,6 +218,10 @@ impl Action {
             Action::Unarchive(_) => "unarchived".into(),
             Action::CopyId(id) => format!("copied {id}"),
             Action::CopyUrl(url) => format!("copied {url}: Cmd-click the row to open it"),
+            Action::EnsureWatch if reply["already"] == true => "already running".into(),
+            Action::EnsureWatch => "engine started".into(),
+            Action::Tell { manager, .. } => format!("told {manager}"),
+            Action::Note(note) => note.clone(),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),
         }
@@ -221,21 +238,48 @@ impl Action {
 
 /// Runs actions against the cockpit of `config`.
 pub struct Runner {
+    home: CpdHome,
+    busy_ms: u64,
     tmux: Tmux,
     cockpit: String,
 }
 
 impl Runner {
-    pub fn new(config: &Config) -> Runner {
-        Runner { tmux: Tmux::new(config.tmux.socket.clone()), cockpit: config.tmux.cockpit_session.clone() }
+    pub fn new(home: CpdHome, config: &Config) -> Runner {
+        Runner {
+            home,
+            busy_ms: u64::from(config.timeouts.store_busy_ms),
+            tmux: Tmux::new(config.tmux.socket.clone()),
+            cockpit: config.tmux.cockpit_session.clone(),
+        }
+    }
+
+    /// The live Managers of the machine (role `manager`, not archived), oldest first: who hears that the engine cannot be started.
+    pub fn live_managers(&self) -> Result<Vec<SessionId>, String> {
+        let mut store = Store::open(&self.home, self.busy_ms).map_err(|e| e.message().to_owned())?;
+        store
+            .read(|conn| {
+                let mut stmt =
+                    conn.prepare("SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL ORDER BY created_at, id")?;
+                let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(ids)
+            })
+            .and_then(|ids| ids.iter().map(|id| SessionId::parse(id)).collect())
+            .map_err(|e| e.message().to_owned())
     }
 
     /// Runs the action's steps: the note of the last, or why one failed (the flow stops there).
     pub fn run(&self, action: &Action) -> Result<String, String> {
+        self.run_all(&action.steps())
+    }
+
+    /// Runs each of `steps` (themselves expanded to their own steps), stopping at the first that fails: the note of the last.
+    pub fn run_all(&self, steps: &[Action]) -> Result<String, String> {
         let mut note = String::new();
-        for step in action.steps() {
+        for step in steps.iter().flat_map(Action::steps) {
             let reply = match step {
                 Action::CopyId(_) | Action::CopyUrl(_) => self.tmux.run(&step.argv()).map(|_| Value::Null).map_err(|e| e.message().to_owned())?,
+                Action::Note(_) => Value::Null,
                 _ => command(&step)?,
             };
             note = step.done(&reply);
@@ -261,10 +305,9 @@ impl Runner {
         Ok(())
     }
 
-    /// A click on an `engine-error` or `engine-down` Inbox item: the logs popup at the Event (the bottom with none);
-    /// returns when it closes.
-    pub fn logs(&self, event: Option<i64>) -> Result<(), String> {
-        crate::logs::open_at(&self.tmux, event).map_err(|e| e.message().to_owned())
+    /// A click on a `pr-ready` item: the merge popup of `pull`; returns when it closes.
+    pub fn merge(&self, pull: &Pull) -> Result<(), String> {
+        crate::merge::open(&self.tmux, &pull.to_string()).map_err(|e| e.message().to_owned())
     }
 
     /// Opens the dialog popup of `question` and returns when it closes: the command its answer makes, none when the
@@ -289,23 +332,58 @@ impl Dialogs for Runner {
     }
 }
 
-/// Runs the command of `action`: its reply, or the message of the error it printed (or why it could not run).
-fn command(action: &Action) -> Result<Value, String> {
+/// Why a command did not succeed: `cpd` refused it (`code` and `message` of its error), or it could not be run or printed
+/// no JSON.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Failure {
+    Refused { code: String, message: String },
+    Broken(String),
+}
+
+impl Failure {
+    /// The error's `code`; `error` for a command that could not be run.
+    pub fn code(&self) -> &str {
+        match self {
+            Failure::Refused { code, .. } => code,
+            Failure::Broken(_) => "error",
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Failure::Refused { message, .. } | Failure::Broken(message) => message,
+        }
+    }
+}
+
+/// Runs the command of `action`: its reply, or why it failed.
+pub fn call(action: &Action) -> Result<Value, Failure> {
     let output = Command::new(PROGRAM)
         .args(action.argv())
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("cannot run {PROGRAM}: {e}"))?;
+        .map_err(|e| Failure::Broken(format!("cannot run {PROGRAM}: {e}")))?;
     let reply: Value = serde_json::from_slice(&output.stdout).map_err(|_| {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        format!("{PROGRAM} {} printed no JSON (exit {}): {}", action.argv().join(" "), output.status, stderr.trim())
+        Failure::Broken(format!("{PROGRAM} {} printed no JSON (exit {}): {}", action.argv().join(" "), output.status, stderr.trim()))
     })?;
     if reply["ok"] == true {
         Ok(reply)
     } else {
         let error = &reply["error"];
-        Err(action.failed(error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
+        Err(Failure::Refused {
+            code: error["code"].as_str().unwrap_or("error").to_owned(),
+            message: error["message"].as_str().unwrap_or("failed").to_owned(),
+        })
     }
+}
+
+/// [`call`], the failure in the words of the note.
+fn command(action: &Action) -> Result<Value, String> {
+    call(action).map_err(|failure| match failure {
+        Failure::Refused { code, message } => action.failed(&code, &message),
+        Failure::Broken(why) => why,
+    })
 }
 
 #[cfg(test)]
@@ -382,6 +460,8 @@ mod tests {
             (Action::Snooze { item: 12, until: Until::Hour1 }, vec!["inbox", "snooze", "12", "1h"]),
             (Action::Snooze { item: 7, until: Until::Tomorrow }, vec!["inbox", "snooze", "7", "tomorrow"]),
             (Action::Dismiss(12), vec!["inbox", "dismiss", "12"]),
+            (Action::EnsureWatch, vec!["watch", "--ensure"]),
+            (Action::Tell { manager: sid("m-alpha"), text: "The engine is down.".into() }, vec!["session", "send", "m-alpha", "The engine is down."]),
         ];
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");
@@ -414,6 +494,16 @@ mod tests {
         let copy = Action::CopyUrl("https://x.io/1".into());
         assert_eq!(sequence(&copy), [vec!["set-buffer", "-w", "--", "https://x.io/1"]]);
         assert_eq!(copy.done(&json!(null)), "copied https://x.io/1: Cmd-click the row to open it");
+    }
+
+    #[test]
+    fn ensure_watch_says_whether_it_started_the_engine_and_a_note_is_no_command() {
+        assert_eq!(Action::EnsureWatch.done(&json!({"ok": true, "started": true, "pane": "%3"})), "engine started");
+        assert_eq!(Action::EnsureWatch.done(&json!({"ok": true, "started": false, "already": true})), "already running");
+        assert_eq!(Action::EnsureWatch.failed("watch_start_failed", "x"), "watch_start_failed: x");
+        let note = Action::Note("no review page yet".into());
+        assert_eq!(note.argv(), Vec::<String>::new());
+        assert_eq!(note.done(&json!(null)), "no review page yet");
     }
 
     #[test]

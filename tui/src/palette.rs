@@ -29,7 +29,8 @@ pub enum Meaning {
     Review,
     /// A merged Job; a merged PR; phase `done`; checks passed.
     Done,
-    /// A failed Job; a closed PR; checks failed.
+    /// What needs the User: a stuck Job (`job-stuck`), a closed PR its Lead asked about, a conflict or failed checks on a PR
+    /// no Plan owns. A failure an agent handles is [`Meaning::Waiting`] instead (hs-d303).
     Failed,
     /// Phase `plan`.
     Planning,
@@ -37,10 +38,12 @@ pub enum Meaning {
     Grounding,
     /// A draft Job, a zero count, a separator, no Plan, no checks, nothing to show.
     Nothing,
+    /// A Session that waits for another agent, not for the User (hs-d303): the waiting dot.
+    Waiting,
 }
 
 impl Meaning {
-    pub const ALL: [Meaning; 8] = [
+    pub const ALL: [Meaning; 9] = [
         Meaning::NotStarted,
         Meaning::InProgress,
         Meaning::Review,
@@ -49,6 +52,7 @@ impl Meaning {
         Meaning::Planning,
         Meaning::Grounding,
         Meaning::Nothing,
+        Meaning::Waiting,
     ];
 
     pub fn label(self) -> &'static str {
@@ -61,6 +65,7 @@ impl Meaning {
             Meaning::Planning => "planning",
             Meaning::Grounding => "grounding",
             Meaning::Nothing => "nothing / n/a / zero",
+            Meaning::Waiting => "waiting on an agent",
         }
     }
 }
@@ -78,6 +83,8 @@ pub fn color(m: Meaning) -> Color {
         Meaning::Planning => Color::Magenta,
         Meaning::Grounding => Color::White,
         Meaning::Nothing => Color::DarkGray,
+        // A calm blue: no other meaning uses blue; it is neither the red of a failure nor the yellow of attention.
+        Meaning::Waiting => Color::Blue,
     }
 }
 
@@ -149,11 +156,16 @@ pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
         (JobStatus::Running, false) => (SPINNER[0], Meaning::InProgress),
         (JobStatus::Running, true) => (MERGING, Meaning::Review),
         (JobStatus::Merged, _) => (MERGED, Meaning::Done),
-        (JobStatus::Failed, _) => (FAILED, Meaning::Failed),
+        // an agent handles a failed Job (its Lead retries or cancels it): waiting; it is red only once `job-stuck` is open
+        (JobStatus::Failed, _) => (FAILED, Meaning::Waiting),
         (JobStatus::Draft, _) => (DRAFT, Meaning::Nothing),
         (JobStatus::Cancelled, _) => (CANCELLED, Meaning::Nothing),
     }
 }
+
+/// A failed Job that needs the User: its `job-stuck` item is open (audit Q3). Red, where [`job_status`] gives `failed` the
+/// waiting colour.
+pub const JOB_STUCK: (&str, Meaning) = (FAILED, Meaning::Failed);
 
 /// The Job statuses the legend lists: the name shown, the status and whether it is `merging`.
 pub const JOB_LEGEND: [(&str, JobStatus, bool); 6] = [
@@ -197,6 +209,8 @@ pub const SPINNER: [&str; 9] =
 pub const IDLE: &str = SPINNER[0];
 /// A stopped Session: the first frame, drawn dim.
 pub const STOPPED: &str = IDLE;
+/// A Session that waits for another agent (hs-d303): `nf-md-circle_slice_4`, the half circle, in `Meaning::Waiting`.
+pub const WAITING: &str = SPINNER[4];
 /// A Session that needs the User (coloured by case): the last frame.
 pub const NEEDS_YOU: &str = SPINNER[8];
 
@@ -210,7 +224,7 @@ pub fn frame(now: SystemTime) -> usize {
 }
 
 /// The tree's dot (commands.md §17): [`NEEDS_YOU`] red, yellow, magenta or white; [`SPINNER`] (frame `frame`) in the
-/// terminal's foreground when working; [`IDLE`] in the terminal's foreground; [`STOPPED`] dim. An `archived` row keeps its glyph, never
+/// terminal's foreground when working; [`WAITING`] in the colour of [`Meaning::Waiting`]; [`IDLE`] in the terminal's foreground; [`STOPPED`] dim. An `archived` row keeps its glyph, never
 /// animated (the first frame when working), in the colour of [`Meaning::Nothing`].
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
     let (glyph, style) = match dot {
@@ -219,6 +233,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Magenta => (NEEDS_YOU, Style::new().fg(Color::Magenta)),
         Dot::White => (NEEDS_YOU, Style::new().fg(Color::White)),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], Style::new()),
+        Dot::Waiting => (WAITING, fg(Meaning::Waiting)),
         Dot::Idle => (IDLE, Style::new()),
         Dot::Stopped => (STOPPED, Style::new().add_modifier(Modifier::DIM)),
     };
@@ -235,14 +250,25 @@ pub fn count_style(status: JobStatus, merging: bool, n: usize) -> Style {
     fg(if n == 0 { Meaning::Nothing } else { job_status(status, merging).1 })
 }
 
+/// Style of the failed counter: [`count_style`]'s waiting colour while an agent handles the failed Jobs, red when one of
+/// them is `stuck` (a `job-stuck` item is open, audit Q3), nothing when the count is zero.
+pub fn failed_count_style(n: usize, stuck: bool) -> Style {
+    if stuck && n > 0 { fg(JOB_STUCK.1) } else { count_style(JobStatus::Failed, false, n) }
+}
+
 /// Meaning of a PR's state.
 pub fn pr_state(state: PrState) -> Meaning {
     match state {
         PrState::Open => Meaning::Review,
         PrState::Merged => Meaning::Done,
-        PrState::Closed => Meaning::Failed,
+        // its Lead handles a closed pull request (asks the User only if it must): waiting, see `PR_CLOSED_ASKED`
+        PrState::Closed => Meaning::Waiting,
     }
 }
+
+/// A closed-unmerged pull request whose Plan's Lead has an open `dialog` item (it asks the User about it), or that no Plan
+/// owns: red (audit Q4), where [`pr_state`] gives `closed` the waiting colour.
+pub const PR_CLOSED_ASKED: (&str, Meaning) = ("closed", Meaning::Failed);
 
 /// The PR states the legend lists, with the name shown.
 pub const PR_LEGEND: [(&str, PrState); 3] = [("open", PrState::Open), ("merged", PrState::Merged), ("closed", PrState::Closed)];
@@ -250,6 +276,19 @@ pub const PR_LEGEND: [(&str, PrState); 3] = [("open", PrState::Open), ("merged",
 /// What an open pull request with a merge conflict reads instead of `open` (its `mergeable` is `conflicting`), and its
 /// meaning: the plan view's PR box title and the legend's PR states.
 pub const PR_CONFLICT: (&str, Meaning) = ("conflict", Meaning::Failed);
+
+/// What a conflicting open pull request that a cpd Plan owns reads: its Lead fixes it (hs-d302), so it is `Waiting`, not
+/// red. [`PR_CONFLICT`] is the one no Plan owns, the User's to fix.
+pub const PR_CONFLICT_OWNED: (&str, Meaning) = ("conflict", Meaning::Waiting);
+
+/// [`checks`] of a pull request that is `owned` by a Plan or not: owned failed checks are `Waiting` (the Lead fixes
+/// them, hs-d302), not red; every other value is [`checks`]'.
+pub fn checks_of(c: Checks, owned: bool) -> (&'static str, Meaning) {
+    match (c, owned) {
+        (Checks::Failed, true) => (CHECKS_FAILED, Meaning::Waiting),
+        _ => checks(c),
+    }
+}
 
 /// Icon and meaning of a PR's checks.
 pub fn checks(c: Checks) -> (&'static str, Meaning) {
@@ -280,6 +319,7 @@ mod tests {
             (Meaning::Planning, Color::Magenta),
             (Meaning::Grounding, Color::White),
             (Meaning::Nothing, Color::DarkGray),
+            (Meaning::Waiting, Color::Blue),
         ];
         assert_eq!(table.map(|(m, _)| m), Meaning::ALL);
         for (m, c) in table {
@@ -294,7 +334,7 @@ mod tests {
             (JobStatus::Running, false, SPINNER[0], Meaning::InProgress),
             (JobStatus::Running, true, MERGING, Meaning::Review),
             (JobStatus::Merged, false, MERGED, Meaning::Done),
-            (JobStatus::Failed, false, FAILED, Meaning::Failed),
+            (JobStatus::Failed, false, FAILED, Meaning::Waiting),
             (JobStatus::Draft, false, DRAFT, Meaning::Nothing),
             (JobStatus::Cancelled, false, CANCELLED, Meaning::Nothing),
         ];
@@ -333,6 +373,14 @@ mod tests {
             assert_eq!(dot_span(dot, 0, false), Span::styled(NEEDS_YOU, Style::new().fg(colour)), "{dot:?}");
         }
         assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled(IDLE, Style::new()), "the terminal's foreground");
+        assert_eq!(
+            dot_span(Dot::Waiting, 0, false),
+            Span::styled(WAITING, Style::new().fg(Color::Blue)),
+            "a calm blue: not red, not the yellow of attention, and not a filled dot"
+        );
+        assert_ne!(WAITING, NEEDS_YOU);
+        assert_ne!(color(Meaning::Waiting), color(Meaning::Failed));
+        assert_ne!(color(Meaning::Waiting), color(Meaning::Review));
         assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled(STOPPED, Style::new().add_modifier(Modifier::DIM)), "dim, no colour");
     }
 
@@ -348,7 +396,7 @@ mod tests {
 
     #[test]
     fn every_dot_glyph_is_one_cell_wide() {
-        for glyph in SPINNER.into_iter().chain([NEEDS_YOU, IDLE, STOPPED]) {
+        for glyph in SPINNER.into_iter().chain([NEEDS_YOU, WAITING, IDLE, STOPPED]) {
             assert_eq!(Span::raw(glyph).width(), 1, "U+{:X}", glyph.chars().next().unwrap() as u32);
             assert_eq!(glyph.chars().count(), 1, "{glyph:?}");
         }
@@ -382,6 +430,7 @@ mod tests {
             (Dot::Yellow, NEEDS_YOU),
             (Dot::Magenta, NEEDS_YOU),
             (Dot::White, NEEDS_YOU),
+            (Dot::Waiting, WAITING),
             (Dot::Idle, IDLE),
             (Dot::Stopped, STOPPED),
         ] {
@@ -408,13 +457,30 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_job_and_its_counter_are_waiting_until_it_is_stuck() {
+        assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
+        assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
+        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::Blue));
+        assert_eq!(failed_count_style(2, true), Style::new().fg(Color::Red));
+        assert_eq!(failed_count_style(0, true), Style::new().fg(Color::DarkGray), "nothing failed: nothing to show");
+        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::Blue));
+    }
+
+    #[test]
     fn every_pr_state_and_check_has_its_icon_and_meaning() {
-        let states = [(PrState::Open, Meaning::Review), (PrState::Merged, Meaning::Done), (PrState::Closed, Meaning::Failed)];
+        let states = [(PrState::Open, Meaning::Review), (PrState::Merged, Meaning::Done), (PrState::Closed, Meaning::Waiting)];
         for (s, m) in states {
             assert_eq!(pr_state(s), m, "{s:?}");
         }
         assert_eq!(PR_LEGEND.map(|(_, s)| s), states.map(|(s, _)| s));
-        assert_eq!(PR_CONFLICT, ("conflict", pr_state(PrState::Closed)));
+        assert_eq!(PR_CONFLICT, ("conflict", Meaning::Failed));
+        assert_eq!(PR_CLOSED_ASKED, ("closed", Meaning::Failed));
+        assert_eq!(PR_CONFLICT_OWNED, ("conflict", Meaning::Waiting));
+        assert_eq!(checks_of(Checks::Failed, true), (CHECKS_FAILED, Meaning::Waiting));
+        assert_eq!(checks_of(Checks::Failed, false), checks(Checks::Failed));
+        for c in [Checks::Passed, Checks::Pending, Checks::None] {
+            assert_eq!(checks_of(c, true), checks(c), "{c:?}");
+        }
         let table = [
             (Checks::Passed, CHECKS_PASSED, Meaning::Done),
             (Checks::Failed, CHECKS_FAILED, Meaning::Failed),
