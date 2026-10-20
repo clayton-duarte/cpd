@@ -1541,7 +1541,7 @@ mod tests {
         for (row, subject) in [
             (5, Subject::Plan(PlanId::parse("old").unwrap())),
             (6, Subject::Session(sid("f-blocked"))),
-            (13, Subject::Context(ContextId::parse("zeta").unwrap())),
+            (15, Subject::Context(ContextId::parse("zeta").unwrap())),
         ] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
@@ -1558,7 +1558,7 @@ mod tests {
             Ok(Some(Action::RenamePlan { id: PlanId::parse("old").unwrap(), title: "Older".into() }))
         );
         drawn(&mut view, 44, 24);
-        right_click(&mut view, 8, 13);
+        right_click(&mut view, 8, 15);
         let rename = Question::input("Rename", Ask::RenameContext(ContextId::parse("zeta").unwrap()), "Zeta".into());
         assert_eq!(asked(press(&mut view, KeyCode::Enter)), rename);
         // and of an archived fork: its name
@@ -1582,7 +1582,7 @@ mod tests {
         }
         // archived rows: a Plan, a fork of it, an archived Context
         let mut view = archived_open();
-        for (row, id) in [(5, "old"), (6, "ship·f-bl"), (13, "zeta")] {
+        for (row, id) in [(5, "old"), (6, "ship·f-bl"), (15, "zeta")] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
             assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyId(id.into())), "row {row}");
@@ -1592,7 +1592,7 @@ mod tests {
     /// Right-clicks (`column`, `row`) and picks the item `index` of its menu with Enter.
     fn pick_at(view: &mut View, column: u16, row: u16, index: usize) -> Effect {
         view.menu = None;
-        drawn(view, 44, 20);
+        drawn(view, 44, 24);
         right_click(view, column, row);
         for _ in 0..index {
             press(view, KeyCode::Down);
@@ -1725,7 +1725,7 @@ mod tests {
         assert_eq!(answered(question, None), Ok(None), "a cancel runs nothing");
         // a taken id (also of an archived Context) gets `-2`, then `-3`
         view.refresh(archived());
-        let question = popup_at(&mut view, 8, 15, 0);
+        let question = popup_at(&mut view, 8, 18, 0);
         assert_eq!(
             answered(question.clone(), Some("Alpha")),
             Ok(Some(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into() }))
@@ -1985,8 +1985,8 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 14));
         assert_eq!(rows[8], header(5), "{rows:?}");
         assert_eq!(rows[7], "", "the empty row above it");
-        assert_eq!(rows[1], cue_row_at('▲', 8), "the tree's cue is right-aligned: {rows:?}");
-        assert_eq!(rows[6], cue_row_at('▼', 2), "{rows:?}");
+        assert_eq!(rows[1], cue_row_at('▲', 5), "the tree's cue is right-aligned: {rows:?}");
+        assert_eq!(rows[6], cue_row_at('▼', 3), "{rows:?}");
         assert!(rows[2..6].iter().any(|r| r.starts_with(&format!(" ╰─{NEEDS_YOU} rel"))), "the cursor's Session is between the cues: {rows:?}");
         assert!(!rows[1..7].iter().any(|r| r.contains("alpha")), "the top of the tree scrolled away: {rows:?}");
     }
@@ -2624,10 +2624,10 @@ mod tests {
         let buf = draw_now(&mut view, 43, 31);
         let rows = text_rows(&buf);
         let at = rows.iter().position(|r| r.contains("p39")).expect("the cursor's Session is drawn");
-        assert!((2..24).contains(&at), "between the cues: {rows:?}");
+        assert!((2..23).contains(&at), "between the cues: {rows:?}");
         assert!(buf[(5, at as u16)].modifier.contains(Modifier::REVERSED));
-        assert!(rows[1].trim_start().starts_with('▲') && rows[24].trim_start().starts_with('▼'), "{rows:?}");
-        assert_eq!((rows[1].as_str(), rows[24].as_str()), (cue_row_at('▲', 19).as_str(), cue_row_at('▼', 21).as_str()), "right-aligned: {rows:?}");
+        assert!(rows[1].trim_start().starts_with('▲') && rows[23].trim_start().starts_with('▼'), "{rows:?}");
+        assert_eq!((rows[1].as_str(), rows[23].as_str()), (cue_row_at('▲', 20).as_str(), cue_row_at('▼', 20).as_str()), "right-aligned: {rows:?}");
         let before = rows.clone();
         wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
         assert_ne!(text_rows(&draw_now(&mut view, 43, 31)), before, "the wheel moved it, though the cursor is out of sight");
