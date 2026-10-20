@@ -1,7 +1,7 @@
 //! The in-pane section title (commands.md §17, "Section titles"; hs-d298, hs-d308, hs-d475, hs-d476): the one helper every
 //! view draws its section titles with, as a **grey pill** on a line, inside the panel's padding of one column on each
 //! side: a blank cell, `╭─`, the title as a pill (its text inverted, between the powerline semicircle caps `` and
-//! ``), a muted `─` line up to the optional count and a blank cell: ` ╭─Inbox────…────35 `. The title is as the
+//! ``), a muted `─` line up to the optional count (a grey pill too, hs-d480) and a blank cell: ` ╭─Inbox────…────35 `; a non-collapsible title starts ` ──` instead of ` ╭─` (hs-d478). The title is as the
 //! caller gives it, in Title Case, with no padding spaces inside the pill. It is never clickable (the helper draws a line,
 //! it is no hit target).
 //!
@@ -16,8 +16,10 @@ use ratatui::text::{Line, Span};
 
 use crate::palette::{self, Meaning};
 
-/// The start of the row: the corner and one line.
+/// The start of a collapsible title's row: the corner and one line.
 const LEAD: &str = "╭─";
+/// The start of a non-collapsible title's row: two lines, no corner.
+const PLAIN_LEAD: &str = "──";
 /// The line to the right edge.
 const RULE: &str = "─";
 /// U+E0B6: the pill's left cap.
@@ -29,27 +31,31 @@ const PAD: &str = " ";
 
 /// The **non-collapsible** section title (hs-d478): a title `width` cells wide whose left cap sits three columns from the edge,
 /// ` ──<pill>───…` (the padding, a muted `──`, the pill), for every in-pane title that is no collapsible widget's (logs, legend,
-/// the Deploy column's sections, dialog titles). Stub (Job `t4c-red`): it still draws the collapsible form; Job `t4c-impl` draws ` ──`.
+/// the Deploy column's sections, dialog titles).
 pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    collapsible_title(title, count, width)
+    row(PLAIN_LEAD, title, count, width)
 }
 
 /// The **collapsible** section title (hs-d478): a title `width` cells wide, its first and last cell the padding: ` ╭─<pill>───…`
 /// with, when `count` is given and fits after at least one `─`, the count against the padding on the right. For a title that heads a
 /// collapsible widget (the Inbox's); its left cap sits three columns from the edge, as [`title`]'s does. A title wider than the room
-/// is cut (a pill narrower than 3 cells is left out); the line never wraps. Stub (Job `t4c-red`): the count is still plain text;
-/// Job `t4c-impl` draws it as a grey pill (hs-d480).
+/// is cut (a pill narrower than 3 cells is left out); the line never wraps. The count is a grey pill too (hs-d480).
 pub fn collapsible_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
+    row(LEAD, title, count, width)
+}
+
+/// The row both forms share: `lead` (two cells) is all that differs.
+fn row(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'static> {
     let muted = palette::fg(Meaning::Nothing);
     let pad = usize::from(width >= 2);
     let width = width - 2 * pad;
-    let lead: String = LEAD.chars().take(width).collect();
+    let lead: String = lead.chars().take(width).collect();
     let left = width - lead.chars().count();
     let text: String = title.chars().take(left.saturating_sub(2)).collect();
     let pill = left >= 3 && !text.is_empty();
     let left = if pill { left - text.chars().count() - 2 } else { left };
-    let count = count.map(|n| n.to_string()).filter(|c| pill && 1 + c.chars().count() <= left).unwrap_or_default();
-    let fill = left - count.chars().count();
+    let count = count.map(|n| n.to_string()).filter(|c| pill && 1 + c.chars().count() + 2 <= left).unwrap_or_default();
+    let fill = left - if count.is_empty() { 0 } else { count.chars().count() + 2 };
     let mut spans = vec![Span::raw(PAD.repeat(pad)), Span::styled(lead, muted)];
     if pill {
         spans.push(Span::styled(CAP_LEFT, muted));
@@ -57,7 +63,11 @@ pub fn collapsible_title(title: &str, count: Option<usize>, width: usize) -> Lin
         spans.push(Span::styled(CAP_RIGHT, muted));
     }
     spans.push(Span::styled(RULE.repeat(fill), muted));
-    spans.push(Span::raw(count));
+    if !count.is_empty() {
+        spans.push(Span::styled(CAP_LEFT, muted));
+        spans.push(Span::styled(count, muted.add_modifier(Modifier::REVERSED)));
+        spans.push(Span::styled(CAP_RIGHT, muted));
+    }
     spans.push(Span::raw(PAD.repeat(pad)));
     Line::from(spans)
 }
@@ -122,7 +132,7 @@ mod tests {
         let got = text(collapsible_title("Inbox", Some(35), 22));
         assert_eq!(got, format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{} ", "─".repeat(7), count_pill("35")));
         assert_eq!(got.chars().count(), 22, "full width, the padding included");
-        assert_eq!(text(collapsible_title("PRs", Some(3), 26)), format!(" ╭─{CAP_LEFT}PRs{CAP_RIGHT}{}{} ", "─".repeat(26 - 2 - 2 - 5 - 3 - 1), count_pill("3")));
+        assert_eq!(text(collapsible_title("PRs", Some(3), 26)), format!(" ╭─{CAP_LEFT}PRs{CAP_RIGHT}{}{} ", "─".repeat(26 - 1 - 2 - 5 - 3 - 1), count_pill("3")));
         assert_eq!(text(collapsible_title("Inbox", Some(0), 16)), format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{} ", "─".repeat(2), count_pill("0")));
     }
 
@@ -140,7 +150,7 @@ mod tests {
         assert_eq!(got, format!(" ──{CAP_LEFT}Logs{CAP_RIGHT}{} ", "─".repeat(20 - 2 - 2 - 6)));
         assert_eq!(got.chars().count(), 20);
         let got = text(title("PRs", Some(3), 26));
-        assert_eq!(got, format!(" ──{CAP_LEFT}PRs{CAP_RIGHT}{}{} ", "─".repeat(26 - 2 - 2 - 5 - 3 - 1), count_pill("3")));
+        assert_eq!(got, format!(" ──{CAP_LEFT}PRs{CAP_RIGHT}{}{} ", "─".repeat(26 - 1 - 2 - 5 - 3 - 1), count_pill("3")));
         assert_eq!(got.chars().count(), 26);
     }
 

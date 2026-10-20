@@ -2906,7 +2906,7 @@ mod tests {
     fn the_inbox_title_sits_inside_the_panels_padding_one_column_each_side() {
         let buf = draw_now(&mut with_inbox(5), 43, 20);
         let y = inbox_title_y(&text_rows(&buf), 5);
-        assert_eq!((buf[(0, y)].symbol(), buf[(1, y)].symbol(), buf[(41, y)].symbol(), buf[(42, y)].symbol()), (" ", "╭", "5", " "));
+        assert_eq!((buf[(0, y)].symbol(), buf[(1, y)].symbol(), buf[(41, y)].symbol(), buf[(42, y)].symbol()), (" ", "╭", "\u{E0B4}", " "));
     }
 
     #[test]
