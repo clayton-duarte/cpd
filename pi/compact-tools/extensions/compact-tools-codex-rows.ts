@@ -428,7 +428,7 @@ function customResult(input: ResultInput, width: number): string[] {
 			}
 		}
 		if (component) {
-			// The author's view hangs from "└" like any result, without the blank lines it may open with.
+			// The author's view hangs from the corner glyph like any result, without the blank lines it may open with.
 			const lines = component.render(Math.max(1, width - visibleWidth(CODEX_INDENT)));
 			const start = lines.findIndex((line) => stripTerminalSequences(line).trim() !== "");
 			rows = (start < 0 ? [] : lines.slice(start)).map((line, index) => (index === 0 ? first : CODEX_INDENT) + line);

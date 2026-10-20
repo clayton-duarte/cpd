@@ -167,7 +167,8 @@ test("with no other copy, or with other packages, the factory registers what it 
 			const { pi, calls, handlers } = fakePi();
 			compactTools(pi);
 			const methods = new Set(calls.map((call) => call.method));
-			assert.ok(methods.has("registerTool"), JSON.stringify(packages));
+			// The extension draws pi's tools through registerToolRenderer; it registers no tool of its own.
+			assert.ok(methods.has("registerToolRenderer"), JSON.stringify(packages));
 			assert.ok(methods.has("registerCommand"), "the /compact-tools command");
 			assert.ok(handlers.size > 1, "its hooks");
 			const { ctx, notices } = context("tui");
