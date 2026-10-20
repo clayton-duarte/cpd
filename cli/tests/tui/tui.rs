@@ -188,11 +188,12 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     }
     assert_eq!(tmux_out(&env, &["show", "-gv", "remain-on-exit"]).trim(), "on");
     let border = tmux_out(&env, &["show", "-gv", "pane-border-format"]);
-    assert!(border.contains("#{==:#{@cpd_view},tree}, Context "), "{border}");
+    assert!(border.contains("#{==:#{@cpd_view},tree},Context,"), "{border}");
     assert!(border.contains("#[reverse]") && border.contains("#[noreverse]"), "{border}");
     // tmux expands the format of the tree pane to its reversed title.
     let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
-    assert!(expanded.contains("\u{e0b6}#[reverse] Context #[noreverse]\u{e0b4}"), "{expanded}");
+    // (the colour, grey or blue, is the pane's focus: `pane_active`)
+    assert!(expanded.contains("━\u{e0b6}#[reverse]Context#[noreverse]\u{e0b4}"), "{expanded}");
     assert!(!border.contains("statusbar"), "{border}");
     // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
     assert_status_line(&env);
@@ -587,38 +588,79 @@ fn styled_row(outer: &Outer, row: usize) -> String {
     outer.run(&["capture-pane", "-p", "-e", "-t", "o"]).lines().nth(row).unwrap_or("").to_owned()
 }
 
+/// `row` without its escape sequences: the cells as the client shows them.
+fn visible(row: &str) -> String {
+    let mut out = String::new();
+    let mut chars = row.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for e in chars.by_ref() {
+                if e.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Where the pill of `title` is in the styled `row`, its text reversed with no padding between the caps: the
+/// 0-based column of its left cap, the SGR parameters in force at that cap (`90` is colour 8, `34` blue) and those in
+/// force at the right cap.
+fn pill(row: &str, title: &str) -> (usize, String, String) {
+    let (before, after) = row.split_once(&format!("\u{e0b6}\x1b[7m{title}\x1b[0m")).unwrap_or_else(|| panic!("{title} in {row:?}"));
+    let in_force = |text: &str| text.rsplit("\x1b[").next().and_then(|s| s.split_once('m')).map_or(String::new(), |(p, _)| p.to_owned());
+    let right = after.strip_prefix("\x1b[").and_then(|s| s.split_once('m')).unwrap_or_else(|| panic!("a colour before the right cap in {after:?}"));
+    assert!(right.1.starts_with('\u{e0b4}'), "{title}: the right cap follows at once: {after:?}");
+    (visible(before).chars().count(), in_force(before), right.0.to_owned())
+}
+
 #[test]
-fn a_pane_header_is_a_title_pill_whose_caps_take_the_borders_colour() {
+fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_from_the_edge() {
     let env = env();
     env.cpd(&["tui"]).ok();
     let panes = main_panes(&env);
-    let (plan, chat) = (view(&panes, "plan").clone(), view(&panes, "chat").clone());
+    let (tree, plan, widgets, chat) =
+        (view(&panes, "tree").clone(), view(&panes, "plan").clone(), view(&panes, "widgets").clone(), view(&panes, "chat").clone());
     // A Lead in the chat slot, with a header (its Plan's title) and the keyboard focus.
     let lead = tmux_out(&env, &["new-window", "-d", "-t", "=cpd:", "-n", "park-pay", "-P", "-F", "#{pane_id}", "sleep", "3600"]);
     let lead = lead.trim();
     tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_session", "lead-a"]);
-    tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_title", "Retry payouts"]);
+    tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_title", "Retry Payouts"]);
     tmux_out(&env, &["swap-pane", "-d", "-s", lead, "-t", &chat.id]);
     tmux_out(&env, &["select-pane", "-t", lead]);
     let outer = Outer::attach(&env, 120, 30);
-    // The caps are in the border's colour: blue (SGR 34) on the focused pane, the border colour (default) elsewhere;
-    // the title between them is reversed.
-    wait_until("the Lead's header", || outer.screen().contains("\u{e0b6} Retry payouts \u{e0b4}"));
-    // The client's size is the window's now: the rows are those of the header above each pane.
-    let lead_row = usize::try_from(tmux_out(&env, &["display", "-p", "-t", lead, "#{pane_top}"]).trim().parse::<i32>().unwrap() - 1).unwrap();
-    let plan_row = usize::try_from(tmux_out(&env, &["display", "-p", "-t", &plan.id, "#{pane_top}"]).trim().parse::<i32>().unwrap() - 1).unwrap();
-    // The row up to the left cap and the text after the title: whether the colour in force there is blue.
-    let caps_blue = |row: &str, title: &str| -> (bool, bool) {
-        let (before, after) = row.split_once(&format!("\u{e0b6}\x1b[7m {title} ")).unwrap_or_else(|| panic!("{title} in {row:?}"));
-        let last_colour = before.rsplit("\x1b[").next().unwrap_or("");
-        (last_colour.starts_with("34m"), after.starts_with("\x1b[0m\x1b[34m\u{e0b4}"))
+    // No padding inside the caps: the title between them, nothing around it.
+    wait_until("the Lead's header", || outer.screen().contains("\u{e0b6}Retry Payouts\u{e0b4}"));
+    // The tree is wide enough for its whole pill on a client this size.
+    tmux_out(&env, &["resize-pane", "-t", &tree.id, "-x", "30"]);
+    for title in ["Context", "Plan", "Deploy"] {
+        wait_until(title, || outer.screen().contains(&format!("\u{e0b6}{title}\u{e0b4}")));
+    }
+    // The pane's header row (the client's size is the window's now) and its left edge.
+    let at = |pane: &str| -> (usize, usize) {
+        let out = tmux_out(&env, &["display", "-p", "-t", pane, "#{pane_top} #{pane_left}"]);
+        let (top, left) = out.trim().split_once(' ').unwrap();
+        (usize::try_from(top.parse::<i32>().unwrap() - 1).unwrap(), left.parse().unwrap())
     };
-    assert_eq!(caps_blue(&styled_row(&outer, lead_row), "Retry payouts"), (true, true));
-    assert_eq!(caps_blue(&styled_row(&outer, plan_row), "Plan"), (false, false));
-    // Focus the plan view: its caps turn blue, the Lead's do not.
+    let titled = [("Context", tree.id.as_str()), ("Plan", plan.id.as_str()), ("Deploy", widgets.id.as_str()), ("Retry Payouts", lead)];
+    // Every pill starts three columns from its pane's edge (hs-d478): three border cells, then the left cap. Its caps
+    // and block are grey (colour 8, SGR 90) and, on the focused pane, blue (SGR 34), whatever the border's colour is.
+    let check = |focused: &str| {
+        for (title, id) in titled {
+            let (row, left) = at(id);
+            let colour = if id == focused { "34" } else { "90" };
+            let (column, left_cap, right_cap) = pill(&styled_row(&outer, row), title);
+            assert_eq!((column, left_cap.as_str(), right_cap.as_str()), (left + 3, colour, colour), "{title} (focus on {focused})");
+        }
+    };
+    check(lead);
+    // Focus the plan view: its pill turns blue, the Lead's turns grey.
     tmux_out(&env, &["select-pane", "-t", &plan.id]);
-    wait_until("the focus to move", || caps_blue(&styled_row(&outer, plan_row), "Plan") == (true, true));
-    assert_eq!(caps_blue(&styled_row(&outer, lead_row), "Retry payouts"), (false, false));
+    wait_until("the focus to move", || pill(&styled_row(&outer, at(&plan.id).0), "Plan").1 == "34");
+    check(&plan.id);
 }
 
 /// Kills `gone` (views of `main`), runs `cpd tui`, and asserts the layout is whole again with the panes that were

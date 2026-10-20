@@ -572,7 +572,7 @@ impl Tmux {
         self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_SESSION, session.as_str()])).map(drop)
     }
 
-    /// `set -p -t <pane> @cpd_title <title>`.
+    /// `set -p -t <pane> @cpd_title <title>`, the title in Title Case (hs-d475, [`title_case`]).
     pub fn set_pane_title(&self, pane: &PaneId, title: &str) -> Result<(), CpdError> {
         self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_TITLE, title])).map(drop)
     }
@@ -895,6 +895,12 @@ fn parse_pane(line: &str) -> Option<Line> {
     }
 }
 
+/// The text in Title Case (contract §6.1, hs-d475): the first letter of each space-separated word upper-cased, the
+/// rest of each word unchanged, so ids, acronyms and `E10` stay.
+pub fn title_case(_text: &str) -> String {
+    todo!("title_case (hs-d475)")
+}
+
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
 }
@@ -919,6 +925,22 @@ mod tests {
             assert!(!older_version(same, same));
         }
         assert!(!older_version("master", "3.8") && !older_version("3.4", "unknown"));
+    }
+
+    #[test]
+    fn title_case_upper_cases_the_first_letter_of_each_word_and_leaves_the_rest() {
+        for (text, want) in [
+            ("dynamic session titles", "Dynamic Session Titles"),
+            ("E10 retitle fix", "E10 Retitle Fix"),
+            ("cpd·tui visuals", "Cpd·tui Visuals"),
+            ("Retry payouts", "Retry Payouts"),
+            ("fix PAY-1 on hs-d475", "Fix PAY-1 On Hs-d475"),
+            ("", ""),
+        ] {
+            assert_eq!(title_case(text), want, "{text:?}");
+        }
+        // Twice is once, and the spaces stay as they are.
+        assert_eq!(title_case(&title_case("a  b")), "A  B");
     }
 
     #[test]

@@ -110,6 +110,17 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
     }
 }
 
+/// `pane-border-format`, exactly (contract §6.1, hs-d475, hs-d478): every title is a pill with no padding, grey
+/// (colour 8) and blue on the focused pane, set in the format itself; one `━` in the pill's colour before the left
+/// cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
+const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]\
+#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
+#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
+#[noreverse]\u{e0b4}}}}";
+
 /// Every option, binding and hook of contract §6.1: the reference's
 /// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.
 fn assert_server_options(s: &Server) {
@@ -124,9 +135,7 @@ fn assert_server_options(s: &Server) {
         ("pane-border-lines", "heavy"),
         (
             "pane-border-format",
-            "#{?#{@cpd_session},#{?#{@cpd_title},\u{e0b6}#[reverse] #{@cpd_title} #[noreverse]\u{e0b4},},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-             \u{e0b6}#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]\u{e0b4}}}}",
+            BORDER_FORMAT_WANT,
         ),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
@@ -142,7 +151,7 @@ fn assert_server_options(s: &Server) {
     } else {
         eprintln!("extended-keys-format not asserted: this tmux does not know the option");
     }
-    assert!(s.tmux.global_option("pane-border-format").unwrap().contains(", Deploy ,"));
+    assert!(s.tmux.global_option("pane-border-format").unwrap().contains(",Deploy,"));
     let features = s.tmux.global_option("terminal-features").unwrap();
     for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
         assert_eq!(features.matches(feature).count(), 1, "{feature} in {features}");
@@ -442,8 +451,10 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
     };
     t.set_pane_session(&pane_id, &SessionId::new_v4()).unwrap();
     assert_eq!(border(), "");
+    // Title Case, no padding, the pill in blue (this pane is the active one), one border line character before the
+    // left cap (hs-d475, hs-d478)
     t.set_pane_title(&pane_id, "Retry payouts").unwrap();
-    assert_eq!(border(), "\u{e0b6}#[reverse] Retry payouts #[noreverse]\u{e0b4}");
+    assert_eq!(border(), "#[fg=blue]━\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
 }
 
 /// The status line's format, exactly: three button pills each in its own range and one space apart, the grey fill
