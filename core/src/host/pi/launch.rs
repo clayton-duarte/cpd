@@ -302,8 +302,31 @@ mod tests {
         );
         assert_eq!(
             launch.env,
-            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("PLANNOTATOR_UPDATE_CHECK", "0"), ("PI_SKIP_VERSION_CHECK", "1")])
+            env(&[
+                ("CPD_HOME", "/cpd-home"),
+                ("CPD_SESSION", ID),
+                ("PLANNOTATOR_UPDATE_CHECK", "0"),
+                ("PLANNOTATOR_REMOTE", "1"),
+                ("PLANNOTATOR_URL_HOST", "192.168.3.3"),
+                ("PLANNOTATOR_PORT", "19432"),
+                ("PI_SKIP_VERSION_CHECK", "1"),
+            ])
         );
+    }
+
+    #[test]
+    fn a_manager_gets_remote_the_review_host_and_its_port_but_no_data_dir() {
+        let home = home();
+        let session = SessionId::parse(ID).unwrap();
+        let extensions = strs(&["/opt/cpd/pi"]);
+        let plannotator = plannotator(Some("19437"));
+        let start = LeadStart::Resume { file: "/cpd-home/sessions/m.jsonl".into() };
+        let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
+        assert_eq!(launch.env["PLANNOTATOR_REMOTE"], "1");
+        assert_eq!(launch.env["PLANNOTATOR_URL_HOST"], "192.168.3.3");
+        assert_eq!(launch.env["PLANNOTATOR_PORT"], "19437");
+        assert!(!launch.env.contains_key("PLANNOTATOR_DATA_DIR"));
+        assert!(!launch.env.contains_key("CPD_PLAN"));
     }
 
     fn lead_env(extra: &[(&str, &str)]) -> BTreeMap<String, String> {

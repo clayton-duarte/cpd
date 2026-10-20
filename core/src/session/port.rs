@@ -233,4 +233,54 @@ mod tests {
         assert_eq!(err.details()["holders"], json!([{"plan": "aa", "port": 19432}, {"plan": "bb", "port": 19433}]));
         assert!(!f.home.plannotator_port(&plan("cc")).exists());
     }
+
+    /// A live Manager of Context `ctx` (hs-d496): its port file is `run/<context>/plannotator-port`, the path
+    /// `plannotator_port` gives for an id, here the Context's.
+    fn add_manager(f: &mut Fixture) {
+        f.store
+            .write("manager", |tx| {
+                Ok(tx.execute_batch(
+                    "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('m1', 'manager', 'ctx', 'ctx-manager', '/', 'O5', 'idle', 't', 't');",
+                )?)
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn a_live_managers_port_is_held_against_a_plans_allocation() {
+        let mut f = fixture(&[("aa", "grounding")]);
+        add_manager(&mut f);
+        write_port(&f.home.plannotator_port(&plan("ctx")), 19432).unwrap();
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19433);
+    }
+
+    #[test]
+    fn a_plan_holding_a_live_managers_port_moves() {
+        let mut f = fixture(&[("aa", "grounding")]);
+        add_manager(&mut f);
+        write_port(&f.home.plannotator_port(&plan("ctx")), 19432).unwrap();
+        write_port(&f.home.plannotator_port(&plan("aa")), 19432).unwrap();
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19433);
+    }
+
+    #[test]
+    fn a_managers_port_is_never_one_a_live_plan_holds() {
+        let mut f = fixture(&[("aa", "grounding")]);
+        add_manager(&mut f);
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
+        // The Manager's allocation, keyed by its Context (`ctx`, never a Plan's id).
+        assert_eq!(assign_to(&mut f, "19432-19441", "ctx").unwrap(), 19433);
+        assert_eq!(fs::read_to_string(f.home.plannotator_port(&plan("ctx"))).unwrap(), "19433\n");
+        assert!(f.home.plannotator_port(&plan("ctx")).ends_with("ctx/plannotator-port"));
+    }
+
+    #[test]
+    fn a_stopped_and_archived_managers_port_is_reused() {
+        let mut f = fixture(&[("aa", "grounding")]);
+        add_manager(&mut f);
+        write_port(&f.home.plannotator_port(&plan("ctx")), 19432).unwrap();
+        f.store.write("archive", |tx| Ok(tx.execute("UPDATE sessions SET archived_at = 't' WHERE id = 'm1'", [])?)).unwrap();
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
+    }
 }
