@@ -256,32 +256,27 @@ pub enum Remote {
     Reusable,
 }
 
-/// `fetch origin <base>` and the remote check of the Lead Branch. Refuses
-/// `branch_exists` when `origin/<branch>` does not contain `origin/<base>`.
-fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdError> {
-    if !has_origin(repo)? {
-        return Ok(Remote::None);
-    }
-    fetch(repo, &["origin", base])?;
-    let listed = run(repo, &["ls-remote", "--exit-code", "--heads", "origin", branch])?;
+/// Whether `origin` has branch `name`: `ls-remote --exit-code --heads` exits 0 (it has) or 2 (it has not);
+/// any other result is `setup_failed`.
+fn on_remote(repo: &Path, name: &str) -> Result<bool, CpdError> {
+    let listed = run(repo, &["ls-remote", "--exit-code", "--heads", "origin", name])?;
     match listed.code {
-        0 => {}
-        2 => return Ok(Remote::Absent),
-        code => {
-            return Err(CpdError::new(
-                ErrorCode::SetupFailed,
-                format!("Cannot tell whether {branch} is on origin: git ls-remote exited {code}."),
-            )
+        0 => Ok(true),
+        2 => Ok(false),
+        code => Err(CpdError::new(ErrorCode::SetupFailed, format!("Cannot tell whether {name} is on origin: git ls-remote exited {code}."))
             .with("exit", code)
-            .with("stderr", tail(&listed.stderr, TAIL_LINES)));
-        }
+            .with("stderr", tail(&listed.stderr, TAIL_LINES))),
     }
+}
+
+/// Fetches `origin/<branch>` and refuses `branch_exists` when it does not contain `origin/<base>`.
+fn require_contains_base(repo: &Path, branch: &str, base: &str) -> Result<(), CpdError> {
     fetch(repo, &["origin", branch])?;
     let remote_branch = format!("origin/{branch}");
     let remote_base = format!("origin/{base}");
     let ancestor = run(repo, &["merge-base", "--is-ancestor", &remote_base, &remote_branch])?;
     match ancestor.code {
-        0 => Ok(Remote::Reusable),
+        0 => Ok(()),
         1 => Err(CpdError::new(
             ErrorCode::BranchExists,
             format!("Branch {branch} already exists on origin and does not contain {remote_base}: cpd does not reset or force-push it."),
@@ -295,6 +290,64 @@ fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdErro
     }
 }
 
+/// `fetch origin <base>` and the remote check of the Lead Branch. Refuses
+/// `branch_exists` when `origin/<branch>` does not contain `origin/<base>`.
+fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdError> {
+    if !has_origin(repo)? {
+        return Ok(Remote::None);
+    }
+    fetch(repo, &["origin", base])?;
+    if !on_remote(repo, branch)? {
+        return Ok(Remote::Absent);
+    }
+    require_contains_base(repo, branch, base)?;
+    Ok(Remote::Reusable)
+}
+
+/// The remote check and the start point of a **stacked** PR's Lead Branch (contract §7.2 "A stacked PR"): `base`
+/// is its base PR's Lead Branch, and the branch starts from that branch's head `S`, the local `refs/heads/<base>`
+/// (which the base PR's merges move), else `origin/<base>` when the local branch is gone, else `setup_failed`
+/// (`step` `base_pr_branch`). `origin/<base>` is fetched only when `origin` has it; a Lead Branch on the remote is
+/// reused when `origin/<base>` is its ancestor, or at once when `origin` has no `base` (nothing to be behind).
+fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, String), StartFailure> {
+    let at = |step| move |error| StartFailure { step, error };
+    let origin = has_origin(repo).map_err(at(Step::Remote))?;
+    let base_on_remote = if origin {
+        let found = on_remote(repo, base).map_err(at(Step::Remote))?;
+        if found {
+            fetch(repo, &["origin", base]).map_err(at(Step::Remote))?;
+        }
+        found
+    } else {
+        false
+    };
+    let local = format!("refs/heads/{base}");
+    let start = if run(repo, &["rev-parse", "--verify", "--quiet", &local]).map_err(at(Step::BasePrBranch))?.code == 0 {
+        rev_parse(repo, &local).map_err(at(Step::BasePrBranch))?
+    } else if base_on_remote {
+        rev_parse(repo, &format!("origin/{base}")).map_err(at(Step::BasePrBranch))?
+    } else {
+        let error = CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("The base PR's Lead Branch {base} is neither a local branch of this repo nor on origin: the stacked PR has nothing to start from."),
+        )
+        .with("base", base);
+        return Err(StartFailure { step: Step::BasePrBranch, error });
+    };
+    if !origin {
+        return Ok((Remote::None, start));
+    }
+    if !on_remote(repo, branch).map_err(at(Step::Remote))? {
+        return Ok((Remote::Absent, start));
+    }
+    if base_on_remote {
+        require_contains_base(repo, branch, base).map_err(at(Step::Remote))?;
+    } else {
+        fetch(repo, &["origin", branch]).map_err(at(Step::Remote))?;
+    }
+    Ok((Remote::Reusable, format!("origin/{branch}")))
+}
+
 /// The part of a Lead worktree's start that failed (contract §3.8 "A failed
 /// start": `step` of `pr_start_failed`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,6 +356,8 @@ pub enum Step {
     Worktree,
     /// `fetch origin`, `ls-remote`, the ancestor check.
     Remote,
+    /// A stacked PR's start point: its base PR's Lead Branch, local or on `origin` (§7.2).
+    BasePrBranch,
     /// The `pre-start` hook.
     PreStart,
 }
@@ -312,6 +367,7 @@ impl Step {
         match self {
             Step::Worktree => "worktree",
             Step::Remote => "remote",
+            Step::BasePrBranch => "base_pr_branch",
             Step::PreStart => "pre-start",
         }
     }
@@ -370,12 +426,16 @@ impl Prepared {
 /// it contains `origin/<base>`, refused `branch_exists` when it does not, and
 /// cut from `origin/<base>` when absent (R35). On failure the worktree and
 /// branch are removed.
+///
+/// `stacked`: `base` is a base PR's Lead Branch, and the branch is cut from its head, not from `origin/<base>`
+/// (see [`check_stacked`]); everything else is the same.
 pub fn prepare_lead_worktree(
     repo: &Path,
     plan: &PlanId,
     path: &Path,
     branch: &str,
     base: &str,
+    stacked: bool,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
     let at = |step| move |error| StartFailure { step, error };
@@ -401,11 +461,16 @@ pub fn prepare_lead_worktree(
         }
     }
 
-    let remote = check_remote(repo, branch, base).map_err(at(Step::Remote))?;
-    let start = match remote {
-        Remote::None => base.to_owned(),
-        Remote::Absent => format!("origin/{base}"),
-        Remote::Reusable => format!("origin/{branch}"),
+    let (remote, start) = if stacked {
+        check_stacked(repo, branch, base)?
+    } else {
+        let remote = check_remote(repo, branch, base).map_err(at(Step::Remote))?;
+        let start = match remote {
+            Remote::None => base.to_owned(),
+            Remote::Absent => format!("origin/{base}"),
+            Remote::Reusable => format!("origin/{branch}"),
+        };
+        (remote, start)
     };
 
     let created = (|| {
@@ -429,7 +494,7 @@ pub fn prepare_lead_worktree(
 /// a new branch (R35). A failed push does not fail it: see [`Created`].
 pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
-    let prepared = prepare_lead_worktree(repo, plan, &path, &lead_branch(plan), base, setup).map_err(|f| f.error)?;
+    let prepared = prepare_lead_worktree(repo, plan, &path, &lead_branch(plan), base, false, setup).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
