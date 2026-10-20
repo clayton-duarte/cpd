@@ -66,7 +66,7 @@ pub fn resolve(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error
     }
 }
 
-/// [`resolve`] for a `pull_requests` row no PR owns (the Inbox's `pr-failing`):
+/// [`resolve`] for a `pull_requests` row no PR owns (the Inbox's `pr-ready`):
 /// an owner without a file is cpd's default, source `default (no owner file)`,
 /// not `owner_unknown`.
 pub fn resolve_unowned_row(home: &CpdHome, key: &PolicyKey) -> Result<Resolved, crate::error::CpdError> {
