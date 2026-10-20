@@ -169,6 +169,11 @@ impl CpdHome {
         self.root.join("run")
     }
 
+    /// `run/gate-<i>.lock`: the Gate's machine-wide slot `i`, for `i` in `0..gate_concurrency` (contract §1.4, §7.6).
+    pub fn gate_slot(&self, i: u32) -> PathBuf {
+        self.run_dir().join(format!("gate-{i}.lock"))
+    }
+
     /// `run/watch.log`: the engine's stderr.
     pub fn watch_log(&self) -> PathBuf {
         self.run_dir().join("watch.log")

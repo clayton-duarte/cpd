@@ -104,7 +104,15 @@ pub fn run_hook(
     timeout: Duration,
     log: &Path,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(hook, worktree, None, operation, timeout, log)
+    run_with_branch(hook, worktree, None, operation, timeout, log, Log::Truncate)
+}
+
+/// How a hook's log is opened: every hook starts its log afresh, except the Gate's `pre-merge`, whose log
+/// already holds the lines of the wait for a slot (contract §7.6 "The Gate slot"), which its output follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Log {
+    Truncate,
+    Append,
 }
 
 /// [`run_hook`] in a worktree whose `HEAD` is detached (a gate worktree,
@@ -117,8 +125,9 @@ pub fn run_hook_as(
     operation: Option<&Operation<'_>>,
     timeout: Duration,
     log: &Path,
+    mode: Log,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(hook, worktree, Some(branch), operation, timeout, log)
+    run_with_branch(hook, worktree, Some(branch), operation, timeout, log, mode)
 }
 
 fn run_with_branch(
@@ -128,6 +137,7 @@ fn run_with_branch(
     operation: Option<&Operation<'_>>,
     timeout: Duration,
     log: &Path,
+    mode: Log,
 ) -> Result<HookResult, CpdError> {
     let pipeline = match load(worktree, hook) {
         Ok(p) => p,
@@ -160,7 +170,11 @@ fn run_with_branch(
 
     // The log is opened first and written as the output arrives (a killed hook
     // or driver still leaves it, and `tail -f` works).
-    let file = match log.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::File::create(log)) {
+    let open = || match mode {
+        Log::Truncate => fs::File::create(log),
+        Log::Append => fs::File::options().create(true).append(true).open(log),
+    };
+    let file = match log.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| open()) {
         Ok(file) => file,
         Err(e) => {
             let why = format!("Cannot write {}: {e}.", log.display());
