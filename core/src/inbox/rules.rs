@@ -871,18 +871,58 @@ mod tests {
             (c.urgency, c.subject.as_str(), c.label.as_str()),
             (Urgency::Magenta, "review:pay/r1", "pay plan review: Add retries")
         );
-        assert_eq!(c.url, None, "no port file");
+        assert_eq!(c.url, None, "no open plan row (hs-d502)");
         assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Lead");
         assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")));
+    }
 
-        let port = f.home.plannotator_port(&PlanId::parse("pay").unwrap());
-        std::fs::create_dir_all(port.parent().unwrap()).unwrap();
-        std::fs::write(&port, "20000\n").unwrap();
-        // the review host: `PLANNOTATOR_URL_HOST` from cpd's environment (the only test that sets it)
+    impl Fixture {
+        /// A tracked plannotator session of `session` with `kind`; open unless `closed`.
+        fn tracked_kind(&mut self, session: &str, kind: &str, port: u16, closed: bool) {
+            let (closed_at, ended) = if closed { (format!("'{T}'"), "'decided'".to_owned()) } else { ("NULL".to_owned(), "NULL".to_owned()) };
+            self.sql(&format!(
+                "INSERT INTO plannotator_reviews (session, pn_id, kind, subject, port, opened_at, closed_at, ended)
+                 VALUES ('{session}', 'pn-0a1b2c', '{kind}', 'plan.md', {port}, '{T}', {closed_at}, {ended});"
+            ));
+        }
+
+        fn plan_port_file(&self, port: &str) {
+            let path = self.home.plannotator_port(&PlanId::parse("pay").unwrap());
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, port).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_plan_review_has_no_url_without_an_open_plan_row_even_with_a_port_file_hs_d502() {
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        f.plan_port_file("20000\n");
+        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "a port file alone is no open page");
+    }
+
+    #[test]
+    fn a_plan_review_carries_the_review_hosts_page_on_the_open_plan_rows_port_hs_d502() {
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        f.plan_port_file("20000\n");
+        f.tracked_kind("l-pay", "plan", 20007, false);
         unsafe { std::env::set_var(URL_HOST, "review.example") };
         let url = one(f.of(Kind::PlanReview)).url;
         unsafe { std::env::remove_var(URL_HOST) };
-        assert_eq!(url.as_deref(), Some("http://review.example:20000/"));
+        assert_eq!(url.as_deref(), Some("http://review.example:20007/"));
+    }
+
+    #[test]
+    fn a_closed_plan_row_or_an_open_annotate_row_gives_a_plan_review_no_url_hs_d502() {
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        f.plan_port_file("20000\n");
+        f.tracked_kind("l-pay", "plan", 20007, true);
+        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "closed plan row");
+        f.sql("DELETE FROM plannotator_reviews");
+        f.tracked_kind("l-pay", "annotate", 20008, false);
+        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "open annotate row");
     }
 
     #[test]

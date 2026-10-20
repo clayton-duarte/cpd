@@ -598,9 +598,43 @@ mod tests {
         let url = "http://review.example:20000/";
         let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "ab", OPENED);
         waiting.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[waiting], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[waiting], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         let text = printed(&sink.0.borrow());
         assert!(text.contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "the label is a link to the review page: {text:?}");
+    }
+
+    // ---- plan-review with an optional url (hs-d502) ----
+
+    #[test]
+    fn a_plan_review_with_no_url_opens_the_lead_and_copies_nothing_hs_d502() {
+        let tree = sample();
+        let mut review = item(1, Kind::PlanReview, Urgency::Magenta, "ship plan review", OPENED);
+        review.plan = Some(PlanId::parse("ship").unwrap());
+        assert_eq!(jump(&tree, &review), Some(Jump::Run(Action::Open(sid("l-ship")))));
+        review.url = Some("http://review.example:20000/".into());
+        assert_eq!(
+            jump(&tree, &review),
+            Some(Jump::Steps(vec![Action::Open(sid("l-ship")), Action::CopyUrl("http://review.example:20000/".into())]))
+        );
+    }
+
+    #[test]
+    fn a_plan_review_label_is_an_osc_8_link_only_with_a_url_hs_d502() {
+        let drawn = |url: Option<&str>| {
+            let sink = Sink::default();
+            let mut terminal = Terminal::with_options(
+                CrosstermBackend::new(sink.clone()),
+                TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
+            )
+            .unwrap();
+            let mut review = item(1, Kind::PlanReview, Urgency::Magenta, "ab", OPENED);
+            review.url = url.map(Into::into);
+            terminal.draw(|f| draw(f, f.area(), &[review], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
+            printed(&sink.0.borrow())
+        };
+        let url = "http://review.example:20000/";
+        assert!(drawn(Some(url)).contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "with a url: a link");
+        assert!(!drawn(None).contains("\x1b]8;;"), "with no url: no link");
     }
 
     // ---- spacing v2 (hs-d476): the section is a collapsible widget with an empty row above and one below; red until `Shape` has the row below ----
