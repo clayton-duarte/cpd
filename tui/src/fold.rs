@@ -32,6 +32,9 @@ const CLOSE: &str = "╰";
 /// The closing row of a block with nothing to fold.
 const PLAIN: &str = "╰─";
 /// U+F004B md-arrow_down_drop_circle_outline: the folded block's arrow.
+/// The glyph of the empty Inbox's closing row (hs-d487).
+const UP_TO_DATE: &str = "\u{F005A}";
+
 const DOWN: &str = "\u{F004B}";
 /// U+F0063 md-arrow_up_drop_circle_outline: the expanded block's arrow.
 const UP: &str = "\u{F0063}";
@@ -58,6 +61,11 @@ pub fn toggle(expanded: bool) -> Line<'static> {
 /// a muted `╰─` and no word (commands.md §17, "Collapsible blocks"; hs-d349).
 pub fn plain() -> Line<'static> {
     Line::from(Span::styled(PLAIN, muted()))
+}
+
+/// The closing row of a section with nothing in it: a muted `╰`, the glyph and the word (the empty Inbox; hs-d487).
+pub fn done(text: &str) -> Line<'static> {
+    Line::from(Span::styled(format!("{CLOSE}{UP_TO_DATE} {text}"), muted()))
 }
 
 /// A content row: the muted `branch`, then the content as it is.

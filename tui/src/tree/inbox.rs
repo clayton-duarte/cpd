@@ -86,15 +86,10 @@ impl Shape {
         self.count > SHOWN
     }
 
-    /// The section ends in a closing row: the toggle, or a plain `╰─` when there is nothing to fold. None with no item.
-    fn has_close(self) -> bool {
-        self.count > 0
-    }
-
     /// The rows the section wants: the empty row, the title, the items, the closing row; expanded, at most the cap, but
     /// not less than collapsed.
     pub fn height(self) -> u16 {
-        let close = usize::from(self.has_close());
+        let close = 1;
         let collapsed = TOP + self.count.min(SHOWN) + close;
         let full = TOP + self.count + close;
         let height = if self.expanded { full.min(usize::from(self.cap)).max(collapsed) } else { collapsed };
@@ -103,7 +98,7 @@ impl Shape {
 
     /// The rows between the title and the closing row: the items and their cues.
     fn list_rows(self) -> usize {
-        usize::from(self.height()) - TOP - usize::from(self.has_close())
+        usize::from(self.height()) - TOP - 1
     }
 
     /// The items drawn and the cues: all of the first three when collapsed, else the window at the scroll offset.
@@ -290,8 +285,9 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
             None if win.below > 0 && at == TOP + list - 1 => {
                 f.render_widget(Paragraph::new(cue_line(Cue::Below, win.below, width)), row);
             }
-            None if shape.has_close() && at == TOP + list => {
-                f.render_widget(Paragraph::new(fold::plain()), row);
+            None if at == TOP + list => {
+                let close = if items.is_empty() { fold::done("up to date, drink some water") } else { fold::plain() };
+                f.render_widget(Paragraph::new(close), row);
             }
             None => {}
         }
@@ -380,7 +376,7 @@ mod tests {
             let shape = Shape::new(count, expanded);
             (0..shape.height() + 1).map(|r| shape.hit(r)).collect::<Vec<_>>()
         };
-        assert_eq!(rows(0, false), [None, Some(Hit::Header), None], "no item, no closing row");
+        assert_eq!(rows(0, false), [None, Some(Hit::Header), None, None], "no item: the up-to-date closing row, no hit (hs-d487)");
         assert_eq!(rows(2, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None, None], "a plain closing row is no hit");
         assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
         assert_eq!(rows(5, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
@@ -389,7 +385,7 @@ mod tests {
             expanded,
             [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle), None]
         );
-        assert_eq!((Shape::new(0, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (2, 6, 8));
+        assert_eq!((Shape::new(0, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (3, 6, 8));
     }
 
     #[test]
