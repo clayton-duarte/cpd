@@ -26,7 +26,9 @@ pub enum Kind {
     EngineError,
     EngineDown,
     Question,
+    /// No longer opened, hs-d470; only history rows an older engine wrote.
     PrFailing,
+    /// No longer opened, hs-d470; only history rows an older engine wrote.
     PrChanges,
     PrReady,
     ReviewRequested,

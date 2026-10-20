@@ -8,7 +8,7 @@
 //!
 //! `attempt run` belongs to the driver (`crate::driver`).
 
-pub(crate) mod ledger;
+pub mod ledger;
 mod read;
 mod row;
 mod show;

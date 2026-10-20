@@ -98,6 +98,9 @@ release() {
     git-cliff --unreleased --tag "v$version" --prepend CHANGELOG.md
     git add CHANGELOG.md
     git commit -q --amend --no-edit
+    # The release build reports exactly the release commit (docs/implementing.md "The version string").
+    CPD_COMMIT=$(git rev-parse --short HEAD)
+    export CPD_COMMIT
     [ -d node_modules ] || npm ci
     npm run verify
     git push origin "$branch"

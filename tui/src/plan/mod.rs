@@ -43,6 +43,7 @@ use self::flow::{Dir, Selection};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
 use super::background::Background;
+use super::viewlog::ViewLog;
 use super::read::{self, ChatSlot, PlanBoxes, Pulse, ReviewStatus};
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
@@ -189,17 +190,14 @@ fn concerns(event: &Event, centre: Option<&Centre>, pulse: Option<&Pulse>) -> bo
 }
 
 /// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
-/// or `no Plan yet`, then the note of the last action.
-fn message(error: Option<&str>, note: &str, centre: Option<&Centre>) -> Option<Line<'static>> {
+/// or `no Plan yet`: lasting states of the view (commands.md §17 "No notes", rule (b)).
+fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>> {
     let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::note())).collect();
     match centre {
         None => parts.push(" no Lead session in the centre".dim()),
         Some(c) if c.plan.prs.is_empty() => parts.push("no PR yet: cpd pr add".dim()),
         Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::note())),
         Some(_) => {}
-    }
-    if !note.is_empty() {
-        parts.push(Span::styled(note.to_owned(), palette::note()));
     }
     (!parts.is_empty()).then(|| Line::from(spaced(parts)))
 }
@@ -227,7 +225,6 @@ struct Ui {
     remembered: HashMap<PlanId, (u16, u16)>,
     /// The first Pulse row shown (reset whenever the Context of the Pulse changes).
     pulse_offset: usize,
-    note: String,
     error: Option<String>,
     /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
@@ -242,7 +239,6 @@ impl Ui {
         }
         self.selected.reset();
         self.scroll = to.and_then(|plan| self.remembered.get(plan).copied()).unwrap_or((0, 0));
-        self.note.clear();
     }
 
     /// Records the offset of `plan`, the Plan on show, once it differs from the one remembered (a Plan never scrolled
@@ -253,16 +249,13 @@ impl Ui {
         }
     }
 
-    /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`, the note).
+    /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`).
     fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse) {
         let mut window = f.area();
         let mut parts: Vec<Span<'static>> =
             self.error.iter().map(|e| Span::styled(e.clone(), palette::note())).collect();
         if pulse.rows.is_empty() {
             parts.push(" no Plans yet".dim());
-        }
-        if !self.note.is_empty() {
-            parts.push(Span::styled(self.note.clone(), palette::note()));
         }
         if !parts.is_empty() {
             let [rows, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
@@ -284,7 +277,7 @@ impl Ui {
             row.draw(f.buffer_mut(), row_area);
             window = below;
         }
-        if let Some(text) = message(self.error.as_deref(), &self.note, centre) {
+        if let Some(text) = message(self.error.as_deref(), centre) {
             let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
             // the pane's last row, indented like the chart's content at scroll (0, 0)
             f.render_widget(Paragraph::new(text), message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }));
@@ -408,6 +401,16 @@ fn now_ms() -> i64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
+/// Starts `ui` from the offsets file: an unreadable or invalid file starts empty and is replaced at the next write. Returns
+/// the lines for the view's log (`run/tui/plan.log`).
+/// A reset draws nothing (commands.md §17 "No notes").
+fn begin(ui: &mut Ui, offsets: &mut Offsets, plan: Option<&PlanId>) -> Vec<String> {
+    let loaded = offsets.load();
+    ui.remembered = loaded.clone().unwrap_or_default();
+    ui.switch(None, plan);
+    loaded.err().map(|reason| format!("scroll positions reset: {reason}")).into_iter().collect()
+}
+
 /// Draws, follows Events and takes input until the terminal fails.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
@@ -420,12 +423,15 @@ fn show(
 ) -> Result<(), ViewError> {
     let mut ui = Ui::default();
     let mut offsets = Offsets::at(home);
-    let loaded = offsets.load();
-    // an unreadable or invalid file starts empty; it is replaced at the next write
-    ui.remembered = loaded.clone().unwrap_or_default();
-    ui.switch(None, snap.centre.as_ref().map(|c| &c.plan.plan));
-    if let Err(reason) = loaded {
-        ui.note = format!("scroll positions reset: {reason}");
+    let log = ViewLog::of(home, "plan");
+    // a log that cannot be written is the view's error line: a lasting state
+    let write = |ui: &mut Ui, line: &str| {
+        if let Err(why) = log.append(line) {
+            ui.error = Some(why);
+        }
+    };
+    for line in begin(&mut ui, &mut offsets, snap.centre.as_ref().map(|c| &c.plan.plan)) {
+        write(&mut ui, &line);
     }
     // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
     // (runner::kept), the snapshot's error first
@@ -433,14 +439,11 @@ fn show(
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
     // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
     let mut redraw = true;
-    // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); a result is the note to show, or none
-    // to leave it
-    let mut worker = Background::<Option<String>>::new();
+    // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); one that fails opens the error dialog
+    // from there ([`Actions::report`]), so the view only draws again
+    let mut worker = Background::<()>::new();
     loop {
-        while let Some(result) = worker.finished() {
-            if let Some(note) = result {
-                ui.note = note;
-            }
+        while worker.finished().is_some() {
             redraw = true;
         }
         let frame = palette::frame(SystemTime::now());
@@ -564,20 +567,30 @@ fn show(
         }
         if let Some(lead) = lead {
             let actions = Arc::clone(actions);
-            worker.submit(move || Some(actions.open_lead(&lead).err().map_or_else(String::new, |e| e.message().to_owned())));
+            worker.submit(move || {
+                if let Err(e) = actions.open_lead(&lead) {
+                    actions.report("Open Lead", &e);
+                }
+            });
         }
         let Some(centre) = snap.centre.as_ref() else { continue };
         if let Some(key) = unselect {
             let actions = Arc::clone(actions);
-            worker.submit(move || actions.close_worker(&key).err().map(|e| e.message().to_owned()));
+            worker.submit(move || {
+                if let Err(e) = actions.close_worker(&key) {
+                    actions.report("Close Worker", &e);
+                }
+            });
         }
         if let Some(key) = open {
             match attempt_of(centre, &key) {
-                None => ui.note = format!("{key} has not started yet"),
+                None => write(&mut ui, &format!("{key} has not started yet")),
                 Some(attempt) => {
                     let (actions, plan) = (Arc::clone(actions), centre.plan.plan.clone());
                     worker.submit(move || {
-                        Some(actions.toggle_worker(&plan, &key, &attempt).err().map_or_else(String::new, |e| e.message().to_owned()))
+                        if let Err(e) = actions.toggle_worker(&plan, &key, &attempt) {
+                            actions.report("Open Worker", &e);
+                        }
                     });
                 }
             }
@@ -715,7 +728,7 @@ mod tests {
         assert_eq!(rows[0], "   Plan review r2 pending 󰏌");
         assert_eq!(rows[1], "", "the boxes' own margin row");
         assert_eq!(rows[2], without.1[1], "the first border, one row lower");
-        assert_eq!(rows[2], "  ┌ api · api 󱦰 main · #12 open 󰏌 ┐");
+        assert_eq!(rows[2], "  ╭ api · api 󱦰 main · #12 open 󰏌 ╮");
         assert_eq!(without.1[0], "");
         assert_eq!((ui.body.y, ui.body.height), (1, 6), "clicks and scrolling use the area between the row and the message row");
         assert_eq!(without.2.body.y, 0);
@@ -1146,5 +1159,35 @@ mod tests {
         let snap = snapshot(&mut store, &home, 125, now).unwrap();
         assert!(snap.pulse.is_none());
         assert_eq!(snap.centre.expect("the Lead is in the slot").plan.plan.as_str(), "p1");
+    }
+
+    /// The pane `ui` draws for `centre`, as the buffer.
+    fn frame_of(ui: &mut Ui, centre: &Centre) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(PANE.0, PANE.1)).unwrap();
+        terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn a_scroll_file_that_is_reset_draws_nothing_and_logs() {
+        // commands.md §17 "No notes": no `scroll positions reset: …` line; the reason goes to run/tui/plan.log
+        let centre = scroll_centre("plan-a", 3);
+        let plan_id = plan("plan-a");
+        let clean = tempfile::tempdir().unwrap();
+        let mut plain = Ui::default();
+        begin(&mut plain, &mut offsets_in(&clean), Some(&plan_id));
+        let plain = frame_of(&mut plain, &centre);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{not json").unwrap();
+        let mut ui = Ui::default();
+        let lines = begin(&mut ui, &mut offsets_in(&dir), Some(&plan_id));
+        assert_eq!(frame_of(&mut ui, &centre), plain, "the frame is the one of a start with no file");
+        assert!(
+            lines.iter().any(|l| l.starts_with("scroll positions reset: ") && l.contains("plan-scroll.json")),
+            "logged: {lines:?}"
+        );
     }
 }

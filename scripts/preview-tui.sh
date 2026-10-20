@@ -21,7 +21,7 @@ usage() {
 }
 
 tmux_cmd() {
-  env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null "$@"
+  env -u TMUX -u TMUX_PANE tmux -u -L "$socket" -f /dev/null "$@"
 }
 
 # Reads the socket and the cockpit session from `cpd config` (no jq: this must
