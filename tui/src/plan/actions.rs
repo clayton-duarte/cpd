@@ -9,23 +9,33 @@ use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 
-use crate::{RunCommand, widgets};
+use crate::viewlog::ViewLog;
+use crate::{RunCommand, dialog, widgets};
 
 pub struct Actions {
     home: CpdHome,
     tmux: Tmux,
     cockpit: String,
     run_command: RunCommand,
+    log: ViewLog,
 }
 
 impl Actions {
     pub fn new(home: CpdHome, config: &Config, run_command: RunCommand) -> Actions {
+        let log = ViewLog::of(&home, "plan");
         Actions {
             home,
             tmux: Tmux::new(config.tmux.socket.clone()),
             cockpit: config.tmux.cockpit_session.clone(),
             run_command,
+            log,
         }
+    }
+
+    /// A command failed: a line of `run/tui/plan.log` and the error dialog (commands.md §17 "No notes"); `what` is what
+    /// failed. Returns when the dialog closes.
+    pub fn report(&self, what: &str, err: &CpdError) {
+        dialog::report(&self.tmux, &self.log, what, err);
     }
 
     /// A click on a tab: `session open <id>`, which moves that Lead into the chat slot, then `select-pane` on the chat
