@@ -133,10 +133,10 @@ fn truncate(s: &str, w: usize) -> String {
     }
 }
 
-/// The left half of a pill (` <icon> <key> `, the key cut to `key_w` characters) and the right half (`│<tier>[│aN] `).
+/// The left half of a pill (`<icon> <key>`, the key cut to `key_w` characters) and the right half (`│<tier>[│aN]`).
 fn pill_parts(j: &FlowJob, key_w: usize, frame: usize) -> (String, String) {
     let a = if j.attempt > 1 { format!("│a{}", j.attempt) } else { String::new() };
-    (format!(" {} {} ", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{} ", j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string()), a))
+    (format!("{} {}", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{}", j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string()), a))
 }
 
 /// The needs of each Job (as indices) that no other need already implies: a need reachable through another need is dropped.

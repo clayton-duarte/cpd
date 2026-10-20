@@ -16,7 +16,7 @@ use ratatui::{
     layout::{Margin, Rect},
     style::Stylize,
     text::{Line, Span},
-    widgets::{Block, Widget},
+    widgets::{Block, BorderType, Widget},
 };
 
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
@@ -202,7 +202,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     let lines = palette::fg(Meaning::Nothing);
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
-        Block::bordered().border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
+        Block::bordered().border_type(BorderType::Rounded).border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
         if let Some(pull) = &prs[i].pull {
             // the title starts after the corner and ends with one space; the `󰏌` is the cell before it, and the link
             // runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󰏌`

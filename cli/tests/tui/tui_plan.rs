@@ -279,7 +279,7 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
     assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
     // a Plan of one PR is one box, titled on its top border
     assert!(screen[1].starts_with("  ╭ repo · repo 󱦰 main · dispatch ─"), "{:?}", screen[1]);
-    assert_eq!(screen.iter().filter(|l| l.contains('╭')).count(), 1, "{}", screen.join("\n"));
+    assert_eq!(screen.iter().filter(|l| l.trim().starts_with("╭ ") && l.contains(" · ") && l.trim_end().ends_with('╮')).count(), 1, "{}", screen.join("\n"));
     assert!(screen.iter().all(|l| !l.contains(['┌', '┐', '└', '┘'])), "the corners are rounded:\n{}", screen.join("\n"));
 }
 

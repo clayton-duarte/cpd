@@ -127,7 +127,7 @@ fn sections() -> Vec<Section> {
             let (icon, meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                capped(format!(" {icon} key │S1 "), palette::pill(meaning)),
+                capped(format!("{icon} key│S1"), palette::pill(meaning)),
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })
@@ -139,7 +139,7 @@ fn sections() -> Vec<Section> {
         failed + 1,
         vec![
             plain("failed, stuck"),
-            capped(format!(" {stuck_icon} key │S1 "), palette::pill(stuck)),
+            capped(format!("{stuck_icon} key│S1"), palette::pill(stuck)),
             Line::from(Span::styled("3", palette::fg(stuck))),
         ],
     );
