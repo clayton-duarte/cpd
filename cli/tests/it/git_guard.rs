@@ -9,7 +9,7 @@ use std::process::Command;
 use cpd_core::home::CpdHome;
 use cpd_core::host::git_guard::{self, NO_GIT, REFUSAL};
 
-mod common;
+use crate::common;
 use common::{output, write_executable};
 
 struct Wrapper {

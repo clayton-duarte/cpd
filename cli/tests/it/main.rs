@@ -19,6 +19,7 @@ mod e2e_cross;
 mod e2e;
 mod events;
 mod git;
+mod git_guard;
 mod harness;
 mod host;
 mod inbox;
