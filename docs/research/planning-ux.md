@@ -81,9 +81,9 @@ What is **not** plannotator's: the recorded approval (`cpd plan decide`, run by 
 | Header / label | 16 / 60 characters. 5 of 324 calls were refused for a header longer than 16 | T §1.1; U §6.3 |
 | Total text | No limit in the tool. cpd's G2 refuses over 1500 characters (any role). Before G2, 24 of 313 rounds were over 2000 | T §3.3; U §4.2 |
 | Preview | Single-select only; 16 content rows side by side, 11 stacked; cut, no scrolling (inferred) | T §1.2 |
-| Blocking, timeout | Blocks the tool call until the User answers; no timeout. Waits reached 1598.7 min. While it waits, nothing reaches that agent, not even a steered Worker escalation (inferred: steering lands after the current tool call, docs/commands.md §15 "Steered and follow-up") | T §1.5; U §6.5 |
+| Blocking, timeout | Blocks the tool call until the User answers; no timeout. Waits reached 1598.7 min. While it waits, nothing reaches that agent, not even a steered Worker escalation (inferred: steering lands after the current tool call, docs/commands.md:2561) | T §1.5; U §6.5 |
 | Esc | Cancels the whole call; the model gets `User declined to answer questions` | T §1.5 |
-| G1 | Refuses every ask from a Lead whose Plan has a draft Job. That covers the whole `plan` phase once a Job exists (every Job is a draft there) and any time a stub draft is registered (hs-d239) (inferred from `askguard.ts:39-44`, docs/commands.md:891) | T §3.3 |
+| G1 | Refuses every ask from a Lead whose Plan has a draft Job. That covers the whole `plan` phase once a Job exists (every Job is a draft there) and any time a stub draft is registered (hs-d239) (inferred from `pi/lib/askguard.ts:40-44`, docs/commands.md:891) | T §3.3 |
 | Approval | It has none. Approving a Plan is `cpd_plan_review` + `plan decide` | T §4 |
 | Not seen | 3 calls have no result (session ended, unverified); no Inbox item exists beyond `dialog` | U §6.5; T §3.5 |
 
