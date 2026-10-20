@@ -133,7 +133,7 @@ fn fixture() -> (TestEnv, Store) {
 }
 
 fn machine() -> Machine {
-    Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), mem: Some(41) } }
+    Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } }
 }
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
@@ -240,11 +240,11 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let env = TestEnv::new();
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
-    let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, mem: Some(7) } };
+    let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, gpus: vec![], mem: Some(7) } };
     terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
-    assert_eq!(lines[..3], ["", " homeserver", " \u{F4BC} –%  \u{F035B} 7%"], "no CPU % until a second sample");
+    assert_eq!(lines[..3], ["", " homeserver", " \u{F4BC} –%  \u{EFC5} 7%"], "no CPU % until a second sample");
     assert_eq!(lines[3..6], ["", head("PRs").as_str(), ""]);
     assert_eq!(lines[6], " no open PRs");
     assert_eq!(lines[7..], [""; 13], "the PRs take the rest of the column: no git, no Jira");
@@ -260,7 +260,7 @@ fn the_column_shows_the_machine_and_the_open_prs_and_nothing_else() {
     let mut expected = vec![
         "",
         " homeserver",
-        " \u{F4BC} 23%  \u{F035B} 41%",
+        " \u{F4BC} 23%  \u{EFC5} 41%",
         "",
         prs.as_str(),
         "",

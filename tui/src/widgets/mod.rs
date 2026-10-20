@@ -2,7 +2,7 @@
 //! machine-wide right column of the cockpit. It takes one snapshot of the read
 //! model ([`read::open_prs`]: the one thing it draws), then follows the Events: it looks at the Events and at the pull
 //! request rows every [`TICK`] and re-reads when one concerns it (a pull request row changes with no Event), at most
-//! once per [`COALESCE`]; the CPU % and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when the
+//! once per [`COALESCE`]; the CPU %, GPU % and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when the
 //! pull requests, the CPU and memory, the note, the size, a click or the wheel changed, not on every tick. It makes no write of
 //! its own, but for what a click on an owned PR row asks of `cpd session open`, and the merge popup a click on a merge
 //! icon opens. It has no key; mouse capture is on, for the clicks and the wheel over the PRs section.
@@ -47,7 +47,7 @@ pub(crate) use column::{Window, dim, max_scroll, section_header, window};
 const TICK: Duration = Duration::from_millis(200);
 /// At most one snapshot per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
-/// The CPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
+/// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
 const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {

@@ -1,13 +1,19 @@
-//! What the Deploy column reads of the machine (commands.md §13.2, §17): CPU % and memory %. The parsers are pure, on the text
-//! of `/proc/stat`, `/proc/meminfo` (Linux), `ps` and `vm_stat` (macOS); [`Sampler`] reads the real thing.
+//! What the Deploy column reads of the machine (commands.md §13.2, §17): CPU %, one utilization % per GPU, and memory %. The
+//! parsers are pure, on the text of `/proc/stat`, `/proc/meminfo`, `nvidia-smi` (Linux), `ps`, `vm_stat` and `ioreg` (macOS);
+//! [`Sampler`] reads the real thing.
+//!
+//! The macOS GPU parse ([`parse_ioreg`]) is UNVERIFIED on hardware: it is written from the documented shape of `ioreg -r -d 1
+//! -w 0 -c IOAccelerator` and tested on a captured sample only.
 
 use std::process::Command;
 
-/// CPU % and memory %, whole numbers; `None` is drawn as `–`. `cpu` is `None` until a second CPU sample exists, and either is
-/// `None` when it cannot be read: like the hostname, that is no error of the view (tui-W10).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// CPU %, GPU % and memory %, whole numbers; `None` is drawn as `–`. `cpu` is `None` until a second CPU sample exists, and any
+/// is `None` when it cannot be read: like the hostname, that is no error of the view (tui-W10). `gpus` has one entry per GPU,
+/// in the tool's order; empty means no GPU was found (no tool, or no GPU in its output), and the row has no GPU part.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Usage {
     pub cpu: Option<u8>,
+    pub gpus: Vec<Option<u8>>,
     pub mem: Option<u8>,
 }
 
@@ -27,14 +33,14 @@ pub struct Sampler {
 impl Sampler {
     pub fn sample(&mut self) -> Usage {
         if cfg!(target_os = "macos") {
-            Usage { cpu: macos_cpu(), mem: macos_mem() }
+            Usage { cpu: macos_cpu(), gpus: macos_gpus(), mem: macos_mem() }
         } else {
             let times = read_file("/proc/stat").and_then(|text| parse_proc_stat(&text));
             let cpu = self.previous.zip(times).and_then(|(before, after)| cpu_share(before, after));
             if times.is_some() {
                 self.previous = times;
             }
-            Usage { cpu, mem: read_file("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
+            Usage { cpu, gpus: linux_gpus(), mem: read_file("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
         }
     }
 }
@@ -47,6 +53,15 @@ fn read_file(path: &str) -> Option<String> {
 fn run(program: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(program).args(args).output().ok().filter(|o| o.status.success())?;
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// A missing tool, or one that fails, is no GPU: an empty list, never an error.
+fn linux_gpus() -> Vec<Option<u8>> {
+    run("nvidia-smi", &["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"]).map_or_else(Vec::new, |t| parse_nvidia_smi(&t))
+}
+
+fn macos_gpus() -> Vec<Option<u8>> {
+    run("ioreg", &["-r", "-d", "1", "-w", "0", "-c", "IOAccelerator"]).map_or_else(Vec::new, |t| parse_ioreg(&t))
 }
 
 fn macos_cpu() -> Option<u8> {
@@ -107,12 +122,53 @@ pub fn parse_vm_stat(text: &str, memsize: u64) -> Option<u8> {
     percent(used * page_size, memsize)
 }
 
+/// `nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits`: one line per GPU holding an integer; a line that is not
+/// one (`[N/A]`, an error text) is `None` in that GPU's place. Blank lines are no GPU.
+pub fn parse_nvidia_smi(text: &str) -> Vec<Option<u8>> {
+    text.lines().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.parse::<u8>().ok().filter(|v| *v <= 100)).collect()
+}
+
+/// `ioreg -r -d 1 -w 0 -c IOAccelerator`: each accelerator starts at a line `+-o <name>` in column 0; its `"PerformanceStatistics"`
+/// dictionary holds `"Device Utilization %"=N`. An accelerator without that number is `None`. Unverified on hardware.
+pub fn parse_ioreg(text: &str) -> Vec<Option<u8>> {
+    const KEY: &str = "\"Device Utilization %\"";
+    let mut gpus: Vec<Option<u8>> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with("+-o ") {
+            gpus.push(None);
+        }
+        let value = line.split_once(KEY).and_then(|(_, rest)| {
+            let digits: String = rest.trim_start().strip_prefix('=')?.trim_start().chars().take_while(char::is_ascii_digit).collect();
+            digits.parse::<u8>().ok().filter(|v| *v <= 100)
+        });
+        if let (Some(gpu), Some(value)) = (gpus.last_mut(), value) {
+            gpu.get_or_insert(value);
+        }
+    }
+    gpus
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const PROC_STAT: &str = "cpu  4705 150 3120 84000 900 0 45 0 0 0\ncpu0 1200 30 800 21000 200 0 10 0 0 0\nintr 12345\nctxt 999\n";
     const MEMINFO: &str = "MemTotal:       16000000 kB\nMemFree:         1000000 kB\nMemAvailable:    4000000 kB\nBuffers:          500000 kB\n";
+    const IOREG_ONE: &str = "+-o AGXAcceleratorG13X  <class AGXAcceleratorG13X, id 0x100000385, registered, matched, active, busy 0 (0 ms), retain 28>\n\
+        {\n\
+        \x20 \"IOClass\" = \"AGXAcceleratorG13X\"\n\
+        \x20 \"PerformanceStatistics\" = {\"Alloc system memory\"=50167808,\"Device Utilization %\"=37,\"Renderer Utilization %\"=21,\"Tiler Utilization %\"=30}\n\
+        }\n\
+        \n";
+    const IOREG_TWO: &str = "+-o AMDRadeonX6000_AMDNavi14Graphics  <class AMDRadeonX6000_AMDNavi14Graphics, id 0x1000003e0>\n\
+        \x20 {\n\
+        \x20   \"PerformanceStatistics\" = {\"Device Utilization %\"=12,\"GPU Core Utilization\"=0}\n\
+        \x20 }\n\
+        \n\
+        +-o IntelAccelerator  <class IntelAccelerator, id 0x1000003e1>\n\
+        \x20 {\n\
+        \x20   \"PerformanceStatistics\" = {\"Alloc system memory\"=1}\n\
+        \x20 }\n";
     const VM_STAT: &str = "Mach Virtual Memory Statistics: (page size of 16384 bytes)\n\
         Pages free:                               12345.\n\
         Pages active:                            100000.\n\
@@ -120,6 +176,25 @@ mod tests {
         Pages speculative:                         1000.\n\
         Pages wired down:                         50000.\n\
         Pages occupied by compressor:             10000.\n";
+
+    #[test]
+    fn nvidia_smi_is_one_integer_per_line_in_the_tools_order() {
+        assert_eq!(parse_nvidia_smi("61\n"), [Some(61)]);
+        assert_eq!(parse_nvidia_smi("61\n0\n"), [Some(61), Some(0)]);
+        assert_eq!(parse_nvidia_smi(" 7 \r\n100\n"), [Some(7), Some(100)]);
+        assert_eq!(parse_nvidia_smi("61\n[N/A]\n3\n"), [Some(61), None, Some(3)], "a line that is no number keeps its place");
+        assert_eq!(parse_nvidia_smi("101\n-1\n"), [None, None]);
+        assert_eq!(parse_nvidia_smi(""), [], "no GPU");
+        assert_eq!(parse_nvidia_smi("\n  \n"), []);
+    }
+
+    #[test]
+    fn ioreg_is_the_device_utilization_of_each_accelerator() {
+        assert_eq!(parse_ioreg(IOREG_ONE), [Some(37)]);
+        assert_eq!(parse_ioreg(IOREG_TWO), [Some(12), None], "an accelerator without the number is None");
+        assert_eq!(parse_ioreg(""), [], "no accelerator");
+        assert_eq!(parse_ioreg("ioreg: no matching entries\n"), []);
+    }
 
     #[test]
     fn proc_stat_counts_idle_plus_iowait_of_the_all_cpu_line() {

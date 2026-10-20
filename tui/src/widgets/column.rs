@@ -45,7 +45,8 @@ pub struct MergeIcon {
 
 /// Nerd Font `nf-oct-cpu` and `nf-md-memory`: one cell each.
 const CPU_ICON: &str = "\u{F4BC}";
-const MEM_ICON: &str = "\u{F035B}";
+const GPU_ICON: &str = "\u{E266}";
+const MEM_ICON: &str = "\u{EFC5}";
 
 /// The machine the column names: its hostname and its CPU % and memory %.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,10 +56,13 @@ pub struct Machine {
 }
 
 impl Machine {
-    /// ` <cpu icon> N%  <mem icon> M%`; a value not known (the CPU until a second sample, or one that cannot be read) is `–`.
+    /// ` <cpu icon> N%  <gpu icon> A% B%  <mem icon> M%`, one % per GPU and no GPU part when there is none; a value not known (the
+    /// CPU until a second sample, or one that cannot be read) is `–`.
     fn usage_line(&self) -> String {
         let known = |v: Option<u8>| v.map_or("–".to_owned(), |v| v.to_string());
-        format!(" {CPU_ICON} {}%  {MEM_ICON} {}%", known(self.usage.cpu), known(self.usage.mem))
+        let gpus = &self.usage.gpus;
+        let gpu = if gpus.is_empty() { String::new() } else { format!("{GPU_ICON} {}  ", gpus.iter().map(|g| format!("{}%", known(*g))).collect::<Vec<_>>().join(" ")) };
+        format!(" {CPU_ICON} {}%  {gpu}{MEM_ICON} {}%", known(self.usage.cpu), known(self.usage.mem))
     }
 }
 
@@ -272,7 +276,7 @@ mod tests {
     }
 
     fn scrolled(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize) -> (Buffer, Drawn) {
-        let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), mem: Some(41) } };
+        let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
         terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, note, scroll))).unwrap();
@@ -337,7 +341,7 @@ mod tests {
         let expected = [
             "".to_owned(),
             " homeserver".to_owned(),
-            " \u{F4BC} 23%  \u{F035B} 41%".to_owned(),
+            " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
             "".to_owned(),
             format!("── PRs {}", "─".repeat(13)),
             "".to_owned(),
@@ -357,9 +361,18 @@ mod tests {
 
     #[test]
     fn a_value_not_known_is_a_dash() {
-        let usage = |cpu, mem| Machine { name: "homeserver".to_owned(), usage: Usage { cpu, mem } }.usage_line();
-        assert_eq!(usage(None, Some(100)), " \u{F4BC} –%  \u{F035B} 100%", "the CPU until a second sample");
-        assert_eq!(usage(Some(7), None), " \u{F4BC} 7%  \u{F035B} –%", "a memory that cannot be read");
+        let usage = |cpu, mem| Machine { name: "homeserver".to_owned(), usage: Usage { cpu, gpus: vec![], mem } }.usage_line();
+        assert_eq!(usage(None, Some(100)), " \u{F4BC} –%  \u{EFC5} 100%", "the CPU until a second sample");
+        assert_eq!(usage(Some(7), None), " \u{F4BC} 7%  \u{EFC5} –%", "a memory that cannot be read");
+    }
+
+    #[test]
+    fn the_gpu_part_has_one_percent_per_gpu_and_is_absent_with_none() {
+        let row = |gpus: Vec<Option<u8>>| Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus, mem: Some(41) } }.usage_line();
+        assert_eq!(row(vec![]), " \u{F4BC} 23%  \u{EFC5} 41%", "no GPU, no GPU part");
+        assert_eq!(row(vec![Some(61)]), " \u{F4BC} 23%  \u{E266} 61%  \u{EFC5} 41%");
+        assert_eq!(row(vec![Some(61), Some(0)]), " \u{F4BC} 23%  \u{E266} 61% 0%  \u{EFC5} 41%");
+        assert_eq!(row(vec![None, Some(5)]), " \u{F4BC} 23%  \u{E266} –% 5%  \u{EFC5} 41%", "an unknown GPU is –%");
     }
 
     #[test]
