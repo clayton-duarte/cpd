@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -86,6 +86,7 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "focus-events", "on"],
     &["set", "-g", "default-terminal", "tmux-256color"],
     &["set", "-g", "extended-keys", "on"],
+    &["set", "-gq", "extended-keys-format", "csi-u"],
     &["set", "-as", "terminal-features", TERMINAL_FEATURES],
     &["set", "-g", "escape-time", "10"],
     &["set", "-g", "status", "off"],
@@ -94,10 +95,17 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "pane-border-format", BORDER_FORMAT],
     &["set", "-g", "pane-active-border-style", "fg=blue"],
     &["set", "-g", "remain-on-exit", "on"],
+    &["set", "-g", "set-titles", "on"],
+    &["set", "-g", "set-titles-string", SET_TITLES_STRING],
     &["set-hook", "-g", "pane-died", PANE_DIED_HOOK],
     &["bind", "-T", "root", "MouseDown1Pane", "select-pane -t = ; send-keys -M"],
     &["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK],
 ];
+
+/// The terminal window's title (contract §6.1, hs-d300): the config's machine
+/// name, which `cpd tui` sets as the global `@cpd_machine`; the host's short
+/// name until then, on a server another command started.
+const SET_TITLES_STRING: &str = "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}";
 
 /// What a click on a StatusBar button runs (contract §6.1): `cpd tui action`
 /// with the button's range and the clicking client, `cpd` found on `PATH` as
@@ -266,22 +274,41 @@ pub struct Tmux {
     socket: String,
     /// `TMUX_TMPDIR` for every call, when set; otherwise the process's own environment applies.
     tmpdir: Option<PathBuf>,
+    /// The tmux program every call runs, when set (see [`Tmux::on_server_binary`]); otherwise `tmux` from `PATH`.
+    program: Option<PathBuf>,
 }
 
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: None }
+        Tmux { socket: socket.into(), tmpdir: None, program: None }
     }
 
     /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
     /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
     pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()) }
+        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None }
     }
 
     pub fn socket(&self) -> &str {
         &self.socket
+    }
+
+    /// This server, with every call run by `program` instead of `tmux` from `PATH`.
+    pub fn with_program(mut self, program: impl Into<PathBuf>) -> Tmux {
+        self.program = Some(program.into());
+        self
+    }
+
+    /// This server, with every call run by the server's own tmux program ([`Tmux::server_exe`]): a
+    /// client of another version cannot be trusted to talk to it, least of all while it dies (hs-n285).
+    ///
+    /// The program is the file `/proc/<pid>/exe` points to, which outlives the server; a file an upgrade
+    /// has replaced is only reachable as `/proc/<pid>/exe`, which lasts as long as the server does.
+    pub fn on_server_binary(&self) -> Result<Tmux, CpdError> {
+        let exe = self.server_exe()?;
+        let program = std::fs::read_link(&exe).ok().filter(|file| file.is_file()).unwrap_or(exe);
+        Ok(self.clone().with_program(program))
     }
 
     /// The full argv of a call: `tmux -L <socket> -f /dev/null <args>`.
@@ -294,7 +321,7 @@ impl Tmux {
     /// The `Command` for a call: its argv, without `TMUX` and `TMUX_PANE`.
     fn command(&self, args: &[String]) -> Command {
         let argv = self.argv(args);
-        let mut cmd = Command::new(&argv[0]);
+        let mut cmd = Command::new(self.program.as_deref().unwrap_or_else(|| Path::new(&argv[0])));
         cmd.args(&argv[1..]).env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null());
         if let Some(tmpdir) = &self.tmpdir {
             cmd.env("TMUX_TMPDIR", tmpdir);
@@ -541,23 +568,55 @@ impl Tmux {
         self.run(&strings(&["kill-pane", "-t", pane.as_str()])).map(drop)
     }
 
-    /// `kill-server`: the server and everything in it end. Returns once no server runs; a server that
-    /// exits before it answers makes the call fail, which is not an error here.
+    /// `kill-server`: the server and everything in it end. Returns once the server is gone. A server that
+    /// exits before it answers makes the call fail, and one that is dying answers `list-sessions` with
+    /// `server exited unexpectedly` or a refused connection: neither is an error here (hs-n285).
     pub fn kill_server(&self) -> Result<(), CpdError> {
         let args = strings(&["kill-server"]);
         let out = self.output(&args)?;
-        if !out.status.success() && self.server_running()? {
+        if !out.status.success() && !self.program_gone() && self.liveness()? == Liveness::Answering {
             return Err(self.failed(&args, &out));
         }
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while self.server_running()? {
-            if std::time::Instant::now() >= deadline {
-                return Err(CpdError::new(ErrorCode::TmuxFailed, "The tmux server did not exit within 10 s of kill-server.")
-                    .with("argv", self.argv(&args)));
+        loop {
+            if self.program_gone() {
+                return Ok(());
             }
-            std::thread::sleep(Duration::from_millis(50));
+            match self.liveness()? {
+                Liveness::Gone => return Ok(()),
+                Liveness::Answering | Liveness::Dying if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                // Its connection closed on us: the server is dead, only its cleanup is left.
+                Liveness::Dying => return Ok(()),
+                Liveness::Answering => {
+                    return Err(CpdError::new(ErrorCode::TmuxFailed, "The tmux server did not exit within 10 s of kill-server.")
+                        .with("argv", self.argv(&args)));
+                }
+            }
         }
-        Ok(())
+    }
+
+    /// The program is the server's own `/proc/<pid>/exe` and it is gone: the server went, and took it.
+    fn program_gone(&self) -> bool {
+        self.program.as_deref().is_some_and(|p| p.starts_with("/proc/") && !p.exists())
+    }
+
+    /// `list-sessions`, read as the answer of a server that may be on its way out.
+    fn liveness(&self) -> Result<Liveness, CpdError> {
+        let args = strings(&["list-sessions", "-F", "#{session_id}"]);
+        let out = self.output(&args)?;
+        if out.status.success() {
+            return Ok(Liveness::Answering);
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if no_server(&stderr) || refused(&stderr) {
+            Ok(Liveness::Gone)
+        } else if dying(&stderr) {
+            Ok(Liveness::Dying)
+        } else {
+            Err(self.failed(&args, &out))
+        }
     }
 
     /// `kill-window -t <window>`.
@@ -648,6 +707,29 @@ fn no_server(stderr: &str) -> bool {
         line.starts_with("no server running on ")
             || (line.starts_with("error connecting to ") && line.ends_with("(No such file or directory)"))
     })
+}
+
+/// What a `list-sessions` after `kill-server` says about the server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Liveness {
+    /// It answered: the server runs.
+    Answering,
+    /// Its connection closed without an answer (`server exited unexpectedly`, `lost server`): it is exiting.
+    Dying,
+    /// No server runs: no socket file, nothing listens on it, or the connection was refused.
+    Gone,
+}
+
+/// Whether a failed call's stderr says the connection to the server was refused (its socket file is
+/// left behind, nothing listens on it).
+fn refused(stderr: &str) -> bool {
+    stderr.lines().any(|line| line.starts_with("error connecting to ") && line.ends_with("(Connection refused)"))
+}
+
+/// Whether a failed call's stderr says the server closed the connection without answering, as a
+/// server does while it exits.
+fn dying(stderr: &str) -> bool {
+    stderr.lines().any(|line| line.starts_with("server exited unexpectedly") || line.starts_with("lost server"))
 }
 
 /// The arguments of [`Tmux::create_session`]'s call: `new-session -d -s <name>
@@ -855,5 +937,66 @@ mod tests {
         assert_eq!(cmd.get_program(), "tmux");
         let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
         assert_eq!(removed, ["TMUX", "TMUX_PANE"]);
+    }
+
+    /// A `tmux` that behaves as one does while its server dies after `kill-server` (hs-n285): its
+    /// first answers to `list-sessions` are `server exited unexpectedly`, then a refused connection,
+    /// then `no server running`. Returns the script and the calls it logs.
+    fn dying_server(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("tmux");
+        let script = format!(
+            "#!/bin/sh\n\
+             d='{d}'\n\
+             echo \"$*\" >> \"$d/calls\"\n\
+             case \" $* \" in\n\
+               *' kill-server '*) touch \"$d/killed\"; echo 'server exited unexpectedly' >&2; exit 1;;\n\
+               *' list-sessions '*)\n\
+                 [ -e \"$d/killed\" ] || exit 0\n\
+                 n=$(cat \"$d/n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$d/n\"\n\
+                 case $n in\n\
+                   1|2) echo 'server exited unexpectedly' >&2;;\n\
+                   3) echo 'lost server' >&2;;\n\
+                   4) echo 'error connecting to /tmp/x (Connection refused)' >&2;;\n\
+                   *) echo 'no server running on /tmp/x' >&2;;\n\
+                 esac; exit 1;;\n\
+             esac\n",
+            d = dir.display()
+        );
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Another test's `fork` may hold the script's write descriptor for a moment: run it until it can be.
+        for _ in 0..100 {
+            match Command::new(&path).arg("warm-up").status() {
+                Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(Duration::from_millis(20)),
+                _ => break,
+            }
+        }
+        path
+    }
+
+    #[test]
+    fn a_dying_server_answering_server_exited_unexpectedly_does_not_fail_kill_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmux = Tmux::new("dying").with_program(dying_server(dir.path()));
+        tmux.kill_server().unwrap();
+        let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
+        let listed = calls.lines().filter(|l| l.contains("list-sessions")).count();
+        assert_eq!(listed, 4, "it waited until the connection was refused: {calls}");
+        assert!(calls.lines().any(|l| l == "-L dying -f /dev/null kill-server"), "{calls}");
+    }
+
+    #[test]
+    fn every_call_runs_the_program_it_was_given() {
+        let tmux = Tmux::new("s").with_program("/opt/tmux-3.4");
+        assert_eq!(tmux.command(&strings(&["kill-server"])).get_program(), "/opt/tmux-3.4");
+        assert_eq!(tmux.argv(&strings(&["kill-server"]))[0], "tmux");
+    }
+
+    #[test]
+    fn what_a_server_says_while_it_exits() {
+        assert!(dying("server exited unexpectedly\n") && dying("lost server\n") && !dying("no server running on /tmp/x"));
+        assert!(refused("error connecting to /tmp/x (Connection refused)") && !refused("error connecting to /tmp/x (No such file or directory)"));
+        assert!(no_server("error connecting to /tmp/x (No such file or directory)"));
     }
 }

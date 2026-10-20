@@ -11,9 +11,11 @@ use cpd_core::ids::ContextId;
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::{self, Filter, Item, Kind, State, Urgency};
 use cpd_core::store::Store;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::dot::{self, Dot};
-use super::shared::{PlanHead, SessionNode, id, plan_heads, sessions};
+use super::shared::{PlanHead, SessionNode, bad_row, id, plan_heads, sessions};
 
 /// Every Context of the machine, by id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +118,22 @@ pub(super) fn fill_dots(visible: &[Item], sessions: &mut [SessionNode]) {
     for s in sessions.iter_mut().filter(|s| !s.is_archived()) {
         s.dot = Dot::of(s.state, dot::urgency(visible, &s.id, s.plan.as_ref().filter(|_| s.plan_lead)));
     }
+}
+
+/// When the earliest snooze of an open, undismissed Inbox item that has not ended yet ends; none when no item is
+/// snoozed. A snooze ends by the clock with no Event (§17): a view that shows the Inbox reads it again then. Read
+/// before the view's snapshot, so that a snooze that ends between the two reads is not missed.
+pub fn snooze_end(store: &mut Store) -> Result<Option<OffsetDateTime>, CpdError> {
+    let end: Option<String> = store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT min(snoozed_until) FROM inbox_items
+              WHERE closed_at IS NULL AND dismissed_at IS NULL AND snoozed_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+            [],
+            |r| r.get(0),
+        )?)
+    })?;
+    end.map(|end| OffsetDateTime::parse(&end, &Rfc3339).map_err(|_| bad_row(format!("Inbox snoozed_until {end:?}"))))
+        .transpose()
 }
 
 pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {

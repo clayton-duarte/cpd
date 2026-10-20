@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 23
+-- cpd-migration: breaking after 24
 -- The Session state `waiting` (contract §3.6; hs-d303, Plan inbox, Job wait-core): an agent
 -- waits for another agent, not for the User. `blocked` stays for the human reasons only (a
 -- dialog, a pending Plan review); the Worker that `cpd ask`s and the Lead with an open

@@ -940,7 +940,7 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
         // The history triggers list the rebuilt table's columns; every other keeps its text.
-        // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started`.
+        // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started` and `open>cancelled` since `pr-cancel-open`.
         if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" {
             assert_eq!(new, old, "{name}");
         }
@@ -948,7 +948,7 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     let locked = &after.iter().find(|(name, _)| name == "prs_locked").unwrap().1;
     assert!(locked.contains("OLD.status = 'merged'"), "migration 5's prs_locked: {locked}");
     let status = &after.iter().find(|(name, _)| name == "prs_status").unwrap().1;
-    assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled'"), "prs_status: {status}");
+    assert!(status.contains("'waiting>cancelled', 'dispatch>cancelled', 'open>cancelled'"), "prs_status: {status}");
 }
 
 #[test]
@@ -1411,8 +1411,12 @@ fn prs_status_refuses_a_transition_outside_3_8() {
                          VALUES ('acme/di', 11, 'u', 'D', 0, 'open', 'none', 'none', 't', 't');
                        UPDATE prs SET status = 'open', pr_number = 11, pr_url = 'u', pr_opened_at = 't',
                               pull_request = (SELECT id FROM pull_requests WHERE number = 11) WHERE plan = 'di';
-                       UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pr'")
+                       UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pr';
+                       UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL, pr_number = NULL, pr_url = NULL,
+                              pr_opened_at = NULL, pull_request = NULL WHERE plan = 'di'")
         .unwrap();
+    let err = refused(&mut store, "UPDATE prs SET status = 'open', lead_worktree = '/w', started_at = 't', pr_number = 11, pr_url = 'u', pr_opened_at = 't', pull_request = 1 WHERE plan = 'di'");
+    assert_eq!(err.code(), ErrorCode::IllegalTransition, "{err:?}");
 }
 
 #[test]

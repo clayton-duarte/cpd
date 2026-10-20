@@ -869,6 +869,99 @@ fn a_driver_refuses_an_attempt_that_is_not_starting() {
     assert_eq!(fx.txns(), before);
 }
 
+/// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
+/// marker in the file) and releases it after `hold`. Returns once the lock is held.
+fn migrating_for(env: &TestEnv, hold: Duration) -> std::thread::JoinHandle<()> {
+    use nix::fcntl::{Flock, FlockArg};
+    use std::io::Write;
+    let locks = env.cpd_home().join("locks");
+    fs::create_dir_all(&locks).unwrap();
+    let file = OpenOptions::new().create(true).append(true).open(locks.join("store.lock")).unwrap();
+    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    let marker = json!({"migrating": true, "pid": std::process::id(), "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd migrating-holder"});
+    lock.write_all(marker.to_string().as_bytes()).unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(hold);
+        let _ = lock.set_len(0);
+        drop(lock);
+    })
+}
+
+/// hs-n278: a driver that starts while another cpd migrates the store waits for it, as it waits for a busy
+/// store (contract §3.4), instead of dying `lock_timeout` after `store_busy_ms`. Its Attempt is not
+/// `starting`, so once the store opens it refuses with `illegal_transition`, which proves it got that far.
+#[test]
+fn a_driver_waits_out_a_migration_longer_than_store_busy_ms() {
+    let fx = fx_with("[timeouts]\nstore_busy_ms = 300\n");
+    let lock = starting(&fx);
+    fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
+    let release = migrating_for(&fx.env, Duration::from_millis(1500));
+    let start = Instant::now();
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+    let waited = start.elapsed();
+    release.join().unwrap();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "illegal_transition", "{out:?}");
+    assert!(waited >= Duration::from_millis(1000), "did not wait: {waited:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("waiting for cpd pid"), "{out:?}");
+}
+
+/// hs-n278: a driver that ends on a store newer than its binary (an install raced a migration) leaves the marker
+/// E2 reads, so the Attempt is not its Worker's failure. It ends no Attempt itself.
+#[test]
+fn a_driver_ending_on_store_too_new_leaves_the_infra_marker_and_ends_nothing() {
+    let fx = fx();
+    let lock = starting(&fx);
+    // Above any user_version this binary knows (contract §4.5).
+    rusqlite::Connection::open(fx.home().db()).unwrap().pragma_update(None, "user_version", 4999).unwrap();
+    let plan = PlanId::parse(PLAN).unwrap();
+    let attempt = AttemptId::parse(ATTEMPT).unwrap();
+    let marker = fx.home().attempt_infra(&plan, &attempt);
+    assert!(!marker.exists());
+
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "store_too_new", "{out:?}");
+    assert_eq!(fx.home().infra(&plan, &attempt).unwrap().map(|(infra, _)| infra.code()), Some("store_too_new"));
+}
+
+/// Another failure of the driver leaves no marker: the ladder counts it.
+#[test]
+fn a_driver_refusing_for_another_reason_leaves_no_infra_marker() {
+    let fx = fx();
+    let lock = starting(&fx);
+    fx.fixture("UPDATE attempts SET status = 'running' WHERE plan = 'pay' AND id = 'api-a1';");
+    let out = fx
+        .env
+        .command("sh")
+        .args(["-c", "exec 3<\"$1\"; shift; exec \"$@\"", "sh"])
+        .arg(&lock)
+        .args([CPD, "attempt", "run", ATTEMPT, "--plan", PLAN])
+        .output()
+        .unwrap();
+    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(json["error"]["code"], "illegal_transition", "{out:?}");
+    let marker = fx.home().attempt_infra(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(ATTEMPT).unwrap());
+    assert!(!marker.exists());
+}
+
 // ---------- job dispatch refusals ----------
 
 #[test]
