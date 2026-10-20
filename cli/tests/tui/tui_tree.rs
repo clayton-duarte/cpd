@@ -525,7 +525,7 @@ fn the_tree_of_a_prepared_store() {
     let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("{ACTIVE_MARK}─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
         row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!(" ├─{IDLE} ship·f-id"),
         format!(" ├─{NEEDS_YOU} ship·f-bl"),
@@ -967,7 +967,7 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
     let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
-        row(&format!("{ACTIVE_MARK}─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
+        row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
         row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!(" ├─{IDLE} ship·f-id"),
         format!(" ├─{NEEDS_YOU} ship·f-bl"),
@@ -1698,7 +1698,7 @@ fn fake_tmux_without_popups(env: &TestEnv) {
 }
 
 #[test]
-fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_a_click_on_it_runs_watch_ensure() {
+fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_only_a_click_on_it_runs_watch_ensure() {
     let env = env_without_engine();
     populate(&env);
     archive_managers(&env);
@@ -1706,71 +1706,37 @@ fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_a_click_on
     fake_tmux_without_popups(&env);
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
-    // the tree restarted the engine on its own, as soon as it saw it down; the fake leaves the lock free, so it is down still
-    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
-    // counted in the header, first of the rows (the note of the restart takes two rows of the narrow pane)
+    // counted in the header, first of the rows
     let screen = pane.wait("the item", |s| s.iter().any(|r| r.contains("engine is down")));
     let first = screen.iter().position(|r| r.contains("engine is down")).unwrap();
     assert!(screen[first - 1].contains("Inbox") && screen[first - 1].ends_with('5'), "{:?}", screen[first - 1]);
+    // hs-d363: the tree never restarts the engine by itself (the supervisor does), and says nothing of it
+    // time-claim: the tree took its first snapshot before `ready`, and the old restart ran on it; none comes in 3 s; no per-poll signal from the view.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    assert_eq!(calls(&env), Vec::<Vec<String>>::new(), "no automatic `watch --ensure`");
+    assert!(!pane.screen().iter().any(|r| r.contains("engine was down")), "{:?}", pane.screen());
+    // the User's own click does
     pane.click(10, u16::try_from(first).unwrap());
-    assert_eq!(wait_for_calls(&env, 2), [words(&["watch", "--ensure"]), words(&["watch", "--ensure"])]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
     pane.wait("the note", |_| pane.footer_has("engine started"));
     pane.settled_with_a_client();
     assert_eq!(popups(&env).len(), 1, "only the legend's, from the settling: {:?}", popups(&env));
-    assert_eq!(calls(&env).len(), 2, "the restart and the click ran `watch --ensure`: {:?}", calls(&env));
+    assert_eq!(calls(&env).len(), 1, "the click ran `watch --ensure`, once: {:?}", calls(&env));
 }
 
 #[test]
-fn a_stopped_engine_is_restarted_once_and_not_again_within_a_minute_and_no_engine_down_shows_with_a_manager() {
+fn a_stopped_engine_is_not_restarted_by_the_tree_and_no_note_says_so_and_no_engine_down_shows_with_a_manager() {
     let env = env_without_engine();
     populate(&env); // its Contexts have Managers: the engine's absence is no Inbox item
     fake_cpd(&env, r#"{"ok":true,"started":true,"pane":"%3"}"#);
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
-    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
-    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure started"));
-    let screen = pane.screen();
-    assert!(!screen.iter().any(|r| r.contains("engine is down")), "a Manager handles it: {screen:?}");
-    // the view takes a snapshot every 2 s and sees the engine down each time, but tries once a minute
-    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 6 s; no per-poll signal from the view.
+    // hs-d363: one restart path, the supervisor's; the tree speaks only after 60 s down, and no e2e test waits that long
+    // time-claim: the old restart ran on the tree's first snapshot, before `ready`; none comes in 6 s (two snapshots); no per-poll signal from the view.
     std::thread::sleep(std::time::Duration::from_secs(6));
-    assert_eq!(calls(&env), [words(&["watch", "--ensure"])], "once, and no message: it started");
-}
-
-#[test]
-fn a_failed_restart_reaches_each_live_manager_once_and_none_without_a_manager() {
-    let env = env_without_engine();
-    populate(&env);
-    env.fake(
-        "cpd",
-        "if [ \"$1\" = watch ]; then echo '{\"ok\":false,\"error\":{\"code\":\"watch_start_failed\",\"message\":\"no tmux\"}}'; else echo '{\"ok\":true}'; fi",
-    );
-    let pane = Pane::start(&env, 46, 20);
-    pane.ready();
-    let text = "The cpd engine is down and 'cpd watch --ensure' failed: watch_start_failed: no tmux. Start it with cpd watch --ensure.";
-    let expected = [words(&["watch", "--ensure"]), words(&["session", "send", "m-alpha", text]), words(&["session", "send", "m-beta", text])];
-    assert_eq!(wait_for_calls(&env, 3), expected);
-    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure failed:"));
-    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 4 s; no per-poll signal from the view.
-    std::thread::sleep(std::time::Duration::from_secs(4));
-    assert_eq!(calls(&env), expected, "nothing more within the minute");
-
-    // with no live Manager, nothing is sent: the Inbox item is the User's
-    let env = env_without_engine();
-    populate(&env);
-    archive_managers(&env);
-    env.fake(
-        "cpd",
-        "if [ \"$1\" = watch ]; then echo '{\"ok\":false,\"error\":{\"code\":\"watch_start_failed\",\"message\":\"no tmux\"}}'; else echo '{\"ok\":true}'; fi",
-    );
-    let pane = Pane::start(&env, 46, 20);
-    pane.ready();
-    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
-    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure failed"));
-    pane.wait("the item", |s| s.iter().any(|r| r.contains("engine is down")));
-    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 4 s; no per-poll signal from the view.
-    std::thread::sleep(std::time::Duration::from_secs(4));
-    assert_eq!(calls(&env), [words(&["watch", "--ensure"])], "no Manager to tell");
+    assert_eq!(calls(&env), Vec::<Vec<String>>::new(), "no `watch --ensure`, no message to a Manager");
+    let screen = pane.screen();
+    assert!(!screen.iter().any(|r| r.contains("engine was down") || r.contains("engine is down")), "{screen:?}");
 }
 
 /// An Attempt of Job `job` of `ship`, ended failed with `cause` (`Some`), or running.
@@ -1864,8 +1830,9 @@ fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
     pane.ready();
     pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
     pane.click(10, pane.screen().len() as u16 - 1);
-    let screen = pane.wait("the link's row", |s| s.iter().any(|r| r.contains("acme/api#12")));
     let expected = item_row_of(44, "acme/api#12 failing");
+    // Wait for the whole row: the link is drawn in chunks, so a capture can land mid-draw.
+    let screen = pane.wait("the link's whole row", |s| s.iter().any(|r| *r == expected));
     let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
     assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
 }
@@ -1985,4 +1952,99 @@ fn a_refusal_of_an_item_command_shows_in_the_prompt_row() {
     pane.keys(&["d"]);
     pane.wait("the refusal", |_| pane.footer_has("item_closed: Item 1 is closed."));
     assert_eq!(calls(&env), [words(&["inbox", "dismiss", "1"])]);
+}
+
+// ---------- blue: the selected row's name (hs-d351; commands.md §13.2 "Rows", §17 "Blue") ----------
+
+/// The cells of one screen row with escapes: each glyph and its foreground as an SGR colour index (`Some(4)` is blue,
+/// `Some(2)` green, `Some(8)` the bright black of dark grey), `None` the terminal's own.
+fn cells_of(styled: &str) -> Vec<(char, Option<u8>)> {
+    let (mut out, mut fg) = (Vec::new(), None);
+    let mut chars = styled.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push((c, fg));
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                let mut params = String::new();
+                for c in chars.by_ref() {
+                    if c.is_ascii_digit() || c == ';' || c == ':' {
+                        params.push(c);
+                    } else {
+                        if c == 'm' {
+                            let mut p = params.split(';').map(|p| p.parse::<u8>().unwrap_or(0));
+                            while let Some(n) = p.next() {
+                                match n {
+                                    0 | 39 => fg = None,
+                                    30..=37 => fg = Some(n - 30),
+                                    90..=97 => fg = Some(n - 90 + 8),
+                                    38 => match p.next() {
+                                        Some(5) => fg = p.next(),
+                                        _ => {
+                                            p.by_ref().take(3).for_each(drop);
+                                            fg = Some(u8::MAX);
+                                        }
+                                    },
+                                    _ => {}
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            Some('(') | Some(')') => {
+                chars.next();
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// What the screen draws in blue: per row, the glyphs whose foreground is blue.
+fn blue_text(styled: &str) -> Vec<String> {
+    styled.lines().map(|l| cells_of(l).into_iter().filter(|(_, fg)| *fg == Some(4)).map(|(c, _)| c).collect::<String>()).filter(|t| !t.is_empty()).collect()
+}
+
+/// The foreground of the first cell of `glyph` in the screen row that says `row`.
+fn fg_of(styled: &str, row: &str, glyph: &str) -> Option<u8> {
+    let cells = styled.lines().map(cells_of).find(|c| c.iter().map(|(c, _)| *c).collect::<String>().contains(row)).expect("the row");
+    cells.iter().find(|(c, _)| glyph.starts_with(*c)).and_then(|(_, fg)| *fg)
+}
+
+#[test]
+fn the_selected_plan_rows_name_is_blue_and_no_chat_mark_is_drawn() {
+    let env = env();
+    populate(&env); // `l-ship`, the Lead of `ship`, is in the chat slot
+    let pane = Pane::start(&env, 46, 19);
+    pane.ready();
+    let screen = pane.styled_screen();
+    assert!(!screen.contains(ACTIVE_MARK), "no marker in column 0: {screen:?}");
+    assert_eq!(blue_text(&screen), ["ship"], "the one blue thing is the name of the Plan whose Lead is in the chat slot: {screen:?}");
+    assert_eq!(fg_of(&screen, " sketch", "sketch"), None, "an unselected row's name is the terminal's colour");
+    assert_eq!(fg_of(&screen, " ship ", "1"), Some(15), "the row keeps its counters' colours (the queued Job: white)");
+    assert_eq!(fg_of(&screen, " ship ", "2"), Some(8), "(the merged Jobs: dark grey)");
+}
+
+#[test]
+fn the_selected_context_rows_name_is_blue_when_its_manager_is_in_the_chat_slot() {
+    let env = env();
+    populate(&env);
+    // the chat slot moves from `l-ship` to the Manager of `alpha`
+    sql(
+        &mut open(&env),
+        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), '2026-01-04T00:00:00.000Z', 'session-moved', 'alpha', 'ship', 'l-ship', 'fixture', '{\"place\":\"parked\"}');
+         INSERT INTO events (txn, at, kind, context, session, text, data)
+         VALUES (cpd_txn(), '2026-01-04T00:00:01.000Z', 'session-moved', 'alpha', 'm-alpha', 'fixture', '{\"pane\":\"%2\",\"window\":\"@1\",\"place\":\"chat\"}');",
+    );
+    let pane = Pane::start(&env, 46, 19);
+    pane.ready();
+    let screen = pane.styled_screen();
+    assert!(!screen.contains(ACTIVE_MARK), "no marker: {screen:?}");
+    assert_eq!(blue_text(&screen), ["alpha"], "the Context's name, and no Plan's: {screen:?}");
+    assert_ne!(fg_of(&screen, "╭", NEEDS_YOU), Some(4), "its dot keeps the dot's colour");
 }
