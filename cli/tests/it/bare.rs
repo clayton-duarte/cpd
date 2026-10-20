@@ -513,6 +513,12 @@ fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_
 
     let t = run_in_terminal(&env, "restart", false, "");
     assert_eq!(t.exit_code(), 0, "{}", t.stderr());
+    // Bare `cpd` restarts in its own process and attaches only when that is done, and it exits 0 whatever the
+    // restart did (A3): its one line says whether the restart succeeded, so it is read before the server is.
+    // A restart that failed after the kill leaves no server, and the line is then the only message there is.
+    let line = t.stderr();
+    assert!(line.contains("restarted the tmux server") && line.contains("3 Session(s) reopened"), "{line}");
+    assert_eq!(line.lines().count(), 1, "{line}");
     assert_eq!(kill_server_calls(&env), 0, "the old server is killed by its own binary, not by the installed tmux on PATH");
     assert_ne!(server_pid(&env), before, "the server was not restarted");
     assert_eq!(session_windows(&env), places());
@@ -538,9 +544,6 @@ fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_
     wait_idle_in_live_panes(&env, &["lead1", "lead2", "manager1"]);
     // The server is as new as the installed tmux: the installed tmux attaches.
     assert_eq!(attach_calls(&env).len(), 1);
-    let line = t.stderr();
-    assert!(line.contains("restarted the tmux server") && line.contains("3 Session(s) reopened"), "{line}");
-    assert_eq!(line.lines().count(), 1, "{line}");
     // The engine runs again in the new server.
     assert_eq!(tmux_out(&env, &["list-panes", "-t", "=cpd-work:watch", "-F", "#{pane_dead}"]).trim(), "0");
 }
