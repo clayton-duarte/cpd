@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tui_tree_widget::TreeState;
 
-use super::rows::{self, Id, Row};
+use super::rows::Id;
 use crate::read::Tree;
 use cpd_core::home::CpdHome;
 
@@ -19,23 +19,25 @@ use cpd_core::home::CpdHome;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Folds {
-    /// The Contexts the User collapsed (Contexts start open).
+    /// The live Contexts the User collapsed (live Contexts start open).
     collapsed: BTreeSet<Id>,
-    /// The paths of the `…` rows the User expanded (`…` rows start collapsed).
+    /// The archived Contexts the User expanded, each as its one-id path (archived Contexts start folded, hs-d339).
     expanded: BTreeSet<Vec<Id>>,
 }
 
 impl Folds {
-    /// The folds of `state` over `tree`: only rows that exist are kept, so ids that match none are dropped.
+    /// The folds of `state` over `tree`: what differs from each Context's start (open when live, folded when
+    /// archived). Only Contexts that exist are kept, so ids that match none are dropped.
     pub fn of(state: &TreeState<Id>, tree: &Tree) -> Folds {
         let opened = state.opened();
-        let collapsed = tree.contexts.iter().map(|c| c.id.to_string()).filter(|id| !opened.contains(std::slice::from_ref(id))).collect();
-        let expanded = opened.iter().filter(|path| matches!(rows::row(tree, path), Some(Row::More))).cloned().collect();
+        let open = |c: &&crate::read::ContextNode| opened.contains(&vec![c.id.to_string()]);
+        let collapsed = tree.contexts.iter().filter(|c| !c.is_archived() && !open(c)).map(|c| c.id.to_string()).collect();
+        let expanded = tree.contexts.iter().filter(|c| c.is_archived() && open(c)).map(|c| vec![c.id.to_string()]).collect();
         Folds { collapsed, expanded }
     }
 
-    /// Applies the folds to a state that has opened every Context: a collapsed Context counts as known and is closed,
-    /// every expanded path is opened. Ids that match no row are harmless.
+    /// Applies the folds to a state that has opened every live Context: a collapsed Context is closed, an expanded
+    /// one opened, and both count as known. Ids that match no row are harmless.
     pub fn merge(&self, state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>) {
         for id in &self.collapsed {
             let context = vec![id.clone()];
@@ -44,6 +46,7 @@ impl Folds {
         }
         for path in &self.expanded {
             state.open(path.clone());
+            known.insert(path.clone());
         }
     }
 }
@@ -114,7 +117,6 @@ impl FoldsFile {
 mod tests {
     use super::super::fixture::archived;
     use super::*;
-    use super::rows::MORE;
 
     fn file_in(dir: &tempfile::TempDir) -> FoldsFile {
         FoldsFile::at(&CpdHome::resolve(Some(dir.path().into()), None).unwrap())
@@ -229,12 +231,13 @@ mod tests {
     fn the_folds_of_a_state_keep_only_rows_that_exist_and_merge_back() {
         let tree = archived();
         let (mut state, mut known) = (TreeState::default(), HashSet::new());
-        rows::open_new(&mut state, &mut known, &tree);
-        let stored = folds(&["beta", "vanished"], &[&["alpha", MORE], &[MORE], &["beta", MORE], &["vanished", MORE], &["alpha", "ship"]]);
+        super::super::rows::open_new(&mut state, &mut known, &tree);
+        let stored = folds(&["beta", "vanished"], &[&["zeta"], &["alpha"], &["gone"], &["alpha", "ship"]]);
         stored.merge(&mut state, &mut known);
         assert!(!state.opened().contains(&vec!["beta".to_owned()]), "beta is collapsed");
         assert!(state.opened().contains(&vec!["alpha".to_owned()]), "alpha is not");
+        assert!(state.opened().contains(&vec!["zeta".to_owned()]), "the archived zeta is expanded");
         assert!(known.contains(&vec!["vanished".to_owned()]), "a collapsed Context counts as known");
-        assert_eq!(Folds::of(&state, &tree), folds(&["beta"], &[&["alpha", MORE], &[MORE]]), "unknown ids and non-`…` paths are dropped");
+        assert_eq!(Folds::of(&state, &tree), folds(&["beta"], &[&["zeta"]]), "unknown ids, a live Context open as it starts and paths below a Context are dropped");
     }
 }

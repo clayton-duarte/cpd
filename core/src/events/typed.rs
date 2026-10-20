@@ -183,8 +183,8 @@ impl NewEvent {
         )
     }
 
-    pub fn pr_added(text: impl Into<String>, pr: impl Serialize, repo: &str, base: &str, needs: impl Serialize, appended: bool) -> NewEvent {
-        make(Kind::PrAdded, text, json!({"pr": pr, "repo": repo, "base": base, "needs": needs, "appended": appended}))
+    pub fn pr_added(text: impl Into<String>, pr: impl Serialize, repo: &str, base: &str, title: &str, needs: impl Serialize, appended: bool) -> NewEvent {
+        make(Kind::PrAdded, text, json!({"pr": pr, "repo": repo, "base": base, "title": title, "needs": needs, "appended": appended}))
     }
 
     pub fn pr_edited(text: impl Into<String>, pr: impl Serialize, fields: impl Serialize) -> NewEvent {
@@ -259,6 +259,10 @@ impl NewEvent {
         make(Kind::SessionRenamed, text, json!({"name": name}))
     }
 
+    pub fn session_titled(text: impl Into<String>, title: &str) -> NewEvent {
+        make(Kind::SessionTitled, text, json!({"title": title}))
+    }
+
     pub fn context_owner(text: impl Into<String>, owner: &str) -> NewEvent {
         make(Kind::ContextOwner, text, json!({"owner": owner}))
     }
@@ -285,6 +289,16 @@ impl NewEvent {
 
     pub fn session_message(text: impl Into<String>, from: impl Serialize, message: &str, wake: bool) -> NewEvent {
         make(Kind::SessionMessage, text, json!({"from": from, "text": message, "wake": wake}))
+    }
+
+    /// E4's escalation to a Context's Manager (§3.7): a PR still unopened `minutes` after its `all-merged`; `from` is the Plan's Lead.
+    pub fn session_message_pr_unopened(text: impl Into<String>, from: &str, plan: &str, pr: &str, minutes: i64) -> NewEvent {
+        let text = text.into();
+        make(
+            Kind::SessionMessage,
+            text.clone(),
+            json!({"from": from, "text": text, "wake": true, "escalation": "pr_unopened", "plan": plan, "pr": pr, "minutes": minutes}),
+        )
     }
 
     pub fn inbox_opened(text: impl Into<String>, item: i64, kind: &str, urgency: &str, label: &str) -> NewEvent {
@@ -357,7 +371,7 @@ mod tests {
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
-            Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, [s], b)],
+            Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, [s], b)],
             Kind::PrEdited => vec![NewEvent::pr_edited(T, s, [s])],
             Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s)],
             Kind::PrStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
@@ -370,13 +384,14 @@ mod tests {
             Kind::SessionState => vec![NewEvent::session_state(T, s, s, None, false), NewEvent::session_state(T, s, s, None, true)],
             Kind::SessionMoved => vec![NewEvent::session_moved(T, Some(s), Some(s), s), NewEvent::session_moved(T, None, None, s)],
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
+            Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],
             Kind::ContextOwner => vec![NewEvent::context_owner(T, s)],
             Kind::PlanRenamed => vec![NewEvent::plan_renamed(T, s)],
             Kind::ContextArchived => vec![NewEvent::context_archived(T, b)],
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],
             Kind::SessionArchived => vec![NewEvent::session_archived(T, b)],
-            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b)],
+            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b), NewEvent::session_message_pr_unopened(T, s, s, s, n)],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],
             Kind::InboxClosed => vec![NewEvent::inbox_closed(T, 1, s)],
             Kind::InboxSnoozed => vec![NewEvent::inbox_snoozed(T, 1, s)],
