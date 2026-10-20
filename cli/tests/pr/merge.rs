@@ -208,17 +208,26 @@ impl Fx {
 
     /// [`Fx::submitted`] for a Job of `pr`.
     fn submitted_on(&self, pr: &Pr, key: &str, path: &str, content: &str) -> (AttemptId, PathBuf) {
+        self.submitted_as(pr, key, "work", Some((path, content)))
+    }
+
+    /// [`Fx::submitted_on`] for a Job of `kind`, whose Attempt commits `change` (a path and its content) or, when there is none,
+    /// nothing: an `open` or `update` Worker whose base did not move submits the Lead tip as it is (contract §7.7).
+    fn submitted_as(&self, pr: &Pr, key: &str, kind: &str, change: Option<(&str, &str)>) -> (AttemptId, PathBuf) {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
         let made = create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup).unwrap();
-        let sha = self.commit(&made.path, path, content);
+        let sha = match change {
+            Some((path, content)) => self.commit(&made.path, path, content),
+            None => self.git(&made.path, &["rev-parse", "HEAD"]),
+        };
         self.store()
             .write("fixture", |tx| {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                                       status, appended, fingerprint, created_txn, created_at)
-                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, ?2, ?3, 't')",
-                    params![key, "f".repeat(64), tx.id(), pr.key],
+                                       status, appended, kind, fingerprint, created_txn, created_at)
+                     VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', ?5, ?6, ?2, ?3, 't')",
+                    params![key, "f".repeat(64), tx.id(), pr.key, i64::from(kind != "work"), kind],
                 )?;
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha,
@@ -926,6 +935,72 @@ fn a_push_that_origin_already_contains_is_no_push_failed() {
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
     assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+}
+
+// ------------------------------------------------- an `open` or `update` Job's merge (contract §7.4; hs-d340)
+
+/// Step 5 never rebases for these kinds: the Gate ran on the submitted HEAD, and a rebase would drop its merge commit and replay the base's
+/// commits. The Lead tip must already be an ancestor of HEAD, else the Attempt ends `failed` / `merge_conflict` with the detail
+/// `lead_branch_moved` (a ladder cause: the next Attempt starts from the newer tip). Nothing moves: no rebase, no fast-forward, no push.
+#[test]
+fn an_update_jobs_merge_never_rebases_and_ends_merge_conflict_lead_branch_moved() {
+    let (fx, origin) = fx_origin();
+    let (attempt, worktree) = fx.submitted_as(&fx.first_pr(), "up-repo", "update", None);
+    let before = fx.git(&worktree, &["rev-parse", "HEAD"]);
+    // Another Job merged since the Attempt began: an ordinary Job would rebase onto it, cleanly.
+    let old = fx.advance_lead("other.txt", "other\n");
+
+    let result = fx.merge(&attempt);
+
+    let End::Failed { cause: Failure::MergeConflict, detail } = &result.end else { panic!("{result:?}") };
+    assert!(detail.contains("lead_branch_moved"), "{detail}");
+    assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), before, "never rebased");
+    assert_eq!(fx.lead_sha(), old, "the Lead Branch did not move");
+    assert_ne!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), old, "nothing was pushed");
+    let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
+    assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("merge_conflict"), None));
+    assert_eq!(fx.job_row("up-repo"), ("queued".into(), None, None), "a ladder cause: the next Attempt starts from the newer tip");
+}
+
+/// An `update` Job whose Worker merged the base (the Lead tip is its ancestor) lands as it is, `new` = HEAD, and its push is the point:
+/// origin holds the resolution when the Job is `merged`.
+#[test]
+fn an_update_jobs_merge_pushes_what_it_landed() {
+    let (fx, origin) = fx_origin();
+    let (attempt, worktree) = fx.submitted_as(&fx.first_pr(), "up-repo", "update", Some(("resolved.txt", "resolved\n")));
+
+    let result = fx.merge(&attempt);
+
+    let new = fx.git(&worktree, &["rev-parse", "HEAD"]);
+    assert_eq!(result.end, End::Merged { sha: new.clone() });
+    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), new);
+    assert_eq!(fx.job_row("up-repo"), ("merged".into(), Some(new), None));
+    let kinds: Vec<String> = fx.events(&attempt).into_iter().map(|e| e.0).collect();
+    assert_eq!(kinds, ["job-merged"]);
+    // `job-merged` carries the Job's kind (§5.2); an `update` Job writes no PR row and no `pr-opened`.
+    let merged = &fx.events(&attempt)[0].1;
+    assert_eq!(merged["kind"], "update", "{merged}");
+}
+
+/// The push is part of the Job (§7.4 step 8): one that fails and is not rule P's success ends the Attempt `failed` / `crashed` with the
+/// detail `push_failed`, after the fast-forward (the next Attempt finds the Lead Branch already holding the merge), where an ordinary Job
+/// stays Merged with a `push_failed` error.
+#[test]
+fn a_failed_push_of_an_update_job_ends_the_attempt_crashed_with_push_failed_after_the_fast_forward() {
+    let (fx, origin) = fx_origin();
+    let before = fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]);
+    write_executable(&origin.join("hooks").join("pre-receive"), "#!/bin/sh\necho nope >&2\nexit 1\n");
+    let (attempt, worktree) = fx.submitted_as(&fx.first_pr(), "up-repo", "update", Some(("resolved.txt", "resolved\n")));
+
+    let result = fx.merge(&attempt);
+
+    let End::Failed { cause: Failure::Crashed, detail } = &result.end else { panic!("{result:?}") };
+    assert!(detail.contains("push_failed"), "{detail}");
+    assert_eq!(fx.lead_sha(), fx.git(&worktree, &["rev-parse", "HEAD"]), "the fast-forward stands");
+    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), before);
+    let (status, outcome, cause, merged, _) = fx.attempt_row(&attempt);
+    assert_eq!((status.as_str(), outcome.as_deref(), cause.as_deref(), merged), ("ended", Some("failed"), Some("crashed"), None));
+    assert_eq!(fx.job_row("up-repo"), ("queued".into(), None, None), "crashed is a ladder cause");
 }
 
 // ------------------------------------------------------------ R

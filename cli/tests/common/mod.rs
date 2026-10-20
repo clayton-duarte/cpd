@@ -207,6 +207,28 @@ pub const WATCH_OK: &str = "echo '{\"ok\": true, \"started\": true, \"pane\": \"
 /// The exit status of a deny shim.
 pub const DENIED_EXIT: i32 = 97;
 
+/// Pull request `acme/pay` #812 as the poll's queries print it: open, titled `Pay the bills`, no review, no checks, with the
+/// `mergeable` and `mergeStateStatus` GitHub reports (`MERGEABLE`/`CLEAN`, `CONFLICTING`/`DIRTY`, `MERGEABLE`/`BEHIND`, ...).
+fn pay_node(mergeable: &str, merge_state: &str) -> String {
+    format!(
+        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":812,"url":"https://github.com/acme/pay/pull/812","title":"Pay the bills","isDraft":false,"state":"OPEN","createdAt":"opened","mergedAt":null,"reviewDecision":null,"mergeable":"{mergeable}","mergeStateStatus":"{merge_state}","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+    )
+}
+
+/// The PR poll's search answer (commands.md §9.2) for the one pull request a fixture stored, [`pay_node`]: the one thing a test of the
+/// update Job varies is what GitHub says of its mergeability.
+pub fn pay_search(mergeable: &str, merge_state: &str) -> String {
+    format!(
+        r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
+        pay_node(mergeable, merge_state)
+    )
+}
+
+/// The poll's lookup answer (§7.6 step 3), which `pr open` also reads for the pull request it just opened: [`pay_node`] as alias `p0`.
+pub fn pay_lookup() -> String {
+    format!(r#"{{"data":{{"p0":{{"pullRequest":{}}}}}}}"#, pay_node("MERGEABLE", "CLEAN"))
+}
+
 /// The proxy variables, dropped from every command (either case).
 const PROXY_VARS: [&str; 3] = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
 
