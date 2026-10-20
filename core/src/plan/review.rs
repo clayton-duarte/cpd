@@ -13,6 +13,7 @@ use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, wri
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, ReviewId};
+use crate::job::open as job_open;
 use crate::output::Output;
 
 /// What the Lead does after requesting a review (commands.md §4.6).
@@ -133,6 +134,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         return Err(no_draft_jobs(&id));
     }
     check_drafts_complete(&id, jobs)?;
+    super::shape::check(&id, &s.prs, jobs)?;
     if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
         return Ok(Output::success(json!({
             "review": {"id": r.id, "fingerprint": r.fingerprint, "status": r.status, "requested_at": r.requested_at},
@@ -231,6 +233,7 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         return Err(review_decided(&id, &review));
     }
 
+    let open_tier = env.config.open_tier;
     let (review, phase, current, queued) = env.store.write("plan decide", |tx| {
         // The phase and the drafts as they are now: an approval queues what it covered only.
         let phase = row::load(tx, &id)?.phase;
@@ -256,6 +259,14 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
                 queued.push(job.key.clone());
             }
             queued.sort();
+            // One path for every change to an open PR (hs-d497): a fix draft queued on an `open` PR queues its `update` Job.
+            let mut keys: Vec<&str> = all.iter().filter(|j| j.is_draft()).map(|j| j.pr.as_str()).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            let prs = load_prs(tx, &id)?;
+            for pr in prs.iter().filter(|p| p.status == "open" && keys.contains(&p.key.as_str())) {
+                job_open::queue_update(tx, &id, pr, open_tier, "plan decide", job_open::Cause::Feedback)?;
+            }
         }
         let verdict = status.to_uppercase();
         let text = match (status, phase) {

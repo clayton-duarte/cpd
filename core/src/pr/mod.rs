@@ -47,6 +47,7 @@ use crate::plan::PrRow;
 use row::PlanPrs;
 
 pub use gh::close_pr;
+pub use open::{Pulled, is_merged_on_github, pull_request, record as record_pull, submit_checks};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -287,17 +288,23 @@ fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
 /// in it, the gate worktree removed. `again` is the command the Lead runs after fixing it.
 /// Nothing runs when the PR's policy says `pr.gate` is not `local` (§8.3).
 fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, again: &str) -> Result<(), CpdError> {
+    gate_then(env, policy, plan, pr, sha, &format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged."))
+}
+
+/// [`gate`] where `then` is what a refused Gate tells the caller to do next: the Lead's (`pr open`, `pr push`, `pr rebase`) or a Worker's
+/// (an `open` or `update` Job's submit, contract §7.7, which fixes what the Gate reports and submits again).
+fn gate_then(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, then: &str) -> Result<(), CpdError> {
     if policy.pr.gate != Gate::Local {
         return Ok(());
     }
-    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, again))
+    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, then))
 }
 
 /// A Gate that did not pass (contract §7.3, §7.6 step 3): a `pre-merge` that failed
 /// is `gate_failed` (exit 3); a `pre-merge` that could not be judged, or a
 /// `pre-start` that did not pass in any way, is `gate_error` (exit 1). Both carry
-/// the hook's last 60 lines in `details.tail` and its log in `details.log`.
-fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, again: &str) -> CpdError {
+/// the hook's last 60 lines in `details.tail` and its log in `details.log`. `then` follows a failed `pre-merge` in its message.
+fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, then: &str) -> CpdError {
     let tail = refused.tail.unwrap_or_default();
     let log = refused.log.display().to_string();
     let hook = refused.hook.as_str();
@@ -305,7 +312,7 @@ fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, again: &str) 
         (Hook::PreMerge, HookOutcome::Failed { exit }) => CpdError::new(
             ErrorCode::GateFailed,
             format!(
-                "The Gate failed on {} at {} (exit {exit}): nothing was pushed. Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.",
+                "The Gate failed on {} at {} (exit {exit}): nothing was pushed. {then}",
                 pr.lead_branch,
                 short(sha)
             ),

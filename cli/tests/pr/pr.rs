@@ -146,8 +146,8 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, '{REPO_TITLE}', cpd_txn(), 't', {locked}{values});",
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
         repo = fx.repo.display(),
     );
     fx.store()
@@ -357,8 +357,8 @@ impl Fx {
             .write("fixture", |tx| {
                 tx.execute_batch(&format!(
                     "{row}
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at{open_columns})
-                       VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', cpd_txn(), 't', {started}{open_values});
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{open_columns})
+                       VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', 'config', cpd_txn(), 't', {started}{open_values});
                      {needs}",
                     repo = repo.display(),
                     row = if matches!(state, Web::Open) {
@@ -815,6 +815,60 @@ fn open_refuses_while_a_job_is_not_merged_or_cancelled() {
     assert_eq!(run.error()["details"]["jobs"], json!([{"key": "ui", "status": "queued"}]));
     assert!(fx.gh_calls().is_empty());
     assert_eq!(fx.plan_row().0, "dispatch");
+}
+
+impl Fx {
+    /// The PR's `open` Job `open-repo` in `status`, as engine E4 adds it (contract §3.7 E4: appended, no Dependencies).
+    fn open_job(&self, status: &str) {
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute(
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, kind, fingerprint, merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
+                     VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?1, 1, 'open', ?2,
+                             iif(?1 = 'merged', 'abc', NULL), iif(?1 = 'failed', 'crashed', NULL),
+                             iif(?1 = 'cancelled', 'start over', NULL), iif(?1 = 'cancelled', 't', NULL), ?3, 't')",
+                    params![status, "f".repeat(64), tx.id()],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+/// `pr open` is the repair (contract §7.6): while the PR's `open` Job is `queued` or `running` that Job is about to do it, and two openers
+/// would race. Refused `open_job_live` (exit 3, `details.job`), with nothing run, written or pushed.
+#[test]
+fn open_is_refused_open_job_live_while_the_open_job_is_queued_or_running() {
+    for status in ["queued", "running"] {
+        let fx = fx("dispatch");
+        fx.open_job(status);
+        let txns = fx.txns();
+
+        let run = fx.pr("open");
+
+        assert_eq!(code(&run), ("open_job_live".into(), 3), "{status}: {run:?}");
+        assert_eq!(run.error()["details"]["job"], "open-repo", "{status}");
+        assert!(fx.gh_calls().is_empty(), "{status}");
+        assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "{status}: nothing was pushed");
+        assert_eq!((fx.plan_row().0, fx.txns()), ("dispatch".to_owned(), txns), "{status}");
+    }
+}
+
+/// A PR whose `open` Job is `failed` (the Lead decides between `job retry` and this), `cancelled` or `merged` on a PR still `dispatch`
+/// (a merge that died before it opened the pull request) is opened by hand as before; `jobs_not_done` counts no `open` Job.
+#[test]
+fn open_by_hand_goes_on_when_the_open_job_failed_was_cancelled_or_merged_and_counts_it_for_nothing() {
+    for status in ["failed", "cancelled", "merged"] {
+        let fx = fx("dispatch");
+        fx.open_job(status);
+
+        let out = fx.pr("open").ok();
+
+        assert_eq!(out["pr"]["status"], "open", "{status}: {out}");
+        assert_eq!(fx.plan_row().0, "deploy", "{status}");
+        assert_eq!(fx.gh_calls()[1][..2], ["pr", "create"], "{status}");
+    }
 }
 
 #[test]
@@ -1534,7 +1588,7 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
                "changed": [
                    {"repo": "acme/pay", "number": 901, "state": "open", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"},
                    {"repo": "acme/web", "number": 902, "state": "open", "draft": false, "checks": "none", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown"}],
-               "base_changed": [], "removed": 0, "feedback": [], "merged": [], "done": [],
+               "base_changed": [], "removed": 0, "feedback": [], "update_jobs": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}})
     );
     assert_eq!(fx.pull_requests(), [("acme/pay".to_owned(), 901), ("acme/web".to_owned(), 902)]);
@@ -1638,7 +1692,7 @@ fn a_second_identical_poll_writes_nothing() {
 
     assert_eq!(
         again,
-        json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "removed": 0, "feedback": [], "merged": [], "done": [],
+        json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "removed": 0, "feedback": [], "update_jobs": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "prs": again["prs"]})
     );
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
@@ -1878,57 +1932,109 @@ fn poll_tells_the_plan_once_that_the_checks_turned_failed() {
     assert_eq!(fx.events("pr-feedback").len(), 2);
 }
 
+impl Fx {
+    /// `(key, status)` of every `update` Job of Plan `pay`, by key.
+    fn update_jobs(&self) -> Vec<(String, String)> {
+        self.store()
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT key, status FROM jobs WHERE plan = 'pay' AND kind = 'update' ORDER BY key")?;
+                Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap()
+    }
+
+    /// GitHub says pull request 812 is `mergeable` / `merge_state`; one poll of Plan `pay`.
+    fn polled(&self, mergeable: &str, merge_state_: &str) -> Value {
+        self.search(&[merge_state(pay("OPEN", None, None), mergeable, merge_state_)]);
+        self.poll()
+    }
+}
+
+/// The poll queues the PR's `update` Job in the transaction that stores `conflicting` (contract §7.6 step 6, §3.7 E5): `up-repo`, Tier
+/// `open_tier`, `queued`, `appended`, no Dependencies, and `job-added` with `kind` `update`, `by` `poll`, `reason` `conflict`. The conflict
+/// is no `pr-feedback`, and the PR stays `open`. The same conflict seen again writes nothing.
 #[test]
-fn poll_tells_the_plan_once_per_transition_that_the_pull_request_became_conflicting() {
+fn poll_queues_one_update_job_when_the_pull_request_becomes_conflicting() {
     let fx = fx("deploy");
-    let conflicting = || pay("OPEN", None, None);
-    let seen = |mergeable: &str, state: &str| fx.search(&[merge_state(conflicting(), mergeable, state)]);
-    seen("MERGEABLE", "BLOCKED");
-    let out = fx.poll();
-    assert_eq!((out["feedback"].clone(), fx.events("pr-feedback").len()), (json!([]), 0), "mergeable is no conflict");
-    assert_eq!(out["changed"][0]["mergeable"], "mergeable");
-    assert_eq!(out["changed"][0]["merge_state"], "blocked");
+    fx.polled("MERGEABLE", "CLEAN");
+    assert_eq!(fx.update_jobs(), Vec::<(String, String)>::new());
 
-    seen("CONFLICTING", "DIRTY");
-    let out = fx.poll();
+    let out = fx.polled("CONFLICTING", "DIRTY");
 
-    assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
-    assert_eq!(out["changed"][0]["mergeable"], "conflicting");
-    assert_eq!(out["changed"][0]["merge_state"], "dirty");
-    let events = fx.events("pr-feedback");
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1, feedback_merge("open", "none", "none", "conflicting", "dirty", &["conflict"]));
-    assert_eq!(events[0].1["conflict"], true);
-    assert_eq!(events[0].0, "PR repo (#812) of Plan pay needs attention: merge conflict. Read the details with cpd pr view --plan pay --pr repo.");
-    assert_eq!(fx.shown_pull_request()["mergeable"], "conflicting");
-    assert_eq!(fx.shown_pull_request()["merge_state"], "dirty");
+    assert_eq!(fx.update_jobs(), [("up-repo".to_owned(), "queued".to_owned())]);
+    assert_eq!(out["feedback"], json!([]), "a conflict is no pr-feedback reason");
+    assert!(fx.events("pr-feedback").is_empty());
+    let row: (String, String, i64, bool) = fx
+        .store()
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT title, tier, appended, fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = 'up-repo'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(row, (format!("Bring the pull request up to date: {REPO_TITLE}"), "S2".into(), 1, true));
+    let dependencies: i64 = fx.store().read(|c| Ok(c.query_row("SELECT count(*) FROM dependencies WHERE job = 'up-repo'", [], |r| r.get(0))?)).unwrap();
+    assert_eq!(dependencies, 0);
+    let added = fx.events("job-added");
+    assert_eq!(added.len(), 1, "{added:?}");
+    let data = &added[0].1;
+    assert_eq!((&data["kind"], &data["by"], &data["reason"], &data["pr"]), (&json!("update"), &json!("poll"), &json!("conflict"), &json!("repo")));
+    assert_eq!(fx.pr_status("repo"), "open");
 
-    // The same poll again: nothing is written and nothing is told.
     let txns = fx.txns();
-    assert_eq!(fx.poll()["feedback"], json!([]));
-    assert_eq!((fx.txns(), fx.events("pr-feedback").len()), (txns, 1));
+    fx.polled("CONFLICTING", "DIRTY");
+    assert_eq!((fx.txns(), fx.update_jobs().len()), (txns, 1), "the same conflict again writes nothing");
+}
 
-    // Still conflicting, only the merge state moved: stored, not told.
-    seen("CONFLICTING", "BEHIND");
-    let out = fx.poll();
-    assert_eq!((out["feedback"].clone(), out["changed"].as_array().unwrap().len()), (json!([]), 1));
-    assert_eq!(fx.events("pr-feedback").len(), 1);
+/// A base that merely moved queues nothing (hs-d497: no `behind` detection): `merge_state` `behind` is stored as GitHub gives it and is
+/// no cause, whatever `mergeable` says. The conflict that follows does queue the Job.
+#[test]
+fn poll_queues_no_update_job_for_a_base_that_merely_moved_and_one_for_the_conflict_that_follows() {
+    let fx = fx("deploy");
+    fx.polled("MERGEABLE", "CLEAN");
 
-    // GitHub recomputes after the base moved: `unknown` is stored and is no conflict, and the same conflict seen again is told again.
-    seen("UNKNOWN", "UNKNOWN");
-    let out = fx.poll();
-    assert_eq!((out["feedback"].clone(), out["changed"].as_array().unwrap().len()), (json!([]), 1));
-    assert_eq!(fx.shown_pull_request()["mergeable"], "unknown");
-    assert_eq!(fx.events("pr-feedback").len(), 1);
-    seen("CONFLICTING", "DIRTY");
-    assert_eq!(fx.poll()["feedback"], json!([{"plan": "pay", "pr": "repo"}]));
-    let events = fx.events("pr-feedback");
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[1].1, events[0].1);
+    for (mergeable, state) in [("MERGEABLE", "BEHIND"), ("UNKNOWN", "BEHIND"), ("MERGEABLE", "BLOCKED"), ("MERGEABLE", "UNSTABLE")] {
+        fx.polled(mergeable, state);
+        assert_eq!(fx.update_jobs(), Vec::<(String, String)>::new(), "{mergeable}/{state}");
+        assert_eq!(fx.shown_pull_request()["merge_state"], state.to_lowercase(), "{mergeable}/{state}: stored as GitHub says");
+    }
+    assert!(fx.events("job-added").is_empty());
+
+    fx.polled("CONFLICTING", "DIRTY");
+
+    assert_eq!(fx.update_jobs(), [("up-repo".to_owned(), "queued".to_owned())]);
+}
+
+/// "Once per conflict": no second `update` Job while one is `queued` or `running`, however often the conflict is seen again, and a conflict
+/// that comes after the Job ended (`merged`) is a new cause, a new Job, `up-repo-2`.
+#[test]
+fn poll_queues_no_second_update_job_while_one_is_live_and_a_new_one_for_a_conflict_after_it_ended() {
+    let fx = fx("deploy");
+    fx.polled("CONFLICTING", "DIRTY");
+    assert_eq!(fx.update_jobs(), [("up-repo".to_owned(), "queued".to_owned())]);
+
+    // GitHub recomputes after the base moved (`unknown`) and the conflict is seen as a transition again: the Job is still queued.
+    fx.polled("UNKNOWN", "UNKNOWN");
+    fx.polled("CONFLICTING", "DIRTY");
+    assert_eq!(fx.update_jobs(), [("up-repo".to_owned(), "queued".to_owned())]);
+
+    // Still no second one while it runs.
+    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE jobs SET status = 'running' WHERE key = 'up-repo';")?)).unwrap();
+    fx.polled("UNKNOWN", "UNKNOWN");
+    fx.polled("CONFLICTING", "DIRTY");
+    assert_eq!(fx.update_jobs(), [("up-repo".to_owned(), "running".to_owned())]);
+
+    // It merged: the next conflict is a new transition and a new Job.
+    fx.store().write("fixture", |tx| Ok(tx.execute_batch("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'up-repo';")?)).unwrap();
+    fx.polled("UNKNOWN", "UNKNOWN");
+    fx.polled("CONFLICTING", "DIRTY");
+    assert_eq!(fx.update_jobs(), [("up-repo".to_owned(), "merged".to_owned()), ("up-repo-2".to_owned(), "queued".to_owned())]);
 }
 
 #[test]
-fn a_conflict_told_with_another_reason_lists_both() {
+fn a_conflicting_pull_request_with_failed_checks_is_told_only_the_checks() {
     let fx = fx("deploy");
     fx.search(&[merge_state(pay("OPEN", None, Some("FAILURE")), "CONFLICTING", "DIRTY")]);
 
@@ -1936,8 +2042,8 @@ fn a_conflict_told_with_another_reason_lists_both() {
 
     let events = fx.events("pr-feedback");
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].1, feedback_merge("open", "failed", "none", "conflicting", "dirty", &["checks_failed", "conflict"]));
-    assert!(events[0].0.contains("needs attention: checks failed, merge conflict. Read"), "{}", events[0].0);
+    assert_eq!(events[0].1, feedback_merge("open", "failed", "none", "conflicting", "dirty", &["checks_failed"]));
+    assert!(events[0].0.contains("needs attention: checks failed. Read"), "{}", events[0].0);
 }
 
 #[test]

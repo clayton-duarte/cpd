@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::row::{self, Attempt};
-use super::{Env, SubmitArgs};
+use super::{Env, SubmitArgs, kind, span};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, HookOutcome, Operation, run_hook};
@@ -51,10 +51,18 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
         .clone()
         .ok_or_else(|| CpdError::bad_row(format!("Attempt {plan}/{id} is running with no base_sha")))?;
     let ahead = git::run::ok(&root, &["rev-list", "--count", &format!("{base}..HEAD")])?;
-    let review = env.store.read(|conn| crate::plan::jobs::load(conn, &plan)?.iter().find(|j| j.key == attempt.job).map(|j| j.review).ok_or_else(|| CpdError::bad_row(format!("Attempt {plan}/{id} has no Job {}", attempt.job))))?;
+    let job = env.store.read(|conn| {
+        crate::plan::jobs::load(conn, &plan)?
+            .into_iter()
+            .find(|j| j.key == attempt.job)
+            .ok_or_else(|| CpdError::bad_row(format!("Attempt {plan}/{id} has no Job {}", attempt.job)))
+    })?;
+    let review = job.review;
+    // An `open` or `update` Job needs no commit: the base may not have moved (§7.3 precondition 3, §7.7).
+    let cpd_job = matches!(job.kind.as_str(), "open" | "update");
     if review {
         require_review(&env, &plan, &id, &attempt.job, &base, ahead.trim() != "0")?;
-    } else if ahead.trim() == "0" {
+    } else if ahead.trim() == "0" && !cpd_job {
         return Err(CpdError::new(ErrorCode::NoCommits, "There is no commit on top of the base: commit your work, then submit again.")
             .with("attempt", id.to_string())
             .with("base_sha", base));
@@ -71,8 +79,19 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
             Ok((lead, crate::pr::start::tamper_bases(conn, &root, &repo, &pr_base)?))
         })?;
         git::tamper::check_over(&root, &lead, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), &base, &sha)?;
-        quick_check(&env, &plan, &id, &root, &lead)?
+        // The red tests of the `test` Jobs an `impl` Job needs are guarded the same way (§7.5, §7.7).
+        kind::guard_tests(&mut env, &plan, &job, &root, &lead, &base, &sha)?;
+        let tail = quick_check(&env, &plan, &id, &root, &lead)?;
+        // The kind's check (§7.3 precondition 6, §7.7): a `test` or `impl` Job's `[tests]`.
+        if kind::has_checks(&job) {
+            kind::check(&mut env, &plan, &id, &job, &root, &lead, &sha)?;
+        }
+        tail
     };
+    // An `open` or `update` Job's base check and Gate, in a span: the wait for a test slot and the Gate are not the Worker's time.
+    if cpd_job {
+        span::within(&mut env, &plan, &id, &job.key, "gate", |env| crate::pr::submit_checks(env, &plan, &id, &job, &root, &sha))?;
+    }
 
     // The Worker is the only one who moves its HEAD, and it is waiting for us: but the
     // compare-and-swap of §6.1 is on the HEAD that was checked.

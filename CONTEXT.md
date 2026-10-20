@@ -23,7 +23,7 @@ The phase where the Lead turns Requirements into a draft graph of Jobs and the U
 _Avoid_: breakdown, decomposition
 
 **Dispatch**:
-The phase that starts when the Plan is locked, in which PRs start, their Jobs are executed and merged, and each PR is opened after its Gate passes; it ends when every PR of the Plan is open.
+The phase that starts when the Plan is locked, in which PRs start, their Jobs are executed and merged, and each PR is opened by its open Job, whose submit runs the Gate; it ends when every PR of the Plan is open.
 _Avoid_: execution, run phase
 
 **PR** (phase):
@@ -65,18 +65,18 @@ The engine runs the Jobs.
 **Deploy** (stage):
 Mechanical checks, PR, Reviewing and Monitoring, Addressing; the end of phase `dispatch` and phase `deploy` until `done`.
 
-**Mechanical checks** (step):
-The Gate, run by `pr open` when the PR's `pr.gate` is `local`; else the repo's CI.
+**Mechanical checks** (step, changed hs-d340, hs-d341):
+The checks cpd runs at an Attempt's submit, by the Job's kind: for a test Job the red tests (they build and fail), for an impl Job the same tests (they pass) and the red-test guard, and for an open or update Job the Lead Branch's fit with its base (merged only on a conflict) and the Gate, run when the PR's `pr.gate` is `local`; else the repo's CI. They are checks of the Job, so the Worker fixes what they report; the Lead runs none of them. `pr open` is the repair.
 
 **PR** (step):
-The pull request is opened.
+The pull request is opened, by the PR's open Job's merge (`pr open` is the repair).
 
 **Reviewing** (step, with Monitoring):
 People, the User's review bot and CI review the open pull request; the engine polls it (`pr-feedback`). There is no local review before the Gate (hs-d171, supersedes hs-d77); a final review Job stays optional.
 _Avoid_: pre-Gate review
 
 **Addressing** (step):
-Feedback Jobs are appended, the Plan returns to Dispatching, then `pr rebase`.
+Feedback Jobs are appended and the Plan returns to Dispatching; an update Job, which cpd queues when one of them is queued (or when the pull request conflicts with its base), then brings the pull request up to date. `pr rebase` and `pr push` are the repair.
 
 ## Work units
 
@@ -109,15 +109,27 @@ The part of a Plan in one repository, tied to its Lead Branch: a repo, a base br
 _Avoid_: sub-plan, track, slice, repo plan
 
 **Job** (changed):
-A self-contained unit of work defined by a Spec, executable by a fresh agent session with no other context. It belongs to exactly one PR of its Plan.
+A self-contained unit of work defined by a Spec, executable by a fresh agent session with no other context. It belongs to exactly one PR of its Plan, and has a kind.
 _Avoid_: card, task, step
+
+**Job kind** (new, hs-d340, hs-d341):
+What a Job is for, and so which checks its submit runs: `work` (the default: any Job, as before), `docs` (the contract amended first), `test` (red tests, written from the docs by a Worker other than the implementer, with stubs so the branch builds; its Spec names its `tests` and the `test_files` that hold them), `impl` (makes the tests of the test Jobs it needs pass, and may not change their files unless the Lead approved the path with `job approve-tests`), and `open` and `update`, which only cpd adds. A PR's shape (`pr add --shape tdd|docs|config`, stored and enforced) lays out its kinds: `tdd` is docs, tests, impl; `docs` and `config` have no test Job. A repo needs a `[tests]` table in its `.config/cpd.toml` before its PRs can be `tdd`; the Lead adds it.
+_Avoid_: type, category, role
+
+**Open Job** (new, hs-d340):
+The last Job of every started PR, added by cpd (engine E4), never by the Lead: a Job of kind `open` that is Ready when every other Job of its PR is merged or cancelled. Its Worker merges the PR's base into the Lead Branch only if the two conflict, resolves the conflicts and submits; cpd then runs the Gate in a test slot, pushes the Lead Branch and opens the pull request, ready, never a draft. A Gate failure fails the Job like any other. `pr open` is kept as the repair for a failed Job or a down engine.
+_Avoid_: opener, release Job
+
+**Update Job** (new, hs-d340):
+A Job of kind `update`, added by cpd for a pull request that is already open, for one of two causes: the pull request conflicts with its base (never for a base that merely moved), or a fix Job of the PR (failed checks, review comments) was queued. Like the open Job it merges the base only on a conflict, then cpd runs the Gate and pushes; so every change to an open PR goes the same way. `pr rebase` and `pr push` are the repair.
+_Avoid_: sync Job, rebase Job
 
 **Spec**:
 The complete, guess-free description of a Job: goal, context, files it touches, acceptance criteria and what is out of scope.
 _Avoid_: brief, prompt, ticket
 
 **Review Job** (new: B2):
-A Job added with `job add --review`, whose Worker is a fork of the Plan's Lead, so it knows the intention. It depends on every Job of its PR that exists when it is added, reads the Lead Branch's diff against the base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<job>.md`. It commits nothing and ends Merged with no change to the Lead Branch; the Lead turns the findings into fix Jobs before `pr open`. Optional: the Lead adds one only when it makes sense. Not a Reviewer, and no Gate or verdict belongs to it.
+A Job added with `job add --review`, whose Worker is a fork of the Plan's Lead, so it knows the intention. It depends on every Job of its PR that exists when it is added, reads the Lead Branch's diff against the base and the Plan's Specs, and writes its findings to `run/<plan>/reviews/<job>.md`. It commits nothing and ends Merged with no change to the Lead Branch; the Lead turns the findings into fix Jobs before the PR's open Job runs, so it registers a stub draft for them when it adds the review Job (a draft holds the open Job). Optional: the Lead adds one only when it makes sense. Not a Reviewer, and no Gate or verdict belongs to it.
 _Avoid_: reviewer, verdict, code review Job
 
 **Dependency**:
@@ -133,7 +145,7 @@ The durable, append-only record of every Plan's Jobs, Dependencies, Attempts, Pl
 _Avoid_: database, board, tracker
 
 **Draft**:
-A Job the User has not approved yet. The engine never runs it, and it is editable and cancellable. Every Job is a draft in the Plan phase; in a running Plan (any phase after it) the Lead adds its later batches as drafts (`job add --draft`), so that the Plan view shows every planned batch before it is approved, and the User approves each batch through a Plan review of the drafts, which queues them. A PR with a draft never opens by itself.
+A Job the User has not approved yet. The engine never runs it, and it is editable and cancellable. Every Job is a draft in the Plan phase; in a running Plan (any phase after it) the Lead adds its later batches as drafts (`job add --draft`), so that the Plan view shows every planned batch before it is approved, and the User approves each batch through a Plan review of the drafts, which queues them. A PR with a draft never opens by itself: its open Job waits for the draft.
 _Avoid_: proposed, pending Job
 
 **Locked**:
@@ -209,7 +221,7 @@ _Avoid_: blocker, ask
 ## Outcomes
 
 **Gate** (changed):
-The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd only at the PR level: on a PR's Lead Branch, in its Lead worktree, before `pr open`, `pr push` and `pr rebase` push, and only when the PR's Policy sets `pr.gate = "local"`; with cpd's default, `ci`, the repo's CI is the check (hs-d292). Never per Job or per merge (R19).
+The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd only at the PR level: on a PR's Lead Branch, in a gate worktree, at the submit of the PR's open or update Job (before cpd pushes), and in `pr open`, `pr push` and `pr rebase`, the repair, before they push, and only when the PR's Policy sets `pr.gate = "local"`; with cpd's default, `ci`, the repo's CI is the check (hs-d292). Never per Job (a Job's submit runs the quick check, and a test or impl Job's own tests) or per merge (R19).
 _Avoid_: CI, checks
 
 **Quick check** (new):

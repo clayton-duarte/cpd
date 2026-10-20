@@ -25,7 +25,6 @@ fn phrase(reason: Reason) -> &'static str {
         Reason::ChecksFailed => "checks failed",
         Reason::ChangesRequested => "changes requested",
         Reason::Closed => "closed without a merge",
-        Reason::Conflict => "merge conflict",
     }
 }
 
@@ -38,7 +37,8 @@ pub(super) fn text(plan: &str, key: &str, number: i64, reasons: &[Reason]) -> St
     )
 }
 
-/// The Event (§5.2 `pr-feedback`): `conflict` is true exactly when `conflict` is in `reasons`.
+/// The Event (§5.2 `pr-feedback`). Its `conflict` field is always false: a conflict is no reason since hs-d340 (the field stays, the
+/// Event's data shape being fixed by a table `core/src/events` and its tests own).
 pub(super) fn event(text: String, key: &str, pull: &PullRequest, reasons: &[Reason]) -> NewEvent {
     let reasons: Vec<&str> = reasons.iter().map(|r| r.as_str()).collect();
     NewEvent::pr_feedback(
@@ -51,7 +51,7 @@ pub(super) fn event(text: String, key: &str, pull: &PullRequest, reasons: &[Reas
         &pull.review_decision,
         &pull.mergeable,
         &pull.merge_state,
-        reasons.contains(&Reason::Conflict.as_str()),
+        false,
         &reasons,
     )
 }
@@ -97,14 +97,14 @@ mod tests {
 
     #[test]
     fn the_text_names_every_reason_and_the_command() {
-        let all = [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed, Reason::Conflict];
+        let all = [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed];
         assert_eq!(
             text("pay", "api", 7, &all),
-            "PR api (#7) of Plan pay needs attention: checks failed, changes requested, closed without a merge, merge conflict. \
+            "PR api (#7) of Plan pay needs attention: checks failed, changes requested, closed without a merge. \
              Read the details with cpd pr view --plan pay --pr api."
         );
         assert!(text("pay", "api", 7, &all[..1]).contains("needs attention: checks failed. Read"));
-        assert!(text("pay", "api", 7, &all[3..]).contains("needs attention: merge conflict. Read"));
+        assert!(text("pay", "api", 7, &all[2..]).contains("needs attention: closed without a merge. Read"));
     }
 
     /// The `data` of the Event.
@@ -134,16 +134,13 @@ mod tests {
     }
 
     #[test]
-    fn the_data_carries_the_mergeable_state_and_a_conflict_flag_true_exactly_for_the_reason() {
+    fn the_data_carries_the_mergeable_state_and_a_conflict_flag_that_is_always_false() {
         let url = "https://github.com/acme/pay/pull/7";
         assert_eq!(
-            data("api", &pull("conflicting", "dirty"), &[Reason::ChecksFailed, Reason::Conflict]),
+            data("api", &pull("conflicting", "dirty"), &[Reason::ChecksFailed]),
             json!({"pr": "api", "number": 7, "url": url, "state": "open", "checks": "failed", "review_decision": "none",
-                   "mergeable": "conflicting", "merge_state": "dirty", "conflict": true, "reasons": ["checks_failed", "conflict"]})
+                   "mergeable": "conflicting", "merge_state": "dirty", "conflict": false, "reasons": ["checks_failed"]})
         );
-        // Still conflicting, but told for another reason: the flag follows the reasons.
-        let still = data("api", &pull("conflicting", "dirty"), &[Reason::ChecksFailed]);
-        assert_eq!((&still["conflict"], &still["mergeable"]), (&json!(false), &json!("conflicting")));
         assert_eq!(data("api", &pull("unknown", "unknown"), &[Reason::Closed])["conflict"], json!(false));
     }
 }

@@ -12,8 +12,11 @@
 //! writes is what it checked.
 
 mod add;
+mod approve;
 mod cancel;
 mod edit;
+pub mod guard;
+pub mod open;
 mod retry;
 mod show;
 mod spec;
@@ -49,6 +52,8 @@ pub enum Command {
     Retry(RetryArgs),
     /// Mark a Job urgent, only when the User asks (§5.8)
     Urgent(UrgentArgs),
+    /// The Lead approves an impl Job to change red tests (§5.9)
+    ApproveTests(ApproveArgs),
     /// Start one Ready Job now (§5.5)
     Dispatch(driver::DispatchArgs),
     /// List the Jobs (§5.6)
@@ -160,6 +165,21 @@ pub struct UrgentArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct ApproveArgs {
+    /// The impl Job
+    #[arg(value_name = "job")]
+    key: JobKey,
+    /// A guarded path, or a directory ending in `/` (repeatable)
+    #[arg(long = "path", value_name = "p", required = true)]
+    paths: Vec<String>,
+    /// Why
+    #[arg(long, value_name = "text")]
+    reason: Text,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct ListArgs {
     /// Only Jobs in this status (repeatable)
     #[arg(long = "status", value_name = "status", value_parser = PossibleValuesParser::new(STATUSES))]
@@ -184,6 +204,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Cancel(args) => cancel::cancel(args),
         Command::Retry(args) => retry::retry(args),
         Command::Urgent(args) => urgent::urgent(args),
+        Command::ApproveTests(args) => approve::approve(args),
         Command::Dispatch(args) => driver::dispatch(args),
         Command::List(args) => show::list(args),
         Command::Show(args) => show::show(args),

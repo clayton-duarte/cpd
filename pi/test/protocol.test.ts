@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { installedIdentity } from "../lib/cpd.ts";
+import { LEAD_MESSAGES } from "../lib/delivery.ts";
 import { KINDS, PROTOCOL } from "../lib/event.ts";
 import { ev, Fixture, planShow, waitFor } from "./fake.ts";
 
@@ -20,6 +21,14 @@ test("the adapter's KINDS are exactly core's Event kinds", () => {
   const core = [...block[1]!.matchAll(/=\s*"([a-z-]+)"\s*,/g)].map((m) => m[1]!);
   assert.ok(core.length > 0, "no kinds read from core");
   assert.deepEqual([...KINDS].sort(), [...core].sort(), "pi/lib/event.ts KINDS differs from core's kinds: update it, and raise PROTOCOL");
+});
+
+test("hs-d496: the protocol is 8, and review-opened and review-closed are known kinds that are delivered to nobody", () => {
+  assert.equal(PROTOCOL, 8);
+  for (const kind of ["review-opened", "review-closed"]) {
+    assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is not in KINDS`);
+    assert.equal((LEAD_MESSAGES as Record<string, unknown>)[kind], undefined, `${kind}: delivery none`);
+  }
 });
 
 // ---- the adapter's check (commands.md §15.2, step 0) ----

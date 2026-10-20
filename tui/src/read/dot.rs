@@ -71,14 +71,14 @@ impl From<Urgency> for Dot {
 /// The kinds a Plan's own Lead shows besides the ones linked to it (§17, "Which items fill which row").
 const PLAN_KINDS: [Kind; 3] = [Kind::PlanReview, Kind::JobStuck, Kind::PrReady];
 
-/// The urgency of the most urgent of the `visible` items that fill the dot of `session`: its `dialog` and `unread`
+/// The urgency of the most urgent of the `visible` items that fill the dot of `session`: its `dialog`, `unread` and `review-waiting`
 /// items (`inbox_items.session`) and, when it is the Lead of `lead_of`, the Plan's `plan-review`, `job-stuck` and
 /// `pr-ready` items (§17; `pr-failing` and `pr-changes` are no longer opened and fill no dot, hs-d470). `visible` is the open items that are neither snoozed nor dismissed.
 pub fn urgency(visible: &[Item], session: &SessionId, lead_of: Option<&PlanId>) -> Option<Urgency> {
     visible
         .iter()
         .filter(|i| match i.kind {
-            Kind::Dialog | Kind::Unread => i.session.as_ref() == Some(session),
+            Kind::Dialog | Kind::Unread | Kind::ReviewWaiting => i.session.as_ref() == Some(session),
             k => lead_of.is_some() && i.plan.as_ref() == lead_of && PLAN_KINDS.contains(&k),
         })
         .map(|i| i.urgency)

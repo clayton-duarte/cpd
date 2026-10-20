@@ -54,12 +54,24 @@ fn backing_off(conn: &Connection, plan: &PlanId, key: &JobKey, now: OffsetDateTi
 
 /// Ready (§3.2): `queued`, in a Plan in `dispatch` or `deploy`, whose PR is `dispatch`
 /// or `open`, every Dependency `merged`. `driver::start`'s `require_ready` says the same.
+/// An `open` or `update` Job has no Dependency rows: its rule is derived from the PR's other Jobs (§3.2),
+/// which are the Jobs that are neither `open` nor `update` (those do not count each other). An `open` Job is
+/// Ready when its PR is `dispatch`, none of them is `draft`, `queued`, `running` or `failed`, and one is `merged`;
+/// an `update` Job when its PR is `open` and none of them is `queued` or `running`.
 /// The `workers` step counts these rows too (the StatusBar's `W waiting`).
 pub(super) const READY: &str = "SELECT j.plan, j.key, j.urgent FROM jobs j JOIN plans p ON p.id = j.plan
   JOIN prs r ON r.plan = j.plan AND r.key = j.pr
   WHERE j.status = 'queued' AND p.phase IN ('dispatch', 'deploy') AND r.status IN ('dispatch', 'open')
     AND NOT EXISTS (SELECT 1 FROM dependencies d JOIN jobs n ON n.plan = d.plan AND n.key = d.needs
                      WHERE d.plan = j.plan AND d.job = j.key AND n.status <> 'merged')
+    AND (j.kind <> 'open' OR (r.status = 'dispatch'
+         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+                           AND o.status NOT IN ('merged', 'cancelled'))
+         AND EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+                       AND o.status = 'merged')))
+    AND (j.kind <> 'update' OR (r.status = 'open'
+         AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.plan = j.plan AND o.pr = j.pr AND o.key <> j.key AND o.kind NOT IN ('open', 'update')
+                           AND o.status IN ('queued', 'running'))))
   ORDER BY j.urgent DESC, j.seq";
 
 pub(super) fn run(engine: &mut Engine) {

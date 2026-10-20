@@ -38,6 +38,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job cancel` | Cancel a Job (§5.3) | Lead | |
 | `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead | |
 | `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
+| `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |
 | `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
 | `cpd job list` | List the Jobs (§5.6) | Lead | |
 | `cpd job show` | Show a Job and its Attempts (§5.7) | Lead | |
@@ -60,6 +61,10 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
+| `cpd review` | Plannotator sessions a Session has open (hs-d496) | | |
+| `cpd review open` | Record an open plannotator session | Lead, Manager | |
+| `cpd review close` | Close one or every open plannotator session | Lead, Manager | |
+| `cpd review list` | List the open plannotator sessions of a Session | Lead, Manager | |
 | `cpd policy` | Policies (commands.md §22) | | |
 | `cpd policy show` | Show the resolved policy of a key (§22.1) | Lead, Manager, Worker | |
 | `cpd session` | Sessions and their tmux panes (commands.md §10) | | |

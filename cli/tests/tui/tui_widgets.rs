@@ -1103,6 +1103,106 @@ fn merge_in_the_menu_opens_the_same_popup_as_the_merge_icon() {
     assert_eq!(popup[at + 1..at + 4], ["-E", "-c", CLIENT], "{popup:?}");
 }
 
+// ---------- a merge in progress (hs-d495): the marker, the spinner and no click ----------
+
+/// The second line of the PR named `name` (` acme/repo#9`) on `screen`, if the screen has it.
+fn second_line_of(screen: &[String], name: &str) -> Option<String> {
+    let first = screen.iter().position(|r| r.starts_with(name))?;
+    screen.get(first + 1).cloned()
+}
+
+/// The cell at the end of the second line of `name` is a spinner frame.
+fn spinning(screen: &[String], name: &str) -> bool {
+    second_line_of(screen, name).is_some_and(|line| palette::SPINNER.iter().any(|frame| line.ends_with(frame)))
+}
+
+/// The cell at the end of the second line of `name` is the merge icon.
+fn has_icon(screen: &[String], name: &str) -> bool {
+    second_line_of(screen, name).is_some_and(|line| line.ends_with('\u{F062D}'))
+}
+
+#[test]
+fn a_live_merge_marker_shows_the_spinner_for_that_pull_request_alone_and_it_cannot_be_clicked_a_stale_one_changes_nothing() {
+    let env = pane_env();
+    clean_prs(&env);
+    let view = cockpit(&env);
+    let shown = wait_for_screen(&env, &view, "the merge icons", |s| has_icon(s, " acme/repo#9") && has_icon(s, " acme/repo#20"));
+    fake_tmux(&env);
+    let width = u16::try_from(tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<usize>().unwrap()).unwrap();
+    let (nine, twenty) = (first_line_of(&shown, " acme/repo#9"), first_line_of(&shown, " acme/repo#20"));
+
+    // A merge of #9 runs (a live marker, written after the view started: no Event of the store tells it) and the marker of
+    // #20 is stale (a dead pid).
+    crate::tui_merge::put_marker(&env, "acme__repo__9.json", std::process::id());
+    crate::tui_merge::put_marker(&env, "acme__repo__20.json", crate::tui_merge::dead_pid());
+    let shown = wait_for_screen(&env, &view, "the spinner of #9", |s| spinning(s, " acme/repo#9"));
+    assert!(!second_line_of(&shown, " acme/repo#9").unwrap().contains('\u{F062D}'), "the spinner is instead of the icon: {shown:?}");
+    assert!(has_icon(&shown, " acme/repo#20"), "a stale marker is ignored: the icon stays: {shown:?}");
+    assert!(!spinning(&shown, " acme/web#4") && !has_icon(&shown, " acme/web#4"), "#4 is blocked: no icon, no spinner");
+
+    // A click on the spinner does nothing: no popup, no Lead (no `session open`)
+    let before = moved_events(&env);
+    click(&env, &view, width - 1, nine + 1);
+    // The icon of the stale one opens its popup, as ever: a positive signal that the click on the spinner was handled first
+    click(&env, &view, width - 1, twenty + 1);
+    wait_until("the popup of #20", || popups(&env).len() == 1);
+    // time-claim: over the next redraws no second popup opens
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
+    assert_eq!(popups(&env)[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#20' --client '{CLIENT}'"));
+    assert_eq!(moved_events(&env), before, "no `session open` ran");
+
+    // The menu of #9: Merge is shown with the spinner and cannot be selected; the stale one's menu is as ever
+    right_click(&env, &view, 3, nine);
+    let screen = wait_for_screen(&env, &view, "the menu of #9", |s| menu_labels(s).len() == 2);
+    let labels = menu_labels(&screen);
+    assert!(labels[0].contains("Merge") && palette::SPINNER.iter().any(|f| labels[0].contains(f)), "Merge with the spinner: {labels:?}");
+    assert_eq!(labels[1], "Copy Link", "{labels:?}");
+    tmux_out(&env, &["send-keys", "-t", &view, "Enter"]);
+    // Copy Link's Down and Enter is the positive signal that the Enter on Merge was handled before it
+    tmux_out(&env, &["send-keys", "-t", &view, "Down", "Enter"]);
+    common::wait_some("the copy", common::WAIT, || {
+        let copies: Vec<Vec<String>> = env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "set-buffer")).collect();
+        if copies.is_empty() { Err("no copy yet".to_owned()) } else { Ok(copies) }
+    });
+    assert_eq!(popups(&env).len(), 1, "Enter on the busy Merge opened no popup: {:?}", popups(&env));
+    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
+    right_click(&env, &view, 3, twenty);
+    let screen = wait_for_screen(&env, &view, "the menu of #20", |s| !menu_labels(s).is_empty());
+    assert_eq!(menu_labels(&screen), ["Merge", "Copy Link", "Go to Lead"], "the stale marker changes nothing");
+    tmux_out(&env, &["send-keys", "-t", &view, "Escape"]);
+    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
+
+    // The merge ends (the action removes its marker): the icon is back, and its click opens the popup
+    std::fs::remove_file(crate::tui_merge::markers(&env).join("acme__repo__9.json")).unwrap();
+    wait_for_screen(&env, &view, "the icon of #9 back", |s| has_icon(s, " acme/repo#9") && !spinning(s, " acme/repo#9"));
+    click(&env, &view, width - 1, nine + 1);
+    wait_until("the popup of #9", || popups(&env).len() == 2);
+    assert_eq!(popups(&env)[1].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
+}
+
+#[test]
+fn a_view_started_while_a_merge_runs_shows_its_spinner_at_once_on_the_owned_row_too() {
+    let env = pane_env();
+    clean_prs(&env);
+    crate::tui_merge::put_marker(&env, "acme__repo__20.json", std::process::id());
+    let view = cockpit(&env);
+    let shown = wait_for_screen(&env, &view, "the spinner of #20", |s| spinning(s, " acme/repo#20"));
+    assert!(has_icon(&shown, " acme/repo#9"), "only #20 merges: {shown:?}");
+    // the owned row's click on the spinner opens neither the popup nor the Lead
+    fake_tmux(&env);
+    let width = u16::try_from(tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<usize>().unwrap()).unwrap();
+    let before = moved_events(&env);
+    click(&env, &view, width - 1, first_line_of(&shown, " acme/repo#20") + 1);
+    click(&env, &view, width - 1, first_line_of(&shown, " acme/repo#9") + 1);
+    wait_until("the popup of #9", || popups(&env).len() == 1);
+    // time-claim: over the next redraws no popup and no Lead follows the click on #20's spinner
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
+    assert_eq!(popups(&env)[0].last().unwrap(), &format!("cpd tui view merge 'acme/repo#9' --client '{CLIENT}'"));
+    assert_eq!(moved_events(&env), before, "no `session open` ran");
+}
+
 // ---------- the legend ----------
 
 fn legend_buffer() -> Buffer {

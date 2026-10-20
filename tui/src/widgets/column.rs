@@ -26,7 +26,8 @@ pub struct Hit {
     pub area: Rect,
     /// The `󰏌` cell, inside `area`.
     pub arrow: Position,
-    /// The merge icon's cell, inside `area`, when the PR shows one.
+    /// The merge icon's cell, inside `area`, when the PR shows one, or the spinner's while its merge runs: no click on
+    /// it reaches the Lead.
     pub icon: Option<Position>,
     /// The Lead of the owner: `cpd session open <lead>`.
     pub lead: SessionId,
@@ -50,6 +51,8 @@ pub struct MergeIcon {
 pub enum PrItem {
     /// The `merge` popup: only on a row that shows the merge icon.
     Merge,
+    /// A merge of this pull request is running (hs-d495): the `Merge` entry, shown with the spinner and not selectable.
+    Merging,
     /// `tmux set-buffer -w -- <url>`.
     CopyLink,
     /// `session open` of the owner's Lead, then the focus on the chat: only on a PR a Plan owns.
@@ -59,10 +62,14 @@ pub enum PrItem {
 impl crate::menu::Entry for PrItem {
     fn label(self) -> &'static str {
         match self {
-            PrItem::Merge => "Merge",
+            PrItem::Merge | PrItem::Merging => "Merge",
             PrItem::CopyLink => "Copy Link",
             PrItem::GoToLead => "Go to Lead",
         }
+    }
+
+    fn busy(self) -> bool {
+        self == PrItem::Merging
     }
 }
 
@@ -76,13 +83,16 @@ pub struct PrRow {
     pub url: String,
     /// The row shows the merge icon.
     pub clean: bool,
+    /// A merge of the pull request is running (hs-d495): the menu's Merge entry is [`PrItem::Merging`].
+    pub merging: bool,
     pub lead: Option<SessionId>,
 }
 
 impl PrRow {
-    /// The menu's entries, in order: Merge (a clean row), Copy Link, Go to Lead (an owned one).
+    /// The menu's entries, in order: Merge (a clean row; busy while its merge runs), Copy Link, Go to Lead (an owned one).
     pub fn items(&self) -> Vec<PrItem> {
-        [self.clean.then_some(PrItem::Merge), Some(PrItem::CopyLink), self.lead.as_ref().map(|_| PrItem::GoToLead)]
+        let merge = if self.merging { PrItem::Merging } else { PrItem::Merge };
+        [self.clean.then_some(merge), Some(PrItem::CopyLink), self.lead.as_ref().map(|_| PrItem::GoToLead)]
             .into_iter()
             .flatten()
             .collect()
@@ -180,7 +190,8 @@ fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     }
     if pr.clean {
         spans.push(" ".repeat(width.saturating_sub(shown + 1)).into());
-        spans.push(MERGE.into());
+        // While its merge runs the cell is the spinner (hs-d495), turning with the shared clock.
+        spans.push(if pr.merging { palette::SPINNER[frame % palette::SPINNER.len()] } else { MERGE }.into());
     }
     let first = Line::from(vec![bold(name), gap.into(), link::CUE.into()]);
     let second = Line::from(spans);
@@ -283,10 +294,12 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
             pull: format!("{}#{}", pr.repo, pr.number),
             url: pr.url.clone(),
             clean: pr.clean,
+            merging: pr.clean && pr.merging,
             lead: pr.lead.clone(),
         });
         let icon = arrow_x.filter(|_| pr.clean).map(|x| Position::new(x, y + 1));
-        if let Some(at) = icon {
+        // The spinner is no merge icon: a click on it opens no popup.
+        if let Some(at) = icon.filter(|_| !pr.merging) {
             icons.push(MergeIcon { area: Rect::new(at.x, at.y, 1, 1), pull: format!("{}#{}", pr.repo, pr.number) });
         }
         if let (Some(lead), Some(x)) = (&pr.lead, arrow_x) {
@@ -370,6 +383,7 @@ mod tests {
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
             lead_working: false,
+            merging: false,
         }
     }
 
@@ -850,5 +864,64 @@ mod tests {
         assert!(d.hits.iter().all(|h| h.area.y > 4), "no click on the title row: {:?}", d.hits);
         assert!(d.rows.iter().all(|r| r.area.y > 4), "no menu on the title row: {:?}", d.rows);
         assert!(d.icons.iter().all(|i| i.area.y > 4));
+    }
+
+    // ---- a merge in progress (hs-d495): the spinner instead of the merge button, and no click ----
+
+    /// A clean PR, owned or not, whose merge is running.
+    fn merging(number: i64, lead: Option<&str>) -> OpenPr {
+        OpenPr { clean: true, merging: true, ..pr(number, lead) }
+    }
+
+    #[test]
+    fn a_merging_prs_merge_cell_is_the_spinner_frame_in_place_of_the_icon_and_turns_with_the_frame() {
+        let (clean, running) = (OpenPr { clean: true, ..pr(7, Some("l-a")) }, merging(7, Some("l-a")));
+        for frame in 0..palette::SPINNER.len() {
+            let (line, _) = second_at(&running, 30, frame);
+            let (icon_line, _) = second_at(&clean, 30, frame);
+            assert!(!line.contains(MERGE), "frame {frame}: no merge icon while it merges: {line:?}");
+            assert_eq!(line, icon_line.replace(MERGE, palette::SPINNER[frame]), "frame {frame}: the spinner is the icon's cell, the rest of the row as before");
+            assert_eq!(line.chars().count(), 30, "the last column");
+        }
+        assert_ne!(second_at(&running, 30, 1).1, second_at(&running, 30, 2).1, "the frame is what changes between two draws");
+    }
+
+    #[test]
+    fn a_click_on_the_spinner_does_nothing_it_is_no_merge_icon_and_not_the_owners_row_either() {
+        let (_, d) = at_frame(30, 20, &[merging(7, Some("l-a")), merging(8, None)], 0, 3);
+        assert_eq!(d.icons, [], "no merge icon to click: the popup of a running merge does not open");
+        let [hit] = &d.hits[..] else { panic!("{:?}", d.hits) };
+        assert!(!hit.contains(Position::new(29, 7)), "nor does the click on the spinner open the Lead");
+        assert!(hit.contains(Position::new(28, 7)), "the rest of the owned row still does");
+    }
+
+    #[test]
+    fn only_the_merging_pull_request_shows_the_spinner_the_others_keep_their_icon_and_its_click() {
+        let open = [merging(7, Some("l-a")), OpenPr { clean: true, ..pr(8, Some("l-b")) }, OpenPr { clean: true, ..pr(9, None) }];
+        let (buf, d) = at_frame(30, 20, &open, 0, 4);
+        assert_eq!(buf[(29, 7)].symbol(), palette::SPINNER[4], "#7 merges");
+        assert_eq!((buf[(29, 9)].symbol(), buf[(29, 11)].symbol()), (MERGE, MERGE), "#8 and #9 do not");
+        assert_eq!(
+            d.icons,
+            [
+                MergeIcon { area: Rect::new(29, 9, 1, 1), pull: "acme/repo#8".to_owned() },
+                MergeIcon { area: Rect::new(29, 11, 1, 1), pull: "acme/repo#9".to_owned() },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_row_whose_merge_is_running_offers_merge_busy_and_the_others_offer_it_as_before() {
+        let items = |p: OpenPr| {
+            let (_, d) = scrolled(30, 20, &[p], 0);
+            let [row] = &d.rows[..] else { panic!("{:?}", d.rows) };
+            (row.merging, row.items())
+        };
+        assert_eq!(items(merging(7, Some("l-a"))), (true, vec![PrItem::Merging, PrItem::CopyLink, PrItem::GoToLead]));
+        assert_eq!(items(merging(7, None)), (true, vec![PrItem::Merging, PrItem::CopyLink]));
+        assert_eq!(items(OpenPr { clean: true, ..pr(7, Some("l-a")) }), (false, vec![PrItem::Merge, PrItem::CopyLink, PrItem::GoToLead]));
+        assert_eq!(crate::menu::Entry::label(PrItem::Merging), "Merge");
+        assert!(crate::menu::Entry::busy(PrItem::Merging), "shown with the spinner, not selectable");
+        assert!(![PrItem::Merge, PrItem::CopyLink, PrItem::GoToLead].into_iter().any(crate::menu::Entry::busy));
     }
 }

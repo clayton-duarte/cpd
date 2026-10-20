@@ -152,7 +152,14 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     assert!(has_var(vars, &format!("CPD_SESSION={id}")), "CPD_SESSION is not the Manager's Session");
     assert!(has_var(vars, &format!("CPD_HOME={}", env.cpd_home().display())), "CPD_HOME is not this env's");
     assert_eq!(var_names(vars, "CPD_PLAN"), Vec::<&str>::new(), "a Manager has no Plan");
-    assert_eq!(var_names(vars, "PLANNOTATOR_"), ["PLANNOTATOR_UPDATE_CHECK"], "the only plannotator variable of a Manager");
+    let mut names = var_names(vars, "PLANNOTATOR_");
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        ["PLANNOTATOR_PORT", "PLANNOTATOR_REMOTE", "PLANNOTATOR_UPDATE_CHECK", "PLANNOTATOR_URL_HOST"],
+        "the plannotator variables of a Manager (hs-d496)"
+    );
+    assert!(has_var(vars, "PLANNOTATOR_REMOTE=1"), "a Manager's pi is remote");
     let calls = env.calls("pi");
     assert_eq!(calls.len(), 1);
     let argv = &calls[0];
@@ -195,7 +202,13 @@ fn a_managers_pi_gets_no_plannotator_variable_from_its_callers() {
     let id = out["manager"]["session"].as_str().unwrap().to_owned();
 
     let envs = pi_envs(&env, &id, 1);
-    assert_eq!(var_names(&envs[0], "PLANNOTATOR_"), ["PLANNOTATOR_UPDATE_CHECK"]);
+    let mut names = var_names(&envs[0], "PLANNOTATOR_");
+    names.sort_unstable();
+    assert_eq!(names, ["PLANNOTATOR_PORT", "PLANNOTATOR_REMOTE", "PLANNOTATOR_UPDATE_CHECK", "PLANNOTATOR_URL_HOST"]);
+    // The caller's values are replaced by cpd's: remote, and a port of the range, not the caller's `1`.
+    assert!(has_var(&envs[0], "PLANNOTATOR_REMOTE=1"));
+    assert!(!has_var(&envs[0], "PLANNOTATOR_PORT=1"), "the caller's port is not the Manager's");
+    assert!(!envs[0].lines().any(|l| l.starts_with("PLANNOTATOR_DATA_DIR=")));
 }
 
 #[test]

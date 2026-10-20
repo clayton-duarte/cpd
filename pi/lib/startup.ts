@@ -11,6 +11,7 @@ import { followerHooks } from "./handle.ts";
 import type { Host } from "./host.ts";
 import type { Ctx } from "./pi.ts";
 import { ENTRY_TYPE, highestReview, REVIEW_LABEL, reviewsFromEntries } from "./plan-review.ts";
+import { createTracker, type Tracker } from "./pntrack.ts";
 import { parseResult } from "./plannotator.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage } from "./reload.ts";
 import { guardOf } from "./reload-command.ts";
@@ -21,9 +22,12 @@ import { registerUpdates } from "./turns.ts";
 
 // Start-up and shutdown (§15.2).
 
+/** The tracker of each active Lead or Manager run (§15 "Every plannotator session is tracked"). */
+export const trackers = new WeakMap<Run, Tracker>();
+
 export async function start(host: Host, ctx: Ctx, reason: string): Promise<void> {
   if (ctx.mode !== "tui") return;
-  host.rendering.load(host.env, { cwd: ctx.cwd, trusted: ctx.isProjectTrusted() });
+  host.rendering.load({ cwd: ctx.cwd, trusted: ctx.isProjectTrusted() });
   const id = host.env.CPD_SESSION;
   if (id === undefined || id === "") return;
   await stop(host); // a start without a shutdown (never seen) must not leave a second follower behind
@@ -177,6 +181,22 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     onLongRefusal: () => host.ctx?.ui.notify(LONG_REFUSAL_NOTICE),
     longRefusalMs: options.reload?.longRefusalMs,
   });
+
+  // Every plannotator session this Session opens is tracked (§15): reconcile now, then poll and on each plannotator result (adapter.ts).
+  if (info.role === "lead" || info.role === "manager") {
+    const tracker = createTracker({
+      session: id,
+      store: globalThis as Record<string, unknown>,
+      cpd: async (argv) => (await host.exec("cpd", argv, { timeout: host.timing.callTimeoutMs, signal: host.abort.signal })).stdout,
+      report: (m) => host.deliver("plannotator tracker", new CpdError("registry_changed", m)),
+    });
+    trackers.set(r, tracker);
+    const poll = () => void tracker.poll().catch((e) => host.deliver("plannotator tracker", e));
+    void tracker.start().catch((e) => host.deliver("plannotator tracker", e));
+    const timer = setInterval(poll, host.timing.pollMs);
+    timer.unref();
+    r.unsubscribe.push(() => clearInterval(timer));
+  }
 
   // Recovery of the reviews this session opened (§15.5), in the background.
   r.unsubscribe.push(

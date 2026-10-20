@@ -23,6 +23,7 @@ mod render;
 mod rename;
 mod review;
 pub mod row;
+pub(crate) mod shape;
 mod show;
 #[cfg(test)]
 mod sql_trace;

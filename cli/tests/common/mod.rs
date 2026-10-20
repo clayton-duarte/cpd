@@ -13,6 +13,8 @@
 //!   record their calls; `gh`, `pi`, `curl`, `wget` and `ssh` start as shims that
 //!   exit 97 (`no fake installed for <name>`), and no `GH_*`, `GITHUB_*`, `SSH_*`
 //!   or proxy variable reaches a command, so no test reaches pi or the network;
+//!   after it comes the test process's own `PATH` without any cpd wrapper directory
+//!   ([`inherited_path`]), so a run gives the same result from any Session;
 //! - temporary git repos with a fixed identity and no global or system config.
 //!
 //! Use it from a test file with `use crate::common;`.
@@ -23,8 +25,9 @@
 
 #![allow(dead_code)] // Every test file compiles this module whole and uses a subset of it.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::io;
@@ -38,6 +41,7 @@ use clap::Parser;
 use cpd::cli::Cli;
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
+use cpd_core::host::git_guard;
 use cpd_core::store::Store;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -198,6 +202,28 @@ const ENVS_DIR: &str = "/dev/shm";
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
+/// Whether `dir` holds a cpd `git` wrapper, of any version: they all start with [`git_guard::SIGNATURE`].
+fn is_wrapper_dir(dir: &Path) -> bool {
+    let Ok(file) = fs::File::open(dir.join("git")) else { return false };
+    let mut head = Vec::new();
+    file.take(git_guard::SIGNATURE.len() as u64).read_to_end(&mut head).is_ok_and(|_| head == git_guard::SIGNATURE.as_bytes())
+}
+
+/// `path` without the directories that hold a cpd `git` wrapper.
+pub fn without_wrapper_dirs(path: &OsStr) -> OsString {
+    std::env::join_paths(std::env::split_paths(path).filter(|dir| !is_wrapper_dir(dir))).expect("a PATH without some of its entries")
+}
+
+/// The test process's own `PATH` without any cpd wrapper directory, the one `PATH` every test builds on. A Session
+/// that runs the tests (a Lead running the Gate) has its `$CPD_HOME/bin` first on its `PATH`, and a test's `git` would
+/// find that wrapper where it looks for the real git: a fake `git` that execs "the real git" would exec the wrapper,
+/// which would find the fake again, for ever; a `PATH` narrowed to a few tools would hold the wrapper and no git.
+/// Read it here, never `std::env::var_os("PATH")`, to find a real tool or to build a `PATH`.
+pub fn inherited_path() -> &'static OsStr {
+    static PATH: OnceLock<OsString> = OnceLock::new();
+    PATH.get_or_init(|| without_wrapper_dirs(&std::env::var_os("PATH").unwrap_or_default()))
+}
+
 /// The tools a test never runs for real: `TestEnv::new` installs a deny shim for each.
 pub const DENIED_TOOLS: [&str; 5] = ["gh", "pi", "curl", "wget", "ssh"];
 
@@ -206,6 +232,28 @@ pub const WATCH_OK: &str = "echo '{\"ok\": true, \"started\": true, \"pane\": \"
 
 /// The exit status of a deny shim.
 pub const DENIED_EXIT: i32 = 97;
+
+/// Pull request `acme/pay` #812 as the poll's queries print it: open, titled `Pay the bills`, no review, no checks, with the
+/// `mergeable` and `mergeStateStatus` GitHub reports (`MERGEABLE`/`CLEAN`, `CONFLICTING`/`DIRTY`, `MERGEABLE`/`BEHIND`, ...).
+fn pay_node(mergeable: &str, merge_state: &str) -> String {
+    format!(
+        r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":812,"url":"https://github.com/acme/pay/pull/812","title":"Pay the bills","isDraft":false,"state":"OPEN","createdAt":"opened","mergedAt":null,"reviewDecision":null,"mergeable":"{mergeable}","mergeStateStatus":"{merge_state}","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+    )
+}
+
+/// The PR poll's search answer (commands.md §9.2) for the one pull request a fixture stored, [`pay_node`]: the one thing a test of the
+/// update Job varies is what GitHub says of its mergeability.
+pub fn pay_search(mergeable: &str, merge_state: &str) -> String {
+    format!(
+        r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}"#,
+        pay_node(mergeable, merge_state)
+    )
+}
+
+/// The poll's lookup answer (§7.6 step 3), which `pr open` also reads for the pull request it just opened: [`pay_node`] as alias `p0`.
+pub fn pay_lookup() -> String {
+    format!(r#"{{"data":{{"p0":{{"pullRequest":{}}}}}}}"#, pay_node("MERGEABLE", "CLEAN"))
+}
 
 /// The proxy variables, dropped from every command (either case).
 const PROXY_VARS: [&str; 3] = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"];
@@ -440,8 +488,7 @@ pub struct TestEnv {
 fn sqlite3() -> &'static Path {
     static SQLITE3: OnceLock<PathBuf> = OnceLock::new();
     SQLITE3.get_or_init(|| {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        std::env::split_paths(&path)
+        std::env::split_paths(inherited_path())
             .map(|dir| dir.join("sqlite3"))
             .find(|p| p.is_file())
             .unwrap_or_else(|| panic!("the test harness needs the sqlite3 CLI on PATH (its teardown reads the env's store); install sqlite3"))
@@ -606,9 +653,8 @@ impl TestEnv {
                 cmd.env_remove(&key);
             }
         }
-        let path = std::env::var_os("PATH").unwrap_or_default();
         let mut paths = vec![self.bin()];
-        paths.extend(std::env::split_paths(&path));
+        paths.extend(std::env::split_paths(inherited_path()));
         cmd.env("PATH", std::env::join_paths(paths).expect("PATH"))
             .env("CPD_HOME", self.cpd_home())
             .env("HOME", self.home())
@@ -1001,6 +1047,5 @@ impl Locale {
 
 /// The first `tmux` of the real `PATH`.
 pub fn real_tmux() -> std::path::PathBuf {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).map(|dir| dir.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH")
+    std::env::split_paths(inherited_path()).map(|dir| dir.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH")
 }

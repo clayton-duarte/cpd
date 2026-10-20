@@ -61,21 +61,31 @@ pub struct Watch {
     /// The modification time of the file at the last kill: a stall is killed
     /// once, a new one needs a new write.
     killed_at: Option<SystemTime>,
+    /// The last tick at which a check span was open (contract §7.7): the Worker's pi sat in `attempt submit`, silent, so the quiet
+    /// of the session file counts from then at the earliest. Without it a Gate that ran past the limit would be killed in the instant
+    /// the span ends, before its tool result was written.
+    span_seen_at: Option<SystemTime>,
 }
 
 impl Watch {
     pub fn new(stall_seconds: u32) -> Watch {
-        Watch { limit: Duration::from_secs(u64::from(stall_seconds)), killed_at: None }
+        Watch { limit: Duration::from_secs(u64::from(stall_seconds)), killed_at: None, span_seen_at: None }
     }
 
     /// One tick: when `file` has been quiet for the limit and pi (`pi`) is
     /// inside a tool call, kills pi's descendants and returns the driver-log
-    /// line; None when there is nothing to do.
-    pub fn check(&mut self, file: &Path, pi: u32) -> Option<String> {
+    /// line; None when there is nothing to do. While a check span is open
+    /// (`span_open`, §7.7) nothing is killed and the quiet starts over.
+    pub fn check(&mut self, file: &Path, pi: u32, span_open: bool) -> Option<String> {
         if self.limit.is_zero() {
             return None;
         }
+        if span_open {
+            self.span_seen_at = Some(SystemTime::now());
+            return None;
+        }
         let modified = std::fs::metadata(file).and_then(|m| m.modified()).ok()?;
+        let modified = self.span_seen_at.map_or(modified, |seen| modified.max(seen));
         let quiet = SystemTime::now().duration_since(modified).unwrap_or_default();
         if quiet < self.limit || self.killed_at == Some(modified) {
             return None;
@@ -210,6 +220,41 @@ mod tests {
         assert!(!in_tool_call(""));
         assert!(!in_tool_call(SESSION));
         assert!(!in_tool_call(&[SESSION, CALL, r#"{"type":"mess"#].join("\n")));
+    }
+
+    /// A session file that has been inside a tool call for an hour, and a stand-in for pi: a shell with a child of its own.
+    fn stalled() -> (tempfile::TempDir, std::path::PathBuf, std::process::Child) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("session.jsonl");
+        std::fs::write(&file, [SESSION, CALL].join("\n")).unwrap();
+        let hour_ago = SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(hour_ago).unwrap();
+        let pi = std::process::Command::new("sh").args(["-c", "sleep 30 & wait"]).spawn().unwrap();
+        // Its child exists once `sh` has forked it.
+        for _ in 0..200 {
+            if !descendants(pi.id()).is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        (dir, file, pi)
+    }
+
+    #[test]
+    fn a_stall_is_killed_unless_a_check_span_is_open() {
+        let (_dir, file, mut pi) = stalled();
+        let child = descendants(pi.id());
+        assert_eq!(child.len(), 1, "{child:?}");
+        let mut watch = Watch::new(60);
+        assert_eq!(watch.check(&file, pi.id(), true), None, "an open span is not a stall");
+        assert!(alive(child[0]));
+        // The span ended a moment ago: the quiet counts from the last tick that saw it, not from the file.
+        assert_eq!(watch.check(&file, pi.id(), false), None);
+        assert!(alive(child[0]));
+        // With no span ever seen, the same file is a stall.
+        let line = Watch::new(60).check(&file, pi.id(), false).expect("killed");
+        assert!(line.contains(&child[0].to_string()), "{line}");
+        pi.wait().unwrap();
     }
 
     #[test]

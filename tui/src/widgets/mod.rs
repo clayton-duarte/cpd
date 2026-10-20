@@ -76,7 +76,7 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
         |terminal, (mut store, home, config, prs, machine, sampler, follow)| {
             let tmux = Tmux::new(config.tmux.socket.clone());
             let log = ViewLog::of(&home, "widgets");
-            let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session, log: &log };
+            let lead = Opener { home: &home, run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session, log: &log };
             show(terminal, &mut store, follow, prs, machine, sampler, &lead)
         },
     )
@@ -89,6 +89,7 @@ const KINDS: &[Kind] = &[Kind::PrOpened, Kind::PlanCreated, Kind::SessionRegiste
 /// What a click on an owned PR row runs: `session open <lead>` through `run_command`, then the focus on the chat slot.
 /// `log` is `run/tui/widgets.log`.
 struct Opener<'a> {
+    home: &'a CpdHome,
     run_command: RunCommand,
     tmux: &'a Tmux,
     cockpit: &'a str,
@@ -106,6 +107,7 @@ struct PrMenu {
 fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(), CpdError>) {
     match item {
         PrItem::Merge => ("Merge Pull Request", crate::merge::open(opener.tmux, &row.pull)),
+        PrItem::Merging => ("Merge Pull Request", Ok(())),
         PrItem::CopyLink => {
             ("Copy Link", opener.tmux.run(&["set-buffer", "-w", "--", row.url.as_str()].map(str::to_owned)).map(drop))
         }
@@ -139,6 +141,7 @@ fn show(
     let mut pane = Rect::default();
     // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
     let mut scroll = 0usize;
+    mark_merging(&mut prs, &crate::merge::marker::live(opener.home));
     loop {
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
         let frame = palette::frame(SystemTime::now());
@@ -150,7 +153,7 @@ fn show(
                     draw_error(f, pane, error);
                 }
                 if let Some(open) = &menu {
-                    open.menu.draw(f, pane);
+                    open.menu.draw_at(f, pane, frame);
                 }
             })?;
             (redraw, drawn_frame) = (false, Some(frame));
@@ -214,7 +217,10 @@ fn show(
             })();
             match kept(read, &mut error) {
                 Some(next) => {
-                    if let Some(next) = next.filter(|next| *next != prs) {
+                    // A merge starts and ends with no Event of the store: the markers are read on each snapshot.
+                    let mut next = next.unwrap_or_else(|| prs.clone());
+                    mark_merging(&mut next, &crate::merge::marker::live(opener.home));
+                    if next != prs {
                         prs = next;
                         redraw = true;
                     }
@@ -236,14 +242,22 @@ fn show(
     }
 }
 
-/// How long the view waits for input before it draws again: one spinner frame while a PR's Lead works, else [`TICK`].
+/// How long the view waits for input before it draws again: one spinner frame while a PR's Lead works or its merge runs, else [`TICK`].
 fn tick(prs: &[OpenPr]) -> Duration {
     if spins(prs) { FRAME } else { TICK }
 }
 
-/// A shown PR's Lead is working: its spinner turns.
+/// A shown PR's Lead is working, or its merge runs (a clean one, which shows the spinner in place of the merge icon): its
+/// spinner turns.
 fn spins(prs: &[OpenPr]) -> bool {
-    prs.iter().any(|p| p.lead_working)
+    prs.iter().any(|p| p.lead_working || (p.merging && p.clean))
+}
+
+/// Sets `merging` of each PR whose merge runs: `live` is the pull requests with a live merge marker (hs-d495).
+fn mark_merging(prs: &mut [OpenPr], live: &std::collections::BTreeSet<String>) {
+    for pr in prs {
+        pr.merging = live.contains(&format!("{}#{}", pr.repo, pr.number));
+    }
 }
 
 /// A click on a tab or on an owned PR row: `session open <id>`, which moves that Lead into the chat slot, then `select-pane`
@@ -420,7 +434,16 @@ mod tests {
             active: false,
             lead: Some(SessionId::parse("l-a").unwrap()),
             lead_working: working,
+            merging: false,
         }
+    }
+
+    #[test]
+    fn the_view_redraws_every_spinner_frame_while_a_shown_pr_merges_too() {
+        let merging = read::OpenPr { clean: true, merging: true, ..pr(false) };
+        assert_eq!(tick(&[pr(false), merging.clone()]), FRAME, "the merge spinner turns");
+        assert!(spins(&[merging]));
+        assert_eq!(tick(&[pr(false)]), TICK);
     }
 
     #[test]

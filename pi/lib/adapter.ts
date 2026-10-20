@@ -4,10 +4,11 @@ import { registerAgentState } from "./agent-state.ts";
 import { createHost, type Host, type Options } from "./host.ts";
 import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
+import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import type { Run } from "./run.ts";
 import { registerReloadCommand } from "./reload-command.ts";
-import { start, stop } from "./startup.ts";
+import { start, stop, trackers } from "./startup.ts";
 import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
 import { registerReminderCheck } from "./turns.ts";
 
@@ -42,6 +43,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   // §15.11, §15.12: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
   pi.on("tool_call", async (event) => {
     const role = host.run?.info.role;
+    const pn = pnVerdict({ env: host.env, live: host.run !== undefined, store: globalThis as Record<string, unknown> }, event);
+    if (pn) return pn;
     if (host.run && event.toolName === "ask_user_question") return askVerdict(host, host.run, event.input);
     if ((role !== "manager" && role !== "worker") || event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown; timeout?: unknown };
@@ -52,6 +55,14 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
     const matched = unfilteredTestRun(command);
     return matched === undefined ? undefined : { block: true, reason: testReasonText(matched) };
+  });
+
+  // commands.md §15 "Every plannotator session is tracked": a plannotator result may have opened or closed a review.
+  pi.on("tool_result", async (event) => {
+    if (event.toolName !== "plannotator" && event.toolName !== "plannotator_submit_plan") return;
+    const r = host.run;
+    const tracker = r && trackers.get(r);
+    if (tracker) await tracker.poll().catch((e) => host.deliver("plannotator tracker", e));
   });
 
   registerAgentState(host);

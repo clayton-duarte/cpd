@@ -15,7 +15,7 @@ use time::format_description::well_known::Rfc3339;
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, team, titles, workers};
+use super::{SOURCE, distill, escalations, inbox, liveness, open, pr, restart, schedule, team, titles, workers};
 use cpd_core::clock;
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
@@ -79,11 +79,6 @@ impl Engine {
         self.report.clear(step, about);
     }
 
-    /// What `step` reported with `code` and has not cleared.
-    pub(super) fn open_failures(&self, step: Step, code: &str) -> Vec<About> {
-        self.report.open(step, code)
-    }
-
     /// pi's catalog (§9), for the ladder and E3.
     pub(super) fn catalog(&mut self) -> Result<Catalog, CpdError> {
         if let Some(catalog) = &self.catalog {
@@ -103,7 +98,7 @@ impl Engine {
             escalations::run,
             liveness::run,
             schedule::run,
-            completion::run,
+            open::run,
             pr::run,
             start_prs,
             inbox::run,

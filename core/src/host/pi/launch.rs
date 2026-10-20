@@ -128,13 +128,19 @@ pub fn lead(launch: &LeadLaunch) -> Launch {
 fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
     let Some(plan) = launch.plan else {
         // A Context's Manager (contract §6.5, "Manager").
-        return BTreeMap::from([
+        let mut env = BTreeMap::from([
             session_path(launch.home),
             ("CPD_HOME".to_owned(), launch.home.root().display().to_string()),
             ("CPD_SESSION".to_owned(), launch.session.to_string()),
             ("PLANNOTATOR_UPDATE_CHECK".to_owned(), "0".to_owned()),
+            ("PLANNOTATOR_REMOTE".to_owned(), "1".to_owned()),
+            (URL_HOST.to_owned(), launch.plannotator.url_host.clone()),
             (SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned()),
         ]);
+        if let Some(port) = &launch.plannotator.port {
+            env.insert("PLANNOTATOR_PORT".into(), port.clone());
+        }
+        return env;
     };
     let mut env = base_env(launch.home, launch.session, plan);
     env.insert("PLANNOTATOR_DATA_DIR".into(), launch.home.plan_dir(plan).join("plannotator").display().to_string());
@@ -302,8 +308,31 @@ mod tests {
         );
         assert_eq!(
             launch.env,
-            env(&[("CPD_HOME", "/cpd-home"), ("CPD_SESSION", ID), ("PLANNOTATOR_UPDATE_CHECK", "0"), ("PI_SKIP_VERSION_CHECK", "1")])
+            env(&[
+                ("CPD_HOME", "/cpd-home"),
+                ("CPD_SESSION", ID),
+                ("PLANNOTATOR_UPDATE_CHECK", "0"),
+                ("PLANNOTATOR_REMOTE", "1"),
+                ("PLANNOTATOR_URL_HOST", "192.168.3.3"),
+                ("PLANNOTATOR_PORT", "19432"),
+                ("PI_SKIP_VERSION_CHECK", "1"),
+            ])
         );
+    }
+
+    #[test]
+    fn a_manager_gets_remote_the_review_host_and_its_port_but_no_data_dir() {
+        let home = home();
+        let session = SessionId::parse(ID).unwrap();
+        let extensions = strs(&["/opt/cpd/pi"]);
+        let plannotator = plannotator(Some("19437"));
+        let start = LeadStart::Resume { file: "/cpd-home/sessions/m.jsonl".into() };
+        let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
+        assert_eq!(launch.env["PLANNOTATOR_REMOTE"], "1");
+        assert_eq!(launch.env["PLANNOTATOR_URL_HOST"], "192.168.3.3");
+        assert_eq!(launch.env["PLANNOTATOR_PORT"], "19437");
+        assert!(!launch.env.contains_key("PLANNOTATOR_DATA_DIR"));
+        assert!(!launch.env.contains_key("CPD_PLAN"));
     }
 
     fn lead_env(extra: &[(&str, &str)]) -> BTreeMap<String, String> {

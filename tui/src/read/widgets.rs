@@ -96,6 +96,9 @@ pub struct OpenPr {
     /// The owner's Lead Session has `state = 'working'` (contract §3.6): the row shows the Lead's working dot (hs-d335).
     /// False when no Plan owns it.
     pub lead_working: bool,
+    /// A merge of this pull request is running (a live merge marker, `crate::merge::marker`, hs-d495): the merge
+    /// button shows the spinner instead and cannot be clicked. Not in the store: the view sets it from the markers.
+    pub merging: bool,
 }
 
 /// A Plan: its head (counts), its label and the rows of its PRs that have a pull request. The PRs section no longer draws it
@@ -227,6 +230,7 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             active: r.get(9)?,
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
             lead_working: r.get(11)?,
+            merging: false,
             repo,
             number,
         });
