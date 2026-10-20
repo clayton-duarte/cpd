@@ -873,6 +873,34 @@ mod tests {
     }
 
     #[test]
+    fn an_http_5xx_is_read_from_stderr_or_from_stdout_when_stderr_is_empty() {
+        let out = |stdout: &str, stderr: &str| Output { stdout: stdout.to_owned(), stderr: stderr.to_owned(), exit: Some(1) };
+        assert_eq!(http_5xx(&out("", "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)")).as_deref(), Some("HTTP 502"));
+        assert_eq!(http_5xx(&out("", "gh: Service Unavailable (HTTP 503)")).as_deref(), Some("HTTP 503"));
+        assert_eq!(http_5xx(&out("gh: HTTP 504: Gateway Timeout", "")).as_deref(), Some("HTTP 504"));
+        // stdout is read only when stderr is empty; a 4xx, a bare 5 and a body without a status are no 5xx.
+        assert_eq!(http_5xx(&out("HTTP 502", "gh: exit status 1")), None);
+        assert_eq!(http_5xx(&out("", "gh: HTTP 401: Bad credentials")), None);
+        assert_eq!(http_5xx(&out("", "HTTP 5")), None);
+        assert_eq!(http_5xx(&out("<html>502 Bad Gateway</html>", "")), None);
+    }
+
+    #[test]
+    fn a_failure_of_a_poll_call_holds_call_transient_and_reason_whatever_it_was() {
+        let details = |e: CpdError| Value::Object(polled_call("search", e).details().clone());
+        let plain = details(CpdError::new(ErrorCode::GhFailed, "x"));
+        assert_eq!((&plain["call"], &plain["transient"], &plain["reason"]), (&json!("search"), &json!(false), &Value::Null));
+        let transient = details(CpdError::new(ErrorCode::GhFailed, "x").with("transient", true).with("reason", "HTTP 502"));
+        assert_eq!((&transient["transient"], &transient["reason"]), (&json!(true), &json!("HTTP 502")));
+        // Only an answer that is no GraphQL result and exited non-zero is transient.
+        let body = |stdout: &str, exit: i32| search(&Output { stdout: stdout.to_owned(), stderr: "gh: HTTP 502: Bad Gateway".to_owned(), exit: Some(exit) });
+        let transient = |r: Result<Search, CpdError>| r.unwrap_err().details().get("transient").cloned();
+        assert_eq!(transient(body("<html>", 1)), Some(json!(true)));
+        assert_eq!(transient(body("<html>", 0)), None);
+        assert_eq!(transient(body(r#"{"errors":[{"message":"x"}]}"#, 1)), None);
+    }
+
+    #[test]
     fn a_failure_carries_argv_exit_and_stderr() {
         let e = search(&reply("", 1)).unwrap_err();
         let details = serde_json::to_value(&e).unwrap();

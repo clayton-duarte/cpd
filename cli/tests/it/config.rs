@@ -190,6 +190,7 @@ pi_stop_seconds = 1
 tick_seconds = 1
 pr_poll_seconds = 1
 team_review_seconds = 1
+pr_poll_transient_minutes = 1
 error_repeat_seconds = 1
 [inbox]
 stuck_job_minutes = 1
