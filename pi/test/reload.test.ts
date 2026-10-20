@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { type Options } from "../lib/adapter.ts";
-import { identityOf, LONG_REFUSAL_NOTICE, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, validatePackage, type Guard } from "../lib/reload.ts";
+import { identityOf, LONG_REFUSAL_NOTICE, LOAD_TIMEOUT_MS, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, validatePackage, type Guard } from "../lib/reload.ts";
 import { Fixture, ID, planShow, waitFor } from "./fake.ts";
 
 const GOOD = "export default function (pi: unknown): void {}\n";
@@ -272,13 +272,19 @@ for (const [name, files, reasonOf] of refused) {
 const HANGS = "setInterval(() => {}, 1000);\nawait new Promise(() => {});\nexport default function () {}\n";
 
 test("a load that hangs is refused after the timeout, and tried again at a later poll", async (t) => {
-  const f = await started(t, { reload: { timeoutMs: 300 } });
+  // The timeout is read at every poll (`validatePackage(dir, options.reload)`). It is short only for the hanging package, which times out however
+  // long it is; the good one is validated under the generous bound, so how long the machine takes to load it is not the claim.
+  const reload = { timeoutMs: 300 };
+  const f = await started(t, { reload });
   install(f, { "extension.ts": HANGS, "package.json": "{}" });
-  await waitFor("the error", () => f.pi.errorNotices.length > 0, 5000);
+  await waitFor("the error", () => f.pi.errorNotices.length > 0);
   assert.deepEqual(f.pi.errorNotices, [noticeFor("load timed out after 300 ms")]);
   assert.equal(f.pi.reloads, 0);
-  writeFileSync(join(f.adapterDir, "extension.ts"), GOOD); // the machine is free again: the next poll passes
+  // The machine is free again: the next poll passes. No await between the three, so no poll validates the new package under the short bound
+  // (one that already began on the old package ends with the identity changed and starts over).
+  writeFileSync(join(f.adapterDir, "extension.ts"), GOOD);
   touch(f.adapterDir);
+  reload.timeoutMs = LOAD_TIMEOUT_MS;
   await waitFor("the reload", () => f.pi.reloads > 0);
   assert.equal(f.pi.errorNotices.length, 1, "a timeout is a refusal shown once, not a failure");
 });
