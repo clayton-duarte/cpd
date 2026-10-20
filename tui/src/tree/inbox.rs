@@ -1,6 +1,7 @@
-//! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): one empty
-//! row, the pill title `╭─Inbox────…────<n>` (`crate::section`), up to [`SHOWN`] item rows `│  <glyph> <label>` (each with its tier's
-//! glyph and colour) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
+//! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
+//! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
+//! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│  <glyph> <label>` (each with
+//! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
 //! the muted `╰󰁋 expand` that expands the list inline and becomes `╰󰁣 collapse`, with fewer a plain `╰─`, with none no
 //! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
 //! column's split gives it (the tree has two thirds, hs-d307; `View::draw_at`) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
@@ -11,7 +12,7 @@
 //! modifier-click). Everything here is pure but [`draw`], which only writes to the frame.
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -39,6 +40,9 @@ const LEAD_WIDTH: usize = 5;
 
 /// The rows above the items: the empty row (hs-d346) and the title.
 const TOP: usize = 2;
+
+/// The rows below the closing row: the empty row (hs-d476).
+const BOTTOM: usize = 1;
 
 /// What a row of the section is, by its offset from the section's first row (the empty one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,19 +90,20 @@ impl Shape {
         self.count > SHOWN
     }
 
-    /// The rows the section wants: the empty row, the title, the items, the closing row; expanded, at most the cap, but
-    /// not less than collapsed.
+    /// The rows the section wants: the empty row, the title, the items, the closing row (the toggle, a plain `╰─`, or
+    /// with no item the up-to-date row, hs-d487) and the empty row below; expanded, at most the cap, but not less than
+    /// collapsed.
     pub fn height(self) -> u16 {
         let close = 1;
-        let collapsed = TOP + self.count.min(SHOWN) + close;
-        let full = TOP + self.count + close;
+        let collapsed = TOP + self.count.min(SHOWN) + close + BOTTOM;
+        let full = TOP + self.count + close + BOTTOM;
         let height = if self.expanded { full.min(usize::from(self.cap)).max(collapsed) } else { collapsed };
         u16::try_from(height).unwrap_or(u16::MAX)
     }
 
     /// The rows between the title and the closing row: the items and their cues.
     fn list_rows(self) -> usize {
-        usize::from(self.height()) - TOP - 1
+        usize::from(self.height()) - TOP - 1 - BOTTOM
     }
 
     /// The items drawn and the cues: all of the first three when collapsed, else the window at the scroll offset.
@@ -133,7 +138,7 @@ impl Shape {
         scroll
     }
 
-    /// The row `row` rows below the section's first; the empty row, a cue row and a plain closing row are none.
+    /// The row `row` rows below the section's first; the empty rows, a cue row and a plain closing row are none.
     pub fn hit(self, row: u16) -> Option<Hit> {
         let row = usize::from(row);
         let win = self.window();
@@ -191,30 +196,30 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318). `engine-down`
 /// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
-/// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (or says there is
-/// none yet); the `url` is copied for `pr-failing`, `pr-changes` and `review-requested` (their OSC 8 link stays for the
+/// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
+/// one); the `url` is copied for `review-requested` (their OSC 8 link stays for the
 /// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
-        // no click: the engine's errors and the stuck Jobs go to the Manager, not the Inbox (hs-d314, hs-d318); only a row an older engine opened remains
-        Kind::EngineError | Kind::JobStuck => None,
+        // no click: the engine's errors, the stuck Jobs and PR check/review state reach no Inbox (hs-d314, hs-d318, hs-d470); only a row an older engine opened remains
+        Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
         Kind::PlanReview => {
             let open = open_lead(tree, item.plan.as_ref()?)?;
-            let page = item.url.as_ref().map_or_else(|| Action::Note(NO_REVIEW_PAGE.into()), |url| Action::CopyUrl(url.clone()));
-            Some(Jump::Steps(vec![open, page]))
+            // with no port file yet there is no page to copy: the Lead opens, and nothing else happens
+            Some(match item.url.as_ref() {
+                Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
+                None => Jump::Run(open),
+            })
         }
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
-        Kind::PrFailing | Kind::PrChanges | Kind::ReviewRequested => {
+        Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }
     }
 }
-
-/// The note of a `plan-review` click when the Plan has no port file, so no page to copy.
-const NO_REVIEW_PAGE: &str = "no review page yet";
 
 /// `session open` of the Lead of Plan `plan` (`session history` if archived); none for a Plan the tree does not have.
 fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
@@ -224,7 +229,7 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
 
 /// The kinds whose label is an OSC 8 link to the item's `url`.
 fn is_link(kind: Kind) -> bool {
-    matches!(kind, Kind::PlanReview | Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested)
+    matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::ReviewRequested)
 }
 
 /// An item's row: the fold's muted `│`, two spaces, the item's tier glyph in its urgency's colour, a space, the label cut with
@@ -250,19 +255,21 @@ fn cue_line(which: Cue, n: usize, width: usize) -> Line<'static> {
     fold::content(fold::BRANCH, cue(which, n, width.saturating_sub(1)))
 }
 
-/// Draws the section into `area` (its first row is the empty one; rows that do not fit are cut): `items` are the
+/// Draws the section into `area`, the panel's full width (its first row is the empty one; rows that do not fit are cut;
+/// the title keeps the padding of one column on each side, the rows are drawn inside it): `items` are the
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
 /// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled.
 pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime) {
     let win = shape.window();
     let list = shape.list_rows();
     for dy in 0..area.height.min(shape.height()) {
-        let row = Rect::new(area.x, area.y + dy, area.width, 1);
+        let full = Rect::new(area.x, area.y + dy, area.width, 1);
+        let row = full.inner(Margin::new(1, 0));
         let width = usize::from(row.width);
         let at = usize::from(dy);
         match shape.hit(dy) {
             Some(Hit::Header) => {
-                f.render_widget(Paragraph::new(section::title("Inbox", Some(items.len()), width)), row);
+                f.render_widget(Paragraph::new(section::collapsible_title("Inbox", Some(items.len()), usize::from(full.width))), full);
             }
             Some(Hit::Item(i)) => {
                 let item = &items[i];
@@ -371,48 +378,30 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_are_an_empty_row_the_title_up_to_three_items_and_a_toggle_only_with_more() {
-        let rows = |count, expanded| {
-            let shape = Shape::new(count, expanded);
-            (0..shape.height() + 1).map(|r| shape.hit(r)).collect::<Vec<_>>()
-        };
-        assert_eq!(rows(0, false), [None, Some(Hit::Header), None, None], "no item: the up-to-date closing row, no hit (hs-d487)");
-        assert_eq!(rows(2, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None, None], "a plain closing row is no hit");
-        assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
-        assert_eq!(rows(5, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
-        let expanded: Vec<_> = (0..9).map(|r| Shape::new(5, true).hit(r)).collect();
-        assert_eq!(
-            expanded,
-            [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle), None]
-        );
-        assert_eq!((Shape::new(0, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (3, 6, 8));
-    }
-
-    #[test]
     fn expanded_the_section_is_capped_but_never_below_the_collapsed_one_and_its_items_scroll_between_cues() {
         let shape = |count, cap, scroll| Shape::new(count, true).capped(cap).scrolled(scroll);
-        // 50 items in a 40-row column: 20 rows, the empty row, the title, 17 list rows, the toggle
+        // 50 items in a 40-row column: 20 rows, the empty row, the title, 16 list rows, the toggle, the empty row
         assert_eq!(shape(50, 20, 0).height(), 20);
-        assert_eq!(shape(5, 20, 0).height(), 8, "a short list is not padded to the cap");
-        assert_eq!(shape(50, 2, 0).height(), 6, "never less than the collapsed section");
-        assert_eq!(Shape::new(50, false).capped(20).height(), 6);
+        assert_eq!(shape(5, 20, 0).height(), 9, "a short list is not padded to the cap");
+        assert_eq!(shape(50, 2, 0).height(), 7, "never less than the collapsed section");
+        assert_eq!(Shape::new(50, false).capped(20).height(), 7);
         let rows = |s: Shape| (0..s.height() + 1).map(|r| s.hit(r)).collect::<Vec<_>>();
-        let top = rows(shape(50, 8, 0));
-        // the empty row, the title, 5 list rows (4 items and the ▼ cue), the toggle
-        assert_eq!(top, [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), None, Some(Hit::Toggle), None]);
-        let middle = rows(shape(50, 8, 10));
-        assert_eq!(middle, [None, Some(Hit::Header), None, Some(Hit::Item(10)), Some(Hit::Item(11)), Some(Hit::Item(12)), None, Some(Hit::Toggle), None]);
+        let top = rows(shape(50, 9, 0));
+        // the empty row, the title, 5 list rows (4 items and the ▼ cue), the toggle, the empty row
+        assert_eq!(top, [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), None, Some(Hit::Toggle), None, None]);
+        let middle = rows(shape(50, 9, 10));
+        assert_eq!(middle, [None, Some(Hit::Header), None, Some(Hit::Item(10)), Some(Hit::Item(11)), Some(Hit::Item(12)), None, Some(Hit::Toggle), None, None]);
         // the offset clamps: the last item reaches the bottom, under the ▲ cue
-        let bottom = rows(shape(50, 8, 999));
-        assert_eq!(bottom, [None, Some(Hit::Header), None, Some(Hit::Item(46)), Some(Hit::Item(47)), Some(Hit::Item(48)), Some(Hit::Item(49)), Some(Hit::Toggle), None]);
-        assert_eq!(shape(50, 8, 0).max_scroll(), 46);
+        let bottom = rows(shape(50, 9, 999));
+        assert_eq!(bottom, [None, Some(Hit::Header), None, Some(Hit::Item(46)), Some(Hit::Item(47)), Some(Hit::Item(48)), Some(Hit::Item(49)), Some(Hit::Toggle), None, None]);
+        assert_eq!(shape(50, 9, 0).max_scroll(), 46);
         assert_eq!(Shape::new(50, false).max_scroll(), 0);
         assert_eq!(shape(5, 20, 3).max_scroll(), 0, "nothing to scroll when all fit");
     }
 
     #[test]
     fn an_items_row_is_none_while_it_is_hidden_and_scroll_to_brings_it_in() {
-        let shape = Shape::new(50, true).capped(8);
+        let shape = Shape::new(50, true).capped(9);
         assert_eq!((shape.row_of(0), shape.row_of(3), shape.row_of(4)), (Some(2), Some(5), None));
         assert_eq!(shape.scrolled(10).row_of(10), Some(3), "under the ▲ cue");
         assert_eq!(shape.scroll_to(3), 0, "already in view");
@@ -459,8 +448,8 @@ mod tests {
         );
         assert_eq!(
             jump(&tree, &with(Kind::PlanReview, &plan)),
-            steps(Action::Note("no review page yet".into())),
-            "no port file: the Lead, and the note says so"
+            Some(Jump::Run(Action::Open(sid("l-ship")))),
+            "no port file: the Lead opens and nothing else happens"
         );
         let merge = |subject: &str| Pull::from_subject(subject).map(Jump::Merge);
         let ready = |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
@@ -476,12 +465,12 @@ mod tests {
             assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?} gives no merge popup");
         }
         for kind in [Kind::PrFailing, Kind::PrChanges] {
-            assert_eq!(jump(&tree, &with(kind, &owned)), copy, "{kind:?} copies its url, a Plan's or not");
-            assert_eq!(jump(&tree, &with(kind, &url)), copy);
+            assert_eq!(jump(&tree, &with(kind, &owned)), None, "{kind:?} (an old row, hs-d470): no click, a Plan's or not");
+            assert_eq!(jump(&tree, &with(kind, &url)), None, "{kind:?} (an old row, hs-d470): no url copy");
         }
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &url)), copy);
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &owned)), copy, "a review request is never a Plan's");
-        assert_eq!(jump(&tree, &with(Kind::PrFailing, &|_| {})), None, "a link without a url has nothing to copy");
+        assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &|_| {})), None, "a link without a url has nothing to copy");
         assert_eq!(jump(&tree, &with(Kind::PlanReview, &|_| {})), None);
         // an item without what its jump needs jumps nowhere
         assert_eq!(jump(&tree, &with(Kind::Dialog, &|_| {})), None);
@@ -537,7 +526,7 @@ mod tests {
         )
         .unwrap();
         let url = "https://github.com/acme/api/pull/12";
-        let mut linked = item(1, Kind::PrFailing, Urgency::Red, "api#12 failing", OPENED);
+        let mut linked = item(1, Kind::ReviewRequested, Urgency::Red, "api#12 failing", OPENED);
         linked.url = Some(url.into());
         terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
         let bytes = sink.0.borrow().clone();
@@ -570,7 +559,7 @@ mod tests {
             let shape = Shape::new(count, expanded);
             (0..shape.height()).map(|r| shape.hit(r)).collect::<Vec<_>>()
         };
-        assert_eq!(rows(0, false), [None, Some(Hit::Header), None], "no item: the title between its two empty rows");
+        assert_eq!(rows(0, false), [None, Some(Hit::Header), None, None], "no item: the up-to-date closing row (no hit, hs-d487), then the empty row");
         assert_eq!(rows(2, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None, None], "a plain closing row, then the empty row");
         assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
         assert_eq!(rows(5, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
@@ -578,7 +567,7 @@ mod tests {
             rows(5, true),
             [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle), None]
         );
-        assert_eq!((Shape::new(0, false).height(), Shape::new(3, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (3, 7, 7, 9));
+        assert_eq!((Shape::new(0, false).height(), Shape::new(3, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (4, 7, 7, 9));
     }
 
     #[test]

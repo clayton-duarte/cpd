@@ -250,10 +250,10 @@ pub struct Drawn {
 }
 
 /// Draws the column in `area`: a blank row, the machine, then the PRs under their header. The PRs section
-/// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. A non-empty `note`
-/// replaces the column's last row, in `palette::note()`. `frame` is the spinner's frame (`palette::frame`) for the rows whose
+/// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. It draws no note
+/// (commands.md §17 "No notes"); the snapshot's error is [`draw_error`]'s. `frame` is the spinner's frame (`palette::frame`) for the rows whose
 /// Lead is working. Returns where a click reaches an owned PR or a merge icon.
-pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note: &str, scroll: usize, frame: usize) -> Drawn {
+pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scroll: usize, frame: usize) -> Drawn {
     let [_top, home, _above_prs, prs_header, _below_prs, prs] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(2),
@@ -310,12 +310,16 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
             link::link(f.buffer_mut(), Rect::new(x, *y, 1, 1), &pr.url);
         }
     }
-    if !note.is_empty() {
-        let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
-        f.render_widget(Clear, last);
-        f.render_widget(Paragraph::new(Span::styled(note.to_owned(), palette::note())), last);
-    }
     Drawn { hits, prs, max_scroll: max_scroll(open.len(), height, 2), icons, rows }
+}
+
+
+/// The snapshot's `error`, a lasting state of the column (commands.md §17 "No notes", rule (b)): it replaces the last row
+/// of `area`, in `palette::note()`, over what [`draw`] drew.
+pub fn draw_error(f: &mut Frame, area: Rect, error: &str) {
+    let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
+    f.render_widget(Clear, last);
+    f.render_widget(Paragraph::new(Span::styled(error.to_owned(), palette::note())), last);
 }
 
 #[cfg(test)]
@@ -327,29 +331,29 @@ mod tests {
     use crate::palette::Meaning;
 
     use super::*;
-    fn drawn(width: u16, height: u16, open: &[OpenPr], note: &str) -> (Buffer, Vec<Hit>) {
-        let (buf, d) = scrolled(width, height, open, note, 0);
+    fn drawn(width: u16, height: u16, open: &[OpenPr]) -> (Buffer, Vec<Hit>) {
+        let (buf, d) = scrolled(width, height, open, 0);
         (buf, d.hits)
     }
 
-    fn scrolled(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize) -> (Buffer, Drawn) {
-        at_frame(width, height, open, note, scroll, 0)
+    fn scrolled(width: u16, height: u16, open: &[OpenPr], scroll: usize) -> (Buffer, Drawn) {
+        at_frame(width, height, open, scroll, 0)
     }
 
-    fn at_frame(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize, frame: usize) -> (Buffer, Drawn) {
+    fn at_frame(width: u16, height: u16, open: &[OpenPr], scroll: usize, frame: usize) -> (Buffer, Drawn) {
         let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
-        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, note, scroll, frame))).unwrap();
+        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, scroll, frame))).unwrap();
         (terminal.backend().buffer().clone(), out.unwrap())
     }
 
     fn icons(width: u16, open: &[OpenPr]) -> Vec<MergeIcon> {
-        scrolled(width, 20, open, "", 0).1.icons
+        scrolled(width, 20, open, 0).1.icons
     }
 
     fn buffer(width: u16, height: u16) -> Buffer {
-        drawn(width, height, &[], "").0
+        drawn(width, height, &[]).0
     }
 
     fn pr(number: i64, lead: Option<&str>) -> OpenPr {
@@ -380,13 +384,13 @@ mod tests {
             terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
             row(terminal.backend().buffer(), 0)
         };
-        assert_eq!(header(20, Some(3)), format!("╭─\u{E0B6}PRs\u{E0B4}{}3", "─".repeat(12)));
-        assert_eq!(header(30, Some(12)), format!("╭─\u{E0B6}PRs\u{E0B4}{}12", "─".repeat(30 - 9)));
-        assert_eq!(header(20, None), format!("╭─\u{E0B6}PRs\u{E0B4}{}", "─".repeat(13)));
+        assert_eq!(header(20, Some(3)), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}3\u{E0B4}", "─".repeat(8)));
+        assert_eq!(header(30, Some(12)), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}12\u{E0B4}", "─".repeat(30 - 8 - 4 - 1)));
+        assert_eq!(header(20, None), format!(" ──\u{E0B6}PRs\u{E0B4}{}", "─".repeat(11)));
         let buf = buffer(20, 15);
-        assert_eq!(row(&buf, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)));
+        assert_eq!(row(&buf, 4), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(8)));
         let two = [pr(1, Some("l-a")), pr(2, None)];
-        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}2", "─".repeat(12)));
+        assert_eq!(row(&drawn(20, 15, &two).0, 4), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}2\u{E0B4}", "─".repeat(8)));
     }
 
     #[test]
@@ -398,7 +402,7 @@ mod tests {
             " homeserver".to_owned(),
             " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
             "".to_owned(),
-            format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)),
+            format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(8)),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
@@ -432,18 +436,18 @@ mod tests {
 
     #[test]
     fn a_pr_ends_its_first_line_in_a_linked_arrow_and_the_name_never_reaches_it() {
-        let (buf, _) = drawn(24, 20, &[pr(7, Some("l-a"))], "");
+        let (buf, _) = drawn(24, 20, &[pr(7, Some("l-a"))]);
         // the arrow's cell carries the link: its symbol is wrapped in the OSC 8 escapes
         let link = format!("\x1b]8;;https://github.com/acme/repo/pull/7\x07{}\x1b]8;;\x07", link::CUE);
         assert_eq!(row(&buf, 6), format!(" acme/repo#7{}{link}", " ".repeat(11)));
         // the name is cut before the arrow's column and its gap
-        let (buf, _) = drawn(9, 20, &[pr(7, Some("l-a"))], "");
+        let (buf, _) = drawn(9, 20, &[pr(7, Some("l-a"))]);
         assert_eq!(row(&buf, 6).replace(&link, link::CUE), format!(" acme/… {}", link::CUE));
     }
 
     #[test]
     fn an_unowned_pr_is_dim_on_both_lines_and_has_no_hit_area() {
-        let (buf, hits) = drawn(30, 20, &[pr(7, None), pr(8, Some("l-a"))], "");
+        let (buf, hits) = drawn(30, 20, &[pr(7, None), pr(8, Some("l-a"))]);
         for (y, dim) in [(6, true), (7, true), (8, false), (9, false)] {
             assert_eq!(buf[(1, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
             assert_eq!(buf[(2, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
@@ -456,7 +460,7 @@ mod tests {
 
     #[test]
     fn a_hit_area_is_the_two_rows_except_the_arrow_cell() {
-        let (_, hits) = drawn(30, 20, &[pr(7, Some("l-a"))], "");
+        let (_, hits) = drawn(30, 20, &[pr(7, Some("l-a"))]);
         let hit = &hits[0];
         for (x, y, inside) in [(0, 6, true), (28, 6, true), (29, 6, false), (29, 7, true), (0, 7, true), (0, 8, false), (0, 5, false)] {
             assert_eq!(hit.contains(Position::new(x, y)), inside, "({x}, {y})");
@@ -464,15 +468,23 @@ mod tests {
     }
 
     #[test]
-    fn a_note_replaces_the_last_row_in_the_note_style() {
-        let (buf, _) = drawn(30, 15, &[], "no_cockpit: nothing here");
+    fn a_snapshot_error_replaces_the_last_row() {
+        let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
+        let mut terminal = Terminal::new(TestBackend::new(30, 15)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(f, f.area(), &[], &machine, 0, 0);
+                draw_error(f, f.area(), "no_cockpit: nothing here");
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
         assert_eq!(buf[(0, 14)].fg, palette::note().fg.unwrap());
         assert_eq!(row(&buf, 6), " no open PRs", "the rest is as drawn");
     }
 
     fn second_line(pr: &OpenPr, width: u16) -> (String, Buffer) {
-        let (buf, _) = drawn(width, 20, &[pr.clone()], "");
+        let (buf, _) = drawn(width, 20, &[pr.clone()]);
         (row(&buf, 7), buf)
     }
 
@@ -538,7 +550,7 @@ mod tests {
     }
 
     fn second_at(pr: &OpenPr, width: u16, frame: usize) -> (String, Buffer) {
-        let (buf, _) = at_frame(width, 20, &[pr.clone()], "", 0, frame);
+        let (buf, _) = at_frame(width, 20, &[pr.clone()], 0, frame);
         (row(&buf, 7), buf)
     }
 
@@ -585,7 +597,7 @@ mod tests {
         let (line, _) = second_line(&p, 40);
         assert_eq!(line, format!("  open \u{F05E0} no review  A title{}{MERGE}", " ".repeat(40 - 27 - 1)));
         assert_eq!(line.chars().count(), 40, "the icon is the last column");
-        assert!(!row(&drawn(40, 20, &[p], "").0, 6).contains(MERGE), "never on the first line");
+        assert!(!row(&drawn(40, 20, &[p]).0, 6).contains(MERGE), "never on the first line");
     }
 
     #[test]
@@ -614,7 +626,7 @@ mod tests {
             ],
             "every clean row, owned or not; none for the other"
         );
-        let (_, hits) = drawn(30, 20, &w, "");
+        let (_, hits) = drawn(30, 20, &w);
         let [first, second] = &hits[..] else { panic!("{hits:?}") };
         assert_eq!(first.icon, Some(Position::new(29, 7)));
         assert_eq!(second.icon, None);
@@ -628,7 +640,7 @@ mod tests {
         let labels = |clean: bool, lead: Option<&str>| {
             let mut p = pr(7, lead);
             p.clean = clean;
-            let (_, d) = scrolled(30, 20, &[p], "", 0);
+            let (_, d) = scrolled(30, 20, &[p], 0);
             let [row] = &d.rows[..] else { panic!("{:?}", d.rows) };
             row.items().into_iter().map(crate::menu::Entry::label).collect::<Vec<_>>()
         };
@@ -640,7 +652,7 @@ mod tests {
 
     #[test]
     fn every_row_on_screen_is_a_right_click_target_with_its_two_lines_its_pull_and_its_url() {
-        let (_, d) = scrolled(30, 20, &[pr(7, Some("l-a")), pr(8, None)], "", 0);
+        let (_, d) = scrolled(30, 20, &[pr(7, Some("l-a")), pr(8, None)], 0);
         let got: Vec<_> = d.rows.iter().map(|r| (r.area, r.pull.as_str(), r.url.as_str())).collect();
         assert_eq!(
             got,
@@ -649,7 +661,7 @@ mod tests {
                 (Rect::new(0, 8, 30, 2), "acme/repo#8", "https://github.com/acme/repo/pull/8"),
             ]
         );
-        let (_, d) = scrolled(30, height(7), &many(6), "", 2);
+        let (_, d) = scrolled(30, height(7), &many(6), 2);
         assert_eq!(d.rows.iter().map(|r| r.pull.as_str()).collect::<Vec<_>>(), ["acme/repo#3", "acme/repo#4"], "the rows drawn after a scroll");
     }
 
@@ -674,19 +686,19 @@ mod tests {
 
     #[test]
     fn no_cue_is_drawn_when_every_pull_request_fits() {
-        let (buf, d) = scrolled(30, height(6), &many(3), "", 0);
+        let (buf, d) = scrolled(30, height(6), &many(3), 0);
         let got = section(&buf);
         assert!(got.iter().all(|r| !r.contains('▲') && !r.contains('▼')), "{got:#?}");
         assert_eq!(names(&got), ["acme/repo#1", "acme/repo#2", "acme/repo#3"]);
         assert_eq!(d.max_scroll, 0);
         // a scroll that has nowhere to go changes nothing
-        assert_eq!(scrolled(30, height(6), &many(3), "", 5).0, buf);
+        assert_eq!(scrolled(30, height(6), &many(3), 5).0, buf);
     }
 
     #[test]
     fn a_cue_below_counts_the_hidden_pull_requests_and_replaces_the_last_row_in_dim() {
         // 5 rows: the `▼` row, so two pull requests of the five that do not fit.
-        let (buf, d) = scrolled(30, height(5), &many(5), "", 0);
+        let (buf, d) = scrolled(30, height(5), &many(5), 0);
         let got = section(&buf);
         assert_eq!(names(&got), ["acme/repo#1", "acme/repo#2"]);
         assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"), "{got:#?}");
@@ -699,7 +711,7 @@ mod tests {
 
     #[test]
     fn a_cue_above_appears_after_a_scroll_and_each_cue_takes_a_row_of_the_list() {
-        let (buf, _) = scrolled(30, height(5), &many(5), "", 1);
+        let (buf, _) = scrolled(30, height(5), &many(5), 1);
         let got = section(&buf);
         assert_eq!(got[0], format!("{:>30}", "▲ 1 more"), "{got:#?}");
         // 5 rows less both cues leave 3: one pull request, and a spare row
@@ -711,21 +723,21 @@ mod tests {
     #[test]
     fn the_offset_is_clamped_so_the_last_pull_request_reaches_the_bottom() {
         // 5 rows, 5 pull requests: at the end, the `▲` row and two pull requests; no `▼`.
-        let (buf, d) = scrolled(30, height(5), &many(5), "", 99);
+        let (buf, d) = scrolled(30, height(5), &many(5), 99);
         let got = section(&buf);
         assert_eq!(d.max_scroll, 3);
         assert_eq!(got[0], format!("{:>30}", "▲ 3 more"), "{got:#?}");
         assert_eq!(names(&got), ["acme/repo#4", "acme/repo#5"]);
         assert!(!got.iter().any(|r| r.contains('▼')), "{got:#?}");
-        assert_eq!(scrolled(30, height(5), &many(5), "", 3).0, buf);
+        assert_eq!(scrolled(30, height(5), &many(5), 3).0, buf);
         // a list that shrank under the offset is drawn at the new end
-        let (buf, _) = scrolled(30, height(5), &many(3), "", 3);
+        let (buf, _) = scrolled(30, height(5), &many(3), 3);
         assert_eq!(names(&section(&buf)), ["acme/repo#2", "acme/repo#3"]);
     }
 
     #[test]
     fn a_hit_area_is_that_of_the_row_drawn_after_a_scroll() {
-        let (buf, d) = scrolled(30, height(7), &many(6), "", 2);
+        let (buf, d) = scrolled(30, height(7), &many(6), 2);
         let got = section(&buf);
         assert_eq!(got[0], format!("{:>30}", "▲ 2 more"), "{got:#?}");
         assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 2 more"), "{got:#?}");
@@ -747,41 +759,48 @@ mod tests {
         (0..buf.area.height).map(|y| row(buf, y)).collect()
     }
 
-    /// The rows that are a section title: they start with the pill's `╭─`.
+    /// The first section title row of `buf`: a non-collapsible title (` ──`, hs-d478), asserted to be there.
+    fn first_title(buf: &Buffer) -> (u16, String) {
+        let found = titles(buf);
+        assert!(!found.is_empty(), "a pill title row: none starts with ` ──`: {:?}", all_rows(buf));
+        found.into_iter().next().unwrap()
+    }
+
+    /// The rows that are a section title: they start with the padding and the non-collapsible title's `──` (hs-d478).
     fn titles(buf: &Buffer) -> Vec<(u16, String)> {
-        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with('╭')).map(|(y, r)| (y as u16, r)).collect()
+        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with(" ──")).map(|(y, r)| (y as u16, r)).collect()
     }
 
     #[test]
     fn the_prs_title_is_the_pill_with_the_count_one_empty_row_above_it() {
-        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let (buf, _) = scrolled(30, height(5), &many(5), 0);
         let (open, close) = CAPS;
-        let (y, title) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
-        assert_eq!(title, format!("╭─{open}PRs{close}{}5", "─".repeat(30 - 2 - 5 - 1)));
-        assert_eq!(title.chars().count(), 30, "full width, no margin");
+        let (y, title) = first_title(&buf);
+        assert_eq!(title, format!(" ──{open}PRs{close}{}{open}5{close}", "─".repeat(30 - 1 - 2 - 5 - 3 - 1)));
+        assert_eq!(title.chars().count(), 29, "full width but the padding's last column (the row is trimmed)");
         assert_eq!(row(&buf, y - 1), "", "one empty row above the title");
     }
 
     #[test]
     fn the_prs_pill_text_is_inverted_and_its_lines_are_muted() {
-        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let (buf, _) = scrolled(30, height(5), &many(5), 0);
         let muted = palette::color(palette::Meaning::Nothing);
-        let (y, _) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
+        let (y, _) = first_title(&buf);
         let at = |x: u16| &buf[(x, y)];
-        assert_eq!((at(0).symbol(), at(0).fg), ("╭", muted), "the corner");
-        assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "its line");
-        for x in 3..6 {
+        assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "the first line (a non-collapsible title has no corner, hs-d478)");
+        assert_eq!((at(2).symbol(), at(2).fg), ("─", muted), "its line");
+        for x in 4..7 {
             assert!(at(x).modifier.contains(Modifier::REVERSED), "the title text is inverted: column {x} {:?}", at(x));
         }
-        assert_eq!((at(10).symbol(), at(10).fg), ("─", muted), "the line to the edge");
+        assert_eq!((at(11).symbol(), at(11).fg), ("─", muted), "the line to the edge");
     }
 
     #[test]
     fn the_prs_title_is_the_pill_with_its_count_and_there_is_no_other_title() {
-        let (buf, _) = scrolled(30, height(5), &many(2), "", 0);
+        let (buf, _) = scrolled(30, height(5), &many(2), 0);
         let (open, close) = CAPS;
         let got: Vec<String> = titles(&buf).into_iter().map(|(_, t)| t).collect();
-        assert_eq!(got, [format!("╭─{open}PRs{close}{}2", "─".repeat(30 - 2 - 5 - 1))]);
+        assert_eq!(got, [format!(" ──{open}PRs{close}{}{open}2{close}", "─".repeat(30 - 1 - 2 - 5 - 3 - 1))]);
     }
 
     /// The cue rows of the section, top to bottom.
@@ -791,17 +810,17 @@ mod tests {
 
     #[test]
     fn the_cues_are_right_aligned_at_the_end_of_their_rows() {
-        let (buf, _) = scrolled(30, height(7), &many(6), "", 2);
+        let (buf, _) = scrolled(30, height(7), &many(6), 2);
         assert_eq!(cue_rows(&buf), [format!("{:>30}", "▲ 2 more"), format!("{:>30}", "▼ 2 more")]);
-        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let (buf, _) = scrolled(30, height(5), &many(5), 0);
         assert_eq!(cue_rows(&buf), [format!("{:>30}", "▼ 3 more")]);
-        let (buf, _) = scrolled(30, height(5), &many(5), "", 99);
+        let (buf, _) = scrolled(30, height(5), &many(5), 99);
         assert_eq!(cue_rows(&buf), [format!("{:>30}", "▲ 3 more")]);
     }
 
     #[test]
     fn a_right_aligned_cue_is_dim_and_leaves_the_left_of_its_row_blank() {
-        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let (buf, _) = scrolled(30, height(5), &many(5), 0);
         let y = all_rows(&buf).iter().position(|r| r.contains('▼')).expect("a ▼ cue row") as u16;
         assert!((0..22).all(|x| buf[(x, y)].symbol() == " "), "nothing on the left of the cue");
         assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "`▼ 3 more` is dim and ends at the last column");
@@ -814,17 +833,18 @@ mod tests {
         let buf = buffer(20, 15);
         let y = 4;
         let cells: String = (0..20).map(|x| buf[(x, y)].symbol()).collect();
-        assert_eq!(cells, format!(" ╭─\u{E0B6}PRs\u{E0B4}{}0 ", "─".repeat(10)), "starts at column 1, ends one column before the edge");
+        assert_eq!(cells, format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}0\u{E0B4} ", "─".repeat(8)), "starts at column 1, ends one column before the edge");
         crate::section::check::grey_pill(&buf, 3, y, "PRs");
-        let (buf, _) = drawn(30, 15, &[pr(1, Some("l-a")), pr(2, None)], "");
+        crate::section::check::grey_pill(&buf, 16, y, "0"); // the count is a grey pill at the row's end, inside the right padding (hs-d480)
+        let (buf, _) = drawn(30, 15, &[pr(1, Some("l-a")), pr(2, None)]);
         let cells: String = (0..30).map(|x| buf[(x, y)].symbol()).collect();
-        assert_eq!(cells, format!(" ╭─\u{E0B6}PRs\u{E0B4}{}2 ", "─".repeat(30 - 1 - 2 - 5 - 1 - 1)));
+        assert_eq!(cells, format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}2\u{E0B4} ", "─".repeat(30 - 1 - 2 - 5 - 3 - 1)));
     }
 
     #[test]
     fn the_prs_title_has_one_empty_row_above_and_one_below_and_is_no_click_target() {
         let open = [pr(1, Some("l-a")), pr(2, None)];
-        let (buf, d) = scrolled(24, 15, &open, "", 0);
+        let (buf, d) = scrolled(24, 15, &open, 0);
         assert_eq!((row(&buf, 3).as_str(), row(&buf, 5).as_str()), ("", ""), "an empty row above and one below");
         assert!(row(&buf, 4).contains("PRs"), "the title is on row 4: {}", row(&buf, 4));
         assert!(d.hits.iter().all(|h| h.area.y > 4), "no click on the title row: {:?}", d.hits);

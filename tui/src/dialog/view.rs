@@ -379,13 +379,13 @@ mod tests {
             assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "{}", d.title);
         }
         let rows = rows(&render(&mut confirm(), 20, 8));
-        assert_eq!(rows[1], format!("╭─{}Archive{}{}", "\u{E0B6}", "\u{E0B4}", "─".repeat(9)));
+        assert_eq!(rows[1], format!(" ──{}Archive{}{}", "\u{E0B6}", "\u{E0B4}", "─".repeat(7)));
     }
 
     #[test]
     fn confirm_draws_the_question_and_both_buttons() {
         let buf = rows(&render(&mut confirm(), 40, 7));
-        assert_eq!(buf[1..], [format!("╭─\u{E0B6}Archive\u{E0B4}{}", "─".repeat(29)).as_str(), "", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
+        assert_eq!(buf[1..], [format!(" ──\u{E0B6}Archive\u{E0B4}{}", "─".repeat(27)).as_str(), "", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
     }
 
     #[test]
@@ -606,7 +606,7 @@ mod tests {
             let buf = render(&mut d, 40, 10);
             let width = title.chars().count();
             let row: String = (0..40).map(|x| buf[(x, 1)].symbol()).collect();
-            assert_eq!(row, format!(" ╭─\u{E0B6}{title}\u{E0B4}{} ", "─".repeat(40 - 1 - 2 - (width + 2) - 1)), "{title}");
+            assert_eq!(row, format!(" ──\u{E0B6}{title}\u{E0B4}{} ", "─".repeat(40 - 1 - 2 - (width + 2) - 1)), "{title}");
             crate::section::check::grey_pill(&buf, 3, 1, title);
         }
     }
