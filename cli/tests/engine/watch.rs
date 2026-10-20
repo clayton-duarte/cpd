@@ -3,7 +3,7 @@
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 use crate::common;
-#[path = "common/checkout.rs"]
+#[path = "../common/checkout.rs"]
 mod checkout;
 
 use std::fs::{self, File, OpenOptions};
