@@ -2944,7 +2944,7 @@ fn install_replaces_an_installed_adapter_as_a_whole_and_it_is_never_missing() {
     let (stop, watcher) = watch_missing(adapter.join("package.json"));
     let (out, _) = install_with(&env, OPENS);
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let (missing, polls) = watcher.join().unwrap();
+    let (missing, _polls) = watcher.join().unwrap();
 
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     assert_eq!(missing, 0, "the adapter's package.json was missing {missing} times during the swap of a symlink");
