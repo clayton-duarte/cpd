@@ -660,6 +660,8 @@ impl View {
     /// The row drawn at `at`, none below the last row (the tree state answers with the last row there).
     fn row_at(&self, at: Position) -> Option<Vec<Id>> {
         let path = self.state.rendered_at(at)?.to_vec();
+        // an empty row between two Contexts is no row
+        rows::row(&self.tree, &path)?;
         let above = at.y.checked_sub(1).and_then(|y| self.state.rendered_at(Position::new(at.x, y)));
         (above != Some(path.as_slice())).then_some(path)
     }
@@ -706,7 +708,9 @@ impl View {
         .areas(inner);
         self.inbox_area = inbox_area;
         let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
-        inbox::draw(f, inbox_area, &self.tree.inbox, self.shape(), inbox_cursor, now);
+        // the section's title carries the padding itself, so the section is drawn across the panel (`inbox::draw`)
+        let across = Rect { x: f.area().x, width: f.area().width, ..inbox_area };
+        inbox::draw(f, across, &self.tree.inbox, self.shape(), inbox_cursor, now);
         if footer_height > 0 {
             f.render_widget(Paragraph::new(footer).style(palette::note()).wrap(Wrap { trim: false }), footer_area);
         }
@@ -903,11 +907,11 @@ mod tests {
         press(&mut view, KeyCode::Char('n'));
         press(&mut view, KeyCode::Char('x'));
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[14..17].iter().all(|r| r.is_empty()) && rows[17].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "no row for a prompt: {rows:?}");
+        assert!(rows[13..16].iter().all(|r| r.is_empty()) && rows[16].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[17].is_empty(), "no row for a prompt: {rows:?}");
         assert!(rows.iter().all(|r| !r.contains("Enter") && !r.contains("█") && !r.contains("(y/N)")), "{rows:?}");
         view.error = Some("closed".into());
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[16].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─"), "the Inbox section is above the error: {rows:?}");
+        assert!(rows[15].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[16].is_empty(), "the Inbox section is above the error: {rows:?}");
         assert_eq!(rows[17], " closed", "an error is one row at the bottom");
         let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
         terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -981,16 +985,16 @@ mod tests {
     fn an_archived_context_starts_folded_unfolds_at_its_closing_row_and_opens_no_manager() {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 22);
-        assert_eq!((rows[13].as_str(), rows[14].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), EXPAND), "{rows:?}");
-        assert_eq!(click(&mut view, 6, 13), Effect::None, "its title: no Manager for an archived Context");
+        assert_eq!((rows[15].as_str(), rows[16].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), EXPAND), "{rows:?}");
+        assert_eq!(click(&mut view, 6, 15), Effect::None, "its title: no Manager for an archived Context");
         assert_eq!(drawn(&mut view, 44, 22), rows, "its title folds and unfolds nothing");
-        click(&mut view, 3, 14);
+        click(&mut view, 3, 16);
         let rows = drawn(&mut view, 44, 22);
-        assert_eq!(rows[13], format!(" ╭{STOPPED} zeta"));
-        assert_eq!(rows[16], COLLAPSE, "its closing row unfolds it");
-        assert_eq!(click(&mut view, 6, 13), Effect::None);
-        assert_eq!(click(&mut view, 8, 16), Effect::None);
-        assert_eq!(drawn(&mut view, 44, 22)[14], EXPAND, "and folds it");
+        assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
+        assert_eq!(rows[18], COLLAPSE, "its closing row unfolds it");
+        assert_eq!(click(&mut view, 6, 15), Effect::None);
+        assert_eq!(click(&mut view, 8, 18), Effect::None);
+        assert_eq!(drawn(&mut view, 44, 22)[16], EXPAND, "and folds it");
     }
 
     #[test]
@@ -1073,7 +1077,7 @@ mod tests {
         }
         assert_eq!(click(&mut view, 1, 1), Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap())), "the title row keeps its action");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 1, 7), Effect::None, "a plain closing row has nothing to fold");
+        assert_eq!(click(&mut view, 1, 12), Effect::None, "a plain closing row has nothing to fold");
         assert_eq!(drawn(&mut view, 44, 16), rows, "and folds nothing");
     }
 
@@ -1115,7 +1119,8 @@ mod tests {
         assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")), "{rows:?}");
         assert_eq!(rows[6], format!(" ├─{NEEDS_YOU} ship·f-bl"));
         assert_eq!(rows[7], COLLAPSE, "one closing row for alpha, its archived rows included");
-        assert_eq!(rows[8], format!(" ╭{NEEDS_YOU} beta"));
+        assert_eq!(rows[8], "", "one empty row between two Contexts");
+        assert_eq!(rows[9], format!(" ╭{NEEDS_YOU} beta"));
         assert!(!rows.iter().any(|r| r.contains('\u{F01D8}')), "no `󰇘` row: {rows:?}");
         // a click on an archived row is a click on its row: its history
         assert_eq!(click(&mut view, 3, 5), Effect::Run(Action::History(sid("l-old"))));
@@ -1124,12 +1129,12 @@ mod tests {
         // the closing row folds the archived rows only: the live ones stay
         assert_eq!(click(&mut view, 3, 7), Effect::None);
         let rows = drawn(&mut view, 44, 22);
-        assert_eq!((rows[4].as_str(), rows[5].as_str(), rows[6].as_str()), (format!(" ├─{IDLE} ship·f-id").as_str(), EXPAND, format!(" ╭{NEEDS_YOU} beta").as_str()));
+        assert_eq!((rows[4].as_str(), rows[5].as_str(), rows[6].as_str(), rows[7].as_str()), (format!(" ├─{IDLE} ship·f-id").as_str(), EXPAND, "", format!(" ╭{NEEDS_YOU} beta").as_str()));
         assert!(!rows.iter().any(|r| r.contains(" old") || r.contains("f-bl")), "{rows:?}");
         // an archived Context unfolds at its own closing row
-        assert_eq!(click(&mut view, 1, 12), Effect::None);
+        assert_eq!(click(&mut view, 1, 14), Effect::None);
         let rows = drawn(&mut view, 44, 22);
-        assert_eq!((rows[11].as_str(), rows[14].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), COLLAPSE), "{rows:?}");
+        assert_eq!((rows[13].as_str(), rows[16].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), COLLAPSE), "{rows:?}");
     }
 
     const UP_COLLAPSE: &str = "╰\u{F0063} collapse";
@@ -1204,30 +1209,30 @@ mod tests {
     fn a_click_below_the_last_row_does_nothing() {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 22);
-        assert_eq!(rows[14], EXPAND);
-        assert_eq!(click(&mut view, 1, 15), Effect::None, "the row right below the last");
-        assert_eq!(click(&mut view, 3, 16), Effect::None);
+        assert_eq!(rows[16], EXPAND);
+        assert_eq!(click(&mut view, 1, 17), Effect::None, "the row right below the last");
+        assert_eq!(click(&mut view, 3, 18), Effect::None);
         assert_eq!(drawn(&mut view, 44, 22), rows);
-        let _ = right_click(&mut view, 1, 15);
+        let _ = right_click(&mut view, 1, 17);
         assert_eq!(drawn(&mut view, 44, 22).len(), rows.len());
-        assert_eq!(drawn(&mut view, 44, 22)[14], EXPAND, "only the left button clicks, and no row was hit");
+        assert_eq!(drawn(&mut view, 44, 22)[16], EXPAND, "only the left button clicks, and no row was hit");
     }
 
     #[test]
     fn a_click_on_an_archived_session_shows_its_history_and_enter_n_and_x_never_act_on_one() {
         let mut view = View::new(archived(), true);
         drawn(&mut view, 44, 22);
-        click(&mut view, 1, 14);
+        click(&mut view, 1, 16);
         let rows = drawn(&mut view, 44, 22);
-        assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[13] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
+        assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
         // the archived Plan (its Lead), the archived fork of a live Plan, the Plan of the archived Context and its
         // fork: each shows the history of its Session
-        for ((column, row), id) in [((8, 5), "l-old"), ((8, 6), "f-blocked"), ((8, 14), "l-zp"), ((8, 15), "f-zp")] {
+        for ((column, row), id) in [((8, 5), "l-old"), ((8, 6), "f-blocked"), ((8, 16), "l-zp"), ((8, 17), "f-zp")] {
             assert_eq!(click(&mut view, column, row), Effect::Run(Action::History(sid(id))), "({column}, {row})");
             assert_eq!(drawn(&mut view, 44, 22), rows, "({column}, {row}) changes nothing");
         }
         // the archived Context's title does nothing
-        assert_eq!(click(&mut view, 5, 13), Effect::None);
+        assert_eq!(click(&mut view, 5, 15), Effect::None);
         // the cursor is put on archived rows by hand, as a bug might: no key acts on it
         press(&mut view, KeyCode::Down);
         for path in [&["alpha", "old"][..], &["alpha", "f-blocked"], &["zeta", "zp"], &["zeta", "f-zp"]] {
@@ -1285,13 +1290,13 @@ mod tests {
     }
 
     /// A view of `archived()` with the archived Context unfolded (a tall pane, 24 rows): the archived Plan `old` is
-    /// at row 5, its fork `f-blocked` at 6, the archived Context `zeta` at 13, its Plan at 14 and fork at 15.
+    /// at row 5, its fork `f-blocked` at 6, the archived Context `zeta` at 15, its Plan at 16 and fork at 17.
     fn archived_open() -> View {
         let mut view = View::new(archived(), true);
         drawn(&mut view, 44, 24);
-        click(&mut view, 1, 14); // `╰󰁋 expand` of the archived Context
+        click(&mut view, 1, 16); // `╰󰁋 expand` of the archived Context
         let rows = drawn(&mut view, 44, 24);
-        assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[13] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
+        assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
         view
     }
 
@@ -1299,15 +1304,15 @@ mod tests {
     fn a_right_click_on_an_archived_row_offers_rename_copy_id_and_unarchive_and_on_a_closing_row_nothing() {
         let mut view = archived_open();
         // the archived Plan, its fork, an archived Context and its Plan and fork
-        for (column, row) in [(8, 5), (8, 6), (8, 13), (8, 14), (8, 15)] {
+        for (column, row) in [(8, 5), (8, 6), (8, 15), (8, 16), (8, 17)] {
             assert_eq!(menu_at(&mut view, column, row), ["Rename…", "Copy id", "Unarchive"], "({column}, {row})");
             press(&mut view, KeyCode::Esc);
         }
         // the closing rows have none, the empty area has one
         drawn(&mut view, 44, 24);
-        for (column, row) in [(3, 7), (3, 10), (3, 12), (3, 16), (1, 21)] {
+        for (column, row) in [(3, 7), (3, 13), (3, 18), (1, 20)] {
             let _ = right_click(&mut view, column, row);
-            assert_eq!(view.menu.is_some(), row == 21, "({column}, {row}): a closing row has none, the empty area has one");
+            assert_eq!(view.menu.is_some(), row == 20, "({column}, {row}): a closing row has none, the empty area has one");
             view.menu = None;
         }
     }
@@ -1319,8 +1324,8 @@ mod tests {
         right_click(&mut view, 8, 5);
         let rows = drawn(&mut view, 44, 16);
         assert_eq!(rows[5], format!(" ├─{IDLE} shi┌─────────┐"), "{rows:?}");
-        assert_eq!(rows[6], format!(" ├─{NEEDS_YOU} shi│ Open    │"));
-        assert_eq!(rows[7], " ╰─     │ Rename… │", "drawn over the tree: {rows:?}");
+        assert_eq!(rows[6], format!(" ╰─{NEEDS_YOU} shi│ Open    │"));
+        assert_eq!(rows[7], "        │ Rename… │", "drawn over the tree, an empty row too: {rows:?}");
         assert_eq!(rows[12], " ╰─     └─────────┘");
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
@@ -1334,9 +1339,9 @@ mod tests {
         right_click(&mut view, 43, 15);
         let rows = drawn(&mut view, 44, 16);
         let box_row = |left: char, fill: &str, right: char| format!("{}{left}{fill}{right}", " ".repeat(27));
-        assert_eq!((rows[13].clone(), rows[14].clone()), (box_row('┌', &"─".repeat(14), '┐'), box_row('│', " New Context… ", '│')));
+        assert_eq!((rows[13].clone(), rows[15].clone()), (box_row('┌', &"─".repeat(14), '┐'), box_row('└', &"─".repeat(14), '┘')));
         // the menu is drawn over the Inbox title, which shows to its left
-        assert!(rows[15].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[15].ends_with("└──────────────┘"), "{rows:?}");
+        assert!(rows[14].starts_with(" ╭─\u{E0B6}Inbox\u{E0B4}─") && rows[14].ends_with("│ New Context… │"), "{rows:?}");
     }
 
     #[test]
@@ -1515,7 +1520,7 @@ mod tests {
         for (row, subject) in [
             (5, Subject::Plan(PlanId::parse("old").unwrap())),
             (6, Subject::Session(sid("f-blocked"))),
-            (13, Subject::Context(ContextId::parse("zeta").unwrap())),
+            (15, Subject::Context(ContextId::parse("zeta").unwrap())),
         ] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
@@ -1532,7 +1537,7 @@ mod tests {
             Ok(Some(Action::RenamePlan { id: PlanId::parse("old").unwrap(), title: "Older".into() }))
         );
         drawn(&mut view, 44, 24);
-        right_click(&mut view, 8, 13);
+        right_click(&mut view, 8, 15);
         let rename = Question::input("Rename", Ask::RenameContext(ContextId::parse("zeta").unwrap()), "Zeta".into());
         assert_eq!(asked(press(&mut view, KeyCode::Enter)), rename);
         // and of an archived fork: its name
@@ -1556,7 +1561,7 @@ mod tests {
         }
         // archived rows: a Plan, a fork of it, an archived Context
         let mut view = archived_open();
-        for (row, id) in [(5, "old"), (6, "ship·f-bl"), (13, "zeta")] {
+        for (row, id) in [(5, "old"), (6, "ship·f-bl"), (15, "zeta")] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
             assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyId(id.into())), "row {row}");
@@ -1566,7 +1571,7 @@ mod tests {
     /// Right-clicks (`column`, `row`) and picks the item `index` of its menu with Enter.
     fn pick_at(view: &mut View, column: u16, row: u16, index: usize) -> Effect {
         view.menu = None;
-        drawn(view, 44, 20);
+        drawn(view, 44, 24);
         right_click(view, column, row);
         for _ in 0..index {
             press(view, KeyCode::Down);
@@ -1656,7 +1661,7 @@ mod tests {
     fn new_context_with_no_owner_policy_is_refused_in_a_dialog_and_runs_nothing() {
         let (mut view, _dir) = owned(sample(), &["notes.md"]);
         assert_eq!(
-            pick_at(&mut view, 8, 17, 0),
+            pick_at(&mut view, 8, 15, 0),
             Effect::text("New Context", "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml"),
             "no input popup opens"
         );
@@ -1665,7 +1670,7 @@ mod tests {
     #[test]
     fn new_context_with_several_owners_asks_which_after_the_title() {
         let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml", "other.toml"]);
-        let question = popup_at(&mut view, 8, 17, 0);
+        let question = popup_at(&mut view, 8, 15, 0);
         // two popups: the title, then the owner (`Owner (<owners>):`); a name that is no owner is refused after it
         struct Typed(std::cell::RefCell<Vec<(String, &'static str)>>, &'static str);
         impl Dialogs for Typed {
@@ -1691,7 +1696,7 @@ mod tests {
     #[test]
     fn new_context_opens_an_input_popup_for_a_title_and_derives_the_id() {
         let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml"]);
-        let question = popup_at(&mut view, 8, 17, 0);
+        let question = popup_at(&mut view, 8, 15, 0);
         let Question::Input { title, ref ask, ref initial } = question else { panic!("an input") };
         assert_eq!((title, initial.as_str()), ("New Context", ""));
         assert!(matches!(ask, Ask::NewContext { taken, owners } if taken == &["alpha", "beta", "gamma"] && owners == &["clayton-duarte"]), "{ask:?}");
@@ -1702,7 +1707,7 @@ mod tests {
         assert_eq!(answered(question, None), Ok(None), "a cancel runs nothing");
         // a taken id (also of an archived Context) gets `-2`, then `-3`
         view.refresh(archived());
-        let question = popup_at(&mut view, 8, 17, 0);
+        let question = popup_at(&mut view, 8, 18, 0);
         assert_eq!(
             answered(question.clone(), Some("Alpha")),
             Ok(Some(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into() }))
@@ -1876,7 +1881,14 @@ mod tests {
 
     /// The title of the section at 43 columns: a blank margin, then the pill, the line and the count of `n` items.
     fn header(n: usize) -> String {
-        format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}{n}", "─".repeat(41 - 2 - 7 - n.to_string().len()))
+        format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}{n}\u{E0B4}", "─".repeat(41 - 2 - 7 - (n.to_string().len() + 2)))
+    }
+
+    /// The row of the Inbox's title: it is the pill title with the count pill (hs-d480), asserted whole.
+    fn inbox_title_y(rows: &[String], n: usize) -> u16 {
+        let y = rows.iter().position(|r| r.starts_with(" ╭─\u{E0B6}Inbox")).expect("the Inbox title");
+        assert_eq!(rows[y], header(n));
+        y as u16
     }
 
     /// An item row at 43 columns: the margin, the fold's `│`, a space, the icon, a space, the label, the age ending at the last column of the inner area.
@@ -1895,43 +1907,36 @@ mod tests {
     }
 
     #[test]
-    fn with_no_item_the_section_is_its_header_pinned_to_the_bottom() {
-        let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
-        assert_eq!(rows[15], header(0));
-        assert_eq!(rows[14], "", "no rows");
-        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"), "the tree above is where it was");
-    }
-
-    #[test]
     fn three_items_are_three_rows_with_the_age_at_the_right_edge_and_a_plain_close() {
         let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 16));
-        assert_eq!(rows[10], "", "the empty row above the title");
-        assert_eq!(rows[11], header(3));
-        assert_eq!(rows[12], item_row("f-blocked: Worker question", "42s"));
-        assert_eq!(rows[13], item_row("acme/api#12 checks failed", "5m"));
-        assert_eq!(rows[14], item_row("ship: Job c is stuck", "3h"));
-        assert_eq!(rows[15], " ╰─", "nothing to fold");
-        assert_eq!(rows[12].chars().count(), 42, "the age ends in column 41, the last of the inner area");
+        assert_eq!(rows[9], "", "the empty row above the title");
+        assert_eq!(rows[10], header(3));
+        assert_eq!(rows[11], item_row("f-blocked: Worker question", "42s"));
+        assert_eq!(rows[12], item_row("acme/api#12 checks failed", "5m"));
+        assert_eq!(rows[13], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[14], " ╰─", "nothing to fold");
+        assert_eq!(rows[15], "", "the empty row below the section");
+        assert_eq!(rows[11].chars().count(), 42, "the age ends in column 41, the last of the inner area");
     }
 
     #[test]
     fn five_items_show_three_and_the_arrow_and_a_click_expands_and_folds_inline() {
-        // 21 rows: the tree's 12 and the expanded section's 8 fit the column, so the section shows all five items
+        // 22 rows: the tree's 12 and the expanded section's 9 fit the column, so the section shows all five items
         let mut view = with_inbox(5);
-        let rows = text_rows(&draw_now(&mut view, 43, 21));
+        let rows = text_rows(&draw_now(&mut view, 43, 22));
         assert_eq!(rows[15], "", "the empty row above the title");
         assert_eq!(rows[16], header(5));
         assert_eq!(rows[19], item_row("ship: Job c is stuck", "3h"));
         assert_eq!(rows[20], EXPAND);
         assert_eq!(click(&mut view, 20, 20), Effect::None, "a view-state change: no command");
-        let rows = text_rows(&draw_now(&mut view, 43, 21));
+        let rows = text_rows(&draw_now(&mut view, 43, 22));
         assert_eq!(rows[13], "", "the empty row above the title");
         assert_eq!(rows[14], header(5));
         assert_eq!(rows[18], item_row("engine: store busy", "2d"));
         assert_eq!(rows[19], item_row("ship lead has a reply", "10m"));
         assert_eq!(rows[20], COLLAPSE);
         assert_eq!(click(&mut view, 3, 20), Effect::None);
-        let rows = text_rows(&draw_now(&mut view, 43, 21));
+        let rows = text_rows(&draw_now(&mut view, 43, 22));
         assert_eq!((rows[16].clone(), rows[20].clone()), (header(5), EXPAND.to_owned()), "folded again");
     }
 
@@ -1940,24 +1945,24 @@ mod tests {
         let mut view = with_inbox(5);
         let buf = draw_now(&mut view, 43, 16);
         for x in 1..12 {
-            let cell = &buf[(x, 15)];
+            let cell = &buf[(x, 14)];
             if cell.symbol() != " " {
                 assert_eq!(cell.fg, palette::color(crate::palette::Meaning::Nothing), "`╰󰁋 expand` is muted: column {x}");
                 assert!(!cell.modifier.contains(Modifier::BOLD));
             }
         }
         // the title does nothing; a click on an item keeps its action
-        assert_eq!(click(&mut view, 20, 11), Effect::None);
+        assert_eq!(click(&mut view, 20, 10), Effect::None);
         assert!(!view.inbox_expanded, "the title does not toggle");
-        assert_eq!(click(&mut view, 20, 12), Effect::Run(Action::Open(sid("f-blocked"))), "an item jumps");
+        assert_eq!(click(&mut view, 20, 11), Effect::Run(Action::Open(sid("f-blocked"))), "an item jumps");
         assert!(!view.inbox_expanded, "an item row does not toggle");
-        assert_eq!(click(&mut view, 20, 15), Effect::None);
+        assert_eq!(click(&mut view, 20, 14), Effect::None);
         assert!(view.inbox_expanded, "`╰󰁋 expand` does");
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[15], COLLAPSE);
+        assert_eq!(rows[14], COLLAPSE);
         assert_eq!(click(&mut view, 20, rows.iter().position(|r| r.starts_with(" ╭─\u{E0B6}Inbox")).unwrap() as u16), Effect::None);
         assert!(view.inbox_expanded, "the title does not fold it");
-        click(&mut view, 20, 15);
+        click(&mut view, 20, 14);
         assert!(!view.inbox_expanded, "`╰󰁣 collapse` does");
     }
 
@@ -1967,12 +1972,12 @@ mod tests {
         press(&mut view, KeyCode::Down);
         view.state.select(vec!["beta".into(), "rel".into()]);
         let rows = text_rows(&draw_now(&mut view, 43, 14));
-        assert_eq!(rows[9], header(5), "{rows:?}");
-        assert_eq!(rows[8], "", "the empty row above it");
-        assert_eq!(rows[1], cue_row_at('▲', 4), "the tree's cue is right-aligned: {rows:?}");
-        assert_eq!(rows[7], cue_row_at('▼', 3), "{rows:?}");
-        assert!(rows[2..7].iter().any(|r| r.starts_with(&format!(" ├─{NEEDS_YOU} rel"))), "the cursor's Session is between the cues: {rows:?}");
-        assert!(!rows[1..8].iter().any(|r| r.contains("alpha")), "the top of the tree scrolled away: {rows:?}");
+        assert_eq!(rows[8], header(5), "{rows:?}");
+        assert_eq!(rows[7], "", "the empty row above it");
+        assert_eq!(rows[1], cue_row_at('▲', 5), "the tree's cue is right-aligned: {rows:?}");
+        assert_eq!(rows[6], cue_row_at('▼', 3), "{rows:?}");
+        assert!(rows[2..6].iter().any(|r| r.starts_with(&format!(" ╰─{NEEDS_YOU} rel"))), "the cursor's Session is between the cues: {rows:?}");
+        assert!(!rows[1..7].iter().any(|r| r.contains("alpha")), "the top of the tree scrolled away: {rows:?}");
     }
 
     #[test]
@@ -1982,10 +1987,10 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 16));
         let label = "f-blocked: a very long question …"; // 41 - 4 (`│`, a space, the icon, a space) - 1 (space) - 3 (age) = 33 columns
         assert_eq!(label.chars().count(), 33);
-        assert_eq!(rows[14], format!(" │ {NEEDS_YOU} {label} 42s"));
+        assert_eq!(rows[13], format!(" │ {NEEDS_YOU} {label} 42s"));
         view.tree.inbox[0].label = "x".repeat(33);
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[14], format!(" │ {NEEDS_YOU} {} 42s", "x".repeat(33)), "a label that fits is not cut");
+        assert_eq!(rows[13], format!(" │ {NEEDS_YOU} {} 42s", "x".repeat(33)), "a label that fits is not cut");
     }
 
     #[test]
@@ -1995,7 +2000,7 @@ mod tests {
             let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
             let at = OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339).unwrap();
             terminal.draw(|f| view.draw_at(f, 0, at)).unwrap();
-            text_rows(terminal.backend().buffer())[14].clone()
+            text_rows(terminal.backend().buffer())[13].clone()
         };
         let ends = |row: String| row.trim_end().rsplit(' ').next().unwrap().to_owned();
         assert_eq!(ends(draw_at(&mut view, "2026-01-02T23:59:19.000Z")), "1s");
@@ -2009,21 +2014,21 @@ mod tests {
         let buf = draw_now(&mut with_inbox(5), 43, 16);
         let rows = text_rows(&buf);
         let muted = palette::color(palette::Meaning::Nothing);
-        for (y, colour) in [(12, palette::Meaning::Failed), (13, palette::Meaning::Failed), (14, palette::Meaning::Review)].map(|(y, m)| (y, palette::color(m))) {
+        for (y, colour) in [(11, palette::Meaning::Failed), (12, palette::Meaning::Failed), (13, palette::Meaning::Review)].map(|(y, m)| (y, palette::color(m))) {
             assert!(rows[y].starts_with(&format!(" │ {NEEDS_YOU} ")), "the icon in row {y}: {rows:?}");
             assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted), "the branch of row {y}");
             assert_eq!((buf[(3, y as u16)].symbol(), buf[(3, y as u16)].fg), (NEEDS_YOU, colour), "the icon of row {y}");
             assert_ne!(buf[(5, y as u16)].fg, muted, "the label of row {y} is not muted");
         }
-        assert_eq!(buf[(40, 12)].fg, muted, "the age");
+        assert_eq!(buf[(40, 11)].fg, muted, "the age");
     }
 
     #[test]
     fn a_click_on_each_kind_runs_its_action() {
         let mut view = with_inbox(5);
-        draw_now(&mut view, 43, 21);
+        draw_now(&mut view, 43, 22);
         click(&mut view, 20, 20); // expand
-        draw_now(&mut view, 43, 21);
+        draw_now(&mut view, 43, 22);
         // rows 15.. are (the sample tree has 12 rows: one `└ collapse` per Context) the five items: dialog, pr-failing, job-stuck, engine-error, unread
         assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::Open(sid("f-blocked"))), "dialog: session open");
         assert_eq!(click(&mut view, 10, 16), Effect::None, "pr-failing (an old row, hs-d470): no click");
@@ -2062,15 +2067,15 @@ mod tests {
         let mut view = with_inbox(2);
         draw_now(&mut view, 43, 16);
         let before = view.inbox_expanded;
-        assert_eq!(click(&mut view, 10, 13), Effect::Run(Action::Open(sid("f-blocked"))));
-        assert_eq!(click(&mut view, 10, 14), Effect::None, "a pr-failing (an old row, hs-d470): no click, no url copy");
-        assert_eq!(click(&mut view, 10, 12), Effect::None, "the header");
+        assert_eq!(click(&mut view, 10, 12), Effect::Run(Action::Open(sid("f-blocked"))));
+        assert_eq!(click(&mut view, 10, 13), Effect::None, "a pr-failing (an old row, hs-d470): no click, no url copy");
+        assert_eq!(click(&mut view, 10, 11), Effect::None, "the header");
         assert_eq!(view.inbox_expanded, before);
         let mut question = item(6, InboxKind::Question, Urgency::Magenta, "alpha: a question", "2026-01-02T23:00:00.000Z");
         question.context = Some(ContextId::parse("alpha").unwrap());
         view.tree.inbox = vec![question];
         draw_now(&mut view, 43, 16);
-        assert_eq!(click(&mut view, 10, 14), Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap())));
+        assert_eq!(click(&mut view, 10, 13), Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap())));
     }
 
     #[test]
@@ -2081,8 +2086,8 @@ mod tests {
         let down = item(8, InboxKind::EngineDown, Urgency::Red, "engine is down", "2026-01-02T23:00:00.000Z");
         view.tree.inbox = vec![down, unread];
         draw_now(&mut view, 43, 18);
-        assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::EnsureWatch));
-        assert_eq!(click(&mut view, 10, 16), Effect::Run(Action::History(sid("f-blocked"))));
+        assert_eq!(click(&mut view, 10, 14), Effect::Run(Action::EnsureWatch));
+        assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::History(sid("f-blocked"))));
     }
 
     /// The row of the Inbox item `i`, as the last frame drew it: under the empty row and the title.
@@ -2194,7 +2199,7 @@ mod tests {
         // the toggle row and the header are skipped; expanded, the cursor reaches every item
         let toggle = inbox_row(&view, 3);
         click(&mut view, 20, toggle);
-        draw_now(&mut view, 43, 21);
+        draw_now(&mut view, 43, 22);
         press(&mut view, KeyCode::Down);
         for _ in 0..9 {
             press(&mut view, KeyCode::Down);
@@ -2220,8 +2225,8 @@ mod tests {
         let header = view.inbox_area.y + 1;
         click(&mut view, 20, header);
         let buf = draw_now(&mut view, 43, 16);
-        // (row 11 is the title, whose pill is inverted by design)
-        let lit: Vec<_> = (0..16).filter(|&y| y != 11).flat_map(|y| (0..43).map(move |x| (x, y))).filter(|&(x, y)| buf[(x, y)].modifier.contains(Modifier::REVERSED)).collect();
+        // (row 10 is the title, whose pill is inverted by design)
+        let lit: Vec<_> = (0..16).filter(|&y| y != 10).flat_map(|y| (0..43).map(move |x| (x, y))).filter(|&(x, y)| buf[(x, y)].modifier.contains(Modifier::REVERSED)).collect();
         assert!(lit.is_empty(), "{lit:?}");
         assert_eq!(view.inbox_cursor, Some(0));
         press(&mut view, KeyCode::Down);
@@ -2349,7 +2354,7 @@ mod tests {
 
     /// `n` open items `item 00`, `item 01`, … (ages `1d`), a view of them on the sample tree (12 rows) expanded and drawn
     /// at 43x40: the tree needs less than its two thirds, so the section has the other 27 rows, from row 13: the empty
-    /// row, the title, 24 rows of list (items between their cues) and the closing row.
+    /// row, the title, 23 rows of list (items between their cues), the closing row and the empty row.
     fn fifty(n: usize) -> (View, Vec<String>) {
         let mut view = View::new(sample(), true);
         view.tree.inbox = (0..n)
@@ -2360,7 +2365,7 @@ mod tests {
             })
             .collect();
         draw_now(&mut view, 43, 40);
-        assert_eq!(click(&mut view, 20, 39), Effect::None, "`╰󰁋 expand` expands");
+        assert_eq!(click(&mut view, 20, 38), Effect::None, "`╰󰁋 expand` expands");
         let rows = text_rows(&draw_now(&mut view, 43, 40));
         (view, rows)
     }
@@ -2381,9 +2386,10 @@ mod tests {
         assert_eq!(rows[14], header(50));
         assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"), "the tree is above it");
         assert_eq!(rows[12], " ╰─", "the tree's rows are its 12, then the section's empty row");
-        assert_eq!((label(&rows[15]), label(&rows[37])), ("item 00", "item 22"));
-        assert_eq!(rows[38], cue_row('▼', 27), "the last row of the list is the cue, right-aligned after the line");
-        assert_eq!(rows[39], COLLAPSE, "the closing row stays in view");
+        assert_eq!((label(&rows[15]), label(&rows[36])), ("item 00", "item 21"));
+        assert_eq!(rows[37], cue_row('▼', 28), "the last row of the list is the cue, right-aligned after the line");
+        assert_eq!(rows[38], COLLAPSE, "the closing row stays in view");
+        assert_eq!(rows[39], "", "and the empty row below it");
         assert!(!rows.iter().any(|r| r.contains("▲")), "nothing is hidden above: no cue");
     }
 
@@ -2393,24 +2399,24 @@ mod tests {
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
         let rows = text_rows(&draw_now(&mut view, 43, 40));
         assert_eq!(rows[15], cue_row('▲', 3));
-        assert_eq!((label(&rows[16]), label(&rows[37])), ("item 03", "item 24"));
-        assert_eq!(rows[38], cue_row('▼', 25));
+        assert_eq!((label(&rows[16]), label(&rows[36])), ("item 03", "item 23"));
+        assert_eq!(rows[37], cue_row('▼', 26));
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
         assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[15], cue_row('▲', 6));
         for _ in 0..30 {
             wheel(&mut view, MouseEventKind::ScrollDown, 10, 39);
         }
         let rows = text_rows(&draw_now(&mut view, 43, 40));
-        assert_eq!(rows[15], cue_row('▲', 27), "clamped: the last item reaches the bottom");
-        assert_eq!((label(&rows[16]), label(&rows[38])), ("item 27", "item 49"));
+        assert_eq!(rows[15], cue_row('▲', 28), "clamped: the last item reaches the bottom");
+        assert_eq!((label(&rows[16]), label(&rows[37])), ("item 28", "item 49"));
         assert!(!rows.iter().any(|r| r.contains("▼")), "nothing is hidden below: no cue");
         wheel(&mut view, MouseEventKind::ScrollUp, 10, 22);
-        assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[15], cue_row('▲', 24));
+        assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[15], cue_row('▲', 25));
         for _ in 0..30 {
             wheel(&mut view, MouseEventKind::ScrollUp, 10, 20);
         }
         let rows = text_rows(&draw_now(&mut view, 43, 40));
-        assert_eq!((label(&rows[15]), rows[38].as_str()), ("item 00", cue_row('▼', 27).as_str()));
+        assert_eq!((label(&rows[15]), rows[37].as_str()), ("item 00", cue_row('▼', 28).as_str()));
     }
 
     #[test]
@@ -2419,7 +2425,7 @@ mod tests {
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 0);
         assert_eq!(view.inbox_scroll, 0, "the wheel over the tree is the tree's");
-        assert_eq!(click(&mut view, 10, 38), Effect::None, "the ▼ cue");
+        assert_eq!(click(&mut view, 10, 37), Effect::None, "the ▼ cue");
         assert_eq!(view.inbox_scroll, 0);
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
         draw_now(&mut view, 43, 40);
@@ -2437,9 +2443,9 @@ mod tests {
         view.refresh(tree);
         let rows = text_rows(&draw_now(&mut view, 43, 40));
         assert_eq!((rows[15].clone(), label(&rows[16])), (cue_row('▲', 3), "item 03"));
-        click(&mut view, 3, 39);
+        click(&mut view, 3, 38);
         let rows = text_rows(&draw_now(&mut view, 43, 40));
-        assert_eq!((rows[34].clone(), rows[35].clone(), rows[39].clone()), (String::new(), header(49), EXPAND.to_owned()));
+        assert_eq!((rows[33].clone(), rows[34].clone(), rows[38].clone()), (String::new(), header(49), EXPAND.to_owned()));
         assert_eq!(view.inbox_scroll, 0);
     }
 
@@ -2455,7 +2461,7 @@ mod tests {
         let buf = draw_now(&mut view, 43, 40);
         let rows = text_rows(&buf);
         let shown = rows.iter().position(|r| r.contains(&format!("item {at:02}"))).expect("the cursor's item is drawn");
-        assert!((16..38).contains(&shown), "between the cues: {rows:?}");
+        assert!((16..37).contains(&shown), "between the cues: {rows:?}");
         assert!(buf[(5, shown as u16)].modifier.contains(Modifier::REVERSED));
         // down to the last item, then back up to the first
         for _ in 0..60 {
@@ -2463,14 +2469,14 @@ mod tests {
         }
         let buf = draw_now(&mut view, 43, 40);
         let rows = text_rows(&buf);
-        assert_eq!(label(&rows[38]), "item 49", "{rows:?}");
-        assert!(buf[(5, 38)].modifier.contains(Modifier::REVERSED));
+        assert_eq!(label(&rows[37]), "item 49", "{rows:?}");
+        assert!(buf[(5, 37)].modifier.contains(Modifier::REVERSED));
         for _ in 0..49 {
             press(&mut view, KeyCode::Up);
         }
         let buf = draw_now(&mut view, 43, 40);
         let rows = text_rows(&buf);
-        assert_eq!((label(&rows[15]), rows[38].as_str()), ("item 00", cue_row('▼', 27).as_str()));
+        assert_eq!((label(&rows[15]), rows[37].as_str()), ("item 00", cue_row('▼', 28).as_str()));
         assert!(buf[(5, 15)].modifier.contains(Modifier::REVERSED));
     }
 
@@ -2513,11 +2519,11 @@ mod tests {
     #[test]
     fn both_fit_each_takes_its_rows_and_the_leftover_is_empty_between_them() {
         let (view, rows) = shared(sample(), 3, false, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 25, 41, 6), "the empty row, the title, three items and `╰─`: as tall as its rows, pinned to the bottom");
+        assert_eq!(view.inbox_area, Rect::new(1, 24, 41, 7), "the empty row, the title, three items, `╰─` and the empty row: as tall as its rows, pinned to the bottom");
         assert!(rows[1].starts_with(&format!(" ╭{NEEDS_YOU} alpha")), "{rows:?}");
         assert_eq!(rows[12], " ╰─", "the tree's last row: {rows:?}");
-        assert!(rows[13..26].iter().all(|r| r.is_empty()), "the gap, and the section's empty row above its title: {rows:?}");
-        assert_eq!((rows[26].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰─"), "{rows:?}");
+        assert!(rows[13..25].iter().all(|r| r.is_empty()), "the gap, and the section's empty row above its title: {rows:?}");
+        assert_eq!((rows[25].as_str(), rows[29].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰─", ""), "{rows:?}");
         assert!(!rows.iter().any(|r| r.contains('▲') || r.contains('▼')), "no cue when all fit: {rows:?}");
     }
 
@@ -2527,32 +2533,32 @@ mod tests {
         assert_eq!(view.inbox_area, Rect::new(1, 21, 41, 10), "the Inbox has a third of the column's rows, its empty row among them");
         assert_eq!(rows[21], "", "the empty row above the title");
         assert_eq!(rows[22], header(50));
-        assert_eq!((label(&rows[23]), label(&rows[28])), ("item 00", "item 05"));
-        assert_eq!(rows[29], cue_row('▼', 44), "the Inbox's cue, right-aligned: {rows:?}");
-        assert_eq!(rows[30], COLLAPSE);
+        assert_eq!((label(&rows[23]), label(&rows[27])), ("item 00", "item 04"));
+        assert_eq!(rows[28], cue_row('▼', 45), "the Inbox's cue, right-aligned: {rows:?}");
+        assert_eq!((rows[29].as_str(), rows[30].as_str()), (COLLAPSE, ""));
         assert!(rows[1].ends_with(" alpha"), "the tree starts at the top: {rows:?}");
         assert!(rows[19].contains("p17"), "the tree's 19th row: {rows:?}");
-        assert_eq!(rows[20], cue_row_at('▼', 43), "the tree's cue is the last of its 20 rows, right-aligned: {rows:?}");
+        assert_eq!(rows[20], cue_row_at('▼', 42), "the tree's cue is the last of its 20 rows, right-aligned: {rows:?}");
     }
 
     #[test]
     fn a_long_tree_and_a_short_expanded_inbox_give_the_rest_to_the_tree() {
         let (view, rows) = shared(long_tree(60), 4, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 24, 41, 7), "the empty row, the title, four items and `╰󰁣 collapse`");
-        assert_eq!((rows[24].clone(), rows[25].clone(), label(&rows[29]).to_owned(), rows[30].clone()), (String::new(), header(4), "item 03".to_owned(), COLLAPSE.to_owned()));
-        assert_eq!(rows[23], cue_row_at('▼', 40), "the tree has 23 rows: {rows:?}");
-        assert!(!rows[1..23].iter().any(|r| r.is_empty() || r.contains('▼')), "{rows:?}");
+        assert_eq!(view.inbox_area, Rect::new(1, 23, 41, 8), "the empty row, the title, four items, `╰󰁣 collapse` and the empty row");
+        assert_eq!((rows[23].clone(), rows[24].clone(), label(&rows[28]).to_owned(), rows[29].clone()), (String::new(), header(4), "item 03".to_owned(), COLLAPSE.to_owned()));
+        assert_eq!(rows[22], cue_row_at('▼', 40), "the tree has 22 rows: {rows:?}");
+        assert!(!rows[1..22].iter().any(|r| r.is_empty() || r.contains('▼')), "{rows:?}");
     }
 
     #[test]
     fn a_short_tree_and_a_long_inbox_give_the_rest_to_the_inbox() {
         let (view, rows) = shared(long_tree(2), 50, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 5, 41, 26), "four tree rows (its `╰─` too), the rest to the Inbox");
-        assert!(rows[1].ends_with(" alpha") && rows[3].contains("p01") && rows[4] == " ╰─", "{rows:?}");
-        assert_eq!(rows[5], "", "the empty row above the title");
-        assert_eq!(rows[6], header(50));
-        assert_eq!((label(&rows[7]), label(&rows[28])), ("item 00", "item 21"));
-        assert_eq!((rows[29].as_str(), rows[30].as_str()), (cue_row('▼', 28).as_str(), COLLAPSE));
+        assert_eq!(view.inbox_area, Rect::new(1, 4, 41, 27), "three tree rows (the last row's `╰─` ends it), the rest to the Inbox");
+        assert!(rows[1].ends_with(" alpha") && rows[3].contains("p01") && rows[3].starts_with(" ╰─"), "{rows:?}");
+        assert_eq!(rows[4], "", "the empty row above the title");
+        assert_eq!(rows[5], header(50));
+        assert_eq!((label(&rows[6]), label(&rows[27])), ("item 00", "item 21"));
+        assert_eq!((rows[28].as_str(), rows[29].as_str(), rows[30].as_str()), (cue_row('▼', 28).as_str(), COLLAPSE, ""));
     }
 
     #[test]
@@ -2562,20 +2568,20 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 31));
         assert_eq!(rows[1], cue_row_at('▲', 3), "right-aligned");
         assert!(rows[2].contains("p02"), "{rows:?}");
-        assert_eq!(rows[20], cue_row_at('▼', 41));
+        assert_eq!(rows[20], cue_row_at('▼', 40));
         assert_eq!(view.inbox_scroll, 0, "the wheel over the tree leaves the Inbox alone");
         for _ in 0..40 {
             wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
         }
         let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert_eq!(rows[1], cue_row_at('▲', 43), "clamped: the last row reaches the bottom of the tree's rows");
-        assert!(rows[19].contains("p59") && rows[20] == " ╰─", "{rows:?}");
+        assert_eq!(rows[1], cue_row_at('▲', 42), "clamped: the last row reaches the bottom of the tree's rows");
+        assert!(rows[20].contains("p59") && rows[20].starts_with(" ╰─"), "{rows:?}");
         assert!(!rows[1..21].iter().any(|r| r.contains('▼')), "nothing hidden below: {rows:?}");
         for _ in 0..40 {
             wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
         }
         let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert!(rows[1].ends_with(" alpha") && rows[20] == cue_row_at('▼', 43), "{rows:?}");
+        assert!(rows[1].ends_with(" alpha") && rows[20] == cue_row_at('▼', 42), "{rows:?}");
     }
 
     #[test]
@@ -2584,7 +2590,7 @@ mod tests {
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
         let rows = text_rows(&draw_now(&mut view, 43, 31));
         assert_eq!(rows[23], cue_row('▲', 3));
-        assert_eq!((label(&rows[24]), rows[29].as_str()), ("item 03", cue_row('▼', 42).as_str()));
+        assert_eq!((label(&rows[24]), rows[28].as_str()), ("item 03", cue_row('▼', 43).as_str()));
         assert!(rows[1].ends_with(" alpha"), "the tree did not move: {rows:?}");
         assert_eq!(click(&mut view, 10, 1 + 20 - 1), Effect::None, "the tree's ▼ cue is no row");
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
@@ -2602,10 +2608,10 @@ mod tests {
         let buf = draw_now(&mut view, 43, 31);
         let rows = text_rows(&buf);
         let at = rows.iter().position(|r| r.contains("p39")).expect("the cursor's Session is drawn");
-        assert!((2..24).contains(&at), "between the cues: {rows:?}");
+        assert!((2..23).contains(&at), "between the cues: {rows:?}");
         assert!(buf[(5, at as u16)].modifier.contains(Modifier::REVERSED));
-        assert!(rows[1].trim_start().starts_with('▲') && rows[24].trim_start().starts_with('▼'), "{rows:?}");
-        assert_eq!((rows[1].as_str(), rows[24].as_str()), (cue_row_at('▲', 19).as_str(), cue_row_at('▼', 21).as_str()), "right-aligned: {rows:?}");
+        assert!(rows[1].trim_start().starts_with('▲') && rows[23].trim_start().starts_with('▼'), "{rows:?}");
+        assert_eq!((rows[1].as_str(), rows[23].as_str()), (cue_row_at('▲', 20).as_str(), cue_row_at('▼', 20).as_str()), "right-aligned: {rows:?}");
         let before = rows.clone();
         wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
         assert_ne!(text_rows(&draw_now(&mut view, 43, 31)), before, "the wheel moved it, though the cursor is out of sight");
@@ -2756,6 +2762,135 @@ mod tests {
         view.watch_engine(t0, &mut refuse, &mut || Ok(vec![SessionId::parse("m-alpha").unwrap()]));
         let lines = view.watch_engine(secs(t0, 60), &mut refuse, &mut || Ok(vec![SessionId::parse("m-alpha").unwrap()]));
         assert!(lines.iter().any(|l| l.contains("no tmux")), "{lines:?}");
+    }
+
+    // ---------- spacing v2, the grey title and no closing row to fold nothing (hs-d475, hs-d476, hs-d477): red until the tree draws them ----------
+
+    #[test]
+    fn a_context_with_nothing_to_fold_ends_with_its_last_rows_corner_branch_and_no_closing_row() {
+        let rows = drawn(&mut View::new(sample(), true), 44, 26);
+        let starts = |row: usize, text: String| assert!(rows[row].starts_with(&text), "row {row} starts with {text:?}: {rows:#?}");
+        assert_eq!(rows[0], "", "the first block's empty row above");
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"));
+        starts(2, format!(" ├─{WORKING} ship"));
+        starts(3, format!(" ├─{IDLE} sketch"));
+        starts(4, format!(" ├─{STOPPED} old"));
+        starts(5, format!(" ├─{IDLE} ship·f-id"));
+        starts(6, format!(" ╰─{NEEDS_YOU} ship·f-bl"));
+        assert_eq!(rows[7], "", "one empty row between two blocks, not two (the Lead's assumption: adjacent margins collapse)");
+        assert_eq!(rows[8], format!(" ╭{NEEDS_YOU} beta"));
+        starts(9, format!(" ╰─{NEEDS_YOU} rel"));
+        assert_eq!(rows[10], "");
+        assert_eq!(rows.iter().filter(|r| r.trim() == "╰─").count(), 1, "no plain `╰─` line but the Context with no row's: {rows:#?}");
+    }
+
+    #[test]
+    fn a_context_with_archived_rows_keeps_its_closing_row_and_its_rows_keep_the_branch() {
+        let rows = drawn(&mut View::new(archived(), true), 44, 26);
+        let starts = |row: usize, text: String| assert!(rows[row].starts_with(&text), "row {row} starts with {text:?}: {rows:#?}");
+        assert_eq!(rows[0], "");
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"));
+        starts(2, format!(" ├─{WORKING} ship"));
+        starts(3, format!(" ├─{IDLE} sketch"));
+        starts(4, format!(" ├─{IDLE} ship·f-id"));
+        starts(5, format!(" ├─{STOPPED} old"));
+        starts(6, format!(" ├─{NEEDS_YOU} ship·f-bl"));
+        assert_eq!(rows[7], COLLAPSE, "the closing row of the expanded Context");
+        assert_eq!(rows[8], "");
+        assert_eq!(rows[9], format!(" ╭{NEEDS_YOU} beta"));
+        starts(10, format!(" ╰─{NEEDS_YOU} rel"));
+        assert_eq!(rows[11], "");
+        assert_eq!(rows[12], format!(" ╭{STOPPED} gamma"));
+        assert_eq!(rows[13], " ╰─", "a Context with no row at all stays as it was");
+        assert_eq!(rows[14], "");
+        assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
+        assert_eq!(rows[16], EXPAND, "the folded Context with archived rows: `╰󰁋 expand`");
+        assert_eq!(rows[17], "");
+    }
+
+    #[test]
+    fn a_context_with_no_row_at_all_is_its_title_and_a_plain_corner_line_as_before() {
+        let tree = super::super::fixture::tree(vec![super::super::fixture::context("gamma", vec![])]);
+        let rows = drawn(&mut View::new(tree, true), 44, 10);
+        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰─".to_owned()]);
+    }
+
+    #[test]
+    fn with_no_item_the_section_is_an_empty_row_the_title_and_an_empty_row_pinned_to_the_bottom() {
+        let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
+        assert_eq!(rows[13], "", "the empty row above the title");
+        assert_eq!(rows[14], header(0));
+        assert_eq!(rows[15], "", "the empty row below it");
+    }
+
+    #[test]
+    fn three_items_close_with_a_plain_line_and_an_empty_row_below() {
+        let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 22));
+        assert_eq!(rows[15], "", "the empty row above the title");
+        assert_eq!(rows[16], header(3));
+        assert_eq!(rows[17], item_row("f-blocked: Worker question", "42s"));
+        assert_eq!(rows[19], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[20], " ╰─", "nothing to fold");
+        assert_eq!(rows[21], "", "the empty row below the section");
+    }
+
+    #[test]
+    fn five_items_fold_between_an_empty_row_above_and_one_below_and_the_tree_above_shares_the_row() {
+        // 20 rows: the tree's 12 (its last block's empty row below is the section's empty row above) and the section's 7
+        let rows = text_rows(&draw_now(&mut with_inbox(5), 43, 20));
+        assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
+        assert_eq!(rows[12], " ╰─");
+        assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
+        assert_eq!(rows[14], header(5));
+        assert_eq!(rows[15], item_row("f-blocked: Worker question", "42s"));
+        assert_eq!(rows[17], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[18], EXPAND);
+        assert_eq!(rows[19], "", "the empty row below the section");
+    }
+
+    #[test]
+    fn expanded_the_closing_row_is_followed_by_an_empty_row_and_it_toggles_where_it_is_drawn() {
+        let mut view = with_inbox(5);
+        let rows = text_rows(&draw_now(&mut view, 43, 22));
+        assert_eq!((rows[20].as_str(), rows[21].as_str()), (EXPAND, ""));
+        assert_eq!(click(&mut view, 20, 20), Effect::None, "a view-state change: no command");
+        let rows = text_rows(&draw_now(&mut view, 43, 22));
+        assert_eq!(rows[13], "");
+        assert_eq!(rows[14], header(5));
+        assert_eq!(rows[19], item_row("ship lead has a reply", "10m"));
+        assert_eq!(rows[20], COLLAPSE);
+        assert_eq!(rows[21], "");
+    }
+
+    #[test]
+    fn the_inbox_pill_is_grey_the_block_muted_its_text_the_background_colour_and_its_caps_muted() {
+        let buf = draw_now(&mut with_inbox(5), 43, 20);
+        let y = inbox_title_y(&text_rows(&buf), 5);
+        assert_eq!(buf[(1, y)].symbol(), "╭");
+        crate::section::check::grey_pill(&buf, 3, y, "Inbox");
+        crate::section::check::grey_pill(&buf, 39, y, "5"); // the count is a grey pill too (hs-d480), ending at column 41
+    }
+
+    #[test]
+    fn the_inbox_title_sits_inside_the_panels_padding_one_column_each_side() {
+        let buf = draw_now(&mut with_inbox(5), 43, 20);
+        let y = inbox_title_y(&text_rows(&buf), 5);
+        assert_eq!((buf[(0, y)].symbol(), buf[(1, y)].symbol(), buf[(41, y)].symbol(), buf[(42, y)].symbol()), (" ", "╭", "\u{E0B4}", " "));
+    }
+
+    #[test]
+    fn a_click_on_the_inbox_title_does_nothing_and_opens_no_menu() {
+        let mut view = with_inbox(5);
+        let rows = text_rows(&draw_now(&mut view, 43, 20));
+        let y = inbox_title_y(&rows, 5);
+        for column in [0, 1, 3, 6, 20, 41, 42] {
+            assert_eq!(click(&mut view, column, y), Effect::None, "column {column}");
+        }
+        for column in [1, 3, 6, 20, 41] {
+            assert_eq!(right_click(&mut view, column, y), Effect::None, "column {column}");
+            assert!(view.menu.is_none(), "no menu on a title: column {column}");
+        }
+        assert_eq!(text_rows(&draw_now(&mut view, 43, 20)), rows, "and nothing folds or moves");
     }
 
     // ---------- no notes (commands.md §17 "No notes", hs-d469) ----------

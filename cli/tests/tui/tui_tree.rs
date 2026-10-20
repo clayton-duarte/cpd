@@ -6,6 +6,7 @@
 //! in `tui/src/tree/`.
 
 use crate::common;
+use crate::tui_titles;
 
 use std::time::{Duration, Instant};
 
@@ -24,8 +25,6 @@ const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 /// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline) and the pill's caps.
 const DOWN: &str = "\u{F004B}";
 const UP: &str = "\u{F0063}";
-const CAP_LEFT: &str = "\u{E0B6}";
-const CAP_RIGHT: &str = "\u{E0B4}";
 
 /// The closing row of a block that folds, folded, after the pane's margin.
 fn expand() -> String {
@@ -37,9 +36,10 @@ fn collapse() -> String {
     format!(" ╰{UP} collapse")
 }
 
-/// The Inbox's pill title for `count` items in `inner` columns (the pane less its margins), after the margin.
+/// The Inbox's pill title for `count` items in `inner` columns (the pane less its margins), after the margin: the collapsible form
+/// (hs-d478), the count a pill too (hs-d480).
 fn pill(inner: usize, count: usize) -> String {
-    format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{count}", "─".repeat(inner - 2 - "Inbox".len() - 2 - count.to_string().len()))
+    tui_titles::collapsible_title(inner + 2, "Inbox", Some(count))
 }
 
 /// An Inbox item row in `inner` columns: the muted `│`, the icon, the label and the age (`5m`) at the last column.
@@ -531,7 +531,7 @@ fn wait_for_popups(env: &TestEnv, n: usize) -> Vec<String> {
 fn the_tree_of_a_prepared_store() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 19);
+    let pane = Pane::start(&env, 46, 20);
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let mut expected = vec![
         String::new(),
@@ -539,21 +539,21 @@ fn the_tree_of_a_prepared_store() {
         row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
         row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!(" ├─{IDLE} ship·f-id"),
-        format!(" ├─{NEEDS_YOU} ship·f-bl"),
-        " ╰─".to_owned(),
+        format!(" ╰─{NEEDS_YOU} ship·f-bl"),
+        String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
         row(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
-        row(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
-        " ╰─".to_owned(),
+        row(&format!("╰─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
+        String::new(),
         format!(" ╭{STOPPED} gamma"),
         " ╰─".to_owned(),
-    ]; // each Context is a fold: its rows behind `├`, then a plain `╰─` (nothing archived); the Inbox section is pinned below
+    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a Context with no row keeps a plain `╰─`), one empty row between two Contexts; the Inbox section is pinned below
     expected.extend(inbox_section(46));
     let screen = pane.screen_is(&expected);
     assert_eq!(
         screen,
         expected,
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the Contexts' plain `╰─` rows (nothing archived); the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰁋 expand`"
+        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the last row of each Context `╰─` (nothing archived) and the plain `╰─` of the Context with no row; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰁋 expand`"
     );
 }
 
@@ -570,7 +570,8 @@ fn an_inbox_of_two_items_is_the_pill_title_and_two_rows_with_no_toggle_and_a_pla
         item_row_of(44, "l-rel label"),
         " ╰─".to_owned(),
     ];
-    let screen = pane.wait("the two items", |s| s.len() == 18 && s[13..] == expected);
+    // the screen has no empty row at its end: the section's own empty row below is not in it
+    let screen = pane.wait("the two items", |s| s.len() == 17 && s[12..] == expected);
     assert!(screen.iter().all(|r| !r.contains("expand")), "two items have nothing to expand: {screen:?}");
 }
 
@@ -593,7 +594,7 @@ fn an_empty_store_says_so() {
     drop(open(&env));
     let pane = Pane::start(&env, 30, 5);
     let header = pill(28, 0);
-    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", "", header.as_str()], "the section is there with no item");
+    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", header.as_str()], "the section is there with no item: an empty row above its title (and one below, which is trimmed)");
 }
 
 #[test]
@@ -919,10 +920,10 @@ fn the_tree_follows_the_events_of_the_store() {
     pane.wait("the closed item", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} sketch"))));
     // inbox-dismissed, by the command: the red dialog of the fork falls back to its glyph
     let screen = pane.screen();
-    assert!(screen.iter().any(|r| r.contains(&format!("├─{NEEDS_YOU} ship·f-bl"))));
+    assert!(screen.iter().any(|r| r.contains(&format!("╰─{NEEDS_YOU} ship·f-bl"))));
     let id = store_item(&mut store, "session:f-blocked");
     env.cpd(&["inbox", "dismiss", &id.to_string()]).ok();
-    pane.wait("the dismissed item", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} ship·f-bl"))));
+    pane.wait("the dismissed item", |s| s.iter().any(|r| r.contains(&format!("╰─{IDLE} ship·f-bl"))));
 }
 
 /// The id of the open item of `subject`.
@@ -962,7 +963,7 @@ fn the_tree_starts_no_subprocess() {
     // follow an Event and take a new snapshot: the fork's red dialog is dismissed
     let id = store_item(&mut open(&env), "session:f-blocked");
     env.cpd(&["inbox", "dismiss", &id.to_string()]).ok();
-    pane.wait("the new state", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} ship·f-bl"))));
+    pane.wait("the new state", |s| s.iter().any(|r| r.contains(&format!("╰─{IDLE} ship·f-bl"))));
     let children = env.command("ps").args(["-o", "pid=,args=", "--ppid", &pid]).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&children.stdout).trim(), "", "children of the view");
 }
@@ -1006,29 +1007,30 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
         row(&format!("├─{WORKING} ship"), "1⋅1⋅0⋅1⋅2"),
         row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!(" ├─{IDLE} ship·f-id"),
-        format!(" ├─{NEEDS_YOU} ship·f-bl"),
-        " ╰─".to_owned(),
+        format!(" ╰─{NEEDS_YOU} ship·f-bl"),
+        String::new(),
         format!(" ╭{NEEDS_YOU} beta"),
         row(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
         row(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
         collapse(),
+        String::new(),
         format!(" ╭{STOPPED} gamma"),
         " ╰─".to_owned(),
     ];
-    expected.extend(["", "", "", "", "", "", ""].map(String::from)); // the rest of the tree's rows
+    expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
     expected.extend(inbox_section(46));
     let screen = pane.screen_is(&expected);
     assert_eq!(
         screen,
         expected,
-        "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰁣 collapse`; alpha and the archived Context `gamma` have nothing to fold and close with a plain `╰─`; no `󰇘` row"
+        "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰁣 collapse`; alpha has nothing to fold: its last row ends it with `╰─`, and `gamma`, with no row, closes with a plain `╰─`; no `󰇘` row"
     );
     assert!(screen.iter().all(|r| !r.contains('\u{F01D8}')), "no `󰇘` row: {screen:?}");
     // a click on the archived Plan shows its history; the archived Context's title and its plain closing row do nothing
     pane.click(10, 9);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "l-old"])]);
-    pane.click(5, 11);
-    pane.click(1, 12);
+    pane.click(5, 12);
+    pane.click(1, 13);
     pane.settled();
     // beta's closing row hides its archived row only: the live row stays
     pane.click(5, 10);
@@ -1037,7 +1039,7 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
     assert_eq!(screen[7..8], shown);
     assert!(screen[8].starts_with(&format!(" ├─{NEEDS_YOU} rel")), "the live row stays: {screen:?}");
     assert!(!screen.iter().any(|r| r.contains(" old")), "the archived row is hidden: {screen:?}");
-    assert_eq!((screen[10].as_str(), screen[11].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰─"));
+    assert_eq!((screen[11].as_str(), screen[12].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰─"));
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
@@ -1065,7 +1067,7 @@ fn the_cursor_skips_archived_rows_and_enter_never_opens_one() {
 fn the_tree_follows_the_archive_events() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 20);
+    let pane = Pane::start(&env, 46, 24);
     pane.ready();
     // an archived row is drawn muted: its colours change, its text does not (the working dots turn, so a row, not the screen)
     let styled = |text: &str| pane.styled_screen().lines().find(|r| r.contains(text)).map(str::to_owned).unwrap_or_default();
@@ -1143,10 +1145,10 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     pane.wait("the Plan's menu", |s| menu_open(s, "New session…"));
     pane.right_click(45, 13); // a right click outside closes it too
     pane.wait("the menu closed", the_menu_is_closed);
-    pane.right_click(5, 15); // the empty area
+    pane.right_click(5, 14); // the empty area
     pane.wait("the empty area's menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Escape"]);
-    pane.right_click(5, 6); // the closing row of the Context `alpha`: no menu
+    pane.right_click(5, 12); // the plain closing row of the Context `gamma`, which has no row: no menu
     pane.settled();
     assert!(the_menu_is_closed(&pane.screen()), "a closing row has no menu");
     pane.wait("the menu closed", the_menu_is_closed);
@@ -1265,7 +1267,7 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     populate(&env);
     sql(&mut open(&env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 60, 14);
+    let pane = Pane::start(&env, 60, 15);
     pane.ready();
     let shown = [format!(" ├─{IDLE} ship·f-bl"), collapse()];
     assert_eq!(pane.rows_are(5, &shown)[5..7], shown, "the archived fork is inside alpha's block, after the live rows");
@@ -1317,7 +1319,8 @@ fn open_and_close_in_the_menu_run_session_open_and_after_a_confirmed_popup_sessi
     fake_cpd(&env, r#"{"ok":true,"session":"x","pane":"%1","displaced":null}"#);
     fake_dialogs(&env);
     confirm(&env);
-    let pane = Pane::start(&env, 60, 14);
+    // 15 rows: the note `running: …` takes a row of the tree's after the first action, and the fork stays in view
+    let pane = Pane::start(&env, 60, 15);
     pane.ready();
     pane.right_click(8, 5); // the fork `ship review`
     pane.wait("the menu", |s| menu_open(s, "Open"));
@@ -1403,7 +1406,7 @@ fn new_context_opens_an_input_popup_for_a_title_and_runs_context_new_with_the_de
     type_in(&env, "Building cpd!");
     let pane = Pane::start(&env, 60, 22);
     pane.ready();
-    pane.right_click(5, 15); // the empty area
+    pane.right_click(5, 14); // the empty area
     pane.wait("the menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Enter"]);
     assert_eq!(
@@ -1424,7 +1427,7 @@ fn a_title_no_id_can_be_made_of_is_refused_in_a_text_dialog_and_runs_nothing() {
     type_in(&env, "!!");
     let pane = Pane::start(&env, 60, 22);
     pane.ready();
-    pane.right_click(5, 15); // the empty area
+    pane.right_click(5, 14); // the empty area, above the Inbox's margin row (row 15 is its upper margin, the widget's)
     pane.wait("the menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Enter"]);
     let popups = wait_for_popups(&env, 2);
@@ -1620,7 +1623,7 @@ fn the_inbox_sections_toggle_row_expands_the_list_inline_and_folds_it_and_the_ti
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
-    let pane = Pane::start(&env, 46, 20);
+    let pane = Pane::start(&env, 46, 21);
     pane.ready();
     // the section is pinned to the bottom, the Session rows above it
     assert_eq!(pane.rows_are(14, &inbox_section(46))[14..], inbox_section(46));
@@ -1633,7 +1636,10 @@ fn the_inbox_sections_toggle_row_expands_the_list_inline_and_folds_it_and_the_ti
     pane.click(10, 15); // the title: the pill toggles nothing
     pane.settled();
     let without_note = |rows: Vec<String>| -> Vec<String> { rows.into_iter().filter(|r| !r.contains(NO_CLIENT)).collect() };
-    let rows = without_note(pane.screen());
+    let mut rows = without_note(pane.screen());
+    while rows.last().is_some_and(String::is_empty) {
+        rows.pop(); // the section's empty row below
+    }
     assert_eq!(rows[rows.len() - 6..], inbox_section(46), "still folded");
 }
 
@@ -1763,7 +1769,7 @@ fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_only_a_cli
     // counted in the header, first of the rows
     let screen = pane.wait("the item", |s| s.iter().any(|r| r.contains("engine is down")));
     let first = screen.iter().position(|r| r.contains("engine is down")).unwrap();
-    assert!(screen[first - 1].contains("Inbox") && screen[first - 1].ends_with('5'), "{:?}", screen[first - 1]);
+    assert!(screen[first - 1].contains("Inbox") && screen[first - 1].ends_with("\u{E0B6}5\u{E0B4}"), "{:?}", screen[first - 1]);
     // hs-d363: the tree never restarts the engine by itself (the supervisor does), and says nothing of it
     // time-claim: the tree took its first snapshot before `ready`, and the old restart ran on it; none comes in 3 s; no per-poll signal from the view.
     std::thread::sleep(std::time::Duration::from_secs(3));
@@ -1864,8 +1870,8 @@ fn the_inbox_follows_an_engine_that_starts_and_a_snooze_that_ends_with_no_event(
     let _engine = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
-    pane.wait("three stored items, one snoozed", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with('3')));
-    pane.wait("the snoozed item back", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with('4')));
+    pane.wait("three stored items, one snoozed", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with("\u{E0B6}3\u{E0B4}")));
+    pane.wait("the snoozed item back", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with("\u{E0B6}4\u{E0B4}")));
 }
 
 /// The `display-popup` calls of a fake tmux.

@@ -379,13 +379,13 @@ mod tests {
             assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "{}", d.title);
         }
         let rows = rows(&render(&mut confirm(), 20, 8));
-        assert_eq!(rows[1], format!("╭─{}Archive{}{}", "\u{E0B6}", "\u{E0B4}", "─".repeat(9)));
+        assert_eq!(rows[1], format!(" ──{}Archive{}{}", "\u{E0B6}", "\u{E0B4}", "─".repeat(7)));
     }
 
     #[test]
     fn confirm_draws_the_question_and_both_buttons() {
         let buf = rows(&render(&mut confirm(), 40, 7));
-        assert_eq!(buf[1..], [format!("╭─\u{E0B6}Archive\u{E0B4}{}", "─".repeat(29)).as_str(), "", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
+        assert_eq!(buf[1..], [format!(" ──\u{E0B6}Archive\u{E0B4}{}", "─".repeat(27)).as_str(), "", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
     }
 
     #[test]
@@ -595,6 +595,29 @@ mod tests {
             let mut d = input("Bad");
             d.press_key(press(KeyCode::Enter));
             render(&mut d, w, h);
+        }
+    }
+
+    // ---- the dialog kit's title v4 (hs-d475, hs-d476): red until it is a grey pill inside the padding ----
+
+    #[test]
+    fn every_kind_draws_its_title_as_a_grey_pill_from_column_1_to_one_column_before_the_edge() {
+        for (mut d, title) in [(confirm(), "Archive"), (input(""), "New Plan"), (text(3), "Legend")] {
+            let buf = render(&mut d, 40, 10);
+            let width = title.chars().count();
+            let row: String = (0..40).map(|x| buf[(x, 1)].symbol()).collect();
+            assert_eq!(row, format!(" ──\u{E0B6}{title}\u{E0B4}{} ", "─".repeat(40 - 1 - 2 - (width + 2) - 1)), "{title}");
+            crate::section::check::grey_pill(&buf, 3, 1, title);
+        }
+    }
+
+    #[test]
+    fn a_click_on_the_title_row_does_nothing() {
+        for mut d in [confirm(), input(""), text(3)] {
+            render(&mut d, 40, 10);
+            for column in [0, 1, 3, 6, 20, 38, 39] {
+                assert_eq!(d.press_mouse(click(column, 1)), None, "{} column {column}", d.title);
+            }
         }
     }
 }

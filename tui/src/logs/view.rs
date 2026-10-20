@@ -171,7 +171,7 @@ fn line(e: &Event, width: usize) -> Line<'static> {
 pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let [head, area] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
     let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
-    f.render_widget(Paragraph::new(section::title("logs", None, usize::from(title.width))), title);
+    f.render_widget(Paragraph::new(section::title("Logs", None, usize::from(title.width))), title);
     let area = match &log.error {
         Some(error) => {
             let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
@@ -327,12 +327,28 @@ mod tests {
         let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
         // an empty row, the title, an empty row, then the Events
         assert_eq!(row(0).trim_end(), "");
-        assert_eq!(row(1), format!("╭─\u{E0B6}logs\u{E0B4}{}", "─".repeat(16)));
+        assert_eq!(row(1), format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(14)));
         assert_eq!(row(2).trim_end(), "");
         assert!(row(3).starts_with(" 00:00:08 event 8"), "{}", row(3));
         // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows
         assert!(row(5).contains("event 10") && got[(0, 5)].modifier.contains(Modifier::REVERSED));
         assert!(!got[(0, 4)].modifier.contains(Modifier::REVERSED));
+    }
+
+    // ---- the logs popup's title v4 (hs-d475, hs-d476): red until it is `Logs`, a grey pill inside the padding ----
+
+    #[test]
+    fn the_title_is_a_grey_title_case_pill_inside_the_padding_of_one_column_each_side() {
+        let mut log = Log::at(events(30), 11);
+        log.fit(8);
+        let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
+        let got = terminal.backend().buffer();
+        let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
+        assert_eq!(row(0).trim_end(), "", "an empty row above");
+        assert_eq!(row(1), format!(" ──\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(24 - 1 - 2 - 6 - 1)), "column 1 to column 22");
+        assert_eq!(row(2).trim_end(), "", "an empty row below");
+        crate::section::check::grey_pill(got, 3, 1, "Logs");
     }
 }
 

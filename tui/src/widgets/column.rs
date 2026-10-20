@@ -384,13 +384,13 @@ mod tests {
             terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
             row(terminal.backend().buffer(), 0)
         };
-        assert_eq!(header(20, Some(3)), format!("╭─\u{E0B6}PRs\u{E0B4}{}3", "─".repeat(12)));
-        assert_eq!(header(30, Some(12)), format!("╭─\u{E0B6}PRs\u{E0B4}{}12", "─".repeat(30 - 9)));
-        assert_eq!(header(20, None), format!("╭─\u{E0B6}PRs\u{E0B4}{}", "─".repeat(13)));
+        assert_eq!(header(20, Some(3)), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}3\u{E0B4}", "─".repeat(8)));
+        assert_eq!(header(30, Some(12)), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}12\u{E0B4}", "─".repeat(30 - 8 - 4 - 1)));
+        assert_eq!(header(20, None), format!(" ──\u{E0B6}PRs\u{E0B4}{}", "─".repeat(11)));
         let buf = buffer(20, 15);
-        assert_eq!(row(&buf, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)));
+        assert_eq!(row(&buf, 4), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(8)));
         let two = [pr(1, Some("l-a")), pr(2, None)];
-        assert_eq!(row(&drawn(20, 15, &two).0, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}2", "─".repeat(12)));
+        assert_eq!(row(&drawn(20, 15, &two).0, 4), format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}2\u{E0B4}", "─".repeat(8)));
     }
 
     #[test]
@@ -402,7 +402,7 @@ mod tests {
             " homeserver".to_owned(),
             " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
             "".to_owned(),
-            format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)),
+            format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(8)),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
@@ -759,18 +759,25 @@ mod tests {
         (0..buf.area.height).map(|y| row(buf, y)).collect()
     }
 
-    /// The rows that are a section title: they start with the pill's `╭─`.
+    /// The first section title row of `buf`: a non-collapsible title (` ──`, hs-d478), asserted to be there.
+    fn first_title(buf: &Buffer) -> (u16, String) {
+        let found = titles(buf);
+        assert!(!found.is_empty(), "a pill title row: none starts with ` ──`: {:?}", all_rows(buf));
+        found.into_iter().next().unwrap()
+    }
+
+    /// The rows that are a section title: they start with the padding and the non-collapsible title's `──` (hs-d478).
     fn titles(buf: &Buffer) -> Vec<(u16, String)> {
-        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with('╭')).map(|(y, r)| (y as u16, r)).collect()
+        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with(" ──")).map(|(y, r)| (y as u16, r)).collect()
     }
 
     #[test]
     fn the_prs_title_is_the_pill_with_the_count_one_empty_row_above_it() {
         let (buf, _) = scrolled(30, height(5), &many(5), 0);
         let (open, close) = CAPS;
-        let (y, title) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
-        assert_eq!(title, format!("╭─{open}PRs{close}{}5", "─".repeat(30 - 2 - 5 - 1)));
-        assert_eq!(title.chars().count(), 30, "full width, no margin");
+        let (y, title) = first_title(&buf);
+        assert_eq!(title, format!(" ──{open}PRs{close}{}{open}5{close}", "─".repeat(30 - 1 - 2 - 5 - 3 - 1)));
+        assert_eq!(title.chars().count(), 29, "full width but the padding's last column (the row is trimmed)");
         assert_eq!(row(&buf, y - 1), "", "one empty row above the title");
     }
 
@@ -778,14 +785,14 @@ mod tests {
     fn the_prs_pill_text_is_inverted_and_its_lines_are_muted() {
         let (buf, _) = scrolled(30, height(5), &many(5), 0);
         let muted = palette::color(palette::Meaning::Nothing);
-        let (y, _) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
+        let (y, _) = first_title(&buf);
         let at = |x: u16| &buf[(x, y)];
-        assert_eq!((at(0).symbol(), at(0).fg), ("╭", muted), "the corner");
-        assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "its line");
-        for x in 3..6 {
+        assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "the first line (a non-collapsible title has no corner, hs-d478)");
+        assert_eq!((at(2).symbol(), at(2).fg), ("─", muted), "its line");
+        for x in 4..7 {
             assert!(at(x).modifier.contains(Modifier::REVERSED), "the title text is inverted: column {x} {:?}", at(x));
         }
-        assert_eq!((at(10).symbol(), at(10).fg), ("─", muted), "the line to the edge");
+        assert_eq!((at(11).symbol(), at(11).fg), ("─", muted), "the line to the edge");
     }
 
     #[test]
@@ -793,7 +800,7 @@ mod tests {
         let (buf, _) = scrolled(30, height(5), &many(2), 0);
         let (open, close) = CAPS;
         let got: Vec<String> = titles(&buf).into_iter().map(|(_, t)| t).collect();
-        assert_eq!(got, [format!("╭─{open}PRs{close}{}2", "─".repeat(30 - 2 - 5 - 1))]);
+        assert_eq!(got, [format!(" ──{open}PRs{close}{}{open}2{close}", "─".repeat(30 - 1 - 2 - 5 - 3 - 1))]);
     }
 
     /// The cue rows of the section, top to bottom.
@@ -817,5 +824,31 @@ mod tests {
         let y = all_rows(&buf).iter().position(|r| r.contains('▼')).expect("a ▼ cue row") as u16;
         assert!((0..22).all(|x| buf[(x, y)].symbol() == " "), "nothing on the left of the cue");
         assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "`▼ 3 more` is dim and ends at the last column");
+    }
+
+    // ---- the Deploy column's PRs title v4 (hs-d475, hs-d476): red until the column draws a grey pill inside its padding ----
+
+    #[test]
+    fn the_prs_title_is_a_grey_pill_inside_the_columns_one_column_of_padding_on_each_side() {
+        let buf = buffer(20, 15);
+        let y = 4;
+        let cells: String = (0..20).map(|x| buf[(x, y)].symbol()).collect();
+        assert_eq!(cells, format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}0\u{E0B4} ", "─".repeat(8)), "starts at column 1, ends one column before the edge");
+        crate::section::check::grey_pill(&buf, 3, y, "PRs");
+        crate::section::check::grey_pill(&buf, 16, y, "0"); // the count is a grey pill at the row's end, inside the right padding (hs-d480)
+        let (buf, _) = drawn(30, 15, &[pr(1, Some("l-a")), pr(2, None)]);
+        let cells: String = (0..30).map(|x| buf[(x, y)].symbol()).collect();
+        assert_eq!(cells, format!(" ──\u{E0B6}PRs\u{E0B4}{}\u{E0B6}2\u{E0B4} ", "─".repeat(30 - 1 - 2 - 5 - 3 - 1)));
+    }
+
+    #[test]
+    fn the_prs_title_has_one_empty_row_above_and_one_below_and_is_no_click_target() {
+        let open = [pr(1, Some("l-a")), pr(2, None)];
+        let (buf, d) = scrolled(24, 15, &open, 0);
+        assert_eq!((row(&buf, 3).as_str(), row(&buf, 5).as_str()), ("", ""), "an empty row above and one below");
+        assert!(row(&buf, 4).contains("PRs"), "the title is on row 4: {}", row(&buf, 4));
+        assert!(d.hits.iter().all(|h| h.area.y > 4), "no click on the title row: {:?}", d.hits);
+        assert!(d.rows.iter().all(|r| r.area.y > 4), "no menu on the title row: {:?}", d.rows);
+        assert!(d.icons.iter().all(|i| i.area.y > 4));
     }
 }

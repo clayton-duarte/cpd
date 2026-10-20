@@ -40,11 +40,11 @@ fn capped(body: String, pill: Style) -> Line<'static> {
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
 const POPUP_BORDER: u16 = 2;
-const DOTS_TITLE: &str = "Session dots";
+const DOTS_TITLE: &str = "Session Dots";
 /// The rows above the body: the title, drawn as a section header (hs-d124, hs-d297).
 /// The title's rows: an empty row above it; the body's first row is the empty row below (hs-d308).
 const HEADER_ROWS: u16 = 2;
-const INTRO: &str = "Legend: what the cockpit's colours and icons mean   (any key closes)";
+const INTRO: &str = "Legend: What The Cockpit's Colours And Icons Mean (Any Key Closes)";
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
 
@@ -114,7 +114,7 @@ fn precedence() -> String {
 /// The sections, built only from the palette and the read model's counters.
 fn sections() -> Vec<Section> {
     let meanings = Section {
-        title: "Meanings → colour (one source for every view)",
+        title: "Meanings → Colour (One Source For Every View)",
         header: None,
         rows: Meaning::ALL
             .iter()
@@ -159,7 +159,7 @@ fn sections() -> Vec<Section> {
         Line::from(counters),
         Line::from(order).style(Style::new().add_modifier(Modifier::DIM)),
     ]);
-    let jobs = Section { title: "Jobs: Plan pills and Context counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
+    let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
     let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
     let dots = Section {
@@ -191,7 +191,7 @@ fn sections() -> Vec<Section> {
     pr_rows.push(vec![sample(palette::PR_CONFLICT)]);
     let prs = Section { title: "PRs (Dispatch)", header: None, rows: pr_rows };
     let checks = Section {
-        title: "PR checks",
+        title: "PR Checks",
         header: None,
         rows: vec![
             palette::CHECKS_LEGEND
@@ -226,11 +226,11 @@ fn body_height(sections: &[Section]) -> u16 {
 }
 
 /// The size the legend needs: columns, rows (without a popup's border). The title is a section header, which
-/// needs its own width: `╭─`, the pill (the title and its two caps) and one `─`.
+/// needs its own width: the padding, `╭─`, the pill (the title and its two caps), one `─` and the padding.
 pub fn size() -> (u16, u16) {
     let sections = sections();
     let width = sections.iter().map(Section::width).max().unwrap_or(0) + 2;
-    (width.max(INTRO.chars().count() as u16 + 5), HEADER_ROWS + body_height(&sections))
+    (width.max(INTRO.chars().count() as u16 + 7), HEADER_ROWS + body_height(&sections))
 }
 
 /// The whole body drawn off screen, `width` columns wide: the popup shows a window of it.
@@ -265,8 +265,9 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
         let last = (scroll.offset() + scroll.page()).min(scroll.total());
         let position = format!(" {}-{}/{} ", scroll.offset() + 1, last, scroll.total());
         let width = position.chars().count() as u16;
-        if width < title.width {
-            let at = Rect::new(title.x + title.width - width, title.y, width, 1);
+        // ends one column before the edge: the padding stays blank
+        if width + 1 < title.width {
+            let at = Rect::new(title.x + title.width - 1 - width, title.y, width, 1);
             f.render_widget(Paragraph::new(position).style(palette::fg(Meaning::Nothing)), at);
         }
     }
@@ -330,12 +331,12 @@ mod tests {
         assert_eq!(
             titles,
             [
-                "Meanings → colour (one source for every view)",
-                "Jobs: Plan pills and Context counters",
-                "Session dots",
+                "Meanings → Colour (One Source For Every View)",
+                "Jobs: Plan Pills And Context Counters",
+                "Session Dots",
                 "PRs (Dispatch)",
                 "Pulse",
-                "PR checks",
+                "PR Checks",
             ]
         );
     }
@@ -379,7 +380,7 @@ mod tests {
     #[test]
     fn session_dots_lists_every_glyph_and_each_circle_in_its_palette_colour() {
         let dots = &sections()[2];
-        assert_eq!(dots.title, "Session dots");
+        assert_eq!(dots.title, "Session Dots");
         let shown: String = dots.rows.iter().flatten().map(text).collect();
         let precedence = format!(
             "red > yellow > magenta > white > {} > {} > {} > {}",
@@ -518,7 +519,7 @@ mod tests {
         assert!((0..w).all(|x| buf[(x, 1)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 1));
         assert_eq!(row(&buf, 0), "");
         assert_eq!(row(&buf, 2), "");
-        assert!(row(&buf, 1).starts_with("╭─\u{E0B6}Legend: what") && row(&buf, 1).contains("(any key closes)\u{E0B4}─"));
+        assert!(row(&buf, 1).starts_with(" ──\u{E0B6}Legend: What") && row(&buf, 1).contains("(Any Key Closes)\u{E0B4}─"));
     }
 
     #[test]
@@ -583,5 +584,26 @@ mod tests {
             assert!(!closes(&mouse(kind), &mut scroll), "{kind:?}");
         }
         assert!(!closes(&Event::FocusGained, &mut scroll));
+    }
+
+    // ---- the legend's titles v4 (hs-d475, hs-d476): red until they are Title Case and the popup's title is a grey pill in its padding ----
+
+    #[test]
+    fn the_section_titles_are_in_title_case() {
+        let titles: Vec<&str> = sections().iter().map(|s| s.title).collect();
+        for want in ["Jobs: Plan Pills And Context Counters", "Session Dots", "Pulse"] {
+            assert!(titles.contains(&want), "{want:?} is a section title: {titles:?}");
+        }
+        assert!(!titles.contains(&"Session dots") && !titles.iter().any(|t| t.starts_with("Jobs: Plan pills")), "{titles:?}");
+    }
+
+    #[test]
+    fn the_popups_title_is_a_grey_pill_inside_the_padding_of_one_column_each_side() {
+        let (w, h) = size();
+        let buf = render(w, h, &mut Scroll::default());
+        assert_eq!((buf[(0, 1)].symbol(), buf[(1, 1)].symbol(), buf[(w - 1, 1)].symbol()), (" ", "─", " "), "{}", row(&buf, 1));
+        assert_eq!((buf[(2, 1)].symbol(), buf[(3, 1)].symbol(), buf[(4, 1)].symbol()), ("─", "\u{E0B6}", "L"), "{}", row(&buf, 1));
+        let text: String = (4..).map(|x| buf[(x, 1)].symbol()).take_while(|s| *s != "\u{E0B4}").collect();
+        section::check::grey_pill(&buf, 3, 1, &text);
     }
 }
