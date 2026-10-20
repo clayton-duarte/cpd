@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
+use crate::dialog::scroll::{self, Cue};
 use crate::link;
 use crate::palette::{self, Meaning};
 use crate::section;
@@ -178,9 +179,9 @@ pub(crate) struct Window {
     pub first: usize,
     /// How many are drawn.
     pub shown: usize,
-    /// A ` ▲ <first> more` row opens the list.
+    /// A `▲ <first> more` row (right-aligned, `scroll::cue`) opens the list.
     pub cue_above: bool,
-    /// How many are hidden below: a ` ▼ <n> more` row ends the list when not 0.
+    /// How many are hidden below: a `▼ <n> more` row ends the list when not 0.
     pub below: usize,
 }
 
@@ -283,10 +284,12 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
     }
     f.render_widget(Paragraph::new(text), list);
     if win.cue_above {
-        f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), Rect::new(prs.x, prs.y, prs.width, 1));
+        let cue = scroll::cue(Cue::Above, win.first, usize::from(prs.width));
+        f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.y, prs.width, 1));
     }
     if win.below > 0 && prs.height > 0 {
-        f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
+        let cue = scroll::cue(Cue::Below, win.below, usize::from(prs.width));
+        f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
     }
     for (y, pr) in &shown {
         if let Some(x) = arrow_x {
@@ -589,10 +592,10 @@ mod tests {
         let (buf, d) = scrolled(30, height(5), &many(5), "", 0);
         let got = section(&buf);
         assert_eq!(names(&got), ["acme/repo#1", "acme/repo#2"]);
-        assert_eq!(got.last().unwrap(), " ▼ 3 more", "{got:#?}");
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"), "{got:#?}");
         assert!(!got.iter().any(|r| r.contains('▲')));
         let y = 6 + 4;
-        assert!((0..9).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "the cue is dim");
+        assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "the cue is dim");
         assert_eq!(d.prs, Rect::new(0, 6, 30, 5));
         assert_eq!(d.max_scroll, 3);
     }
@@ -601,11 +604,11 @@ mod tests {
     fn a_cue_above_appears_after_a_scroll_and_each_cue_takes_a_row_of_the_list() {
         let (buf, _) = scrolled(30, height(5), &many(5), "", 1);
         let got = section(&buf);
-        assert_eq!(got[0], " ▲ 1 more", "{got:#?}");
+        assert_eq!(got[0], &format!("{:>30}", "▲ 1 more"), "{got:#?}");
         // 5 rows less both cues leave 3: one pull request, and a spare row
         assert_eq!(names(&got), ["acme/repo#2"]);
-        assert_eq!(got.last().unwrap(), " ▼ 3 more");
-        assert!(buf[(1, 6)].modifier.contains(Modifier::DIM));
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"));
+        assert!(buf[(29, 6)].modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -614,7 +617,7 @@ mod tests {
         let (buf, d) = scrolled(30, height(5), &many(5), "", 99);
         let got = section(&buf);
         assert_eq!(d.max_scroll, 3);
-        assert_eq!(got[0], " ▲ 3 more", "{got:#?}");
+        assert_eq!(got[0], &format!("{:>30}", "▲ 3 more"), "{got:#?}");
         assert_eq!(names(&got), ["acme/repo#4", "acme/repo#5"]);
         assert!(!got.iter().any(|r| r.contains('▼')), "{got:#?}");
         assert_eq!(scrolled(30, height(5), &many(5), "", 3).0, buf);
@@ -627,8 +630,8 @@ mod tests {
     fn a_hit_area_is_that_of_the_row_drawn_after_a_scroll() {
         let (buf, d) = scrolled(30, height(7), &many(6), "", 2);
         let got = section(&buf);
-        assert_eq!(got[0], " ▲ 2 more", "{got:#?}");
-        assert_eq!(got.last().unwrap(), " ▼ 2 more", "{got:#?}");
+        assert_eq!(got[0], &format!("{:>30}", "▲ 2 more"), "{got:#?}");
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 2 more"), "{got:#?}");
         let leads: Vec<(&str, Rect)> = d.hits.iter().map(|h| (h.lead.as_str(), h.area)).collect();
         assert_eq!(leads, [("l-3", Rect::new(0, 7, 30, 2)), ("l-4", Rect::new(0, 9, 30, 2))]);
         for hit in &d.hits {

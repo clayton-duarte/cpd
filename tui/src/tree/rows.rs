@@ -8,29 +8,31 @@
 //! reason (the widget owns the indent). Context rows are not selectable: the cursor moves between Sessions
 //! only, and is inverted over its row's whole width, only while the pane has keyboard focus.
 //!
-//! **Folds** (decisions hs-d337, hs-d339; `crate::fold`, the one widget). A Context is a collapsible block: the title
-//! row `╭` + the Context's dot + its id, each content row `├─` + the row's dot + its name, straight against the branch
-//! (the widget indents a child by two columns; `draw` takes it back), and **one** muted `╰─ collapse` row; folded, the
-//! title row and a muted `╰─ expand` row. Only that row folds ([`Row::Toggle`], [`click_toggle`]); a click on the title
-//! row keeps the row's own action. A Context's toggle row is drawn as the Context's next sibling (`tui-tree-widget`
-//! hides the children of a folded item, and the toggle must stay).
+//! **Folds** (decisions hs-d337, hs-d339, hs-d344, hs-d349; `crate::fold`, the one widget). A Context is a collapsible
+//! block: the title row `╭` + the Context's dot + its id, each content row `├─` + the row's dot + its name, straight
+//! against the branch (the widget indents a child by two columns; `draw` takes it back), and **one** closing row. The
+//! toggle shows and hides **only the archived rows**: the live rows always show. Folded, the closing row is the muted
+//! `╰󰁋 expand`; expanded, the archived rows (muted) and `╰󰁣 collapse`; a Context with no archived rows closes with a
+//! plain `╰─` and has no toggle. Only the closing row folds ([`Row::Toggle`], [`click_toggle`]); a click on the title
+//! row keeps the row's own action. A Context's closing row is drawn as the Context's next sibling.
 //!
 //! Labels (commands.md §13.2): a Context row shows its id, a Plan row its Plan's id, a fork its Session's id.
 //!
 //! **Forks** (B1, contract §6.8): a forked Session is a sibling of the Plans directly under its Context, after
 //! them, never under a Plan or under its source.
 //!
-//! **Archived rows** (hs-d339). An expanded Context's block lists its archived Plans, and the forks that are archived
-//! or of an archived Plan, after the live rows, muted, with the same `├─` rows. There is no `…` row and no separate
-//! toggle. Archived Contexts follow the live ones, each its own block, muted; they start folded. Whether a Context is
-//! expanded is the tree state's open set, so view state only. The cursor never rests on archived rows.
+//! **Archived rows** (hs-d339, hs-d344). An expanded Context's block lists its archived Plans, and the forks that are
+//! archived or of an archived Plan, after the live rows, muted, with the same `├─` rows. There is no `…` row and no
+//! separate toggle. Archived Contexts follow the live ones, each its own block, with every row archived; they start
+//! folded. The widget's open set holds every Context (its live rows always show); a Context is **expanded** when the open
+//! set holds its closing row's identifier, so view state only. The cursor never rests on archived rows.
 //!
 //! Rows (identifiers are paths):
 //!
 //! | Path | Row |
 //! |---|---|
 //! | `[context]`, `[context, plan]`, `[context, session]` | a Context, a Plan (its row is its Lead's), a forked Session; archived or not |
-//! | `[╰─ context]` | the `╰─ expand` / `╰─ collapse` row of that Context |
+//! | `[╰─ context]` | the closing row of that Context (`╰󰁋 expand`, `╰󰁣 collapse` or `╰─`); its toggle |
 //!
 //! Everything here is pure except `draw`, which only writes to the frame's buffer.
 
@@ -88,22 +90,28 @@ pub enum Row<'a> {
     Toggle,
 }
 
-/// What a Context lists: the live rows, then the archived ones.
+/// What a Context lists: the live rows, then the archived ones (the rows its toggle shows and hides).
 struct Kids<'a> {
-    /// The Plans listed under the Context: its live Plans, or every Plan when the Context is archived.
+    /// The live Plans listed under the Context (none when the Context is archived).
     direct: Vec<&'a PlanNode>,
-    /// The forks listed under the Context after its Plans (B1): those of `direct` that are not archived, or
-    /// every fork when the Context is archived.
+    /// The forks listed under the Context after its Plans (B1): those of `direct` that are not archived.
     forks: Vec<(&'a PlanNode, &'a SessionNode)>,
-    /// The archived Plans of a live Context, listed after the live rows.
+    /// The archived Plans, listed after the live rows (every Plan when the Context is archived).
     archived: Vec<&'a PlanNode>,
-    /// The forks of a live Context that are archived or of an archived Plan, listed last.
+    /// The forks that are archived or of an archived Plan, listed last (every fork when the Context is archived).
     strays: Vec<(&'a PlanNode, &'a SessionNode)>,
+}
+
+impl Kids<'_> {
+    /// The Context has rows its toggle shows and hides.
+    fn has_archived(&self) -> bool {
+        !self.archived.is_empty() || !self.strays.is_empty()
+    }
 }
 
 fn kids(c: &ContextNode) -> Kids<'_> {
     if c.is_archived() {
-        return Kids { direct: c.plans.iter().collect(), forks: c.forks(), archived: Vec::new(), strays: Vec::new() };
+        return Kids { direct: Vec::new(), forks: Vec::new(), archived: c.plans.iter().collect(), strays: c.forks() };
     }
     let (archived, direct): (Vec<&PlanNode>, Vec<&PlanNode>) = c.plans.iter().partition(|p| p.head.is_archived());
     let (strays, forks): (Vec<_>, Vec<_>) = c.forks().into_iter().partition(|(p, s)| p.head.is_archived() || s.is_archived());
@@ -277,14 +285,9 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
 }
 
 /// A Context's title (after the `╭`): its dot (the most urgent of its live Sessions, grey when the Context is
-/// archived), id, and the number of Plans listed inside when folded. The fold makes it bold.
-fn context_text(c: &ContextNode, folded: bool, frame: usize) -> Line<'static> {
-    let k = kids(c);
-    let mut spans = vec![palette::dot_span(c.dot, frame, c.is_archived()), " ".into(), c.id.to_string().into()];
-    if folded {
-        spans.push(Span::styled(format!(" {}", k.direct.len()), palette::fg(Meaning::Nothing)));
-    }
-    Line::from(spans)
+/// archived) and id. The fold makes it bold.
+fn context_text(c: &ContextNode, frame: usize) -> Line<'static> {
+    Line::from(vec![palette::dot_span(c.dot, frame, c.is_archived()), " ".into(), c.id.to_string().into()])
 }
 
 /// A Plan's row text, one level under its Context.
@@ -303,38 +306,26 @@ fn fork_row(s: &SessionNode, width: u16, frame: usize, muted: bool) -> (Id, Line
     (s.id.to_string(), text)
 }
 
-/// The items of the rows of a fold, as the fold widget draws them: the title row, then, only if `expanded`, the
-/// content rows behind the muted `branch`, then the toggle row. The toggle row is left to the caller, which knows where
-/// it goes (a sibling of the title row: the widget hides the children of a folded item, and the toggle must stay).
-fn folded<'a>(
-    title: Line<'static>,
-    rows: Vec<(Id, Line<'static>)>,
-    expanded: bool,
-    branch: &'static str,
-) -> (Line<'static>, Vec<TreeItem<'a, Id>>, Line<'static>) {
-    let (ids, lines): (Vec<Id>, Vec<Line<'static>>) = rows.into_iter().unzip();
-    let mut drawn = fold::Fold::new(title, lines, expanded).branch(branch).drawn();
-    let toggle = drawn.lines.pop().expect("a fold has its toggle row");
-    let mut lines = drawn.lines.into_iter();
-    let title = lines.next().expect("a fold has its title row");
-    let items = ids.into_iter().zip(lines).map(|(id, line)| TreeItem::new_leaf(id, line)).collect();
-    (title, items, toggle)
-}
-
-/// A Context's items: its item (title row, its live Plans and forks, then its archived ones, as the children) and, right
-/// after it, its toggle row. `opened` is the tree state's open set.
+/// A Context's items: its item (the title row and, as the children, its live Plans and forks, then, when expanded, its
+/// archived ones) and, right after it, its closing row. `opened` is the tree state's open set: the Context is expanded
+/// when it holds the closing row's identifier. The closing row is a sibling of the title row, not a child, so that it
+/// stays under the live rows (the tree widget draws a child only under an open item) and is drawn once.
 fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
     let id = c.id.to_string();
-    let expanded = opened.contains(&vec![id.clone()]);
+    let close = toggle_id(&id);
     let k = kids(c);
+    let expanded = opened.contains(&vec![close.clone()]);
     let mut rows: Vec<(Id, Line<'static>)> = k.direct.iter().map(|p| plan_row(c, p, width, frame)).collect();
-    rows.extend(k.forks.iter().map(|(_, s)| fork_row(s, width, frame, c.is_archived())));
-    rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
-    rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
-    let (title, children, toggle) = folded(context_text(c, !expanded, frame), rows, expanded, fold::TREE_BRANCH);
+    rows.extend(k.forks.iter().map(|(_, s)| fork_row(s, width, frame, false)));
+    if expanded {
+        rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
+        rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
+    }
+    let children = rows.into_iter().map(|(id, line)| TreeItem::new_leaf(id, fold::content(fold::TREE_BRANCH, line))).collect();
+    let closing = if k.has_archived() { fold::toggle(expanded) } else { fold::plain() };
     vec![
-        TreeItem::new(id.clone(), title, children).expect("Plan and Session ids are unique"),
-        TreeItem::new_leaf(toggle_id(&id), toggle),
+        TreeItem::new(id, fold::title(context_text(c, frame)), children).expect("Plan and Session ids are unique"),
+        TreeItem::new_leaf(close, closing),
     ]
 }
 
@@ -392,13 +383,16 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
     }
 }
 
-/// Open each live Context the first time it is seen (Contexts start expanded; a collapse by the User is kept across
-/// refreshes). The archived Contexts are not opened: they start folded.
+/// Open every Context the first time it is seen, so that its live rows show, and expand each live one (its archived rows
+/// show; a fold by the User is kept across refreshes). The archived Contexts start folded.
 pub fn open_new(state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>, tree: &Tree) {
     for c in &tree.contexts {
         let context = vec![c.id.to_string()];
-        if known.insert(context.clone()) && !c.is_archived() {
+        if known.insert(context.clone()) {
             state.open(context);
+            if !c.is_archived() {
+                state.open(vec![toggle_id(c.id.as_str())]);
+            }
         }
     }
 }
@@ -442,15 +436,15 @@ pub fn move_cursor(state: &mut TreeState<Id>, tree: &Tree, delta: isize) {
     state.select(visible[next].clone());
 }
 
-/// A click on a toggle row (`╰─ expand`, `╰─ collapse`) folds or unfolds its Context; it selects nothing.
-/// Returns whether `path` was a toggle row: the only row that folds.
+/// A click on a closing row (`╰󰁋 expand`, `╰󰁣 collapse`) shows or hides its Context's archived rows; it selects nothing.
+/// Returns whether `path` was a closing row: the only row that folds. A plain `╰─` (nothing to fold) is one, and folds
+/// nothing.
 pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
-    let owner = toggle_owner(path).filter(|_| matches!(row(tree, path), Some(Row::Toggle)));
-    let is_toggle = owner.is_some();
-    if let Some(owner) = owner {
-        state.toggle(owner);
+    let Some(Row::Context(c)) = toggle_owner(path).and_then(|owner| row(tree, &owner)) else { return false };
+    if kids(c).has_archived() {
+        state.toggle(path.to_vec());
     }
-    is_toggle
+    true
 }
 
 #[cfg(test)]

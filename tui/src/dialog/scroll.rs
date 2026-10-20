@@ -4,25 +4,30 @@
 //! the logs and the legend popups.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 
 /// Rows a wheel notch moves (the Worker and Plan views' notch).
 pub(crate) const WHEEL_ROWS: usize = 3;
 
 /// Which way a scroll cue points: `▲ <n> more` (rows hidden above) or `▼ <n> more` (rows hidden below).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // the shared scroll cue's direction: no view builds one until they move onto `cue`
 pub(crate) enum Cue {
     Above,
     Below,
 }
 
 /// The one scroll indicator of cpd (commands.md §17, "Scroll cues"; hs-d348): `▲ <n> more` / `▼ <n> more`, dim,
-/// **right-aligned** in a row of `width` cells (blank to its left, so it never cuts a line drawn there). Stub: the
-/// pinned tests are red; the views draw their own left-aligned cue until they call this.
-#[allow(dead_code)] // the shared scroll cue: no view calls it until the Job that moves them onto it
-pub(crate) fn cue(which: Cue, n: usize, width: usize) -> ratatui::text::Line<'static> {
-    let _ = (which, n, width);
-    todo!("the right-aligned `▲ <n> more` / `▼ <n> more` row, dim")
+/// **right-aligned** in a row of `width` cells (blank to its left, so it never cuts a line drawn there). Every region
+/// that scrolls draws its cues with this; a cue wider than the row is cut at its right edge.
+pub(crate) fn cue(which: Cue, n: usize, width: usize) -> Line<'static> {
+    let arrow = match which {
+        Cue::Above => "▲",
+        Cue::Below => "▼",
+    };
+    let text: String = format!("{arrow} {n} more").chars().take(width).collect();
+    let pad = " ".repeat(width - text.chars().count());
+    Line::from(vec![Span::raw(pad), Span::styled(text, Style::new().add_modifier(Modifier::DIM))])
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -208,7 +213,7 @@ mod tests {
 
     // ---- the shared cue (commands.md §17, "Scroll cues"; hs-d348): red until `cue` draws it ----
 
-    fn flat(line: &ratatui::text::Line<'_>) -> String {
+    fn flat(line: &Line<'_>) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
