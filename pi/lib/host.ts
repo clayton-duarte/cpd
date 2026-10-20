@@ -1,7 +1,7 @@
 import { callCpd, toCpdError } from "./cpd.ts";
 import { errorMessage } from "./delivery.ts";
 import { DEFAULT_TIMING, type Schedule, type Spawn, type Timing } from "./follower.ts";
-import type { Ctx, Exec, PiApi } from "./pi.ts";
+import type { Exec, ModelCtx, PiApi } from "./pi.ts";
 import type { Validation } from "./reload.ts";
 import { Rendering } from "./render.ts";
 import type { Run } from "./run.ts";
@@ -31,7 +31,7 @@ export type Host = {
   /** Aborted at `session_shutdown` (and by the next start): a call in flight then ends instead of outliving the run. */
   abort: AbortController;
   /** The context of `session_start`: `ctx.ui` is only handed to handlers. */
-  ctx: Ctx | undefined;
+  ctx: ModelCtx | undefined;
   /** Set while the start-up `session show` is being retried (§15.2 step 1); `stop` aborts it. */
   showRetry: AbortController | undefined;
   /** The installed cpd binaries already reported as speaking another protocol (§15.2, step 0), and the error codes of a failed `--version` already reported; both once per adapter, so a follower restart repeats nothing. */

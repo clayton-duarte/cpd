@@ -9,7 +9,7 @@ import { PERMANENT_CODES } from "./follower.ts";
 import { policySection } from "./policy.ts";
 import { followerHooks } from "./handle.ts";
 import type { Host } from "./host.ts";
-import type { Ctx } from "./pi.ts";
+import type { Ctx, ModelCtx } from "./pi.ts";
 import { ENTRY_TYPE, highestReview, REVIEW_LABEL, reviewsFromEntries } from "./plan-review.ts";
 import { createTracker, type Tracker } from "./pntrack.ts";
 import { parseResult } from "./plannotator.ts";
@@ -25,7 +25,7 @@ import { registerUpdates } from "./turns.ts";
 /** The tracker of each active Lead or Manager run (§15 "Every plannotator session is tracked"). */
 export const trackers = new WeakMap<Run, Tracker>();
 
-export async function start(host: Host, ctx: Ctx, reason: string): Promise<void> {
+export async function start(host: Host, ctx: ModelCtx, reason: string): Promise<void> {
   if (ctx.mode !== "tui") return;
   host.rendering.load({ cwd: ctx.cwd, trusted: ctx.isProjectTrusted() });
   const id = host.env.CPD_SESSION;
