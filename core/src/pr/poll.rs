@@ -6,25 +6,25 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
+use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
-use super::row::PlanRow;
+use super::row::PlanPrs;
 use super::status::PrState;
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, PlanId, PrKey};
-use crate::merge::RepoLock;
+use crate::lock;
 use crate::output::Output;
+use crate::policy::Checks;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
@@ -37,6 +37,14 @@ const RETRY: Duration = Duration::from_millis(100);
 
 /// A pull request an `open` PR of a Plan points to.
 type Owned = (PlanId, PrKey, pulls::PullRequest);
+
+/// An owned PR whose policy did not resolve (`owner_unset`, `owner_unknown`, `policy_invalid`).
+struct Unresolved {
+    plan: PlanId,
+    pr: PrKey,
+    number: i64,
+    error: CpdError,
+}
 
 /// What the transaction did.
 #[derive(Default)]
@@ -60,6 +68,16 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let search = gh::search_open(&root)?;
     let present: Vec<(String, i64)> = search.prs.iter().map(|l| (l.pr.repo.clone(), l.pr.number)).collect();
     let owned = env.store.read(pulls::owned_open)?;
+    // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3). A PR whose policy does not
+    // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
+    let mut checks = Vec::new();
+    let mut unresolved = Vec::new();
+    for (plan, key, row) in &owned {
+        match super::pr_policy_resolved(&mut env, plan, key)? {
+            Ok(policy) => checks.push((plan.clone(), key.clone(), policy.pr.feedback.checks)),
+            Err(error) => unresolved.push(Unresolved { plan: plan.clone(), pr: key.clone(), number: row.number, error }),
+        }
+    }
 
     // The owned pull requests that left the open search: merged, closed, or the index lags (D3).
     // One stored as decided (`closed`, A11) is already right: it is not looked up again until the search lists it.
@@ -88,7 +106,9 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         Ok(unowned.iter().any(|row| !present.contains(row)))
     })?;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks))? } else { Outcome::default() };
+
+    report_unresolved(&mut env, &unresolved)?;
 
     // After the transaction: the clean-up of each PR that merged, then the silent retry of the earlier ones.
     clean_up(&mut env, &outcome.merged)?;
@@ -118,20 +138,18 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
 
 /// `flock` on `path`, waiting at most [`LOCK_WAIT`]: `lock_timeout` (exit 5). The
 /// descriptor stays open while waiting.
-fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
+fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
     let failed = |what: &dyn std::fmt::Display| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use the lock {}: {what}.", path.display())).with("lock", path.display().to_string())
     };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| failed(&e))?;
     }
-    let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| failed(&e))?;
     let deadline = Instant::now() + LOCK_WAIT;
     loop {
-        match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
-            Ok(lock) => return Ok(lock),
-            Err((back, Errno::EWOULDBLOCK | Errno::EINTR)) => file = back,
-            Err((_, errno)) => return Err(failed(&format!("flock failed: {errno}"))),
+        if lock::try_lock(&file).map_err(|e| failed(&format!("flock failed: {e}")))? {
+            return Ok(file);
         }
         if Instant::now() >= deadline {
             return Err(CpdError::new(
@@ -147,7 +165,7 @@ fn take_lock(path: &Path) -> Result<Flock<fs::File>, CpdError> {
 
 /// The one write transaction (D5, D7): every changed row, the Events of the
 /// owning Plans, the rows that left the search.
-fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned]) -> Result<Outcome, CpdError> {
+fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned], checks: &[(PlanId, PrKey, Checks)]) -> Result<Outcome, CpdError> {
     let mut out = Outcome::default();
     for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
@@ -169,7 +187,9 @@ fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
-            } else if tell(tx, plan, key, &change)? {
+            } else if let Some(checks) = checks_of(checks, plan, key)
+                && tell(tx, plan, key, checks, &change)?
+            {
                 out.feedback.push((plan.clone(), key.clone()));
             }
         }
@@ -178,15 +198,65 @@ fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &
     Ok(out)
 }
 
+/// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
+fn checks_of(checks: &[(PlanId, PrKey, Checks)], plan: &PlanId, key: &PrKey) -> Option<Checks> {
+    checks.iter().find(|(p, k, _)| p == plan && k == key).map(|(_, _, c)| *c)
+}
+
+/// One `error` Event for each PR whose policy did not resolve (§7.6): `source` `pr poll`, the resolve error's `code`,
+/// `details` the error's with `plan`, `pr` and `number`. Once per episode: not again while the latest such Event of
+/// the PR has the same code, so a poll every `pr_poll_seconds` does not repeat it, and no write transaction opens.
+fn report_unresolved(env: &mut Env, unresolved: &[Unresolved]) -> Result<(), CpdError> {
+    let fresh: Vec<&Unresolved> = env.store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT json_extract(data, '$.code') FROM events
+              WHERE kind = 'error' AND plan = ?1 AND json_extract(data, '$.source') = ?2
+                AND json_extract(data, '$.details.pr') = ?3 AND json_extract(data, '$.code') <> ?4
+              ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut fresh = Vec::new();
+        for failed in unresolved {
+            let latest: Option<String> = stmt
+                .query_row(
+                    [failed.plan.as_str(), COMMAND, failed.pr.as_str(), ErrorCode::CleanupFailed.as_str()],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if latest.as_deref() != Some(failed.error.code().as_str()) {
+                fresh.push(failed);
+            }
+        }
+        Ok(fresh)
+    })?;
+    if fresh.is_empty() {
+        return Ok(());
+    }
+    env.store.write(COMMAND, |tx| {
+        for Unresolved { plan, pr, number, error } in &fresh {
+            let message = format!("The policy of PR {pr} (#{number}) of Plan {plan} did not resolve: {}", error.message());
+            let next = match error.details().get("next").and_then(Value::as_str) {
+                Some(next) => next.to_owned(),
+                None => format!("cpd policy show --pr {pr} --plan {plan}"),
+            };
+            let text = format!("{message} The poll sends this PR no pr-feedback until it does; every other PR is polled. Next: {next}");
+            let mut details = error.details().clone();
+            details.insert("plan".into(), json!(plan));
+            details.insert("pr".into(), json!(pr));
+            details.insert("number".into(), json!(number));
+            append(tx, NewEvent::error(text, COMMAND, error.code().as_str(), &message, details).plan(plan.clone()))?;
+        }
+        Ok(())
+    })
+}
+
 /// D7: `pr-feedback` to the Plan, when the change needs its attention.
-fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change) -> Result<bool, CpdError> {
-    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after);
+fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &Change) -> Result<bool, CpdError> {
+    let reasons: Vec<Reason> = pulls::attention(change.before.as_ref(), &change.after, checks);
     if reasons.is_empty() {
         return Ok(false);
     }
     let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons);
-    let data = feedback::data(key.as_str(), &change.after, &reasons);
-    append(tx, NewEvent::new(Kind::PrFeedback, text, data).plan(plan.clone()))?;
+    append(tx, feedback::event(text, key.as_str(), &change.after, &reasons).plan(plan.clone()))?;
     Ok(true)
 }
 
@@ -203,8 +273,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
         return Err(cas_lost(id, key));
     }
     let text = format!("PR {key} (#{}) of Plan {id} is merged.", pull.number);
-    let data = json!({"pr": key, "number": pull.number, "url": pull.url, "merged_at": pull.merged_at});
-    append(tx, NewEvent::new(Kind::PrMerged, text, data).plan(id.clone()))?;
+    append(tx, NewEvent::pr_merged(text, key, pull.number, &pull.url, pull.merged_at.as_deref()).plan(id.clone()))?;
     // The last PR to merge ends the Plan (§3.1).
     let unmerged: i64 =
         tx.query_row("SELECT count(*) FROM prs WHERE plan = ?1 AND status NOT IN ('merged', 'cancelled')", [id.as_str()], |r| r.get(0))?;
@@ -221,12 +290,12 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     }
     let merged = merged_prs(tx, id, key, pull.merged_at.as_deref())?;
     let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
-    append(tx, NewEvent::new(Kind::PlanDone, text, json!({"prs": merged})).plan(id.clone()))?;
+    append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
     Ok(true)
 }
 
 /// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
-fn plan_prs(env: &mut Env, plan: &PlanRow) -> Result<Vec<Value>, CpdError> {
+fn plan_prs(env: &mut Env, plan: &PlanPrs) -> Result<Vec<Value>, CpdError> {
     env.store.read(|conn| {
         plan.live()
             .map(|pr| {
@@ -266,14 +335,32 @@ struct Merged {
     repo: String,
     lead_branch: String,
     lead_worktree: Option<String>,
-    /// `(attempt, branch, worktree)`.
-    attempts: Vec<(String, String, String)>,
+    attempts: Vec<Attempt>,
+}
+
+/// An Attempt of one of the PR's Jobs.
+struct Attempt {
+    id: AttemptId,
+    branch: String,
+    worktree: String,
+    ended: bool,
 }
 
 impl Merged {
-    /// Whether a path this clean-up removes is still on disk.
+    /// Whether a path this clean-up removes is still on disk: an Attempt or Lead
+    /// worktree, or a gate worktree of the PR (contract §7.1).
     fn on_disk(&self) -> bool {
-        self.lead_worktree.iter().chain(self.attempts.iter().map(|(_, _, w)| w)).any(|p| Path::new(p).exists())
+        self.lead_worktree.iter().chain(self.attempts.iter().map(|a| &a.worktree)).any(|p| Path::new(p).exists()) || self.has_gate_worktree()
+    }
+
+    /// Whether `<repo-parent>` holds an entry named as a gate worktree of this PR.
+    fn has_gate_worktree(&self) -> bool {
+        // The path of pid 0 ends in `gate-0`; without the `0` it is the name every gate worktree of the PR starts with.
+        let Ok(path) = git::gate_worktree_path(Path::new(&self.repo), &self.plan, &self.pr, 0) else { return false };
+        let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else { return false };
+        let Some(prefix) = name.strip_suffix('0') else { return false };
+        let Ok(entries) = fs::read_dir(dir) else { return false };
+        entries.flatten().any(|e| e.file_name().to_str().is_some_and(|n| n.starts_with(prefix)))
     }
 }
 
@@ -288,7 +375,7 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
     let all = env.store.read(merged_prs_to_clean)?;
     let (fresh, earlier): (Vec<Merged>, Vec<Merged>) = all.into_iter().partition(|m| just.contains(&(m.plan.clone(), m.pr.clone())));
     for merged in earlier.iter().filter(|m| m.on_disk()) {
-        clean_locked(&env.home, merged);
+        clean_when_idle(&env.home, merged);
     }
     if fresh.is_empty() {
         return Ok(());
@@ -299,15 +386,15 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
     let mut events = Vec::new();
     for merged in &fresh {
         let mut failures = Vec::new();
-        for (id, _, worktree) in &merged.attempts {
-            let name = attempt_window(&merged.plan, &AttemptId::parse(id)?);
+        for attempt in &merged.attempts {
+            let name = attempt_window(&merged.plan, &attempt.id);
             for pane in panes.iter().filter(|p| p.session_name == work && p.window_name == name) {
                 if let Err(e) = tmux.kill_window(&pane.window) {
-                    failures.push((worktree.clone(), reason(&e)));
+                    failures.push((attempt.worktree.clone(), reason(&e)));
                 }
             }
         }
-        failures.extend(clean_locked(&env.home, merged));
+        failures.extend(clean_when_idle(&env.home, merged));
         events.extend(failures.into_iter().map(|(path, reason)| (merged.plan.clone(), merged.pr.clone(), path, reason)));
     }
     if events.is_empty() {
@@ -318,8 +405,8 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
             let message = format!("The clean-up of the merged PR {pr} of Plan {plan} did not remove {path}: {reason}");
             let text = format!("{message} It is retried by every later poll, except a dirty or unpushed Lead worktree, which stays until you deal with it.");
             let details = json!({"plan": plan, "pr": pr, "path": path, "reason": reason});
-            let data = json!({"source": COMMAND, "code": ErrorCode::CleanupFailed.as_str(), "message": message, "details": details});
-            append(tx, NewEvent::new(Kind::Error, text, data).plan(plan.clone()))?;
+            let event = NewEvent::error(text, COMMAND, ErrorCode::CleanupFailed.as_str(), &message, details);
+            append(tx, event.plan(plan.clone()))?;
         }
         Ok(())
     })
@@ -334,45 +421,75 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdEr
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
-        "SELECT a.id, a.branch, a.worktree FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+        "SELECT a.id, a.branch, a.worktree, a.status = 'ended' FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
           WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
     )?;
     let mut found = Vec::new();
     for (plan, pr, repo, lead_branch, lead_worktree) in rows {
         let list = attempts
-            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|(id, branch, worktree, ended)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
+            .collect::<Result<Vec<_>, CpdError>>()?;
         found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, attempts: list });
     }
     Ok(found)
 }
 
-/// [`clean`] under the PR's per-repo lock, taken without waiting (hs-n124): a Gate, a merge or
-/// a push holding it must not lose its worktree. When the lock is held, nothing is removed and
-/// there is no failure: the PR is still on disk, so a later poll cleans it up. A lock that
-/// cannot be opened is a failed removal.
-fn clean_locked(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
-    match RepoLock::try_take(home, Path::new(&merged.repo)) {
-        Ok(Some(_lock)) => clean(merged),
-        Ok(None) => Vec::new(),
-        Err(e) => vec![(merged.lead_worktree.clone().unwrap_or_else(|| merged.repo.clone()), reason(&e))],
+/// [`clean`] once the PR is idle (contract §7.2, hs-d243, hs-n124): every Attempt of its
+/// Jobs is `ended` and its driver lock is free, probed without creating the file, since
+/// a driver that just ended its Attempt may still be in A9, removing its worktree. While
+/// it is not, nothing is removed and there is no failure: the PR is still on disk, so a
+/// later poll cleans it up. A driver lock that cannot be probed is a failed removal.
+fn clean_when_idle(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
+    for attempt in &merged.attempts {
+        if !attempt.ended {
+            return Vec::new();
+        }
+        match crate::driver::lock::probe(home, &merged.plan, &attempt.id) {
+            Ok(Some(_free)) => {}
+            Ok(None) => return Vec::new(),
+            Err(e) => return vec![(attempt.worktree.clone(), reason(&e))],
+        }
     }
+    clean(merged)
 }
 
-/// Removes the Attempt worktrees of the PR that are on disk, then its Lead worktree. Each
-/// removal runs in the PR's repo, so the order does not matter; a failure does not stop the
-/// others. What it did not remove.
+/// Removes the Attempt worktrees of the PR that are on disk, then its gate worktrees whose
+/// pid is dead, then its Lead worktree, first brought up to date by rule S. Each removal
+/// runs in the PR's repo, so the order does not matter; a failure does not stop the others.
+/// What it did not remove.
 fn clean(merged: &Merged) -> Vec<Failure> {
     let repo = Path::new(&merged.repo);
     let mut failures = Vec::new();
-    for (_, branch, worktree) in &merged.attempts {
-        if Path::new(worktree).exists()
-            && let Err(e) = git::discard_worktree(repo, Path::new(worktree), branch)
+    for attempt in &merged.attempts {
+        if Path::new(&attempt.worktree).exists()
+            && let Err(e) = git::discard_worktree(repo, Path::new(&attempt.worktree), &attempt.branch)
         {
-            failures.push((worktree.clone(), reason(&e)));
+            failures.push((attempt.worktree.clone(), reason(&e)));
         }
     }
+    // A gate worktree whose pid lives belongs to a Gate still running: it stays (§7.2).
+    if merged.has_gate_worktree()
+        && let Err(e) = git::sweep_gate_worktrees(repo, &merged.plan, &merged.pr)
+    {
+        failures.push((merged.repo.clone(), reason(&e)));
+    }
     if let Some(lead) = &merged.lead_worktree {
+        // Rule S first, so a tree a merge left stale is not kept as dirty. Every stop of it is
+        // `lead_worktree_stale` and leaves the worktree as it was: the check below keeps such a
+        // worktree and reports it as `cleanup_failed`, never as `lead_worktree_stale` (§7.2).
+        if Path::new(lead).exists() {
+            match git::sync_lead(Path::new(lead), &merged.lead_branch) {
+                Ok(_) => {}
+                Err(e) if e.code() == ErrorCode::LeadWorktreeStale => {}
+                Err(e) => {
+                    failures.push((lead.clone(), reason(&e)));
+                    return failures;
+                }
+            }
+        }
         match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch) {
             Ok(git::LeadRemoval::Removed) => {}
             Ok(git::LeadRemoval::Kept(why)) => failures.push((lead.clone(), why.as_str().to_owned())),

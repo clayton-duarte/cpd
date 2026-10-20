@@ -7,7 +7,7 @@ use rusqlite::{Connection, Row};
 use serde_json::{Value, json};
 
 use super::jobs::STATUSES;
-use super::show::query_heads;
+use super::row;
 use super::{Env, ListArgs};
 use crate::error::CpdError;
 use crate::events::highest_id;
@@ -26,7 +26,7 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
 fn snapshot(conn: &Connection, args: &ListArgs) -> Result<(Vec<Value>, i64), CpdError> {
     let context = args.context.as_ref().map(|c| c.as_str().to_owned());
     let phase = args.phase.map(|p| p.as_str());
-    let heads = query_heads(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
+    let heads = row::query(conn, "(?1 IS NULL OR context = ?1) AND (?2 IS NULL OR phase = ?2)", &[&context, &phase])?;
     let mut counts = job_counts(conn)?;
     let mut prs = prs(conn)?;
     let out = heads

@@ -1,6 +1,6 @@
 //! The plan view's PR boxes (commands.md §13.2, R34 A15, hs-d115): one bordered box per PR that is not `cancelled`,
 //! holding the chart of that PR's Jobs ([`flow::layout`]) with its title on the top border; the boxes top to bottom by
-//! the PRs' needs, one row of boxes per level, each need an arrow from the needed box's bottom border to the needing
+//! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need an arrow from the needed box's bottom border to the needing
 //! box's top border.
 //!
 //! In: the PRs and the Jobs. Out: [`Boxes`], one [`Chart`] of the whole canvas of boxes, so the scrolling and the clicks
@@ -20,16 +20,18 @@ use ratatui::{
 };
 
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
-use crate::link::link;
+use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
-use crate::read::{JobNode, PrNode, PrState, Pull};
+use crate::read::{JobNode, PrNode, PrState, PrStatus, Pull};
 
 /// Rows between two rows of boxes: the run of lines, then the arrowheads.
 const GAP: u16 = 2;
 /// What the box of a PR with no Jobs (none that is not cancelled) says.
 const NO_JOBS: &str = " no Jobs ";
-/// The head of an arrow, just above the needing box's top border.
-const ARROW: &str = "▼";
+/// The head of an arrow, just above the needing box's top border: `nf-md-arrow_down_thin` (U+F19B3).
+const ARROW: &str = "\u{F19B3}";
+/// Between a box title's repo name and its base: `nf-md-arrow_right_thin` (U+F19B0).
+const TO: &str = "\u{F19B0}";
 /// The needed box's bottom border where an arrow leaves it.
 const EXIT: &str = "┬";
 
@@ -40,18 +42,20 @@ pub struct Boxes {
     pub row_of: Vec<usize>,
 }
 
-/// The level of each PR (indices into `prs`): 0 with no needs, else one more than the highest level among its needs.
-/// A need that is not one of `prs`, or that closes a cycle, is ignored.
+/// The level of each PR (indices into `prs`). A merged PR's is 0 with no needs, else one more than the highest level
+/// among its needs. A PR that is not merged is at max(1 + the highest level among its needs, M + 1), M the highest level
+/// of any merged PR (no floor when none is merged): every box that is not merged is below every merged box, so the work
+/// in progress sits together (User, 2026-10-18). A need that is not one of `prs`, or that closes a cycle, is ignored.
 pub fn levels(prs: &[PrNode]) -> Vec<usize> {
-    fn level(i: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
+    fn level(i: usize, floor: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
         if let Some(l) = memo[i] {
             return l;
         }
         open.insert(i);
-        let mut l = 0;
+        let mut l = floor;
         for &p in &needs[i] {
             if !open.contains(&p) {
-                l = l.max(level(p, needs, memo, open) + 1);
+                l = l.max(level(p, floor, needs, memo, open) + 1);
             }
         }
         open.remove(&i);
@@ -60,8 +64,14 @@ pub fn levels(prs: &[PrNode]) -> Vec<usize> {
     }
     let needs: Vec<Vec<usize>> =
         prs.iter().map(|p| p.needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n)).collect()).collect();
+    // by the needs alone
     let mut memo = vec![None; prs.len()];
-    (0..prs.len()).map(|i| level(i, &needs, &mut memo, &mut HashSet::new())).collect()
+    let base: Vec<usize> = (0..prs.len()).map(|i| level(i, 0, &needs, &mut memo, &mut HashSet::new())).collect();
+    let merged = |i: usize| prs[i].status == PrStatus::Merged;
+    let Some(m) = (0..prs.len()).filter(|&i| merged(i)).map(|i| base[i]).max() else { return base };
+    // the merged keep their level; the others are floored below them
+    let mut memo: Vec<Option<usize>> = (0..prs.len()).map(|i| merged(i).then_some(base[i])).collect();
+    (0..prs.len()).map(|i| level(i, m + 1, &needs, &mut memo, &mut HashSet::new())).collect()
 }
 
 /// A PR state's word.
@@ -73,9 +83,6 @@ fn state_text(state: PrState) -> &'static str {
     }
 }
 
-/// What follows `#<number> <state>` in a title once the PR has a pull request: the `↗` its link covers.
-const PULL_LINK: &str = " ↗";
-
 /// The word and colour of a pull request's state in a title: `conflict` (failed) for an open one that conflicts, else
 /// its state in the palette's PR state colour. The title and its link's width both use it.
 fn state_word(pull: &Pull) -> (&'static str, Meaning) {
@@ -85,17 +92,17 @@ fn state_word(pull: &Pull) -> (&'static str, Meaning) {
     }
 }
 
-/// The box's title: ` <key> · <repo name> → <base> · <pull request> `, the key bold; `#<number> <state> ↗` once the PR has
+/// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󰏌` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, failed, for an open one that conflicts), else the PR's status, dim.
 pub fn title(pr: &PrNode) -> Line<'static> {
     let mut spans: Vec<Span<'static>> =
-        vec![" ".into(), pr.key.to_string().bold(), format!(" · {} → {} · ", pr.repo_name, pr.base).into()];
+        vec![" ".into(), pr.key.to_string().bold(), format!(" · {} {TO} {} · ", pr.repo_name, pr.base).into()];
     match &pr.pull {
         Some(pull) => {
             spans.push(format!("#{} ", pull.number).into());
             let (word, meaning) = state_word(pull);
             spans.push(Span::styled(word, palette::fg(meaning)));
-            spans.push(PULL_LINK.into());
+            spans.push(format!(" {CUE}").into());
         }
         None => spans.push(pr.status.as_str().dim()),
     }
@@ -186,9 +193,9 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], frame: usize) -> Boxes {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
         Block::bordered().border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
         if let Some(pull) = &prs[i].pull {
-            // the title starts after the corner and ends with one space; the `↗` is the cell before it, and the link
-            // runs back from there over `#<number> <state> ↗`
-            let len = format!("#{} {}{PULL_LINK}", pull.number, state_word(pull).0).chars().count() as u16;
+            // the title starts after the corner and ends with one space; the `󰏌` is the cell before it, and the link
+            // runs back from there over `#<number> <state> 󰏌`
+            let len = format!("#{} {} {CUE}", pull.number, state_word(pull).0).chars().count() as u16;
             link(&mut buf, Rect::new(rect.x + titles[i].width() as u16 - len, rect.y, len, 1), &pull.url);
         }
         let inner = rect.inner(Margin { horizontal: 1, vertical: 1 });
@@ -339,6 +346,77 @@ mod tests {
         assert_eq!(levels(&[pr("a", &["b"]), pr("b", &["a"])]).len(), 2);
     }
 
+    fn merged(key: &str, needs: &[&str]) -> PrNode {
+        PrNode { status: PrStatus::Merged, ..pr(key, needs) }
+    }
+
+    #[test]
+    fn the_prs_not_merged_are_below_every_merged_one_ordered_by_needs() {
+        // merged: cpd, drafts, followups (needs cpd); not merged: cleanup (no needs), flake (waiting), status (needs cleanup)
+        let prs = [
+            merged("cpd", &[]),
+            merged("drafts", &[]),
+            merged("followups", &["cpd"]),
+            pr("cleanup", &[]),
+            PrNode { status: PrStatus::Waiting, ..pr("flake", &[]) },
+            pr("status", &["cleanup"]),
+        ];
+        assert_eq!(levels(&prs), [0, 0, 1, 2, 2, 3]);
+        // laid out: every pill of a PR not merged is below every pill of a merged one
+        let jobs: Vec<JobNode> = prs.iter().map(|p| job(p.key.as_str(), &format!("j-{}", p.key.as_str()), &[])).collect();
+        let c = layout(&prs, &jobs, 0).chart;
+        let y = |key: &str| c.pills.iter().find(|p| p.key == format!("j-{key}")).unwrap().rect.y;
+        let last_merged = ["cpd", "drafts", "followups"].iter().map(|k| y(k)).max().unwrap();
+        let first_other = ["cleanup", "flake", "status"].iter().map(|k| y(k)).min().unwrap();
+        assert!(first_other > last_merged, "{first_other} > {last_merged}");
+        assert_eq!(y("cleanup"), y("flake"), "the others sit together, side by side");
+        assert!(y("status") > y("cleanup"), "and still by needs");
+    }
+
+    #[test]
+    fn a_pr_not_merged_that_needs_a_merged_one_sits_below_it_with_an_arrow() {
+        let prs = [merged("api", &[]), pr("web", &["api"])];
+        assert_eq!(levels(&prs), [0, 1]);
+        let b = layout(&prs, &[], 0);
+        snap(&b.chart, "
+┌ api · api-repo 󱦰 main · merged ┐
+│ no Jobs                        │
+└───────────────┬────────────────┘
+                ╰╮
+                 󱦳
+┌ web · web-repo 󱦰 main · dispatch ┐
+│ no Jobs                          │
+└──────────────────────────────────┘");
+    }
+
+    #[test]
+    fn a_pr_not_merged_with_no_needs_is_floored_below_the_merged_ones() {
+        // the merged chain is two rows deep: the independent open PR goes to the third, not the first
+        let prs = [merged("a", &[]), merged("b", &["a"]), pr("c", &[])];
+        assert_eq!(levels(&prs), [0, 1, 2]);
+        // needs still win over the floor
+        let prs = [merged("a", &[]), pr("b", &["a"]), pr("c", &["b"])];
+        assert_eq!(levels(&prs), [0, 1, 2]);
+        let prs = [merged("a", &[]), pr("x", &[]), pr("y", &["x"]), pr("z", &["y"])];
+        assert_eq!(levels(&prs), [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn with_no_merged_pr_or_with_all_merged_the_levels_are_the_needs_alone() {
+        let names = [("api", &["schema"][..]), ("docs", &[]), ("e2e", &["docs", "web"]), ("schema", &[]), ("web", &["api", "schema"])];
+        let none: Vec<PrNode> = names.iter().map(|(k, n)| pr(k, n)).collect();
+        let all: Vec<PrNode> = names.iter().map(|(k, n)| merged(k, n)).collect();
+        assert_eq!(levels(&none), [1, 0, 3, 0, 2]);
+        assert_eq!(levels(&all), [1, 0, 3, 0, 2]);
+    }
+
+    #[test]
+    fn the_arrow_glyphs_are_one_cell_wide() {
+        for glyph in [ARROW, TO] {
+            assert_eq!(Span::raw(glyph).width(), 1, "{glyph:?}");
+        }
+    }
+
     #[test]
     fn boxes_of_one_level_sit_side_by_side_by_key() {
         // given out of key order: the row still puts them by key, one column apart
@@ -350,8 +428,8 @@ mod tests {
         assert_eq!(c.columns, [vec![1], vec![0]], "alpha's column first");
         assert_eq!(b.row_of, [0, 0]);
         snap(c, "
-┌ alpha · alpha-repo → main · dispatch ┐ ┌ zed · zed-repo → main · dispatch ┐
-│  ○ a │S1                             │ │  ○ z │S1                         │
+┌ alpha · alpha-repo 󱦰 main · dispatch ┐ ┌ zed · zed-repo 󱦰 main · dispatch ┐
+│  󰝦 a │S1                             │ │  󰝦 z │S1                         │
 └──────────────────────────────────────┘ └──────────────────────────────────┘");
     }
 
@@ -367,10 +445,10 @@ mod tests {
             assert_eq!(inside, want, "row {y}");
         }
         snap(&c, "
-┌ api · api-repo → main · dispatch ┐
-│  ○ a │S1 ──╮                     │
-│            ├── ○ c │S1           │
-│  ○ b │S1 ──╯                     │
+┌ api · api-repo 󱦰 main · dispatch ┐
+│  󰝦 a │S1 ──╮                     │
+│            ├── 󰝦 c │S1           │
+│  󰝦 b │S1 ──╯                     │
 └──────────────────────────────────┘");
     }
 
@@ -378,7 +456,7 @@ mod tests {
     fn a_pr_with_no_jobs_is_an_empty_box() {
         let c = layout(&[pr("api", &[])], &[], 0).chart;
         snap(&c, "
-┌ api · api-repo → main · dispatch ┐
+┌ api · api-repo 󱦰 main · dispatch ┐
 │ no Jobs                          │
 └──────────────────────────────────┘");
         assert!(c.buf[(1, 1)].modifier.contains(Modifier::DIM));
@@ -392,12 +470,12 @@ mod tests {
         let mut p = pr("api", &[]);
         p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p);
-        assert_eq!(t.to_string(), " api · api-repo → main · #12 conflict ↗ ");
+        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󰏌 ");
         assert_eq!(t.spans[4].style.fg, failed);
         // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the failed colour
         p.pull = Some(pull(12, PrState::Open));
         let t = title(&p);
-        assert_eq!(t.to_string(), " api · api-repo → main · #12 open ↗ ");
+        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
         assert_ne!(t.spans[4].style.fg, failed);
         // merged and closed never read `conflict`
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
@@ -413,7 +491,7 @@ mod tests {
         let mut open = pr("api", &[]);
         open.pull = Some(pull(12, PrState::Open));
         let t = title(&open);
-        assert_eq!(t.to_string(), " api · api-repo → main · #12 open ↗ ");
+        assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
         assert!(t.spans[1].style.add_modifier.contains(Modifier::BOLD), "the key is bold");
         assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(PrState::Open)).fg);
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
@@ -425,7 +503,7 @@ mod tests {
         let mut waiting = pr("web", &["api"]);
         waiting.status = PrStatus::Waiting;
         let t = title(&waiting);
-        assert_eq!(t.to_string(), " web · web-repo → main · waiting ");
+        assert_eq!(t.to_string(), " web · web-repo 󱦰 main · waiting ");
         assert!(t.spans[3].style.add_modifier.contains(Modifier::DIM));
     }
 
@@ -447,12 +525,12 @@ mod tests {
         plain
     }
 
-    /// The cells of the title row under the link to the pull request, and the cells of `#` and `↗` in the plain chart.
+    /// The cells of the title row under the link to the pull request, and the cells of `#` and `󰏌` in the plain chart.
     /// A piece's second cell keeps its symbol but is covered by the piece.
     fn link_cells(c: &Chart, plain: &Chart) -> (Vec<u16>, u16, u16) {
         let top: Vec<char> = text(plain).lines().next().unwrap().chars().collect();
         let first = top.iter().position(|&ch| ch == '#').unwrap() as u16;
-        let arrow = top.iter().position(|&ch| ch == '↗').unwrap() as u16;
+        let arrow = top.iter().position(|&ch| ch.to_string() == CUE).unwrap() as u16;
         let mut covered = Vec::new();
         for x in 0..c.buf.area.width {
             let symbol = c.buf[(x, 0)].symbol();
@@ -470,11 +548,11 @@ mod tests {
         let c = layout(&[api], &[], 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
-┌ api · api-repo → main · #12 conflict ↗ ┐
+┌ api · api-repo 󱦰 main · #12 conflict 󰏌 ┐
 │ no Jobs                                │
 └────────────────────────────────────────┘");
         let (covered, first, arrow) = link_cells(&c, &plain);
-        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict ↗` whole, not the key nor the separators");
+        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#12 conflict 󰏌` whole, not the key nor the separators");
     }
 
     #[test]
@@ -485,12 +563,12 @@ mod tests {
         let c = layout(&[api], &[], 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
-┌ api · api-repo → main · #12 open ↗ ┐
+┌ api · api-repo 󱦰 main · #12 open 󰏌 ┐
 │ no Jobs                            │
 └────────────────────────────────────┘");
-        assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open ↗` is two cells longer than `dispatch`");
+        assert_eq!(c.buf.area.width, before.buf.area.width + 2, "`#12 open 󰏌` is two cells longer than `dispatch`");
         let (covered, first, arrow) = link_cells(&c, &plain);
-        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `↗`, not the key nor the separators");
+        assert_eq!(covered, (first..=arrow).collect::<Vec<_>>(), "`#` through `󰏌`, not the key nor the separators");
         assert!(before.buf.content.iter().all(|cell| !cell.symbol().contains("]8;;")), "no pull request, no link");
     }
 
@@ -500,13 +578,13 @@ mod tests {
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("web", "c", &[])];
         let c = layout(&prs, &jobs, 0).chart;
         snap(&c, "
-┌ api · api-repo → main · dispatch ┐
-│  ○ a │S1 ───── ○ b │S1           │
+┌ api · api-repo 󱦰 main · dispatch ┐
+│  󰝦 a │S1 ───── 󰝦 b │S1           │
 └────────────────┬─────────────────┘
                  │
-                 ▼
-┌ web · web-repo → main · dispatch ┐
-│  ○ c │S1                         │
+                 󱦳
+┌ web · web-repo 󱦰 main · dispatch ┐
+│  󰝦 c │S1                         │
 └──────────────────────────────────┘");
         // the arrow is in the lines' colour
         let exit = c.buf.content.iter().find(|cell| cell.symbol() == EXIT).unwrap();
@@ -518,13 +596,13 @@ mod tests {
         let prs = [pr("docs", &["schema"]), pr("schema", &[]), pr("web", &["schema"])];
         let jobs = [job("schema", "types", &[]), job("schema", "gql", &["types"]), job("web", "page", &[]), job("docs", "readme", &[])];
         snap(&layout(&prs, &jobs, 0).chart, "
-┌ schema · schema-repo → main · dispatch ┐
-│  ○ types │S1 ───── ○ gql │S1           │
+┌ schema · schema-repo 󱦰 main · dispatch ┐
+│  󰝦 types │S1 ───── 󰝦 gql │S1           │
 └───────────────────┬────────────────────┘
                   ╭─┴───────────────────────────────────╮
-                  ▼                                     ▼
-┌ docs · docs-repo → main · dispatch ┐ ┌ web · web-repo → main · dispatch ┐
-│  ○ readme │S1                      │ │  ○ page │S1                      │
+                  󱦳                                     󱦳
+┌ docs · docs-repo 󱦰 main · dispatch ┐ ┌ web · web-repo 󱦰 main · dispatch ┐
+│  󰝦 readme │S1                      │ │  󰝦 page │S1                      │
 └────────────────────────────────────┘ └──────────────────────────────────┘");
     }
 
@@ -533,13 +611,13 @@ mod tests {
         let prs = [pr("api", &[]), pr("db", &[]), pr("web", &["api", "db"])];
         let jobs = [job("api", "a", &[]), job("db", "d", &[]), job("web", "w", &[])];
         snap(&layout(&prs, &jobs, 0).chart, "
-┌ api · api-repo → main · dispatch ┐ ┌ db · db-repo → main · dispatch ┐
-│  ○ a │S1                         │ │  ○ d │S1                       │
+┌ api · api-repo 󱦰 main · dispatch ┐ ┌ db · db-repo 󱦰 main · dispatch ┐
+│  󰝦 a │S1                         │ │  󰝦 d │S1                       │
 └────────────────┬─────────────────┘ └───────────────┬────────────────┘
                  ├───────────────────────────────────╯
-                 ▼
-┌ web · web-repo → main · dispatch ┐
-│  ○ w │S1                         │
+                 󱦳
+┌ web · web-repo 󱦰 main · dispatch ┐
+│  󰝦 w │S1                         │
 └──────────────────────────────────┘");
     }
 
@@ -547,17 +625,17 @@ mod tests {
     fn a_need_that_skips_a_row_rides_a_column_free_of_boxes() {
         let prs = [pr("a", &[]), pr("b", &["a"]), pr("c", &["a", "b"])];
         snap(&layout(&prs, &[], 0).chart, "
-┌ a · a-repo → main · dispatch ┐
+┌ a · a-repo 󱦰 main · dispatch ┐
 │ no Jobs                      │
 └──────────────┬───────────────┘
                ├─────────────────╮
-               ▼                 │
-┌ b · b-repo → main · dispatch ┐ │
+               󱦳                 │
+┌ b · b-repo 󱦰 main · dispatch ┐ │
 │ no Jobs                      │ │
 └──────────────┬───────────────┘ │
                ├─────────────────╯
-               ▼
-┌ c · c-repo → main · dispatch ┐
+               󱦳
+┌ c · c-repo 󱦰 main · dispatch ┐
 │ no Jobs                      │
 └──────────────────────────────┘");
     }
@@ -583,7 +661,7 @@ mod tests {
         // a pill is found where it is drawn
         let r = b.chart.pills[at("w")].rect;
         assert_eq!(b.chart.pill_at(r.x, r.y), Some(at("w")));
-        assert_eq!(b.chart.buf[(r.x + 1, r.y)].symbol(), "○");
+        assert_eq!(b.chart.buf[(r.x + 1, r.y)].symbol(), crate::palette::QUEUED);
     }
 
     #[test]
@@ -649,7 +727,7 @@ mod tests {
     fn at_scroll_zero_the_first_box_starts_two_columns_and_one_row_inside_the_body() {
         let rows = body(40, 6, (0, 0));
         assert_eq!(rows[0].trim(), "");
-        assert_eq!(rows[1], "  ┌ api · api-repo → main · dispatch ┐  ");
+        assert_eq!(rows[1], "  ┌ api · api-repo 󱦰 main · dispatch ┐  ");
     }
 
     #[test]

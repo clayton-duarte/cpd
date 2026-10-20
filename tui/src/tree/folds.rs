@@ -114,6 +114,7 @@ impl FoldsFile {
 mod tests {
     use super::super::fixture::archived;
     use super::*;
+    use super::rows::MORE;
 
     fn file_in(dir: &tempfile::TempDir) -> FoldsFile {
         FoldsFile::at(&CpdHome::resolve(Some(dir.path().into()), None).unwrap())
@@ -229,11 +230,11 @@ mod tests {
         let tree = archived();
         let (mut state, mut known) = (TreeState::default(), HashSet::new());
         rows::open_new(&mut state, &mut known, &tree);
-        let stored = folds(&["beta", "vanished"], &[&["alpha", "…"], &["…"], &["beta", "…"], &["vanished", "…"], &["alpha", "ship"]]);
+        let stored = folds(&["beta", "vanished"], &[&["alpha", MORE], &[MORE], &["beta", MORE], &["vanished", MORE], &["alpha", "ship"]]);
         stored.merge(&mut state, &mut known);
         assert!(!state.opened().contains(&vec!["beta".to_owned()]), "beta is collapsed");
         assert!(state.opened().contains(&vec!["alpha".to_owned()]), "alpha is not");
         assert!(known.contains(&vec!["vanished".to_owned()]), "a collapsed Context counts as known");
-        assert_eq!(Folds::of(&state, &tree), folds(&["beta"], &[&["alpha", "…"], &["…"]]), "unknown ids and non-`…` paths are dropped");
+        assert_eq!(Folds::of(&state, &tree), folds(&["beta"], &[&["alpha", MORE], &[MORE]]), "unknown ids and non-`…` paths are dropped");
     }
 }

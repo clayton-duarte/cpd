@@ -7,7 +7,7 @@ use serde_json::json;
 use super::row::{self, Phase, PlanRow};
 use super::{Env, PhaseArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::output::Output;
 
 const COMMAND: &str = "plan phase";
@@ -42,7 +42,7 @@ pub(super) fn phase(args: PhaseArgs) -> Result<Output, CpdError> {
                 .with("plan", id.as_str()));
         }
         let text = format!("Plan {id} moved from grounding to plan. Next: cpd job add <key> --title <text> --tier <T> --spec <file>, then cpd plan review");
-        append(tx, NewEvent::new(Kind::PlanPhase, text, json!({"from": "grounding", "to": "plan"})).plan(id.clone()))?;
+        append(tx, NewEvent::plan_phase(text, "grounding", "plan").plan(id.clone()))?;
         Ok(())
     })?;
     Ok(Output::success(json!({"plan": id, "phase": "plan"})))

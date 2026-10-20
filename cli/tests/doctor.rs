@@ -7,7 +7,7 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
-use common::{CPD, Run, TestEnv};
+use common::{CPD, Run, TestEnv, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
@@ -61,7 +61,7 @@ fn write_config(env: &TestEnv, extra: &str) {
         adapter.display()
     );
     // `extra` holds top-level keys, so it must come before the `[tiers]` table.
-    fs::write(env.cpd_home().join("config.toml"), text).unwrap();
+    env.write_config(&text);
 }
 
 /// A fake pi install whose agent directory is the test root: `bin/pi` answering
@@ -84,7 +84,7 @@ fn healthy() -> TestEnv {
     let env = TestEnv::new();
     write_config(&env, "");
     env.fake("git", "echo 'git version 2.43.0'");
-    env.fake("tmux", "[ \"$1\" = -V ] && echo 'tmux 3.4'; exit 0");
+    env.fake("tmux", "[ \"$1\" = -V ] && echo 'tmux 3.6'; exit 0");
     env.fake_gh("[ \"$1\" = auth ] && exit 0; echo 'gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)'");
     install_pi(&env, "1.2.0");
     symlink(real_node(), env.bin().join("node")).unwrap();
@@ -167,7 +167,7 @@ fn a_healthy_machine_passes_every_check_in_order() {
         assert_eq!(c["severity"], "error");
     };
     tool("git", "2.43.0", ">= 2.43.0");
-    tool("tmux", "3.4", ">= 3.4");
+    tool("tmux", "3.6", ">= 3.6");
     tool("pi", "1.2.0", ">= 1.2.0 < 2.0.0");
     tool("gh", "2.45.0", ">= 2.45.0");
     for warn in ["gh_auth", "lead_packages", "watch"] {
@@ -239,9 +239,11 @@ fn each_tool_must_be_at_or_above_its_minimum() {
         ("git", "git version 2.43.0", true, "2.43.0"),
         ("git", "git version 2.50.1 (Apple Git-155)", true, "2.50.1"),
         ("tmux", "tmux 3.3a", false, "3.3"),
-        ("tmux", "tmux 3.4a", true, "3.4"),
-        ("tmux", "tmux 3.5", true, "3.5"),
-        ("tmux", "tmux next-3.6", true, "next-3.6"),
+        ("tmux", "tmux 3.4", false, "3.4"),
+        ("tmux", "tmux 3.5a", false, "3.5"),
+        ("tmux", "tmux 3.6", true, "3.6"),
+        ("tmux", "tmux 3.8", true, "3.8"),
+        ("tmux", "tmux next-3.9", true, "next-3.9"),
         ("pi", "1.1.9", false, "1.1.9"),
         ("pi", "1.9.9", true, "1.9.9"),
         ("pi", "2.0.0", false, "2.0.0"),
@@ -315,8 +317,7 @@ fn pi_node_must_run() {
     let env = healthy();
     let pi_node = env.home().join(".local/share/pi-node/current/bin");
     fs::create_dir_all(&pi_node).unwrap();
-    fs::write(pi_node.join("node"), "#!/bin/sh\necho 'node broke' >&2; exit 7\n").unwrap();
-    fs::set_permissions(pi_node.join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&pi_node.join("node"), "#!/bin/sh\necho 'node broke' >&2; exit 7\n");
     let run = doctor(&env);
     assert_doctor_failed(&run);
     assert_fails(&run, "pi_node", "error", "exited 7");
@@ -744,8 +745,7 @@ fn a_hung_pi_node_is_a_failed_check() {
     let env = healthy();
     link_sleep(&env);
     fs::remove_file(env.bin().join("node")).unwrap();
-    fs::write(env.bin().join("node"), format!("#!/bin/sh\n{HANG}\n")).unwrap();
-    fs::set_permissions(env.bin().join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n{HANG}\n"));
     let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_NODE", "1")]);
     assert_doctor_failed(&run);
     assert_timed_out(&run, "pi_node", "error", "node", "--version");
@@ -759,10 +759,11 @@ fn a_hung_catalog_probe_is_killed_at_10_seconds() {
     let env = healthy();
     link_sleep(&env);
     fs::remove_file(env.bin().join("node")).unwrap();
-    fs::write(env.bin().join("node"), format!("#!/bin/sh\n[ \"$1\" = --version ] && {{ echo v22.0.0; exit 0; }}\n{HANG}\n")).unwrap();
-    fs::set_permissions(env.bin().join("node"), std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n[ \"$1\" = --version ] && {{ echo v22.0.0; exit 0; }}\n{HANG}\n"));
     let started = std::time::Instant::now();
     let run = doctor(&env);
+    // time-claim: the probe is killed at doctor's 10 s deadline, not the cache fill's 30 s; no per-poll signal from
+    // the deadline.
     assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
     assert_doctor_failed(&run);
     assert_passes(&run, "pi_node");

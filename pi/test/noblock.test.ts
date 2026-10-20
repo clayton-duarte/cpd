@@ -1,0 +1,147 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { BOUND_SECONDS, blockingReason, reasonText } from "../lib/noblock.ts";
+import { Fixture, sessionShow, waitFor } from "./fake.ts";
+
+// commands.md §15.11: a Manager's bash call that waits over 30 s is refused.
+
+const refused = (command: string, timeout?: number) => assert.notEqual(blockingReason(command, timeout), undefined, `${command} (timeout ${timeout}) must be refused`);
+const passes = (command: string, timeout?: number) => assert.equal(blockingReason(command, timeout), undefined, `${command} (timeout ${timeout}) must run`);
+
+test("sleep: 30 s passes, over it is refused, in any unit", () => {
+  assert.equal(BOUND_SECONDS, 30);
+  passes("sleep 30");
+  passes("sleep 30s");
+  passes("sleep 0.5m");
+  passes("sleep 5");
+  passes("sleep $n");
+  refused("sleep 31");
+  refused("sleep 30.5");
+  refused("sleep 1m");
+  refused("sleep 0.6m");
+  refused("sleep 1h");
+  refused("sleep 1d");
+  refused("sleep infinity");
+  refused("sleep 20 20");
+  refused("/bin/sleep 60");
+  refused("echo start; sleep 31 && echo done");
+});
+
+test("timeout: 20 passes, 60 is refused, its options are skipped", () => {
+  passes("timeout 20 cmd");
+  passes("timeout 30 cmd");
+  refused("timeout 60 cmd");
+  refused("timeout 2m cmd");
+  refused("timeout -s KILL 60 cmd");
+  refused("timeout --preserve-status -k 5 60 cmd");
+  passes("timeout -s KILL 20 cmd");
+});
+
+test("watch, tail -f, cpd events follow, gh run watch, gh pr checks --watch", () => {
+  refused("watch -n 1 date");
+  refused("tail -f log");
+  refused("tail -F log");
+  refused("tail -n 5 -f log");
+  refused("tail -fn5 log");
+  refused("tail --follow=name log");
+  passes("tail -n 20 log");
+  refused("cpd events follow --session x");
+  passes("cpd events list --context c");
+  refused("gh run watch 123");
+  refused("gh pr checks 12 --watch");
+  passes("gh pr checks 12");
+  passes("gh run list");
+});
+
+test("a while or until loop whose body sleeps is refused, whatever the sleep", () => {
+  refused("while true; do cpd plan show; sleep 5; done");
+  refused("until cpd plan show; do sleep 1; done");
+  refused("while sleep 1; do x; done");
+  refused("while true\ndo\n  sleep 2\ndone");
+  passes("while read l; do echo $l; done < f");
+  passes("for i in 1 2; do sleep 5; done");
+});
+
+test("the bash tool's own timeout above 30 s is refused", () => {
+  refused("ls", 120);
+  refused("ls", 31);
+  passes("ls", 30);
+  passes("ls", 10);
+  passes("ls");
+});
+
+test("commands that match nothing run, and a pattern in an argument or in quotes is not a command", () => {
+  passes("cpd plan show");
+  passes("git log --grep watch");
+  passes("grep -r 'sleep 60' .");
+  passes('echo "watch; sleep 100"');
+  passes("echo sleep 100");
+  passes("# sleep 100");
+  passes("cpd --timeout 60 plan show");
+  passes("");
+});
+
+test("the reason is one line naming the rule and what matched", () => {
+  const r = reasonText(blockingReason("sleep 1m")!);
+  assert.equal(r, "cpd: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: sleep 1m");
+  assert.equal(r.includes("\n"), false);
+  assert.match(reasonText(blockingReason("ls", 120)!), /refused: bash timeout 120$/);
+});
+
+// ---- through the adapter ----
+
+async function started(role: string) {
+  const f = new Fixture();
+  f.respond("session-show", sessionShow({ role, plan: role === "manager" ? null : "p1", plan_lead: role === "lead" }));
+  f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  return f;
+}
+
+const call = async (f: Fixture, input: Record<string, unknown>, toolName = "bash") => (await f.pi.fireWith("tool_call", { toolName, toolCallId: "t", input }))[0] as { block?: boolean; reason?: string } | undefined;
+
+const CASES: [Record<string, unknown>, boolean][] = [
+  [{ command: "sleep 31" }, true],
+  [{ command: "sleep 1m" }, true],
+  [{ command: "watch -n 2 cpd plan show" }, true],
+  [{ command: "while true; do cpd plan show; sleep 5; done" }, true],
+  [{ command: "ls", timeout: 120 }, true],
+  [{ command: "sleep 30" }, false],
+  [{ command: "cpd plan show" }, false],
+  [{ command: "timeout 20 cmd" }, false],
+];
+
+test("a Manager's refused calls get block and the rule's reason; the others run", async (t) => {
+  const f = await started("manager");
+  t.after(() => f.close());
+  for (const [input, isRefused] of CASES) {
+    const r = await call(f, input);
+    if (isRefused) {
+      assert.equal(r?.block, true, JSON.stringify(input));
+      assert.match(r?.reason ?? "", /^cpd: a Manager never blocks: .* refused: /);
+    } else assert.equal(r, undefined, JSON.stringify(input));
+  }
+});
+
+test("a Manager's other tools are never refused", async (t) => {
+  const f = await started("manager");
+  t.after(() => f.close());
+  assert.equal(await call(f, { command: "sleep 60", timeout: 120 }, "read"), undefined);
+});
+
+test("a Lead's and a Worker's identical calls are never refused", async (t) => {
+  for (const role of ["lead", "worker"]) {
+    const f = await started(role);
+    t.after(() => f.close());
+    for (const [input] of CASES) assert.equal(await call(f, input), undefined, `${role}: ${JSON.stringify(input)}`);
+  }
+});
+
+test("before session_start no call is refused", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.load();
+  assert.equal(await call(f, { command: "sleep 60" }), undefined);
+});

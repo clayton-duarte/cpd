@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { installedIdentity } from "../lib/cpd.ts";
 import { KINDS, PROTOCOL } from "../lib/event.ts";
-import { ev, Fixture, planShow, settle, waitFor } from "./fake.ts";
+import { ev, Fixture, planShow, waitFor } from "./fake.ts";
 
 const KIND_RS = new URL("../../core/src/events/kind.rs", import.meta.url);
 const source = () => readFileSync(KIND_RS, "utf8");
@@ -46,7 +46,7 @@ test("equal protocol: no message, and the check runs at start and at every resta
   t.after(() => f.close());
   await started(f);
   await restart(f);
-  await settle();
+  await f.quiet(); // `restart` returns once the next follower started, after its `--version` check
   assert.equal(f.versions(), 2);
   assert.deepEqual(f.pi.sent, []);
 });
@@ -73,7 +73,7 @@ test("a different protocol twice for the same binary: still one message", async 
   await started(f);
   await restart(f);
   await restart(f);
-  await settle();
+  await f.quiet(); // `restart` returns once the next follower started, after its `--version` check
   assert.equal(f.versions(), 3);
   assert.equal(mismatches(f).length, 1);
 });
@@ -88,7 +88,7 @@ test("a new binary that is still different: a second message", async (t) => {
   await restart(f);
   await waitFor("the second message", () => mismatches(f).length === 2);
   await restart(f);
-  await settle();
+  await f.quiet(); // `restart` returns once the next follower started, after its `--version` check
   assert.equal(mismatches(f).length, 2);
 });
 
@@ -101,7 +101,7 @@ test("a `--version` without protocol is a message", async (t) => {
   assert.match(String(m!.message.content), new RegExp(String.raw`^cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks no protocol .*this adapter ${PROTOCOL}; reload pi \(\/reload\)$`));
   assert.equal((m!.message.details as any).cpd, null);
   await restart(f);
-  await settle();
+  await f.quiet(); // `restart` returns once the next follower started, after its `--version` check
   assert.equal(mismatches(f).length, 1);
 });
 
@@ -111,7 +111,7 @@ test("a failing `--version` is an ordinary error once per code; following goes o
   f.respond("--version", { ok: false, error: { code: "boom", message: "it broke.", details: {} } }, { exit: 1 });
   await started(f);
   await restart(f);
-  await settle();
+  await f.quiet(); // `restart` returns once the next follower started, after its `--version` check
   assert.equal(f.pi.errors().filter((e) => (e.message.details as any).code === "boom").length, 1);
   assert.equal(mismatches(f).length, 0);
 });

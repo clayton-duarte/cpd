@@ -15,7 +15,7 @@
 //! one file a view writes, its own state.
 //!
 //! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
-//! dies stays dead (contract §6.1).
+//! dies is started again by the `pane-died` hook (contract §6.1), so the view never exits on a key.
 
 mod actions;
 mod boxes;
@@ -26,13 +26,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind,
-};
+use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
@@ -41,14 +40,17 @@ use ratatui::widgets::{Paragraph, Widget};
 use self::actions::Actions;
 use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
-use crate::link::link;
+use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
+use super::background::Background;
 use super::read::{self, ChatSlot, PlanBoxes, Pulse, ReviewStatus};
-use super::{RunCommand, not_a_terminal, on_a_terminal};
+use super::runner::{ViewError, kept};
+use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::events::{self, Event, highest_id};
+use cpd_core::events::{Event, highest_id};
 use cpd_core::home::CpdHome;
+use cpd_core::host::addr::review_host;
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 use cpd_core::output::Output;
 use cpd_core::store::Store;
@@ -56,14 +58,10 @@ use cpd_core::store::Store;
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 
-/// The snapshot is retaken at least this often, Event or not: a conflict clears with no Event (`mergeable` changes
-/// silently), as the `widgets` view's `REFRESH` (§17).
-const REFRESH: Duration = Duration::from_secs(2);
-
-/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (`stale`), else after
-/// [`REFRESH`].
+/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it or a pull request row
+/// changed (`stale`: a conflict clears with no Event, `mergeable` changes silently, §17), never else.
 fn due(stale: bool, since: Duration) -> bool {
-    since >= if stale { COALESCE } else { REFRESH }
+    stale && since >= COALESCE
 }
 
 /// While Pulse shows the snapshot is retaken at least this often, Event or not: the window moves and the ages tick,
@@ -76,29 +74,31 @@ fn pulse_due(stale: bool, since: Duration) -> bool {
     since >= if stale { COALESCE } else { PULSE_REFRESH }
 }
 
-/// The view redraws at least this often, for the spinner (one frame: palette.rs); a redraw reads nothing from the store.
+/// While a spinner is on screen ([`Centre::spins`], [`pulse_spins`]) the view redraws this often (one frame:
+/// palette.rs); a redraw reads nothing from the store. With none, it draws only when something changed.
 const FRAME: Duration = Duration::from_millis(100);
 
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
 /// chart touches the pane's edges, and scrolled the chart reaches them.
 const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
 
-/// The row above the boxes while the Plan's latest Plan review is pending (commands.md §13.2): ` Plan review r<n> pending ↗`.
+/// The row above the boxes while the Plan's latest Plan review is pending (commands.md §13.2): ` Plan review r<n> pending 󰏌`.
 #[derive(Debug, PartialEq, Eq)]
 struct ReviewRow {
     number: u32,
-    /// `http://localhost:<port>`, the port of `run/<plan>/plannotator-port`; `None` when that file is missing or holds
-    /// no port: the row shows without the `↗`.
+    /// `http://<host>:<port>`, the port of `run/<plan>/plannotator-port`; `None` when that file is missing or holds
+    /// no port: the row shows without the `󰏌`.
     url: Option<String>,
 }
 
 impl ReviewRow {
-    /// The row of `plan`, if its latest review is pending; reads the port file.
-    fn of(plan: &PlanBoxes, home: &CpdHome) -> Option<ReviewRow> {
+    /// The row of `plan`, if its latest review is pending; reads the port file. `host` is the review host (contract
+    /// §6.5), asked for only when there is a port to link.
+    fn of(plan: &PlanBoxes, home: &CpdHome, host: impl FnOnce() -> String) -> Option<ReviewRow> {
         let review = plan.review.as_ref().filter(|r| r.status == ReviewStatus::Pending)?;
         let port: Option<u16> =
             fs::read_to_string(home.plannotator_port(&plan.plan)).ok().and_then(|text| text.trim().parse().ok());
-        Some(ReviewRow { number: review.number, url: port.map(|port| format!("http://localhost:{port}")) })
+        Some(ReviewRow { number: review.number, url: port.map(|port| format!("http://{}:{port}", host())) })
     }
 
     fn line(&self) -> Line<'static> {
@@ -107,7 +107,7 @@ impl ReviewRow {
             Span::styled("pending", palette::fg(Meaning::Review)),
         ];
         if self.url.is_some() {
-            spans.push(" ↗".into());
+            spans.push(format!(" {CUE}").into());
         }
         Line::from(spans)
     }
@@ -119,7 +119,7 @@ impl ReviewRow {
         let width = line.width() as u16;
         line.render(area, buf);
         if let Some(url) = &self.url {
-            // from `Plan` (after the leading blank) through `↗`
+            // from `Plan` (after the leading blank) through `󰏌`
             link(buf, Rect::new(area.x + 1, area.y, width - 1, 1).intersection(area), url);
         }
     }
@@ -136,13 +136,26 @@ struct Centre {
 }
 
 impl Centre {
-    /// Draw the boxes again at spinner frame `frame`, from the Plan already read.
-    fn turn(&mut self, frame: usize) {
-        if frame != self.frame {
+    /// A Job runs: its pill's icon is the spinner, which turns with the clock.
+    fn spins(&self) -> bool {
+        self.plan.jobs.iter().any(|j| flow::Live::of(j) == Some(flow::Live::Running))
+    }
+
+    /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
+    /// frame is not the one drawn. Whether it did.
+    fn turn(&mut self, frame: usize) -> bool {
+        let turned = frame != self.frame && self.spins();
+        if turned {
             self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, frame).with_margin(MARGIN);
             self.frame = frame;
         }
+        turned
     }
+}
+
+/// A Lead of Pulse is working: its dot is the spinner, which turns with the clock.
+fn pulse_spins(pulse: &Pulse) -> bool {
+    pulse.rows.iter().any(|r| r.dot == read::Dot::Working)
 }
 
 /// One read of the store: the Pulse of the Manager in the chat slot, or the Plan of the Lead there, if any, and the
@@ -167,7 +180,7 @@ fn snapshot(store: &mut Store, home: &CpdHome, width: u16, now_ms: i64) -> Resul
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
     let boxes = boxes::layout(&plan.prs, &plan.jobs, frame).with_margin(MARGIN);
-    let review = ReviewRow::of(&plan, home);
+    let review = ReviewRow::of(&plan, home, || review_host(&mut std::io::sink()));
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, review, boxes, frame }), pulse: None })
 }
 
@@ -370,35 +383,29 @@ fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
 }
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view plan"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let width = ratatui::crossterm::terminal::size()
-        .map_err(|e| {
-            CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
-                .with("command", "tui view plan")
-        })?
-        .0;
-    let mut snap = snapshot(&mut store, &home, width, now_ms())?;
-    let actions = Actions::new(home.clone(), &config, run_command);
-    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.map_err(|e| e.to_string()).and_then(|()| {
-        show(&mut terminal, &mut store, &home, &mut snap, poll, &actions).map_err(|e| e.to_string())
-    });
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    match result {
-        Ok(()) => Ok(Output::Owned),
-        Err(error) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view plan failed: {error}."))
-            .with("command", "tui view plan")),
-    }
+    run_view(
+        "plan",
+        Capture::Mouse,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let width = ratatui::crossterm::terminal::size()
+                .map_err(|e| {
+                    CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
+                        .with("command", "tui view plan")
+                })?
+                .0;
+            let snap = snapshot(&mut store, &home, width, now_ms())?;
+            let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
+            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+            let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
+            Ok((store, home, snap, poll, follow, actions))
+        },
+        |terminal, (mut store, home, mut snap, poll, follow, actions)| {
+            show(terminal, &mut store, &home, &mut snap, poll, follow, &actions)
+        },
+    )
 }
 
 /// Now, in Unix ms.
@@ -413,8 +420,9 @@ fn show(
     home: &CpdHome,
     snap: &mut Snapshot,
     poll: Duration,
-    actions: &Actions,
-) -> std::io::Result<()> {
+    mut follow: read::Follow,
+    actions: &Arc<Actions>,
+) -> Result<(), ViewError> {
     let mut ui = Ui::default();
     let mut offsets = Offsets::at(home);
     let loaded = offsets.load();
@@ -424,25 +432,43 @@ fn show(
     if let Err(reason) = loaded {
         ui.note = format!("scroll positions reset: {reason}");
     }
-    let follow = store.read(|conn| events::Selection::resolve(conn, None, None, None, Vec::new()));
-    let follow = match follow {
-        Ok(f) => f,
-        Err(e) => return Err(std::io::Error::other(e.to_string())),
-    };
+    // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
+    // (runner::kept), the snapshot's error first
+    let (mut snapshot_error, mut follow_error) = (None, None);
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
+    // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
+    let mut redraw = true;
+    // the spinner frame Pulse was last drawn at
+    let mut pulse_frame = palette::frame(SystemTime::now());
+    // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); a result is the note to show, or none
+    // to leave it
+    let mut worker = Background::<Option<String>>::new();
     loop {
-        if let Some(c) = snap.centre.as_mut() {
-            c.turn(palette::frame(SystemTime::now()));
+        while let Some(result) = worker.finished() {
+            if let Some(note) = result {
+                ui.note = note;
+            }
+            redraw = true;
         }
-        terminal.draw(|f| match snap.pulse.as_ref() {
-            Some(pulse) => ui.draw_pulse(f, pulse, palette::frame(SystemTime::now())),
-            None => ui.draw(f, snap.centre.as_ref()),
-        })?;
+        let frame = palette::frame(SystemTime::now());
+        if let Some(c) = snap.centre.as_mut() {
+            redraw |= c.turn(frame);
+        }
+        redraw |= snap.pulse.as_ref().is_some_and(pulse_spins) && frame != pulse_frame;
+        // the scroll offsets file follows the chart's offset (a write only when they changed, at most every SAVE_EVERY)
         if let Some(c) = snap.centre.as_ref() {
             ui.remember(&c.plan.plan);
             if let Err(e) = offsets.save(&ui.remembered, false) {
+                redraw |= ui.error.as_deref() != Some(e.as_str());
                 ui.error = Some(e);
             }
+        }
+        if redraw {
+            terminal.draw(|f| match snap.pulse.as_ref() {
+                Some(pulse) => ui.draw_pulse(f, pulse, frame),
+                None => ui.draw(f, snap.centre.as_ref()),
+            })?;
+            (redraw, pulse_frame) = (false, frame);
         }
         if !event::poll(poll.min(FRAME))? {
             // idle: look for Events, every `poll`
@@ -450,42 +476,40 @@ fn show(
                 continue;
             }
             fetched = Instant::now();
-            match store.read(|conn| follow.fetch(conn, snap.cursor, None, 500)) {
-                Ok(events) => {
-                    ui.error = None;
-                    if let Some(last) = events.last() {
-                        snap.cursor = last.id;
-                    }
-                    stale |= events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
-                }
-                Err(e) => ui.error = Some(e.to_string()),
+            let shown = ui.error.clone();
+            if let Some(changes) = kept(follow.poll_changes(store), &mut follow_error) {
+                stale |= changes.pulls
+                    || changes.events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
             }
+            ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
             let due = if snap.pulse.is_some() { pulse_due(stale, taken.elapsed()) } else { due(stale, taken.elapsed()) };
             if due {
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
                 let width = terminal.size().map_or(0, |s| s.width);
-                match snapshot(store, home, width, now_ms()) {
-                    Ok(next) => {
-                        *snap = next;
-                        ui.error = None;
-                        let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                        if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
-                            ui.pulse_offset = 0;
-                        }
-                        if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
-                            ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
-                            if let Err(e) = offsets.save(&ui.remembered, true) {
-                                ui.error = Some(e);
-                            }
+                let next = kept(snapshot(store, home, width, now_ms()), &mut snapshot_error);
+                stale = snapshot_error.is_some();
+                ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
+                if let Some(next) = next {
+                    redraw = true;
+                    *snap = next;
+                    let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                    if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
+                        ui.pulse_offset = 0;
+                    }
+                    if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
+                        ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
+                        if let Err(e) = offsets.save(&ui.remembered, true) {
+                            ui.error = Some(e);
                         }
                     }
-                    Err(e) => ui.error = Some(e.to_string()),
                 }
-                (stale, taken) = (false, Instant::now());
+                taken = Instant::now();
             }
+            redraw |= ui.error != shown;
             continue;
         }
+        redraw = true; // a key, a click, a resize
         let mut open = None::<String>;
         let mut unselect = None::<String>; // the Job whose Worker pane closes
         let mut lead = None::<SessionId>; // the Lead a click on a Pulse row opens
@@ -547,22 +571,24 @@ fn show(
             _ => {}
         }
         if let Some(lead) = lead {
-            ui.note = actions.open_lead(&lead).err().map(|e| e.message().to_owned()).unwrap_or_default();
+            let actions = Arc::clone(actions);
+            worker.submit(move || Some(actions.open_lead(&lead).err().map_or_else(String::new, |e| e.message().to_owned())));
         }
         let Some(centre) = snap.centre.as_ref() else { continue };
         if let Some(key) = unselect {
-            if let Err(e) = actions.close_worker(&key) {
-                ui.note = e.message().to_owned();
-            }
+            let actions = Arc::clone(actions);
+            worker.submit(move || actions.close_worker(&key).err().map(|e| e.message().to_owned()));
         }
         if let Some(key) = open {
-            ui.note = match attempt_of(centre, &key) {
-                None => format!("{key} has not started yet"),
-                Some(attempt) => match actions.toggle_worker(&centre.plan.plan, &key, &attempt) {
-                    Ok(_) => String::new(),
-                    Err(e) => e.message().to_owned(),
-                },
-            };
+            match attempt_of(centre, &key) {
+                None => ui.note = format!("{key} has not started yet"),
+                Some(attempt) => {
+                    let (actions, plan) = (Arc::clone(actions), centre.plan.plan.clone());
+                    worker.submit(move || {
+                        Some(actions.toggle_worker(&plan, &key, &attempt).err().map_or_else(String::new, |e| e.message().to_owned()))
+                    });
+                }
+            }
         }
     }
 }
@@ -579,15 +605,19 @@ mod tests {
 
 
     #[test]
-    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_else_every_two_seconds() {
+    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_and_never_else() {
         let ms = Duration::from_millis;
         assert!(!due(true, ms(499)) && due(true, ms(500)), "an Event that concerns it: coalesced at 500 ms");
-        assert!(!due(false, ms(1999)) && due(false, ms(2000)), "no Event: every 2 s");
-        assert!(due(false, Duration::from_secs(60)));
+        assert!(!due(false, ms(2000)), "nothing changed: no snapshot (tui-F3)");
+        assert!(!due(false, Duration::from_secs(60)));
     }
 
-    const URL: &str = "http://localhost:19433";
-    const OPEN: &str = "\x1b]8;;http://localhost:19433\x07";
+    const URL: &str = "http://review.test:19433";
+    const OPEN: &str = "\x1b]8;;http://review.test:19433\x07";
+
+    fn test_host() -> String {
+        "review.test".to_owned()
+    }
 
     fn review(status: ReviewStatus) -> Review {
         Review {
@@ -682,26 +712,26 @@ mod tests {
     #[test]
     fn a_pending_review_is_a_row_above_the_boxes_which_start_one_row_lower() {
         let row = ReviewRow { number: 2, url: Some(URL.into()) };
-        assert_eq!(row.line().to_string(), " Plan review r2 pending ↗");
+        assert_eq!(row.line().to_string(), " Plan review r2 pending 󰏌");
         assert_eq!(row.line().spans[1].style.fg, palette::fg(Meaning::Review).fg);
 
         let without = drawn(&centre(None));
         let (buf, rows, ui) = drawn(&centre(Some(row)));
         // the row is indented by the margin, on the pane's first row; the boxes are one row lower than they were
-        assert_eq!(rows[0], "   Plan review r2 pending ↗");
+        assert_eq!(rows[0], "   Plan review r2 pending 󰏌");
         assert_eq!(rows[1], "", "the boxes' own margin row");
         assert_eq!(rows[2], without.1[1], "the first border, one row lower");
-        assert_eq!(rows[2], "  ┌ api · api → main · #12 open ↗ ┐");
+        assert_eq!(rows[2], "  ┌ api · api 󱦰 main · #12 open 󰏌 ┐");
         assert_eq!(without.1[0], "");
         assert_eq!((ui.body.y, ui.body.height), (1, 6), "clicks and scrolling use the area between the row and the message row");
         assert_eq!(without.2.body.y, 0);
-        // `pending` is yellow, `↗` links to the plannotator page; the title's `↗` still links to the pull request
+        // `pending` is yellow, `󰏌` links to the plannotator page; the title's `󰏌` still links to the pull request
         assert_eq!(buf[(18, 0)].fg, palette::fg(Meaning::Review).fg.unwrap());
-        assert_eq!(linked(&buf, 0, OPEN), (3..=26).collect::<Vec<u16>>(), "`Plan` through `↗`, not the blank before it");
+        assert_eq!(linked(&buf, 0, OPEN), (3..=26).collect::<Vec<u16>>(), "`Plan` through `󰏌`, not the blank before it");
         let pull = "\x1b]8;;https://github.com/acme/api/pull/12\x07";
         let title: Vec<char> = rows[2].chars().collect();
-        let (first, arrow) = (title.iter().position(|&c| c == '#').unwrap() as u16, title.iter().position(|&c| c == '↗').unwrap() as u16);
-        assert_eq!(linked(&buf, 2, pull), (first..=arrow).collect::<Vec<u16>>(), "the title's `#12 open ↗` links to the pull request");
+        let (first, arrow) = (title.iter().position(|&c| c == '#').unwrap() as u16, title.iter().position(|&c| c.to_string() == CUE).unwrap() as u16);
+        assert_eq!(linked(&buf, 2, pull), (first..=arrow).collect::<Vec<u16>>(), "the title's `#12 open 󰏌` links to the pull request");
     }
 
     #[test]
@@ -717,13 +747,13 @@ mod tests {
     fn no_review_row_while_the_review_is_not_pending() {
         let home = CpdHome::resolve(Some(std::env::temp_dir().join("cpd-plan-view-no-home").into()), None).unwrap();
         let mut plan = centre(None).plan;
-        assert_eq!(ReviewRow::of(&plan, &home), None, "no review");
+        assert_eq!(ReviewRow::of(&plan, &home, test_host), None, "no review");
         for status in [ReviewStatus::Approved, ReviewStatus::Rejected] {
             plan.review = Some(review(status));
-            assert_eq!(ReviewRow::of(&plan, &home), None, "{status:?}");
+            assert_eq!(ReviewRow::of(&plan, &home, test_host), None, "{status:?}");
         }
         plan.review = Some(review(ReviewStatus::Pending));
-        assert_eq!(ReviewRow::of(&plan, &home), Some(ReviewRow { number: 2, url: None }), "no port file");
+        assert_eq!(ReviewRow::of(&plan, &home, test_host), Some(ReviewRow { number: 2, url: None }), "no port file");
     }
 
     #[test]
@@ -743,7 +773,7 @@ mod tests {
             ("19433\n19434\n", None),
         ] {
             fs::write(&file, text).unwrap();
-            assert_eq!(ReviewRow::of(&plan, &home).unwrap().url.as_deref(), url, "{text:?}");
+            assert_eq!(ReviewRow::of(&plan, &home, test_host).unwrap().url.as_deref(), url, "{text:?}");
         }
         fs::remove_dir_all(dir).unwrap();
     }
@@ -802,6 +832,21 @@ mod tests {
     fn draw(ui: &mut Ui, centre: &Centre) {
         let mut terminal = Terminal::new(TestBackend::new(PANE.0, PANE.1)).unwrap();
         terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
+    }
+
+    #[test]
+    fn the_chart_turns_with_the_clock_only_while_a_job_runs() {
+        let mut queued = scroll_centre("plan-a", 3);
+        assert!(!queued.spins());
+        assert!(!queued.turn(1), "nothing spins: nothing to draw again");
+        assert_eq!(queued.frame, 0);
+
+        let mut running = scroll_centre("plan-a", 3);
+        running.plan.jobs[1].status = JobStatus::Running;
+        assert!(running.spins());
+        assert!(running.turn(1), "a new frame of the spinner");
+        assert!(!running.turn(1), "the same frame: nothing to draw again");
+        assert_eq!(running.frame, 1);
     }
 
     #[test]

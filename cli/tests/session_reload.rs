@@ -9,11 +9,10 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
+use common::{CPD, SLEEP_SECONDS, TestEnv, copy_executable, wait_until, write_executable};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 
@@ -22,15 +21,7 @@ const LEAD: &str = "lead1";
 /// neither legacy nor its own.
 const NEWER_SCHEMA: i64 = cpd_core::store::VERSION + 1;
 /// The `--version` of a cpd whose verdict opens the store (commands.md §1.2).
-const OPENS: &str = r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":1000,"store":{"opens":true,"refusal":null,"unknown":[],"pending":[]}}'; exit 0"#;
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
+const OPENS: &str = r#"echo '{"ok":true,"version":"x","store":{"opens":true,"refusal":null,"unknown":[],"pending":[]}}'; exit 0"#;
 
 fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -49,6 +40,24 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// Starts the wrapper in a new pane of the cockpit.
+    fn launch(&mut self) {
+        self.launch_for(LEAD);
+    }
+
+    /// Starts `session run <id>` in a new pane of the cockpit.
+    fn launch_for(&mut self, id: &str) {
+        let ok = |args: &[&str]| {
+            let out = self.env.tmux(args);
+            assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        let command = format!("exec '{}' session run {id}", self.installed.display());
+        let pane = ok(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
+        ok(&["set", "-p", "-t", &pane, "@cpd_session", id]);
+        self.pane = pane;
+    }
+
     fn path(&self, name: &str) -> PathBuf {
         self.env.home().join(name)
     }
@@ -90,20 +99,18 @@ impl Fixture {
     /// A `cpd` that cannot open the store installed over the wrapper: its `--version` reports a
     /// refusing verdict (`store.opens` false).
     fn install_older(&self) {
-        self.install_script(r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":1001,"store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}'; exit 0"#);
+        self.install_script(r#"echo '{"ok":true,"version":"x","store":{"opens":false,"refusal":{"code":"store_too_new","message":"The database was migrated by a newer cpd."},"unknown":[],"pending":[]}}'; exit 0"#);
     }
 
     fn install_script(&self, on_version: &str) {
         let new = self.installed.with_extension("new");
-        fs::write(
+        write_executable(
             &new,
-            format!(
+            &format!(
                 "#!/bin/sh\ncase \"$1\" in --version) {on_version};; esac\necho \"$$ $*\" >> '{}'\nexec '{CPD}' \"$@\"\n",
                 self.path("installed.runs").display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&new, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         fs::rename(&new, &self.installed).unwrap();
     }
 
@@ -139,9 +146,15 @@ impl Fixture {
         conn.execute_batch(sql).unwrap();
     }
 
+    /// `1` once the pane's program ended (the cockpit keeps such a pane).
+    fn pane_dead(&self) -> String {
+        let out = self.env.tmux(&["display-message", "-p", "-t", &self.pane, "#{pane_dead}"]);
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    }
+
     /// What the pane shows: the wrapper's stderr is its terminal.
     fn screen(&self) -> String {
-        String::from_utf8(self.env.tmux(&["capture-pane", "-p", "-J", "-t", &self.pane]).stdout).unwrap()
+        String::from_utf8(self.env.tmux(&["capture-pane", "-p", "-J", "-S", "-", "-t", &self.pane]).stdout).unwrap()
     }
 }
 
@@ -155,11 +168,23 @@ fn start(state: &str) -> Fixture {
 /// As [`start`]; `on_term` is what the fake pi runs after it records `SIGTERM`
 /// (`exit 0`, or `:` to ignore it). Every pi records its pid in `pi.pids`.
 fn start_with(state: &str, on_term: &str) -> Fixture {
+    let mut fixture = prepare(state, on_term, 5000);
+    fixture.launch();
+    // The fake records its call before it runs its body, so the call alone does not
+    // say that the pid is written. The pid is written last, after the trap is set:
+    // once it is there, the pi can be signalled and its pid read.
+    wait_until("the first pi", || fixture.env.calls("pi").len() == 1 && fixture.pi_pids().len() == 1);
+    fixture
+}
+
+/// As [`start_with`], up to the pane: the wrapper is not started, so a test can set the store up first.
+/// `store_busy_ms` is the config's.
+fn prepare(state: &str, on_term: &str, store_busy_ms: u32) -> Fixture {
     let env = TestEnv::new();
     fs::write(
         env.cpd_home().join("config.toml"),
         format!(
-            "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[timeouts]\nfork_quiet_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+            "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[timeouts]\nfork_quiet_seconds = 1\nstore_busy_ms = {store_busy_ms}\npi_stop_seconds = 3\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
@@ -196,23 +221,11 @@ fn start_with(state: &str, on_term: &str) -> Fixture {
     let bin = env.root().join("installed-bin");
     fs::create_dir_all(&bin).unwrap();
     let installed = bin.join("cpd");
-    fs::copy(CPD, &installed).unwrap();
+    copy_executable(CPD, &installed);
 
-    let ok = |args: &[&str]| {
-        let out = env.tmux(args);
-        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8(out.stdout).unwrap().trim().to_owned()
-    };
-    ok(&["new-session", "-d", "-s", "cpd", "-n", "main", &format!("sleep {SLEEP_SECONDS}")]);
-    let command = format!("exec '{}' session run {LEAD}", installed.display());
-    let pane = ok(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", &command]);
-    ok(&["set", "-p", "-t", &pane, "@cpd_session", LEAD]);
-    let fixture = Fixture { env, installed, session_file, pane };
-    // The fake records its call before it runs its body, so the call alone does not
-    // say that the pid is written. The pid is written last, after the trap is set:
-    // once it is there, the pi can be signalled and its pid read.
-    wait_until("the first pi", || fixture.env.calls("pi").len() == 1 && fixture.pi_pids().len() == 1);
-    fixture
+    let out = env.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", &format!("sleep {SLEEP_SECONDS}")]);
+    assert!(out.status.success(), "tmux new-session: {}", String::from_utf8_lossy(&out.stderr));
+    Fixture { env, installed, session_file, pane: String::new() }
 }
 
 #[test]
@@ -229,6 +242,8 @@ fn an_install_re_execs_an_idle_wrapper_at_once_keeping_pi_and_a_new_pi_then_rest
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")], "the same process re-execed the new file");
     // Several polls: pi runs on, untouched, under the new wrapper.
+    // time-claim: the re-exec'd wrapper leaves pi alone over five 0.5 s polls; no per-poll signal from `session run` (a
+    // poll that changes nothing leaves nothing behind).
     std::thread::sleep(Duration::from_millis(2500));
     assert!(f.signals().is_empty(), "pi was signalled");
     assert!(alive(old_pi));
@@ -251,6 +266,8 @@ fn a_parked_idle_lead_restarts_its_pi_on_its_session_file_after_pi_changes() {
     let f = start("idle");
     let session_file = f.session_file.display().to_string();
     assert!(f.signals().is_empty());
+    // time-claim: with nothing installed pi is not restarted over three 0.5 s polls of the wrapper; no per-poll
+    // signal from `session run` (a poll that changes nothing leaves nothing behind).
     std::thread::sleep(Duration::from_millis(1500));
     assert_eq!(f.env.calls("pi").len(), 1, "nothing changed, pi runs on");
 
@@ -277,6 +294,8 @@ fn a_working_lead_survives_an_install_the_wrapper_re_execs_and_pi_is_never_signa
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")]);
     assert!(f.screen().contains("new cpd installed"), "{}", f.screen());
     // Several polls: the Lead is working, pi runs on and nothing else happens.
+    // time-claim: the Lead is working, so pi runs on and nothing else happens over five 0.5 s polls of the new wrapper;
+    // no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_millis(2500));
     assert!(f.signals().is_empty(), "pi was signalled");
     assert!(alive(old_pi));
@@ -306,6 +325,8 @@ fn a_pi_that_changed_before_the_install_is_restarted_at_idle_by_the_new_wrapper(
 
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi} --pi-stale")]);
+    // time-claim: the Lead is working, so the new wrapper does not restart the stale pi over five 0.5 s polls;
+    // no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_millis(2500));
     assert!(f.signals().is_empty(), "the Lead is working: pi runs on");
     assert_eq!(f.env.calls("pi").len(), 1);
@@ -322,7 +343,7 @@ fn alive(pid: i32) -> bool {
 }
 
 #[test]
-fn a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi() {
+fn a_pi_that_ignores_sigterm_is_killed_after_pi_stop_seconds_and_the_wrapper_starts_pi_again_for_a_new_pi() {
     let f = start_with("idle", ":");
     let pid = f.pane_pid();
     let old_pi = f.pi_pids()[0];
@@ -331,12 +352,14 @@ fn a_pi_that_ignores_sigterm_is_killed_after_ten_seconds_and_the_wrapper_starts_
     f.activate_pi("1.3.0");
 
     wait_until("SIGTERM to reach pi", || !f.signals().is_empty());
-    std::thread::sleep(Duration::from_secs(3));
-    assert!(alive(old_pi), "pi is not killed before the ten seconds are up");
+    // time-claim: pi ignores SIGTERM and is not killed before pi_stop_seconds (3) are up.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    assert!(alive(old_pi), "pi is not killed before pi_stop_seconds (3) are up");
     assert_eq!(f.env.calls("pi").len(), 1);
 
+    // The restart comes with the SIGKILL, ten seconds after the SIGTERM: the lower bound is the claim.
     wait_until("pi restarted", || f.env.calls("pi").len() == 2);
-    assert!(changed_at.elapsed() >= Duration::from_secs(10), "killed after {:?}", changed_at.elapsed());
+    assert!(changed_at.elapsed() >= Duration::from_secs(3), "killed after {:?}", changed_at.elapsed());
     assert!(!alive(old_pi), "the old pi is dead");
     assert_eq!(f.signals(), "TERM\n", "SIGTERM once, then SIGKILL");
     assert_eq!(f.pane_pid(), pid);
@@ -360,6 +383,8 @@ fn a_newer_store_does_not_end_a_wrapper_and_the_new_cpd_that_opens_it_adopts_pi(
     f.migrate_store();
     wait_until("the wrapper to say its read failed", || f.screen().contains("Retrying at the next poll"));
     // Several polls: said once, nothing ended, nothing signalled.
+    // time-claim: the failed read is said once, and nothing ends or is signalled, over nine 0.5 s polls of the wrapper;
+    // no per-poll signal from `session run` (a failed read leaves nothing but its first line).
     std::thread::sleep(Duration::from_millis(4500));
     let screen = f.screen();
     assert_eq!(screen.matches("Retrying at the next poll").count(), 1, "{screen}");
@@ -373,6 +398,7 @@ fn a_newer_store_does_not_end_a_wrapper_and_the_new_cpd_that_opens_it_adopts_pi(
     f.install_script(OPENS);
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")]);
+    // time-claim: the adopting wrapper leaves pi alone over five 0.5 s polls; no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_millis(2500));
     assert!(alive(old_pi) && f.signals().is_empty(), "pi was touched");
     assert_eq!(f.env.calls("pi").len(), 1);
@@ -389,6 +415,8 @@ fn a_failing_store_read_is_said_once_and_retried_with_pi_untouched() {
 
     f.migrate_store();
     wait_until("the wrapper to say its read failed", || f.screen().contains("Retrying at the next poll"));
+    // time-claim: the failed read is said once, and pi is not touched, over nine 0.5 s polls of the wrapper;
+    // no per-poll signal from `session run` (a failed read leaves nothing but its first line).
     std::thread::sleep(Duration::from_millis(4500));
     let screen = f.screen();
     assert_eq!(screen.matches("Retrying at the next poll").count(), 1, "{screen}");
@@ -416,8 +444,9 @@ fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_in
 
     f.install_older();
     wait_until("the wrapper to refuse the reload", || f.screen().contains("reload skipped"));
-    // Several polls: pi is not signalled, nothing is exec'd, nothing is said twice.
-    std::thread::sleep(Duration::from_millis(2500));
+    // time-claim: pi is not signalled, nothing is exec'd and nothing is said twice over three 0.5 s polls of the
+    // wrapper; no per-poll signal from `session run`.
+    std::thread::sleep(Duration::from_millis(1500));
     let screen = f.screen();
     assert_eq!(screen.matches("reload skipped").count(), 1, "{screen}");
     assert!(screen.contains(&format!("reload skipped: {} cannot open the store: The database was migrated by a newer cpd.", f.installed.display())), "{screen}");
@@ -430,6 +459,7 @@ fn a_lead_wrapper_does_not_reload_into_a_cpd_older_than_the_store_and_reloads_in
     f.install();
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")], "the same process re-execed the new file");
+    // time-claim: the re-exec'd wrapper leaves pi alone over five 0.5 s polls; no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_millis(2500));
     assert!(f.signals().is_empty(), "pi was signalled");
     assert!(alive(old_pi));
@@ -449,6 +479,55 @@ fn a_lead_wrapper_whose_pi_exits_does_not_exec_a_cpd_older_than_the_store() {
     wait_until("the wrapper to carry on", || f.screen().contains("pi exited. Press Enter"));
     assert!(f.runs().is_empty(), "the older cpd was exec'd: {:?}", f.runs());
     assert_eq!(f.env.calls("pi").len(), 1);
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+/// The root of the `no_cockpit` flake: a Lead wrapper whose first store write waits longer than
+/// `store_busy_ms` for the write lock used to end with `store_busy`, and its pane with it. It
+/// says what it waits for and starts pi once the lock is free.
+#[test]
+fn a_wrapper_whose_first_write_meets_a_held_write_lock_waits_and_starts_pi_when_it_is_released() {
+    // A tenth of a second: the lock is held for much longer than `store_busy_ms`.
+    let mut f = prepare("idle", "exit 0", 100);
+    // A pane that ends stays, dead, as in cpd's cockpit (SERVER_OPTIONS).
+    f.env.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+    let holder = rusqlite::Connection::open(f.env.cpd_home().join("cpd.db")).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+    f.launch();
+    wait_until("the wrapper to say it waits for the store", || f.screen().contains("Waiting for the store"));
+    let pid = f.pane_pid();
+    // time-claim: over several tries of the wrapper (each longer than `store_busy_ms`, then a 0.5 s, 1 s wait), it
+    // neither ended nor started pi; no per-poll signal from `session run`, which says once that it waits.
+    std::thread::sleep(Duration::from_millis(2500));
+    let screen = f.screen();
+    assert_eq!(screen.matches("Waiting for the store").count(), 1, "said once: {screen}");
+    assert!(screen.contains("recording the session file") && screen.contains("store_busy"), "{screen}");
+    assert_eq!(f.pane_dead(), "0", "the wrapper ended: {screen}");
+    assert_eq!(f.pane_pid(), pid);
+    assert!(f.env.calls("pi").is_empty(), "pi started under the lock");
+
+    holder.execute_batch("COMMIT").unwrap();
+    wait_until("pi", || f.env.calls("pi").len() == 1 && f.pi_pids().len() == 1);
+    assert_eq!(f.pane_dead(), "0");
+    assert_eq!(f.pane_pid(), pid, "the same wrapper started pi");
+    let recorded: String = query(&f.env, "SELECT file FROM sessions WHERE id = 'lead1'");
+    assert_eq!(recorded, f.session_file.display().to_string(), "the write that waited was made");
+    f.env.tmux(&["kill-window", "-t", &f.pane]);
+}
+
+/// What does not heal still ends a wrapper, as before: a Session that does not exist.
+#[test]
+fn a_wrapper_whose_session_does_not_exist_still_ends_with_that_error() {
+    let mut f = prepare("idle", "exit 0", 100);
+    f.env.tmux(&["set-option", "-g", "remain-on-exit", "on"]);
+
+    f.launch_for("nosuch");
+    wait_until("the wrapper to end", || f.pane_dead() == "1");
+    let screen = f.screen();
+    assert!(screen.contains("session_not_found"), "{screen}");
+    assert!(!screen.contains("Waiting for the store"), "{screen}");
+    assert!(f.env.calls("pi").is_empty());
     f.env.tmux(&["kill-window", "-t", &f.pane]);
 }
 

@@ -1,41 +1,15 @@
 //! The plan fingerprint (contract §2.3): what a Plan review approves, so that
 //! it covers the `draft` Jobs and the PRs.
 
-use std::collections::BTreeMap;
-
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
 use super::jobs::{self, Job, sha256_of};
+use super::prs::PrRow;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 
-/// A PR as the fingerprint sees it: `{key, repo, base, needs}`, and its status
-/// (`cancelled` PRs are left out of the fingerprint).
-#[derive(Clone, Debug, PartialEq)]
-pub struct PrSpec {
-    pub key: String,
-    pub repo: String,
-    pub base: String,
-    /// Keys of the PRs it needs, sorted.
-    pub needs: Vec<String>,
-    pub status: String,
-}
-
-/// Every PR of `plan`, `cancelled` ones included, ordered by key.
-pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrSpec>, CpdError> {
-    let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
-    for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-        let (pr, need) = row?;
-        needs.entry(pr).or_default().push(need);
-    }
-    let mut stmt = conn.prepare("SELECT key, repo, base, status FROM prs WHERE plan = ?1 ORDER BY key")?;
-    let rows = stmt
-        .query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows.into_iter().map(|(key, repo, base, status)| PrSpec { needs: needs.remove(&key).unwrap_or_default(), key, repo, base, status }).collect())
-}
+pub use super::prs::load_prs;
 
 /// The plan fingerprint of `plan` as it is now: `sha256` of the canonical JSON
 /// `{jobs, prs}` of [`of`]. In a phase after `plan` the review covers the
@@ -57,7 +31,7 @@ pub(super) fn reviews_prs(phase: Option<&str>) -> bool {
 /// `plan render`), ordered by key, a stub with its missing fields as JSON
 /// `null` (hs-d241); `prs` is `{key, repo, base, needs}` of
 /// every PR in `prs` that is not `cancelled`, ordered by key, `needs` sorted.
-pub fn of(jobs: &[Job], prs: &[PrSpec]) -> String {
+pub fn of(jobs: &[Job], prs: &[PrRow]) -> String {
     let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_draft()).collect();
     drafts.sort_by(|a, b| a.key.cmp(&b.key));
     let jobs: Vec<Value> = drafts
@@ -70,7 +44,7 @@ pub fn of(jobs: &[Job], prs: &[PrSpec]) -> String {
             Value::Object(fields)
         })
         .collect();
-    let mut prs: Vec<&PrSpec> = prs.iter().filter(|p| p.status != "cancelled").collect();
+    let mut prs: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     prs.sort_by(|a, b| a.key.cmp(&b.key));
     let prs: Vec<Value> = prs
         .into_iter()
@@ -101,6 +75,7 @@ mod tests {
             status: status.into(),
             appended: false,
             review: false,
+            urgent: false,
             fingerprint: None,
             retry_tier: None,
             cancel_reason: None,
@@ -112,8 +87,8 @@ mod tests {
         }
     }
 
-    fn pr(key: &str, needs: &[&str]) -> PrSpec {
-        PrSpec { key: key.into(), repo: format!("/r/{key}"), base: "main".into(), needs: needs.iter().map(|n| (*n).to_owned()).collect(), status: "waiting".into() }
+    fn pr(key: &str, needs: &[&str]) -> PrRow {
+        PrRow::fixture(key, &format!("/r/{key}"), "main", needs, "waiting")
     }
 
     #[test]

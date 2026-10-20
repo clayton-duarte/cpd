@@ -7,12 +7,8 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use common::{CPD, TestEnv};
-use cpd_core::error::CpdError;
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::json;
 
 // ---------- the prepared store ----------
@@ -23,22 +19,11 @@ fn env() -> TestEnv {
     env
 }
 
-fn sql(env: &TestEnv, text: &str) {
-    let mut store = Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap();
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
-}
-
 /// Context `alpha` with the Lead Session `l1`, named `old lead`, with `file` (or none registered), archived or not.
 fn populate(env: &TestEnv, file: Option<&Path>, archived: bool) {
     let file = file.map_or("NULL".to_owned(), |f| format!("'{}'", f.display()));
     let archived = if archived { "'2026-01-04T00:00:00.000Z'" } else { "NULL" };
-    sql(
-        env,
+    env.sql(
         &format!(
             "INSERT INTO contexts (id, title, jira, created_at, created_on)
              VALUES ('alpha', 'Title', NULL, '2026-01-01T00:00:00.000Z', 'm1');
@@ -114,15 +99,7 @@ impl<'a> Pane<'a> {
     }
 
     fn wait(&self, what: &str, done: impl Fn(&[String]) -> bool) -> Vec<String> {
-        let start = Instant::now();
-        loop {
-            let screen = self.screen();
-            if done(&screen) {
-                return screen;
-            }
-            assert!(start.elapsed() < Duration::from_secs(10), "waiting for {what}; the screen is:\n{}", screen.join("\n"));
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        common::wait_screen(what, || self.screen(), done)
     }
 
     fn keys(&self, keys: &[&str]) {
@@ -145,7 +122,7 @@ fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
     let file = session_file(&env);
     populate(&env, Some(&file), true);
     let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("← ok")));
+    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     assert_eq!(
         screen,
         [
@@ -155,7 +132,7 @@ fn the_session_file_of_an_archived_lead_is_rendered_read_only() {
             "16:33:44 agent",
             "      Here is the plan.",
             "16:33:44 → bash cpd plan show",
-            "        ← ok",
+            "        󰘌 ok",
         ]
     );
 }
@@ -166,7 +143,7 @@ fn a_session_that_is_not_archived_says_read_only_only() {
     let file = session_file(&env);
     populate(&env, Some(&file), false);
     let pane = Pane::start(&env, 40, 12);
-    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("← ok")));
+    let screen = pane.wait("the conversation", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     assert_eq!(screen[0], "old lead (read-only)");
 }
 
@@ -176,13 +153,13 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
     let file = session_file(&env);
     populate(&env, Some(&file), true);
     let pane = Pane::start(&env, 40, 4);
-    pane.wait("the end", |s| s.iter().any(|r| r.contains("← ok")));
+    pane.wait("the end", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     pane.keys(&["g"]); // not a key
     pane.keys(&["k", "k", "k", "k", "k", "k"]);
     let screen = pane.wait("the top", |s| s.get(1).is_some_and(|r| r.contains("you")));
     assert_eq!(screen, [TOP, "16:33:44 you", "      Plan the API.", "16:33:44 agent"]);
     pane.keys(&["G"]);
-    pane.wait("the end again", |s| s.iter().any(|r| r.contains("← ok")));
+    pane.wait("the end again", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     pane.keys(&["q"]);
     // the placeholder wraps in a 40-column pane
     let screen = pane.wait("the placeholder", |s| s.join(" ").replace("  ", " ").contains(PLACEHOLDER));
@@ -198,7 +175,7 @@ fn an_unknown_session_or_a_missing_file_is_refused_before_drawing() {
     assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("session_not_found")), "{run:?}");
     let run = env.cpd(&["tui", "view", "history", "l1"]);
     assert_eq!(run.error()["code"], "file_unreadable", "a Session with no file: {run:?}");
-    sql(&env, &format!("UPDATE sessions SET file = '{}' WHERE id = 'l1'", env.root().join("gone.jsonl").display()));
+    env.sql(&format!("UPDATE sessions SET file = '{}' WHERE id = 'l1'", env.root().join("gone.jsonl").display()));
     let run = env.cpd(&["tui", "view", "history", "l1"]);
     assert_eq!(run.error()["code"], "file_unreadable", "a file that is not there: {run:?}");
     let run = env.cpd(&["tui", "view", "history"]);

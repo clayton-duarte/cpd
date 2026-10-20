@@ -8,7 +8,8 @@ use clap::Args;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::{ContextRow, Select, open};
+use super::{ContextRow, Select};
+use crate::env::Env;
 use crate::error::CpdError;
 use crate::ids::ContextId;
 use crate::output::Output;
@@ -24,7 +25,7 @@ pub struct PendingArgs {
 
 /// `context pending` (§3.11).
 pub(super) fn pending(args: PendingArgs) -> Result<Output, CpdError> {
-    let (_, _, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let plans = store.read(|conn| {
         ContextRow::require(conn, &context)?;
@@ -103,10 +104,7 @@ fn jobs(conn: &Connection, plan: &str, pr: &str) -> Result<Vec<Value>, CpdError>
             let touches: Value = touches
                 .map(|text| {
                     serde_json::from_str(&text).map_err(|e| {
-                        CpdError::new(
-                            crate::error::ErrorCode::StoreFailed,
-                            format!("The database holds an invalid row: Job {key} of Plan {plan} has touches {text:?}: {e}."),
-                        )
+                        CpdError::bad_row(format!("Job {key} of Plan {plan} has touches {text:?}: {e}"))
                     })
                 })
                 .transpose()?

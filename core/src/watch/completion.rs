@@ -3,13 +3,12 @@
 //! `all_merged_at` null gets `all-merged` `{pr, merged, cancelled}` and that
 //! `all_merged_at`, once. A `draft` is an unapproved batch: the PR waits for it.
 
-use serde_json::json;
 
 use super::SOURCE;
 use super::engine::Engine;
 use super::report::{About, Step};
 use crate::error::CpdError;
-use crate::events::{self, Kind, NewEvent};
+use crate::events::{self, NewEvent};
 use crate::ids::{PlanId, PrKey};
 use crate::store::WriteTxn;
 
@@ -83,6 +82,6 @@ fn complete(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrKey) -> Result<bool, CpdErr
             failed.join(", ")
         );
     }
-    events::append(tx, NewEvent::new(Kind::AllMerged, text, json!({"pr": pr, "merged": merged, "cancelled": cancelled})).plan(plan.clone()))?;
+    events::append(tx, NewEvent::all_merged(text, pr, &merged, &cancelled).plan(plan.clone()))?;
     Ok(true)
 }

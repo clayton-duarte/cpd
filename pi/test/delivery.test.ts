@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { KINDS } from "../lib/event.ts";
-import { ev, Fixture, ID, OTHER, planShow, sessionShow, settle, stateCalls, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, OTHER, planShow, sessionShow, stateCalls, waitFor } from "./fake.ts";
 
 const DATA: Record<string, Record<string, unknown>> = {
   escalation: { escalation: "j-a1-q1", question: "q?" },
@@ -29,6 +29,10 @@ const LEAD: Record<string, "turn" | "no turn"> = {
   "pr-merged": "no turn",
 };
 
+/** Last Events of a `drain` for a Worker (which only reads its own nudge) and for a Session that only reads its own messages. */
+const nudge = (id: number) => event(id, "attempt-nudge", { session: ID });
+const asMessage = (id: number) => message(id, null);
+
 async function started(f: Fixture, role: "lead" | "worker") {
   f.respond("plan-show", planShow());
   if (role === "worker") f.respond("session-show", sessionShow({ role: "worker", plan_lead: false }));
@@ -50,7 +54,7 @@ test("Plan Lead: every kind of §15.3's table", async (t) => {
     id++;
   }
   await waitFor("the last delivery", () => f.pi.delivered().length === expected.length);
-  await settle();
+  await f.drain(); // every Event above was handled
 
   assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), expected);
   for (const s of f.pi.delivered()) {
@@ -59,10 +63,29 @@ test("Plan Lead: every kind of §15.3's table", async (t) => {
     assert.equal(s.message.display, true);
     assert.equal(s.message.content, `text of ${d.kind} ${d.id}`, "content is the Event's text");
     assert.equal(d.delivered_to, ID);
-    assert.deepEqual(s.options, { triggerTurn: LEAD[d.kind] === "turn", deliverAs: "followUp" }, d.kind);
+    const urgent = d.kind === "pr-feedback" || d.kind === "escalation";
+    assert.deepEqual(s.options, { triggerTurn: LEAD[d.kind] === "turn", deliverAs: urgent ? "steer" : "followUp" }, d.kind);
   }
   // Silent kinds: no message, no turn, nothing else sent.
   assert.equal(f.pi.sent.length, expected.length);
+});
+
+test("Plan Lead: a busy Lead gets pr-feedback (every reason) and escalation steered, job-merged as a follow-up; each still triggers a turn (hs-d276)", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  await f.pi.busy();
+  const reasons = ["checks-failed", "changes-requested", "closed", "conflict"];
+  f.emit(...reasons.map((reason, i) => event(101 + i, "pr-feedback", { data: { reason } })), event(105, "escalation"), event(106, "job-merged"));
+  await waitFor("six deliveries", () => f.pi.delivered().length === 6);
+  assert.deepEqual(
+    f.pi.delivered().map((s) => [(s.message.details as any).kind, s.options]),
+    [
+      ...reasons.map((): [string, unknown] => ["pr-feedback", { triggerTurn: true, deliverAs: "steer" }]),
+      ["escalation", { triggerTurn: true, deliverAs: "steer" }],
+      ["job-merged", { triggerTurn: true, deliverAs: "followUp" }],
+    ],
+  );
 });
 
 test("Plan Lead: the details are the whole Event plus delivered_to", async (t) => {
@@ -82,13 +105,15 @@ test("Plan Lead: escalation opens `escalation:<id>`, answered and expired close 
   await waitFor("idle", () => stateCalls(f).length === 1);
 
   f.emit(event(101, "escalation"), event(102, "escalation", { text: "again" }));
+  // The two lines may be read in different polls: `blocked` follows the first, the second is delivered on its own time.
+  await waitFor("both escalations delivered", () => f.pi.delivered().length === 2);
   await waitFor("blocked", () => stateCalls(f).length === 2);
   assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question"]);
   assert.equal(f.pi.delivered().length, 2, "both are messages with a turn");
 
   f.emit(event(103, "escalation-answered"), event(104, "escalation-answered"));
   await waitFor("idle again", () => stateCalls(f).length === 3);
-  await settle();
+  await f.drain();
   assert.deepEqual(stateCalls(f), ["idle", "blocked:cpd: Worker question", "idle"]);
   assert.equal(f.pi.delivered().length, 2, "answered is no message");
 
@@ -107,7 +132,7 @@ test("session-renamed for itself: setSessionName and a notice, no message, no tu
   f.emit(event(101, "session-renamed", { session: ID }), event(102, "session-renamed", { session: OTHER, data: { name: "not mine" } }));
   await waitFor("the name", () => f.pi.sessionName === "new name");
   await f.pi.fire("session_info_changed", { name: "new name" });
-  await settle();
+  await f.drain();
   assert.deepEqual(f.pi.notices, ['cpd: session renamed to "new name"']);
   assert.deepEqual(f.pi.sent, []);
   assert.equal(f.argvs().some((a) => a[1] === "rename"), false, "the session-renamed it causes comes back and changes nothing");
@@ -126,7 +151,7 @@ test("Worker: attempt-nudge for itself is a message with data.prompt and a turn;
   }
   await waitFor("the nudge", () => f.pi.delivered().length === 1);
   await waitFor("the rename", () => f.pi.sessionName === "new name");
-  await settle();
+  await f.drain(nudge); // handled in order: what is not delivered by now is ignored
 
   assert.equal(f.pi.sent.length, 1);
   const s = f.pi.delivered()[0]!;
@@ -161,7 +186,7 @@ test("session-message for this Lead: one cpd message with no turn, followUp, fro
   f.respond(`session-show-${OTHER}`, { ok: true, session: { id: OTHER, name: "the manager" } });
   f.emit(message(101, OTHER));
   await waitFor("the message", () => f.pi.delivered().length === 1);
-  await settle();
+  await f.drain();
 
   assert.equal(f.pi.sent.length, 1);
   const s = f.pi.delivered()[0]!;
@@ -192,7 +217,7 @@ test("session-message: from null is the User; an unreadable sender is named by i
   f.respond("session-show-gone", { ok: false, error: { code: "session_not_found", message: "no such session" } }, { exit: 4 });
   f.emit(message(101, null), message(102, "gone"), message(103, null, { session: OTHER }));
   await waitFor("two messages", () => f.pi.delivered().length === 2);
-  await settle();
+  await f.drain();
   assert.equal(f.pi.delivered()[0]!.message.content, "Message from the User: ship it");
   assert.equal(f.pi.delivered()[1]!.message.content, "Message from gone: ship it");
   assert.equal(f.pi.sent.length, 2);
@@ -217,7 +242,7 @@ test("session-message reaches a side fork (role lead, not the Plan's Lead) too",
   await waitFor("the follower", () => f.follows().length > 0);
   f.emit(message(101, null), event(102, "job-merged"));
   await waitFor("the message", () => f.pi.delivered().length === 1);
-  await settle();
+  await f.drain(asMessage);
   assert.equal(f.pi.sent.length, 1, "the Plan's Events are not its");
   assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
 });
@@ -251,6 +276,6 @@ test("a Worker ignores session-message", async (t) => {
   t.after(() => f.close());
   await started(f, "worker");
   f.emit(message(101, null));
-  await settle();
+  await f.drain(nudge);
   assert.deepEqual(f.pi.sent, []);
 });

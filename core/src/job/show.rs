@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
-use super::{ListArgs, ShowArgs, Env, bad_row, find, plan_phase};
+use super::{ListArgs, ShowArgs, Env, find, plan_phase};
 use crate::error::CpdError;
 use crate::ids::PlanId;
 use crate::output::Output;
@@ -22,7 +22,7 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
             .filter(|j| args.statuses.is_empty() || args.statuses.contains(&j.status))
             .map(|j| {
                 let attempts = counts.iter().find(|(job, _)| *job == j.key).map_or(0, |(_, n)| *n);
-                json!({"key": j.key, "title": j.title, "status": j.status, "tier": j.tier, "appended": j.appended, "review": j.review,
+                json!({"key": j.key, "title": j.title, "status": j.status, "tier": j.tier, "appended": j.appended, "review": j.review, "urgent": j.urgent,
                        "needs": j.needs, "attempts": attempts, "merged_sha": j.merged_sha})
             })
             .collect::<Vec<_>>())
@@ -89,7 +89,7 @@ fn attempts(conn: &Connection, plan: &PlanId, job: &str) -> Result<Vec<Value>, C
     for (id, metrics, mut attempt) in rows {
         attempt["metrics"] = match metrics {
             None => Value::Null,
-            Some(text) => serde_json::from_str(&text).map_err(|_| bad_row(format!("Attempt {plan}/{id} has metrics {text:?}")))?,
+            Some(text) => serde_json::from_str(&text).map_err(|_| CpdError::bad_row(format!("Attempt {plan}/{id} has metrics {text:?}")))?,
         };
         attempt["escalations"] = json!(escalations(conn, plan, &id)?);
         out.push(attempt);

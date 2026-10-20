@@ -6,12 +6,13 @@ mod common;
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, backdate, refused, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::events::{Kind, NewEvent, append};
 use cpd_core::home::CpdHome;
+use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
@@ -29,15 +30,6 @@ fn store(env: &TestEnv) -> Store {
     Store::open(&home(env), 5000).unwrap()
 }
 
-/// `config.toml` on this env's private tmux server, with a 1 s quiet time for forks.
-fn write_config(env: &TestEnv) {
-    let config = format!(
-        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[timeouts]\nfork_quiet_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
-        env.tmux_socket()
-    );
-    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-}
-
 fn exec(tx: &WriteTxn<'_>, sql: &str) -> Result<(), CpdError> {
     tx.execute_batch(sql)?;
     Ok(())
@@ -51,7 +43,7 @@ fn sid(id: &str) -> SessionId {
 /// Job `api` with Attempt `api-a1`, Worker `worker1` and an open Escalation)
 /// and `other` (Lead `lead2`, stopped). Every Session's cwd is the env's root.
 fn setup(env: &TestEnv) {
-    write_config(env);
+    env.write_tmux_config("[timeouts]\nfork_quiet_seconds = 1\n"); // a 1 s quiet time for forks
     let cwd = env.root().display().to_string();
     let mut store = store(env);
     store
@@ -61,10 +53,10 @@ fn setup(env: &TestEnv) {
                 &format!(
                     "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
                      INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
-                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', 't1', 't1'),
+                       ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead one', '{cwd}', 'O3', 'idle', '2020-01-01T00:00:01Z', 't1'),
                        ('lead2', 'lead', 'ctx', 'other', NULL, 'Lead two', '{cwd}', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't2'),
                        ('manager1', 'manager', 'ctx', NULL, NULL, 'Manager', '{cwd}', 'O5', 'stopped', '2020-01-01T00:00:00Z', 't0'),
-                       ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', 't3', 't3');
+                       ('worker1', 'worker', 'ctx', 'pay', 'api-a1', 'pay api a1', '{cwd}', 'S2', 'working', '2020-01-01T00:00:03Z', 't3');
                      INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
                        ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't'),
                        ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
@@ -116,13 +108,6 @@ fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
     }
 }
 
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
-}
-
 fn exec_sql(env: &TestEnv, sql: &str) {
     store(env).write("test", |tx| exec(tx, sql)).unwrap();
 }
@@ -139,21 +124,7 @@ fn show(env: &TestEnv, id: &str) -> Value {
     env.cpd(&["session", "show", id]).ok()["session"].clone()
 }
 
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 // ---------- tmux ----------
-
-/// A fake `cpd` on `PATH` for the panes: `cpd tui view chat` and `cpd tui view history <id>`
-/// (the TUI Job's views) just sleep; everything else is the built binary.
-fn fake_cpd(env: &TestEnv) {
-    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"tui view chat\"|\"tui view history\") exec sleep {SLEEP_SECONDS};; esac\nexec '{CPD}' \"$@\""));
-}
 
 /// A fake `pi` that creates its session file (when given `--session-id`) and
 /// then runs `then`.
@@ -166,14 +137,19 @@ fn fake_pi(env: &TestEnv, then: &str) {
 }
 
 /// The cockpit: session `cpd`, window `main` with a tree pane and the
-/// placeholder in the chat slot.
+/// placeholder in the chat slot, on a server started with cpd's
+/// [`SERVER_OPTIONS`] (contract §6.1), as cpd starts it: with `remain-on-exit`,
+/// a pane whose program exits stays, dead, instead of taking the chat slot with it.
 fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
         let out = env.tmux(args);
         assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         String::from_utf8(out.stdout).unwrap().trim().to_owned()
     };
-    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    let sleep = format!("sleep {SLEEP_SECONDS}");
+    let mut args: Vec<&str> = SERVER_OPTIONS.iter().flat_map(|option| option.iter().copied().chain([";"])).collect();
+    args.extend(["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &sleep]);
+    let tree = ok(&args);
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
     let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
@@ -225,6 +201,37 @@ fn window_names(env: &TestEnv) -> Vec<String> {
     names
 }
 
+/// Every pane of the server, dead ones with their screen (where a dead `cpd
+/// session run` printed its error): the evidence of what the chat slot held.
+fn panes_report(env: &TestEnv) -> String {
+    let format = "#{pane_id} #{session_name}:#{window_name} dead=#{pane_dead} status=#{pane_dead_status} view=#{@cpd_view} session=#{@cpd_session}";
+    let listed = String::from_utf8_lossy(&env.tmux(&["list-panes", "-a", "-F", format]).stdout).into_owned();
+    let mut report = String::new();
+    for line in listed.lines() {
+        report.push_str(&format!("{line}\n"));
+        if line.contains(" dead=1 ") {
+            let pane = line.split(' ').next().unwrap();
+            let screen = String::from_utf8_lossy(&env.tmux(&["capture-pane", "-p", "-J", "-t", pane]).stdout).into_owned();
+            for text in screen.lines().filter(|text| !text.trim().is_empty()) {
+                report.push_str(&format!("  | {text}\n"));
+            }
+        }
+    }
+    report
+}
+
+/// `cpd <args>`'s success fields, where no pane may die: it panics with
+/// [`panes_report`] when a pane is dead before the command, or the command fails.
+fn ok_with_panes(env: &TestEnv, args: &[&str]) -> Value {
+    let before = panes_report(env);
+    assert!(!before.contains(" dead=1 "), "a pane died before cpd {args:?}:\n{before}");
+    let run = env.cpd(args);
+    if run.exit != 0 {
+        panic!("cpd {args:?} failed: {run:?}\npanes:\n{}", panes_report(env));
+    }
+    run.ok()
+}
+
 fn pi_calls_with(env: &TestEnv, flag: &str) -> Vec<Vec<String>> {
     env.calls("pi").into_iter().filter(|c| c.iter().any(|a| a == flag)).collect()
 }
@@ -247,7 +254,7 @@ fn list_filters_and_derives_place_and_leads() {
     assert_eq!(
         *lead1,
         json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
-               "state": "idle", "state_label": null, "state_at": "t1", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
+               "state": "idle", "state_label": null, "state_at": "2020-01-01T00:00:01Z", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
                "forked_from": null, "plan_lead": true, "tier": "O3",
                "cwd": env.root().display().to_string()})
     );
@@ -367,6 +374,39 @@ fn state_follows_section_3_6() {
 }
 
 #[test]
+fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
+    let env = TestEnv::new();
+    setup(&env);
+    let state = |args: &[&str]| {
+        let mut argv = vec!["session", "state"];
+        argv.extend(args);
+        argv.extend(["--session", LEAD1]);
+        env.cpd(&argv)
+    };
+
+    // Only `idle` takes `--reply`; a refusal writes nothing.
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    for other in [&["working", "--reply"][..], &["blocked", "--label", "x", "--reply"], &["stopped", "--reply"]] {
+        refused(&state(other), "usage", 2);
+    }
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+
+    state(&["working"]).ok();
+    state(&["idle", "--reply"]).ok();
+    let all = events(&env, "session-state");
+    assert_eq!(all.last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null, "reply": true}));
+
+    // Without `--reply` the Event has no `reply`; an unchanged state writes nothing whatever `--reply`.
+    state(&["working"]).ok();
+    state(&["idle"]).ok();
+    assert_eq!(events(&env, "session-state").last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null}));
+    let (events_before, txns) = (events(&env, "session-state").len(), query::<i64>(&env, "SELECT count(*) FROM txns"));
+    assert_eq!(state(&["idle", "--reply"]).ok()["already"], true);
+    assert_eq!(events(&env, "session-state").len(), events_before);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+}
+
+#[test]
 fn rename_appends_session_renamed_once() {
     let env = TestEnv::new();
     setup(&env);
@@ -413,7 +453,7 @@ fn fork_refusals_register_nothing() {
 fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let message = env.root().join("message.md");
@@ -466,7 +506,7 @@ fn tmux_refusing_the_session_mark(env: &TestEnv) {
 fn fork_and_open_leave_no_window_when_a_step_after_new_window_fails() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     tmux_refusing_the_session_mark(&env);
@@ -489,7 +529,7 @@ fn fork_and_open_leave_no_window_when_a_step_after_new_window_fails() {
 fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, "exit 1");
     cockpit(&env);
     env.cpd(&["session", "state", "working", "--session", LEAD1]).ok();
@@ -503,6 +543,8 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     wait_until("the waiting line", || capture().contains("Waiting for the source Lead to finish its turn, then forking it as \"side\""));
 
     // No file yet, and busy.
+    // time-claim: the fork does not happen while the source is busy and has no file, over a whole 2 s poll of the
+    // source; no per-poll signal from `session run` (it only reads the store and the file).
     std::thread::sleep(Duration::from_secs(3));
     assert!(env.calls("pi").is_empty());
     // A file with a finished turn, but still busy.
@@ -514,6 +556,10 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
         "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
     )
     .unwrap();
+    // Quiet for long enough and finished: only the busy source is in the way.
+    backdate(&source_file, Duration::from_secs(3600));
+    // time-claim: the fork does not happen while the source is busy, over a whole 2 s poll of the source;
+    // no per-poll signal from `session run`.
     std::thread::sleep(Duration::from_secs(3));
     assert!(env.calls("pi").is_empty(), "the source is still working");
 
@@ -546,7 +592,7 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
 fn fork_stops_waiting_for_a_stopped_source_without_a_file_and_retries_on_enter() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, "exit 1");
     cockpit(&env);
     let message = env.root().join("message.md");
@@ -568,7 +614,7 @@ fn fork_stops_waiting_for_a_stopped_source_without_a_file_and_retries_on_enter()
         "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n",
     )
     .unwrap();
-    std::thread::sleep(Duration::from_secs(2));
+    backdate(&source_file, Duration::from_secs(3600));
     env.tmux(&["send-keys", "-t", &pane, "Enter"]);
     wait_until("the fork", || !pi_calls_with(&env, "--fork").is_empty());
     let fork = &pi_calls_with(&env, "--fork")[0];
@@ -591,7 +637,7 @@ fn big_message() -> String {
 fn a_fresh_lead_with_a_first_message_over_128_kib_starts_pi_with_its_file() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &copy_last_file());
     cockpit(&env);
     let path = home(&env).lead_message(&PlanId::parse("pay").unwrap());
@@ -612,7 +658,7 @@ fn a_fresh_lead_with_a_first_message_over_128_kib_starts_pi_with_its_file() {
 fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &copy_last_file());
     cockpit(&env);
     pi_file(&env, LEAD2, true);
@@ -636,7 +682,7 @@ fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
 fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let placeholder = slot(&env);
@@ -706,7 +752,7 @@ fn open_and_park_keep_at_most_one_placeholder_only_in_the_slot() {
 fn open_writes_session_moved_before_the_rename_so_a_failing_rename_keeps_the_swap_recorded() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     env.cpd(&["session", "open", LEAD1]).ok();
@@ -734,7 +780,7 @@ fn open_writes_session_moved_before_the_rename_so_a_failing_rename_keeps_the_swa
 fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     // `context manager` wrote its first message.
@@ -743,7 +789,7 @@ fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     fs::write(&message, "You are the Manager.").unwrap();
 
     // A stopped Manager with no pane is resumed in a new window and swapped in.
-    let out = env.cpd(&["session", "open", MANAGER]).ok();
+    let out = ok_with_panes(&env, &["session", "open", MANAGER]);
     assert_eq!(out["displaced"], Value::Null);
     assert_eq!(slot(&env).session, MANAGER);
     assert_placeholders(&env, 0);
@@ -752,17 +798,17 @@ fn open_and_park_take_a_context_s_manager_and_park_it_in_its_context_window() {
     assert_eq!(show(&env, MANAGER)["place"], "chat");
 
     // A Lead displaces it into `ctx-<context>`.
-    assert_eq!(env.cpd(&["session", "open", LEAD1]).ok()["displaced"], MANAGER);
+    assert_eq!(ok_with_panes(&env, &["session", "open", LEAD1])["displaced"], MANAGER);
     let manager = panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap();
     assert_eq!(manager.window_name, "ctx-ctx");
     assert_eq!(window_names(&env), ["ctx-ctx", "main"]);
     assert_eq!(show(&env, MANAGER)["place"], "parked");
 
     // Parking the Lead, then opening the Manager again uses its live pane.
-    env.cpd(&["session", "park"]).ok();
-    let out = env.cpd(&["session", "open", MANAGER]).ok();
+    ok_with_panes(&env, &["session", "park"]);
+    let out = ok_with_panes(&env, &["session", "open", MANAGER]);
     assert_eq!(out["pane"], json!(manager.pane));
-    env.cpd(&["session", "park", MANAGER]).ok();
+    ok_with_panes(&env, &["session", "park", MANAGER]);
     assert_eq!(panes(&env).into_iter().find(|p| p.session == MANAGER).unwrap().window_name, "ctx-ctx");
 }
 
@@ -776,7 +822,7 @@ fn open_and_park_refusals() {
     refused(&env.cpd(&["session", "park"]), "no_cockpit", 3);
     refused(&env.cpd(&["session", "park", LEAD1]), "no_cockpit", 3);
 
-    fake_cpd(&env);
+    env.fake_cpd_views();
     cockpit(&env);
     refused(&env.cpd(&["session", "open", WORKER]), "not_a_lead", 3);
     refused(&env.cpd(&["session", "open", "nobody"]), "session_not_found", 4);
@@ -806,7 +852,7 @@ fn history_panes(env: &TestEnv) -> Vec<P> {
 fn history_parks_the_lead_in_the_slot_and_open_kills_the_history_pane() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     archived_lead2(&env);
@@ -862,7 +908,7 @@ fn history_parks_the_lead_in_the_slot_and_open_kills_the_history_pane() {
 fn history_replaces_the_placeholder_in_place_and_park_brings_it_back() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     cockpit(&env);
     archived_lead2(&env);
     let placeholder = slot(&env);
@@ -897,7 +943,7 @@ fn history_refusals_change_nothing() {
     let error = refused(&env.cpd(&["session", "history", LEAD2]), "no_cockpit", 3);
     assert_eq!(error["details"]["next"], "cpd tui");
 
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     env.cpd(&["session", "open", LEAD1]).ok();
@@ -918,7 +964,7 @@ fn close_refusals_and_nothing_to_close() {
     refused(&env.cpd(&["session", "close", WORKER]), "not_a_lead", 3);
     refused(&env.cpd(&["session", "close", "nobody"]), "session_not_found", 4);
     // A Lead with no pane: nothing to do.
-    fake_cpd(&env);
+    env.fake_cpd_views();
     cockpit(&env);
     assert_eq!(env.cpd(&["session", "close", LEAD2]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
     // A pane that is gone, with E2 not having recorded it: nothing is written.
@@ -933,7 +979,7 @@ fn close_refusals_and_nothing_to_close() {
 fn close_refuses_the_lead_in_the_chat_slot_and_leaves_everything() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let pane = env.cpd(&["session", "open", LEAD1]).ok()["pane"].as_str().unwrap().to_owned();
@@ -948,7 +994,7 @@ fn close_refuses_the_lead_in_the_chat_slot_and_leaves_everything() {
 fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     // lead2 displaces lead1 into a park window; lead1 is made `idle`, as pi would report.
@@ -988,7 +1034,7 @@ fn close_kills_a_parked_pane_and_writes_what_e2_writes() {
 fn close_of_a_stopped_lead_with_a_pane_appends_only_session_moved() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     // lead2 is `stopped` (the fake pi reports nothing) and parked by lead1.
@@ -1037,7 +1083,7 @@ fn rename_sets_the_title_of_a_forks_live_pane_to_its_name() {
 fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_fork() {
     let env = TestEnv::new();
     setup(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(&env);
     let title = |env: &TestEnv, session: &str| {
@@ -1056,7 +1102,7 @@ fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_f
 /// A parked side fork of `lead1` (stopped, with a pane): fake pi and cpd, and the cockpit.
 fn parked_fork(env: &TestEnv) -> String {
     setup(env);
-    fake_cpd(env);
+    env.fake_cpd_views();
     fake_pi(env, &format!("exec sleep {SLEEP_SECONDS}"));
     cockpit(env);
     env.cpd(&["session", "fork", LEAD1]).ok()["session"]["id"].as_str().unwrap().to_owned()
@@ -1105,7 +1151,7 @@ fn archive_of_a_lead_with_no_pane_closes_nothing() {
         &env,
         &format!(
             "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from)
-               VALUES ('{fork}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', 't', 't', 'lead1')"
+               VALUES ('{fork}', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't', 'lead1')"
         ),
     );
     let out = env.cpd(&["session", "archive", fork]).ok();
@@ -1234,7 +1280,6 @@ fn dying_leads(env: &TestEnv) {
         ),
     );
     cockpit(env);
-    assert!(env.tmux(&["set", "-g", "remain-on-exit", "on"]).status.success());
 }
 
 /// Lets every Lead's pi but `lead2`'s exit, so its pane dies.
@@ -1247,7 +1292,7 @@ fn is_dead(env: &TestEnv, pane: &str) -> bool {
     String::from_utf8(out.stdout).unwrap().lines().any(|l| l == format!("{pane} 1"))
 }
 
-/// `cpd watch` with a one-second tick, killed when dropped.
+/// `cpd watch` with a tick of 0.2 s, killed when dropped.
 struct Engine(std::process::Child);
 
 impl Drop for Engine {
@@ -1261,7 +1306,7 @@ fn engine(env: &TestEnv) -> Engine {
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
     let path = env.cpd_home().join("config.toml");
     let config = fs::read_to_string(&path).unwrap();
-    fs::write(&path, format!("{config}[watch]\ntick_seconds = 1\n")).unwrap();
+    fs::write(&path, format!("{config}[watch]\ntick_seconds = 0.2\n")).unwrap();
     let child = env.command(CPD).arg("watch").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap();
     Engine(child)
 }
@@ -1372,7 +1417,7 @@ fn run_refusals() {
 /// session files of both Plans' Leads, so `session run` resumes them.
 fn port_fixture(env: &TestEnv) {
     setup(env);
-    fake_cpd(env);
+    env.fake_cpd_views();
     fake_pi(env, "echo \"${PLANNOTATOR_PORT-unset}\" >> \"$HOME/ports.$CPD_SESSION\"\nexit 1");
     cockpit(env);
     let sessions = env.home().join(".pi/agent/sessions/g");
@@ -1385,8 +1430,18 @@ fn port_fixture(env: &TestEnv) {
 /// A new window running `cpd session run <id>`, with `PLANNOTATOR_PORT=1` in its
 /// environment (the port every Lead pane inherits from cpd's environment); returns its pane.
 fn run_lead(env: &TestEnv, id: &str) -> String {
+    run_lead_with(env, id, &[])
+}
+
+/// [`run_lead`] with more `NAME=value` variables in the pane's environment.
+fn run_lead_with(env: &TestEnv, id: &str, vars: &[&str]) -> String {
     let command = format!("cpd session run {id}");
-    let out = env.tmux(&["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_PORT=1", &command]);
+    let mut args = vec!["new-window", "-d", "-t", "=cpd:", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_PORT=1"];
+    for var in vars {
+        args.extend(["-e", var]);
+    }
+    args.push(&command);
+    let out = env.tmux(&args);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let pane = String::from_utf8(out.stdout).unwrap().trim().to_owned();
     env.tmux(&["set", "-p", "-t", &pane, "@cpd_session", id]);
@@ -1424,6 +1479,27 @@ fn run_gives_each_plan_its_port_and_keeps_it_across_a_restart() {
     }
     assert_eq!(recorded_ports(&env, LEAD1), ["19432", "19432"]);
     assert_eq!(recorded_ports(&env, LEAD2), ["19433", "19433"]);
+}
+
+#[test]
+fn run_gives_the_lead_remote_and_the_review_host() {
+    let env = TestEnv::new();
+    port_fixture(&env);
+    fake_pi(&env, "echo \"$PLANNOTATOR_REMOTE ${PLANNOTATOR_URL_HOST-unset}\" >> \"$HOME/hosts.$CPD_SESSION\"\nexit 1");
+    let hosts = |id: &str| fs::read_to_string(env.home().join(format!("hosts.{id}"))).unwrap_or_default();
+
+    // The environment's `PLANNOTATOR_URL_HOST` is the override; the `PLANNOTATOR_REMOTE` it holds is replaced.
+    run_lead_with(&env, LEAD1, &["PLANNOTATOR_URL_HOST=review.test", "PLANNOTATOR_REMOTE=0"]);
+    wait_until("the first Lead's pi", || !hosts(LEAD1).is_empty());
+    assert_eq!(hosts(LEAD1), "1 review.test\n");
+
+    // With no override the host is detected: an address or `localhost`, never unset.
+    run_lead(&env, LEAD2);
+    wait_until("the second Lead's pi", || !hosts(LEAD2).is_empty());
+    let hosts2 = hosts(LEAD2);
+    let (remote, host) = hosts2.trim_end().split_once(' ').unwrap();
+    assert_eq!(remote, "1");
+    assert!(host == "localhost" || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| !ip.is_loopback()), "{host}");
 }
 
 #[test]
@@ -1486,14 +1562,14 @@ fn pi_file(env: &TestEnv, id: &str, finished: bool) {
 /// with a session file, a quitting pi and the cockpit.
 fn quit_fixture(env: &TestEnv) {
     setup(env);
-    fake_cpd(env);
+    env.fake_cpd_views();
     quitting_pi(env);
     cockpit(env);
     exec_sql(
         env,
         "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at, forked_from) VALUES
-           ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', 't', 't', 'lead1'),
-           ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', 't', 't', 'lead2')",
+           ('side', 'lead', 'ctx', 'pay', 'Side', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead1'),
+           ('side2', 'lead', 'ctx', 'other', 'Side two', '/', 'O3', 'idle', '2020-01-01T00:00:00Z', 't', 'lead2')",
     );
     for id in ["side", "side2", LEAD1, LEAD2] {
         pi_file(env, id, false);
@@ -1614,12 +1690,12 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     quit_fixture(&env);
     // An idle Lead at a finished turn, parked: the restart for a new pi is due at once.
     pi_file(&env, "side", true);
+    backdate(&env.home().join(".pi/agent/sessions/g/2026_side.jsonl"), Duration::from_secs(3600));
     exec_sql(&env, "UPDATE sessions SET state_at = '2020-01-01T00:00:00Z' WHERE id = 'side'");
     // pi's install, as the wrapper watches it (a cpd install does not restart pi, hs-d210).
     let current = env.home().join(".pi/agent/install/current-version");
     fs::create_dir_all(current.parent().unwrap()).unwrap();
     fs::write(&current, "1.2.0\n").unwrap();
-    std::thread::sleep(Duration::from_secs(2));
     let pane = run_lead_with_pane(&env, "side");
     wait_until("pi", || env.calls("pi").len() == 1);
 
@@ -1650,10 +1726,10 @@ fn setup_short(env: &TestEnv) {
         &format!(
             "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('cafe', 'ctx', 'Cafe', 'grounding', '{CAFE_LEAD}', 't');
              INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at) VALUES
-               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', 't', 't4'),
-               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', 't', 't5'),
-               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', 't', 't6'),
-               ('{CAFE_PREFIXED}', 'lead', 'ctx', 'cafe', 'Cafe prefixed', '/', 'O3', 'stopped', 't', 't7')"
+               ('{UUID_A}', 'lead', 'ctx', 'pay', 'A', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't4'),
+               ('{UUID_B}', 'lead', 'ctx', 'pay', 'B', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't5'),
+               ('{CAFE_LEAD}', 'lead', 'ctx', 'cafe', 'Cafe lead', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't6'),
+               ('{CAFE_PREFIXED}', 'lead', 'ctx', 'cafe', 'Cafe prefixed', '/', 'O3', 'stopped', '2020-01-01T00:00:00Z', 't7')"
         ),
     );
 }
@@ -1742,7 +1818,7 @@ fn unmatched_values_are_session_not_found_and_malformed_ones_usage_errors() {
 fn every_session_command_accepts_the_short_forms() {
     let env = TestEnv::new();
     setup_short(&env);
-    fake_cpd(&env);
+    env.fake_cpd_views();
     cockpit(&env);
     // `--session` and `CPD_SESSION`.
     let out = env.cpd(&["session", "rename", "renamed", "--session", "pay"]).ok();
