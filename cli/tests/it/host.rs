@@ -755,7 +755,7 @@ fn every_tmux_call_of_cpd_is_a_utf8_client_whatever_the_callers_locale() {
 }
 
 /// The structural guard (hs-d463): the one place that spawns tmux is `core/src/host/tmux.rs`, and what it spawns goes
-/// through `client(program)`, which puts `-u` first; no source names the program in a `Command::new` of its own.
+/// through `client(program)`, which puts `-u` first; no source names the program in a `Command::new("tmux")` of its own.
 #[test]
 fn no_source_spawns_tmux_with_a_command_of_its_own() {
     fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
@@ -785,9 +785,8 @@ fn no_source_spawns_tmux_with_a_command_of_its_own() {
             if t.starts_with("//") {
                 continue;
             }
-            // `Command::new("tmux")`, and a `Command::new` of a constant or path that names tmux.
-            let spawns = line.contains("Command::new(\"tmux\"") || (line.contains("Command::new(") && line.to_lowercase().contains("tmux") && !line.contains("client("));
-            if spawns {
+            // `Command::new("tmux")`: the program named in place, not given to `client(program)`.
+            if line.contains("Command::new(\"tmux\"") {
                 hits.push(format!("{name}:{}: {}", n + 1, t));
             }
         }

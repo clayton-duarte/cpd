@@ -2981,3 +2981,33 @@ fn install_over_a_real_adapter_directory_misses_it_for_a_tiny_fraction_of_polls_
     assert!(share.join("pi.legacy/stale.ts").exists(), "pi.legacy holds the old files");
     assert!(adapter.join("package.json").exists());
 }
+
+// ---------- a caller with no UTF-8 locale (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----------
+
+/// The install's `cpd watch --ensure` runs from a launchd agent that sets only `PATH`: tmux then prints the tabs of cpd's `-F`
+/// formats as `_`, and the call failed `tmux_failed: tmux list-panes printed unexpected output` (mac-pro, hs-d463).
+#[test]
+fn ensure_starts_the_engine_for_a_caller_without_a_utf8_locale() {
+    let mut failures = Vec::new();
+    for locale in crate::host::LOCALES {
+        let fx = fx("");
+        fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
+        let mut cmd = fx.env.command(CPD);
+        locale.apply(&mut cmd).args(["watch", "--ensure"]);
+        let out = common::output(&mut cmd).unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if !out.status.success() || !stdout.contains("\"started\":true") {
+            failures.push(format!("{locale:?}: watch --ensure exited {:?}: {stdout}{}", out.status.code(), String::from_utf8_lossy(&out.stderr)));
+            continue;
+        }
+        // The second call sees the engine's window through the same listing.
+        let mut again = fx.env.command(CPD);
+        locale.apply(&mut again).args(["watch", "--ensure"]);
+        let out = common::output(&mut again).unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if !stdout.contains("\"already\":true") {
+            failures.push(format!("{locale:?}: the second watch --ensure: {stdout}{}", String::from_utf8_lossy(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "cpd watch --ensure fails without a UTF-8 locale:\n{}", failures.join("\n"));
+}
