@@ -26,6 +26,9 @@ const POLL: Duration = Duration::from_millis(100);
 /// With `--wait`: how long a dying engine's process has to let go of the lock
 /// (its window is gone: it is stopping, as `kill-window`'s SIGHUP says).
 const LOCK_LIMIT: Duration = Duration::from_secs(15);
+/// Without `--wait`: how long a call waits for `locks/watch-ensure.lock` behind another:
+/// a supervising call holds it for at most [`LOCK_LIMIT`] + [`START_LIMIT`] + [`BACKOFF`] (27 s).
+const PLAIN_LIMIT: Duration = Duration::from_secs(30);
 /// With `--wait`: the pause after a failed start, so an engine that cannot start
 /// is tried once every few seconds, not in a loop of the hooks it triggers.
 const BACKOFF: Duration = Duration::from_secs(2);
@@ -36,9 +39,11 @@ pub(super) fn ensure(wait: bool) -> Result<Output, CpdError> {
     let config = Config::load(&home)?;
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let work = config.tmux.work_session.as_str();
-    // One supervising call at a time: a pane that dies at once makes its hook run
-    // again while this call still starts it, and the next waits out the back-off.
-    let _one_at_a_time = if wait { Some(serialize(&home)?) } else { None };
+    // One call at a time, plain or supervising: a pane that dies at once makes its
+    // hook run again while this call still starts it, and the next waits out the
+    // back-off; and a plain call that probed the engine's lock beside a supervising
+    // one would start a second window.
+    let _one_at_a_time = serialize(&home, wait)?;
     if !free(&home, &tmux, work, wait)? {
         return Ok(Output::success(json!({"started": false, "already": true})));
     }
@@ -58,15 +63,32 @@ pub(super) fn ensure(wait: bool) -> Result<Output, CpdError> {
     result
 }
 
-/// Takes `locks/watch-ensure.lock`, which the supervising calls hold while they start the engine.
-fn serialize(home: &CpdHome) -> Result<File, CpdError> {
+/// Takes `locks/watch-ensure.lock`, which every call holds while it checks and starts the
+/// engine. A supervising call (`wait`) waits for it without a limit; a plain call waits
+/// [`PLAIN_LIMIT`] and then fails.
+fn serialize(home: &CpdHome, wait: bool) -> Result<File, CpdError> {
     let path = home.locks_dir().join("watch-ensure.lock");
     let failed = |e: std::io::Error| {
         CpdError::new(ErrorCode::StoreFailed, format!("Cannot use {}: {e}.", path.display())).with("lock", path.display().to_string())
     };
     std::fs::create_dir_all(home.locks_dir()).map_err(failed)?;
     let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).map_err(failed)?;
-    crate::lock::blocking(&file).map_err(failed)?;
+    if wait {
+        crate::lock::blocking(&file).map_err(failed)?;
+        return Ok(file);
+    }
+    let deadline = Instant::now() + PLAIN_LIMIT;
+    while !crate::lock::try_lock(&file).map_err(failed)? {
+        if Instant::now() >= deadline {
+            return Err(CpdError::new(
+                ErrorCode::WatchStartFailed,
+                format!("Another watch --ensure still holds {} after {}s.", path.display(), PLAIN_LIMIT.as_secs()),
+            )
+            .with("lock", path.display().to_string())
+            .with("next", "cpd watch --ensure"));
+        }
+        std::thread::sleep(POLL);
+    }
     Ok(file)
 }
 

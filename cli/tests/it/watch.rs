@@ -580,6 +580,27 @@ fn an_engine_killed_by_an_install_that_then_does_nothing_is_back_within_seconds(
     fx.back_after(1);
 }
 
+/// A plain `--ensure` waits for `locks/watch-ensure.lock` like a supervising one: held by another call between its probe and its
+/// start, it keeps the plain call from probing, so no second window starts. Released, the call starts the engine.
+#[test]
+fn a_plain_ensure_waits_for_the_ensure_lock_another_call_holds() {
+    let fx = fx("");
+    let path = fx.env.cpd_home().join("locks/watch-ensure.lock");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path).unwrap();
+    let held = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    let mut child = common::spawn(fx.env.command(CPD).args(["watch", "--ensure"]).stdout(Stdio::piped()).stderr(Stdio::piped())).unwrap();
+    // time-claim: nothing signals "the call did not start", so it gets 2 s, far over what a start that is not held takes to begin.
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(child.try_wait().unwrap().is_none(), "the plain call returned while the lock was held");
+    assert_eq!(fx.count("watch-started"), 0);
+    drop(held);
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(serde_json::from_slice::<Value>(&out.stdout).unwrap()["started"], true);
+    fx.back_after(0);
+}
+
 /// The install's own `watch --ensure` right after its kill: the hook and the script both start the engine, and one runs.
 #[test]
 fn an_install_that_restarts_the_engine_itself_leaves_one_engine() {

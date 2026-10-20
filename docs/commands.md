@@ -2086,10 +2086,12 @@ Effects: probe `locks/watch.lock` (open and `flock(LOCK_EX | LOCK_NB)`, released
 
 Idempotent: yes; a running engine gives `"started": false` with `"already": true`.
 
+Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it probes the engine's lock and holds it until it has started the engine, so two calls never start two windows. A plain call waits for it 30 s at most (a supervising call holds it up to 15 s + 10 s + 2 s) and then fails with `watch_start_failed` (`details.next` = `cpd watch --ensure`); it still answers `already` when an engine runs.
+
 **`--ensure --wait` (internal; hs-d328).** What the tmux server's hooks run when the engine's pane died or its window is gone (contract §6.1, §6.6); not an interface of the User or an agent. As `--ensure`, with these differences:
 
 - a held lock with no live pane in the `watch` window (its window is gone, its process is stopping) is waited for, 15 s at most, then the engine is started; with a live pane it answers `already` at once;
-- it takes `locks/watch-ensure.lock` first and holds it until it is done, so only one runs at a time; after a failed start it waits 2 s under it, so a failing engine is tried once every few seconds;
+- it takes `locks/watch-ensure.lock` first, as every `--ensure` does, and waits for it without a limit, and holds it until it is done, so only one runs at a time; after a failed start it waits 2 s under it, so a failing engine is tried once every few seconds;
 - a dead engine pane is respawned in its window (`respawn-pane -e CPD_HOME=…`), the other dead `watch` windows are killed;
 - it sets the server options and hooks again on a running server (§6.1), as `cpd tui` does: **`--ensure` does it too**, so every start of the engine leaves the hooks in place;
 - it appends one line `supervision: …` to `run/watch.log` with the outcome. Its own output is dropped by the hook.
