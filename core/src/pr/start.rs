@@ -115,9 +115,43 @@ fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<
     Ok(NotReady { needs, base_pr })
 }
 
-/// Whether the PR is stacked (§2.2 "The base PR"): a PR of its repo has its `base` for Lead Branch.
-fn is_stacked(conn: &rusqlite::Connection, pr: &PrRow) -> Result<bool, CpdError> {
-    Ok(conn.query_row("SELECT EXISTS (SELECT 1 FROM prs WHERE repo = ?1 AND lead_branch = ?2)", [pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))?)
+/// The PR's base PR as `<plan>/<key>` (§2.2 "The base PR": derived, the PR of its repo whose Lead Branch is its
+/// `base`), `None` when it is not stacked.
+pub(super) fn base_pr(conn: &rusqlite::Connection, pr: &PrRow) -> Result<Option<String>, CpdError> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))
+        .optional()?)
+}
+
+/// The root base of a PR of `repo` whose `base` is `base` (§2.2, §7.5): the `base` of the first PR down the chain
+/// of base PRs that is not stacked, the branch the stack lands on; `base` itself when the PR is not stacked.
+pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<String, CpdError> {
+    use rusqlite::OptionalExtension;
+    let mut base = base.to_owned();
+    let mut seen = Vec::new();
+    while let Some(next) = conn
+        .query_row("SELECT base FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo, base.as_str()], |r| r.get::<_, String>(0))
+        .optional()?
+    {
+        if seen.contains(&base) {
+            return Err(CpdError::bad_row(format!("The base PRs of {repo} form a cycle at {base}")));
+        }
+        seen.push(base);
+        base = next;
+    }
+    Ok(base)
+}
+
+/// The refs a protected path may be brought from by a base merge (§7.5), besides the Lead tip: `origin/<base>` (`<base>`
+/// without `origin`), and for a stacked PR `origin/<root>` too, `<root>` the [`root_base`].
+pub fn tamper_bases(conn: &rusqlite::Connection, dir: &Path, repo: &str, base: &str) -> Result<Vec<String>, CpdError> {
+    let root = root_base(conn, repo, base)?;
+    let mut refs = vec![git::tamper::base_ref(dir, base)?];
+    if root != base {
+        refs.push(git::tamper::base_ref(dir, &root)?);
+    }
+    Ok(refs)
 }
 
 /// A PR whose Lead worktree exists on its Lead Branch with `pre-start` passed.
@@ -264,7 +298,7 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
 /// then [`record`] in a transaction of its own. On failure the worktree and
 /// branch are removed and nothing is written.
 pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, by: By) -> Result<Pushed, Failed> {
-    let stacked = store.read(|conn| is_stacked(conn, pr)).map_err(Failed::Other)?;
+    let stacked = store.read(|conn| base_pr(conn, pr)).map_err(Failed::Other)?.is_some();
     let pushed = prepare_as(home, config, plan, pr, stacked)?.push();
     match store.write(by.source(), |tx| record(tx, plan, &pushed, by)) {
         Ok(()) => Ok(pushed),
