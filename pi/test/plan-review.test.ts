@@ -439,15 +439,29 @@ test("cpd_plan_review is registered for Plan Leads: it runs plan review and retu
   await lead(f);
   const tool = f.pi.tools.find((x) => x.name === "cpd_plan_review")!;
   assert.ok(tool);
-  assert.deepEqual(tool.parameters, { type: "object", properties: {}, additionalProperties: false });
+  assert.deepEqual(tool.parameters, {
+    type: "object",
+    properties: { title: { type: "string", description: "One line of at most 72 characters naming what the drafts under review do" } },
+    required: ["title"],
+    additionalProperties: false,
+  });
   assert.equal(tool.exposure, "model-only");
 
   f.respond("plan-review", { ok: true, review: { id: "r1", status: "pending" }, path: `${f.cpdHome}/run/p1/plan-r1.md`, next: "The User reviews the plan in plannotator. Stop and wait for the decision message." });
-  const out = await f.pi.runTool(tool);
-  assert.deepEqual(f.argvs().find((a) => a[1] === "review"), ["plan", "review", "--plan", "p1"]);
+  const out = await f.pi.runTool(tool, { title: "T" });
+  assert.deepEqual(f.argvs().find((a) => a[1] === "review"), ["plan", "review", "--plan", "p1", "--title", "T"]);
   assert.equal(out.text, "The User reviews the plan in plannotator. Stop and wait for the decision message.");
   await f.quiet();
   assert.equal(requests(f).length, 0, "a new request opens through its Event, not through the tool");
+});
+
+test("the tool: a call without a title passes an empty --title, so cpd's usage refuses it", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("plan-review", { ok: false, error: { code: "usage", message: "--title is required.", details: {} } }, { exit: 2 });
+  await assert.rejects(f.pi.runTool(f.pi.tools[0]!), (e: any) => e.code === "usage");
+  assert.deepEqual(f.argvs().find((a) => a[1] === "review"), ["plan", "review", "--plan", "p1", "--title", ""]);
 });
 
 test("the tool passes CPD_PLAN to plan review", async (t) => {
@@ -456,8 +470,8 @@ test("the tool passes CPD_PLAN to plan review", async (t) => {
   await lead(f);
   process.env.CPD_PLAN = "p1";
   f.respond("plan-review", { ok: true, review: { id: "r1" }, next: "n" });
-  await f.pi.runTool(f.pi.tools[0]!);
-  assert.deepEqual(f.argvs().find((a) => a[1] === "review"), ["plan", "review", "--plan", "p1"]);
+  await f.pi.runTool(f.pi.tools[0]!, { title: "T" });
+  assert.deepEqual(f.argvs().find((a) => a[1] === "review"), ["plan", "review", "--plan", "p1", "--title", "T"]);
 });
 
 test("the tool: `already` with no pending entry opens the review itself, so a review that failed to open can be retried", async (t) => {
@@ -469,16 +483,16 @@ test("the tool: `already` with no pending entry opens the review itself, so a re
   const tool = f.pi.tools[0]!;
   f.respond("plan-review", { ok: true, already: true, review: { id: "r1", status: "pending" }, next: "wait" });
 
-  const first = await f.pi.runTool(tool);
+  const first = await f.pi.runTool(tool, { title: "T" });
   assert.equal(first.text, "wait");
   assert.equal(f.pi.errors().length, 1, "the failed open is delivered");
   assert.deepEqual(entries(f), []);
 
   answer = opened();
-  await f.pi.runTool(tool);
+  await f.pi.runTool(tool, { title: "T" });
   assert.deepEqual(entries(f), [{ plan: "p1", review: "r1", plannotator_id: "pn-1", status: "pending" }]);
 
-  await f.pi.runTool(tool); // pending entry now: nothing to open
+  await f.pi.runTool(tool, { title: "T" }); // pending entry now: nothing to open
   assert.equal(requests(f, "plan-review").length, 2);
 });
 
@@ -487,7 +501,7 @@ test("the tool: a refusal of plan review is thrown with its code", async (t) => 
   t.after(() => f.close());
   await lead(f);
   f.respond("plan-review", { ok: false, error: { code: "no_draft_jobs", message: "No draft Jobs.", details: {} } }, { exit: 3 });
-  await assert.rejects(f.pi.runTool(f.pi.tools[0]!), (e: any) => e.code === "no_draft_jobs");
+  await assert.rejects(f.pi.runTool(f.pi.tools[0]!, { title: "T" }), (e: any) => e.code === "no_draft_jobs");
 });
 
 test("the tool is not registered for a Worker", async (t) => {
