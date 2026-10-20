@@ -29,8 +29,9 @@ const PR_URL: &str = "https://github.com/acme/pay/pull/7";
 /// start (§6.5), and reports `idle` as the adapter does at `session_start`
 /// (§15.2). A Lead then stays idle. A Worker (it has `CPD_ATTEMPT`) reports
 /// `working`, writes `<job>.txt` (the Job `ui` first checks that the Job
-/// `api` it needs is in its worktree), commits, runs `attempt submit` and
-/// stays until the driver kills its window.
+/// `api` it needs is in its worktree), commits, runs `attempt submit` (saving
+/// what it printed, whether or not the driver has killed its window by then)
+/// and stays until the driver kills its window.
 const PI: &str = r#"
 sid=""; prev=""
 for a in "$@"; do [ "$prev" = "--session-id" ] && sid="$a"; prev="$a"; done
@@ -47,7 +48,12 @@ if [ -n "$CPD_ATTEMPT" ]; then
   if [ "$job" = ui ] && [ ! -f api.txt ]; then exit 13; fi
   echo "$job" > "$job.txt"
   git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
-  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.part" 2>&1; mv "../submit-$CPD_ATTEMPT.part" "../submit-$CPD_ATTEMPT.json"
+  # The driver kills this window (SIGHUP) as soon as the Attempt is `merging` (contract §7.4 step 0), which may be
+  # before `attempt submit` has printed: the submit and the rename ignore SIGHUP, and the path is absolute, as A9
+  # removes this worktree after the merge.
+  out="$(dirname "$PWD")/submit-$CPD_ATTEMPT"
+  ( trap '' HUP; cpd attempt submit "$CPD_ATTEMPT" > "$out.part" 2>&1 < /dev/null; mv "$out.part" "$out.json" ) &
+  wait
 else
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
 fi
