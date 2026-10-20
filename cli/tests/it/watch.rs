@@ -2630,7 +2630,7 @@ impl Titles {
 /// not.
 #[test]
 fn e10_retitles_an_idle_session_whose_turn_ended_after_its_title_and_no_other() {
-    let mut t = Titles::new(7, "echo 'Auxiliary agent titles'");
+    let mut t = Titles::new(7, "echo 'TITLE: Auxiliary agent titles'");
     t.session("due-manager", "manager", "idle", 0, Some(5), Some(20));
     t.session("due-untitled", "lead", "idle", 1, Some(1), None);
     t.session("throttled", "lead", "idle", 2, Some(1), Some(5));
@@ -2663,7 +2663,7 @@ fn e10_runs_at_most_two_retitles_at_once() {
     let release = std::env::temp_dir().join(format!("e10-release-{}", std::process::id()));
     let mut t = Titles::new(
         3,
-        &format!("i=0\nuntil [ -e '{r}' ] || [ $i -ge 1200 ]; do sleep 0.1; i=$((i+1)); done\necho 'A title'", r = release.display()),
+        &format!("i=0\nuntil [ -e '{r}' ] || [ $i -ge 1200 ]; do sleep 0.1; i=$((i+1)); done\necho 'TITLE: A title'", r = release.display()),
     );
     for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
         t.session(id, "lead", "idle", n, Some(1), None);
@@ -2687,7 +2687,7 @@ fn e10_runs_at_most_two_retitles_at_once() {
 /// it takes one of the two places.
 #[test]
 fn e10_skips_a_session_whose_title_lock_is_held_and_counts_held_locks() {
-    let mut t = Titles::new(3, "echo 'A title'");
+    let mut t = Titles::new(3, "echo 'TITLE: A title'");
     for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
         t.session(id, "lead", "idle", n, Some(1), None);
     }
