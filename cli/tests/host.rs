@@ -102,8 +102,17 @@ fn assert_server_options(s: &Server) {
         ),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
+        ("set-titles", "on"),
+        ("set-titles-string", "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}"),
     ] {
         assert_eq!(s.tmux.global_option(option).unwrap(), value, "{option}");
+    }
+    // `extended-keys-format` exists from tmux 3.5 or so; an older tmux ignores the `set -gq`
+    let format = s.env.tmux(&["show", "-gv", "extended-keys-format"]);
+    if format.status.success() {
+        assert_eq!(String::from_utf8_lossy(&format.stdout).trim(), "csi-u", "extended-keys-format");
+    } else {
+        eprintln!("extended-keys-format not asserted: this tmux does not know the option");
     }
     assert!(s.tmux.global_option("pane-border-format").unwrap().contains(", Deploy ,"));
     let features = s.tmux.global_option("terminal-features").unwrap();
@@ -403,10 +412,14 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
     assert_eq!(
         cpd_core::host::tmux::STATUS_FORMAT,
-        "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]\u{29c9}#[noreverse]\u{e0b4}#[default]#[norange] \
-         #[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]?#[noreverse]\u{e0b4}#[default]#[norange] \
-         #[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]\u{25a4}#[noreverse]\u{e0b4}#[default]#[norange]\
-         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{client_width},11},\
+        format!(
+            "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange] \
+             #[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange] \
+             #[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
+            cpd_core::host::tmux::RESET_GLYPH,
+            cpd_core::host::tmux::LEGEND_GLYPH,
+            cpd_core::host::tmux::LOGS_GLYPH
+        ) + "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{client_width},11},\
          #{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers_width},#{@cpd_workers_short_width}}}}\
          #[default]#[align=right]\
          #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default] \
@@ -414,6 +427,13 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
          #{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]"
     );
+}
+
+/// The buttons' glyphs are the hs-d235 Material Design code points (width 1 is not asserted: no `unicode-width` dependency here).
+#[test]
+fn the_button_glyphs_are_the_hs_d235_code_points() {
+    use cpd_core::host::tmux::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH};
+    assert_eq!([RESET_GLYPH, LEGEND_GLYPH, LOGS_GLYPH], ["\u{F0A1D}", "\u{F0A01}", "\u{F09ED}"]);
 }
 
 #[test]

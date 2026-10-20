@@ -101,32 +101,54 @@ echo "installed $dest_dir/cpd and $adapter_dir" >&2
 
 # A running cockpit's views keep the old binary until restarted (commands.md
 # §13.1): when the configured server has a cockpit with its main window, restart
-# its views. No config, no server or no main: nothing to restart. Likewise a
-# running engine keeps running the old code (contract §3.7): when the work
-# session has its `watch` window, kill it and start the engine again.
-if config=$("$dest_dir/cpd" config 2>/dev/null); then
+# its views. No server or no main: nothing to restart. Likewise a running engine
+# keeps running the old code (contract §3.7): when the work session has its
+# `watch` window, kill it and start the engine again. No follow-up is skipped
+# silently (hs-n278): each failure prints what failed and why, the later
+# follow-ups still run, and the script exits non-zero at the end. cpd waits out a
+# migration holding the setup lock (contract §4.2), so these run after it.
+failed=0
+fail() {
+  echo "cpd install follow-up failed: $1" >&2
+  failed=1
+}
+errfile=$(mktemp)
+trap 'rm -f "$errfile"' EXIT
+
+if ! config=$("$dest_dir/cpd" config 2>"$errfile"); then
+  fail "cpd config: $config $(cat "$errfile"); the views were not respawned and the engine was not restarted"
+else
   tmux_conf=$(printf '%s' "$config" | sed -n 's/.*"tmux":{\([^}]*\)}.*/\1/p')
   socket=$(printf '%s' "$tmux_conf" | sed -n 's/.*"socket":"\([^"]*\)".*/\1/p')
   cockpit=$(printf '%s' "$tmux_conf" | sed -n 's/.*"cockpit_session":"\([^"]*\)".*/\1/p')
   work=$(printf '%s' "$tmux_conf" | sed -n 's/.*"work_session":"\([^"]*\)".*/\1/p')
   if [ -n "$socket" ] && [ -n "$cockpit" ] &&
     env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$cockpit" -F '#{window_name}' 2>/dev/null | grep -qx main; then
-    "$dest_dir/cpd" tui --respawn >&2
+    "$dest_dir/cpd" tui --respawn >&2 || fail "cpd tui --respawn exited $?: the views still run the old binary"
   fi
   if [ -n "$socket" ] && [ -n "$work" ] &&
     env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx watch; then
     echo "restarting the running engine (cpd watch) to run the new binary" >&2
-    env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null kill-window -t "=$work:watch" >&2
-    # The killed engine releases its lock a moment later; --ensure answers
-    # "already" until then.
-    tries=0
-    while :; do
-      out=$("$dest_dir/cpd" watch --ensure) || break
-      case $out in *'"already":true'*) ;; *) break ;; esac
-      tries=$((tries + 1))
-      [ "$tries" -lt 40 ] || break
-      sleep 0.25
-    done
-    echo "$out" >&2
+    if ! env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null kill-window -t "=$work:watch" >&2; then
+      fail "tmux kill-window $work:watch failed: the engine still runs the old binary"
+    else
+      # The killed engine releases its lock a moment later; --ensure answers
+      # "already" until then.
+      tries=0
+      ok=1
+      while :; do
+        if ! out=$("$dest_dir/cpd" watch --ensure 2>"$errfile"); then
+          fail "cpd watch --ensure: $out $(cat "$errfile"); the engine is not running"
+          ok=0
+          break
+        fi
+        case $out in *'"already":true'*) ;; *) break ;; esac
+        tries=$((tries + 1))
+        [ "$tries" -lt 40 ] || break
+        sleep 0.25
+      done
+      [ "$ok" -eq 0 ] || echo "$out" >&2
+    fi
   fi
 fi
+[ "$failed" -eq 0 ] || exit 1

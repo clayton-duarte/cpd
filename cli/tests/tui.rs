@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{CPD, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::host::tmux::{SERVER_OPTIONS, STATUS_FORMAT};
+use cpd_core::host::tmux::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH, SERVER_OPTIONS, STATUS_FORMAT};
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
@@ -45,6 +45,12 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     let out = env.tmux(args);
     assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8(out.stdout).unwrap()
+}
+
+/// `tmux <args>`'s stdout, or `None` when tmux refuses (an option it does not know).
+fn tmux_try(env: &TestEnv, args: &[&str]) -> Option<String> {
+    let out = env.tmux(args);
+    out.status.success().then(|| String::from_utf8(out.stdout).unwrap())
 }
 
 /// One pane of `cpd:main`.
@@ -271,6 +277,11 @@ fn assert_server_options(env: &TestEnv) {
     for option in SERVER_OPTIONS {
         match option {
             ["set", "-g", name, value] => assert_eq!(tmux_out(env, &["show", "-gv", name]).trim_end_matches('\n'), *value, "{name}"),
+            // `-q`: tmux older than 3.5 or so does not know the option, and there is nothing to read back
+            ["set", "-gq", name, value] => match tmux_try(env, &["show", "-gv", name]) {
+                Some(shown) => assert_eq!(shown.trim_end_matches('\n'), *value, "{name}"),
+                None => eprintln!("{name} not asserted: this tmux does not know the option"),
+            },
             ["set", "-as", name, value] => {
                 let shown = tmux_out(env, &["show", "-sv", name]);
                 for feature in value.split(',').filter(|f| !f.is_empty()) {
@@ -289,6 +300,15 @@ fn assert_server_options(env: &TestEnv) {
             other => panic!("an option this test cannot check: {other:?}"),
         }
     }
+}
+
+/// After `cpd tui`: `@cpd_machine` is the test config's machine and the title
+/// tmux expands from `set-titles-string` is `cpd · <machine>` (contract §6.1, hs-d300).
+fn assert_window_title(env: &TestEnv) {
+    assert_eq!(tmux_out(env, &["show", "-gv", "set-titles"]).trim_end_matches('\n'), "on");
+    assert_eq!(tmux_out(env, &["show", "-gv", "@cpd_machine"]).trim_end_matches('\n'), "m1");
+    let format = tmux_out(env, &["show", "-gv", "set-titles-string"]);
+    assert_eq!(tmux_out(env, &["display", "-p", format.trim_end_matches('\n')]).trim_end_matches('\n'), "cpd · m1");
 }
 
 #[test]
@@ -310,6 +330,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
 fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let env = env();
     let out = env.cpd(&["tui"]).ok();
+    assert_window_title(&env);
     let engine = out["watch"]["pane"].as_str().unwrap();
     assert_server_options(&env);
     let before = main_panes(&env);
@@ -521,7 +542,7 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
         !client.is_empty()
     });
     // The status line is the client's last row: the three buttons at the left, one space apart.
-    wait_until("the buttons", || outer.screen().lines().nth(29).is_some_and(|l| l.starts_with(BUTTONS)));
+    wait_until("the buttons", || outer.screen().lines().nth(29).is_some_and(|l| l.starts_with(&buttons())));
     // It takes one row: the window has the other 29.
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{window_height}"]).trim(), "29");
     let chat = view(&main_panes(&env), "chat").clone();
@@ -540,12 +561,12 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     tmux_out(&env, &["display-popup", "-C", "-c", &client]);
     wait_until("the popup to close", || !outer.screen().contains(" legend "));
 
-    // ▤ opens the logs
+    // the logs button opens the logs
     outer.click(9, 29);
     wait_until("the logs popup", || outer.screen().contains(" logs "));
     tmux_out(&env, &["display-popup", "-C", "-c", &client]);
 
-    // ⧉ resets the layout
+    // the reset button resets the layout
     let tree = view(&main_panes(&env), "tree").clone();
     tmux_out(&env, &["resize-pane", "-t", &tree.id, "-x", "70"]);
     outer.click(1, 29);
@@ -590,6 +611,102 @@ fn a_pane_header_is_a_title_pill_whose_caps_take_the_borders_colour() {
     tmux_out(&env, &["select-pane", "-t", &plan.id]);
     wait_until("the focus to move", || caps_blue(&styled_row(&outer, plan_row), "Plan") == (true, true));
     assert_eq!(caps_blue(&styled_row(&outer, lead_row), "Retry payouts"), (false, false));
+}
+
+/// Kills `gone` (views of `main`), runs `cpd tui`, and asserts the layout is whole again with the panes that were
+/// not killed unchanged, and that rerunning adds nothing.
+fn assert_repaired_after_killing(gone: &[&str]) {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let full = main_panes(&env);
+    for name in gone {
+        tmux_out(&env, &["kill-pane", "-t", &view(&full, name).id]);
+    }
+    // An old main, its sizes changed by the User.
+    if !gone.contains(&"widgets") {
+        tmux_out(&env, &["resize-pane", "-t", &view(&full, "widgets").id, "-x", "80"]);
+    }
+    let before = main_panes(&env);
+    assert_eq!(before.len(), 4 - gone.len(), "{before:?}");
+
+    let out = env.cpd(&["tui"]).ok();
+    assert_eq!(out["built"], false, "{out}");
+    let after = main_panes(&env);
+    assert_layout(&after);
+    for old in &before {
+        let new = after.iter().find(|p| p.id == old.id).unwrap_or_else(|| panic!("{} is gone: {after:?}", old.id));
+        assert_eq!((new.view.as_str(), new.pid, new.dead), (old.view.as_str(), old.pid, false));
+    }
+
+    // Rerunning adds nothing and starts nothing.
+    let started = views_started(&env).len();
+    env.cpd(&["tui"]).ok();
+    assert_eq!(main_panes(&env), after);
+    assert_eq!(views_started(&env).len(), started);
+}
+
+#[test]
+fn tui_adds_a_missing_tree_to_an_existing_main() {
+    assert_repaired_after_killing(&["tree"]);
+}
+
+#[test]
+fn tui_adds_a_missing_plan_view_to_an_existing_main() {
+    assert_repaired_after_killing(&["plan"]);
+}
+
+#[test]
+fn tui_adds_a_missing_widgets_view_to_an_existing_main() {
+    assert_repaired_after_killing(&["widgets"]);
+}
+
+#[test]
+fn tui_adds_a_missing_chat_placeholder_to_an_existing_main() {
+    assert_repaired_after_killing(&["chat"]);
+}
+
+#[test]
+fn tui_adds_the_plan_view_and_the_chat_slot_when_both_are_missing() {
+    assert_repaired_after_killing(&["plan", "chat"]);
+}
+
+#[test]
+fn tui_finishes_a_build_that_stopped_after_the_first_pane() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let full = main_panes(&env);
+    let tree = view(&full, "tree").clone();
+    for name in ["plan", "widgets", "chat"] {
+        tmux_out(&env, &["kill-pane", "-t", &view(&full, name).id]);
+    }
+    assert_eq!(main_panes(&env).len(), 1);
+
+    let out = env.cpd(&["tui"]).ok();
+    assert_eq!(out["built"], false, "{out}");
+    let after = main_panes(&env);
+    assert_layout(&after);
+    assert_eq!(view(&after, "tree").pid, tree.pid, "the pane that was there is not touched");
+    env.cpd(&["tui"]).ok();
+    assert_eq!(main_panes(&env), after);
+}
+
+#[test]
+fn tui_keeps_a_lead_in_the_chat_slot_when_the_plan_view_is_missing() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let placeholder = view(&main_panes(&env), "chat").clone();
+    let lead = tmux_out(&env, &["new-window", "-d", "-t", "=cpd:", "-n", "park-pay", "-P", "-F", "#{pane_id}", "sleep", "3600"]);
+    let lead = lead.trim();
+    tmux_out(&env, &["set", "-p", "-t", lead, "@cpd_session", "lead-a"]);
+    tmux_out(&env, &["swap-pane", "-d", "-s", lead, "-t", &placeholder.id]);
+    let full = main_panes(&env);
+    tmux_out(&env, &["kill-pane", "-t", &view(&full, "plan").id]);
+
+    env.cpd(&["tui"]).ok();
+    let after = main_panes(&env);
+    assert_layout(&after);
+    assert!(after.iter().any(|p| p.id == lead), "the Lead keeps the slot: {after:?}");
+    assert!(after.iter().all(|p| p.view != "chat"), "no second slot: {after:?}");
 }
 
 #[test]
@@ -794,7 +911,9 @@ fn env_with_workers() -> (TestEnv, Flock<File>) {
 }
 
 /// Each button is a pill: its glyph between the two caps, 3 cells, with one space between two buttons.
-const BUTTONS: &str = "\u{e0b6}⧉\u{e0b4} \u{e0b6}?\u{e0b4} \u{e0b6}▤\u{e0b4}";
+fn buttons() -> String {
+    format!("\u{e0b6}{RESET_GLYPH}\u{e0b4} \u{e0b6}{LEGEND_GLYPH}\u{e0b4} \u{e0b6}{LOGS_GLYPH}\u{e0b4}")
+}
 
 /// The right items in the long form: two pills (`inbox 2`, `workers 6/6 · 4 waiting · 9 queued`) with one space.
 const LONG_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4} \u{e0b6}workers 6/6 · 4 waiting · 9 queued\u{e0b4}";
@@ -806,9 +925,9 @@ const SHORT_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4} \u{e0b6}6/6·4·9\u{e0b4}";
 fn the_status_line_draws_the_inbox_counter_then_the_long_workers_form_on_a_client_wide_enough() {
     let (env, _engine) = env_with_workers();
     let (line, styled) = status_line(&env, 59, "queued");
-    assert!(line.starts_with(BUTTONS) && line.ends_with(LONG_ITEMS), "{line:?}");
+    assert!(line.starts_with(&buttons()) && line.ends_with(LONG_ITEMS), "{line:?}");
     // The 2 cells of air are the grey fill line, and the row is full: 11 + 2 + 46.
-    assert_eq!(line, format!("{BUTTONS}──{LONG_ITEMS}"));
+    assert_eq!(line, format!("{}──{LONG_ITEMS}", buttons()));
     assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
 }
 
@@ -816,9 +935,9 @@ fn the_status_line_draws_the_inbox_counter_then_the_long_workers_form_on_a_clien
 fn the_status_line_draws_the_inbox_counter_then_the_short_workers_form_on_a_narrow_client() {
     let (env, _engine) = env_with_workers();
     let (line, styled) = status_line(&env, 58, "6/6");
-    assert!(line.starts_with(BUTTONS) && line.ends_with(SHORT_ITEMS) && !line.contains("workers"), "{line:?}");
+    assert!(line.starts_with(&buttons()) && line.ends_with(SHORT_ITEMS) && !line.contains("workers"), "{line:?}");
     // The row is full: 11 + the fill line + 19.
-    assert_eq!(line, format!("{BUTTONS}{}{SHORT_ITEMS}", "─".repeat(58 - 11 - 19)));
+    assert_eq!(line, format!("{}{}{SHORT_ITEMS}", buttons(), "─".repeat(58 - 11 - 19)));
     assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
 }
 

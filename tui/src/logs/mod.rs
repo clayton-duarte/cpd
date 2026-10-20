@@ -1,6 +1,7 @@
 //! The `logs` view (commands.md §13.2, §17; R36): the Event log, in a tmux popup opened by the StatusBar's
-//! `▤` button (`cpd tui action logs`). It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
-//! `events.poll_ms` and appends what is new. ↑↓, j/k and PgUp/PgDn scroll; `q` or Esc closes it. It makes no
+//! `󰧭` (U+F09ED) button (`cpd tui action logs`). It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
+//! `events.poll_ms` and appends what is new. ↑↓, j/k, PgUp/PgDn and the mouse wheel scroll (the dialog kit's
+//! scrolling, mouse capture on); its title is a section header; `q` or Esc closes it. It makes no
 //! write of its own. With `--event <id>` it opens at that Event (a click on an `engine-error` or `engine-down` Inbox
 //! item): the Event's line is selected and scrolled into view, and the view does not follow until the User scrolls to the
 //! bottom; an Event outside the latest [`RECENT`] is read on its own and shown first.
@@ -17,10 +18,11 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 pub use self::view::{Log, draw};
 use super::read;
 use super::widgets::{legend, newest_client};
-use super::{not_a_terminal, on_a_terminal};
+use super::runner::{ViewError, kept};
+use super::{Capture, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::events::{Selection, highest_id};
+use cpd_core::events::Selection;
 use cpd_core::home::CpdHome;
 use cpd_core::host::Tmux;
 use cpd_core::output::Output;
@@ -62,63 +64,65 @@ pub(crate) fn open_at(tmux: &Tmux, event: Option<i64>) -> Result<(), CpdError> {
 }
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view logs"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let first = read::logs(&mut store, RECENT)?;
-    let log = match args.event {
-        Some(id) => Log::at(with_event(&mut store, first.events, id)?, id),
-        None => Log::new(first.events),
-    };
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-    let result = show(&mut terminal, &mut store, poll, first.events_cursor, log);
-    ratatui::restore();
-    result.map(|()| Output::Owned)
+    run_view(
+        "logs",
+        Capture::Mouse,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let first = read::logs(&mut store, RECENT)?;
+            let log = match args.event {
+                Some(id) => Log::at(with_event(&mut store, first.events, id)?, id),
+                None => Log::new(first.events),
+            };
+            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+            let follow = read::Follow::new(&mut store, &[], first.events_cursor)?;
+            Ok((store, poll, follow, log))
+        },
+        |terminal, (mut store, poll, follow, log)| show(terminal, &mut store, poll, follow, log),
+    )
 }
 
-/// Draws and follows until `q` or Esc.
+/// The keys that close the view.
+fn closes(code: KeyCode) -> bool {
+    matches!(code, KeyCode::Char('q') | KeyCode::Esc)
+}
+
+/// Draws and follows until `q` or Esc; the keys and the wheel scroll. A failed read keeps the Events on screen and shows its error in the last row
+/// until a read succeeds ([`kept`]).
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
     poll: Duration,
-    mut cursor: i64,
+    mut follow: read::Follow,
     mut log: Log,
-) -> Result<(), CpdError> {
-    let terminal_failed = |e: std::io::Error| {
-        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view logs failed: {e}."))
-            .with("command", "tui view logs")
-    };
+) -> Result<(), ViewError> {
+    let mut redraw = true; // the pane is written to only when something changed: Events, an error, input, a resize
     loop {
-        terminal
-            .draw(|f| {
+        if redraw {
+            terminal.draw(|f| {
                 log.fit(f.area().height);
                 draw(f, f.area(), &log);
-            })
-            .map_err(terminal_failed)?;
-        if event::poll(poll).map_err(terminal_failed)? {
-            if let Event::Key(key) = event::read().map_err(terminal_failed)? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Up | KeyCode::Char('k') => log.scroll_up(1),
-                        KeyCode::Down | KeyCode::Char('j') => log.scroll_down(1),
-                        KeyCode::PageUp => log.scroll_up(log.page()),
-                        KeyCode::PageDown => log.scroll_down(log.page()),
-                        _ => {}
-                    }
-                }
+            })?;
+            redraw = false;
+        }
+        if event::poll(poll)? {
+            redraw = true;
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press && closes(key.code) => return Ok(()),
+                Event::Key(key) => drop(log.key(key)),
+                Event::Mouse(mouse) => drop(log.mouse(mouse)),
+                _ => {}
             }
         }
-        if store.read(highest_id)? != cursor {
-            let next = read::logs_after(store, cursor)?;
-            cursor = next.events_cursor;
-            log.push(next.events);
+        // the follow's cursor stays where it was on a failure, so the next poll reads what was missed
+        let shown = log.error.clone();
+        if let Some(events) = kept(follow.poll(store), &mut log.error) {
+            redraw |= !events.is_empty();
+            log.push(events);
         }
+        redraw |= log.error != shown;
     }
 }
 
