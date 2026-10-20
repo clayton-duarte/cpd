@@ -1869,9 +1869,6 @@ mod tests {
 
     /// The rows as text: a link's cells carry their OSC 8 escapes (`crate::link`), which are not text.
     fn text_rows(buf: &ratatui::buffer::Buffer) -> Vec<String> {
-        let r = text_rows0(buf); if std::env::var("DUMP").is_ok() { eprintln!("---"); for (i, l) in r.iter().enumerate() { eprintln!("{i:2} {l}"); } } r
-    }
-    fn text_rows0(buf: &ratatui::buffer::Buffer) -> Vec<String> {
         (0..buf.area.height)
             .map(|y| {
                 let (mut row, mut x) = (String::new(), 0);
@@ -2531,42 +2528,46 @@ mod tests {
     #[test]
     fn both_fit_each_takes_its_rows_and_the_leftover_is_empty_between_them() {
         let (view, rows) = shared(sample(), 3, false, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 27, 41, 4), "the section is as tall as its rows, pinned to the bottom");
+        assert_eq!(view.inbox_area, Rect::new(1, 25, 41, 6), "the empty row, the title, three items and `╰─`: as tall as its rows, pinned to the bottom");
         assert!(rows[1].starts_with(&format!(" ╭{NEEDS_YOU} alpha")), "{rows:?}");
-        assert!(rows[13..27].iter().all(|r| r.is_empty()), "the gap: {rows:?}");
+        assert_eq!(rows[12], " ╰─", "the tree's last row: {rows:?}");
+        assert!(rows[13..26].iter().all(|r| r.is_empty()), "the gap, and the section's empty row above its title: {rows:?}");
+        assert_eq!((rows[26].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰─"), "{rows:?}");
         assert!(!rows.iter().any(|r| r.contains('▲') || r.contains('▼')), "no cue when all fit: {rows:?}");
     }
 
     #[test]
     fn a_long_tree_and_a_long_inbox_share_thirty_rows_twenty_and_ten() {
         let (view, rows) = shared(long_tree(60), 50, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 21, 41, 10), "the Inbox has a third of the column's rows");
-        assert_eq!(rows[21], header(50));
-        assert_eq!((label(&rows[22]), label(&rows[28])), ("item 00", "item 06"));
-        assert_eq!(rows[29], "  ▼ 43 more", "the Inbox's cue: {rows:?}");
-        assert_eq!(rows[30], " ╰─ collapse");
+        assert_eq!(view.inbox_area, Rect::new(1, 21, 41, 10), "the Inbox has a third of the column's rows, its empty row among them");
+        assert_eq!(rows[21], "", "the empty row above the title");
+        assert_eq!(rows[22], header(50));
+        assert_eq!((label(&rows[23]), label(&rows[28])), ("item 00", "item 05"));
+        assert_eq!(rows[29], cue_row('▼', 44), "the Inbox's cue, right-aligned: {rows:?}");
+        assert_eq!(rows[30], COLLAPSE);
         assert!(rows[1].ends_with(" alpha"), "the tree starts at the top: {rows:?}");
         assert!(rows[19].contains("p17"), "the tree's 19th row: {rows:?}");
-        assert_eq!(rows[20], "  ▼ 43 more", "the tree's cue is the last of its 20 rows: {rows:?}");
+        assert_eq!(rows[20], cue_row_at('▼', 43), "the tree's cue is the last of its 20 rows, right-aligned: {rows:?}");
     }
 
     #[test]
     fn a_long_tree_and_a_short_expanded_inbox_give_the_rest_to_the_tree() {
         let (view, rows) = shared(long_tree(60), 4, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 25, 41, 6), "the header, four items and `╰─ collapse`");
-        assert_eq!((rows[25].clone(), label(&rows[29]), rows[30].clone()), (header(4), "item 03", " ╰─ collapse".to_owned()));
-        assert_eq!(rows[24], "  ▼ 39 more", "the tree has 24 rows: {rows:?}");
-        assert!(!rows[1..24].iter().any(|r| r.is_empty() || r.contains('▼')), "{rows:?}");
+        assert_eq!(view.inbox_area, Rect::new(1, 24, 41, 7), "the empty row, the title, four items and `╰󰁣 collapse`");
+        assert_eq!((rows[24].clone(), rows[25].clone(), label(&rows[29]).to_owned(), rows[30].clone()), (String::new(), header(4), "item 03".to_owned(), COLLAPSE.to_owned()));
+        assert_eq!(rows[23], cue_row_at('▼', 40), "the tree has 23 rows: {rows:?}");
+        assert!(!rows[1..23].iter().any(|r| r.is_empty() || r.contains('▼')), "{rows:?}");
     }
 
     #[test]
     fn a_short_tree_and_a_long_inbox_give_the_rest_to_the_inbox() {
         let (view, rows) = shared(long_tree(2), 50, true, 31);
-        assert_eq!(view.inbox_area, Rect::new(1, 5, 41, 26), "four tree rows (its `╰─ collapse` too), the rest to the Inbox");
-        assert!(rows[1].ends_with(" alpha") && rows[3].contains("p01") && rows[4] == " ╰─ collapse", "{rows:?}");
-        assert_eq!(rows[5], header(50));
-        assert_eq!((label(&rows[6]), label(&rows[28])), ("item 00", "item 22"));
-        assert_eq!((rows[29].as_str(), rows[30].as_str()), ("  ▼ 27 more", " ╰─ collapse"));
+        assert_eq!(view.inbox_area, Rect::new(1, 5, 41, 26), "four tree rows (its `╰─` too), the rest to the Inbox");
+        assert!(rows[1].ends_with(" alpha") && rows[3].contains("p01") && rows[4] == " ╰─", "{rows:?}");
+        assert_eq!(rows[5], "", "the empty row above the title");
+        assert_eq!(rows[6], header(50));
+        assert_eq!((label(&rows[7]), label(&rows[28])), ("item 00", "item 21"));
+        assert_eq!((rows[29].as_str(), rows[30].as_str()), (cue_row('▼', 28).as_str(), COLLAPSE));
     }
 
     #[test]
@@ -2574,22 +2575,22 @@ mod tests {
         let (mut view, _) = shared(long_tree(60), 50, true, 31);
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
         let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert_eq!(rows[1], "  ▲ 3 more");
+        assert_eq!(rows[1], cue_row_at('▲', 3), "right-aligned");
         assert!(rows[2].contains("p02"), "{rows:?}");
-        assert_eq!(rows[20], "  ▼ 41 more");
+        assert_eq!(rows[20], cue_row_at('▼', 41));
         assert_eq!(view.inbox_scroll, 0, "the wheel over the tree leaves the Inbox alone");
         for _ in 0..40 {
             wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
         }
         let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert_eq!(rows[1], "  ▲ 43 more", "clamped: the last row reaches the bottom of the tree's rows");
-        assert!(rows[19].contains("p59") && rows[20] == " ╰─ collapse", "{rows:?}");
+        assert_eq!(rows[1], cue_row_at('▲', 43), "clamped: the last row reaches the bottom of the tree's rows");
+        assert!(rows[19].contains("p59") && rows[20] == " ╰─", "{rows:?}");
         assert!(!rows[1..21].iter().any(|r| r.contains('▼')), "nothing hidden below: {rows:?}");
         for _ in 0..40 {
             wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
         }
         let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert!(rows[1].ends_with(" alpha") && rows[20] == "  ▼ 43 more", "{rows:?}");
+        assert!(rows[1].ends_with(" alpha") && rows[20] == cue_row_at('▼', 43), "{rows:?}");
     }
 
     #[test]
@@ -2597,8 +2598,8 @@ mod tests {
         let (mut view, _) = shared(long_tree(60), 50, true, 31);
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
         let rows = text_rows(&draw_now(&mut view, 43, 31));
-        assert_eq!(rows[22], "  ▲ 3 more");
-        assert_eq!((label(&rows[23]), rows[29].as_str()), ("item 03", "  ▼ 41 more"));
+        assert_eq!(rows[23], cue_row('▲', 3));
+        assert_eq!((label(&rows[24]), rows[29].as_str()), ("item 03", cue_row('▼', 42).as_str()));
         assert!(rows[1].ends_with(" alpha"), "the tree did not move: {rows:?}");
         assert_eq!(click(&mut view, 10, 1 + 20 - 1), Effect::None, "the tree's ▼ cue is no row");
         wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
@@ -2616,9 +2617,10 @@ mod tests {
         let buf = draw_now(&mut view, 43, 31);
         let rows = text_rows(&buf);
         let at = rows.iter().position(|r| r.contains("p39")).expect("the cursor's Session is drawn");
-        assert!((2..26).contains(&at), "between the cues: {rows:?}");
+        assert!((2..24).contains(&at), "between the cues: {rows:?}");
         assert!(buf[(5, at as u16)].modifier.contains(Modifier::REVERSED));
-        assert!(rows[1].starts_with("  ▲") && rows[26].starts_with("  ▼"), "{rows:?}");
+        assert!(rows[1].trim_start().starts_with('▲') && rows[24].trim_start().starts_with('▼'), "{rows:?}");
+        assert_eq!((rows[1].as_str(), rows[24].as_str()), (cue_row_at('▲', 19).as_str(), cue_row_at('▼', 21).as_str()), "right-aligned: {rows:?}");
         let before = rows.clone();
         wheel(&mut view, MouseEventKind::ScrollUp, 10, 5);
         assert_ne!(text_rows(&draw_now(&mut view, 43, 31)), before, "the wheel moved it, though the cursor is out of sight");
