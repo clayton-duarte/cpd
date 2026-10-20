@@ -6,7 +6,7 @@
 //! - [`distill`] E9: starts `cpd context distill` for a Context whose digest is behind;
 //! - [`titles`] E10: starts `cpd session retitle` for idle Lead and Manager Sessions whose turn ended after their title;
 //! - [`team`] E11: reads the team Slack channel through the detached helper into `run/team-review.json`;
-//! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`completion`] E4,
+//! - [`escalations`] E1, [`liveness`] E2, [`schedule`] E3, [`open`] E4,
 //!   [`pr`] E5, [`inbox`] E8: one module per step (E6 was removed, its number stays);
 //! - [`workers`]: the `@cpd_workers` step, which sets the StatusBar's `workers N/M` text;
 //! - [`report`]: an unexpected failure as an `error` Event, once until it clears;
@@ -14,7 +14,7 @@
 //! - [`restart`]: the tmux server's restart: E3's hold while it is pending, the drain, the detached run;
 //! - [`lock`]: `locks/watch.lock`; [`log`]: stderr and `run/watch.log`.
 
-mod completion;
+mod open;
 mod distill;
 mod engine;
 mod ensure;

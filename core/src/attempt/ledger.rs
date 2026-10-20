@@ -36,6 +36,10 @@ pub struct Attempt {
     pub stop_request: Option<String>,
     /// The Attempt branch's tip when `attempt submit` checked it; set from `merging` on.
     pub submitted_sha: Option<String>,
+    /// The Job's kind (§2.2 "Job kinds"): `open` and `update` Jobs are merged without a rebase and with a push (§7.4).
+    pub kind: String,
+    /// The Job's PR (R34 A7).
+    pub pr: String,
 }
 
 pub(crate) fn corrupt(what: String) -> CpdError {
@@ -51,7 +55,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
     let row = conn
         .query_row(
             "SELECT a.job, a.tier, a.status, a.branch, a.worktree, a.worker_session, a.nudged, a.stop_request,
-                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha
+                    r.repo, r.lead_worktree, r.lead_branch, a.submitted_sha, j.kind, j.pr
                FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
                JOIN prs r ON r.plan = j.plan AND r.key = j.pr
               WHERE a.plan = ?1 AND a.id = ?2",
@@ -68,6 +72,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                     r.get::<_, Option<String>>(7)?,
                     (r.get::<_, String>(8)?, r.get::<_, Option<String>>(9)?, r.get::<_, String>(10)?),
                     r.get::<_, Option<String>>(11)?,
+                    (r.get::<_, String>(12)?, r.get::<_, String>(13)?),
                 ))
             },
         )
@@ -77,7 +82,7 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
                 .with("plan", plan.as_str())
                 .with("attempt", id.to_string())
         })?;
-    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha) = row;
+    let (job, tier, status, branch, worktree, worker_session, nudged, stop_request, (repo, lead_worktree, lead_branch), submitted_sha, (kind, pr)) = row;
     let lead_worktree = lead_worktree.ok_or_else(|| corrupt(format!("Plan {plan} has an Attempt but no Lead worktree")))?;
     Ok(Attempt {
         plan: plan.clone(),
@@ -97,6 +102,8 @@ pub fn load(conn: &Connection, plan: &PlanId, id: &AttemptId) -> Result<Attempt,
         nudged,
         stop_request,
         submitted_sha,
+        kind,
+        pr,
     })
 }
 
@@ -221,6 +228,27 @@ impl Stage {
 /// `metrics` (A9) and appends the Event of §3.4's table: `job-merged`,
 /// `job-cancelled`, `attempt-retry` or `job-failed`.
 pub fn end(tx: &WriteTxn<'_>, attempt: &Attempt, end: &End, metrics: Option<&Value>, ladder: &Ladder<'_>, stage: Stage) -> Result<(), CpdError> {
+    end_opened(tx, attempt, end, metrics, ladder, stage, None)
+}
+
+/// The pull request an `open` Job's merge created or adopted (§7.4 step 8b): what `job-merged` says of it (§5.2).
+#[derive(Clone, Copy, Debug)]
+pub struct Pull<'a> {
+    pub number: i64,
+    pub url: &'a str,
+}
+
+/// [`end`], with the pull request an `open` Job's merge opened, which `job-merged` names (`pr`, `number`, `url`; its `text` says the pull
+/// request is open: it is the Lead's only word of it, §5.2).
+pub fn end_opened(
+    tx: &WriteTxn<'_>,
+    attempt: &Attempt,
+    end: &End,
+    metrics: Option<&Value>,
+    ladder: &Ladder<'_>,
+    stage: Stage,
+    pull: Option<Pull<'_>>,
+) -> Result<(), CpdError> {
     debug_assert!(stage == Stage::Merge || !matches!(end, End::Merged { .. }), "only the merge ends an Attempt merged");
     let (plan, job, id) = (attempt.plan.as_str(), attempt.job.as_str(), attempt.id.to_string());
     let cas_lost = |what: &str| {
@@ -253,8 +281,12 @@ pub fn end(tx: &WriteTxn<'_>, attempt: &Attempt, end: &End, metrics: Option<&Val
             if cancel_too_late {
                 text.push_str(" Its cancel request came too late: the merge had already happened.");
             }
+            if let Some(pull) = pull {
+                text.push_str(&format!(" Pull request #{} of PR {} is open: {}.", pull.number, attempt.pr, pull.url));
+            }
             text.push_str(&format!(" Next: {show}"));
-            ("merged", None, NewEvent::job_merged(text, sha, &tier, cancel_too_late))
+            let pull = pull.map(|p| (attempt.pr.as_str(), p.number, p.url));
+            ("merged", None, NewEvent::job_merged(text, sha, &tier, &attempt.kind, cancel_too_late, pull))
         }
         End::Cancelled => {
             let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.ok_or_else(|| cas_lost("The Job's cancel request"))?;

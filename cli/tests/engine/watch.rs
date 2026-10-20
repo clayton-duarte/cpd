@@ -720,8 +720,9 @@ fn an_engine_that_died_without_a_watch_stopped_is_told_from_the_last_time_it_was
 
 // ---------- @cpd_workers ----------
 
-const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3 · 0 waiting · 0 queued#[default]";
-const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3 · 0 waiting · 0 queued#[default]";
+// Each fixture's dispatch PR has its `open` Job, which E4 adds at the first tick and which waits for the PR's other Jobs: one queued Job.
+const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3 · 0 waiting · 1 queued#[default]";
+const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3 · 0 waiting · 1 queued#[default]";
 
 impl Fx {
     /// A tmux server with one session, `keepalive`.
@@ -748,7 +749,7 @@ fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
 
     let engine = fx.start();
     wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
-    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·0#[default]");
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·1#[default]");
     assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
     assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
 
@@ -773,14 +774,15 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     fx.tmux_server();
     let lock = fx.live_driver("run-a1");
     fx.add_running("run", "running", &ago(1));
-    // Ready but the only slot is taken (E3 starts nothing); the other needs it, so it is queued and not waiting.
+    // Ready but the only slot is taken (E3 starts nothing); the other needs it, so it is queued and not waiting. The PR's `open` Job, which
+    // E4 adds at the first tick, waits for them all: queued too.
     fx.add_job("free", &[], "");
     fx.add_job("blocked", &["free"], "");
 
     let engine = fx.start();
-    let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 2 queued#[default]";
+    let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 3 queued#[default]";
     wait_until("@cpd_workers", || fx.workers() == long);
-    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·2#[default]");
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·3#[default]");
     assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
     assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
     engine.stop();
@@ -1046,7 +1048,7 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
 
     assert_eq!(fx.attempt("api-a1"), ("ended".into(), Some("merged".into()), Some("merged".into()), None));
     assert_eq!(fx.job_status("api"), "merged");
-    assert_eq!(fx.events("job-merged")[0].3, json!({"sha": tip, "tier": "S2"}));
+    assert_eq!(fx.events("job-merged")[0].3, json!({"sha": tip, "tier": "S2", "kind": "work"}));
     assert!(!made.path.exists());
 }
 
@@ -1586,15 +1588,17 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
     wait_until("watch-started", || fx.count("watch-started") == 1);
     wait_until("E5's poll", || marker.exists());
 
-    // A step: the second tick's E4 meets the lock, taken while E5 of the first tick is still running.
-    fx.fixture("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    // A step: the second tick's E4 meets the lock, taken while E5 of the first tick is still running. The first tick added `open-repo`;
+    // cancelling it is how the Lead starts over, so E4 has a Job to add (a write) at the second tick.
+    assert_eq!(fx.jobs_of_kind("open").len(), 1);
+    fx.fixture("UPDATE jobs SET status = 'cancelled', cancel_reason = 'start over', cancel_requested_at = 't' WHERE key = 'open-repo';");
     let busy = watch_log(&fx).matches("store_busy: ").count();
     let held = hold_write_lock(&fx);
     fs::write(&go, "").unwrap();
     wait_until("the engine to meet the lock", || watch_log(&fx).matches("store_busy: ").count() > busy);
-    assert_eq!(fx.count("all-merged"), 0);
+    assert_eq!(fx.jobs_of_kind("open").len(), 1);
     held.release();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
+    wait_until("the fresh open Job", || fx.jobs_of_kind("open").len() == 2);
     assert_eq!(engine.child.as_mut().unwrap().try_wait().unwrap(), None, "the engine exited");
     engine.stop();
 
@@ -1602,7 +1606,7 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
     assert!(log.contains("store_busy: "), "{log}");
     assert!(log.contains("the store is clear again after "), "{log}");
     assert_eq!(fx.count("error"), 0, "{log}");
-    assert_eq!(fx.count("all-merged"), 1);
+    assert_eq!(fx.count("job-added"), 2, "each open Job's Event was appended once");
 }
 
 /// `watch-stopped` is appended when the engine stops while the store is busy, however long that lasts.
@@ -1628,67 +1632,12 @@ fn watch_stopped_waits_for_a_busy_store() {
     assert!(!watch_log(&fx).contains("cannot append watch-stopped"), "{}", watch_log(&fx));
 }
 
-// ---------- E4 ----------
+// ---------- E3: a draft ----------
 
+/// A draft added after the lock (`job add --draft`, contract §3.2): E3 never starts it, and the PR's open Job waits while it remains (§3.2
+/// Ready: the PR waits for the batch). Cancelling it frees the open Job: `the_open_job_is_ready_only_when_...` below.
 #[test]
-fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
-    let fx = fx("");
-    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
-    fx.add_job("web", &[], "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'web';");
-
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-
-    assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"pr": "repo", "merged": ["api"], "cancelled": ["web"]}))]);
-    // The text the Lead is steered with (hs-d334): open now, waiting for nothing.
-    assert!(fx.texts("all-merged")[0].starts_with("No Job of PR repo of Plan pay is draft, queued or running. Open the pull request now: it waits for no slot and no other work."));
-    assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --pr repo --plan pay"));
-    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_some());
-}
-
-#[test]
-fn e4_sends_all_merged_again_after_a_job_is_appended_and_merged() {
-    let fx = fx("");
-    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
-
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    let spec = fx.env.root().join("late-spec.json");
-    fs::write(&spec, json!({"goal": "Do it.", "context": "Because.", "touches": ["late.txt"], "acceptance": ["ok"], "out_of_scope": []}).to_string()).unwrap();
-    let added = fx.env.command(CPD).args(["job", "add", "late", "--title", "Late", "--tier", "S2", "--spec"]).arg(&spec).args(["--plan", "pay"]).output().unwrap();
-    assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stdout));
-    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
-    // The Job merges (set directly; no Worker runs here).
-    fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'late'; UPDATE jobs SET status = 'merged', merged_sha = 'def' WHERE key = 'late';");
-    wait_until("second all-merged", || fx.count("all-merged") == 2);
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-
-    assert_eq!(fx.count("all-merged"), 2);
-    assert_eq!(fx.events("all-merged")[1].3["merged"], json!(["api", "late"]));
-}
-
-#[test]
-fn e4_waits_while_a_job_is_queued() {
-    let fx = fx("concurrency = 1");
-    let _busy = fx.live_driver("busy-a1");
-    fx.add_running("busy", "running", &ago(1));
-    fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
-
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(2);
-    engine.stop();
-
-    assert_eq!(fx.count("all-merged"), 0);
-}
-
-/// A draft added after the lock (`job add --draft`, contract §3.2): E3 never
-/// starts it, and E4 does not send `all-merged` while it remains, so the PR
-/// waits for the batch. Once it is cancelled, E4 completes the PR.
-#[test]
-fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
+fn e3_never_starts_a_draft_and_the_open_job_waits_while_one_remains() {
     let fx = fx("");
     // The work session as tui leaves it, so E3 could start an Attempt if it chose to.
     for args in [&["new-session", "-d", "-s", "cpd-work", "-n", "x", "sleep", "600"][..], &["set", "-g", "remain-on-exit", "on"]] {
@@ -1705,14 +1654,8 @@ fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
     engine.stop();
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
     assert_eq!(fx.job_status("later"), "draft");
-    assert_eq!(fx.count("all-merged"), 0, "the PR waits for its draft");
-    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
-
-    fx.env.cpd(&["job", "cancel", "later", "--reason", "Not needed.", "--plan", "pay"]).ok();
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    engine.stop();
-    assert_eq!(fx.events("all-merged")[0].3, json!({"pr": "repo", "merged": ["api"], "cancelled": ["later"]}));
+    assert_eq!(fx.count("all-merged"), 0, "all-merged is retired");
+    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "queued".to_owned())], "the open Job is added, and waits for the draft");
 }
 
 // ---------- E4: the open Job (contract §3.7 E4, §3.2 Ready, §2.2 "Job kinds"; hs-d340) ----------
@@ -1914,7 +1857,7 @@ fn the_open_job_is_ready_only_when_every_other_job_is_merged_or_cancelled_and_on
     let failed = fx("");
     work_session_with_a_worker_that_stays(&failed);
     failed.add_merged_api();
-    failed.add_job("broken", &[], "UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'broken';");
+    failed.add_job("broken", &[], "UPDATE jobs SET status = 'running' WHERE key = 'broken'; UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'broken';");
     let engine = failed.start();
     wait_until("the open Job", || !failed.jobs_of_kind("open").is_empty());
     failed.env.wait_whole_ticks(3);
@@ -2024,8 +1967,6 @@ fn e5_queues_a_new_update_job_for_a_conflict_that_comes_after_the_first_job_ende
     assert_eq!(fx.jobs_of_kind("update"), [("up-repo".to_owned(), "merged".to_owned()), ("up-repo-2".to_owned(), "queued".to_owned())]);
 }
 
-// ---------- E4: a PR still unopened is escalated to the Manager (hs-d334) ----------
-
 impl Fx {
     /// The Context's live Manager, Session `mgr1`.
     fn add_manager(&self) {
@@ -2035,362 +1976,10 @@ impl Fx {
         );
     }
 
-    /// Job `api` merged: the engine sends `all-merged`.
+    /// Job `api` merged: the PR's open Job can be Ready once nothing else of the PR is left.
     fn add_merged_api(&self) {
         self.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     }
-
-    /// Makes the PR's `all-merged` `minutes` old, as if that long had passed: the engine's only clock is the store's `all_merged_at`.
-    fn age_all_merged(&self, minutes: i64) {
-        self.fixture(&format!("UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';", ago(minutes)));
-    }
-
-    /// Every escalation to a Manager: `(context, plan, session, data)`.
-    fn escalations(&self) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
-        self.store()
-            .read(|conn| {
-                let mut stmt = conn.prepare("SELECT context, plan, session, data FROM events WHERE kind = 'session-message' ORDER BY id")?;
-                let rows = stmt
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows.into_iter().map(|(c, p, s, d)| (c, p, s, serde_json::from_str(&d).unwrap())).collect())
-            })
-            .unwrap()
-    }
-}
-
-#[test]
-fn e4_tells_the_manager_once_when_a_pr_is_still_unopened_ten_minutes_after_all_merged() {
-    let fx = fx("");
-    fx.add_manager();
-    fx.add_merged_api();
-
-    poll_every(&fx, 1);
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    // Within the window: nothing, however many ticks.
-    fx.age_all_merged(9);
-    fx.env.wait_whole_ticks(2);
-    assert_eq!(fx.count("session-message"), 0);
-
-    // Past it: the Manager gets one message naming the Plan, the PR and how long; the next ticks add nothing.
-    fx.age_all_merged(11);
-    wait_until("the escalation", || fx.count("session-message") == 1);
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-
-    let sent = fx.escalations();
-    assert_eq!(sent.len(), 1, "{sent:?}");
-    let (context, plan, session, data) = &sent[0];
-    assert_eq!((context.as_deref(), plan.as_deref(), session.as_deref()), (Some("ctx"), None, Some("mgr1")));
-    let text = "Plan pay (Pay): PR repo has had all its Jobs merged for 11 minutes and its pull request is not opened. The Lead was told to run cpd pr open --pr repo and has not. Look at the Lead: cpd session show lead1, and tell it or the User.";
-    assert_eq!(
-        data,
-        &json!({"from": "lead1", "text": text, "wake": true, "escalation": "pr_unopened", "plan": "pay", "pr": "repo", "minutes": 11})
-    );
-    assert_eq!(fx.texts("session-message"), [text]);
-    assert_eq!(fx.count("error"), 0);
-}
-
-/// SQL that takes the PR out of `dispatch`, as `pr open`, its adoption of a merged pull request or `pr cancel` do.
-fn opened(status: &str) -> String {
-    const URL: &str = "https://github.com/acme/pay/pull/7";
-    let pull_request = format!(
-        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
-           VALUES ('acme/pay', 7, '{URL}', 'Pay', 0, 'open', 'none', 'none', 't', 't');"
-    );
-    let number = format!("pr_number = 7, pr_url = '{URL}', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE number = 7)");
-    let (before, set) = match status {
-        "open" => (pull_request, number),
-        // `dispatch` goes to `merged` through `open` (the adoption of a merged pull request does both).
-        "merged" => (format!("{pull_request} UPDATE prs SET status = 'open', {number} WHERE plan = 'pay' AND key = 'repo';"), "merged_at = 't'".to_owned()),
-        _ => (String::new(), "lead_worktree = NULL, started_at = NULL".to_owned()),
-    };
-    format!("{before} UPDATE prs SET status = '{status}', {set} WHERE plan = 'pay' AND key = 'repo';")
-}
-
-#[test]
-fn e4_tells_no_one_of_a_pr_opened_after_all_merged_however_late() {
-    for status in ["open", "merged", "cancelled"] {
-        let fx = fx("");
-        fx.add_manager();
-        fx.add_merged_api();
-
-        poll_every(&fx, 1);
-        let engine = fx.start();
-        wait_until("all-merged", || fx.count("all-merged") == 1);
-        // Opened, and long past the window: the engine finds the PR opened, not late.
-        fx.fixture(&format!("{} UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';", opened(status), ago(60)));
-        fx.env.wait_whole_ticks(2);
-        engine.stop();
-        // (E5 may report its own error for the pull request the fake `gh` does not know, and the Manager hears of that
-        // error, hs-d314: no message of E4's.)
-        let escalations: Vec<_> = fx.escalations().into_iter().filter(|e| e.3["escalation"] == "pr_unopened").collect();
-        assert!(escalations.is_empty(), "{status}: {escalations:?}");
-        assert!(fx.events("error").iter().all(|e| e.3["code"] != "pr_unopened"), "{status}");
-    }
-}
-
-#[test]
-fn e4_counts_the_window_from_pr_open_escalate_minutes() {
-    let fx = fx("pr_open_escalate_minutes = 5");
-    fx.add_manager();
-    fx.add_merged_api();
-
-    poll_every(&fx, 1);
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    // 4 minutes is short of 5, 6 is past.
-    fx.age_all_merged(4);
-    fx.env.wait_whole_ticks(2);
-    assert_eq!(fx.count("session-message"), 0);
-    fx.age_all_merged(6);
-    wait_until("the escalation", || fx.count("session-message") == 1);
-    engine.stop();
-    assert_eq!(fx.escalations()[0].3["minutes"], 6);
-}
-
-#[test]
-fn e4_starts_a_new_window_when_a_fix_job_is_merged_after_the_escalation() {
-    let fx = fx("");
-    fx.add_manager();
-    fx.add_merged_api();
-
-    poll_every(&fx, 1);
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    fx.age_all_merged(11);
-    wait_until("the escalation", || fx.count("session-message") == 1);
-
-    // A fix Job is added (it clears `all_merged_at`) and merges: a second `all-merged`, a fresh window.
-    let spec = fx.env.root().join("fix-spec.json");
-    fs::write(&spec, json!({"goal": "Fix it.", "context": "Because.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}).to_string()).unwrap();
-    let added = fx.env.command(CPD).args(["job", "add", "fix", "--title", "Fix", "--tier", "S2", "--spec"]).arg(&spec).args(["--plan", "pay"]).output().unwrap();
-    assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stdout));
-    fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'fix'; UPDATE jobs SET status = 'merged', merged_sha = 'def' WHERE key = 'fix';");
-    wait_until("second all-merged", || fx.count("all-merged") == 2);
-    fx.env.wait_whole_ticks(3);
-    assert_eq!(fx.count("session-message"), 1, "the new window has not run out");
-
-    fx.age_all_merged(12);
-    wait_until("the second escalation", || fx.count("session-message") == 2);
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!(fx.count("session-message"), 2);
-    assert_eq!(fx.escalations()[1].3["minutes"], 12);
-}
-
-#[test]
-fn e4_a_restarted_engine_repeats_no_escalation() {
-    let fx = fx("");
-    fx.add_manager();
-    fx.add_merged_api();
-
-    poll_every(&fx, 1);
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    fx.age_all_merged(11);
-    wait_until("the escalation", || fx.count("session-message") == 1);
-    engine.stop();
-
-    let engine = fx.start();
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    // The restarted engine tells the Manager how long it was down (contract §3.7, hs-d328): that message
-    // is not an escalation, so only the others are counted.
-    let escalations: Vec<String> = fx.texts("session-message").into_iter().filter(|t| !t.contains("The engine was down for ")).collect();
-    assert_eq!(escalations.len(), 1, "{escalations:?}");
-}
-
-#[test]
-fn e4_without_a_manager_gives_the_lead_one_error_instead() {
-    let fx = fx("");
-    fx.add_merged_api();
-
-    poll_every(&fx, 1);
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    fx.age_all_merged(11);
-    wait_until("the error", || fx.count("error") == 1);
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-
-    assert_eq!(fx.count("session-message"), 0);
-    let errors = fx.events("error");
-    assert_eq!(errors.len(), 1, "{errors:?}");
-    let (plan, _, _, data) = &errors[0];
-    assert_eq!(plan.as_deref(), Some("pay"));
-    assert_eq!((&data["source"], &data["code"], &data["details"]), (&json!("watch"), &json!("pr_unopened"), &json!({"pr": "repo", "minutes": 11})));
-}
-
-// ---------- E4: a stacked PR's 10 minutes start when its base PR is open or merged (hs-d301) ----------
-
-/// What the fake `gh` answers while PR 7 (`base_open`) is open: the search lists nothing, the lookup says "still open".
-fn gh_pr7_open(fx: &Fx) {
-    fx.env.fake_gh(&format!(
-        "case \"$4\" in *'search(type'*) echo '{EMPTY_SEARCH}' ;; *) echo '{LOOKUP_OPEN}' ;; esac"
-    ));
-}
-
-impl Fx {
-    /// PR `top` of Plan `pay` in `dispatch` on `base` (a stacked PR when `base` is `cpd/pay`, the Lead Branch of PR
-    /// `repo`), its one Job `web` merged: the engine sends `all-merged`.
-    fn add_top(&self, base: &str) {
-        self.fixture(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-               VALUES ('pay', 'top', '{}', '{base}', 'dispatch', 'cpd/pay/top', '/x/top', cpd_txn(), 't', 't');",
-            self.repo.display()
-        ));
-        self.add_job_in("top", "web", &[], "UPDATE jobs SET status = 'running' WHERE key = 'web'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'web';");
-    }
-
-    /// Makes `top`'s `all-merged` `minutes` old.
-    fn age_all_merged_top(&self, minutes: i64) {
-        self.fixture(&format!("UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'top';", ago(minutes)));
-    }
-
-    /// The base PR `repo` `open` since `minutes` ago (its pull request is PR 7, so use [`gh_pr7_open`]).
-    fn base_open(&self, minutes: i64) {
-        self.fixture(&format!("{} UPDATE prs SET pr_opened_at = '{}' WHERE plan = 'pay' AND key = 'repo';", opened("open"), ago(minutes)));
-    }
-
-    /// The base PR `repo` `merged`, `pr_opened_at` `opened_ago` minutes ago, `merged_at` `merged_ago` minutes ago.
-    fn base_merged(&self, opened_ago: i64, merged_ago: i64) {
-        self.fixture(&format!(
-            "{} UPDATE prs SET pr_opened_at = '{}', merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';",
-            opened("merged"),
-            ago(opened_ago),
-            ago(merged_ago)
-        ));
-    }
-
-    /// A base PR `base`, which `top` is stacked on (`cpd/pay/base`), not open: `waiting` (never started), `dispatch` or `cancelled`.
-    fn base_not_ready(&self, status: &str) {
-        let (state, worktree, started, failed) = match status {
-            "waiting" => ("waiting", "NULL", "NULL", "'t'"),
-            _ => ("dispatch", "'/x/base'", "'t'", "NULL"),
-        };
-        self.fixture(&format!(
-            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, start_failed_at)
-               VALUES ('pay', 'base', '{}', 'main', '{state}', 'cpd/pay/base', {worktree}, cpd_txn(), 't', {started}, {failed});",
-            self.repo.display()
-        ));
-        if status == "cancelled" {
-            self.fixture("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay' AND key = 'base';");
-        }
-    }
-
-    /// The escalations of E4 (`pr_unopened`) and the `pr_unopened` errors.
-    fn unopened(&self) -> (Vec<Value>, usize) {
-        let messages = self.escalations().into_iter().map(|e| e.3).filter(|d| d["escalation"] == "pr_unopened").collect();
-        (messages, self.events("error").iter().filter(|e| e.3["code"] == "pr_unopened").count())
-    }
-}
-
-/// `top` (on `base`) is all merged, `all_merged_ago` minutes ago, with a Manager and the base PR as `setup` leaves
-/// it; the engine runs for a few whole ticks. Returns what E4 told the Manager.
-fn stacked_run(base: &str, setup: impl Fn(&Fx), all_merged_ago: i64) -> Vec<Value> {
-    let fx = fx("");
-    fx.add_manager();
-    fx.add_top(base);
-    gh_pr7_open(&fx);
-    setup(&fx);
-
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    fx.age_all_merged_top(all_merged_ago);
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    let (messages, errors) = fx.unopened();
-    assert_eq!(errors, 0);
-    messages
-}
-
-/// `stacked_run` must say nothing for a base PR ready `before` minutes ago, and one message of `after` minutes for one ready `after` minutes ago.
-fn the_window_starts_at_the_base_pr(setup: impl Fn(&Fx, i64)) {
-    let text = "Plan pay (Pay): PR top has had all its Jobs merged for 11 minutes and its pull request is not opened. The Lead was told to run cpd pr open --pr top and has not. Look at the Lead: cpd session show lead1, and tell it or the User.";
-    // Everything merged an hour ago: only the base PR's moment can say it is too early.
-    let early = stacked_run("cpd/pay", |fx| setup(fx, 9), 60);
-    assert!(early.is_empty(), "the base PR opened 9 minutes ago: {early:?}");
-    let late = stacked_run("cpd/pay", |fx| setup(fx, 11), 60);
-    assert_eq!(late.len(), 1, "{late:?}");
-    // `minutes` is the age of the clock start (the base PR's moment), not of `all_merged_at` (60).
-    assert_eq!(late[0], json!({"from": "lead1", "text": text, "wake": true, "escalation": "pr_unopened", "plan": "pay", "pr": "top", "minutes": 11}));
-}
-
-#[test]
-fn e4_a_stacked_pr_is_escalated_ten_minutes_after_its_base_pr_opened_not_after_all_merged() {
-    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_open(minutes));
-}
-
-#[test]
-fn e4_a_stacked_pr_counts_from_the_merge_of_a_merged_base_pr_and_from_its_pr_opened_at_when_it_has_one() {
-    // `pr_opened_at`, not `merged_at` (the merge was long after): a merged PR always carries `pr_opened_at` (schema CHECK).
-    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_merged(minutes, 1));
-}
-
-#[test]
-fn e4_a_stacked_pr_whose_all_merged_is_later_than_its_base_prs_opening_counts_from_all_merged() {
-    // The base PR opened an hour ago: `all_merged_at` is the later moment.
-    let early = stacked_run("cpd/pay", |fx| fx.base_open(60), 9);
-    assert!(early.is_empty(), "{early:?}");
-    let late = stacked_run("cpd/pay", |fx| fx.base_open(60), 11);
-    assert_eq!(late.len(), 1, "{late:?}");
-    assert_eq!(late[0]["minutes"], 11);
-}
-
-#[test]
-fn e4_a_stacked_pr_whose_base_pr_is_not_open_raises_no_alarm_however_late() {
-    for status in ["waiting", "dispatch", "cancelled"] {
-        let sent = stacked_run("cpd/pay/base", |fx| fx.base_not_ready(status), 60);
-        assert!(sent.is_empty(), "base PR {status}: {sent:?}");
-    }
-}
-
-#[test]
-fn e4_a_stacked_pr_with_no_manager_gives_the_lead_no_error_while_its_base_pr_is_not_open() {
-    let fx = fx("");
-    fx.add_top("cpd/pay");
-    gh_pr7_open(&fx);
-
-    let engine = fx.start();
-    wait_until("all-merged", || fx.count("all-merged") == 1);
-    fx.age_all_merged_top(60);
-    fx.env.wait_whole_ticks(3);
-    engine.stop();
-    assert_eq!(fx.unopened(), (vec![], 0));
-}
-
-/// SQL for a `pr-base-changed` Event of PR `top` `minutes` ago, `from_pr` the base PR before.
-fn base_changed(minutes: i64, from_pr: Option<&str>) -> String {
-    let data = json!({"pr": "top", "from": "cpd/pay", "to": "main", "from_pr": from_pr, "to_pr": null, "by": "engine"});
-    format!(
-        "INSERT INTO events (txn, at, kind, context, plan, text, data)
-           VALUES (cpd_txn(), '{}', 'pr-base-changed', 'ctx', 'pay', 'PR top of Plan pay now targets main (was cpd/pay).', '{data}');",
-        ago(minutes)
-    )
-}
-
-#[test]
-fn e4_a_pr_unstacked_after_its_base_pr_merged_counts_from_its_latest_pr_base_changed_with_from_pr() {
-    for (minutes, told) in [(9, false), (11, true)] {
-        // The PR now targets `main`; its base PR merged long ago and the repoint was `minutes` ago.
-        let sent = stacked_run("main", |fx| fx.fixture(&format!("{}{}", base_changed(60, Some("pay/repo")), base_changed(minutes, Some("pay/repo")))), 60);
-        assert_eq!(sent.len(), usize::from(told), "the base changed {minutes} minutes ago: {sent:?}");
-        if told {
-            assert_eq!(sent[0]["minutes"], 11);
-        }
-    }
-}
-
-#[test]
-fn e4_a_pr_that_was_never_stacked_counts_from_all_merged_alone_whatever_its_base_changed() {
-    // On `develop`, no PR's Lead Branch; a repoint with no base PR (`from_pr` null) is no candidate.
-    let sent = stacked_run("develop", |fx| fx.fixture(&base_changed(1, None)), 11);
-    assert_eq!(sent.len(), 1, "{sent:?}");
-    assert_eq!(sent[0]["minutes"], 11);
-    let sent = stacked_run("develop", |_| {}, 9);
-    assert!(sent.is_empty(), "{sent:?}");
 }
 
 // ---------- E5 ----------

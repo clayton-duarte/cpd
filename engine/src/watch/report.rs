@@ -47,7 +47,7 @@ impl fmt::Display for Step {
             Step::E1 => "E1 (Escalations)",
             Step::E2 => "E2 (liveness)",
             Step::E3 => "E3 (scheduling)",
-            Step::E4 => "E4 (completion)",
+            Step::E4 => "E4 (open Jobs)",
             Step::E5 => "E5 (PR)",
             Step::E7 => "E7 (PR start)",
             Step::Workers => "the @cpd_workers step",
@@ -231,11 +231,6 @@ impl Report {
             // Not marked as reported: the next tick tries again.
             Err(e) => log.line(&format!("cannot append the error Event: {} ({})", e.message(), e.code().as_str())),
         }
-    }
-
-    /// What `step` reported with `code` and has not cleared.
-    pub(super) fn open(&self, step: Step, code: &str) -> Vec<About> {
-        self.open.iter().filter(|((s, _), (c, _))| *s == step && c == code).map(|((_, about), _)| about.clone()).collect()
     }
 
     /// `step` succeeded for `about`: a later failure is reported again.

@@ -51,7 +51,6 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "npm:@juicesharp/rpiv-ask-user-question@2.13.8"
             ],
             "pi_adapter": "",
-            "pr_open_escalate_minutes": 10,
             "plannotator_ports": "19432-19441",
             "tiers": {
                 "O": "github-copilot/claude-opus-5.5",
@@ -145,7 +144,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["test_concurrency", "retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "pr_open_escalate_minutes", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["test_concurrency", "retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "open_tier", "lead_pi_packages", "pi_adapter", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -172,7 +171,6 @@ context_distill_tier = "H0"
 open_tier = "O5"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
-pr_open_escalate_minutes = 1
 plannotator_ports = "1-65535"
 [tiers]
 O = "a/b/c"
@@ -216,7 +214,6 @@ work_session = "w"
     assert_eq!(out["config"]["open_tier"], "O5");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
-    assert_eq!(out["config"]["pr_open_escalate_minutes"], 1);
     assert_eq!(out["config"]["plannotator_ports"], "1-65535");
     assert_eq!(out["config"]["tiers"]["O"], "a/b/c");
     assert!(out["sources"].as_object().unwrap().values().all(|s| s == "file"));
@@ -320,8 +317,9 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nopen_tier = 2\n", "open_tier"),
         ("version = 1\nmachine = \"hs\"\nlead_pi_packages = [\"\"]\n", "lead_pi_packages"),
         ("version = 1\nmachine = \"hs\"\npi_adapter = \"/no/such/adapter\"\n", "pi_adapter"),
+        // removed by hs-d340 (contract §8.2): E4 opens the PR through its open Job and no longer escalates, so a config still setting it is unknown
+        ("version = 1\nmachine = \"hs\"\npr_open_escalate_minutes = 10\n", "pr_open_escalate_minutes"),
         ("version = 1\nmachine = \"hs\"\npr_open_escalate_minutes = 0\n", "pr_open_escalate_minutes"),
-        ("version = 1\nmachine = \"hs\"\npr_open_escalate_minutes = \"10\"\n", "pr_open_escalate_minutes"),
         ("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"no-slash\"\n", "tiers.O"),
         ("version = 1\nmachine = \"hs\"\n[tiers]\nS = \"/model\"\n", "tiers.S"),
         ("version = 1\nmachine = \"hs\"\n[tiers]\nH = \"provider/\"\n", "tiers.H"),

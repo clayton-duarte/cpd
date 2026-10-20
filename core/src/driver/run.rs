@@ -306,6 +306,11 @@ impl Driver {
 
     /// A2 to A5, for a `starting` Attempt.
     fn start(&mut self, target: &Target, job: &jobs::Job, dirs: &PiDirs) -> Result<Ended, CpdError> {
+        // A2: an `open` Job's PR stacked on a merged base PR is unstacked first, so the Worker is told a base that exists (§3.4).
+        if job.kind == "open" {
+            let pr = crate::ids::PrKey::parse(&job.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr)))?;
+            crate::pr::start::unstack_for_open_job(&mut self.store, SOURCE, &self.plan, &pr)?;
+        }
         // A2: the worktree from the Lead Branch HEAD, and pre-start.
         log("A2: creating the worktree and running pre-start");
         let setup = Setup {

@@ -1526,3 +1526,31 @@ fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() 
     assert_eq!(fx.gate_runs(), [before, vec![format!("slot=0 head={lead}")]].concat(), "the Gate ran on the Lead tip, in a slot");
     assert!(fx.gh_pr_calls().is_empty());
 }
+
+/// The newest pull request of the Lead Branch is already `merged` on GitHub and cpd never recorded it (§7.7 submit step 1, §7.4 step 8b): the `open`
+/// Job adopts it. Its submit runs no Gate, its merge pushes nothing and creates nothing, and step 10 writes the rows of `pr open` step 0: the PR
+/// `merged`, `pr-merged` (no `pr-opened`), and the Plan `done` with the last PR.
+#[test]
+fn an_open_job_adopts_a_pull_request_merged_on_github_with_no_gate_and_no_push() {
+    let (fx, origin) = open_fx();
+    let merged = common::pay_lookup().replace("\"state\":\"OPEN\"", "\"state\":\"MERGED\"").replace("\"mergedAt\":null", "\"mergedAt\":\"2026-10-20T12:00:00Z\"");
+    fs::write(fx.env.root().join("gh-lookup.json"), merged).unwrap();
+    fx.env.fake_gh(&format!(
+        "case \"$1 $2\" in\n\"pr list\") echo '[{{\"number\":812,\"url\":\"{PR_URL}\",\"state\":\"MERGED\"}}]' ;;\n\"api graphql\") cat '{}/gh-lookup.json' ;;\n*) echo \"unexpected gh call: $*\" >&2; exit 9 ;;\nesac",
+        fx.env.root().display()
+    ));
+    fx.pi(SUBMIT_ONLY);
+    let before = fx.remote(&origin, "cpd/pay");
+
+    let attempt = run_job(&fx, "open-repo");
+
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
+    assert_eq!(fx.saved("submit", "open-repo-a1")["ok"], true);
+    assert_eq!(fx.gate_runs(), Vec::<String>::new(), "no Gate");
+    assert_eq!(fx.remote(&origin, "cpd/pay"), before, "no push");
+    assert!(fx.gh_pr_calls().iter().all(|c| c[1] != "create"));
+    assert_eq!(fx.pr_row().0, "merged");
+    assert_eq!(fx.phase(), "done");
+    assert!(fx.plan_events("pr-opened").is_empty());
+    assert_eq!(fx.plan_events("pr-merged").len(), 1);
+}

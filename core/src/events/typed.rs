@@ -116,15 +116,33 @@ impl NewEvent {
         )
     }
 
+    /// The `job-added` of a Job cpd adds itself (§5.2, §3.7 E4): an `open` Job (`by` `engine`). It is `queued` and `appended`, and its
+    /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict` or `feedback`).
+    pub fn job_added_by_cpd(text: impl Into<String>, pr: impl Serialize, kind: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
+        let mut data = json!({
+            "pr": pr, "kind": kind, "status": "queued", "appended": true, "tier": tier, "needs": [], "review": false, "urgent": false, "by": by,
+        });
+        if let Some(reason) = reason {
+            data["reason"] = json!(reason);
+        }
+        make(Kind::JobAdded, text, data)
+    }
+
     pub fn job_edited(text: impl Into<String>, fields: impl Serialize) -> NewEvent {
         make(Kind::JobEdited, text, json!({"fields": fields}))
     }
 
-    /// `cancel_too_late` is in `data` only when true.
-    pub fn job_merged(text: impl Into<String>, sha: &str, tier: &str, cancel_too_late: bool) -> NewEvent {
-        let mut data = json!({"sha": sha, "tier": tier});
+    /// `cancel_too_late` is in `data` only when true. `pull` is the pull request an `open` Job's merge opened, `(pr, number, url)`: its
+    /// `pr`, `number` and `url` are in `data` only then (§5.2).
+    pub fn job_merged(text: impl Into<String>, sha: &str, tier: &str, kind: &str, cancel_too_late: bool, pull: Option<(&str, i64, &str)>) -> NewEvent {
+        let mut data = json!({"sha": sha, "tier": tier, "kind": kind});
         if cancel_too_late {
             data["cancel_too_late"] = json!(true);
+        }
+        if let Some((pr, number, url)) = pull {
+            data["pr"] = json!(pr);
+            data["number"] = json!(number);
+            data["url"] = json!(url);
         }
         make(Kind::JobMerged, text, data)
     }
@@ -330,16 +348,6 @@ impl NewEvent {
         make(Kind::SessionMessage, text, json!({"from": from, "text": message, "wake": wake}))
     }
 
-    /// E4's escalation to a Context's Manager (§3.7): a PR still unopened `minutes` after its `all-merged`; `from` is the Plan's Lead.
-    pub fn session_message_pr_unopened(text: impl Into<String>, from: &str, plan: &str, pr: &str, minutes: i64) -> NewEvent {
-        let text = text.into();
-        make(
-            Kind::SessionMessage,
-            text.clone(),
-            json!({"from": from, "text": text, "wake": true, "escalation": "pr_unopened", "plan": plan, "pr": pr, "minutes": minutes}),
-        )
-    }
-
     pub fn inbox_opened(text: impl Into<String>, item: i64, kind: &str, urgency: &str, label: &str) -> NewEvent {
         make(Kind::InboxOpened, text, json!({"item": item, "kind": kind, "urgency": urgency, "label": label}))
     }
@@ -397,9 +405,14 @@ mod tests {
                 NewEvent::plan_review_decided(T, s, s, s, s, Some([s])),
             ],
             Kind::PlanDone => vec![NewEvent::plan_done(T, [s])],
-            Kind::JobAdded => vec![NewEvent::job_added(T, s, s, s, b, Some(s), [s], b, b), NewEvent::job_added(T, s, s, s, b, None, [s], b, b)],
+            Kind::JobAdded => vec![
+                NewEvent::job_added(T, s, s, s, b, Some(s), [s], b, b),
+                NewEvent::job_added(T, s, s, s, b, None, [s], b, b),
+                NewEvent::job_added_by_cpd(T, s, s, s, s, None),
+                NewEvent::job_added_by_cpd(T, s, s, s, s, Some(s)),
+            ],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
-            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, false), NewEvent::job_merged(T, s, s, true)],
+            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, None), NewEvent::job_merged(T, s, s, s, true, Some((s, n, s)))],
             Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
@@ -435,7 +448,7 @@ mod tests {
             Kind::ContextArchived => vec![NewEvent::context_archived(T, b)],
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],
             Kind::SessionArchived => vec![NewEvent::session_archived(T, b)],
-            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b), NewEvent::session_message_pr_unopened(T, s, s, s, n)],
+            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b)],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],
             Kind::InboxClosed => vec![NewEvent::inbox_closed(T, 1, s)],
             Kind::InboxSnoozed => vec![NewEvent::inbox_snoozed(T, 1, s)],

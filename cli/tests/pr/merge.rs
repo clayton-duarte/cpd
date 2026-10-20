@@ -456,7 +456,7 @@ fn merged_rebases_fast_forwards_syncs_the_lead_worktree_and_records_it() {
         ("ended".into(), Some("merged".into()), Some("merged".into()), Some(new.clone()), Some(r#"{"turns":7}"#.into()))
     );
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(new.clone()), None));
-    assert_eq!(fx.events(&attempt), [("job-merged".to_owned(), json!({"sha": new, "tier": "S2"}))]);
+    assert_eq!(fx.events(&attempt), [("job-merged".to_owned(), json!({"sha": new, "tier": "S2", "kind": "work"}))]);
     let command: String = fx
         .store()
         .read(|c| Ok(c.query_row("SELECT t.command FROM events e JOIN txns t ON t.id = e.txn ORDER BY e.id DESC LIMIT 1", [], |r| r.get(0))?))
@@ -1033,7 +1033,7 @@ fn r_after_step_8_ends_merged_at_the_tip_and_finishes_the_stale_lead_worktree() 
     assert_eq!(fx.job_row("api"), ("merged".into(), Some(tip.clone()), None));
     assert_eq!(
         fx.events(&attempt),
-        [("job-merged".to_owned(), json!({"sha": tip, "tier": "S2", "cancel_too_late": true}))]
+        [("job-merged".to_owned(), json!({"sha": tip, "tier": "S2", "kind": "work", "cancel_too_late": true}))]
     );
     // The rest of A9: the worktree and branch are gone.
     assert!(!worktree.exists());

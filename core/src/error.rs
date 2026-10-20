@@ -226,6 +226,8 @@ error_codes! {
     KindReserved = "kind_reserved" => Refused,
     TestJobRequired = "test_job_required" => Refused,
     ShapeViolation = "shape_violation" => Refused,
+    OpenJobLive = "open_job_live" => Refused,
+    LeadBranchMoved = "lead_branch_moved" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
 
@@ -418,6 +420,8 @@ mod tests {
             (ErrorCode::KindReserved, 3),
             (ErrorCode::TestJobRequired, 3),
             (ErrorCode::ShapeViolation, 3),
+            (ErrorCode::OpenJobLive, 3),
+            (ErrorCode::LeadBranchMoved, 3),
             (ErrorCode::PrNotFound, 4),
             (ErrorCode::TitleFailed, 1),
             (ErrorCode::PolicyInvalid, 1),

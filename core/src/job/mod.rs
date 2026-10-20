@@ -14,6 +14,7 @@
 mod add;
 mod cancel;
 mod edit;
+pub mod open;
 mod retry;
 mod show;
 mod spec;
