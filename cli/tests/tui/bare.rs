@@ -335,6 +335,12 @@ fn older_server_run_by(env: &TestEnv, old: &Path) -> PathBuf {
              if [ -e '{flag}.list-sessions-fails' ]; then\n\
                case \" $* \" in *\" list-sessions \"*) echo hit >> '{flag}.hits'; echo 'server exited unexpectedly' >&2; exit 1;; esac\n\
              fi\n\
+             if [ -e '{flag}.record-go-signals' ]; then\n\
+               a=''; b=''; c=''; d=''; e=''; for x in \"$@\"; do a=$b; b=$c; c=$d; d=$e; e=$x; done\n\
+               if [ \"$b\" = -t ] && [ \"$d\" = @cpd_session ] && [ -n \"$e\" ]; then\n\
+                 echo \"$c $e $('{CPD}' session show \"$e\" 2>&1 | tr -d '\\n')\" >> '{flag}.go-signals'\n\
+               fi\n\
+             fi\n\
              if [ -e '{flag}.no-park-other' ]; then\n\
                case \" $* \" in *\" new-window \"*\" -n park-other \"*) echo 'no window for you' >&2; exit 1;; esac\n\
              fi",
@@ -759,6 +765,34 @@ fn a_session_the_panes_do_not_show_but_the_store_records_is_reopened_too() {
     assert!(t.stderr().contains("3 Session(s) reopened"), "{}", t.stderr());
     assert_eq!(session_windows(&env), places());
     wait_idle_in_live_panes(&env, &["lead1", "lead2", "manager1"]);
+}
+
+/// A tmux restart reopens the Sessions of the parked windows (`reopen_one`): the pane gets `@cpd_session` (the go
+/// signal: the wrapper's `session run` waits for it, then its pi reports `idle`) only once the store records the
+/// pane. A report that lands before leaves a row with no pane that engine E2 stops (hs-d238). The fake `tmux`
+/// writes down what `cpd session show` says of each Session as the signal is set on its pane.
+#[test]
+fn a_restart_records_the_pane_of_a_parked_session_before_it_gets_the_go_signal() {
+    let env = env();
+    fake_cpd_with_sleeping_sessions(&env);
+    let flag = older_server(&env);
+    let _driver = fixture(&env, None);
+    cockpit_with_sessions(&env);
+    arm(&env, &flag);
+    fs::write(format!("{}.record-go-signals", flag.display()), "").unwrap();
+
+    let t = run_in_terminal(&env, "go-signal", false, "");
+    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
+    assert!(t.stderr().contains("3 Session(s) reopened"), "{}", t.stderr());
+    let signals = fs::read_to_string(format!("{}.go-signals", flag.display())).unwrap_or_default();
+    // lead1 is the chat slot's, reopened by `session open` (its own test); the others are parked.
+    for id in ["lead2", "manager1"] {
+        let line = signals.lines().find(|l| l.split(' ').nth(1) == Some(id)).unwrap_or_else(|| panic!("{id} never got @cpd_session:\n{signals}"));
+        let mut fields = line.splitn(3, ' ');
+        let (pane, _, row) = (fields.next().unwrap(), fields.next(), fields.next().unwrap());
+        let row: serde_json::Value = serde_json::from_str(row).unwrap_or_else(|e| panic!("`session show {id}` at the go signal: {e}: {row}"));
+        assert_eq!(row["session"]["tmux_pane"], serde_json::json!(pane), "pane {pane} got @cpd_session {id} while the store's tmux_pane for it was {}", row["session"]["tmux_pane"]);
+    }
 }
 
 /// An installed tmux that is older than the one on `PATH`, at a known path; else why there is none.
