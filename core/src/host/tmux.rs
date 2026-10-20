@@ -111,6 +111,7 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "focus-events", "on"],
     &["set", "-g", "default-terminal", "tmux-256color"],
     &["set", "-g", "extended-keys", "on"],
+    &["set", "-gq", "extended-keys-format", "csi-u"],
     &["set", "-as", "terminal-features", TERMINAL_FEATURES],
     &["set", "-g", "escape-time", "10"],
     &["set", "-g", "status", "off"],
@@ -119,12 +120,19 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "pane-border-format", BORDER_FORMAT],
     &["set", "-g", "pane-active-border-style", "fg=blue"],
     &["set", "-g", "remain-on-exit", "on"],
+    &["set", "-g", "set-titles", "on"],
+    &["set", "-g", "set-titles-string", SET_TITLES_STRING],
     &["set-hook", "-g", "pane-died", PANE_DIED_HOOK],
     &["set-hook", "-g", "window-unlinked", WINDOW_UNLINKED_HOOK],
     &["set", "-s", "exit-empty", "off"],
     &["bind", "-T", "root", "MouseDown1Pane", "select-pane -t = ; send-keys -M"],
     &["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK],
 ];
+
+/// The terminal window's title (contract §6.1, hs-d300): the config's machine
+/// name, which `cpd tui` sets as the global `@cpd_machine`; the host's short
+/// name until then, on a server another command started.
+const SET_TITLES_STRING: &str = "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}";
 
 /// What a click on a StatusBar button runs (contract §6.1): `cpd tui action`
 /// with the button's range and the clicking client, `cpd` found on `PATH` as
