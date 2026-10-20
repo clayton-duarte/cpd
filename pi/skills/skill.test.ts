@@ -635,3 +635,11 @@ test("both skills: plans go to plannotator, ask_user_question is for a few short
   }
   assert.match(lead, /refuses `ask_user_question` for a Lead whose Plan has draft Jobs/);
 });
+
+test("cpd-lead merges the base only on a conflict; ready is its own Gate and no conflict", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /only when the Lead Branch conflicts with it/);
+  assert.match(lead, /its Gate passed on its own head and GitHub reports no conflict/);
+  assert.match(lead, /`base_behind` \(exit 3\)/);
+  assert.doesNotMatch(lead, /contains (the|its) base|if it moved/i);
+});

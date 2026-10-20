@@ -149,6 +149,8 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "pane-border-status", "top"],
     &["set", "-g", "pane-border-lines", "heavy"],
     &["set", "-g", "pane-border-format", BORDER_FORMAT],
+    // Unfocused borders are grey like their titles (hs-d489).
+    &["set", "-g", "pane-border-style", "fg=colour8"],
     &["set", "-g", "pane-active-border-style", "fg=blue"],
     // tmux 3.8 greys popups and menus by default (bg=themedarkgrey); the cockpit's dialogs keep the terminal's own
     // background (User, hs-d353). `-q`: an older tmux does not know them.
