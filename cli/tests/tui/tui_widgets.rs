@@ -1126,9 +1126,10 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         assert!(pill_at > x, "{name}: the pill follows the name");
         assert_eq!(buf[(pill_at, y)].bg, palette::color(m), "{name}: pill");
         assert_eq!(buf[(pill_at, y)].fg, palette::pill(m).fg.unwrap(), "{name}: pill text");
-        assert!(text.contains(" key │S1 "), "{name}: {text}");
+        // the compact pill (hs-d474): no padding inside the caps
+        assert!(text.contains(&format!("\u{e0b6}{icon} key│S1\u{e0b4}")), "{name}: {text}");
         // a rounded cap on each end, in the status colour on the default background
-        let (left, right) = (pill_at - 2, pill_at + " key │S1 ".chars().count() as u16 + 1);
+        let (left, right) = (pill_at - 1, pill_at + 1 + " key│S1".chars().count() as u16);
         for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
             let cap = &buf[(cap_at, y)];
             assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, palette::color(m), Color::Reset), "{name}: cap at {cap_at}: {text}");
