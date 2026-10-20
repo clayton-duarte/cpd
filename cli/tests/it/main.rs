@@ -53,6 +53,7 @@ mod session;
 mod session_send;
 mod session_titles;
 mod session_watchdog;
+mod slot;
 mod spec;
 mod store;
 mod store_window;
