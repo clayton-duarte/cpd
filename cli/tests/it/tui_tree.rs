@@ -1782,9 +1782,9 @@ fn a_click_on_a_stuck_job_item_an_older_engine_opened_does_nothing() {
     let views = || String::from_utf8(env.tmux(&["list-panes", "-t", "=cpd:main", "-F", "#{@cpd_view}"]).stdout).unwrap();
     let pane = Pane::start(&env, 60, 40);
     pane.ready();
-    pane.wait("the more row", |s| s.last().is_some_and(|r| r == " ╰─ expand"));
+    pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
     pane.click(10, pane.screen().len() as u16 - 1);
-    pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " ╰─ collapse"));
+    pane.wait("the expanded list", |s| s.last().is_some_and(|r| *r == collapse()));
     // a Job with Attempts and a Job with none: neither click does anything
     pane.click(10, item_row(&pane, "ship: e is stuck"));
     pane.click(10, item_row(&pane, "ship: d is stuck"));
