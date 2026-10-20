@@ -2959,7 +2959,8 @@ fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<St
             r#"case "$1" in
 --version) echo '{{"ok":true,"version":"0.0.0","store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
-watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
+watch) [ "$2" = --check ] && {{ echo '{{"ok":true}}'; exit 0; }}
+  tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
   l="$CPD_HOME/locks/watch.lock"; mkdir -p "$CPD_HOME/locks"
   sh -c 'echo $$ > "$CPD_HOME/engine.pid"; exec flock "$1" sleep 120' sh "$l" </dev/null >/dev/null 2>&1 &
   until ! flock -n "$l" true; do :; done
@@ -2997,7 +2998,7 @@ fn install_restarts_a_running_engine_with_ensure_and_says_so() {
     let (stderr, calls) = install(&env);
 
     assert!(stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--ensure"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--check"], vec!["watch", "--ensure"]]);
     // The window was killed before --ensure ran; the other window is untouched.
     assert_eq!(fs::read_to_string(env.root().join("windows-at-ensure")).unwrap().trim(), "other");
 }
@@ -3011,7 +3012,7 @@ fn install_leaves_a_server_without_an_engine_alone() {
     let (stderr, calls) = install(&env);
 
     assert!(!stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["--version"], vec!["config"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--check"]]);
 }
 
 #[test]
@@ -3192,4 +3193,204 @@ fn install_over_a_real_adapter_directory_moves_it_aside_and_links_in_one_process
     assert!(!adapter.join("stale.ts").exists() && !adapter.join("old").exists(), "the old adapter was not replaced as a whole");
     assert!(share.join("pi.legacy/stale.ts").exists() && share.join("pi.legacy/old/f.ts").exists(), "pi.legacy holds the old files");
     assert!(adapter.join("package.json").exists());
+}
+
+// ---------- a caller with no UTF-8 locale (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----------
+
+/// The install's `cpd watch --ensure` runs from a launchd agent that sets only `PATH`: tmux then prints the tabs of cpd's `-F`
+/// formats as `_`, and the call failed `tmux_failed: tmux list-panes printed unexpected output` (mac-pro, hs-d463).
+#[test]
+fn ensure_starts_the_engine_for_a_caller_without_a_utf8_locale() {
+    let mut failures = Vec::new();
+    for locale in crate::common::LOCALES {
+        let fx = fx("");
+        fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
+        let mut cmd = fx.env.command(CPD);
+        locale.apply(&mut cmd).args(["watch", "--ensure"]);
+        let out = common::output(&mut cmd).unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if !out.status.success() || !stdout.contains("\"started\":true") {
+            failures.push(format!("{locale:?}: watch --ensure exited {:?}: {stdout}{}", out.status.code(), String::from_utf8_lossy(&out.stderr)));
+            continue;
+        }
+        // The second call sees the engine's window through the same listing.
+        let mut again = fx.env.command(CPD);
+        locale.apply(&mut again).args(["watch", "--ensure"]);
+        let out = common::output(&mut again).unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if !stdout.contains("\"already\":true") {
+            failures.push(format!("{locale:?}: the second watch --ensure: {stdout}{}", String::from_utf8_lossy(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "cpd watch --ensure fails without a UTF-8 locale:\n{}", failures.join("\n"));
+}
+
+// ---------- `watch --check` is read-only (hs-d463; contract §3.7 step 1, commands.md §12) ----------
+
+/// A store one migration behind this binary, and what the check must leave alone. The store is the template's, whose
+/// newest migration's row is removed (the trigger that makes `schema_migrations` append-only is dropped and recreated
+/// as it was): the verdict (§4.5) is then `opens` with that one migration `pending`. The migration's effects are
+/// already in the schema, so a check that migrated would fail on it or double-record it: either way the checks below fail.
+struct BehindStore {
+    env: TestEnv,
+    /// The newest migration of this binary: the one the store lacks.
+    pending: String,
+    /// Held open, so that the WAL and its shared memory exist for the whole check: a read-only open must not create them.
+    _held: rusqlite::Connection,
+}
+
+/// What `watch --check` must leave byte-for-byte unchanged: the database, its WAL, `locks/store.lock`, with their
+/// modification times, and the set of files under `$CPD_HOME`. (The shared-memory file is the readers' own scratch,
+/// written by any reader, so it is listed but not compared.)
+#[derive(Debug, PartialEq)]
+struct Files {
+    contents: Vec<(String, Option<Vec<u8>>, Option<std::time::SystemTime>)>,
+    names: Vec<String>,
+}
+
+fn files(env: &TestEnv) -> Files {
+    fn walk(dir: &Path, root: &Path, names: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            names.push(path.strip_prefix(root).unwrap().display().to_string());
+            if path.is_dir() {
+                walk(&path, root, names);
+            }
+        }
+    }
+    let home = env.cpd_home();
+    let mut names = Vec::new();
+    walk(&home, &home, &mut names);
+    names.sort();
+    let contents = ["cpd.db", "cpd.db-wal", "locks/store.lock"]
+        .iter()
+        .map(|name| {
+            let path = home.join(name);
+            (name.to_string(), fs::read(&path).ok(), fs::metadata(&path).and_then(|m| m.modified()).ok())
+        })
+        .collect();
+    Files { contents, names }
+}
+
+/// Every table's row count: the check writes no row and no Event.
+fn row_counts(env: &TestEnv) -> Vec<(String, i64)> {
+    env.read(|conn| {
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        tables
+            .into_iter()
+            .map(|t| Ok((t.clone(), conn.query_row(&format!("SELECT count(*) FROM \"{t}\""), [], |r| r.get(0))?)))
+            .collect()
+    })
+}
+
+fn applied(env: &TestEnv) -> Vec<String> {
+    env.read(|conn| {
+        Ok(conn.prepare("SELECT name FROM schema_migrations ORDER BY seq")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    })
+}
+
+fn user_version(env: &TestEnv) -> i64 {
+    env.query("PRAGMA user_version")
+}
+
+fn behind_store() -> BehindStore {
+    let env = TestEnv::new();
+    env.write_tmux_config("");
+    let conn = rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    conn.pragma_update(None, "journal_mode", "wal").unwrap();
+    let (pending, trigger): (String, String) = (
+        conn.query_row("SELECT name FROM schema_migrations ORDER BY seq DESC LIMIT 1", [], |r| r.get(0)).unwrap(),
+        conn.query_row("SELECT sql FROM sqlite_schema WHERE name = 'schema_migrations_no_delete'", [], |r| r.get(0)).unwrap(),
+    );
+    conn.execute_batch("DROP TRIGGER schema_migrations_no_delete").unwrap();
+    conn.execute("DELETE FROM schema_migrations WHERE name = ?1", [&pending]).unwrap();
+    conn.execute_batch(&trigger).unwrap();
+    // `locks/store.lock` exists, as it does on a machine that has run cpd.
+    fs::create_dir_all(env.cpd_home().join("locks")).unwrap();
+    OpenOptions::new().create(true).append(true).open(env.cpd_home().join("locks/store.lock")).unwrap();
+    assert!(env.cpd_home().join("cpd.db-wal").exists(), "the held connection keeps the WAL");
+    BehindStore { env, pending, _held: conn }
+}
+
+impl BehindStore {
+    /// The stand-in for the old engine (the binary with the earlier list of migrations; none is built here, and a store
+    /// whose last row was removed cannot be opened by this binary's `Store::open`, which would migrate it, the thing
+    /// that must not happen): what makes the old engine fail `store_too_new` (§4.5) is an applied migration it does
+    /// not know. So the old engine still works against the store when no migration the old list lacks is applied, the
+    /// store is not marked newer (`user_version` is the one every named store has), and it reads as it did.
+    fn assert_the_old_engine_still_works(&self, before_applied: &[String], before_version: i64) {
+        let env = &self.env;
+        let now = applied(env);
+        assert_eq!(now, before_applied, "no migration was applied");
+        assert!(!now.contains(&self.pending), "the new binary's migration {} was applied by the check", self.pending);
+        assert_eq!(user_version(env), before_version, "user_version is unchanged");
+        // The old engine's own read and its own write, from a connection that is not this binary's `Store`.
+        let conn = rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let check: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+        assert_eq!(check, "ok");
+        conn.execute_batch("BEGIN IMMEDIATE; COMMIT").expect("the old engine can still take the write lock");
+    }
+}
+
+/// The tmux the check fails at: a UTF-8-less client's listing, tabs printed as `_` (the mac-pro failure of hs-d463).
+fn tmux_printing_underscores(env: &TestEnv) {
+    env.fake(
+        "tmux",
+        r#"case " $*" in
+*" -V"*) echo "tmux 3.6";;
+*" list-sessions"*) echo '$0';;
+*" list-panes"*) echo '%1_cpd_main_0_1234_x';;
+esac"#,
+    );
+}
+
+/// (1) A check that passes against a store one migration behind writes nothing: the database, its WAL and `locks/store.lock`
+/// are byte-for-byte and mtime-for-mtime what they were, no file is made, the schema version is unchanged.
+#[test]
+fn watch_check_against_a_store_one_migration_behind_passes_and_changes_no_file_and_no_version() {
+    let s = behind_store();
+    let before = (files(&s.env), applied(&s.env), user_version(&s.env));
+    let run = s.env.cpd(&["watch", "--check"]);
+    let out = run.ok();
+    assert_eq!(out["checked"], json!(["config", "store", "tmux", "listing", "home"]), "{out}");
+    assert_eq!((files(&s.env), applied(&s.env), user_version(&s.env)), before, "the check passed and wrote nothing");
+    s.assert_the_old_engine_still_works(&before.1, before.2);
+}
+
+/// (2) The Manager's test: the check fails after the store step (the tmux listing, a tmux that prints `_` for tabs) against the
+/// store one migration behind: the store is not migrated, and the old engine still works against it.
+#[test]
+fn a_watch_check_that_fails_after_the_store_step_leaves_the_store_unmigrated_for_the_old_engine() {
+    let s = behind_store();
+    tmux_printing_underscores(&s.env);
+    let before = (files(&s.env), applied(&s.env), user_version(&s.env));
+    let run = s.env.cpd(&["watch", "--check"]);
+    let error = run.error();
+    assert_eq!(error["code"], "tmux_failed", "the check fails at the listing, after the store step: {error}");
+    assert!(error["message"].as_str().unwrap().contains("unexpected output"), "{error}");
+    assert!(
+        s.env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "list-panes")),
+        "the check got as far as the tmux listing: {:?}",
+        s.env.calls("tmux")
+    );
+    assert_eq!((files(&s.env), applied(&s.env), user_version(&s.env)), before, "the failed check left the store as it was");
+    s.assert_the_old_engine_still_works(&before.1, before.2);
+}
+
+/// (3) The check writes no row and no Event, whether it passes or fails.
+#[test]
+fn watch_check_writes_no_row_and_no_event_passing_or_failing() {
+    let s = behind_store();
+    let before = row_counts(&s.env);
+    assert!(before.iter().any(|(t, _)| t == "events") && before.iter().any(|(t, _)| t == "txns"));
+    s.env.cpd(&["watch", "--check"]).ok();
+    assert_eq!(row_counts(&s.env), before, "a passing check wrote a row");
+    tmux_printing_underscores(&s.env);
+    assert_eq!(s.env.cpd(&["watch", "--check"]).error()["code"], "tmux_failed");
+    assert_eq!(row_counts(&s.env), before, "a failing check wrote a row");
+    assert_eq!(s.env.query::<i64>("SELECT count(*) FROM events"), before.iter().find(|(t, _)| t == "events").unwrap().1);
 }

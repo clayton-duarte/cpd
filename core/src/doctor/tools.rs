@@ -52,7 +52,8 @@ fn parse_version(text: &str, parts: usize) -> Option<(String, [u64; 3])> {
 fn run_tool(program: &OsStr, args: &[&str]) -> Result<String, String> {
     let name = program.to_string_lossy();
     let tool = std::path::Path::new(program).file_name().map_or(name.clone(), |n| n.to_string_lossy());
-    let mut cmd = Command::new(program);
+    // tmux is probed as every cpd call of it is: a UTF-8 client (hs-d463).
+    let mut cmd = if tool == "tmux" { crate::host::tmux::client(program) } else { Command::new(program) };
     cmd.args(args).stdin(Stdio::null());
     let out = deadline::output(&mut cmd, &tool, super::deadline()).map_err(|e| match e {
         Failed::Io(e) if e.kind() == std::io::ErrorKind::NotFound => format!("`{name}` was not found."),

@@ -190,7 +190,7 @@ fn in_a_terminal_it_builds_the_cockpit_starts_the_engine_and_attaches() {
     assert_eq!(t.stderr(), "");
 
     let socket = env.tmux_socket();
-    assert_eq!(attach_calls(&env), [["-L", socket, "-f", "/dev/null", "attach", "-t", "cpd"]]);
+    assert_eq!(attach_calls(&env), [["-u", "-L", socket, "-f", "/dev/null", "attach", "-t", "cpd"]]);
     assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
     // The engine runs in its own session.
     assert_eq!(tmux_out(&env, &["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]).trim(), "watch");
@@ -275,7 +275,7 @@ fn inside_the_cockpit_it_does_not_nest_an_attach() {
 fn when_the_server_runs_another_tmux_the_servers_own_binary_attaches() {
     let env = env();
     // The installed tmux says it is another version than the server's.
-    fake_tmux(&env, "[ \"$1\" = -V ] && { echo 'tmux 1.0'; exit 0; }");
+    fake_tmux(&env, "[ \"$2\" = -V ] && { echo 'tmux 1.0'; exit 0; }");
     let t = run_in_terminal(&env, "other", false, "");
     wait_until("the attach", || {
         let clients = env.tmux(&["list-clients", "-t", "=cpd", "-F", "#{client_pid}"]);
