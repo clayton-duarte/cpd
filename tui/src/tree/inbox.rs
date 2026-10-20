@@ -365,41 +365,41 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_are_the_header_up_to_three_items_and_a_toggle_only_with_more() {
+    fn the_rows_are_an_empty_row_the_title_up_to_three_items_and_a_toggle_only_with_more() {
         let rows = |count, expanded| {
             let shape = Shape::new(count, expanded);
             (0..shape.height() + 1).map(|r| shape.hit(r)).collect::<Vec<_>>()
         };
-        assert_eq!(rows(0, false), [Some(Hit::Header), None]);
-        assert_eq!(rows(2, false), [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None]);
+        assert_eq!(rows(0, false), [None, Some(Hit::Header), None], "no item, no closing row");
+        assert_eq!(rows(2, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None, None], "a plain closing row is no hit");
         assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
-        assert_eq!(rows(5, false), [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
-        let expanded: Vec<_> = (0..7).map(|r| Shape::new(5, true).hit(r)).collect();
+        assert_eq!(rows(5, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
+        let expanded: Vec<_> = (0..9).map(|r| Shape::new(5, true).hit(r)).collect();
         assert_eq!(
             expanded,
-            [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle)]
+            [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle), None]
         );
-        assert_eq!((Shape::new(0, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (1, 5, 7));
+        assert_eq!((Shape::new(0, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (2, 6, 8));
     }
 
     #[test]
     fn expanded_the_section_is_capped_but_never_below_the_collapsed_one_and_its_items_scroll_between_cues() {
         let shape = |count, cap, scroll| Shape::new(count, true).capped(cap).scrolled(scroll);
-        // 50 items in a 40-row column: 20 rows, the header, 18 list rows, the toggle
+        // 50 items in a 40-row column: 20 rows, the empty row, the title, 17 list rows, the toggle
         assert_eq!(shape(50, 20, 0).height(), 20);
-        assert_eq!(shape(5, 20, 0).height(), 7, "a short list is not padded to the cap");
-        assert_eq!(shape(50, 2, 0).height(), 5, "never less than the collapsed section");
-        assert_eq!(Shape::new(50, false).capped(20).height(), 5);
+        assert_eq!(shape(5, 20, 0).height(), 8, "a short list is not padded to the cap");
+        assert_eq!(shape(50, 2, 0).height(), 6, "never less than the collapsed section");
+        assert_eq!(Shape::new(50, false).capped(20).height(), 6);
         let rows = |s: Shape| (0..s.height() + 1).map(|r| s.hit(r)).collect::<Vec<_>>();
         let top = rows(shape(50, 8, 0));
-        // the header, 6 list rows (5 items and the ▼ cue), the toggle
-        assert_eq!(top, [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), None, Some(Hit::Toggle), None]);
+        // the empty row, the title, 5 list rows (4 items and the ▼ cue), the toggle
+        assert_eq!(top, [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), None, Some(Hit::Toggle), None]);
         let middle = rows(shape(50, 8, 10));
-        assert_eq!(middle, [Some(Hit::Header), None, Some(Hit::Item(10)), Some(Hit::Item(11)), Some(Hit::Item(12)), Some(Hit::Item(13)), None, Some(Hit::Toggle), None]);
+        assert_eq!(middle, [None, Some(Hit::Header), None, Some(Hit::Item(10)), Some(Hit::Item(11)), Some(Hit::Item(12)), None, Some(Hit::Toggle), None]);
         // the offset clamps: the last item reaches the bottom, under the ▲ cue
         let bottom = rows(shape(50, 8, 999));
-        assert_eq!(bottom, [Some(Hit::Header), None, Some(Hit::Item(45)), Some(Hit::Item(46)), Some(Hit::Item(47)), Some(Hit::Item(48)), Some(Hit::Item(49)), Some(Hit::Toggle), None]);
-        assert_eq!(shape(50, 8, 0).max_scroll(), 45);
+        assert_eq!(bottom, [None, Some(Hit::Header), None, Some(Hit::Item(46)), Some(Hit::Item(47)), Some(Hit::Item(48)), Some(Hit::Item(49)), Some(Hit::Toggle), None]);
+        assert_eq!(shape(50, 8, 0).max_scroll(), 46);
         assert_eq!(Shape::new(50, false).max_scroll(), 0);
         assert_eq!(shape(5, 20, 3).max_scroll(), 0, "nothing to scroll when all fit");
     }
@@ -407,13 +407,13 @@ mod tests {
     #[test]
     fn an_items_row_is_none_while_it_is_hidden_and_scroll_to_brings_it_in() {
         let shape = Shape::new(50, true).capped(8);
-        assert_eq!((shape.row_of(0), shape.row_of(4), shape.row_of(5)), (Some(1), Some(5), None));
-        assert_eq!(shape.scrolled(10).row_of(10), Some(2), "under the ▲ cue");
-        assert_eq!(shape.scroll_to(4), 0, "already in view");
+        assert_eq!((shape.row_of(0), shape.row_of(3), shape.row_of(4)), (Some(2), Some(5), None));
+        assert_eq!(shape.scrolled(10).row_of(10), Some(3), "under the ▲ cue");
+        assert_eq!(shape.scroll_to(3), 0, "already in view");
         let down = shape.scroll_to(20);
-        assert_eq!((down, shape.scrolled(down).row_of(20)), (17, Some(5)), "the last row above the ▼ cue");
+        assert_eq!((down, shape.scrolled(down).row_of(20)), (18, Some(5)), "the last row above the ▼ cue");
         assert_eq!(shape.scrolled(30).scroll_to(29), 29, "above the window: it becomes the first");
-        assert_eq!(shape.scroll_to(49), 45);
+        assert_eq!(shape.scroll_to(49), 46);
     }
 
     #[test]
@@ -505,7 +505,7 @@ mod tests {
         let sink = Sink::default();
         let mut terminal = Terminal::with_options(
             CrosstermBackend::new(sink.clone()),
-            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 2)) },
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
         )
         .unwrap();
         let url = "https://github.com/acme/api/pull/12";
@@ -518,13 +518,13 @@ mod tests {
             .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
             .collect();
         let text = printed(&bytes);
-        assert!(text.contains(&format!("│{pieces}3m")), "the branch (the two spaces after it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
-        assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead or the age");
+        assert!(text.contains(&format!("│{}{pieces}3m", palette::NEEDS_YOU)), "the branch, the icon (the spaces around it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
+        assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead (branch and icon) or the age");
         // an item with no url, or of a kind that jumps, has no link
         let sink = Sink::default();
         let mut terminal = Terminal::with_options(
             CrosstermBackend::new(sink.clone()),
-            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 3)) },
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 6)) },
         )
         .unwrap();
         let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
