@@ -53,6 +53,11 @@ fn merges(env: &TestEnv) -> Vec<Vec<String>> {
     env.calls("gh").into_iter().filter(|c| c[..2] == ["pr", "merge"]).collect()
 }
 
+/// The `gh` calls' first words, in order: `pr view`, `pr merge`, `api graphql` ...
+fn call_order(env: &TestEnv) -> Vec<String> {
+    env.calls("gh").into_iter().map(|c| c[..2].join(" ")).collect()
+}
+
 fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     let out = env.tmux(args);
     assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -147,6 +152,34 @@ fn y_or_enter_squash_merges_and_the_result_shows_until_a_key() {
         assert!(!closed(&env), "{key}");
         tmux_out(&env, &["send-keys", "-t", &pane, "x"]);
         wait_closed(&env);
+    }
+}
+
+#[test]
+fn a_confirmed_merge_runs_the_poll_after_it_and_a_failing_poll_does_not_hide_the_result() {
+    let env = env();
+    gh(&env, "CLEAN", 0);
+    let pane = start(&env);
+    wait_dialog(&env, &pane);
+    tmux_out(&env, &["send-keys", "-t", &pane, "y"]);
+    // the fake `gh` fails the poll's `api graphql` read (exit 9): the merge's result stays, with the poll's error
+    let rows = wait_screen(&env, &pane, "the result", |r| r.iter().any(|l| l.contains("Merged o/r#7")));
+    assert_eq!(rows[2], " Merged o/r#7 (squash).");
+    assert!(rows[3].starts_with(" poll failed"), "{rows:?}");
+    let order = call_order(&env);
+    assert_eq!(order[..3], ["pr view", "pr merge", "api graphql"], "{order:?}");
+}
+
+#[test]
+fn a_refused_merge_runs_no_poll() {
+    for (state, exit) in [("BLOCKED", 0), ("CLEAN", 1)] {
+        let env = env();
+        gh(&env, state, exit);
+        let pane = start(&env);
+        wait_dialog(&env, &pane);
+        tmux_out(&env, &["send-keys", "-t", &pane, "y"]);
+        wait_screen(&env, &pane, "the error", |r| r.iter().any(|l| l.contains("any key closes")));
+        assert!(call_order(&env).iter().all(|c| c != "api graphql"), "{state}: {:?}", call_order(&env));
     }
 }
 
