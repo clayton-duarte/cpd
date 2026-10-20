@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output};
 
 use checkout::Checkout;
-use common::{spawn, wait_until, TestEnv};
+use common::{spawn, wait_until, TestEnv, SLEEP_SECONDS};
 
 const OPENS: &str = r#"{"opens":true,"refusal":null,"unknown":[],"pending":[]}"#;
 
@@ -347,6 +347,240 @@ fn a_new_engine_that_does_not_run_fails_the_install_with_the_reason() {
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("but no engine holds "), "{}", run.stderr);
     assert!(run.stderr.contains("the engine is not running"), "{}", run.stderr);
+}
+
+// ---- The install's engine order (hs-d463; contract §3.7 "The install's engine order", docs/implementing.md "The install's engine order") ----
+//
+// Verify with the new binary (`cpd config`, `cpd watch --check`), then retire the old engine, then start the new one: the running
+// engine is never stopped before the new binary is known to be able to start one. A real tmux server holds the old engine's
+// window (`cpd-work:watch`, a process holding `locks/watch.lock`); a fake `tmux` first on `PATH` logs its argv and runs the real
+// one; the fake new `cpd` logs its argv into the same file, so the order of the calls is the file's.
+
+/// The one log of the order: `cpd <argv>` of the fake new binary and `tmux <argv>` of the fake tmux, one line each.
+fn order_log(env: &TestEnv) -> PathBuf {
+    env.root().join("order.log")
+}
+
+fn order(env: &TestEnv) -> Vec<String> {
+    fs::read_to_string(order_log(env)).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+fn lines_with<'a>(log: &'a [String], word: &str) -> Vec<&'a String> {
+    log.iter().filter(|l| l.contains(word)).collect()
+}
+
+/// A fake `tmux` that logs its argv, runs `before` (shell code: it can fail a call) and then the real tmux.
+fn logging_tmux(env: &TestEnv, before: &str) {
+    env.fake("tmux", &format!("echo \"tmux $*\" >> '{}'\n{before}\nexec '{}' \"$@\"", order_log(env).display(), crate::host::real_tmux().display()));
+}
+
+/// The new `cpd`: logs its argv; `config` answers the real tmux server's names; `watch --check`, `watch --ensure` and `tui --respawn`
+/// run the shell code given.
+fn new_cpd(env: &TestEnv, check: &str, respawn: &str, ensure: &str) -> String {
+    format!(
+        r#"echo "cpd $*" >> '{log}'
+case "$1 $2" in
+  "config ") echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cock","work_session":"work"}}}}}}';;
+  "watch --check") {check};;
+  "tui --respawn") {respawn};;
+  "watch --ensure") {ensure};;
+esac"#,
+        log = order_log(env).display(),
+        socket = env.tmux_socket()
+    )
+}
+
+const CHECK_OK: &str = r#"echo '{"ok":true,"checked":["config","store","tmux","listing","home"],"tmux":{"version":"3.8","server":"running"}}'"#;
+const CHECK_FAILS: &str = r#"echo '{"ok":false,"error":{"code":"tmux_failed","message":"tmux list-panes printed unexpected output."}}'; exit 1"#;
+const RESPAWN_OK: &str = r#"echo '{"ok":true,"respawned":[]}'"#;
+const ENSURE_FAILS: &str = r#"echo '{"ok":false,"error":{"code":"watch_start_failed","message":"The engine did not start."}}'; exit 1"#;
+
+/// The old engine as a Lead's install finds it: the cockpit with its `main` window, and the work session whose `watch` window runs a
+/// process holding `locks/watch.lock` (killing the window ends it).
+fn running_old_engine(env: &TestEnv) {
+    let lock = lock_path(env);
+    fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    for args in [
+        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "cock".into(), "-n".into(), "main".into(), "sleep 600".into()],
+        vec!["new-session".to_owned(), "-d".into(), "-s".into(), "work".into(), "-n".into(), "watch".into(), format!("exec flock --no-fork '{}' sleep 600", lock.display())],
+    ] {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = env.tmux(&args);
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    wait_until("the old engine holds the lock", || lock_held(env));
+}
+
+fn work_windows(env: &TestEnv) -> String {
+    String::from_utf8_lossy(&env.tmux(&["list-windows", "-t", "=work", "-F", "#{window_name}"]).stdout).into_owned()
+}
+
+fn assert_old_engine_runs(env: &TestEnv, run: &Install) {
+    assert!(work_windows(env).lines().any(|w| w == "watch"), "the old engine's window was killed: {}", run.stderr);
+    assert!(lock_held(env), "the old engine's process was stopped: {}", run.stderr);
+}
+
+#[test]
+fn a_failing_watch_check_leaves_the_old_engine_and_the_views_alone() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    logging_tmux(&env, "");
+    running_old_engine(&env);
+    let extra = new_cpd(&env, CHECK_FAILS, RESPAWN_OK, STARTS_ENGINE);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    let log = order(&env);
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("cpd install follow-up failed: cpd watch --check: "), "{}", run.stderr);
+    assert!(run.stderr.contains("tmux_failed"), "the failing step's own code: {}", run.stderr);
+    assert!(run.stderr.contains("the engine was not touched"), "{}", run.stderr);
+    assert!(lines_with(&log, "cpd watch --check").len() == 1, "the new binary's watch --check ran once: {log:?}");
+    assert!(lines_with(&log, "kill-window").is_empty(), "a kill-window ran: {log:?}");
+    assert!(lines_with(&log, "respawn-pane").is_empty() && lines_with(&log, "cpd tui --respawn").is_empty(), "the views were respawned: {log:?}");
+    assert!(lines_with(&log, "cpd watch --ensure").is_empty(), "watch --ensure ran: {log:?}");
+    assert_old_engine_runs(&env, &run);
+}
+
+#[test]
+fn a_failing_config_leaves_the_old_engine_alone_and_says_so() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    logging_tmux(&env, "");
+    running_old_engine(&env);
+    let extra = format!(
+        "echo \"cpd $*\" >> '{}'\ncase \"$1\" in config) echo '{{\"ok\":false,\"error\":{{\"code\":\"config_invalid\",\"message\":\"bad\"}}}}'; exit 1;; esac",
+        order_log(&env).display()
+    );
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    let log = order(&env);
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("cpd install follow-up failed: cpd config: "), "{}", run.stderr);
+    assert!(run.stderr.contains("the engine was not touched"), "{}", run.stderr);
+    assert!(lines_with(&log, "kill-window").is_empty() && lines_with(&log, "watch --ensure").is_empty(), "{log:?}");
+    assert_old_engine_runs(&env, &run);
+}
+
+#[test]
+fn a_new_engine_that_cannot_start_after_the_retirement_says_the_old_one_was_stopped() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    logging_tmux(&env, "");
+    running_old_engine(&env);
+    let extra = new_cpd(&env, CHECK_OK, RESPAWN_OK, ENSURE_FAILS);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    let log = order(&env);
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert_eq!(lines_with(&log, "kill-window").len(), 1, "{log:?}");
+    assert_eq!(lines_with(&log, "cpd watch --ensure").len(), 1, "{log:?}");
+    assert!(run.stderr.contains("cpd install follow-up failed: cpd watch --ensure: "), "{}", run.stderr);
+    assert!(run.stderr.contains("the old engine was stopped and no engine is running"), "{}", run.stderr);
+    assert!(!run.stderr.contains("still runs"), "a failure after the retirement cannot say the old engine runs: {}", run.stderr);
+}
+
+#[test]
+fn a_lock_the_old_engine_keeps_past_the_wait_means_the_new_engine_is_never_started() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    logging_tmux(&env, "");
+    // The window is killed, but its process is not the one holding the lock: another process does, for longer than the wait.
+    env.tmux(&["new-session", "-d", "-s", "cock", "-n", "main", "sleep 600"]);
+    env.tmux(&["new-session", "-d", "-s", "work", "-n", "watch", "sleep 600"]);
+    let old = old_engine(&env, "120");
+    let _engines = Engines(vec![], vec![old]);
+    let extra = new_cpd(&env, CHECK_OK, RESPAWN_OK, STARTS_ENGINE);
+
+    // time-claim: the bound is 1 s here; the lock is held well past it; no per-poll signal from the script's wait.
+    let run = install_env(&env, &checkout, &version("null"), &extra, &[("CPD_INSTALL_LOCK_WAIT_SECS", "1")]);
+
+    let log = order(&env);
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("cpd install follow-up failed: the old engine still holds "), "{}", run.stderr);
+    assert!(run.stderr.contains("after 1s: it was told to stop and has not; the new engine was not started"), "{}", run.stderr);
+    assert!(lines_with(&log, "cpd watch --ensure").is_empty(), "{log:?}");
+}
+
+#[test]
+fn a_kill_window_that_fails_says_the_engine_was_not_stopped_and_still_runs_the_old_binary() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    logging_tmux(&env, "case \"$*\" in *kill-window*) echo 'no such window' >&2; exit 1;; esac");
+    running_old_engine(&env);
+    let extra = new_cpd(&env, CHECK_OK, RESPAWN_OK, STARTS_ENGINE);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(run.stderr.contains("cpd install follow-up failed: tmux kill-window work:watch failed: "), "{}", run.stderr);
+    assert!(run.stderr.contains("the engine was not stopped and still runs the old binary"), "{}", run.stderr);
+    assert_old_engine_runs(&env, &run);
+}
+
+#[test]
+fn a_good_install_verifies_then_respawns_the_views_then_retires_the_old_engine_and_starts_the_new_one() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    logging_tmux(&env, "");
+    running_old_engine(&env);
+    let _engines = Engines(vec![env.cpd_home().join("engine.pid")], vec![]);
+    let extra = new_cpd(&env, CHECK_OK, RESPAWN_OK, STARTS_ENGINE);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    let log = order(&env);
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert_eq!(lines_with(&log, "kill-window").len(), 1, "{log:?}");
+    assert_eq!(lines_with(&log, "cpd watch --ensure").len(), 1, "{log:?}");
+    let at = |word: &str| log.iter().position(|l| l.contains(word)).unwrap_or_else(|| panic!("no `{word}` in {log:?}"));
+    let steps = [at("cpd watch --check"), at("cpd tui --respawn"), at("kill-window"), at("cpd watch --ensure")];
+    assert!(steps.windows(2).all(|w| w[0] < w[1]), "the order is --check, --respawn, kill-window, --ensure: {steps:?} in {log:?}");
+    assert!(!work_windows(&env).lines().any(|w| w == "watch"), "the old engine's window is gone");
+    assert!(lock_held(&env), "the new engine holds the lock");
+}
+
+/// The incident, on a real cockpit and the real binary as the new one: the install runs from a caller with no UTF-8 locale (the
+/// launchd agent), every tmux call it or cpd makes is a UTF-8 client, and the engine is restarted.
+#[test]
+fn the_install_restarts_the_engine_of_a_real_cockpit_for_a_caller_without_a_utf8_locale() {
+    let mut failures = Vec::new();
+    for locale in [crate::host::Locale::Unset, crate::host::Locale::LangC, crate::host::Locale::LcAllC] {
+        let env = TestEnv::new();
+        env.write_config(&format!("version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket()));
+        env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
+        // The views the cockpit starts just sleep (as tui.rs's), everything else is the built binary.
+        env.fake("cpd", &format!("if [ \"$1\" = tui ] && [ \"$2\" = view ] && [ \"$3\" != chat ]; then exec sleep {SLEEP_SECONDS}; fi\nexec '{}' \"$@\"", common::CPD));
+        logging_tmux(&env, "");
+        // The cockpit and the engine, built by a caller with a locale.
+        env.cpd(&["tui"]).ok();
+        wait_until("the engine holds the lock", || lock_held(&env));
+        let before = order(&env).len();
+
+        let checkout = Checkout::new(&env, &[]);
+        let built = env.fake("cpd-built", &format!("exec '{}' \"$@\"", common::CPD));
+        let target = env.root().join("target");
+        let cargo = env.fake("fake-cargo", &format!("mkdir -p '{t}/release' && cp '{}' '{t}/release/cpd'", built.display(), t = target.display()));
+        let mut cmd = env.command(checkout.script());
+        locale.apply(&mut cmd).env("CARGO", cargo).env("CARGO_TARGET_DIR", &target);
+        let out = common::output(&mut cmd).unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // The engine the install started is a child of a tmux window: the teardown stops it.
+        if out.status.code() != Some(0) || stderr.contains("follow-up failed") {
+            failures.push(format!("{locale:?}: the install exited {:?}: {stderr}", out.status.code()));
+            continue;
+        }
+        if !lock_held(&env) {
+            failures.push(format!("{locale:?}: no engine holds the lock after the install: {stderr}"));
+        }
+        let bare: Vec<String> = order(&env)[before..].iter().filter(|l| l.starts_with("tmux ") && !l.starts_with("tmux -u ")).cloned().collect();
+        if !bare.is_empty() {
+            failures.push(format!("{locale:?}: tmux calls that are not UTF-8 clients: {bare:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "the install fails without a UTF-8 locale:\n{}", failures.join("\n"));
 }
 
 // ---- The adapter swap (hs-d355; contract §3.7 "The adapter swap", docs/implementing.md "The adapter swap") ----

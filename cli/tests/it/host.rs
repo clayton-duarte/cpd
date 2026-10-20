@@ -641,7 +641,7 @@ impl Locale {
 }
 
 /// The first `tmux` of the real `PATH`.
-fn real_tmux() -> std::path::PathBuf {
+pub(crate) fn real_tmux() -> std::path::PathBuf {
     let path = std::env::var_os("PATH").unwrap_or_default();
     std::env::split_paths(&path).map(|dir| dir.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH")
 }
