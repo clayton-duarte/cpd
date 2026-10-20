@@ -8,6 +8,22 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, M
 /// Rows a wheel notch moves (the Worker and Plan views' notch).
 pub(crate) const WHEEL_ROWS: usize = 3;
 
+/// Which way a scroll cue points: `▲ <n> more` (rows hidden above) or `▼ <n> more` (rows hidden below).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Cue {
+    Above,
+    Below,
+}
+
+/// The one scroll indicator of cpd (commands.md §17, "Scroll cues"; hs-d348): `▲ <n> more` / `▼ <n> more`, dim,
+/// **right-aligned** in a row of `width` cells (blank to its left, so it never cuts a line drawn there). Stub: the
+/// pinned tests are red; the views draw their own left-aligned cue until they call this.
+#[allow(dead_code)] // the shared scroll cue: no view calls it until the Job that moves them onto it
+pub(crate) fn cue(which: Cue, n: usize, width: usize) -> ratatui::text::Line<'static> {
+    let _ = (which, n, width);
+    todo!("the right-aligned `▲ <n> more` / `▼ <n> more` row, dim")
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Scroll {
     offset: usize,
@@ -187,5 +203,35 @@ mod tests {
         s.resize(10, 25);
         assert_eq!(s.offset(), 0);
         assert_eq!((s.total(), s.page()), (10, 25));
+    }
+
+    // ---- the shared cue (commands.md §17, "Scroll cues"; hs-d348): red until `cue` draws it ----
+
+    fn flat(line: &ratatui::text::Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn a_cue_is_right_aligned_in_its_row_with_the_count() {
+        assert_eq!(flat(&cue(Cue::Above, 3, 20)), format!("{:>20}", "▲ 3 more"));
+        assert_eq!(flat(&cue(Cue::Below, 33, 30)), format!("{:>30}", "▼ 33 more"));
+        assert_eq!(flat(&cue(Cue::Below, 1, 8)), "▼ 1 more", "a row exactly as wide as the cue");
+    }
+
+    #[test]
+    fn a_cue_is_as_wide_as_its_row_so_a_line_drawn_on_the_left_is_never_cut() {
+        for width in [12, 13, 40] {
+            let row = flat(&cue(Cue::Above, 7, width));
+            assert_eq!(row.chars().count(), width, "{row:?}");
+            assert!(row.ends_with("▲ 7 more"), "{row:?}");
+            assert!(row.starts_with(' '), "blank on the left: {row:?}");
+        }
+    }
+
+    #[test]
+    fn a_cue_is_dim() {
+        let line = cue(Cue::Below, 2, 20);
+        let cue_span = line.spans.iter().find(|s| s.content.contains("more")).expect("the cue's text");
+        assert!(cue_span.style.add_modifier.contains(ratatui::style::Modifier::DIM), "{cue_span:?}");
     }
 }

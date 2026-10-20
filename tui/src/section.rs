@@ -99,4 +99,52 @@ mod tests {
         assert_eq!(l.spans[3].style, Style::new());
         assert_eq!(l.spans[4].style.fg, palette::fg(Meaning::Nothing).fg);
     }
+
+    // ---- section look v3 (commands.md §17, "Section titles"; hs-d349): the pill title, red until `title` draws it ----
+
+    /// U+E0B6: the pill's left cap.
+    const CAP_LEFT: &str = "\u{E0B6}";
+    /// U+E0B4: the pill's right cap.
+    const CAP_RIGHT: &str = "\u{E0B4}";
+
+    fn cells(line: &Line<'static>) -> usize {
+        text(line.clone()).chars().count()
+    }
+
+    fn muted(span: &Span<'_>) -> bool {
+        span.style.fg == palette::fg(Meaning::Nothing).fg
+    }
+
+    #[test]
+    fn the_pill_title_is_a_corner_a_line_the_capped_text_a_line_to_the_edge_and_the_count() {
+        let got = text(title("Inbox", Some(35), 20));
+        assert_eq!(got, format!("╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}35", "─".repeat(9)));
+        assert_eq!(got.chars().count(), 20, "full width, no margin");
+        assert_eq!(text(title("PRs", Some(3), 24)), format!("╭─{CAP_LEFT}PRs{CAP_RIGHT}{}3", "─".repeat(24 - 2 - 5 - 1)));
+        assert_eq!(text(title("Inbox", Some(0), 14)), format!("╭─{CAP_LEFT}Inbox{CAP_RIGHT}─0"));
+    }
+
+    #[test]
+    fn the_pill_title_without_a_count_fills_to_the_right_edge() {
+        let got = text(title("git", None, 18));
+        assert_eq!(got, format!("╭─{CAP_LEFT}git{CAP_RIGHT}{}", "─".repeat(18 - 2 - 5)));
+        assert_eq!(got.chars().count(), 18);
+        assert_eq!(text(title("Jira", None, 12)), format!("╭─{CAP_LEFT}Jira{CAP_RIGHT}{}", "─".repeat(12 - 2 - 6)));
+    }
+
+    #[test]
+    fn the_pills_text_is_inverted_its_lines_are_muted_and_the_pill_is_not() {
+        let l = title("Inbox", Some(35), 20);
+        let find = |what: &str| l.spans.iter().find(|s| s.content.contains(what)).unwrap_or_else(|| panic!("no span with {what:?}: {:?}", l.spans));
+        let pill = find("Inbox");
+        assert!(pill.style.add_modifier.contains(Modifier::REVERSED), "the title text is reverse video: {pill:?}");
+        assert!(!muted(pill), "{pill:?}");
+        for cap in [CAP_LEFT, CAP_RIGHT] {
+            assert!(!muted(find(cap)), "the cap {cap:?} is part of the pill, not muted");
+        }
+        let lines: Vec<_> = l.spans.iter().filter(|s| !s.content.is_empty() && s.content.chars().all(|c| c == '╭' || c == '─')).collect();
+        assert!(lines.iter().any(|s| s.content.contains('╭')) && lines.iter().any(|s| s.content.contains('─')), "the corner and the lines: {:?}", l.spans);
+        assert!(lines.iter().all(|s| muted(s)), "the corner and every line are muted: {lines:?}");
+        assert_eq!(cells(&l), 20);
+    }
 }
