@@ -2604,6 +2604,38 @@ Only the `style` key matters; the other keys are the extension's own. A file tha
 
 At `session_start` the adapter runs `cpd policy show` with no flag (§22.1) and, at each run, adds one system prompt section, `cpd-policy`, with the `text` of every domain whose `audience` holds the output's `role`, labelled by domain and `source`. contract §8.3 "Delivery to agents" is the rule, including a failed `policy show` (an error message, no policy text).
 
+### 15.11 A Manager never blocks
+
+Decision (User, 2026-10-19). A Manager never blocks: no sleep, polling loop or long wait in its own turn. Anything that takes time runs in the background and reports back as a message, or is the job of the Lead or Worker that owns it. The adapter enforces it, so it is not left to the skill's prose.
+
+**When.** At pi's `tool_call`, for a `bash` call (`event.toolName` is `bash`, `event.input.command` and `event.input.timeout`), of a Session of role `manager` only. The handler is registered once at load (`pi.on` has no unsubscribe) and reads the role of the active run at each call; for a Lead, a Worker, or before `session_start` has read the role, it returns nothing. A call that matches nothing runs as before.
+
+**The bound** is **30 seconds**, one constant of the adapter (`pi/lib/noblock.ts`); there is no config key.
+
+**What is refused.** The call is refused when it waits longer than the bound, that is, when the command (`pi/lib/noblock.ts`, `blockingReason`) contains one of:
+
+- `sleep N` with N > 30 s: any unit (`s`, `m`, `h`, `d`), decimals allowed (`sleep 30` passes; `sleep 31` and `sleep 1m` are refused); several arguments add up (`sleep 20 20`), and `sleep infinity` is refused;
+- `timeout N …` with N > 30 s (same units; `timeout 20 cmd` passes, `timeout 60 cmd` is refused);
+- `watch`;
+- `tail -f` or `tail -F` (also `--follow`);
+- `cpd events follow`;
+- `gh run watch`;
+- `gh pr checks --watch`;
+- a `while` or `until` loop whose body sleeps (any `sleep`, whatever its duration);
+- the bash tool's own `timeout` input above 30 (seconds).
+
+A pattern counts where a command runs: a command word of a simple command (after `;`, `&`, `|`, a newline, a parenthesis, `do`, `then`, and a leading `VAR=value`, `time`, `nohup`, `exec`, `command`, `sudo` or `env`), not an argument or quoted text (`grep watch file` passes). A duration that is not a literal (`sleep $n`) is not judged.
+
+**The refusal** is `{block: true, reason}` (pi's `ToolCallEventResult`), with the reason on one line naming the rule:
+
+```
+cpd: a Manager never blocks: a wait over 30 s runs in the background or is the owning Lead's or Worker's job; refused: sleep 1m
+```
+
+`<what matched>` is the matched command (`sleep 1m`, `watch`, `tail -f`, `cpd events follow`, `gh run watch`, `gh pr checks --watch`, `timeout 60`, `while … sleep`) or, for the tool's input, `bash timeout 120`.
+
+**Not affected:** a Lead or a Worker, whatever it runs; every other tool; every `cpd` command's own timeout.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
