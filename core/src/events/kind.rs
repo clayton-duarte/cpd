@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 7;
+pub const PROTOCOL: u32 = 8;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -123,6 +123,8 @@ kinds! {
     WatchStarted = "watch-started",
     WatchStopped = "watch-stopped",
     Error = "error",
+    ReviewOpened = "review-opened",
+    ReviewClosed = "review-closed",
 }
 
 impl Kind {
@@ -185,6 +187,8 @@ impl Kind {
             InboxSnoozed => spec([M, M, M, N, M], &["item", "until"], &[]),
             InboxDismissed => spec([M, M, M, N, M], &["item"], &[]),
             WatchStarted | WatchStopped => spec([N, N, N, N, N], &["pid"], &[]),
+            ReviewOpened => spec([Y, M, N, N, Y], &["pn_id", "kind", "subject", "port"], &[]),
+            ReviewClosed => spec([Y, M, N, N, Y], &["pn_id", "ended"], &[]),
             Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
         }
     }
@@ -205,5 +209,49 @@ impl FromStr for Kind {
                 .with("kind", s)
                 .with("kinds", Kind::ALL.iter().map(|k| k.as_str()).collect::<Vec<_>>())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::home::CpdHome;
+    use crate::store::Store;
+
+    const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
+
+    /// hs-d496: two Event kinds, so the adapter/cpd protocol is 8.
+    #[test]
+    fn the_protocol_is_8_with_the_two_review_kinds() {
+        assert_eq!(PROTOCOL, 8);
+    }
+
+    #[test]
+    fn the_review_kinds_exist_and_are_about_a_session() {
+        for name in REVIEW_KINDS {
+            let kind: Kind = name.parse().unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(kind.as_str(), name);
+            let spec = kind.spec();
+            assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y), "{name}");
+        }
+        let data = |name: &str| Kind::from_str(name).unwrap().spec().required;
+        assert_eq!(data("review-opened"), ["pn_id", "kind", "subject", "port"]);
+        assert_eq!(data("review-closed"), ["pn_id", "ended"]);
+    }
+
+    /// A kind exists when its `event_kinds` row does (§4.4 K1): one additive migration of one statement per kind.
+    #[test]
+    fn a_fresh_store_lists_the_review_kinds_in_event_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let listed: Vec<String> = store
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT name FROM event_kinds WHERE name LIKE 'review-%' ORDER BY name")?;
+                let names = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+                Ok(names)
+            })
+            .unwrap();
+        assert_eq!(listed, ["review-closed", "review-opened"]);
     }
 }

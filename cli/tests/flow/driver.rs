@@ -360,8 +360,7 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
 /// driver in `merging` before the merge lands holds the merge itself.
 fn hold_merges_until(env: &TestEnv, release: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let real = std::env::split_paths(&path)
+    let real = std::env::split_paths(common::inherited_path())
         .filter(|dir| *dir != env.bin())
         .map(|dir| dir.join("git"))
         .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))

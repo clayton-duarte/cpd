@@ -272,7 +272,7 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     assert_eq!(found, expected);
     // Every table is STRICT.
     let tables = names(&raw(&env), "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
-    assert_eq!(tables.len(), 21, "§4.4's tables, the three lookup tables and schema_migrations");
+    assert_eq!(tables.len(), 22, "§4.4's tables, the three lookup tables and schema_migrations");
     for table in tables {
         let strict: i64 = raw(&env)
             .query_row("SELECT strict FROM pragma_table_list WHERE name = ?1", [&table], |r| r.get(0))
@@ -1579,7 +1579,7 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     let env = TestEnv::empty();
     let out = env.cpd(&["--version"]).ok();
     assert!(out["store"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 7, "{out}");
+    assert_eq!(out["protocol"], 8, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }

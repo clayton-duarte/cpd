@@ -32,6 +32,7 @@ pub mod metrics;
 pub mod plan;
 pub mod policy;
 pub mod pr;
+pub mod review;
 pub mod session;
 pub mod spec;
 pub mod store;

@@ -249,3 +249,65 @@ fn the_four_crates_cpd_engine_holds_watch_and_doctor_and_cpd_tui_does_not_depend
 
     assert!(problems.is_empty(), "the crates are not those of docs/implementing.md's Layout:\n{}", problems.join("\n"));
 }
+
+/// The features `cargo tree` resolves for `scope` (`-p <member>` or `--workspace`), with tests and dev-dependencies
+/// (cargo tree's default edges, what `nextest run` builds): package (`name vX.Y.Z`) to the distinct feature lists it
+/// resolves to. `--locked --offline` reads the lock file and the local registry only: no network, no resolution
+/// against an index, so it is a few milliseconds per scope (measured: 0.14 s for `--workspace`).
+fn resolved_features(scope: &[&str]) -> BTreeMap<String, Vec<String>> {
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["tree", "--locked", "--offline", "--prefix", "none", "--format", "{p}|{f}", "-e", "normal,build,dev", "--manifest-path"])
+        .arg(root().join("Cargo.toml"))
+        .args(scope)
+        .output()
+        .expect("run cargo tree");
+    assert!(out.status.success(), "cargo tree {scope:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+    let mut resolved: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // One tree per workspace member under `--workspace`, a blank line between them.
+    for line in String::from_utf8(out.stdout).expect("cargo tree prints UTF-8").lines().filter(|l| !l.is_empty()) {
+        let (package, features) = line.split_once('|').unwrap_or_else(|| panic!("cargo tree line without `|`: {line:?}"));
+        // `name vX.Y.Z (proc-macro)` or `(/path)`: the name and the version; a repeated subtree ends in ` (*)`.
+        let package = package.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+        let features = features.trim_end_matches(" (*)").to_owned();
+        let lists = resolved.entry(package).or_default();
+        if !lists.contains(&features) {
+            lists.push(features);
+        }
+    }
+    for lists in resolved.values_mut() {
+        lists.sort();
+    }
+    resolved
+}
+
+/// The distinct feature names in `lists`.
+fn feature_names(lists: &[String]) -> Vec<&str> {
+    let names: std::collections::BTreeSet<_> = lists.iter().flat_map(|l| l.split(',')).filter(|f| !f.is_empty()).collect();
+    names.into_iter().collect()
+}
+
+/// `-p <member>` resolves every dependency's features as `--workspace` does (docs/implementing.md, Tests): the first
+/// `-p` run after the Gate's workspace test build then compiles nothing. `-p` unifies features over that member alone,
+/// `--workspace` over all of them, so a member that lacks a dependency another member has (ratatui: tui only) resolves
+/// fewer features, and cargo rebuilds what they touch. The fix is a dev-dependency on what differs, in the member.
+#[test]
+fn every_member_resolves_the_features_of_the_workspace_build() {
+    let workspace = resolved_features(&["--workspace"]);
+    let mut problems = Vec::new();
+    for member in packages().keys() {
+        for (package, lists) in resolved_features(&["-p", member]) {
+            let Some(all) = workspace.get(&package) else { continue };
+            if &lists != all {
+                let (own, wide) = (feature_names(&lists), feature_names(all));
+                let differ: Vec<_> = own.iter().filter(|f| !wide.contains(f)).chain(wide.iter().filter(|f| !own.contains(f))).collect();
+                problems.push(format!("{member}: {package}: `-p {member}` resolves {lists:?}, `--workspace` {all:?} (differ: {differ:?})"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "`-p <member>` resolves other features than `--workspace`, so its first run after the workspace test build rebuilds them; \
+         add `ratatui.workspace = true` to the member's [dev-dependencies] (as core's):\n{}",
+        problems.join("\n")
+    );
+}

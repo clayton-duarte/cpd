@@ -1,7 +1,6 @@
 import { type Component, MouseRegion, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { loadConfig } from "../compact-tools/extensions/compact-tools-config.ts";
+import type { DisplayStyle } from "../compact-tools/extensions/compact-tools-types.ts";
 import { isObject } from "./cpd.ts";
 import { DECISION_TYPE } from "./plan-review.ts";
 import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
@@ -19,49 +18,14 @@ import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 /** Every `customType` the adapter sends with `display: true`. */
 export const RENDERED_TYPES: readonly string[] = ["cpd", CONTEXT_TYPE, DECISION_TYPE];
 
-// ---- the style: the extension's `compact-tools.json`, read once ----
+// ---- the style: the extension's effective config, read once ----
 
-/** `DISPLAY_STYLES` of `compact-tools-types.ts`. */
-const STYLES = ["compact", "claude", "codex", "off"] as const;
-export type Style = (typeof STYLES)[number];
-/** `DEFAULT_CONFIG.style` of `compact-tools-config.ts`. */
-const DEFAULT_STYLE: Style = "compact";
-const CONFIG_FILE = "compact-tools.json";
+/** The extension's `DisplayStyle`: one source of truth, so a file, a default and a warning exist once (contract §6.9). */
+export type Style = DisplayStyle;
 
-/** `compact-tools-config.ts` `warn`: one line on stderr. */
-const warn = (path: string, message: string): void => console.error(`[compact-tools] ${path}: ${message}`);
-
-/** `compact-tools-config.ts` `readJson` + `mergeConfig`, for the one key that matters: a file that is bad is reported and the value before it kept. */
-function styleFrom(path: string, before: Style): Style {
-  if (!existsSync(path)) return before;
-  let value: unknown;
-  try {
-    value = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    warn(path, error instanceof Error ? error.message : String(error));
-    return before;
-  }
-  if (!isObject(value)) {
-    warn(path, "expected a JSON object; using previous values");
-    return before;
-  }
-  if (value.style === undefined) return before;
-  if ((STYLES as readonly unknown[]).includes(value.style)) return value.style as Style;
-  warn(path, `style must be one of ${STYLES.join(", ")}; using previous value`);
-  return before;
-}
-
-/** pi's `getAgentDir()`: `PI_CODING_AGENT_DIR` (a leading `~` is the home directory), else `~/.pi/agent`. */
-function agentDirOf(env: Record<string, string | undefined>): string {
-  const dir = env.PI_CODING_AGENT_DIR;
-  if (!dir) return join(homedir(), ".pi", "agent");
-  return dir === "~" ? homedir() : dir.startsWith("~/") ? join(homedir(), dir.slice(2)) : dir;
-}
-
-/** `loadConfig` of the extension: pi's agent directory, then (a trusted project only) `<cwd>/.pi/`, which overrides it. */
-export function loadStyle(env: Record<string, string | undefined>, project: { cwd: string; trusted: boolean }): Style {
-  const global = styleFrom(join(agentDirOf(env), CONFIG_FILE), DEFAULT_STYLE);
-  return project.trusted ? styleFrom(join(project.cwd, ".pi", CONFIG_FILE), global) : global;
+/** `loadConfig` of `compact-tools-config.ts`: pi's agent directory (`getAgentDir()`, `PI_CODING_AGENT_DIR`), then (a trusted project only) `<cwd>/.pi/`, over its defaults. */
+export function loadStyle(project: { cwd: string; trusted: boolean }): Style {
+  return loadConfig(project.cwd, project.trusted).style;
 }
 
 // ---- what a message says ----
@@ -204,12 +168,12 @@ type OpenState = { expanded: boolean; host: boolean };
 
 /** The one renderer of every cpd `customType`, with the style read at `session_start`. */
 export class Rendering {
-  style: Style = DEFAULT_STYLE;
+  style: Style = "compact";
   private readonly states = new WeakMap<RenderedMessage, OpenState>();
 
   /** The extension's `loadConfig`, once per `session_start` (§15.9 "Which style"). */
-  load(env: Record<string, string | undefined>, project: { cwd: string; trusted: boolean }): void {
-    this.style = loadStyle(env, project);
+  load(project: { cwd: string; trusted: boolean }): void {
+    this.style = loadStyle(project);
   }
 
   /** §15.9 `off`: no component, so pi draws its own default box with the full `content`. */
