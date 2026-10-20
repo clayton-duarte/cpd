@@ -380,13 +380,13 @@ mod tests {
             terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
             row(terminal.backend().buffer(), 0)
         };
-        assert_eq!(header(20, Some(3)), format!("╭─\u{E0B6}PRs\u{E0B4}{}3", "─".repeat(12)));
-        assert_eq!(header(30, Some(12)), format!("╭─\u{E0B6}PRs\u{E0B4}{}12", "─".repeat(30 - 9)));
-        assert_eq!(header(20, None), format!("╭─\u{E0B6}PRs\u{E0B4}{}", "─".repeat(13)));
+        assert_eq!(header(20, Some(3)), format!(" ╭─\u{E0B6}PRs\u{E0B4}{}3", "─".repeat(10)));
+        assert_eq!(header(30, Some(12)), format!(" ╭─\u{E0B6}PRs\u{E0B4}{}12", "─".repeat(30 - 11)));
+        assert_eq!(header(20, None), format!(" ╭─\u{E0B6}PRs\u{E0B4}{}", "─".repeat(11)));
         let buf = buffer(20, 15);
-        assert_eq!(row(&buf, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)));
+        assert_eq!(row(&buf, 4), format!(" ╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(10)));
         let two = [pr(1, Some("l-a")), pr(2, None)];
-        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}2", "─".repeat(12)));
+        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), format!(" ╭─\u{E0B6}PRs\u{E0B4}{}2", "─".repeat(10)));
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
             " homeserver".to_owned(),
             " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
             "".to_owned(),
-            format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)),
+            format!(" ╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(10)),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
@@ -747,9 +747,9 @@ mod tests {
         (0..buf.area.height).map(|y| row(buf, y)).collect()
     }
 
-    /// The rows that are a section title: they start with the pill's `╭─`.
+    /// The rows that are a section title: they start with the padding and the pill's `╭─`.
     fn titles(buf: &Buffer) -> Vec<(u16, String)> {
-        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with('╭')).map(|(y, r)| (y as u16, r)).collect()
+        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with(" ╭")).map(|(y, r)| (y as u16, r)).collect()
     }
 
     #[test]
@@ -757,8 +757,8 @@ mod tests {
         let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
         let (open, close) = CAPS;
         let (y, title) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
-        assert_eq!(title, format!("╭─{open}PRs{close}{}5", "─".repeat(30 - 2 - 5 - 1)));
-        assert_eq!(title.chars().count(), 30, "full width, no margin");
+        assert_eq!(title, format!(" ╭─{open}PRs{close}{}5", "─".repeat(30 - 1 - 2 - 5 - 1 - 1)));
+        assert_eq!(title.chars().count(), 29, "full width but the padding's last column (the row is trimmed)");
         assert_eq!(row(&buf, y - 1), "", "one empty row above the title");
     }
 
@@ -768,12 +768,12 @@ mod tests {
         let muted = palette::color(palette::Meaning::Nothing);
         let (y, _) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
         let at = |x: u16| &buf[(x, y)];
-        assert_eq!((at(0).symbol(), at(0).fg), ("╭", muted), "the corner");
-        assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "its line");
-        for x in 3..6 {
+        assert_eq!((at(1).symbol(), at(1).fg), ("╭", muted), "the corner");
+        assert_eq!((at(2).symbol(), at(2).fg), ("─", muted), "its line");
+        for x in 4..7 {
             assert!(at(x).modifier.contains(Modifier::REVERSED), "the title text is inverted: column {x} {:?}", at(x));
         }
-        assert_eq!((at(10).symbol(), at(10).fg), ("─", muted), "the line to the edge");
+        assert_eq!((at(11).symbol(), at(11).fg), ("─", muted), "the line to the edge");
     }
 
     #[test]
@@ -781,7 +781,7 @@ mod tests {
         let (buf, _) = scrolled(30, height(5), &many(2), "", 0);
         let (open, close) = CAPS;
         let got: Vec<String> = titles(&buf).into_iter().map(|(_, t)| t).collect();
-        assert_eq!(got, [format!("╭─{open}PRs{close}{}2", "─".repeat(30 - 2 - 5 - 1))]);
+        assert_eq!(got, [format!(" ╭─{open}PRs{close}{}2", "─".repeat(30 - 1 - 2 - 5 - 1 - 1))]);
     }
 
     /// The cue rows of the section, top to bottom.

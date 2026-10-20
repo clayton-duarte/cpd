@@ -57,7 +57,8 @@ pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
 #[cfg(test)]
 pub(crate) mod check {
     use ratatui::buffer::Buffer;
-    use ratatui::style::{Color, Modifier};
+    use ratatui::buffer::Cell;
+    use ratatui::style::Modifier;
 
     use super::{CAP_LEFT, CAP_RIGHT};
     use crate::palette::{self, Meaning};
@@ -67,18 +68,19 @@ pub(crate) mod check {
     /// background colour).
     pub(crate) fn grey_pill(buf: &Buffer, x: u16, y: u16, text: &str) {
         let grey = palette::color(Meaning::Nothing);
+        let reset = Cell::EMPTY.bg; // the terminal's own background, which no colour names (no colour outside the palette)
         let width = u16::try_from(text.chars().count()).unwrap();
         let drawn: String = (x..x + width + 2).map(|x| buf[(x, y)].symbol()).collect();
         assert_eq!(drawn, format!("{CAP_LEFT}{text}{CAP_RIGHT}"), "the pill at ({x}, {y})");
         for cap in [x, x + width + 1] {
             let cell = &buf[(cap, y)];
-            assert_eq!((cell.fg, cell.bg), (grey, Color::Reset), "the cap at ({cap}, {y}) is muted: {cell:?}");
+            assert_eq!((cell.fg, cell.bg), (grey, reset), "the cap at ({cap}, {y}) is muted: {cell:?}");
             assert!(!cell.modifier.contains(Modifier::REVERSED), "a cap is not inverted: {cell:?}");
         }
         for at in x + 1..=x + width {
             let cell = &buf[(at, y)];
             assert!(cell.modifier.contains(Modifier::REVERSED), "the text at ({at}, {y}) is inverted: {cell:?}");
-            assert_eq!((cell.fg, cell.bg), (grey, Color::Reset), "the block is muted, the text is the background colour: {cell:?}");
+            assert_eq!((cell.fg, cell.bg), (grey, reset), "the block is muted, the text is the background colour: {cell:?}");
         }
     }
 }

@@ -40,11 +40,11 @@ fn capped(body: String, pill: Style) -> Line<'static> {
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
 const POPUP_BORDER: u16 = 2;
-const DOTS_TITLE: &str = "Session dots";
+const DOTS_TITLE: &str = "Session Dots";
 /// The rows above the body: the title, drawn as a section header (hs-d124, hs-d297).
 /// The title's rows: an empty row above it; the body's first row is the empty row below (hs-d308).
 const HEADER_ROWS: u16 = 2;
-const INTRO: &str = "Legend: what the cockpit's colours and icons mean   (any key closes)";
+const INTRO: &str = "Legend: What The Cockpit's Colours And Icons Mean (Any Key Closes)";
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
 
@@ -114,7 +114,7 @@ fn precedence() -> String {
 /// The sections, built only from the palette and the read model's counters.
 fn sections() -> Vec<Section> {
     let meanings = Section {
-        title: "Meanings → colour (one source for every view)",
+        title: "Meanings → Colour (One Source For Every View)",
         header: None,
         rows: Meaning::ALL
             .iter()
@@ -159,7 +159,7 @@ fn sections() -> Vec<Section> {
         Line::from(counters),
         Line::from(order).style(Style::new().add_modifier(Modifier::DIM)),
     ]);
-    let jobs = Section { title: "Jobs: Plan pills and Context counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
+    let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
     let frames = Line::from((0..palette::SPINNER.len()).map(|f| palette::dot_span(Dot::Working, f, false)).collect::<Vec<_>>());
     let dots = Section {
@@ -191,7 +191,7 @@ fn sections() -> Vec<Section> {
     pr_rows.push(vec![sample(palette::PR_CONFLICT)]);
     let prs = Section { title: "PRs (Dispatch)", header: None, rows: pr_rows };
     let checks = Section {
-        title: "PR checks",
+        title: "PR Checks",
         header: None,
         rows: vec![
             palette::CHECKS_LEGEND
@@ -330,12 +330,12 @@ mod tests {
         assert_eq!(
             titles,
             [
-                "Meanings → colour (one source for every view)",
-                "Jobs: Plan pills and Context counters",
-                "Session dots",
+                "Meanings → Colour (One Source For Every View)",
+                "Jobs: Plan Pills And Context Counters",
+                "Session Dots",
                 "PRs (Dispatch)",
                 "Pulse",
-                "PR checks",
+                "PR Checks",
             ]
         );
     }
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn session_dots_lists_every_glyph_and_each_circle_in_its_palette_colour() {
         let dots = &sections()[2];
-        assert_eq!(dots.title, "Session dots");
+        assert_eq!(dots.title, "Session Dots");
         let shown: String = dots.rows.iter().flatten().map(text).collect();
         let precedence = format!(
             "red > yellow > magenta > white > {} > {} > {} > {}",
@@ -502,7 +502,7 @@ mod tests {
         assert!((0..w).all(|x| buf[(x, 1)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 1));
         assert_eq!(row(&buf, 0), "");
         assert_eq!(row(&buf, 2), "");
-        assert!(row(&buf, 1).starts_with("╭─\u{E0B6}Legend: what") && row(&buf, 1).contains("(any key closes)\u{E0B4}─"));
+        assert!(row(&buf, 1).starts_with(" ╭─\u{E0B6}Legend: What") && row(&buf, 1).contains("(Any Key Closes)\u{E0B4}─"));
     }
 
     #[test]
