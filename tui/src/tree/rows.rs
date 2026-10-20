@@ -894,6 +894,129 @@ mod tests {
         assert!(!buf[(8, 1)].modifier.contains(Modifier::BOLD));
     }
 
+    // ---- hs-d351: the selected row's name is blue, the chat-slot mark is dropped (commands.md §13.2 "Rows", §17 "Blue") ----
+
+    /// The one colour for in focus and selected. Parsed, not named, so that no colour is spelled outside the palette
+    /// (`no_colour_outside_the_palette`); `palette`'s blue is this one.
+    fn blue() -> Color {
+        "blue".parse().unwrap()
+    }
+
+    /// The row of `buf` that says `needle`.
+    fn row_with(buf: &Buffer, needle: &str) -> u16 {
+        (0..buf.area.height).find(|&y| text(buf, y).contains(needle)).unwrap_or_else(|| panic!("no row says {needle:?}: {:?}", lines(buf)))
+    }
+
+    /// Every cell of `buf` whose foreground is blue.
+    fn blue_cells(buf: &Buffer) -> Vec<(u16, u16)> {
+        (0..buf.area.height).flat_map(|y| (0..buf.area.width).map(move |x| (x, y))).filter(|&(x, y)| fg(buf, x, y) == blue()).collect()
+    }
+
+    /// The cells `x0..x0 + width` of row `y`, the width of `name`, with the name drawn there.
+    fn name_cells(buf: &Buffer, y: u16, x0: u16, name: &str) -> Vec<(u16, u16)> {
+        let at: String = (x0..x0 + name.chars().count() as u16).map(|x| buf[(x, y)].symbol()).collect();
+        assert_eq!(at, name, "the name starts at column {x0} of {:?}", text(buf, y));
+        (x0..x0 + name.chars().count() as u16).map(|x| (x, y)).collect()
+    }
+
+    #[test]
+    fn the_selected_plan_row_draws_its_name_in_blue_and_no_chat_mark_anywhere() {
+        let tree = sample(); // `ship`'s Lead is in the chat slot
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
+        assert_eq!(text(&buf, 1), row_of(&format!("├─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "column 0 is the branch, not `{ACTIVE_MARK}`");
+        assert!(!lines(&buf).iter().any(|l| l.contains(ACTIVE_MARK)), "{:?}", lines(&buf));
+        let name = name_cells(&buf, 1, 4, "ship");
+        assert_eq!(blue_cells(&buf), name, "the name, and nothing else on the screen");
+        assert!(name.iter().all(|&(x, y)| !buf[(x, y)].modifier.contains(Modifier::BOLD)), "selected is blue, not bold");
+    }
+
+    #[test]
+    fn the_rest_of_the_selected_row_keeps_its_colours() {
+        let tree = sample();
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
+        let grey = color(Meaning::Nothing);
+        assert_eq!((fg(&buf, 4, 1), fg(&buf, 7, 1)), (blue(), blue()), "the name is what turns blue");
+        assert_eq!(text(&buf, 1).chars().next(), Some('├'), "the branch, not a mark");
+        assert_eq!((fg(&buf, 0, 1), fg(&buf, 1, 1)), (grey, grey), "the branch");
+        assert_eq!(cell(&buf, 2, 1), drawn_dot(Dot::Working), "the dot");
+        // counters "2⋅1⋅1⋅0⋅5" are the last 9 columns
+        let counters: Vec<Color> = (0..5).map(|i| fg(&buf, 35 + 2 * i, 1)).collect();
+        assert_eq!(
+            counters,
+            [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Nothing), color(Meaning::Done)]
+        );
+        assert!((0..4).all(|i| fg(&buf, 36 + 2 * i, 1) == grey), "the separators");
+    }
+
+    #[test]
+    fn a_selected_fork_row_draws_its_name_in_blue_and_nothing_else_is() {
+        let mut tree = sample();
+        tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
+        tree.contexts[0].plans[0].sessions[1].place = Place::Chat; // the fork `ship·f-id`
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
+        assert_eq!(text(&buf, 4), format!("├─{IDLE} ship·f-id"));
+        assert!(!lines(&buf).iter().any(|l| l.contains(ACTIVE_MARK)), "{:?}", lines(&buf));
+        assert_eq!(blue_cells(&buf), name_cells(&buf, 4, 4, "ship·f-id"));
+        assert_eq!(cell(&buf, 2, 4), drawn_dot(Dot::Idle), "the dot keeps its colour");
+        assert_eq!((fg(&buf, 0, 4), fg(&buf, 1, 4)), (color(Meaning::Nothing), color(Meaning::Nothing)), "so does the branch");
+    }
+
+    #[test]
+    fn no_row_has_a_blue_name_when_no_session_is_in_the_chat_slot_whatever_the_cursor() {
+        let mut tree = sample();
+        tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
+        for cursor in [false, true] {
+            let buf = render(&tree, &mut state_for(&tree, &[], &["alpha", "sketch"]), 44, 8, cursor);
+            assert_eq!(blue_cells(&buf), [], "cursor shown: {cursor}; the cursor is not the selection");
+        }
+    }
+
+    #[test]
+    fn the_cursor_on_another_row_does_not_move_the_blue() {
+        let tree = sample();
+        let buf = render(&tree, &mut state_for(&tree, &[], &["alpha", "sketch"]), 44, 8, true);
+        assert_eq!(blue_cells(&buf), name_cells(&buf, 1, 4, "ship"), "still the chat slot's row, not `sketch`");
+        assert!(reversed(&buf, 2).iter().all(|&r| r), "while the cursor row is reversed");
+    }
+
+    #[test]
+    fn a_selected_archived_plan_row_is_blue_where_the_archived_rows_are_muted() {
+        let mut tree = archived();
+        tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
+        tree.contexts[0].plans[2].sessions[0].place = Place::Chat; // the archived Plan `old`
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 10, false);
+        let y = row_with(&buf, " old");
+        assert_eq!(blue_cells(&buf), name_cells(&buf, y, 4, "old"), "its name, not muted; no other archived row: {:?}", lines(&buf));
+        let grey = color(Meaning::Nothing);
+        assert_eq!((fg(&buf, 0, y), fg(&buf, 1, y)), (grey, grey), "the branch stays muted");
+        assert_eq!(cell(&buf, 2, y), (STOPPED.to_owned(), grey), "the dot stays muted");
+        assert!(!text(&buf, y).contains(ACTIVE_MARK));
+        assert!((35..44).all(|x| fg(&buf, x, y) == grey), "the counters stay muted");
+        assert!(!buf[(4, y)].modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn a_selected_archived_fork_row_is_blue_where_the_archived_rows_are_muted() {
+        let mut tree = archived();
+        tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
+        tree.contexts[0].plans[0].sessions[2].place = Place::Chat; // the archived fork `ship·f-bl`
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 10, false);
+        let y = row_with(&buf, "ship·f-bl");
+        assert_eq!(blue_cells(&buf), name_cells(&buf, y, 4, "ship·f-bl"), "{:?}", lines(&buf));
+        let grey = color(Meaning::Nothing);
+        assert_eq!((fg(&buf, 0, y), fg(&buf, 1, y), fg(&buf, 2, y)), (grey, grey, grey), "branch and dot stay muted");
+    }
+
+    #[test]
+    fn an_unselected_archived_row_stays_muted_all_through() {
+        let mut tree = archived();
+        tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 10, false);
+        assert_eq!(blue_cells(&buf), []);
+        let y = row_with(&buf, " old");
+        assert!((0..44).filter(|&x| buf[(x, y)].symbol() != " ").all(|x| fg(&buf, x, y) == color(Meaning::Nothing)));
+    }
+
     #[test]
     fn the_keyboard_cursor_skips_context_rows() {
         let tree = sample();
