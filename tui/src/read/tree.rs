@@ -24,10 +24,10 @@ pub struct Tree {
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
     /// The Inbox's open, visible items (not snoozed, not dismissed) in the order of `cpd inbox list`, as of this
-    /// snapshot (§17), `engine-down` first when no engine runs. Every dot of the tree comes from the stored ones.
+    /// snapshot (§17), `engine-down` first when no engine runs and no live Manager exists. Every dot of the tree comes from the stored ones.
     pub inbox: Vec<Item>,
-    /// Whether an engine holds `locks/watch.lock` (§1.4). `engine-down` is never stored: with none, `inbox` starts
-    /// with it (id 0, which no stored item has), as `cpd inbox list` does.
+    /// Whether an engine holds `locks/watch.lock` (§1.4). `engine-down` is never stored: with none and no live Manager,
+    /// `inbox` starts with it (id 0, which no stored item has), as `cpd inbox list` does.
     pub engine_running: bool,
 }
 
@@ -204,7 +204,8 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 id: context,
             });
         }
-        if !engine_running {
+        // With a live Manager the tree restarts the engine and a failure goes to the Manager (hs-d318): no item.
+        if !engine_running && managers.is_empty() {
             inbox.insert(0, engine_down(now));
         }
         Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox, engine_running })

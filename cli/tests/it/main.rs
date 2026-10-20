@@ -72,3 +72,4 @@ mod tui_widgets;
 mod tui_worker;
 mod watch_inbox;
 mod watch;
+mod watch_team;

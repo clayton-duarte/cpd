@@ -50,10 +50,11 @@ export function registerAgentState(host: Host): void {
     host.refresh(r);
   });
 
-  // pi's dialogs (`ctx.ui.select/confirm/input/editor/custom`).
+  // pi's dialogs (`ctx.ui.select/confirm/input/editor/custom`). A Worker never talks to the human (commands.md §15.4):
+  // its dialog opens no reason; it asks its Lead with `cpd ask`.
   const onPrompt = (active: boolean) => {
     const r = host.run;
-    if (!r) return;
+    if (!r || r.info.role === "worker") return;
     if (r.facts.prompt(active)) host.refresh(r);
   };
   pi.on("ui_prompt_start", () => onPrompt(true));
