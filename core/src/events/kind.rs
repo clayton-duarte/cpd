@@ -175,7 +175,7 @@ impl Kind {
             ContextArchived => spec([Y, N, N, N, N], &["archived"], &[]),
             PlanArchived => spec([Y, Y, N, N, N], &["archived"], &[]),
             SessionArchived => spec([Y, M, N, N, Y], &["archived"], &[]),
-            SessionMessage => spec([Y, M, N, N, Y], &["from", "text", "wake"], &[]),
+            SessionMessage => spec([Y, M, N, N, Y], &["from", "text", "wake"], &["escalation", "plan", "pr", "minutes"]),
             InboxOpened => spec([M, M, M, N, M], &["item", "kind", "urgency", "label"], &[]),
             InboxClosed => spec([M, M, M, N, M], &["item", "kind"], &[]),
             InboxSnoozed => spec([M, M, M, N, M], &["item", "until"], &[]),
