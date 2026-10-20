@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
 use serde::{Deserialize, Serialize};
 
+use super::cockpit::{client_size, on_client};
 use super::widgets::newest_client;
 use super::viewlog::ViewLog;
 use super::{not_a_terminal, on_a_terminal};
@@ -249,22 +250,43 @@ fn widest(text: &str) -> usize {
     text.lines().map(|l| l.chars().count()).max().unwrap_or(0)
 }
 
-/// Opens the popup `kind` with `fields` and returns how it closed. `size` is the popup's size for the newest client's.
+/// The client a popup opens on: the most recently active one, or the one named (`#{client_name}`), for a caller that
+/// knows its client (a `cpd tui action`, commands.md §13.2).
+#[derive(Clone, Copy, Debug)]
+enum On<'a> {
+    Newest,
+    Client(&'a str),
+}
+
+/// Opens the popup `kind` with `fields` on the client `on` and returns how it closed. `size` is the popup's size for
+/// that client's.
 fn ask(
     tmux: &Tmux,
+    on: On<'_>,
     title: &str,
     kind: &str,
     fields: &[(&str, &str)],
     size: impl FnOnce((u16, u16), &str) -> (u16, u16),
 ) -> Result<Outcome, CpdError> {
-    let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
-    let client = newest_client(&clients).ok_or_else(|| {
-        CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
-    })?;
+    let client = match on {
+        On::Newest => {
+            let clients =
+                tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
+            newest_client(&clients).ok_or_else(|| {
+                CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
+            })?
+        }
+        On::Client(name) => client_size(tmux, name)?,
+    };
     let out = temp_path();
     let _ = std::fs::remove_file(&out);
     let command = view_command(kind, title, &out, fields);
-    let ran = tmux.run(&popup_args(title, size(client, title), &command));
+    let popup = popup_args(title, size(client, title), &command);
+    let popup = match on {
+        On::Newest => popup,
+        On::Client(name) => on_client(popup, name),
+    };
+    let ran = tmux.run(&popup);
     let read = read_outcome(&out);
     ran?;
     read
@@ -278,7 +300,7 @@ pub(crate) fn confirm(tmux: &Tmux, title: &str, text: &str, yes_label: &str) -> 
         let natural = widest(text).max(yes_label.chars().count() + CANCEL.len() + 8);
         popup_size(client, title, natural, |width| wrap(text, width).len())
     };
-    Ok(ask(tmux, title, "confirm", &fields, size)?.confirmed)
+    Ok(ask(tmux, On::Newest, title, "confirm", &fields, size)?.confirmed)
 }
 
 /// A one-line field in a popup, starting with `initial` under the question `prompt`; Enter accepts a value that
@@ -290,7 +312,7 @@ pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, valid
         let natural = widest(prompt).max(initial.chars().count() + 1);
         popup_size(client, title, natural, |width| wrap(prompt, width).len() + 1 + REFUSAL_ROWS)
     };
-    let outcome = ask(tmux, title, "input", &fields, size)?;
+    let outcome = ask(tmux, On::Newest, title, "input", &fields, size)?;
     match (outcome.confirmed, outcome.value) {
         (false, _) => Ok(None),
         (true, Some(value)) => Ok(Some(value)),
@@ -298,10 +320,15 @@ pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, valid
     }
 }
 
+/// Read-only `body`, scrollable, in a popup on the client `on`, until the User closes it.
+fn text_on(tmux: &Tmux, on: On<'_>, title: &str, body: &str) -> Result<(), CpdError> {
+    let size = |client, title: &str| popup_size(client, title, widest(body), |width| wrap(body, width).len());
+    ask(tmux, on, title, "text", &[("body", body)], size).map(drop)
+}
+
 /// Read-only `body`, scrollable, in a popup, until the User closes it.
 pub(crate) fn text(tmux: &Tmux, title: &str, body: &str) -> Result<(), CpdError> {
-    let size = |client, title: &str| popup_size(client, title, widest(body), |width| wrap(body, width).len());
-    ask(tmux, title, "text", &[("body", body)], size).map(drop)
+    text_on(tmux, On::Newest, title, body)
 }
 
 /// A failure the User must see (commands.md §17 "No notes"): `title` says what failed, `text` why
@@ -309,6 +336,12 @@ pub(crate) fn text(tmux: &Tmux, title: &str, body: &str) -> Result<(), CpdError>
 /// a failure with, so that no view draws a note.
 pub(crate) fn show_error(tmux: &Tmux, title: &str, text: &str) -> Result<(), CpdError> {
     self::text(tmux, title, text)
+}
+
+/// [`show_error`] on the client named `client` (`display-popup -c`), for a caller that runs with no view of its own
+/// and knows its client: a `cpd tui action` (commands.md §13.2, the `merge` action).
+pub(crate) fn show_error_on(tmux: &Tmux, client: &str, title: &str, text: &str) -> Result<(), CpdError> {
+    text_on(tmux, On::Client(client), title, text)
 }
 
 /// A command of a view failed (commands.md §17 "No notes"): a line of the view's `log`, and the error dialog, `what`
