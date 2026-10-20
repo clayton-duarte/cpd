@@ -79,10 +79,10 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
+/// Starts `cpd tui view plan` alone in a 300 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
 /// (the review host's override, contract §6.5); returns its pane.
 fn start_view(env: &TestEnv) -> String {
-    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", CPD, "tui", "view", "plan"])
+    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "300", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", CPD, "tui", "view", "plan"])
         .trim()
         .to_owned()
 }
@@ -307,8 +307,8 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('┘'));
     // web below api, the arrow from api's bottom border into web's top border
     let (merged_row, queued_row) = (
-        format!("  │  {MERGED} a │O3 ───── {MERGED} b │S3               │"),
-        format!("  │  {QUEUED} c │S3                      │"),
+        format!("  │ \u{e0b6} {MERGED} a │O3 \u{e0b4}─────\u{e0b6} {MERGED} b │S3 \u{e0b4}          │"),
+        format!("  │ \u{e0b6} {QUEUED} c │S3 \u{e0b4}                   │"),
     );
     let want = [
         "  ┌ api · api-server 󱦰 main · #12 open 󰏌 ┐",
@@ -358,17 +358,17 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
     // a column is as wide as its widest pill (the failed pill, `failed │S3│a3`); the tier, and `aN` from the second Attempt, sit at its right
     let want = format!(
         "
-  {DRAFT} draft     │S3
+ \u{e0b6} {DRAFT} draft     │S3 \u{e0b4}
 
-  {QUEUED} queued    │S3
+ \u{e0b6} {QUEUED} queued    │S3 \u{e0b4}
 
-  {} running   │S3
+ \u{e0b6} {} running   │S3 \u{e0b4}
 
-  {MERGING} merging   │S3
+ \u{e0b6} {MERGING} merging   │S3 \u{e0b4}
 
-  {MERGED} merged    │S3
+ \u{e0b6} {MERGED} merged    │S3 \u{e0b4}
 
-  {FAILED} failed │S3│a3",
+ \u{e0b6} {FAILED} failed │S3│a3 \u{e0b4}",
         SPINNER[0]
     );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
@@ -586,7 +586,7 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     // one row of margin, then the box's top border, its one chart row and its bottom border
     assert_eq!(screen[0], "", "{}", screen.join("\n"));
     assert_eq!(screen[1], "  ┌ repo · repo 󱦰 main · dispatch ┐");
-    assert!(screen[2].starts_with(&format!("  │  {QUEUED} a │S3")), "{:?}", screen[2]);
+    assert!(screen[2].starts_with(&format!("  │ \u{e0b6} {QUEUED} a │S3 \u{e0b4}")), "{:?}", screen[2]);
     assert!(screen[3].starts_with("  └─"), "{:?}", screen[3]);
     assert!(screen.iter().all(|l| !l.contains('\u{F0142}' /* md-chevron_right */) && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));
 }
@@ -609,12 +609,12 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
     );
     let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 2 && s[2].contains(" b "));
-    assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} a │S3 ───── {QUEUED} b │S3"));
+    assert_eq!(chart_rows(&screen, 1), format!(" \u{e0b6} {QUEUED} a │S3 \u{e0b4}─────\u{e0b6} {QUEUED} b │S3 \u{e0b4}"));
 
     // the other Lead moves into the chat slot: the view shows its Plan
     env.sql(&in_chat("ctx", "side", "lead-side"));
     let screen = screen_when(&env, &pane, "the other Plan", |s| s.len() > 2 && s[2].contains("other"));
-    assert_eq!(chart_rows(&screen, 1), format!("  {QUEUED} other │O3"));
+    assert_eq!(chart_rows(&screen, 1), format!(" \u{e0b6} {QUEUED} other │O3 \u{e0b4}"));
     assert!(!screen.iter().any(|l| l.contains(&format!("{QUEUED} a "))), "{}", screen.join("\n"));
 }
 
@@ -858,6 +858,83 @@ fn another_job_retargets_the_worker_pane_in_place() {
     // The pane exists before the fake `cpd` has recorded its call: wait for the call.
     let started = ["tui", "view", "worker", "b-a1", "--plan", "ship"].map(str::to_owned).to_vec();
     wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
+}
+
+// ---------- Pulse (a Manager in the chat slot; User, hs-d327) ----------
+
+/// An Event of `plan` in `ctx` that happened `minutes` minutes ago by the clock (the view reads the real time).
+fn event_ago(kind: &str, plan: &str, minutes: u32) -> String {
+    format!(
+        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-{minutes} minutes'), '{kind}', 'ctx', '{plan}', NULL, 'fixture {kind}', '{{}}');"
+    )
+}
+
+/// The bars of a row of a styled screen with their foreground: the number of the 256-colour palette tmux captures
+/// (`1` red, `2` green, `3` yellow, `4` blue, `5` magenta, `8` dark grey, `15` bright white), or `default`.
+fn bars_with_colours(styled_row: &str) -> Vec<(char, String)> {
+    let (mut out, mut colour, mut rest) = (Vec::new(), "default".to_owned(), styled_row);
+    while let Some(c) = rest.chars().next() {
+        if let Some(seq) = rest.strip_prefix("\x1b[") {
+            let end = seq.find('m').expect("an SGR ends in m");
+            let params: Vec<&str> = seq[..end].split(';').collect();
+            match params.as_slice() {
+                ["38", "5", n] => colour = (*n).to_owned(),
+                ["" | "0" | "39"] => colour = "default".to_owned(),
+                _ => {}
+            }
+            rest = &seq[end + 1..];
+        } else {
+            if ('▁'..='█').contains(&c) {
+                out.push((c, colour.clone()));
+            }
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
+}
+
+#[test]
+fn pulse_rows_have_no_icon_and_bars_take_the_colour_of_their_kind_with_a_grey_low_bar_for_zero() {
+    let env = env();
+    let mut s = context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z");
+    s += &lead_row("mgr", "ctx", "", "2026-01-01T00:00:01.000Z").replace("'lead'", "'manager'");
+    s += &plan_row("p1", "ctx", "dispatch", "lead-p1", "2026-01-02T00:00:00.000Z", None);
+    s += &lead_row("lead-p1", "ctx", "p1", "2026-01-02T00:00:00.000Z");
+    // five slots, ten minutes apart (two buckets), oldest first; each with a lower-precedence kind beside the winner
+    for (minutes, kinds) in [
+        (52, &["job-added"][..]),
+        (42, &["pr-opened", "job-merged"]),
+        (32, &["error", "plan-phase"]),
+        (22, &["plan-phase", "job-merged", "job-added"]),
+        (12, &["escalation", "job-merged"]),
+        (2, &["job-merged"]),
+    ] {
+        for kind in kinds {
+            s += &event_ago(kind, "p1", minutes);
+        }
+    }
+    s += &event("session-moved", "ctx", None, Some("mgr"), r#"{"pane":"%1","window":"@1","place":"chat"}"#);
+    env.sql(&s);
+    let pane = start_view(&env);
+
+    let screen = screen_when(&env, &pane, "the Pulse row", |s| s.get(1).is_some_and(|l| l.contains("p1") && l.contains('▁')));
+    let row = &screen[1];
+    assert!(row.starts_with("  p1  "), "the id first, no dot: {row:?}");
+    assert!(!row.contains('󰗠') && !row.contains('󰪥') && !row.contains('󰝦'), "no icon: {row:?}");
+    let age = row.chars().rev().take(9).collect::<String>();
+    assert!(age.trim().chars().next().is_some(), "the age cell stays: {row:?}");
+    // the pane is 300 wide (start_view); 2 columns of margin on each side
+    let n = 300 - 4 - ("p1".len() + 2 + 2 + 9);
+    assert_eq!(row.chars().filter(|c| ('▁'..='█').contains(c)).count(), n, "the sparkline takes the width the icons freed: {row:?}");
+
+    let styled = styled_screen(&env, &pane);
+    let bars = bars_with_colours(styled.lines().nth(1).expect("the first row"));
+    assert_eq!(bars.len(), n);
+    let coloured: Vec<&str> = bars.iter().filter(|(_, c)| c != "8").map(|(_, c)| c.as_str()).collect();
+    assert_eq!(coloured, ["15", "3", "1", "5", "4", "2"], "white, yellow, red, magenta, blue, green: {bars:?}");
+    assert!(bars.iter().filter(|(_, c)| c == "8").all(|(g, _)| *g == '▁'), "an empty slot is a grey ▁: {bars:?}");
+    assert!(bars.iter().any(|(_, c)| c == "8"), "{bars:?}");
 }
 
 #[test]

@@ -136,7 +136,8 @@ fn assert_status_line(env: &TestEnv) {
         "#[range=user|logs]",
         "#[align=right]",
         "#{@cpd_inbox}",
-        "#{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{@cpd_preview}, #[fg=yellow]",
         "#{R:\u{2500},",
     ] {
         assert!(format.contains(range), "{range} in {format}");
@@ -288,9 +289,12 @@ fn assert_server_options(env: &TestEnv) {
                     assert_eq!(shown.lines().filter(|l| *l == feature).count(), 1, "{feature} in {shown}");
                 }
             }
+            ["set", "-s", name, value] => assert_eq!(tmux_out(env, &["show", "-sv", name]).trim_end_matches('\n'), *value, "{name}"),
+            // The hooks' exact text is pinned in `tests/host.rs`; here, that the server has each, and that it starts the engine again.
             ["set-hook", "-g", hook, _] => {
                 let shown = tmux_out(env, &["show-hooks", "-g", hook]);
-                assert_eq!(shown, format!("{hook}[0] if-shell -F \"#{{@cpd_view}}\" respawn-pane\n"));
+                assert!(shown.starts_with(&format!("{hook}[0] if-shell -F ")), "{shown}");
+                assert!(shown.contains("cpd watch --ensure --wait"), "{shown}");
             }
             ["bind", "-T", table, key, .., command] => {
                 // tmux shows a `;` inside a binding escaped
@@ -327,7 +331,7 @@ fn a_server_started_by_plan_new_has_every_server_option() {
 }
 
 #[test]
-fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
+fn a_killed_view_respawns_at_once_and_the_engine_is_started_again() {
     let env = env();
     let out = env.cpd(&["tui"]).ok();
     assert_window_title(&env);
@@ -336,7 +340,7 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
     let before = main_panes(&env);
     let tree = view(&before, "tree").clone();
     let (_, engine_pid) = pane_state(&env, engine);
-    // The engine first: once dead, it makes no tmux calls of its own.
+    // The engine first, so that its hook runs before the tree's.
     let engine_tty = kill(&env, engine, engine_pid);
     wait_until("the engine pane to die", || pane_state(&env, engine).0);
     drop(engine_tty);
@@ -346,8 +350,12 @@ fn a_killed_view_respawns_at_once_and_the_engine_stays_dead() {
         !p.dead && p.pid.is_some() && p.pid != tree.pid
     });
     drop(tree_tty);
-    // tmux runs the `pane-died` hooks in the order the panes died: the tree's has run, so the engine's has.
-    assert!(pane_state(&env, engine).0, "the engine pane stays dead for E2");
+    // tmux runs the `pane-died` hooks in the order the panes died: the tree's has run, so the engine's has. The engine is supervised
+    // (contract §6.6, hs-d328): its hook runs `watch --ensure --wait`, which starts it again in its own pane.
+    wait_until("the engine to be started again", || {
+        let (dead, pid) = pane_state(&env, engine);
+        !dead && pid.is_some() && pid != engine_pid
+    });
     let after = main_panes(&env);
     assert_layout(&after);
     assert_eq!(view(&after, "tree").id, tree.id);
@@ -953,6 +961,58 @@ fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
         // The caps of the buttons and the fill line are colour 8 (bright black, SGR 90).
         assert!(styled.contains(&format!("\x1b[90m\u{e0b4}{fill}")), "{styled:?}");
     }
+}
+
+const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
+
+#[test]
+fn the_status_line_shows_the_preview_in_yellow_after_the_buttons_while_the_option_is_set() {
+    let (env, _engine) = env_with_workers();
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    let pill = format!("\u{e0b6} preview: {PREVIEW} \u{e0b4}");
+    // The pill is 47 cells (33 of value): with the buttons' 11, the long form's 46 and 2 of air it needs 106 columns.
+    for (width, items) in [(100, SHORT_ITEMS), (120, LONG_ITEMS)] {
+        let (line, styled) = status_line(&env, width, "preview:");
+        assert!(line.starts_with(&format!("{} {pill}\u{2500}", buttons())), "one plain space after the buttons, then the pill, then the line: {line:?}");
+        assert!(line.ends_with(items), "at {width}: {line:?}");
+        assert_eq!(line.chars().count(), usize::from(width), "the line is shorter by the pill's width, so the row stays full: {line:?}");
+        assert!(styled.contains(&format!("\x1b[7m preview: {PREVIEW} ")) && styled.contains("\x1b[33m"), "yellow, reversed: {styled:?}");
+    }
+}
+
+#[test]
+fn the_status_line_shows_no_preview_once_the_option_is_unset() {
+    let (env, _engine) = env_with_workers();
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    status_line(&env, 100, "preview:");
+    tmux_out(&env, &["set", "-gu", "@cpd_preview"]);
+    // The unset shows once a fresh client has drawn the whole line.
+    let (line, _) = status_line(&env, 100, "queued");
+    assert!(!line.contains("preview"), "{line:?}");
+    assert!(line.starts_with(&format!("{}\u{2500}", buttons())), "{line:?}");
+}
+
+#[test]
+fn tui_respawn_warns_on_stderr_while_a_preview_is_on_and_not_otherwise() {
+    let env = env();
+    let quiet = env.cpd(&["tui", "--respawn"]);
+    assert_eq!(quiet.exit, 0, "{quiet:?}");
+    assert!(!quiet.stderr.contains("preview"), "{quiet:?}");
+
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    let warned = env.cpd(&["tui", "--respawn"]);
+    assert_eq!(warned.exit, 0, "{warned:?}");
+    assert!(
+        warned.stderr.contains(&format!(
+            "a preview is on ({PREVIEW}); its views keep the preview build until 'preview-tui.sh off'"
+        )),
+        "{warned:?}"
+    );
+    // Without --respawn nothing is said; the option's JSON does not change.
+    assert!(!env.cpd(&["tui"]).stderr.contains("preview"));
+
+    tmux_out(&env, &["set", "-gu", "@cpd_preview"]);
+    assert!(!env.cpd(&["tui", "--respawn"]).stderr.contains("preview"));
 }
 
 #[test]
