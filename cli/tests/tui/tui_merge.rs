@@ -207,7 +207,7 @@ impl<'a> Outer<'a> {
     /// Starts the session `cockpit` (the one the client shows) on the env's server, and attaches a client of
     /// `width` x `height`; returns it with the client's name.
     fn attach(env: &'a TestEnv, width: u16, height: u16) -> (Outer<'a>, String) {
-        tmux_out(env, &["new-session", "-d", "-s", "cockpit", "-x", &width.to_string(), "-y", &height.to_string(), "sleep 300"]);
+        tmux_out(env, &["new-session", "-d", "-s", "cockpit", "-x", &width.to_string(), "-y", &height.to_string(), &format!("sleep {}", common::SLEEP_SECONDS)]);
         let outer = Outer { env, socket: format!("{}-outer", env.tmux_socket()) };
         let attach = format!("env -u TMUX tmux -L {} attach -t cockpit", env.tmux_socket());
         let (w, h) = (width.to_string(), height.to_string());
