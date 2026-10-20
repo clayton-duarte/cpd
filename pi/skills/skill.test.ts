@@ -244,6 +244,22 @@ test("cpd-lead: a Spec's acceptance names targeted tests and the full suite is t
   assert.doesNotMatch(spec, /npm test -- |test --workspace|`npm test`\s+passes/, "no example acceptance runs a full suite");
 });
 
+test("cpd-lead: a PR is docs, red tests by another Worker, implementation; bug fixes reproduce first", () => {
+  const [skillMd, ...refs] = skillFiles("cpd-lead");
+  const text = skillMd!.text;
+  const line = text.split("\n").find((l) => l.startsWith("- **PR shape:**"))!;
+  assert.ok(line, "Sequencing states the PR shape");
+  const at = (re: RegExp) => { const m = re.exec(line); assert.ok(m, `PR shape must state: ${re}`); return m.index; };
+  assert.ok(at(/docs Job/) < at(/red tests/) && at(/red tests/) < at(/implementation Job/) && at(/implementation Job/) < at(/open Job cpd adds/), "order: docs, red tests, implementation, open Job");
+  assert.match(line, /different Worker from the implementer, from the docs alone/);
+  assert.match(line, /A bug or flake fix starts with a test that reproduces it/);
+  assert.match(line, /exact rows/);
+  assert.match(line, /docs-only or config-only PR skips the test Job/);
+  assert.match(text, /cpd job add <tests> .*--needs <docs>\n/);
+  assert.match(text, /cpd job add <impl> .*--needs <tests>\n/);
+  assert.ok(refs.length > 0);
+});
+
 // --- the facts the skills state must be facts of the contract ---
 //
 // Sources (all read from the repo, so no Rust build is needed): docs/contract.md and docs/commands.md for Event kinds (§5.2 table), error
