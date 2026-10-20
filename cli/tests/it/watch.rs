@@ -1641,6 +1641,8 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
     engine.stop();
 
     assert_eq!(fx.events("all-merged"), [(Some("pay".into()), None, None, json!({"pr": "repo", "merged": ["api"], "cancelled": ["web"]}))]);
+    // The text the Lead is steered with (hs-d334): open now, waiting for nothing.
+    assert!(fx.texts("all-merged")[0].starts_with("No Job of PR repo of Plan pay is draft, queued or running. Open the pull request now: it waits for no slot and no other work."));
     assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --pr repo --plan pay"));
     assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_some());
 }
@@ -1713,6 +1715,200 @@ fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
     wait_until("all-merged", || fx.count("all-merged") == 1);
     engine.stop();
     assert_eq!(fx.events("all-merged")[0].3, json!({"pr": "repo", "merged": ["api"], "cancelled": ["later"]}));
+}
+
+// ---------- E4: a PR still unopened is escalated to the Manager (hs-d334) ----------
+
+impl Fx {
+    /// The Context's live Manager, Session `mgr1`.
+    fn add_manager(&self) {
+        self.fixture(
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('mgr1', 'manager', 'ctx', NULL, 'Manager', '/', 'O5', 'idle', 't', 't');",
+        );
+    }
+
+    /// Job `api` merged: the engine sends `all-merged`.
+    fn add_merged_api(&self) {
+        self.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
+    }
+
+    /// Makes the PR's `all-merged` `minutes` old, as if that long had passed: the engine's only clock is the store's `all_merged_at`.
+    fn age_all_merged(&self, minutes: i64) {
+        self.fixture(&format!("UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';", ago(minutes)));
+    }
+
+    /// Every escalation to a Manager: `(context, plan, session, data)`.
+    fn escalations(&self) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
+        self.store()
+            .read(|conn| {
+                let mut stmt = conn.prepare("SELECT context, plan, session, data FROM events WHERE kind = 'session-message' ORDER BY id")?;
+                let rows = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows.into_iter().map(|(c, p, s, d)| (c, p, s, serde_json::from_str(&d).unwrap())).collect())
+            })
+            .unwrap()
+    }
+}
+
+#[test]
+fn e4_tells_the_manager_once_when_a_pr_is_still_unopened_ten_minutes_after_all_merged() {
+    let fx = fx("");
+    fx.add_manager();
+    fx.add_merged_api();
+
+    poll_every(&fx, 1);
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    // Within the window: nothing, however many ticks.
+    fx.age_all_merged(9);
+    fx.env.wait_whole_ticks(2);
+    assert_eq!(fx.count("session-message"), 0);
+
+    // Past it: the Manager gets one message naming the Plan, the PR and how long; the next ticks add nothing.
+    fx.age_all_merged(11);
+    wait_until("the escalation", || fx.count("session-message") == 1);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+
+    let sent = fx.escalations();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let (context, plan, session, data) = &sent[0];
+    assert_eq!((context.as_deref(), plan.as_deref(), session.as_deref()), (Some("ctx"), None, Some("mgr1")));
+    let text = "Plan pay (Pay): PR repo has had all its Jobs merged for 11 minutes and its pull request is not opened. The Lead was told to run cpd pr open --pr repo and has not. Look at the Lead: cpd session show lead1, and tell it or the User.";
+    assert_eq!(
+        data,
+        &json!({"from": "lead1", "text": text, "wake": true, "escalation": "pr_unopened", "plan": "pay", "pr": "repo", "minutes": 11})
+    );
+    assert_eq!(fx.texts("session-message"), [text]);
+    assert_eq!(fx.count("error"), 0);
+}
+
+/// SQL that takes the PR out of `dispatch`, as `pr open`, its adoption of a merged pull request or `pr cancel` do.
+fn opened(status: &str) -> String {
+    const URL: &str = "https://github.com/acme/pay/pull/7";
+    let pull_request = format!(
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+           VALUES ('acme/pay', 7, '{URL}', 'Pay', 0, 'open', 'none', 'none', 't', 't');"
+    );
+    let number = format!("pr_number = 7, pr_url = '{URL}', pr_opened_at = 't', pull_request = (SELECT id FROM pull_requests WHERE number = 7)");
+    let (before, set) = match status {
+        "open" => (pull_request, number),
+        // `dispatch` goes to `merged` through `open` (the adoption of a merged pull request does both).
+        "merged" => (format!("{pull_request} UPDATE prs SET status = 'open', {number} WHERE plan = 'pay' AND key = 'repo';"), "merged_at = 't'".to_owned()),
+        _ => (String::new(), "lead_worktree = NULL, started_at = NULL".to_owned()),
+    };
+    format!("{before} UPDATE prs SET status = '{status}', {set} WHERE plan = 'pay' AND key = 'repo';")
+}
+
+#[test]
+fn e4_tells_no_one_of_a_pr_opened_after_all_merged_however_late() {
+    for status in ["open", "merged", "cancelled"] {
+        let fx = fx("");
+        fx.add_manager();
+        fx.add_merged_api();
+
+        poll_every(&fx, 1);
+        let engine = fx.start();
+        wait_until("all-merged", || fx.count("all-merged") == 1);
+        // Opened, and long past the window: the engine finds the PR opened, not late.
+        fx.fixture(&format!("{} UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';", opened(status), ago(60)));
+        fx.env.wait_whole_ticks(2);
+        engine.stop();
+        assert_eq!(fx.count("session-message"), 0, "{status}");
+        // (E5 may report its own error for the pull request the fake `gh` does not know.)
+        assert!(fx.events("error").iter().all(|e| e.3["code"] != "pr_unopened"), "{status}");
+    }
+}
+
+#[test]
+fn e4_counts_the_window_from_pr_open_escalate_minutes() {
+    let fx = fx("pr_open_escalate_minutes = 5");
+    fx.add_manager();
+    fx.add_merged_api();
+
+    poll_every(&fx, 1);
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    // 4 minutes is short of 5, 6 is past.
+    fx.age_all_merged(4);
+    fx.env.wait_whole_ticks(2);
+    assert_eq!(fx.count("session-message"), 0);
+    fx.age_all_merged(6);
+    wait_until("the escalation", || fx.count("session-message") == 1);
+    engine.stop();
+    assert_eq!(fx.escalations()[0].3["minutes"], 6);
+}
+
+#[test]
+fn e4_starts_a_new_window_when_a_fix_job_is_merged_after_the_escalation() {
+    let fx = fx("");
+    fx.add_manager();
+    fx.add_merged_api();
+
+    poll_every(&fx, 1);
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    fx.age_all_merged(11);
+    wait_until("the escalation", || fx.count("session-message") == 1);
+
+    // A fix Job is added (it clears `all_merged_at`) and merges: a second `all-merged`, a fresh window.
+    let spec = fx.env.root().join("fix-spec.json");
+    fs::write(&spec, json!({"goal": "Fix it.", "context": "Because.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}).to_string()).unwrap();
+    let added = fx.env.command(CPD).args(["job", "add", "fix", "--title", "Fix", "--tier", "S2", "--spec"]).arg(&spec).args(["--plan", "pay"]).output().unwrap();
+    assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stdout));
+    fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'fix'; UPDATE jobs SET status = 'merged', merged_sha = 'def' WHERE key = 'fix';");
+    wait_until("second all-merged", || fx.count("all-merged") == 2);
+    fx.env.wait_whole_ticks(3);
+    assert_eq!(fx.count("session-message"), 1, "the new window has not run out");
+
+    fx.age_all_merged(12);
+    wait_until("the second escalation", || fx.count("session-message") == 2);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert_eq!(fx.count("session-message"), 2);
+    assert_eq!(fx.escalations()[1].3["minutes"], 12);
+}
+
+#[test]
+fn e4_a_restarted_engine_repeats_no_escalation() {
+    let fx = fx("");
+    fx.add_manager();
+    fx.add_merged_api();
+
+    poll_every(&fx, 1);
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    fx.age_all_merged(11);
+    wait_until("the escalation", || fx.count("session-message") == 1);
+    engine.stop();
+
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert_eq!(fx.count("session-message"), 1);
+}
+
+#[test]
+fn e4_without_a_manager_gives_the_lead_one_error_instead() {
+    let fx = fx("");
+    fx.add_merged_api();
+
+    poll_every(&fx, 1);
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    fx.age_all_merged(11);
+    wait_until("the error", || fx.count("error") == 1);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+
+    assert_eq!(fx.count("session-message"), 0);
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let (plan, _, _, data) = &errors[0];
+    assert_eq!(plan.as_deref(), Some("pay"));
+    assert_eq!((&data["source"], &data["code"], &data["details"]), (&json!("watch"), &json!("pr_unopened"), &json!({"pr": "repo", "minutes": 11})));
 }
 
 // ---------- E5 ----------

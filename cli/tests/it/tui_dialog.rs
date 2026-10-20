@@ -1,5 +1,5 @@
 //! The `dialog` view (commands.md §13.2, "The dialog kit"; hs-d295) on a private tmux server: each kind draws in the
-//! section-header style, takes its keys, clicks and wheel, and writes its outcome to the `--out` file. The popup is a
+//! section-title style, takes its keys, clicks and wheel, and writes its outcome to the `--out` file. The popup is a
 //! window of the popup's inside (tmux gives a popup's program a pane of that size). The wheel and the click are raw
 //! mouse bytes sent to the pane.
 
@@ -64,25 +64,23 @@ fn wheel(env: &TestEnv, pane: &str, button: u8, column: u16, row: u16) {
 const CONFIRM: [&str; 2] = ["--text=Archive cpd-ui?", "--yes-label=Archive"];
 
 #[test]
-fn confirm_draws_the_header_the_question_and_the_buttons() {
+fn confirm_draws_the_title_the_question_and_the_buttons() {
     let env = TestEnv::new();
-    let (pane, _) = start(&env, "confirm", &CONFIRM, 40, 5);
+    let (pane, _) = start(&env, "confirm", &CONFIRM, 40, 7);
     let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[Archive]")));
-    assert_eq!(rows[0], format!("── Title {}", "─".repeat(31)));
-    assert_eq!(rows[1..5], [" Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
-    // the title is the header's reversed block, as the cockpit's section headers
-    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    assert!(styled.lines().next().unwrap().contains("\x1b[7m Title "), "{styled:?}");
+    // an empty row, the title, an empty row, the question, two empty rows, the buttons
+    assert_eq!(rows[..2], ["", format!("━━ Title {}", "━".repeat(31)).as_str()]);
+    assert_eq!(rows[2..7], ["", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
 }
 
 #[test]
 fn confirm_y_and_enter_and_a_click_on_the_first_button_confirm() {
     for how in ["y", "Enter", "click"] {
         let env = TestEnv::new();
-        let (pane, out) = start(&env, "confirm", &CONFIRM, 40, 5);
+        let (pane, out) = start(&env, "confirm", &CONFIRM, 40, 7);
         wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[Archive]")));
         match how {
-            "click" => click(&env, &pane, 5, 5),
+            "click" => click(&env, &pane, 5, 7),
             key => keys(&env, &pane, &[key]),
         }
         assert_eq!(outcome(&env, &out), json!({"confirmed": true}), "{how}");
@@ -93,11 +91,11 @@ fn confirm_y_and_enter_and_a_click_on_the_first_button_confirm() {
 fn confirm_esc_n_q_and_a_click_on_the_second_button_cancel() {
     for how in ["Escape", "n", "q", "click"] {
         let env = TestEnv::new();
-        let (pane, out) = start(&env, "confirm", &CONFIRM, 40, 5);
+        let (pane, out) = start(&env, "confirm", &CONFIRM, 40, 7);
         wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[Cancel]")));
         match how {
-            // `[Cancel]` is at 0-based columns 14 to 21, row 4
-            "click" => click(&env, &pane, 16, 5),
+            // `[Cancel]` is at 0-based columns 14 to 21, row 6
+            "click" => click(&env, &pane, 16, 7),
             key => keys(&env, &pane, &[key]),
         }
         assert_eq!(outcome(&env, &out), json!({"confirmed": false}), "{how}");
@@ -109,14 +107,14 @@ const INPUT: [&str; 3] = ["--prompt=Fork cpd-ui into a new Plan, name:", "--init
 #[test]
 fn input_types_a_refused_value_stays_open_and_a_fixed_one_is_written() {
     let env = TestEnv::new();
-    let (pane, out) = start(&env, "input", &INPUT, 60, 7);
+    let (pane, out) = start(&env, "input", &INPUT, 60, 9);
     let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
-    assert_eq!(rows[0], format!("── Title {}", "─".repeat(51)));
-    assert_eq!(rows[1..3], [" Fork cpd-ui into a new Plan, name:", " ab"]);
+    assert_eq!(rows[1], format!("━━ Title {}", "━".repeat(51)));
+    assert_eq!(rows[3..5], [" Fork cpd-ui into a new Plan, name:", " ab"]);
     // "abBad" is no Plan id: refused inside the popup, which stays
     keys(&env, &pane, &["B", "a", "d", "Enter"]);
     let rows = wait_screen(&env, &pane, "the refusal", |r| r.iter().any(|l| l.contains("Invalid Plan id")));
-    assert_eq!(rows[2], " abBad");
+    assert_eq!(rows[4], " abBad");
     assert!(!closed(&env));
     assert!(!out.exists());
     // the User keeps typing: y, n and q are text; the refusal goes at the first edit
@@ -130,7 +128,7 @@ fn input_types_a_refused_value_stays_open_and_a_fixed_one_is_written() {
 #[test]
 fn input_esc_cancels_and_writes_no_value() {
     let env = TestEnv::new();
-    let (pane, out) = start(&env, "input", &INPUT, 60, 7);
+    let (pane, out) = start(&env, "input", &INPUT, 60, 9);
     wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
     keys(&env, &pane, &["x", "Escape"]);
     assert_eq!(outcome(&env, &out), json!({"confirmed": false}));
@@ -139,17 +137,17 @@ fn input_esc_cancels_and_writes_no_value() {
 #[test]
 fn input_the_ok_button_accepts_and_validates() {
     let env = TestEnv::new();
-    let (pane, out) = start(&env, "input", &["--prompt=Title: ", "--initial=Old title", "--validate=title"], 60, 7);
+    let (pane, out) = start(&env, "input", &["--prompt=Title: ", "--initial=Old title", "--validate=title"], 60, 9);
     wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
-    // `[OK]` is at 0-based columns 2 to 5, row 6
-    click(&env, &pane, 4, 7);
+    // `[OK]` is at 0-based columns 2 to 5, row 8
+    click(&env, &pane, 4, 9);
     assert_eq!(outcome(&env, &out), json!({"confirmed": true, "value": "Old title"}));
 }
 
 #[test]
 fn input_an_empty_title_is_refused_by_the_titles_check() {
     let env = TestEnv::new();
-    let (pane, _out) = start(&env, "input", &["--prompt=Title: ", "--initial=", "--validate=title"], 60, 7);
+    let (pane, _out) = start(&env, "input", &["--prompt=Title: ", "--initial=", "--validate=title"], 60, 9);
     wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
     keys(&env, &pane, &["Enter"]);
     wait_screen(&env, &pane, "the refusal", |r| r.iter().any(|l| l.contains("1 to 200")));
@@ -164,36 +162,36 @@ fn body() -> String {
 fn text_the_wheel_and_the_keys_scroll_it() {
     let env = TestEnv::new();
     let body = format!("--body={}", body());
-    let (pane, out) = start(&env, "text", &[&body], 30, 8);
+    let (pane, out) = start(&env, "text", &[&body], 30, 10);
     let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[Close]")));
-    assert_eq!(rows[0], format!("── Title {}", "─".repeat(21)));
-    assert_eq!(rows[1], " line 1");
-    assert_eq!(rows[5], " line 5");
-    assert!(rows[7].ends_with("1-5/20"), "{rows:?}");
+    assert_eq!(rows[1], format!("━━ Title {}", "━".repeat(21)));
+    assert_eq!(rows[3], " line 1");
+    assert_eq!(rows[7], " line 5");
+    assert!(rows[9].ends_with("1-5/20"), "{rows:?}");
     // the wheel: 3 rows a notch
-    wheel(&env, &pane, 65, 5, 3);
-    let rows = wait_screen(&env, &pane, "the wheel down", |r| r[1] == " line 4");
-    assert!(rows[7].ends_with("4-8/20"), "{rows:?}");
-    wheel(&env, &pane, 64, 5, 3);
-    wait_screen(&env, &pane, "the wheel up", |r| r[1] == " line 1");
+    wheel(&env, &pane, 65, 5, 5);
+    let rows = wait_screen(&env, &pane, "the wheel down", |r| r[3] == " line 4");
+    assert!(rows[9].ends_with("4-8/20"), "{rows:?}");
+    wheel(&env, &pane, 64, 5, 5);
+    wait_screen(&env, &pane, "the wheel up", |r| r[3] == " line 1");
     // the keys
     keys(&env, &pane, &["j"]);
-    wait_screen(&env, &pane, "j", |r| r[1] == " line 2");
+    wait_screen(&env, &pane, "j", |r| r[3] == " line 2");
     keys(&env, &pane, &["NPage"]);
-    wait_screen(&env, &pane, "PgDn", |r| r[1] == " line 7");
+    wait_screen(&env, &pane, "PgDn", |r| r[3] == " line 7");
     keys(&env, &pane, &["Down", "Down"]);
-    wait_screen(&env, &pane, "Down", |r| r[1] == " line 9");
+    wait_screen(&env, &pane, "Down", |r| r[3] == " line 9");
     keys(&env, &pane, &["k"]);
     keys(&env, &pane, &["PPage"]);
-    wait_screen(&env, &pane, "k and PgUp", |r| r[1] == " line 3");
+    wait_screen(&env, &pane, "k and PgUp", |r| r[3] == " line 3");
     keys(&env, &pane, &["Up"]);
-    wait_screen(&env, &pane, "Up", |r| r[1] == " line 2");
+    wait_screen(&env, &pane, "Up", |r| r[3] == " line 2");
     // the end of the text stops the scroll
     for _ in 0..8 {
-        wheel(&env, &pane, 65, 5, 3);
+        wheel(&env, &pane, 65, 5, 5);
     }
-    let rows = wait_screen(&env, &pane, "the end", |r| r[5] == " line 20");
-    assert_eq!(rows[1], " line 16");
+    let rows = wait_screen(&env, &pane, "the end", |r| r[7] == " line 20");
+    assert_eq!(rows[3], " line 16");
     // Enter closes: confirmed
     keys(&env, &pane, &["Enter"]);
     assert_eq!(outcome(&env, &out), json!({"confirmed": true}));
@@ -202,16 +200,16 @@ fn text_the_wheel_and_the_keys_scroll_it() {
 #[test]
 fn text_esc_closes_it_and_a_click_on_close_closes_it() {
     let env = TestEnv::new();
-    let (pane, out) = start(&env, "text", &["--body=short"], 30, 6);
+    let (pane, out) = start(&env, "text", &["--body=short"], 30, 8);
     wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[Close]")));
     keys(&env, &pane, &["Escape"]);
     assert_eq!(outcome(&env, &out), json!({"confirmed": false}));
 
     let env = TestEnv::new();
-    let (pane, out) = start(&env, "text", &["--body=short"], 30, 6);
+    let (pane, out) = start(&env, "text", &["--body=short"], 30, 8);
     let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[Close]")));
-    assert_eq!(rows[1], " short");
-    click(&env, &pane, 4, 6);
+    assert_eq!(rows[3], " short");
+    click(&env, &pane, 4, 8);
     assert_eq!(outcome(&env, &out), json!({"confirmed": true}));
 }
 
