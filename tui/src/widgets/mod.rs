@@ -2,13 +2,15 @@
 //! machine-wide right column of the cockpit. It takes one snapshot of the read
 //! model ([`read::open_prs`]: the one thing it draws), then follows the Events: it looks at the Events and at the pull
 //! request rows every [`TICK`] and re-reads when one concerns it (a pull request row changes with no Event), at most
-//! once per [`COALESCE`]; the CPU %, GPU % and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when the
-//! pull requests, the CPU and memory, the note, the size, a click or the wheel changed, not on every tick. It makes no write of
+//! once per [`COALESCE`]; the CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when the
+//! pull requests, the CPU, GPU and memory, the note, the size, a click or the wheel changed, not on every tick. It makes no write of
 //! its own, but for what a click on an owned PR row asks of `cpd session open`, and the merge popup a click on a merge
-//! icon opens. It has no key; mouse capture is on, for the clicks and the wheel over the PRs section.
+//! icon opens. A right click on a PR row opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), which then
+//! takes every key and click until it closes. Otherwise it has no key; mouse capture is on, for the clicks and the
+//! wheel over the PRs section.
 //!
 //! - [`column`]: the drawing of the machine and the PRs;
-//! - [`host`]: the machine's CPU % and memory %;
+//! - [`host`]: the machine's CPU %, GPU % and memory %;
 //! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
 //!   the StatusBar's button (`cpd tui action legend`) open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::palette`]'s.
@@ -21,9 +23,10 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use ratatui::crossterm::event::{self, Event, MouseButton, MouseEventKind};
-use ratatui::layout::Position;
+use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseButton, MouseEventKind};
+use ratatui::layout::{Position, Rect};
 
+use super::menu::{Menu, Outcome};
 use super::read::{self, OpenPr};
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
@@ -38,10 +41,10 @@ use cpd_core::session::PROGRAM;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
-pub use column::{Drawn, Hit, Machine, MergeIcon, draw};
+pub use column::{Drawn, Hit, Machine, MergeIcon, PrItem, PrRow, draw};
 pub use host::Usage;
 use host::Sampler;
-pub(crate) use column::{Window, dim, max_scroll, section_header, window};
+pub(crate) use column::{Window, dim, max_scroll, window};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);
@@ -83,11 +86,33 @@ struct Opener<'a> {
     cockpit: &'a str,
 }
 
+/// The right-click menu of a PR row, while it is open: its entries and the row it is about, as drawn when it opened.
+struct PrMenu {
+    menu: Menu<PrItem>,
+    row: PrRow,
+}
+
+/// What the entry `item` of `row`'s menu does; the note it leaves on success (empty for none).
+fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> Result<String, CpdError> {
+    match item {
+        PrItem::Merge => crate::merge::open(opener.tmux, &row.pull).map(|()| String::new()),
+        PrItem::CopyLink => {
+            opener.tmux.run(&["set-buffer", "-w", "--", row.url.as_str()].map(str::to_owned))?;
+            Ok(format!("copied {}", row.url))
+        }
+        PrItem::GoToLead => {
+            let lead = row.lead.as_ref().expect("Go to Lead is offered only on an owned PR");
+            open_lead(opener.run_command, opener.tmux, opener.cockpit, lead).map(|()| String::new())
+        }
+    }
+}
+
 /// Draws and follows, for as long as the process runs: no key ends it. A failed read keeps what is on screen and shows its error in the last row, until a read
 /// succeeds ([`kept`]). The wheel over the PRs section scrolls it by one pull request per notch. A left click on an owned
 /// PR row (not on its `󰏌` or its merge icon) opens its Lead in the chat slot; a left click on a merge icon opens the merge
 /// popup; a refusal or a failure is the `note` in the column's last row until the
-/// next click.
+/// next click. A right click on a PR row opens its menu, which takes every key and click until it closes; Copy Link
+/// leaves `copied <url>` as the note.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
     store: &mut Store,
@@ -102,37 +127,68 @@ fn show(
     let mut note = String::new();
     let mut error = None::<String>;
     let mut redraw = true;
+    let mut menu = None::<PrMenu>;
+    let mut pane = Rect::default();
     // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
     let mut scroll = 0usize;
     loop {
         if redraw {
             let shown = error.as_deref().unwrap_or(&note);
-            terminal.draw(|f| last = Some(draw(f, f.area(), &prs, &machine, shown, scroll)))?;
+            terminal.draw(|f| {
+                pane = f.area();
+                last = Some(draw(f, pane, &prs, &machine, shown, scroll));
+                if let Some(open) = &menu {
+                    open.menu.draw(f, pane);
+                }
+            })?;
             redraw = false;
         }
         let drawn = last.as_ref().expect("the terminal drew");
         scroll = scroll.min(drawn.max_scroll);
         if event::poll(TICK)? {
             redraw = true; // a click, the wheel, a key or a resize
-            match event::read()? {
-                Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
-                    note.clear();
-                    let at = Position::new(m.column, m.row);
-                    let result = if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
-                        Some(crate::merge::open(opener.tmux, &icon.pull))
-                    } else {
-                        drawn.hits.iter().find(|h| h.contains(at)).map(|hit| open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead))
-                    };
-                    if let Some(Err(e)) = result {
-                        note = e.message().to_owned();
+            let event = event::read()?;
+            if let Some(open) = menu.as_mut() {
+                // an open menu takes every key and click
+                let outcome = match &event {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => open.menu.key(*key),
+                    Event::Mouse(m) => open.menu.mouse(pane, *m),
+                    _ => Outcome::Stay,
+                };
+                match outcome {
+                    Outcome::Stay => {}
+                    Outcome::Close => menu = None,
+                    Outcome::Pick(item) => {
+                        let PrMenu { row, .. } = menu.take().expect("the menu was open");
+                        note = pick(item, &row, opener).unwrap_or_else(|e| e.message().to_owned());
                     }
                 }
-                Event::Mouse(m) if drawn.prs.contains(Position::new(m.column, m.row)) => match m.kind {
-                    MouseEventKind::ScrollDown => scroll = (scroll + 1).min(drawn.max_scroll),
-                    MouseEventKind::ScrollUp => scroll = scroll.saturating_sub(1),
+            } else {
+                match event {
+                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Right) => {
+                        note.clear();
+                        let at = Position::new(m.column, m.row);
+                        menu = drawn.rows.iter().find(|r| r.area.contains(at)).map(|row| PrMenu { menu: Menu::new(row.items(), at), row: row.clone() });
+                    }
+                    Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
+                        note.clear();
+                        let at = Position::new(m.column, m.row);
+                        let result = if let Some(icon) = drawn.icons.iter().find(|i| i.area.contains(at)) {
+                            Some(crate::merge::open(opener.tmux, &icon.pull))
+                        } else {
+                            drawn.hits.iter().find(|h| h.contains(at)).map(|hit| open_lead(opener.run_command, opener.tmux, opener.cockpit, &hit.lead))
+                        };
+                        if let Some(Err(e)) = result {
+                            note = e.message().to_owned();
+                        }
+                    }
+                    Event::Mouse(m) if drawn.prs.contains(Position::new(m.column, m.row)) => match m.kind {
+                        MouseEventKind::ScrollDown => scroll = (scroll + 1).min(drawn.max_scroll),
+                        MouseEventKind::ScrollUp => scroll = scroll.saturating_sub(1),
+                        _ => {}
+                    },
                     _ => {}
-                },
-                _ => {}
+                }
             }
         }
         if read_at.elapsed() >= COALESCE {
@@ -237,9 +293,9 @@ mod tests {
         assert_eq!(newest_client("junk\n"), None);
     }
 
-    /// tui-W10: a name that cannot be read is no error of the view (nor are the CPU and memory, `host::Sampler`).
+    /// tui-W10: a name that cannot be read is no error of the view (nor are the CPU, GPU and memory, `host::Sampler`).
     #[test]
-    fn a_missing_hostname_file_is_not_an_error() {
+    fn a_missing_hostname_file_or_load_is_not_an_error() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("hostname");
         assert_eq!(read_hostname(&file), None, "no file");

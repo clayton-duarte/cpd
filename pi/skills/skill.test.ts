@@ -234,6 +234,16 @@ test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry 
   }
 });
 
+test("cpd-lead: a Spec's acceptance names targeted tests and the full suite is the Gate's", () => {
+  const [skillMd, ...refs] = skillFiles("cpd-lead");
+  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
+  for (const { name, text } of [skillMd!, { name: "spec-files.md", text: spec }]) {
+    assert.match(text, /targeted tests/, `${name}: acceptance names targeted tests`);
+    assert.match(text, /full suite is the Gate's/, `${name}: the full suite is the Gate's`);
+  }
+  assert.doesNotMatch(spec, /npm test -- |test --workspace|`npm test`\s+passes/, "no example acceptance runs a full suite");
+});
+
 // --- the facts the skills state must be facts of the contract ---
 //
 // Sources (all read from the repo, so no Rust build is needed): docs/contract.md and docs/commands.md for Event kinds (§5.2 table), error
@@ -358,8 +368,8 @@ function factProblems(files: { name: string; text: string }[]): string[] {
       if (!exits) bad(`"${m[0]}": \`${m[1]}\` is not an error code`);
       else if (!exits.has(Number(m[2]))) bad(`"${m[0]}": commands.md gives \`${m[1]}\` exit ${[...exits].join(" or ")}`);
     }
-    // Flags: every --flag the text names, in a command or in prose, is a flag of some cpd synopsis (a `gh` or `git` command is not cpd's).
-    for (const f of new Set(text.replace(/`(?:gh|git) [^`\n]*`/g, "").match(/(?<![\w-])--[a-z][a-z-]*/g))) if (!flags.has(f)) bad(`${f} is no flag of any cpd command (commands.md)`);
+    // Flags: every --flag the text names, in a command or in prose, is a flag of some cpd synopsis (a `gh`, `git`, `scripts/cargo.sh`, `node` or `npm` command is not cpd's).
+    for (const f of new Set(text.replace(/`(?:gh|git|timeout \d+ node|scripts\/cargo\.sh|node|npm) [^`\n]*`/g, "").match(/(?<![\w-])--[a-z][a-z-]*/g))) if (!flags.has(f)) bad(`${f} is no flag of any cpd command (commands.md)`);
     // `error.details.x`: a field of the details of some refusal (not the `details` of pi's ask_user_question result).
     for (const m of text.matchAll(/\berror\.details\.([a-z_]+)/g)) if (!commandsDoc.includes(`details.${m[1]}`)) bad(`error.details.${m[1]} is in no commands.md refusal row`);
     // Ids: record ids are <machine>-<letter><n>; the skill's patterns are the contract's.
@@ -464,7 +474,11 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   assert.match(lead, /Register planned work at once/);
   assert.match(lead, /cpd job add <k> --draft --title/);
-  assert.match(lead, /cpd pr add <key> --repo <path> --needs/);
+  assert.match(lead, /cpd pr add <key> --repo <path> --title "<title>" --needs/);
+  assert.match(lead, /pr_title_required/);
+  assert.match(lead, /cpd pr edit <key> --title/);
+  for (const l of lead.split("\n")) if (/cpd pr add <key>/.test(l)) assert.match(l, /--title/, `pr add without --title: ${l}`);
+  assert.doesNotMatch(lead, /cpd_plan_review` \(no parameters\)/);
   const manager = skillFiles("cpd-manager")[0]!.text;
   assert.match(manager, /Check each Plan's registered work/);
   assert.match(manager, /cpd plan show --plan <p>/);
@@ -573,4 +587,13 @@ test("cpd-manager never blocks and says the adapter refuses waits over 30 second
   const text = skillFiles("cpd-manager")[0]!.text;
   assert.match(text, /\*\*Never block\.\*\*/);
   assert.match(text, /waits longer than 30 seconds/);
+});
+
+test("open at once: cpd-lead opens a PR at its last Job's merge without waiting; cpd-manager oversees all-merged PRs", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /Open a PR as soon as its last Job merges; never wait for a slot, a turn or another PR\./);
+  assert.match(lead, /never wait for `all-merged`, a slot, a turn or another PR/);
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(manager, /Oversee all-merged PRs/);
+  assert.match(manager, /stack those that would conflict/);
 });

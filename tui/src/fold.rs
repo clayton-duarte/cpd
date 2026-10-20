@@ -1,14 +1,15 @@
-//! The fold widget (commands.md §17, "Collapsible blocks"; decision hs-d309): the one look of every block of the
-//! cockpit that folds, drawn here and nowhere else. The tree's Contexts and archived `…` groups and the Inbox's
-//! toggle use it; a popup or a Plan view panel that folds would too.
+//! The fold widget (commands.md §17, "Collapsible blocks"; decisions hs-d337, hs-d339): the one look of every block of
+//! the cockpit that folds, drawn here and nowhere else. The tree's Contexts and the Inbox's list use it; a popup or a
+//! Plan view panel that folds would too.
 //!
-//! - **Expanded:** the bold title line, the content lines each led by a muted branch (`│`, or `├` in the tree, which
-//!   keeps its own branches), then a muted `└ collapse` line.
-//! - **Folded:** the title line, then a muted `└ expand` line.
-//! - **Muted** is `palette::fg(Meaning::Nothing)`: the branch, the `└` and the words `expand` and `collapse`. The
-//!   content is not muted. The title is bold.
-//! - **Toggling:** only the `expand` / `collapse` line toggles. [`Drawn::toggle`] is its row, so the caller can
-//!   hit-test it; a click on the title line keeps the caller's own action.
+//! - **Expanded:** the title row `╭` and the title's content (bold), for example `╭󰪥 building-cpd`; each content row
+//!   led by a muted branch with no indent, `├─` in the tree, which puts a glyph straight against it
+//!   (`├─󰪥 cross-repo`), or `│` (the Inbox's rows, `│  <item>`); then **one** closing line, `╰─ collapse`.
+//! - **Folded:** the title row (`╭󰝦 dotfiles`), then `╰─ expand`.
+//! - **Muted** is `palette::fg(Meaning::Nothing)`: the lines (`╭`, `├─`, `│`, `╰─`) and the words `expand` and
+//!   `collapse`. The content is not muted.
+//! - **Toggling:** only the `╰─` line toggles. [`Drawn::toggle`] is its row, so the caller can hit-test it; a click on
+//!   the title row keeps the caller's own action.
 //!
 //! Pure: it only builds lines.
 
@@ -17,33 +18,36 @@ use ratatui::text::{Line, Span};
 
 use crate::palette::{self, Meaning};
 
-/// The branch of a content line.
+/// The branch of a content row that has no glyph of its own (the Inbox's).
 pub const BRANCH: &str = "│";
-/// The branch of a content line in the tree, which keeps its own branches.
-pub const TREE_BRANCH: &str = "├";
-/// The glyph of a title that has no icon of its own.
-pub const GLYPH: &str = "┌";
+/// The branch of a content row in the tree, whose rows lead with their glyph.
+pub const TREE_BRANCH: &str = "├─";
 
-/// The closing glyph of the toggle line.
-const CLOSE: &str = "└";
+/// The start of the title row.
+const OPEN: &str = "╭";
+/// The start of the toggle row.
+const CLOSE: &str = "╰─";
 
 fn muted() -> Style {
     palette::fg(Meaning::Nothing)
 }
 
-/// A title line: `glyph`, a space and `text` (the glyph alone when `text` is empty), unstyled; [`Fold`] makes it bold.
-pub fn title(glyph: &str, text: &str) -> Line<'static> {
-    if text.is_empty() { Line::from(glyph.to_owned()) } else { Line::from(format!("{glyph} {text}")) }
+/// A title row: the muted `╭` and `content` (the glyph and the name, for example); [`Fold`] makes the content bold.
+pub fn title(content: Line<'static>) -> Line<'static> {
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let mut spans = vec![Span::styled(OPEN, muted())];
+    spans.extend(content.spans.into_iter().map(|s| s.patch_style(bold)));
+    Line { spans, ..content }
 }
 
-/// The toggle line: a muted `└ expand` when folded, `└ collapse` when expanded.
+/// The toggle row: a muted `╰─ expand` when folded, `╰─ collapse` when expanded.
 pub fn toggle(expanded: bool) -> Line<'static> {
     Line::from(Span::styled(format!("{CLOSE} {}", if expanded { "collapse" } else { "expand" }), muted()))
 }
 
-/// A content line: the muted `branch` and a space, then the content as it is.
+/// A content row: the muted `branch`, then the content as it is.
 pub fn content(branch: &str, line: Line<'static>) -> Line<'static> {
-    let mut spans = vec![Span::styled(format!("{branch} "), muted())];
+    let mut spans = vec![Span::styled(branch.to_owned(), muted())];
     spans.extend(line.spans);
     Line { spans, ..line }
 }
@@ -59,14 +63,14 @@ pub struct Fold {
 /// The lines of a block, top to bottom.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawn {
-    /// The title, the content (only when expanded) and the toggle line.
+    /// The title, the content (only when expanded) and the toggle row.
     pub lines: Vec<Line<'static>>,
-    /// The row, in `lines`, of the `└ expand` / `└ collapse` line: the only one that toggles.
+    /// The row, in `lines`, of the `╰─ expand` / `╰─ collapse` line: the only one that toggles.
     pub toggle: usize,
 }
 
 impl Fold {
-    /// A block with `title` and `content`, led by [`BRANCH`].
+    /// A block with the title `title` (what follows the `╭`) and `content`, led by [`BRANCH`].
     pub fn new(title: Line<'static>, content: Vec<Line<'static>>, expanded: bool) -> Fold {
         Fold { title, content, expanded, branch: BRANCH }
     }
@@ -78,9 +82,7 @@ impl Fold {
 
     /// The lines to draw. Folded, the content is not drawn.
     pub fn drawn(self) -> Drawn {
-        let bold = Style::new().add_modifier(Modifier::BOLD);
-        let title = Line { spans: self.title.spans.into_iter().map(|s| s.patch_style(bold)).collect(), ..self.title };
-        let mut lines = vec![title];
+        let mut lines = vec![title(self.title)];
         if self.expanded {
             lines.extend(self.content.into_iter().map(|line| content(self.branch, line)));
         }
@@ -102,54 +104,65 @@ mod tests {
     }
 
     fn block(expanded: bool) -> Drawn {
-        Fold::new(title(GLYPH, "Plan"), vec![Line::from("one"), Line::from("two")], expanded).drawn()
+        Fold::new(Line::from("󰪥 building-cpd"), vec![Line::from("󰪥 cross-repo"), Line::from("󰝦 other")], expanded).branch(TREE_BRANCH).drawn()
     }
 
     fn is_muted(span: &Span<'_>) -> bool {
         span.style.fg == Some(palette::color(Meaning::Nothing))
     }
 
+    fn bold(span: &Span<'_>) -> bool {
+        span.style.add_modifier.contains(Modifier::BOLD)
+    }
+
     #[test]
-    fn expanded_is_a_bold_title_the_content_behind_a_muted_branch_and_a_muted_collapse() {
+    fn expanded_is_the_title_the_content_straight_against_its_branch_and_one_collapse() {
         let drawn = block(true);
-        assert_eq!(words(&drawn), ["┌ Plan", "│ one", "│ two", "└ collapse"]);
-        assert_eq!(drawn.toggle, 3, "the toggle is the last row");
-        assert!(drawn.lines[0].spans.iter().all(|s| s.style.add_modifier.contains(Modifier::BOLD)), "the title is bold");
+        assert_eq!(words(&drawn), ["╭󰪥 building-cpd", "├─󰪥 cross-repo", "├─󰝦 other", "╰─ collapse"]);
+        assert_eq!(drawn.toggle, 3, "the toggle is the last row, and the only one");
+    }
+
+    #[test]
+    fn folded_is_the_title_and_expand_and_the_content_is_not_drawn() {
+        let drawn = Fold::new(Line::from("󰝦 dotfiles"), vec![Line::from("one")], false).branch(TREE_BRANCH).drawn();
+        assert_eq!(words(&drawn), ["╭󰝦 dotfiles", "╰─ expand"]);
+        assert_eq!(drawn.toggle, 1);
+    }
+
+    #[test]
+    fn the_lines_and_the_words_are_muted_the_content_is_not_and_the_title_is_bold() {
+        let drawn = block(true);
+        let title = &drawn.lines[0].spans;
+        assert_eq!(title[0].content, "╭");
+        assert!(is_muted(&title[0]) && !bold(&title[0]), "the `╭` is muted");
+        assert!(title[1..].iter().all(|s| bold(s) && !is_muted(s)), "the title's content is bold, not muted");
         for row in [1, 2] {
             let spans = &drawn.lines[row].spans;
-            assert_eq!(spans[0].content, "│ ");
+            assert_eq!(spans[0].content, "├─");
             assert!(is_muted(&spans[0]), "the branch is muted");
-            assert!(!is_muted(&spans[1]) && spans[1].style.fg.is_none(), "the content is not");
+            assert!(spans[1..].iter().all(|s| !is_muted(s) && s.style.fg.is_none()), "the content is not");
         }
-        assert!(drawn.lines[3].spans.iter().all(is_muted), "`└ collapse` is muted, both the glyph and the word");
-        assert!(!drawn.lines[3].spans.iter().any(|s| s.style.add_modifier.contains(Modifier::BOLD)));
+        assert!(drawn.lines[3].spans.iter().all(is_muted), "`╰─ collapse` is muted, the lines and the word");
+        assert!(!drawn.lines[3].spans.iter().any(bold));
+        assert!(Fold::new(Line::from("x"), vec![], false).drawn().lines[1].spans.iter().all(is_muted), "`╰─ expand` too");
     }
 
     #[test]
-    fn folded_is_the_title_and_a_muted_expand_and_the_content_is_not_drawn() {
-        let drawn = block(false);
-        assert_eq!(words(&drawn), ["┌ Plan", "└ expand"]);
-        assert_eq!(drawn.toggle, 1);
-        assert!(drawn.lines[0].spans.iter().all(|s| s.style.add_modifier.contains(Modifier::BOLD)));
-        assert!(drawn.lines[1].spans.iter().all(is_muted));
-    }
-
-    #[test]
-    fn the_tree_leads_its_content_with_its_own_branch() {
-        let drawn = Fold::new(title("󰇘", ""), vec![Line::from("one")], true).branch(TREE_BRANCH).drawn();
-        assert_eq!(words(&drawn), ["󰇘", "├ one", "└ collapse"]);
+    fn a_block_with_no_glyph_leads_its_content_with_the_plain_line() {
+        let drawn = Fold::new(Line::from("t"), vec![Line::from(" one")], true).drawn();
+        assert_eq!(words(&drawn), ["╭t", "│ one", "╰─ collapse"]);
         assert!(is_muted(&drawn.lines[1].spans[0]));
     }
 
     #[test]
     fn a_block_with_no_content_is_its_title_and_its_toggle() {
-        assert_eq!(words(&Fold::new(title(GLYPH, "x"), vec![], true).drawn()), ["┌ x", "└ collapse"]);
+        assert_eq!(words(&Fold::new(Line::from("x"), vec![], true).drawn()), ["╭x", "╰─ collapse"]);
     }
 
     #[test]
-    fn the_toggle_line_alone_is_what_the_inbox_draws() {
-        assert_eq!(flat(&toggle(false)), "└ expand");
-        assert_eq!(flat(&toggle(true)), "└ collapse");
+    fn the_toggle_row_alone_is_what_the_inbox_draws() {
+        assert_eq!(flat(&toggle(false)), "╰─ expand");
+        assert_eq!(flat(&toggle(true)), "╰─ collapse");
         assert!(toggle(true).spans.iter().all(is_muted));
     }
 }

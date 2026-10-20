@@ -12,6 +12,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::engine::{Engine, stopping};
+use super::record_detached;
 use super::report::{About, Step};
 use crate::context::digest;
 use crate::context::distill::{log_path, running};
@@ -107,7 +108,8 @@ fn start_if_due(engine: &mut Engine, context: &ContextId, seq: i64, at: &str, no
 }
 
 /// Spawns `cpd context distill --context <context>` detached (`setsid`), stdin from `/dev/null`, stdout and
-/// stderr appended to the Context's `distill.log`. Returns its pid.
+/// stderr appended to the Context's `distill.log`, its pid recorded in `distill.pid` ([`record_detached`]).
+/// Returns its pid.
 fn spawn(engine: &Engine, context: &ContextId) -> Result<u32, CpdError> {
     let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the distill run of Context {context}: {why}.")).with("context", context.as_str());
     let exe = crate::host::exe::started_as()?;
@@ -134,11 +136,9 @@ fn spawn(engine: &Engine, context: &ContextId) -> Result<u32, CpdError> {
     unsafe {
         command.pre_exec(|| nix::unistd::setsid().map(drop).map_err(std::io::Error::from));
     }
-    let mut child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
-    let pid = child.id();
-    // Reaps it while this process lives; detached otherwise.
-    std::thread::spawn(move || child.wait());
-    Ok(pid)
+    let child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let pid_path = engine.home.distill_pid(context);
+    record_detached(child, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
 }
 
 #[cfg(test)]
