@@ -2900,7 +2900,7 @@ fn stacked(fx: &Fx) -> Stacked {
     let ship = PlanId::parse("ship").unwrap();
     let path = fx.repo.parent().unwrap().join("pay.ship.web");
     let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("web.log") };
-    let prepared = cpd_core::git::prepare_lead_worktree(&fx.repo, &ship, &path, "cpd/ship/web", "cpd/pay", true, &setup).map_err(|f| f.error).unwrap();
+    let prepared = cpd_core::git::worktree::prepare_stacked_lead_worktree(&fx.repo, &ship, &path, "cpd/ship/web", "cpd/pay", &setup).map_err(|f| f.error).unwrap();
     assert_eq!(prepared.base_sha, fx.lead_sha(), "cut from the base PR's Lead Branch head");
     prepared.push().unwrap();
     fx.git(&path, &["config", "user.name", "cpd test"]);

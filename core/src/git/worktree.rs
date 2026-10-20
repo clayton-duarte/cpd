@@ -426,10 +426,32 @@ impl Prepared {
 /// it contains `origin/<base>`, refused `branch_exists` when it does not, and
 /// cut from `origin/<base>` when absent (R35). On failure the worktree and
 /// branch are removed.
-///
-/// `stacked`: `base` is a base PR's Lead Branch, and the branch is cut from its head, not from `origin/<base>`
-/// (see [`check_stacked`]); everything else is the same.
 pub fn prepare_lead_worktree(
+    repo: &Path,
+    plan: &PlanId,
+    path: &Path,
+    branch: &str,
+    base: &str,
+    setup: &Setup,
+) -> Result<Prepared, StartFailure> {
+    prepare(repo, plan, path, branch, base, false, setup)
+}
+
+/// [`prepare_lead_worktree`] of a **stacked** PR: `base` is its base PR's Lead Branch, and the branch is cut from
+/// that branch's head, not from `origin/<base>` (contract §7.2 "A stacked PR", [`check_stacked`]); everything else
+/// is the same.
+pub fn prepare_stacked_lead_worktree(
+    repo: &Path,
+    plan: &PlanId,
+    path: &Path,
+    branch: &str,
+    base: &str,
+    setup: &Setup,
+) -> Result<Prepared, StartFailure> {
+    prepare(repo, plan, path, branch, base, true, setup)
+}
+
+fn prepare(
     repo: &Path,
     plan: &PlanId,
     path: &Path,
@@ -494,7 +516,7 @@ pub fn prepare_lead_worktree(
 /// a new branch (R35). A failed push does not fail it: see [`Created`].
 pub fn create_lead_worktree(repo: &Path, plan: &PlanId, base: &str, setup: &Setup) -> Result<Created, CpdError> {
     let path = lead_worktree_path(repo, plan)?;
-    let prepared = prepare_lead_worktree(repo, plan, &path, &lead_branch(plan), base, false, setup).map_err(|f| f.error)?;
+    let prepared = prepare_lead_worktree(repo, plan, &path, &lead_branch(plan), base, setup).map_err(|f| f.error)?;
     // The remote is touched only after `pre-start` has passed.
     let push_failed = prepared.push().err();
     Ok(Created { path: prepared.path, branch: prepared.branch, base_sha: prepared.base_sha, push_failed })
