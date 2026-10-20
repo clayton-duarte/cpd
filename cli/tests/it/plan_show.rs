@@ -146,7 +146,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
         json!({"key": "pay", "repo": "/r/pay", "base": "main", "needs": [], "status": "dispatch",
                "lead_branch": "cpd/pay-1/pay", "lead_worktree": "/r/pay.pay-1.pay",
                "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
-               "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null,
+               "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null, "title": null,
                "jobs": ["a", "b", "gone"]})
     );
     assert_eq!(keys(&show["jobs"]), ["a", "b", "gone"]);

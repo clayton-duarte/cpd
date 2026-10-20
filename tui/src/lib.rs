@@ -9,9 +9,11 @@
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
+//! - [`menu`]: the right-click menu the tree and the Deploy column share;
 //! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon;
 //! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
 //! - [`fold`]: the one widget every block that folds is drawn by (the tree's Contexts and archived groups, the Inbox's toggle);
+//! - [`section`]: the one helper every in-pane section title is drawn by;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod background;
@@ -22,12 +24,14 @@ pub mod fold;
 mod history;
 pub mod link;
 pub mod logs;
+pub mod menu;
 pub mod merge;
 pub mod palette;
 mod plan;
 pub mod read;
 mod runner;
 mod scroll;
+pub mod section;
 mod tree;
 pub mod widgets;
 mod worker;

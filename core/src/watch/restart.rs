@@ -10,10 +10,12 @@
 //!   is empty) the engine starts the restart detached ([`drain`], `cpd watch --restart-tmux`,
 //!   [`detached`]), because the restart kills the server the engine runs in.
 //!
-//! The restart records every Lead and Manager with a pane and its place, kills the server, runs
-//! `cpd tui` (the cockpit on the installed tmux, and the engine again), reopens each Session in its
-//! place, and clears the pending file. A failure keeps the file with its reason and the engine
-//! raises one `error` Event for it; the hold ends with it.
+//! The restart records every Lead and Manager with a pane (live, or recorded by its row) and its place,
+//! kills the server with the server's own binary, writes each recorded Session `stopped` with no pane
+//! (as engine E2 does for a pane that is gone), runs `cpd tui` (the cockpit on the installed tmux, and
+//! the engine again), reopens each Session in its place, and clears the pending file. Once the server
+//! is killed nothing stops it: a failing step is kept and the next one runs. A failure keeps the file
+//! with its reason and the engine raises one `error` Event for it; the hold ends with it.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -28,6 +30,7 @@ use time::OffsetDateTime;
 
 use super::engine::Engine;
 use super::lock;
+use super::record_detached;
 use crate::clock::timestamp;
 use super::report::{About, Step};
 use super::SOURCE;
@@ -222,14 +225,48 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
     if !busy.is_empty() {
         return Ok(Outcome::Busy(busy));
     }
+    // Everything said to the old server is said by its own binary (`/proc/<pid>/exe`): the installed
+    // tmux may be another version, and a dying server answers it with errors (hs-n285).
+    let old = tmux.on_server_binary()?;
     let cockpit = config.tmux.cockpit_session.as_str();
-    let placed = session::placed(store, &tmux, cockpit)?;
-    log(&format!("restarting the tmux server -L {} (tmux {server} -> {installed}); Sessions with a pane: {}", tmux.socket(), placed.len()));
-    tmux.kill_server()?;
+    // The list of what to restore is taken before the kill, from the store as well as from the panes.
+    let placed = session::placed(store, &old, cockpit)?;
+    log(&format!("restarting the tmux server -L {} (tmux {server} -> {installed}); Sessions to reopen: {}", tmux.socket(), placed.len()));
+    old.kill_server()?;
     log("the server is gone");
-    wait_engine_gone(home)?;
 
-    // The cockpit on the installed tmux, and the engine again (`watch --ensure`).
+    // From here on nothing stops the restart: each step that fails is kept, and the next one runs, so
+    // the cockpit is rebuilt and every Session is reopened whatever went wrong before.
+    let mut problems: Vec<String> = Vec::new();
+    let mut note = |what: String| problems.push(what);
+    for (id, e) in session::gone(store, &placed, "tmux restart") {
+        note(format!("the rows of Session {id} were not written ({})", e.message()));
+    }
+    if let Err(e) = wait_engine_gone(home) {
+        note(e.message().to_owned());
+    }
+    match rebuild_cockpit(home) {
+        Ok(()) => log("the cockpit is built on the installed tmux"),
+        Err(e) => note(e.message().to_owned()),
+    }
+
+    let failed = session::reopen(&placed);
+    if !failed.is_empty() {
+        let list: Vec<String> = failed.iter().map(|(id, e)| format!("{id} ({})", e.message())).collect();
+        note(format!("these Sessions were not reopened: {}. Open each with cpd session open", list.join("; ")));
+    }
+    if !problems.is_empty() {
+        return Err(CpdError::new(
+            ErrorCode::TmuxFailed,
+            format!("The server was restarted but not all of it came back: {}.", problems.join("; ")),
+        ));
+    }
+    log(&format!("reopened {} Session(s); done", placed.len()));
+    Ok(Outcome::Restarted { reopened: placed.len() })
+}
+
+/// The cockpit on the installed tmux, and the engine again (`cpd tui` runs `watch --ensure`).
+fn rebuild_cockpit(home: &CpdHome) -> Result<(), CpdError> {
     let installed_cpd = exe::started_as()?;
     let out = Command::new(installed_cpd)
         .arg("tui")
@@ -247,18 +284,7 @@ fn perform(home: &CpdHome, config: &Config, store: &mut Store, log: &mut dyn FnM
         let tail = String::from_utf8_lossy(&out.stdout).trim().to_owned() + &String::from_utf8_lossy(&out.stderr);
         return Err(CpdError::new(ErrorCode::TmuxFailed, format!("cpd tui failed after the server was killed: {}", tail.trim())));
     }
-    log("the cockpit is built on the installed tmux");
-
-    let failed = session::reopen(&placed);
-    if !failed.is_empty() {
-        let list: Vec<String> = failed.iter().map(|(id, e)| format!("{id} ({})", e.message())).collect();
-        return Err(CpdError::new(
-            ErrorCode::TmuxFailed,
-            format!("The server was restarted but these Sessions were not reopened: {}. Open each with cpd session open.", list.join("; ")),
-        ));
-    }
-    log(&format!("reopened {} Session(s); done", placed.len()));
-    Ok(Outcome::Restarted { reopened: placed.len() })
+    Ok(())
 }
 
 /// Waits until no engine holds its lock: the killed server's panes got `SIGHUP`, and `cpd tui`
@@ -344,7 +370,8 @@ fn report(engine: &mut Engine, pending: &Pending, failed: &Failed) {
 }
 
 /// Starts `cpd watch --restart-tmux` detached (`setsid`, stdin `/dev/null`, stdout and stderr
-/// appended to `run/tmux-restart.log`), as E3 starts a driver. Returns its pid.
+/// appended to `run/tmux-restart.log`), as E3 starts a driver, its pid recorded in
+/// `run/tmux-restart.pid` ([`record_detached`]). Returns its pid.
 fn spawn(home: &CpdHome) -> Result<u32, CpdError> {
     let log_path = home.tmux_restart_log();
     let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the tmux restart: {why}."));
@@ -369,11 +396,9 @@ fn spawn(home: &CpdHome) -> Result<u32, CpdError> {
     unsafe {
         command.pre_exec(|| nix::unistd::setsid().map(drop).map_err(std::io::Error::from));
     }
-    let mut child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
-    let pid = child.id();
-    // Reaps it while this process lives; detached otherwise.
-    std::thread::spawn(move || child.wait());
-    Ok(pid)
+    let child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let pid_path = home.tmux_restart_pid();
+    record_detached(child, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
 }
 
 #[cfg(test)]
