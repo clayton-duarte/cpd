@@ -3,6 +3,7 @@
 # installed cpd back. Nothing is installed: the engine, the Leads and the
 # Workers stay on the installed cpd; only the view panes of <cockpit>:main
 # (commands.md §13) run the preview binary, which only reads the store.
+# The loop it serves (prototype, preview, ask, off, TDD): docs/ui-preview.md.
 #
 #   sh scripts/preview-tui.sh on [<worktree>]   build, then swap the views
 #   sh scripts/preview-tui.sh off               installed cpd in the views again
