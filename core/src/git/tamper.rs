@@ -79,6 +79,20 @@ pub fn touched_protected(
     diff_base: &str,
     branch: &str,
 ) -> Result<Vec<String>, CpdError> {
+    touched_protected_over(dir, lead, &[base_ref], diff_base, branch)
+}
+
+/// [`touched_protected`] with several base revisions: a protected path is not touched when its version on `branch`
+/// is the one on `lead` or on **any** of `base_refs`. A **stacked** PR passes two (§7.5): `origin/<base>`, its base
+/// PR's Lead Branch, and `origin/<root>`, the root base the stack lands on, so a Job that merges the newest root
+/// base brings protected files the base PR's branch does not have yet without tampering.
+pub fn touched_protected_over(
+    dir: &Path,
+    lead: &str,
+    base_refs: &[&str],
+    diff_base: &str,
+    branch: &str,
+) -> Result<Vec<String>, CpdError> {
     let list = protected_list(dir, lead)?;
     let range = format!("{diff_base}...{branch}");
     let changed = ok(dir, &["diff", "--name-only", "--no-renames", "-z", &range])?;
@@ -90,7 +104,11 @@ pub fn touched_protected(
     let mut touched = Vec::new();
     for path in changed.split('\0').filter(|p| !p.is_empty() && is_protected(p)) {
         let mine = blob(dir, branch, path)?;
-        if mine != blob(dir, lead, path)? && mine != blob(dir, base_ref, path)? {
+        let mut brought = mine == blob(dir, lead, path)?;
+        for base_ref in base_refs {
+            brought = brought || mine == blob(dir, base_ref, path)?;
+        }
+        if !brought {
             touched.push(path.to_owned());
         }
     }
@@ -100,7 +118,12 @@ pub fn touched_protected(
 /// [`touched_protected`] as a refusal: `gate_tampered`, with `details.paths`. The
 /// merge ends the Attempt `tampered` instead and uses the list directly.
 pub fn check(dir: &Path, lead: &str, base_ref: &str, diff_base: &str, branch: &str) -> Result<(), CpdError> {
-    let paths = touched_protected(dir, lead, base_ref, diff_base, branch)?;
+    check_over(dir, lead, &[base_ref], diff_base, branch)
+}
+
+/// [`check`] with several base revisions, as [`touched_protected_over`].
+pub fn check_over(dir: &Path, lead: &str, base_refs: &[&str], diff_base: &str, branch: &str) -> Result<(), CpdError> {
+    let paths = touched_protected_over(dir, lead, base_refs, diff_base, branch)?;
     if paths.is_empty() {
         return Ok(());
     }

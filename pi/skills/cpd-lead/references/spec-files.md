@@ -50,7 +50,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Dependencies
 
-- Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
+- Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. The exception is the PR shape's red tests: they come first, `--needs` only the docs Job, and the implementation `--needs` them. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
 - Jobs with disjoint `touches` and no data flow between them need no Dependency. Shared files such as lockfiles, `package.json`, config and index or route registries count as shared.
 - Dependencies cannot form a cycle (`dependency_cycle`), cannot name an unknown Job (`needs_unknown`) and cannot name a cancelled or failed Job (`needs_unavailable`).
 

@@ -102,6 +102,8 @@ Phases `plan` and `dispatch`. Steps: [Dividing](#dividing), [Sequencing](#sequen
 
 Before drafting each batch, read new records: `cpd context show --since <seq>`.
 
+**A PR is a substantial deliverable.** Get parallelism from Jobs inside a PR, not from more PRs. A PR that would hold one small Job joins the PR of its area instead: append the Job there, or combine finished PRs into one before they open (merge one Lead Branch into the other, one Gate, one PR, and cancel the emptied PR with `cpd pr cancel`).
+
 Add every PR first (it needs an existing repo path; a PR may need only PRs added before it):
 
 ```
@@ -137,6 +139,14 @@ cpd pr edit <key> --needs <k1,k2>
 ```
 
 - **Parallel:** prefer many small Jobs that run in parallel. Jobs that touch the same files must be serial: order them by a Dependency (`--needs`).
+- **PR shape:** plan each PR that changes behaviour as, in order: (1) a docs Job (the contract amended first); (2) a test Job, red tests written by a different Worker from the implementer, from the docs alone, that fail before the implementation exists; (3) the implementation Job, which makes them pass; (4) the open Job cpd adds to every PR. A bug or flake fix starts with a test that reproduces it (reproduce first). A visual change pins its exact rows (the rendered lines it expects). A docs-only or config-only PR skips the test Job. Until cpd knows Job kinds, lay it out by hand: the test Job `--needs` the docs Job, the implementation Job `--needs` the test Job:
+
+  ```
+  cpd job add <docs> --title "Amend the contract" --tier H2 --spec docs.json --pr <key>
+  cpd job add <tests> --title "Red tests from the docs" --tier S1 --spec tests.json --pr <key> --needs <docs>
+  cpd job add <impl> --title "Implement" --tier S1 --spec impl.json --pr <key> --needs <tests>
+  ```
+
 - A Job's Dependencies are Jobs of its own PR; order across PRs is the PRs' `--needs` (a PR that needs another starts only after that one is merged).
 
 ### Approving
