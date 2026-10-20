@@ -1707,12 +1707,19 @@ impl Fx {
         ));
     }
 
-    /// The base PR `repo` not open: `waiting` (never started), `dispatch` (as it is) or `cancelled`.
+    /// A base PR `base`, which `top` is stacked on (`cpd/pay/base`), not open: `waiting` (never started), `dispatch` or `cancelled`.
     fn base_not_ready(&self, status: &str) {
-        match status {
-            "dispatch" => {}
-            "waiting" => self.fixture("UPDATE prs SET status = 'waiting', lead_worktree = NULL, started_at = NULL, start_failed_at = 't' WHERE plan = 'pay' AND key = 'repo';"),
-            _ => self.fixture(&opened(status)),
+        let (state, worktree, started, failed) = match status {
+            "waiting" => ("waiting", "NULL", "NULL", "'t'"),
+            _ => ("dispatch", "'/x/base'", "'t'", "NULL"),
+        };
+        self.fixture(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at, start_failed_at)
+               VALUES ('pay', 'base', '{}', 'main', '{state}', 'cpd/pay/base', {worktree}, cpd_txn(), 't', {started}, {failed});",
+            self.repo.display()
+        ));
+        if status == "cancelled" {
+            self.fixture("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE plan = 'pay' AND key = 'base';");
         }
     }
 
@@ -1780,7 +1787,7 @@ fn e4_a_stacked_pr_whose_all_merged_is_later_than_its_base_prs_opening_counts_fr
 #[test]
 fn e4_a_stacked_pr_whose_base_pr_is_not_open_raises_no_alarm_however_late() {
     for status in ["waiting", "dispatch", "cancelled"] {
-        let sent = stacked_run("cpd/pay", |fx| fx.base_not_ready(status), 60);
+        let sent = stacked_run("cpd/pay/base", |fx| fx.base_not_ready(status), 60);
         assert!(sent.is_empty(), "base PR {status}: {sent:?}");
     }
 }
