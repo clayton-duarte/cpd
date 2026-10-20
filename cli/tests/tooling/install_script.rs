@@ -274,13 +274,13 @@ fn a_failing_follow_up_is_printed_and_the_later_ones_still_run() {
     let env = TestEnv::new();
     let checkout = Checkout::new(&env, &[]);
     fake_tmux(&env);
-    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; tui) echo 'no cockpit' >&2; exit 3;; watch) case "$2" in --check) echo '{{"ok":true}}';; *) {STARTS_ENGINE};; esac;; esac"#);
+    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; tui) echo 'no cockpit' >&2; exit 3;; watch) case "$2" in --check) echo '{{"ok":true}}';; --mark-restart) echo '{{"ok":true,"marked":true,"engine_pid":1}}';; *) {STARTS_ENGINE};; esac;; esac"#);
 
     let run = install_with(&env, &checkout, &version("null"), &extra);
 
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("cpd install follow-up failed: cpd tui --respawn exited 3"), "{}", run.stderr);
-    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --ensure"]);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --mark-restart", "watch --ensure"]);
 }
 
 #[test]
@@ -289,16 +289,16 @@ fn the_follow_ups_run_after_a_slow_config() {
     let checkout = Checkout::new(&env, &[]);
     fake_tmux(&env);
     // A migration holds the setup lock: cpd config answers only after a while.
-    let extra = format!(r#"case "$1" in config) sleep 2; echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; *) {STARTS_ENGINE};; esac;; esac"#);
+    let extra = format!(r#"case "$1" in config) sleep 2; echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; --mark-restart) echo '{{"ok":true,"marked":true,"engine_pid":1}}';; *) {STARTS_ENGINE};; esac;; esac"#);
 
     let run = install_with(&env, &checkout, &version("null"), &extra);
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --ensure"]);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --mark-restart", "watch --ensure"]);
 }
 
 fn engine_restart_extra() -> String {
-    format!(r#"case "$1" in config) echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; *) {STARTS_ENGINE};; esac;; esac"#)
+    format!(r#"case "$1" in config) echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; --mark-restart) echo '{{"ok":true,"marked":true,"engine_pid":1}}';; *) {STARTS_ENGINE};; esac;; esac"#)
 }
 
 #[test]
@@ -313,7 +313,7 @@ fn an_old_engine_that_holds_its_lock_for_longer_than_ten_seconds_is_waited_for()
     let run = install_with(&env, &checkout, &version("null"), &engine_restart_extra());
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --ensure"]);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --mark-restart", "watch --ensure"]);
     assert!(lock_held(&env), "the new engine holds the lock");
 }
 
@@ -331,7 +331,7 @@ fn an_old_engine_that_never_frees_its_lock_fails_the_install_with_the_reason() {
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("cpd install follow-up failed: the old engine still holds "), "{}", run.stderr);
     assert!(run.stderr.contains("after 2s: it was told to stop and has not; the new engine was not started"), "{}", run.stderr);
-    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn"]);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --mark-restart"]);
 }
 
 #[test]
@@ -340,7 +340,7 @@ fn a_new_engine_that_does_not_run_fails_the_install_with_the_reason() {
     let checkout = Checkout::new(&env, &[]);
     fake_tmux(&env);
     // --ensure answers, but no process holds the lock.
-    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; *) echo '{{"ok":true,"started":true}}';; esac;; esac"#);
+    let extra = format!(r#"case "$1" in config) echo '{CONFIG}';; watch) case "$2" in --check) echo '{{"ok":true}}';; --mark-restart) echo '{{"ok":true,"marked":true,"engine_pid":1}}';; *) echo '{{"ok":true,"started":true}}';; esac;; esac"#);
 
     let run = install_with(&env, &checkout, &version("null"), &extra);
 
@@ -943,7 +943,7 @@ fn the_installer_goes_on_to_the_views_and_the_engine_after_migrating_on_a_python
 
     assert_eq!(run.exit, 0, "{}", run.stderr);
     linked_version(&env);
-    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --ensure"], "the views are respawned and the engine restarted: {}", run.stderr);
+    assert_eq!(follow_ups(&env), ["watch --check", "tui --respawn", "watch --mark-restart", "watch --ensure"], "the views are respawned and the engine restarted: {}", run.stderr);
     assert!(lock_held(&env), "the new engine holds the lock");
 }
 
@@ -1240,4 +1240,57 @@ fn a_bare_tmux_in_a_message_may_be_exempted_with_a_reason() {
     let ok = check_line("echo tmux -L s # portable: a message, not a call");
     assert_eq!(ok.exit, 0, "{}", ok.stderr);
     assert!(ok.all().contains("check-portable: ok (1 files, 1 exempt)"), "{}", ok.all());
+}
+
+// ---------- the install marks the engine restart as planned (hs-d471, contract §3.7 "The install's engine order", step 3) ----------
+
+const MARK_RESTART_FAILS: &str = r#"echo '{"ok":false,"error":{"code":"watch_not_started","message":"No engine has started in this home."}}'; exit 3"#;
+
+/// `new_cpd` whose `watch --mark-restart` runs `mark` (shell code).
+fn new_cpd_marking(env: &TestEnv, mark: &str) -> String {
+    let base = new_cpd(env, CHECK_OK, RESPAWN_OK, STARTS_ENGINE);
+    base.replacen("esac", &format!("  \"watch --mark-restart\") {mark};;\nesac"), 1)
+}
+
+#[test]
+fn a_good_install_marks_the_restart_after_the_check_and_right_before_the_kill_window() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    logging_tmux(&env, "");
+    running_old_engine(&env);
+    let _engines = Engines(vec![env.cpd_home().join("engine.pid")], vec![]);
+    let extra = new_cpd_marking(&env, r#"echo '{"ok":true,"marked":true,"engine_pid":1}'"#);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    let log = order(&env);
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    assert_eq!(lines_with(&log, "cpd watch --mark-restart").len(), 1, "{log:?}");
+    let at = |word: &str| log.iter().position(|l| l.contains(word)).unwrap_or_else(|| panic!("no `{word}` in {log:?}"));
+    let steps = [at("cpd watch --check"), at("cpd watch --mark-restart"), at("kill-window"), at("cpd watch --ensure")];
+    assert!(steps.windows(2).all(|w| w[0] < w[1]), "the order is --check, --mark-restart, kill-window, --ensure: {steps:?} in {log:?}");
+    let between = &log[at("cpd watch --mark-restart") + 1..at("kill-window")];
+    assert!(between.iter().all(|l| l.starts_with("tmux ") && !l.contains("respawn-pane")), "nothing but the retirement's own lookups between the mark and the kill: {between:?}");
+}
+
+#[test]
+fn a_mark_restart_that_fails_is_printed_and_the_retirement_goes_on() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    logging_tmux(&env, "");
+    running_old_engine(&env);
+    let _engines = Engines(vec![env.cpd_home().join("engine.pid")], vec![]);
+    let extra = new_cpd_marking(&env, MARK_RESTART_FAILS);
+
+    let run = install_with(&env, &checkout, &version("null"), &extra);
+
+    let log = order(&env);
+    assert_eq!(run.exit, 1, "{}", run.stderr);
+    assert!(
+        run.stderr.contains("cpd install follow-up failed: cpd watch --mark-restart: ") && run.stderr.contains("the engine restart is not marked as planned"),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(lines_with(&log, "kill-window").len(), 1, "the retirement went on: {log:?}");
+    assert_eq!(lines_with(&log, "cpd watch --ensure").len(), 1, "{log:?}");
 }

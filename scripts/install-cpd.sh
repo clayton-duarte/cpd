@@ -246,6 +246,10 @@ else
     if [ -n "$socket" ] && [ -n "$work" ] &&
       tmx list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx watch; then
       echo "restarting the running engine (cpd watch) to run the new binary" >&2
+      # Mark the restart as planned (hs-d471): the new engine then only logs a restart that is back within 10 s.
+      if ! mark=$("$dest_dir/cpd" watch --mark-restart 2>"$errfile"); then
+        fail "cpd watch --mark-restart: $mark $(cat "$errfile"); the engine restart is not marked as planned"
+      fi
       if ! killed=$(tmx kill-window -t "=$work:watch" 2>&1); then
         fail "tmux kill-window $work:watch failed: $killed; the engine was not stopped and still runs the old binary"
       else
