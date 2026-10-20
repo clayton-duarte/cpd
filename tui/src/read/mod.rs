@@ -7,8 +7,8 @@
 //!   Dependencies, and the Plan of the Lead in the chat slot; [`flow()`]: one Plan's Jobs, Escalations,
 //!   review and first PR (`plan show`);
 //! - [`pulse()`] and [`manager_slot()`]: the Pulse view, one Context's Plans with their 5-minute activity;
-//! - [`widgets()`]: the Dispatch column, slots, the engine, the open pull requests,
-//!   open Escalations and the latest Events (`plan list`);
+//! - [`widgets()`]: slots, the engine, the Plans, the open pull requests, open Escalations and the latest Events
+//!   (`plan list`); the views read only what they draw: [`open_prs()`] (the Dispatch column) and [`slots()`] (the StatusBar);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
 //! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`).
 //!
@@ -16,7 +16,7 @@
 //! lock, waits for no writer, writes nothing, spawns nothing, and runs a fixed
 //! number of queries whatever the size of the Ledger (§17 refreshes a view about
 //! every second). Each snapshot returns `events_cursor`, the highest Event id of
-//! its own transaction, from which the view follows (`cpd events follow --since`).
+//! its own transaction, from which the view follows ([`Follow`], in process).
 //! Rows are parsed once here: a value the schema forbids is `store_failed`.
 //!
 //! The functions take the opened [`Store`] and no `CpdHome`: the one thing
@@ -27,6 +27,7 @@
 
 mod dot;
 mod flow;
+mod follow;
 mod logs;
 mod pulse;
 mod shared;
@@ -43,10 +44,11 @@ pub use shared::{
     PrState, ReviewStatus, SessionNode,
 };
 pub use dot::Dot;
+pub use follow::{Changes, Follow};
 pub use logs::{Logs, logs, logs_after};
 pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
-pub use tree::{ContextNode, PlanNode, Tree, tree};
+pub use tree::{ContextNode, PlanNode, Tree, snooze_end, tree};
 pub use widgets::{
-    Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, widgets,
+    Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, slots, widgets,
 };
 pub use worker::{AttemptDetail, AttemptEscalation, Worker, worker};

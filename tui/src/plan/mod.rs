@@ -11,23 +11,27 @@
 //! [`COALESCE`] after an Event that concerns the view.
 //! The User's keys and clicks run commands ([`actions`]); nothing else starts a process.
 //!
-//! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a view pane that
-//! dies is respawned by the `pane-died` hook (commands.md §10.9).
+//! The Plans' scroll offsets survive a restart of the view, in `run/tui/plan-scroll.json` ([`Offsets`], hs-d254): the
+//! one file a view writes, its own state.
+//!
+//! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
+//! dies is started again by the `pane-died` hook (contract §6.1), so the view never exits on a key.
 
 mod actions;
 mod boxes;
 mod flow;
 pub(crate) mod pulse;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind,
-};
+use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
@@ -38,11 +42,13 @@ use self::boxes::Boxes;
 use self::flow::{Dir, Selection};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
+use super::background::Background;
 use super::read::{self, ChatSlot, PlanBoxes, Pulse, ReviewStatus};
-use super::{RunCommand, not_a_terminal, on_a_terminal};
+use super::runner::{ViewError, kept};
+use super::{Capture, RunCommand, run_view};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::events::{self, Event, highest_id};
+use cpd_core::events::{Event, highest_id};
 use cpd_core::home::CpdHome;
 use cpd_core::host::addr::review_host;
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
@@ -52,14 +58,10 @@ use cpd_core::store::Store;
 /// A snapshot is retaken at most this often, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 
-/// The snapshot is retaken at least this often, Event or not: a conflict clears with no Event (`mergeable` changes
-/// silently), as the `widgets` view's `REFRESH` (§17).
-const REFRESH: Duration = Duration::from_secs(2);
-
-/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it (`stale`), else after
-/// [`REFRESH`].
+/// Whether the snapshot taken `since` ago is retaken: after [`COALESCE`] once an Event concerns it or a pull request row
+/// changed (`stale`: a conflict clears with no Event, `mergeable` changes silently, §17), never else.
 fn due(stale: bool, since: Duration) -> bool {
-    since >= if stale { COALESCE } else { REFRESH }
+    stale && since >= COALESCE
 }
 
 /// While Pulse shows the snapshot is retaken at least this often, Event or not: the window moves and the ages tick,
@@ -72,7 +74,8 @@ fn pulse_due(stale: bool, since: Duration) -> bool {
     since >= if stale { COALESCE } else { PULSE_REFRESH }
 }
 
-/// The view redraws at least this often, for the spinner (one frame: palette.rs); a redraw reads nothing from the store.
+/// While a spinner is on screen ([`Centre::spins`]; Pulse has none since hs-d327) the view redraws this often (one frame:
+/// palette.rs); a redraw reads nothing from the store. With none, it draws only when something changed.
 const FRAME: Duration = Duration::from_millis(100);
 
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
@@ -133,12 +136,20 @@ struct Centre {
 }
 
 impl Centre {
-    /// Draw the boxes again at spinner frame `frame`, from the Plan already read.
-    fn turn(&mut self, frame: usize) {
-        if frame != self.frame {
+    /// A Job runs: its pill's icon is the spinner, which turns with the clock.
+    fn spins(&self) -> bool {
+        self.plan.jobs.iter().any(|j| flow::Live::of(j) == Some(flow::Live::Running))
+    }
+
+    /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
+    /// frame is not the one drawn. Whether it did.
+    fn turn(&mut self, frame: usize) -> bool {
+        let turned = frame != self.frame && self.spins();
+        if turned {
             self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, frame).with_margin(MARGIN);
             self.frame = frame;
         }
+        turned
     }
 }
 
@@ -211,8 +222,8 @@ struct Ui {
     selected: Selection,
     /// The window's top-left in the chart.
     scroll: (u16, u16),
-    /// The scroll offset each Plan was left at, kept while the view runs only (hs-d197). Not clamped: the chart may
-    /// have changed size by the time it comes back, and a draw clamps.
+    /// The scroll offset each Plan was left at (hs-d197), read from [`Offsets`] at the view's start. Not clamped: the
+    /// chart may have changed size by the time it comes back, and a draw clamps.
     remembered: HashMap<PlanId, (u16, u16)>,
     /// The first Pulse row shown (reset whenever the Context of the Pulse changes).
     pulse_offset: usize,
@@ -232,6 +243,14 @@ impl Ui {
         self.selected.reset();
         self.scroll = to.and_then(|plan| self.remembered.get(plan).copied()).unwrap_or((0, 0));
         self.note.clear();
+    }
+
+    /// Records the offset of `plan`, the Plan on show, once it differs from the one remembered (a Plan never scrolled
+    /// is at its corner). Called after a draw, so the offset is clamped.
+    fn remember(&mut self, plan: &PlanId) {
+        if self.remembered.get(plan).copied().unwrap_or((0, 0)) != self.scroll {
+            self.remembered.insert(plan.clone(), self.scroll);
+        }
     }
 
     /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`, the note).
@@ -282,6 +301,65 @@ impl Ui {
     }
 }
 
+/// The Plans' scroll offsets in `$CPD_HOME/run/tui/plan-scroll.json` (commands.md §13.2, hs-d254): a JSON object
+/// `{"<plan id>": [x, y]}`. The view's own state, not Ledger state: the one file a view writes.
+struct Offsets {
+    path: PathBuf,
+    /// What the file holds, as far as this view knows; a write is due when the offsets differ from it.
+    saved: HashMap<PlanId, (u16, u16)>,
+    /// When the file was last written, or tried.
+    written: Option<Instant>,
+}
+
+/// A write is due at most this often (an offset that changes more often waits).
+const SAVE_EVERY: Duration = Duration::from_secs(1);
+
+impl Offsets {
+    fn at(home: &CpdHome) -> Offsets {
+        // Not in `CpdHome` (contract §1.4): the layout's one source of truth lists this file there.
+        let path = home.run_dir().join("tui").join("plan-scroll.json");
+        Offsets { path, saved: HashMap::new(), written: None }
+    }
+
+    /// The offsets in the file: none when it is missing; `Err` with the reason when it cannot be read or is not
+    /// `{"<plan id>": [x, y]}`.
+    fn load(&mut self) -> Result<HashMap<PlanId, (u16, u16)>, String> {
+        let text = match fs::read(&self.path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(e) => return Err(format!("{}: {e}", self.path.display())),
+        };
+        let offsets: HashMap<PlanId, (u16, u16)> =
+            serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        self.saved = offsets.clone();
+        Ok(offsets)
+    }
+
+    /// Writes `offsets` when they differ from the file and, unless `now` (the Plan changed), a second has passed
+    /// since the last write. A failure is returned and leaves the offsets unsaved, so the next call retries.
+    fn save(&mut self, offsets: &HashMap<PlanId, (u16, u16)>, now: bool) -> Result<(), String> {
+        if *offsets == self.saved || (!now && self.written.is_some_and(|at| at.elapsed() < SAVE_EVERY)) {
+            return Ok(());
+        }
+        self.written = Some(Instant::now());
+        self.write(offsets).map_err(|e| format!("scroll positions not saved: {}: {e}", self.path.display()))?;
+        self.saved.clone_from(offsets);
+        Ok(())
+    }
+
+    /// Replaces the file: a temporary file beside it, then a rename.
+    fn write(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> io::Result<()> {
+        let sorted: BTreeMap<&str, (u16, u16)> = offsets.iter().map(|(plan, at)| (plan.as_str(), *at)).collect();
+        let text = serde_json::to_vec(&sorted).map_err(io::Error::other)?;
+        let dir = self.path.parent().unwrap_or(Path::new("."));
+        fs::create_dir_all(dir)?;
+        let tmp = self.path.with_extension(format!("json.tmp{}", std::process::id()));
+        fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &self.path)).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
+    }
+}
+
 /// An arrow key: as [`Selection::arrow`], each step taken across the boxes ([`Boxes::step`]).
 fn arrow(selected: &mut Selection, boxes: &Boxes, dir: Dir) {
     match selected.resolve(&boxes.chart) {
@@ -300,35 +378,29 @@ fn attempt_of(centre: &Centre, key: &str) -> Option<AttemptId> {
 }
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view plan"));
-    }
-    let home = CpdHome::from_env()?;
-    let config = Config::load(&home)?;
-    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-    let width = ratatui::crossterm::terminal::size()
-        .map_err(|e| {
-            CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
-                .with("command", "tui view plan")
-        })?
-        .0;
-    let mut snap = snapshot(&mut store, &home, width, now_ms())?;
-    let actions = Actions::new(home.clone(), &config, run_command);
-    let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.map_err(|e| e.to_string()).and_then(|()| {
-        show(&mut terminal, &mut store, &home, &mut snap, poll, &actions).map_err(|e| e.to_string())
-    });
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    match result {
-        Ok(()) => Ok(Output::Owned),
-        Err(error) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view plan failed: {error}."))
-            .with("command", "tui view plan")),
-    }
+    run_view(
+        "plan",
+        Capture::Mouse,
+        || {
+            let home = CpdHome::from_env()?;
+            let config = Config::load(&home)?;
+            let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+            let width = ratatui::crossterm::terminal::size()
+                .map_err(|e| {
+                    CpdError::new(ErrorCode::NotATerminal, format!("The size of the terminal of cpd tui view plan is unknown: {e}."))
+                        .with("command", "tui view plan")
+                })?
+                .0;
+            let snap = snapshot(&mut store, &home, width, now_ms())?;
+            let actions = Arc::new(Actions::new(home.clone(), &config, run_command));
+            let poll = Duration::from_millis(u64::from(config.events.poll_ms));
+            let follow = read::Follow::new(&mut store, &[], snap.cursor)?;
+            Ok((store, home, snap, poll, follow, actions))
+        },
+        |terminal, (mut store, home, mut snap, poll, follow, actions)| {
+            show(terminal, &mut store, &home, &mut snap, poll, follow, &actions)
+        },
+    )
 }
 
 /// Now, in Unix ms.
@@ -343,62 +415,93 @@ fn show(
     home: &CpdHome,
     snap: &mut Snapshot,
     poll: Duration,
-    actions: &Actions,
-) -> std::io::Result<()> {
+    mut follow: read::Follow,
+    actions: &Arc<Actions>,
+) -> Result<(), ViewError> {
     let mut ui = Ui::default();
-    let follow = store.read(|conn| events::Selection::resolve(conn, None, None, None, Vec::new()));
-    let follow = match follow {
-        Ok(f) => f,
-        Err(e) => return Err(std::io::Error::other(e.to_string())),
-    };
+    let mut offsets = Offsets::at(home);
+    let loaded = offsets.load();
+    // an unreadable or invalid file starts empty; it is replaced at the next write
+    ui.remembered = loaded.clone().unwrap_or_default();
+    ui.switch(None, snap.centre.as_ref().map(|c| &c.plan.plan));
+    if let Err(reason) = loaded {
+        ui.note = format!("scroll positions reset: {reason}");
+    }
+    // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
+    // (runner::kept), the snapshot's error first
+    let (mut snapshot_error, mut follow_error) = (None, None);
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
+    // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
+    let mut redraw = true;
+    // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); a result is the note to show, or none
+    // to leave it
+    let mut worker = Background::<Option<String>>::new();
     loop {
-        if let Some(c) = snap.centre.as_mut() {
-            c.turn(palette::frame(SystemTime::now()));
+        while let Some(result) = worker.finished() {
+            if let Some(note) = result {
+                ui.note = note;
+            }
+            redraw = true;
         }
-        terminal.draw(|f| match snap.pulse.as_ref() {
-            Some(pulse) => ui.draw_pulse(f, pulse),
-            None => ui.draw(f, snap.centre.as_ref()),
-        })?;
+        let frame = palette::frame(SystemTime::now());
+        if let Some(c) = snap.centre.as_mut() {
+            redraw |= c.turn(frame);
+        }
+        // the scroll offsets file follows the chart's offset (a write only when they changed, at most every SAVE_EVERY)
+        if let Some(c) = snap.centre.as_ref() {
+            ui.remember(&c.plan.plan);
+            if let Err(e) = offsets.save(&ui.remembered, false) {
+                redraw |= ui.error.as_deref() != Some(e.as_str());
+                ui.error = Some(e);
+            }
+        }
+        if redraw {
+            terminal.draw(|f| match snap.pulse.as_ref() {
+                Some(pulse) => ui.draw_pulse(f, pulse),
+                None => ui.draw(f, snap.centre.as_ref()),
+            })?;
+            redraw = false;
+        }
         if !event::poll(poll.min(FRAME))? {
             // idle: look for Events, every `poll`
             if fetched.elapsed() < poll {
                 continue;
             }
             fetched = Instant::now();
-            match store.read(|conn| follow.fetch(conn, snap.cursor, None, 500)) {
-                Ok(events) => {
-                    ui.error = None;
-                    if let Some(last) = events.last() {
-                        snap.cursor = last.id;
-                    }
-                    stale |= events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
-                }
-                Err(e) => ui.error = Some(e.to_string()),
+            let shown = ui.error.clone();
+            if let Some(changes) = kept(follow.poll_changes(store), &mut follow_error) {
+                stale |= changes.pulls
+                    || changes.events.iter().any(|e| concerns(e, snap.centre.as_ref(), snap.pulse.as_ref()));
             }
+            ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
             let due = if snap.pulse.is_some() { pulse_due(stale, taken.elapsed()) } else { due(stale, taken.elapsed()) };
             if due {
                 let before = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
                 let before_pulse = snap.pulse.as_ref().map(|p| p.context.clone());
                 let width = terminal.size().map_or(0, |s| s.width);
-                match snapshot(store, home, width, now_ms()) {
-                    Ok(next) => {
-                        *snap = next;
-                        ui.error = None;
-                        let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
-                        if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
-                            ui.pulse_offset = 0;
-                        }
-                        if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
-                            ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
+                let next = kept(snapshot(store, home, width, now_ms()), &mut snapshot_error);
+                stale = snapshot_error.is_some();
+                ui.error = snapshot_error.clone().or_else(|| follow_error.clone());
+                if let Some(next) = next {
+                    redraw = true;
+                    *snap = next;
+                    let after = snap.centre.as_ref().map(|c| (c.slot.session.clone(), c.plan.plan.clone()));
+                    if before_pulse != snap.pulse.as_ref().map(|p| p.context.clone()) {
+                        ui.pulse_offset = 0;
+                    }
+                    if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
+                        ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
+                        if let Err(e) = offsets.save(&ui.remembered, true) {
+                            ui.error = Some(e);
                         }
                     }
-                    Err(e) => ui.error = Some(e.to_string()),
                 }
-                (stale, taken) = (false, Instant::now());
+                taken = Instant::now();
             }
+            redraw |= ui.error != shown;
             continue;
         }
+        redraw = true; // a key, a click, a resize
         let mut open = None::<String>;
         let mut unselect = None::<String>; // the Job whose Worker pane closes
         let mut lead = None::<SessionId>; // the Lead a click on a Pulse row opens
@@ -460,22 +563,24 @@ fn show(
             _ => {}
         }
         if let Some(lead) = lead {
-            ui.note = actions.open_lead(&lead).err().map(|e| e.message().to_owned()).unwrap_or_default();
+            let actions = Arc::clone(actions);
+            worker.submit(move || Some(actions.open_lead(&lead).err().map_or_else(String::new, |e| e.message().to_owned())));
         }
         let Some(centre) = snap.centre.as_ref() else { continue };
         if let Some(key) = unselect {
-            if let Err(e) = actions.close_worker(&key) {
-                ui.note = e.message().to_owned();
-            }
+            let actions = Arc::clone(actions);
+            worker.submit(move || actions.close_worker(&key).err().map(|e| e.message().to_owned()));
         }
         if let Some(key) = open {
-            ui.note = match attempt_of(centre, &key) {
-                None => format!("{key} has not started yet"),
-                Some(attempt) => match actions.toggle_worker(&centre.plan.plan, &key, &attempt) {
-                    Ok(_) => String::new(),
-                    Err(e) => e.message().to_owned(),
-                },
-            };
+            match attempt_of(centre, &key) {
+                None => ui.note = format!("{key} has not started yet"),
+                Some(attempt) => {
+                    let (actions, plan) = (Arc::clone(actions), centre.plan.plan.clone());
+                    worker.submit(move || {
+                        Some(actions.toggle_worker(&plan, &key, &attempt).err().map_or_else(String::new, |e| e.message().to_owned()))
+                    });
+                }
+            }
         }
     }
 }
@@ -492,11 +597,11 @@ mod tests {
 
 
     #[test]
-    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_else_every_two_seconds() {
+    fn the_snapshot_is_retaken_after_the_coalescing_when_stale_and_never_else() {
         let ms = Duration::from_millis;
         assert!(!due(true, ms(499)) && due(true, ms(500)), "an Event that concerns it: coalesced at 500 ms");
-        assert!(!due(false, ms(1999)) && due(false, ms(2000)), "no Event: every 2 s");
-        assert!(due(false, Duration::from_secs(60)));
+        assert!(!due(false, ms(2000)), "nothing changed: no snapshot (tui-F3)");
+        assert!(!due(false, Duration::from_secs(60)));
     }
 
     const URL: &str = "http://review.test:19433";
@@ -722,6 +827,21 @@ mod tests {
     }
 
     #[test]
+    fn the_chart_turns_with_the_clock_only_while_a_job_runs() {
+        let mut queued = scroll_centre("plan-a", 3);
+        assert!(!queued.spins());
+        assert!(!queued.turn(1), "nothing spins: nothing to draw again");
+        assert_eq!(queued.frame, 0);
+
+        let mut running = scroll_centre("plan-a", 3);
+        running.plan.jobs[1].status = JobStatus::Running;
+        assert!(running.spins());
+        assert!(running.turn(1), "a new frame of the spinner");
+        assert!(!running.turn(1), "the same frame: nothing to draw again");
+        assert_eq!(running.frame, 1);
+    }
+
+    #[test]
     fn switching_plans_and_back_restores_the_offset_with_no_selection() {
         let (a, b) = (plan("plan-a"), plan("plan-b"));
         let mut ui = Ui::default();
@@ -775,9 +895,113 @@ mod tests {
     }
 
     #[test]
-    fn a_view_that_restarts_starts_at_the_top() {
+    fn a_fresh_ui_starts_at_the_top_with_nothing_remembered() {
         assert_eq!(Ui::default().scroll, (0, 0));
         assert!(Ui::default().remembered.is_empty());
+    }
+
+    #[test]
+    fn a_plan_never_scrolled_is_not_remembered_and_a_scrolled_one_is() {
+        let a = plan("plan-a");
+        let mut ui = Ui::default();
+        ui.remember(&a);
+        assert!(ui.remembered.is_empty(), "at its corner: nothing to keep");
+        ui.scroll = (0, 4);
+        ui.remember(&a);
+        ui.scroll = (0, 0);
+        ui.remember(&a);
+        assert_eq!(ui.remembered.get(&a), Some(&(0, 0)), "back at the corner is a change too");
+    }
+
+    fn offsets_in(dir: &tempfile::TempDir) -> Offsets {
+        Offsets::at(&CpdHome::resolve(Some(dir.path().into()), None).unwrap())
+    }
+
+    fn map(entries: &[(&str, (u16, u16))]) -> HashMap<PlanId, (u16, u16)> {
+        entries.iter().map(|(id, at)| (plan(id), *at)).collect()
+    }
+
+    #[test]
+    fn the_offsets_round_trip_through_the_file_which_is_a_json_object_of_plan_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let offsets = map(&[("plan-b", (4, 9)), ("plan-a", (0, 7))]);
+        let mut writer = offsets_in(&dir);
+        writer.save(&offsets, true).unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"plan-a":[0,7],"plan-b":[4,9]}"#);
+        assert_eq!(offsets_in(&dir).load().unwrap(), offsets);
+    }
+
+    #[test]
+    fn a_missing_file_is_an_empty_map() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), HashMap::new());
+    }
+
+    #[test]
+    fn an_invalid_file_is_refused_with_its_reason_and_replaced_by_the_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for bad in ["", "{not json", "[]", r#"{"Bad Id":[0,1]}"#, r#"{"plan-a":[0]}"#, r#"{"plan-a":[0,-1]}"#, r#"{"plan-a":"top"}"#] {
+            fs::write(&path, bad).unwrap();
+            let reason = offsets_in(&dir).load().unwrap_err();
+            assert!(reason.contains("plan-scroll.json"), "{bad:?}: {reason}");
+        }
+        let mut offsets = offsets_in(&dir);
+        offsets.load().unwrap_err();
+        offsets.save(&map(&[("plan-a", (0, 3))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 3))]));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_refused_with_its_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("run/tui/plan-scroll.json")).unwrap(); // reading a directory fails
+        let reason = offsets_in(&dir).load().unwrap_err();
+        assert!(reason.contains("plan-scroll.json"), "{reason}");
+    }
+
+    #[test]
+    fn a_write_leaves_no_temporary_file_and_creates_the_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut offsets = offsets_in(&dir);
+        offsets.save(&map(&[("plan-a", (1, 2))]), true).unwrap();
+        offsets.save(&map(&[("plan-a", (3, 4))]), true).unwrap();
+        let names: Vec<_> = fs::read_dir(dir.path().join("run/tui")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["plan-scroll.json"]);
+    }
+
+    #[test]
+    fn a_failed_write_is_reported_leaves_no_temporary_file_and_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let tui = dir.path().join("run/tui");
+        fs::create_dir_all(tui.join("plan-scroll.json")).unwrap(); // a directory cannot be replaced by a file
+        let mut offsets = offsets_in(&dir);
+        let want = map(&[("plan-a", (0, 5))]);
+        let error = offsets.save(&want, true).unwrap_err();
+        assert!(error.starts_with("scroll positions not saved: "), "{error}");
+        assert_eq!(fs::read_dir(&tui).unwrap().count(), 1, "only the directory is there");
+        fs::remove_dir(tui.join("plan-scroll.json")).unwrap();
+        offsets.save(&want, true).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), want);
+    }
+
+    #[test]
+    fn a_write_waits_a_second_after_the_last_unless_the_plan_changed_and_unchanged_offsets_write_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        let mut offsets = offsets_in(&dir);
+        offsets.save(&HashMap::new(), false).unwrap();
+        assert!(!path.exists(), "nothing changed: nothing written");
+        offsets.save(&map(&[("plan-a", (0, 1))]), false).unwrap();
+        offsets.save(&map(&[("plan-a", (0, 2))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 1))]), "the second change waits");
+        offsets.save(&map(&[("plan-a", (0, 2))]), true).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 2))]), "a Plan change writes at once");
+        offsets.written = Some(Instant::now() - SAVE_EVERY);
+        offsets.save(&map(&[("plan-a", (0, 3))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 3))]), "a second later it writes");
     }
 
     fn pulse_of(rows: &[&str]) -> Pulse {

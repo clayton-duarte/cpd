@@ -30,6 +30,37 @@ impl Hook {
     }
 }
 
+/// Why a driver ended through no fault of its Worker: an install or a store migration (hs-n278). A driver that
+/// ends on one of these errors leaves them in `run/<plan>/attempts/<attempt>.infra`, which the engine reads
+/// without the store: E2 ends that Attempt as one whose driver never started (hs-d160), at the same Tier and
+/// not counted by `retry_cap`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Infra {
+    /// The setup lock stayed held (a migration longer than the wait's ceiling).
+    LockTimeout,
+    /// The store is newer than this binary (a reload, or an install, raced a migration).
+    StoreTooNew,
+}
+
+impl Infra {
+    /// The infrastructure failure `code` is, if it is one.
+    pub fn of(code: ErrorCode) -> Option<Infra> {
+        match code {
+            ErrorCode::LockTimeout => Some(Infra::LockTimeout),
+            ErrorCode::StoreTooNew => Some(Infra::StoreTooNew),
+            _ => None,
+        }
+    }
+
+    /// The error code, as the marker holds it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Infra::LockTimeout => ErrorCode::LockTimeout.as_str(),
+            Infra::StoreTooNew => ErrorCode::StoreTooNew.as_str(),
+        }
+    }
+}
+
 /// The resolved `$CPD_HOME` directory. Holding one proves it is absolute.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CpdHome {
@@ -96,6 +127,16 @@ impl CpdHome {
     /// `archive/contexts/`: where migration 0007 moves each old store (contract §1.4).
     pub fn archived_contexts_dir(&self) -> PathBuf {
         self.root.join("archive").join("contexts")
+    }
+
+    /// `bin/`: the directory first on every pi Session's `PATH` (contract §6.5, hs-d310).
+    pub fn bin_dir(&self) -> PathBuf {
+        self.root.join("bin")
+    }
+
+    /// `bin/git`: the `git` wrapper that refuses `git stash` (contract §1.4, §6.5).
+    pub fn git_wrapper(&self) -> PathBuf {
+        self.bin_dir().join("git")
     }
 
     /// `locks/`.
@@ -232,6 +273,57 @@ impl CpdHome {
         self.plan_dir(plan).join("logs").join(format!("attempt-{attempt}.log"))
     }
 
+    /// `run/<plan>/attempts/<attempt>.infra`: the marker a driver leaves when an install or a store migration
+    /// ended it (see [`Infra`]).
+    pub fn attempt_infra(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
+        self.plan_dir(plan).join("attempts").join(format!("{attempt}.infra"))
+    }
+
+    /// Leaves the marker of a driver that ended on `infra` (`message` says why), before it exits and releases
+    /// its driver lock. Written whole, then renamed, so a reader never sees half of it.
+    pub fn leave_infra(&self, plan: &PlanId, attempt: &AttemptId, infra: Infra, message: &str) -> Result<(), CpdError> {
+        let path = self.attempt_infra(plan, attempt);
+        let failed = |e: std::io::Error| {
+            CpdError::new(ErrorCode::StoreFailed, format!("Cannot write the infrastructure marker {}: {e}.", path.display()))
+        };
+        std::fs::create_dir_all(path.parent().expect("a file in attempts/")).map_err(failed)?;
+        let tmp = path.with_extension("infra.tmp");
+        let body = serde_json::json!({"code": infra.code(), "message": message});
+        std::fs::write(&tmp, body.to_string()).map_err(failed)?;
+        std::fs::rename(&tmp, &path).map_err(failed)
+    }
+
+    /// The marker of `attempt`'s driver: `None` when it left none. A marker that cannot be read is an error, not
+    /// a missing one.
+    pub fn infra(&self, plan: &PlanId, attempt: &AttemptId) -> Result<Option<(Infra, String)>, CpdError> {
+        let path = self.attempt_infra(plan, attempt);
+        let bad = |why: String| CpdError::new(ErrorCode::StoreFailed, format!("The infrastructure marker {} is invalid: {why}.", path.display()));
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(bad(e.to_string())),
+        };
+        let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| bad(e.to_string()))?;
+        let code = json.get("code").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let infra = [Infra::LockTimeout, Infra::StoreTooNew]
+            .into_iter()
+            .find(|i| i.code() == code)
+            .ok_or_else(|| bad(format!("code {code:?}")))?;
+        let message = json.get("message").and_then(serde_json::Value::as_str).unwrap_or_default();
+        Ok(Some((infra, message.to_owned())))
+    }
+
+    /// Removes the marker of an Attempt that has ended; a missing one is fine.
+    pub fn remove_infra(&self, plan: &PlanId, attempt: &AttemptId) -> Result<(), CpdError> {
+        let path = self.attempt_infra(plan, attempt);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(CpdError::new(ErrorCode::StoreFailed, format!("Cannot remove the infrastructure marker {}: {e}.", path.display())))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// `run/<plan>/plannotator-port`: the Plan's plannotator port, one line (contract §6.5).
     pub fn plannotator_port(&self, plan: &PlanId) -> PathBuf {
         self.plan_dir(plan).join("plannotator-port")
@@ -305,6 +397,8 @@ mod tests {
         assert_eq!(h.db(), p("/h/.cpd/cpd.db"));
         assert_eq!(h.old_contexts_dir(), p("/h/.cpd/contexts"));
         assert_eq!(h.archived_contexts_dir(), p("/h/.cpd/archive/contexts"));
+        assert_eq!(h.bin_dir(), p("/h/.cpd/bin"));
+        assert_eq!(h.git_wrapper(), p("/h/.cpd/bin/git"));
         assert_eq!(h.watch_lock(), p("/h/.cpd/locks/watch.lock"));
         assert_eq!(
             h.attempt_lock(&plan(), &attempt()),
@@ -313,6 +407,7 @@ mod tests {
         assert_eq!(h.plannotator_ports_lock(), p("/h/.cpd/locks/plannotator-ports.lock"));
         assert_eq!(h.pr_poll_lock(), p("/h/.cpd/locks/pr-poll.lock"));
         assert_eq!(h.plannotator_port(&plan()), p("/h/.cpd/run/pay-4521/plannotator-port"));
+        assert_eq!(h.attempt_infra(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/attempts/api-schema-a2.infra"));
         assert_eq!(h.watch_log(), p("/h/.cpd/run/watch.log"));
         assert_eq!(h.tmux_restart_lock(), p("/h/.cpd/locks/tmux-restart.lock"));
         assert_eq!(h.tmux_restart_pending(), p("/h/.cpd/run/tmux-restart.pending"));
@@ -375,5 +470,28 @@ mod tests {
         for theirs in ["config.json", "leads", "slots", "workflows"] {
             assert!(!ours.contains(&h.root().join(theirs)), "{theirs}");
         }
+    }
+
+    #[test]
+    fn only_a_lock_timeout_or_a_store_too_new_is_infrastructure() {
+        assert_eq!(Infra::of(ErrorCode::LockTimeout), Some(Infra::LockTimeout));
+        assert_eq!(Infra::of(ErrorCode::StoreTooNew), Some(Infra::StoreTooNew));
+        for other in [ErrorCode::StoreFailed, ErrorCode::StoreBusy, ErrorCode::IllegalTransition] {
+            assert_eq!(Infra::of(other), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn the_infra_marker_round_trips_and_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        assert_eq!(h.infra(&plan(), &attempt()).unwrap(), None);
+        h.leave_infra(&plan(), &attempt(), Infra::StoreTooNew, "newer").unwrap();
+        assert_eq!(h.infra(&plan(), &attempt()).unwrap(), Some((Infra::StoreTooNew, "newer".to_owned())));
+        h.remove_infra(&plan(), &attempt()).unwrap();
+        h.remove_infra(&plan(), &attempt()).unwrap();
+        assert_eq!(h.infra(&plan(), &attempt()).unwrap(), None);
+        std::fs::write(h.attempt_infra(&plan(), &attempt()), r#"{"code":"crashed"}"#).unwrap();
+        assert_eq!(h.infra(&plan(), &attempt()).unwrap_err().code(), ErrorCode::StoreFailed);
     }
 }
