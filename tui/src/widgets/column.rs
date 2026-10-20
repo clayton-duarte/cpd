@@ -11,6 +11,7 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use crate::link;
 use crate::palette::{self, Meaning};
+use crate::section;
 use crate::read::{OpenPr, PrState, ReviewDecision};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
@@ -121,22 +122,8 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
     [first.patch_style(style), second.patch_style(style)]
 }
 
-/// A section header, one line: `──`, then ` <title> ` as a grey reversed block (not bold), then `─` to the right edge, all in
-/// the Nothing colour. A title wider than `width` is cut; the line never wraps.
-pub(crate) fn section_header(title: &str, width: usize) -> Line<'static> {
-    let grey = palette::fg(Meaning::Nothing);
-    let lead = width.min(2);
-    let block: String = format!(" {title} ").chars().take(width - lead).collect();
-    let rest = width - lead - block.chars().count();
-    Line::from(vec![
-        Span::styled("─".repeat(lead), grey),
-        Span::styled(block, grey.add_modifier(Modifier::REVERSED)),
-        Span::styled("─".repeat(rest), grey),
-    ])
-}
-
-fn render_header(f: &mut Frame, area: Rect, title: &str) {
-    f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
+fn render_header(f: &mut Frame, area: Rect, title: &str, count: Option<usize>) {
+    f.render_widget(Paragraph::new(section::title(title, count, usize::from(area.width))), area);
 }
 
 /// Which items a scrolling list draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section"; the
@@ -210,9 +197,9 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
             Constraint::Length(1),
         ])
     .areas(area);
-    render_header(f, prs_header, "PRs");
-    render_header(f, git_header, "git");
-    render_header(f, jira_header, "Jira");
+    render_header(f, prs_header, "PRs", Some(open.len()));
+    render_header(f, git_header, "git", None);
+    render_header(f, jira_header, "Jira", None);
     f.render_widget(
         Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(format!(" load {}", machine.load.join(" ")))]),
         home,
@@ -311,39 +298,32 @@ mod tests {
     }
 
     #[test]
-    fn a_header_is_two_rules_the_title_block_and_rules_to_the_edge() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 1)).unwrap();
-        terminal.draw(|f| render_header(f, f.area(), "PRs")).unwrap();
-        let buf = terminal.backend().buffer().clone();
-        assert_eq!(row(&buf, 0), format!("── PRs {}", "─".repeat(13)));
-        for x in 0..20 {
-            let cell = &buf[(x, 0)];
-            let title = (2..7).contains(&x);
-            assert_eq!(cell.fg, palette::color(Meaning::Nothing), "x={x}");
-            assert_eq!(cell.modifier.contains(Modifier::REVERSED), title, "x={x}");
-            assert!(!cell.modifier.contains(Modifier::BOLD), "x={x}");
-        }
-    }
-
-    #[test]
-    fn a_header_narrower_than_its_title_cuts_the_title() {
-        let text = |width| section_header("Jira", width).spans.iter().map(|s| s.content.to_string()).collect::<String>();
-        assert_eq!(text(5), "── Ji");
-        assert_eq!(text(1), "─");
-        assert_eq!(text(0), "");
+    fn the_prs_header_carries_the_count_of_the_open_pull_requests() {
+        let header = |width: u16, count| {
+            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+            terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
+            row(terminal.backend().buffer(), 0)
+        };
+        assert_eq!(header(20, Some(3)), "━━ PRs ━━━━━━━━ 3 ━━");
+        assert_eq!(header(30, Some(12)), "━━ PRs ━━━━━━━━━━━━━━━━━ 12 ━━");
+        assert_eq!(header(20, None), "━━ PRs ━━━━━━━━━━━━━");
+        let buf = buffer(20, 15);
+        assert_eq!(row(&buf, 4), "━━ PRs ━━━━━━━━ 0 ━━");
+        let two = [pr(1, Some("l-a")), pr(2, None)];
+        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), "━━ PRs ━━━━━━━━ 2 ━━");
     }
 
     #[test]
     fn the_column_has_a_blank_row_an_untitled_machine_and_three_headers() {
         let buf = buffer(20, 15);
-        let rule = |title: &str| format!("── {title} {}", "─".repeat(20 - 4 - title.chars().count()));
+        let rule = |title: &str| format!("━━ {title} {}", "━".repeat(20 - 4 - title.chars().count()));
         let got: Vec<String> = (0..15).map(|y| row(&buf, y)).collect();
         let expected = [
             "".to_owned(),
             " homeserver".to_owned(),
             " load 0.52 0.41 0.30".to_owned(),
             "".to_owned(),
-            rule("PRs"),
+            "━━ PRs ━━━━━━━━ 0 ━━".to_owned(),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
