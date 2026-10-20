@@ -93,6 +93,9 @@ pub struct OpenPr {
     /// The Lead of the owner: `plans.lead_session` of the Plan of the `prs` row that points to this pull request (the most
     /// recently created Plan when several do). `None` when no Plan owns it.
     pub lead: Option<SessionId>,
+    /// The owner's Lead Session has `state = 'working'` (contract §3.6): the row shows the Lead's working dot (hs-d335).
+    /// False when no Plan owns it.
+    pub lead_working: bool,
 }
 
 /// A Plan: its head (counts), its label and the rows of its PRs that have a pull request. The PRs section no longer draws it
@@ -197,7 +200,9 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                           WHERE s.role = 'lead' AND s.plan IS NOT NULL AND json_extract(m.data, '$.place') = 'chat'
                           ORDER BY m.id DESC LIMIT 1)),
                 (SELECT p.lead_session FROM prs r JOIN plans p ON p.id = r.plan
-                  WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1)
+                  WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1),
+                COALESCE((SELECT s.state = 'working' FROM prs r JOIN plans p ON p.id = r.plan JOIN sessions s ON s.id = p.lead_session
+                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0)
            FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
     )?;
     let mut rows = stmt.query([])?;
@@ -221,6 +226,7 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             clean: r.get(8)?,
             active: r.get(9)?,
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
+            lead_working: r.get(11)?,
             repo,
             number,
         });

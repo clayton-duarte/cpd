@@ -235,7 +235,7 @@ Find the cause in the message text or `cpd job show <k>` (it lists Attempts with
 | `tampered` | The Attempt changed a protected path (`.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, the repo's protected list). Retry once; if it recurs the Job needs such a change: cancel and ask the User. |
 
 - The retry ladder already raised the Tier on every automatic Attempt (at most `retry_cap`, default 2, retries). If the Job failed at `O5`, no higher Tier exists: change the Spec (cancel and append) or ask the User.
-- A cancelled or failed Job leaves its dependents blocked forever, because Locked Jobs cannot be edited. Cancel each dependent too and append replacements whose `--needs` point at the new Jobs.
+- A cancelled or failed Job leaves its dependents unable to start, because Locked Jobs cannot be edited. Cancel each dependent too and append replacements whose `--needs` point at the new Jobs.
 - A Job with a running Attempt is stopped by the engine within one tick after you cancel the Job (`cancel_requested` in the result).
 
 #### Escalations
@@ -248,7 +248,7 @@ You have the Context: answer from the Spec, Requirements, assumptions, Context r
 cpd answer <esc-id> "<answer>"
 ```
 
-- The text names the Escalation id (`<attempt-id>-q<k>`), the Job and the question. The Worker is blocked until you answer (it expires after `ask_minutes`, default 60 min), so answer promptly.
+- The text names the Escalation id (`<attempt-id>-q<k>`), the Job and the question. The Worker is waiting for you until you answer (it expires after `ask_minutes`, default 60 min), so answer promptly.
 - Write the answer so the Worker can act on it literally: concrete, self-contained, no follow-up needed. Quote the Spec, assumption or Context record it comes from.
 - When the User must decide, name the Job and the Worker's question in your own question. Send the User's decision back as the answer, never the raw dialog. If the decision outlives this Plan, record it too (`cpd context decide "<decision>"`).
 - `escalation_answered` or `escalation_expired` means it is already answered or expired. Do nothing more.

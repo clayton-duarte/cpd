@@ -386,13 +386,12 @@ fn the_logs_action_opens_the_popup_on_the_clicking_client() {
     let popup = popups(&env).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
     // `tmux -L <socket> -f /dev/null display-popup -c <client> -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
+    // Sized like the legend, at most 80 % of the 200x60 client (`logs::popup_args`): 160x48.
     let (w, h) = cpd_tui::widgets::legend::size();
+    let (w, h) = ((w + 2).min(160), (h + 2).min(48));
     assert_eq!(
         popup[at..],
-        [
-            "display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).min(48).to_string(),
-            "cpd tui view logs"
-        ]
+        ["display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &w.to_string(), "-h", &h.to_string(), "cpd tui view logs"]
     );
     assert!(popup[..at].starts_with(&["-L".to_owned(), env.tmux_socket().to_owned()]), "{popup:?}");
 

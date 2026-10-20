@@ -8,7 +8,7 @@
 //! GitHub's rate limit, no poll runs until the limit resets, and one `error`
 //! `gh_rate_limited` tells the User; it clears when polling resumes.
 
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -133,6 +133,12 @@ fn poll(engine: &Engine) -> Result<Value, Failure> {
         }
         Failed::Timeout(e) => Failure::from(&e),
     })?;
+    printed(&out, &argv)
+}
+
+/// What a child printed: its success value (`ok` true, exit 0), or the failure it printed (`ok` false, with an
+/// `error` code), or a `spawn_failed` failure when it printed no result. Shared with E11's helper.
+pub(super) fn printed(out: &Output, argv: &[&str]) -> Result<Value, Failure> {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let printed: Option<Value> = serde_json::from_str(stdout.trim()).ok();
     match printed {

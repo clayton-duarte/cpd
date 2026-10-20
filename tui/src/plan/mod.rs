@@ -138,7 +138,7 @@ struct Centre {
 impl Centre {
     /// A Job runs: its pill's icon is the spinner, which turns with the clock.
     fn spins(&self) -> bool {
-        self.plan.jobs.iter().any(|j| flow::Live::of(j) == Some(flow::Live::Running))
+        self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == Some(flow::Live::Running))
     }
 
     /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
@@ -146,7 +146,7 @@ impl Centre {
     fn turn(&mut self, frame: usize) -> bool {
         let turned = frame != self.frame && self.spins();
         if turned {
-            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, frame).with_margin(MARGIN);
+            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, &self.plan.needs_user, frame).with_margin(MARGIN);
             self.frame = frame;
         }
         turned
@@ -174,7 +174,7 @@ fn snapshot(store: &mut Store, home: &CpdHome, width: u16, now_ms: i64) -> Resul
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, frame).with_margin(MARGIN);
+    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(MARGIN);
     let review = ReviewRow::of(&plan, home, || review_host(&mut std::io::sink()));
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, review, boxes, frame }), pulse: None })
 }
@@ -636,6 +636,7 @@ mod tests {
                 state: read::PrState::Open,
                 url: "https://github.com/acme/api/pull/12".into(),
                 conflicting: false,
+                lead_working: false,
             }),
         }];
         let plan = PlanBoxes {
@@ -644,9 +645,10 @@ mod tests {
             prs,
             jobs: Vec::new(),
             review: None,
+            needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, 0).with_margin(MARGIN);
+        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("lead-ship").unwrap(),
             name: "lead".into(),
@@ -809,9 +811,10 @@ mod tests {
             prs: vec![node],
             jobs: (0..jobs).map(job).collect(),
             review: None,
+            needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, 0).with_margin(MARGIN);
+        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
             name: "lead".into(),
