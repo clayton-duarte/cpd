@@ -43,6 +43,6 @@ debug = 0
 # that whole gain: the tests run as fast as at 3, and a clean test build is
 # about 35 % cheaper (wall and CPU) than at 3 (docs/implementing.md "Dependency
 # opt-level": the paired numbers). Only dependencies change: the workspace's own
-# crates (cli, core, tui) stay at opt-level 0, so editing them recompiles as before.
+# crates (cli, core, engine, tui) stay at opt-level 0, so editing them recompiles as before.
 [profile.dev.package."*"]
 opt-level = 1
