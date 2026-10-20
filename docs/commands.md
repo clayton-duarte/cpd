@@ -2065,7 +2065,7 @@ Idempotent: read-only; the same `--since` replays the same lines.
 ## 12. `watch`
 
 ```
-cpd watch [--ensure]
+cpd watch [--ensure | --check]
 ```
 
 (and the internal `cpd watch --restart-tmux` and `cpd watch --ensure --wait`, below)
@@ -2100,6 +2100,14 @@ Effects: probe `locks/watch.lock` (open and `flock(LOCK_EX | LOCK_NB)`, released
 Idempotent: yes; a running engine gives `"started": false` with `"already": true`.
 
 Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it probes the engine's lock and holds it until it has started the engine, so two calls never start two windows. A plain call waits for it 30 s at most (a supervising call holds it up to 15 s + 10 s + 2 s) and then fails with `watch_start_failed` (`details.next` = `cpd watch --ensure`); it still answers `already` when an engine runs.
+
+**With `--check`** (hs-d463; contract §3.7 "The install's engine order"): verifies, and **writes nothing**, what `--ensure` and the engine's start depend on: no row, no Event, no migration, no window, no pane, no lock taken, no tmux option set, no server started, no directory made. In this order, failing at the first, each with its own error and exit code (§1.2): (a) the config loads (`config_missing`, `config_invalid`); (b) the store opens, from the **read-only verdict** of `cpd --version` (§1.2; no database is no refusal; a refusal is its own `store_too_new`, `store_failed`, `migration_changed` or `migration_order`), never `Store::open`, which migrates; (c) `tmux -V` parses and is at least 3.6 (`tmux_failed`); (d) the tmux listing: with the server of `<socket>` running, `list-panes -a -F` with the format of the liveness call (§6.3), as a UTF-8 client (§6.1), and every line parses (`tmux_failed`); with no server it is skipped; (e) `$CPD_HOME/locks` and `run` exist or can be made (their nearest existing ancestor is a writable directory) and `locks/watch.lock`, if it exists, opens read-write (`store_failed`). Idempotent; no bound of its own.
+
+```json
+{"ok": true, "checked": ["config", "store", "tmux", "listing", "home"], "tmux": {"version": "3.8", "server": "running"}}
+```
+
+`"server"` is `"running"` or `"none"`. `scripts/install-cpd.sh` runs it with the new binary before it stops anything (contract §3.7).
 
 **`--ensure --wait` (internal; hs-d328).** What the tmux server's hooks run when the engine's pane died or its window is gone (contract §6.1, §6.6); not an interface of the User or an agent. As `--ensure`, with these differences:
 
