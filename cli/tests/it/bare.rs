@@ -55,9 +55,6 @@ fn real_tmux() -> PathBuf {
 /// A fake `tmux` that records its calls, ends `attach` with exit 0 and otherwise
 /// runs the real one. `extra` is shell code run first.
 fn fake_tmux(env: &TestEnv, extra: &str) {
-    // TEMP-DELAY
-    let delay = format!("if [ -n \"$BRR_SUB\" ] && [ -e '{root}/adapter-reports' ]; then case \" $* \" in *\" $BRR_SUB \"*) sleep \"$BRR_DELAY\";; esac; fi\n", root = env.root().display());
-    let extra = format!("{delay}{extra}");
     env.fake("tmux", &format!("{extra}\ncase \" $* \" in *\" attach \"*) exit 0;; esac\nexec '{}' \"$@\"", real_tmux().display()));
 }
 
@@ -502,13 +499,8 @@ fn places() -> Vec<(String, String)> {
     PLACES.iter().map(|(s, w)| ((*s).to_owned(), (*w).to_owned())).collect()
 }
 
-macro_rules! rstress { ($($n:ident),*) => { $( #[test] fn $n() { safe_restart_body() } )* } }
-rstress!(rstress_0, rstress_1, rstress_2, rstress_3, rstress_4, rstress_5, rstress_6, rstress_7, rstress_8, rstress_9, rstress_10, rstress_11, rstress_12, rstress_13, rstress_14, rstress_15);
 #[test]
 fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_place_and_plain_tmux_attaches() {
-    safe_restart_body()
-}
-fn safe_restart_body() {
     let env = env();
     fake_cpd_with_sleeping_sessions(&env);
     let flag = older_server(&env);
@@ -521,7 +513,12 @@ fn safe_restart_body() {
 
     let t = run_in_terminal(&env, "restart", false, "");
     assert_eq!(t.exit_code(), 0, "{}", t.stderr());
-    eprintln!("TEMP-STDERR {}", t.stderr());
+    // Bare `cpd` restarts in its own process and attaches only when that is done, and it exits 0 whatever the
+    // restart did (A3): its one line says whether the restart succeeded, so it is read before the server is.
+    // A restart that failed after the kill leaves no server, and the line is then the only message there is.
+    let line = t.stderr();
+    assert!(line.contains("restarted the tmux server") && line.contains("3 Session(s) reopened"), "{line}");
+    assert_eq!(line.lines().count(), 1, "{line}");
     assert_eq!(kill_server_calls(&env), 0, "the old server is killed by its own binary, not by the installed tmux on PATH");
     assert_ne!(server_pid(&env), before, "the server was not restarted");
     assert_eq!(session_windows(&env), places());
@@ -547,9 +544,6 @@ fn safe_restart_body() {
     wait_idle_in_live_panes(&env, &["lead1", "lead2", "manager1"]);
     // The server is as new as the installed tmux: the installed tmux attaches.
     assert_eq!(attach_calls(&env).len(), 1);
-    let line = t.stderr();
-    assert!(line.contains("restarted the tmux server") && line.contains("3 Session(s) reopened"), "{line}");
-    assert_eq!(line.lines().count(), 1, "{line}");
     // The engine runs again in the new server.
     assert_eq!(tmux_out(&env, &["list-panes", "-t", "=cpd-work:watch", "-F", "#{pane_dead}"]).trim(), "0");
 }
@@ -816,18 +810,3 @@ fn a_real_older_tmux_server_is_restarted_onto_the_installed_tmux() {
     wait_idle_in_live_panes(&env, &["lead1", "lead2", "manager1"]);
     assert!(!pending_file(&env).exists());
 }
-
-// TEMP-STRESS
-fn stress_tui_body() {
-    let mut bad = Vec::new();
-    for i in 0..12 {
-        let env = env();
-        let run = env.cpd(&["tui"]);
-        if run.exit != 0 || !run.stdout.contains("\"ok\":true") {
-            bad.push(format!("iter {i} load {}: {run:?}", std::fs::read_to_string("/proc/loadavg").unwrap()));
-        }
-    }
-    assert!(bad.is_empty(), "{}", bad.join("\n"));
-}
-macro_rules! stress { ($($n:ident),*) => { $( #[test] fn $n() { stress_tui_body() } )* } }
-stress!(stress_tui_0, stress_tui_1, stress_tui_2, stress_tui_3, stress_tui_4, stress_tui_5, stress_tui_6, stress_tui_7, stress_tui_8, stress_tui_9, stress_tui_10, stress_tui_11);
