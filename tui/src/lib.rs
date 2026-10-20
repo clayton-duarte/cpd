@@ -2,17 +2,23 @@
 //! amendments 1, 2, 9 and 10): `cpd tui`, which builds and attaches it, and
 //! the ratatui views of `cpd tui view`, one module per view.
 //!
-//! - [`cockpit`]: `cpd tui [--attach] [--respawn]` (§13.1);
+//! - [`cockpit`]: `cpd tui [--attach] [--respawn]` (§13.1), reset-layout and
+//!   `cpd tui action`, what a click on a StatusBar button runs (the StatusBar
+//!   is tmux's status line, contract §6.1);
 //! - [`chat`]: the chat slot's placeholder (amendment 2);
 //! - [`widgets`]: the Dispatch column and the key legend (`tui view legend`), with the shared [`palette`];
 //! - [`logs`]: the Event log, a popup of the StatusBar (R36);
-//! - [`statusbar`]: the StatusBar, the bottom row, with reset-layout;
 //! - [`history`]: an archived Session's pi file, read-only, in the chat slot;
 //! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon;
+//! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
+//! - [`fold`]: the one widget every block that folds is drawn by (the tree's Contexts and archived groups, the Inbox's toggle);
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
+mod background;
 mod chat;
 mod cockpit;
+pub mod dialog;
+pub mod fold;
 mod history;
 pub mod link;
 pub mod logs;
@@ -20,16 +26,17 @@ pub mod merge;
 pub mod palette;
 mod plan;
 pub mod read;
-mod statusbar;
+mod runner;
+mod scroll;
 mod tree;
 pub mod widgets;
 mod worker;
 
+pub use runner::{Capture, ViewError, run_view};
+
 use std::ffi::OsString;
-use std::time::Duration;
 
 use cpd_core::error::{CpdError, ErrorCode};
-use cpd_core::host::limit::limit;
 use cpd_core::output::Output;
 
 /// Runs `cpd <argv>` in this process, through the root command tree. `cli` owns that tree, so it passes the runner in.
@@ -54,6 +61,21 @@ pub enum Command {
     /// A view in a cockpit pane (internal; owns its terminal) (§13.2)
     #[command(hide = true, subcommand)]
     View(View),
+    /// A click on a StatusBar button (internal; prints nothing) (§13.2)
+    #[command(hide = true)]
+    Action(ActionArgs),
+}
+
+/// `cpd tui action <reset|legend|logs> --client <name>`.
+#[derive(clap::Args, Debug)]
+pub struct ActionArgs {
+    /// `reset`, `legend` or `logs`: the button's range. Optional and free text, so that any value, an empty
+    /// `#{mouse_status_range}` included, reaches the command and fails with `display-message`, never a usage error
+    /// on stdout
+    pub action: Option<String>,
+    /// The tmux client that clicked (`#{client_name}`)
+    #[arg(long)]
+    pub client: String,
 }
 
 /// The views of commands.md §13.2, named as their `@cpd_view` (contract §6.2).
@@ -65,8 +87,6 @@ pub enum View {
     Plan,
     /// The Dispatch column (right)
     Widgets,
-    /// The StatusBar (bottom row)
-    Statusbar,
     /// An Attempt's Worker, read-only (beside the chat)
     Worker(worker::Args),
     /// An archived Session's history, read-only (the chat slot)
@@ -77,6 +97,8 @@ pub enum View {
     Logs(logs::Args),
     /// The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup)
     Merge(merge::Args),
+    /// A dialog of the kit: `confirm`, `input` or `text` (opened by the cockpit's actions, in a tmux popup)
+    Dialog(dialog::Args),
     /// The chat slot's placeholder
     Chat,
 }
@@ -84,19 +106,41 @@ pub enum View {
 pub fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
     match args.command {
         None => cockpit::run(args.attach, args.respawn, run_command),
-        Some(Command::View(view)) => match view {
+        Some(Command::View(view)) => backed_off(match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),
             View::Widgets => widgets::run(run_command),
-            View::Statusbar => statusbar::run(),
             View::Worker(args) => worker::run(args),
             View::History(args) => history::run(args),
             View::Legend => widgets::legend::run(),
             View::Logs(args) => logs::run(args),
             View::Merge(args) => merge::run(args, run_command),
+            View::Dialog(args) => dialog::run(args),
             View::Chat => chat::run(),
-        },
+        }),
+        Some(Command::Action(a)) => Ok(cockpit::action(a.action.as_deref(), &a.client)),
     }
+}
+
+/// How long a view in a pane that failed waits before it exits.
+const BACKOFF: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A view that fails exits, and the cockpit's `pane-died` hook starts it again at once (contract §6.1), so a
+/// persistent failure would be a tight loop. In a pane the failure is shown, and the view waits [`BACKOFF`] before
+/// it exits. Without a terminal no hook is involved: the error is returned at once.
+fn backed_off(result: Result<Output, CpdError>) -> Result<Output, CpdError> {
+    if let Err(e) = &result {
+        if on_a_terminal() {
+            eprintln!("{}\nStarting again in {} s.", e.message(), BACKOFF.as_secs());
+            std::thread::sleep(BACKOFF);
+        }
+    }
+    result
+}
+
+/// `cpd` with no arguments, in a terminal (commands.md §13.3): the follow-ups of an update, then attach.
+pub fn bare(run_command: RunCommand) -> Result<Output, CpdError> {
+    cockpit::bare(run_command)
 }
 
 /// `not_a_terminal`: a command that owns its terminal was not given one.
@@ -105,17 +149,8 @@ fn not_a_terminal(command: &str) -> CpdError {
         .with("command", command)
 }
 
-/// The re-read periods `(coalesce, refresh)` of a view that re-reads its snapshot at least every `refresh` and, on
-/// Events, at most once per `coalesce` (`plan`, `widgets`, `statusbar`, `tree`; commands.md §17): the release values given, or
-/// in a debug build the test's `CPD_TEST_VIEW_REFRESH` for `refresh` (contract §1.2 "Test overrides"), the coalescing
-/// then at most that.
-fn reread(coalesce: Duration, refresh: Duration) -> (Duration, Duration) {
-    let refresh = limit("VIEW_REFRESH", refresh);
-    (coalesce.min(refresh), refresh)
-}
-
 /// Whether stdin and stdout are both a terminal.
-fn on_a_terminal() -> bool {
+pub fn on_a_terminal() -> bool {
     use std::io::IsTerminal;
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }

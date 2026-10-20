@@ -13,6 +13,7 @@ use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::git;
 use crate::home::CpdHome;
+use crate::host::git_guard;
 use crate::host::layout::attempt_window;
 use crate::host::limit::limit;
 use crate::host::pi::{self, PiDirs, WorkerLaunch, extensions_to_pass, worker_candidates};
@@ -312,6 +313,7 @@ pub fn start(
     let model = catalog.model_arg(target.tier)?;
     let adapter = config.pi_adapter_dir()?;
     let extensions = extensions_to_pass(&worker_candidates(&adapter), &target.worktree, dirs, &mut std::io::stderr());
+    git_guard::install(home)?;
     let launch = pi::worker(&WorkerLaunch {
         home,
         session,
