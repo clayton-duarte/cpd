@@ -223,10 +223,9 @@ mod tests {
 
     #[test]
     fn a_wrapped_row_keeps_its_own_glyphs_and_colours_and_the_fold_only_adds_muted_lines() {
-        use ratatui::style::Color;
         let item = Line::from(vec![
             Span::raw(" "),
-            Span::styled(palette::NEEDS_YOU, Style::new().fg(Color::Red)),
+            Span::styled(palette::NEEDS_YOU, palette::fg(Meaning::Failed)),
             Span::raw(" cpd#129 merge conflict"),
             Span::styled("  18m", palette::fg(Meaning::Nothing)),
         ]);
@@ -236,7 +235,7 @@ mod tests {
         assert_eq!(row.spans[0].content, BRANCH);
         assert!(is_muted(&row.spans[0]), "only the line is added, and it is muted");
         assert_eq!(&row.spans[1..], &item.spans[..], "every span of the wrapped row, as it was: glyph, colour and age");
-        assert_eq!(row.spans[2].style.fg, Some(Color::Red), "the icon keeps its colour");
+        assert_eq!(row.spans[2].style.fg, Some(palette::color(Meaning::Failed)), "the icon keeps its colour");
         assert_eq!(flat(drawn.lines.last().unwrap()), format!("╰{UP} collapse"), "and the block closes with the arrow row");
     }
 }

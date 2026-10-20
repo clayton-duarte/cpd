@@ -1914,7 +1914,7 @@ mod tests {
         let buf = draw_now(&mut with_inbox(5), 43, 16);
         let rows = text_rows(&buf);
         let muted = palette::color(palette::Meaning::Nothing);
-        for (y, colour) in [(12, ratatui::style::Color::Red), (13, ratatui::style::Color::Red), (14, ratatui::style::Color::Yellow)] {
+        for (y, colour) in [(12, palette::Meaning::Failed), (13, palette::Meaning::Failed), (14, palette::Meaning::Review)].map(|(y, m)| (y, palette::color(m))) {
             assert!(rows[y].starts_with(&format!(" │ {NEEDS_YOU} ")), "the icon in row {y}: {rows:?}");
             assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted), "the branch of row {y}");
             assert_eq!((buf[(3, y as u16)].symbol(), buf[(3, y as u16)].fg), (NEEDS_YOU, colour), "the icon of row {y}");
