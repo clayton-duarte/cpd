@@ -73,7 +73,7 @@ const PLAN_KINDS: [Kind; 3] = [Kind::PlanReview, Kind::JobStuck, Kind::PrReady];
 
 /// The urgency of the most urgent of the `visible` items that fill the dot of `session`: its `dialog` and `unread`
 /// items (`inbox_items.session`) and, when it is the Lead of `lead_of`, the Plan's `plan-review`, `job-stuck` and
-/// `pr-ready` items (§17; `pr-failing` and `pr-changes` are only for pull requests no Plan owns, hs-d302). `visible` is the open items that are neither snoozed nor dismissed.
+/// `pr-ready` items (§17; `pr-failing` and `pr-changes` are no longer opened and fill no dot, hs-d470). `visible` is the open items that are neither snoozed nor dismissed.
 pub fn urgency(visible: &[Item], session: &SessionId, lead_of: Option<&PlanId>) -> Option<Urgency> {
     visible
         .iter()

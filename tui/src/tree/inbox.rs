@@ -198,13 +198,13 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318). `engine-down`
 /// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (or says there is
-/// none yet); the `url` is copied for `pr-failing`, `pr-changes` and `review-requested` (their OSC 8 link stays for the
+/// none yet); the `url` is copied for `review-requested` (their OSC 8 link stays for the
 /// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
-        // no click: the engine's errors and the stuck Jobs go to the Manager, not the Inbox (hs-d314, hs-d318); only a row an older engine opened remains
-        Kind::EngineError | Kind::JobStuck => None,
+        // no click: the engine's errors, the stuck Jobs and PR check/review state reach no Inbox (hs-d314, hs-d318, hs-d470); only a row an older engine opened remains
+        Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
         Kind::PlanReview => {
@@ -213,7 +213,7 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
             Some(Jump::Steps(vec![open, page]))
         }
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
-        Kind::PrFailing | Kind::PrChanges | Kind::ReviewRequested => {
+        Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }
     }
@@ -230,7 +230,7 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
 
 /// The kinds whose label is an OSC 8 link to the item's `url`.
 fn is_link(kind: Kind) -> bool {
-    matches!(kind, Kind::PlanReview | Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested)
+    matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::ReviewRequested)
 }
 
 /// An item's row: the fold's muted `│`, a space, the item's icon in its urgency's colour, a space, the label cut with
