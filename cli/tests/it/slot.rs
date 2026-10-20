@@ -1,13 +1,11 @@
 //! `cpd slot` (commands.md §23; contract §7.6 "The test slot"): the built binary, a temporary `$CPD_HOME`;
 //! and the scripts of this repo that call it (`scripts/cargo.sh`, `package.json`'s `test`).
 
-mod common;
-
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use common::{CPD, TestEnv, output, spawn, wait_until, write_executable};
+use crate::common::{CPD, TestEnv, output, spawn, wait_until, write_executable};
 
 /// A test environment whose `config.toml` has `test_concurrency` = `n`.
 fn env(n: u32) -> TestEnv {

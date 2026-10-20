@@ -52,6 +52,7 @@ mod session_reload;
 mod session;
 mod session_send;
 mod session_watchdog;
+mod slot;
 mod spec;
 mod store;
 mod store_window;
