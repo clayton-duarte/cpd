@@ -301,6 +301,7 @@ dependencies = [
  "clap",
  "cpd-core",
  "nix 0.31.3",
+ "ratatui",
  "rusqlite",
  "serde",
  "serde_json",
