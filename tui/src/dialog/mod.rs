@@ -336,7 +336,7 @@ mod tests {
         let program = dir.path().join("tmux");
         let script = format!(
             "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\" >> '{calls}'; done\n\
-             case \"$5\" in list-clients) echo '1 100 30';; esac\n",
+             case \" $* \" in *\" list-clients \"*) echo '1 100 30';; esac\n",
             calls = calls.display()
         );
         std::fs::write(&program, script).unwrap();

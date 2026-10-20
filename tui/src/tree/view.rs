@@ -2026,7 +2026,7 @@ mod tests {
         draw_now(&mut view, 43, 21);
         // rows 15.. are (the sample tree has 12 rows: one `└ collapse` per Context) the five items: dialog, pr-failing, job-stuck, engine-error, unread
         assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::Open(sid("f-blocked"))), "dialog: session open");
-        assert_eq!(click(&mut view, 10, 16), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing no Plan owns: copies its url");
+        assert_eq!(click(&mut view, 10, 16), Effect::None, "pr-failing (an old row, hs-d470): no click");
         assert_eq!(click(&mut view, 10, 17), Effect::None, "job-stuck (an old row, hs-d318): no click");
         assert_eq!(click(&mut view, 10, 18), Effect::None, "engine-error (an old row, hs-d314): no click");
         assert_eq!(click(&mut view, 41, 19), Effect::None, "unread, its Lead in the chat slot already: nothing, anywhere on the row, the age too");
@@ -2063,7 +2063,7 @@ mod tests {
         draw_now(&mut view, 43, 16);
         let before = view.inbox_expanded;
         assert_eq!(click(&mut view, 10, 13), Effect::Run(Action::Open(sid("f-blocked"))));
-        assert_eq!(click(&mut view, 10, 14), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "a pr-failing's click copies its url");
+        assert_eq!(click(&mut view, 10, 14), Effect::None, "a pr-failing (an old row, hs-d470): no click, no url copy");
         assert_eq!(click(&mut view, 10, 12), Effect::None, "the header");
         assert_eq!(view.inbox_expanded, before);
         let mut question = item(6, InboxKind::Question, Urgency::Magenta, "alpha: a question", "2026-01-02T23:00:00.000Z");
@@ -2292,7 +2292,7 @@ mod tests {
         }
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))), "dialog");
         press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing: Enter copies its url");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "pr-failing (an old row, hs-d470): no jump, no url copy");
         press(&mut view, KeyCode::Down);
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "job-stuck (an old row, hs-d318): no jump");
         press(&mut view, KeyCode::Down);
@@ -2810,7 +2810,7 @@ mod tests {
     #[test]
     fn a_copy_click_draws_no_note_when_the_copy_is_done() {
         let url = "https://github.com/acme/api/pull/12";
-        let mut failing = item(2, InboxKind::PrFailing, Urgency::Red, "acme/api#12 checks failed", "2026-01-02T23:55:00.000Z");
+        let mut failing = item(2, InboxKind::ReviewRequested, Urgency::Yellow, "review acme/api#12", "2026-01-02T23:55:00.000Z");
         failing.url = Some(url.into());
         let mut view = View::new(sample(), true);
         view.tree.inbox = vec![failing];

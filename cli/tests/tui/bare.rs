@@ -190,7 +190,7 @@ fn in_a_terminal_it_builds_the_cockpit_starts_the_engine_and_attaches() {
     assert_eq!(t.stderr(), "");
 
     let socket = env.tmux_socket();
-    assert_eq!(attach_calls(&env), [["-L", socket, "-f", "/dev/null", "attach", "-t", "cpd"]]);
+    assert_eq!(attach_calls(&env), [["-u", "-L", socket, "-f", "/dev/null", "attach", "-t", "cpd"]]);
     assert_eq!(view_pids(&env).iter().map(|(v, _)| v.as_str()).collect::<Vec<_>>(), ["chat", "plan", "tree", "widgets"]);
     // The engine runs in its own session.
     assert_eq!(tmux_out(&env, &["list-windows", "-t", "=cpd-work", "-F", "#{window_name}"]).trim(), "watch");
@@ -275,7 +275,7 @@ fn inside_the_cockpit_it_does_not_nest_an_attach() {
 fn when_the_server_runs_another_tmux_the_servers_own_binary_attaches() {
     let env = env();
     // The installed tmux says it is another version than the server's.
-    fake_tmux(&env, "[ \"$1\" = -V ] && { echo 'tmux 1.0'; exit 0; }");
+    fake_tmux(&env, "[ \"$2\" = -V ] && { echo 'tmux 1.0'; exit 0; }");
     let t = run_in_terminal(&env, "other", false, "");
     wait_until("the attach", || {
         let clients = env.tmux(&["list-clients", "-t", "=cpd", "-F", "#{client_pid}"]);
@@ -335,6 +335,12 @@ fn older_server_run_by(env: &TestEnv, old: &Path) -> PathBuf {
              if [ -e '{flag}.list-sessions-fails' ]; then\n\
                case \" $* \" in *\" list-sessions \"*) echo hit >> '{flag}.hits'; echo 'server exited unexpectedly' >&2; exit 1;; esac\n\
              fi\n\
+             if [ -e '{flag}.record-go-signals' ]; then\n\
+               a=''; b=''; c=''; d=''; e=''; for x in \"$@\"; do a=$b; b=$c; c=$d; d=$e; e=$x; done\n\
+               if [ \"$b\" = -t ] && [ \"$d\" = @cpd_session ] && [ -n \"$e\" ]; then\n\
+                 echo \"$c $e $('{CPD}' session show \"$e\" 2>&1 | tr -d '\\n')\" >> '{flag}.go-signals'\n\
+               fi\n\
+             fi\n\
              if [ -e '{flag}.no-park-other' ]; then\n\
                case \" $* \" in *\" new-window \"*\" -n park-other \"*) echo 'no window for you' >&2; exit 1;; esac\n\
              fi",
@@ -372,13 +378,23 @@ fn states(env: &TestEnv) -> Vec<(String, String, Option<String>)> {
 /// Waits until every one of `ids` is `idle` with a pane that exists in the server, as the adapter of
 /// the pi of its new pane reports it.
 fn wait_idle_in_live_panes(env: &TestEnv, ids: &[&str]) {
-    wait_until(&format!("{ids:?} to be idle in live panes"), || {
-        let panes = tmux_out(env, &["list-panes", "-a", "-F", "#{pane_id}"]);
-        states(env)
+    let mut seen = (Vec::new(), String::new());
+    let done = common::poll(common::WAIT, || {
+        seen = (states(env), tmux_out(env, &["list-panes", "-a", "-F", "#{pane_id} #{@cpd_session}"]));
+        let live = |p: &str| seen.1.lines().any(|l| l.split(' ').next() == Some(p));
+        seen.0
             .iter()
             .filter(|(id, _, _)| ids.contains(&id.as_str()))
-            .all(|(_, state, pane)| state == "idle" && pane.as_deref().is_some_and(|p| panes.lines().any(|l| l == p)))
+            .all(|(_, state, pane)| state == "idle" && pane.as_deref().is_some_and(live))
+            .then_some(())
     });
+    assert!(
+        done.is_some(),
+        "timed out waiting for {ids:?} to be idle in live panes: rows {:?}, panes {:?}\nsession-state and session-moved Events: {}",
+        seen.0,
+        seen.1,
+        env.cpd(&["events", "list", "--kind", "session-state", "--kind", "session-moved"]).stdout
+    );
 }
 
 fn home_of(env: &TestEnv) -> CpdHome {
@@ -759,6 +775,34 @@ fn a_session_the_panes_do_not_show_but_the_store_records_is_reopened_too() {
     assert!(t.stderr().contains("3 Session(s) reopened"), "{}", t.stderr());
     assert_eq!(session_windows(&env), places());
     wait_idle_in_live_panes(&env, &["lead1", "lead2", "manager1"]);
+}
+
+/// A tmux restart reopens the Sessions of the parked windows (`reopen_one`): the pane gets `@cpd_session` (the go
+/// signal: the wrapper's `session run` waits for it, then its pi reports `idle`) only once the store records the
+/// pane. A report that lands before leaves a row with no pane that engine E2 stops (hs-d238). The fake `tmux`
+/// writes down what `cpd session show` says of each Session as the signal is set on its pane.
+#[test]
+fn a_restart_records_the_pane_of_a_parked_session_before_it_gets_the_go_signal() {
+    let env = env();
+    fake_cpd_with_sleeping_sessions(&env);
+    let flag = older_server(&env);
+    let _driver = fixture(&env, None);
+    cockpit_with_sessions(&env);
+    arm(&env, &flag);
+    fs::write(format!("{}.record-go-signals", flag.display()), "").unwrap();
+
+    let t = run_in_terminal(&env, "go-signal", false, "");
+    assert_eq!(t.exit_code(), 0, "{}", t.stderr());
+    assert!(t.stderr().contains("3 Session(s) reopened"), "{}", t.stderr());
+    let signals = fs::read_to_string(format!("{}.go-signals", flag.display())).unwrap_or_default();
+    // lead1 is the chat slot's, reopened by `session open` (its own test); the others are parked.
+    for id in ["lead2", "manager1"] {
+        let line = signals.lines().find(|l| l.split(' ').nth(1) == Some(id)).unwrap_or_else(|| panic!("{id} never got @cpd_session:\n{signals}"));
+        let mut fields = line.splitn(3, ' ');
+        let (pane, _, row) = (fields.next().unwrap(), fields.next(), fields.next().unwrap());
+        let row: serde_json::Value = serde_json::from_str(row).unwrap_or_else(|e| panic!("`session show {id}` at the go signal: {e}: {row}"));
+        assert_eq!(row["session"]["tmux_pane"], serde_json::json!(pane), "pane {pane} got @cpd_session {id} while the store's tmux_pane for it was {}", row["session"]["tmux_pane"]);
+    }
 }
 
 /// An installed tmux that is older than the one on `PATH`, at a known path; else why there is none.

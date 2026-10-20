@@ -9,6 +9,14 @@
 //! (exit 1) with `argv`, `exit` and the last 60 lines of stderr (commands.md §1.3).
 //! A call that runs past [`DEADLINE`] is killed and fails `tool_timeout` (§6.3),
 //! except the [`INTERACTIVE`] ones.
+//!
+//! Every call is a UTF-8 client, whatever the caller's locale (hs-d463; contract
+//! §6.1): the argv is `tmux -u -L <socket> -f /dev/null …`. Without a UTF-8 locale
+//! tmux prints the tabs of a `-F` format as `_`, and `list-panes` then fails to
+//! parse. `-u` and not `LANG`: tmux reads `LC_ALL` before `LANG`, and `-u` needs no
+//! installed locale. This file is the one place that spawns tmux (`Tmux::argv`,
+//! `Tmux::command`, `client`, which `installed_version` and `doctor` use); a test
+//! refuses a spawn of tmux anywhere else.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -37,6 +45,20 @@ fn deadline_of(args: &[String]) -> Option<Duration> {
         Some(call) if INTERACTIVE.contains(&call.as_str()) => None,
         _ => Some(DEADLINE),
     }
+}
+
+/// The tmux program, found on `PATH`.
+const PROGRAM: &str = "tmux";
+/// tmux's flag for a UTF-8 client (hs-d463): without it, and without a UTF-8 locale, tmux prints the tabs of a `-F`
+/// format as `_`. It is the first argument after the program, the one place that puts it there is [`client`].
+const UTF8: &str = "-u";
+
+/// The one `Command` for a tmux program (hs-d463; contract §6.1): `<program> -u`, with `TMUX` and `TMUX_PANE` removed and no stdin.
+/// Every spawn of tmux in cpd starts from it, so every call is a UTF-8 client whatever the caller's locale.
+pub fn client(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut cmd = Command::new(program);
+    cmd.arg(UTF8).env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null());
+    cmd
 }
 
 /// tmux's `-x`/`-y` for a new session (contract §6.3).
@@ -389,9 +411,9 @@ impl Tmux {
         Ok(self.clone().with_program(program))
     }
 
-    /// The full argv of a call: `tmux -L <socket> -f /dev/null <args>`.
+    /// The full argv of a call: `tmux -u -L <socket> -f /dev/null <args>` (`-u`: a UTF-8 client, hs-d463).
     pub fn argv(&self, args: &[String]) -> Vec<String> {
-        let mut argv = vec!["tmux".to_owned(), "-L".to_owned(), self.socket.clone(), "-f".to_owned(), "/dev/null".to_owned()];
+        let mut argv = vec![PROGRAM.to_owned(), UTF8.to_owned(), "-L".to_owned(), self.socket.clone(), "-f".to_owned(), "/dev/null".to_owned()];
         argv.extend(args.iter().cloned());
         argv
     }
@@ -399,8 +421,8 @@ impl Tmux {
     /// The `Command` for a call: its argv, without `TMUX` and `TMUX_PANE`.
     fn command(&self, args: &[String]) -> Command {
         let argv = self.argv(args);
-        let mut cmd = Command::new(self.program.as_deref().unwrap_or_else(|| Path::new(&argv[0])));
-        cmd.args(&argv[1..]).env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null());
+        let mut cmd = client(self.program.as_deref().unwrap_or_else(|| Path::new(PROGRAM)));
+        cmd.args(&argv[2..]);
         if let Some(tmpdir) = &self.tmpdir {
             cmd.env("TMUX_TMPDIR", tmpdir);
         }
@@ -763,6 +785,12 @@ fn version_key(version: &str) -> Option<(u32, u32, u8)> {
     Some((major.parse().ok()?, minor, letter))
 }
 
+/// Whether `version` (`tmux -V` without its `tmux ` prefix) is one cpd 2 supports: at least 3.6, or a development build
+/// (`next-…`), as `cpd doctor` judges it. False when it does not parse.
+pub fn supported_version(version: &str) -> bool {
+    version.starts_with("next-") || version_key(version).is_some_and(|key| key >= (3, 6, 0))
+}
+
 /// Whether tmux `server` is an older version than tmux `installed`. False when either does not parse.
 pub fn older_version(server: &str, installed: &str) -> bool {
     matches!((version_key(server), version_key(installed)), (Some(s), Some(i)) if s < i)
@@ -771,8 +799,8 @@ pub fn older_version(server: &str, installed: &str) -> bool {
 /// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
 /// `tmux ` prefix, in the form of [`Tmux::server_version`].
 pub fn installed_version() -> Result<String, CpdError> {
-    let argv = vec!["tmux".to_owned(), "-V".to_owned()];
-    let out = Command::new("tmux").arg("-V").env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null()).output().map_err(|e| {
+    let argv = vec![PROGRAM.to_owned(), UTF8.to_owned(), "-V".to_owned()];
+    let out = client(PROGRAM).arg("-V").output().map_err(|e| {
         CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
             .with("argv", argv.clone())
             .with("exit", serde_json::Value::Null)
@@ -1031,9 +1059,10 @@ mod tests {
     #[test]
     fn every_call_names_the_socket_and_no_config_and_drops_tmux_vars() {
         let tmux = Tmux::new("cpdt");
-        assert_eq!(tmux.argv(&strings(&["kill-server"])), ["tmux", "-L", "cpdt", "-f", "/dev/null", "kill-server"]);
+        assert_eq!(tmux.argv(&strings(&["kill-server"])), ["tmux", "-u", "-L", "cpdt", "-f", "/dev/null", "kill-server"]);
         let cmd = tmux.command(&strings(&["kill-server"]));
         assert_eq!(cmd.get_program(), "tmux");
+        assert_eq!(cmd.get_args().next().unwrap(), "-u");
         let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
         assert_eq!(removed, ["TMUX", "TMUX_PANE"]);
     }
@@ -1082,7 +1111,7 @@ mod tests {
         let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
         let listed = calls.lines().filter(|l| l.contains("list-sessions")).count();
         assert_eq!(listed, 4, "it waited until the connection was refused: {calls}");
-        assert!(calls.lines().any(|l| l == "-L dying -f /dev/null kill-server"), "{calls}");
+        assert!(calls.lines().any(|l| l == "-u -L dying -f /dev/null kill-server"), "{calls}");
     }
 
     #[test]

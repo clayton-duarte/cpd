@@ -1721,21 +1721,19 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
     assert_eq!(popups(&env)[0].last().unwrap(), "cpd tui view merge 'acme/api#3'");
     assert!(popups(&env)[0].contains(&" merge ".to_owned()), "{:?}", popups(&env)[0]);
-    // a pull request, a Plan's or not, and a review request: the url is copied, and the log says how to open it
-    pane.click(10, row_of("acme/web#4 changes requested"));
-    copied(2, "https://x.io/changes");
-    pane.wait_logged("the result", "ok: copied https://x.io/changes: Cmd-click the row to open it");
+    // a review request: the url is copied, and the log says how to open it
     pane.click(10, row_of("acme/web#5 review requested"));
-    copied(3, "https://x.io/review");
+    copied(2, "https://x.io/review");
     pane.wait_logged("the result", "ok: copied https://x.io/review: Cmd-click the row to open it");
+    // pr-changes and pr-failing, rows an older engine opened (hs-d470): no click, no url copy
+    pane.click(10, row_of("acme/web#4 changes requested"));
     pane.click(10, row_of("acme/api#12 failing"));
-    copied(4, "https://github.com/acme/api/pull/12");
-    pane.wait_logged("the result", "ok: copied https://github.com/acme/api/pull/12: Cmd-click the row to open it");
-    // engine-error and job-stuck, rows an older engine opened (hs-d314, hs-d318): no click; `settled_with_a_client` fails on any popup but the legend's
+    // engine-error and job-stuck, rows an older engine opened (hs-d314, hs-d318): no click either; `settled_with_a_client` fails on any popup but the legend's
     pane.click(10, row_of("engine: store busy"));
     pane.click(10, row_of("ship: c is stuck"));
     pane.settled_with_a_client();
     assert_eq!(calls(&env).len(), 3, "the copies and the popups ran no cpd command: {:?}", calls(&env));
+    assert_eq!(copies().len(), 2, "only the review page and the review request were copied: {:?}", copies());
 }
 
 /// Every Manager archived: none is live (`populate` makes one per Context).
