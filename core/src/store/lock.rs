@@ -23,6 +23,11 @@ use crate::lock as flock;
 /// the marker's `started_unix_ms` (contract §4.2). Not a config key.
 pub const MIGRATION_WAIT_CEILING: Duration = Duration::from_secs(10 * 60);
 
+/// The least a waiter that waited out a migration waits for SQLite in its own setup, whatever its `store_busy_ms`:
+/// the migrating holder is still finishing, e.g. closing its connection and so checkpointing the migration's WAL
+/// (contract §4.2). Not a config key.
+pub(super) const MIGRATION_SETTLE_MS: u64 = 5000;
+
 /// How often a waiter retries a held lock.
 const RETRY: Duration = Duration::from_millis(20);
 
@@ -69,9 +74,16 @@ fn unix_ms() -> u64 {
 pub(super) struct SetupLock {
     file: File,
     path: PathBuf,
+    /// Whether this wait read a live migration marker.
+    waited: bool,
 }
 
 impl SetupLock {
+    /// Whether the wait for this lock read a live migration marker.
+    pub(super) fn waited_for_migration(&self) -> bool {
+        self.waited
+    }
+
     /// Writes the marker: this process migrates the store from `from` to `to`
     /// applied migrations. One `write`, under the `flock`.
     pub(super) fn migrating(&self, from: usize, to: usize) -> Result<(), CpdError> {
@@ -124,7 +136,7 @@ fn acquire(home: &CpdHome, busy_ms: u64, ceiling: Duration) -> Result<SetupLock,
     let mut seen: Option<Marker> = None;
     loop {
         if flock::try_lock(&file).map_err(|e| failed("lock", &path, e))? {
-            let lock = SetupLock { file, path };
+            let lock = SetupLock { file, path, waited: said };
             // A marker left by a holder that died is not ours to keep.
             lock.file.set_len(0).map_err(|e| failed("clear", &lock.path, e))?;
             return Ok(lock);

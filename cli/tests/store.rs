@@ -1725,6 +1725,35 @@ fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone()
     assert!(waited >= Duration::from_millis(550), "did not wait for the release: {waited:?}");
 }
 
+/// hs-n278, contract §4.2: an opener that waited out a migration waits for SQLite in its own setup at least
+/// `MIGRATION_SETTLE_MS`, whatever its `busy_ms`: the migrating holder may still be finishing (here: another
+/// connection holds the database's exclusive lock a while longer).
+#[test]
+fn an_opener_that_waited_out_a_migration_waits_for_sqlite_in_its_setup() {
+    let env = TestEnv::new();
+    let h = home(&env);
+    Store::open(&h, 5000).map(drop).unwrap();
+    // A rollback-journal database, so that an exclusive lock blocks a reader at once.
+    let finishing = Connection::open(h.db()).unwrap();
+    finishing.pragma_update(None, "journal_mode", "DELETE").unwrap();
+    finishing.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
+    // time-claim: the waiter (1 ms bound) reads the marker within the first 300 ms, gets the lock after that, and finds
+    // the database locked for 300 ms more; no per-poll signal from the waiter.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        drop(holder);
+        std::thread::sleep(Duration::from_millis(300));
+        finishing.execute_batch("COMMIT").unwrap();
+    });
+    let start = Instant::now();
+    let store = Store::open(&h, 1);
+    let waited = start.elapsed();
+    release.join().unwrap();
+    store.expect("the waiter waits for SQLite in its setup");
+    assert!(waited >= Duration::from_millis(550), "did not wait for the database: {waited:?}");
+}
+
 /// hs-n278: a holder with no marker keeps the `store_busy_ms` bound.
 #[test]
 fn a_holder_that_is_not_migrating_still_times_out_after_store_busy_ms() {
