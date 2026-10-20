@@ -489,7 +489,9 @@ fn an_existing_real_adapter_directory_is_migrated_to_pi_legacy_without_renameat2
     assert_eq!(fs::read_to_string(share.join("pi/extension.ts")).unwrap(), "extension.ts\n", "the new adapter is visible at pi");
     assert!(!share.join("pi/lib/old-only.ts").exists(), "no old file shows through the new pi");
     assert_eq!(fs::read_to_string(share.join("pi.legacy/lib/old-only.ts")).unwrap(), "old\n", "pi.legacy holds the old files");
-    assert_eq!(versions(&env), ["pi.legacy".to_string(), id]);
+    let mut want = vec!["pi.legacy".to_string(), id];
+    want.sort();
+    assert_eq!(versions(&env), want);
     assert_eq!(scratch(&env), Vec::<String>::new());
 }
 
