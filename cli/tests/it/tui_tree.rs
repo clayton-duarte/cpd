@@ -829,6 +829,29 @@ fn the_tree_keeps_drawing_and_reading_keys_while_a_command_runs() {
 }
 
 #[test]
+fn a_failing_session_open_opens_a_text_dialog_and_draws_no_note() {
+    // commands.md §17 "No notes" (a): a command that fails is something the User must see, a `text` dialog; the tree
+    // shows no note row behind it
+    let env = env();
+    populate(&env);
+    env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"no_cockpit","message":"No cockpit.","details":{}}}'; exit 3"#);
+    fake_dialogs(&env);
+    let pane = Pane::start(&env, 60, 14);
+    pane.ready();
+    pane.down(1);
+    pane.keys(&["Enter"]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "l-ship"])]);
+    let popups = wait_for_popups(&env, 1);
+    assert!(popups[0].starts_with("cpd tui view dialog text "), "a `text` dialog: {popups:?}");
+    assert!(
+        popups[0].contains("session open l-ship") && popups[0].contains("no_cockpit: No cockpit."),
+        "`<what failed>: <code>: <message>`: {popups:?}"
+    );
+    pane.settled_with_a_client();
+    assert!(!pane.footer_has("no_cockpit"), "no note: {:?}", pane.screen());
+}
+
+#[test]
 fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     let env = env();
     populate(&env);
