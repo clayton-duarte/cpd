@@ -361,26 +361,26 @@ mod tests {
             terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
             row(terminal.backend().buffer(), 0)
         };
-        assert_eq!(header(20, Some(3)), "━━ PRs ━━━━━━━━ 3 ━━");
-        assert_eq!(header(30, Some(12)), "━━ PRs ━━━━━━━━━━━━━━━━━ 12 ━━");
-        assert_eq!(header(20, None), "━━ PRs ━━━━━━━━━━━━━");
+        assert_eq!(header(20, Some(3)), format!("╭─\u{E0B6}PRs\u{E0B4}{}3", "─".repeat(12)));
+        assert_eq!(header(30, Some(12)), format!("╭─\u{E0B6}PRs\u{E0B4}{}12", "─".repeat(30 - 9)));
+        assert_eq!(header(20, None), format!("╭─\u{E0B6}PRs\u{E0B4}{}", "─".repeat(13)));
         let buf = buffer(20, 15);
-        assert_eq!(row(&buf, 4), "━━ PRs ━━━━━━━━ 0 ━━");
+        assert_eq!(row(&buf, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)));
         let two = [pr(1, Some("l-a")), pr(2, None)];
-        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), "━━ PRs ━━━━━━━━ 2 ━━");
+        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}2", "─".repeat(12)));
     }
 
     #[test]
     fn the_column_has_a_blank_row_an_untitled_machine_and_three_headers() {
         let buf = buffer(20, 15);
-        let rule = |title: &str| format!("━━ {title} {}", "━".repeat(20 - 4 - title.chars().count()));
+        let rule = |title: &str| format!("╭─\u{E0B6}{title}\u{E0B4}{}", "─".repeat(20 - 4 - title.chars().count()));
         let got: Vec<String> = (0..15).map(|y| row(&buf, y)).collect();
         let expected = [
             "".to_owned(),
             " homeserver".to_owned(),
             " load 0.52 0.41 0.30".to_owned(),
             "".to_owned(),
-            "━━ PRs ━━━━━━━━ 0 ━━".to_owned(),
+            format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
@@ -604,7 +604,7 @@ mod tests {
     fn a_cue_above_appears_after_a_scroll_and_each_cue_takes_a_row_of_the_list() {
         let (buf, _) = scrolled(30, height(5), &many(5), "", 1);
         let got = section(&buf);
-        assert_eq!(got[0], &format!("{:>30}", "▲ 1 more"), "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 1 more"), "{got:#?}");
         // 5 rows less both cues leave 3: one pull request, and a spare row
         assert_eq!(names(&got), ["acme/repo#2"]);
         assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"));
@@ -617,7 +617,7 @@ mod tests {
         let (buf, d) = scrolled(30, height(5), &many(5), "", 99);
         let got = section(&buf);
         assert_eq!(d.max_scroll, 3);
-        assert_eq!(got[0], &format!("{:>30}", "▲ 3 more"), "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 3 more"), "{got:#?}");
         assert_eq!(names(&got), ["acme/repo#4", "acme/repo#5"]);
         assert!(!got.iter().any(|r| r.contains('▼')), "{got:#?}");
         assert_eq!(scrolled(30, height(5), &many(5), "", 3).0, buf);
@@ -630,7 +630,7 @@ mod tests {
     fn a_hit_area_is_that_of_the_row_drawn_after_a_scroll() {
         let (buf, d) = scrolled(30, height(7), &many(6), "", 2);
         let got = section(&buf);
-        assert_eq!(got[0], &format!("{:>30}", "▲ 2 more"), "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 2 more"), "{got:#?}");
         assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 2 more"), "{got:#?}");
         let leads: Vec<(&str, Rect)> = d.hits.iter().map(|h| (h.lead.as_str(), h.area)).collect();
         assert_eq!(leads, [("l-3", Rect::new(0, 7, 30, 2)), ("l-4", Rect::new(0, 9, 30, 2))]);

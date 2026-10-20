@@ -199,7 +199,7 @@ fn body_height(sections: &[Section]) -> u16 {
 }
 
 /// The size the legend needs: columns, rows (without a popup's border). The title is a section header, which
-/// needs its own width: `──`, ` <title> ` and one `─`.
+/// needs its own width: `╭─`, the pill (the title and its two caps) and one `─`.
 pub fn size() -> (u16, u16) {
     let sections = sections();
     let width = sections.iter().map(Section::width).max().unwrap_or(0) + 2;
@@ -409,7 +409,7 @@ mod tests {
         assert!((0..w).all(|x| buf[(x, 1)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 1));
         assert_eq!(row(&buf, 0), "");
         assert_eq!(row(&buf, 2), "");
-        assert!(row(&buf, 1).starts_with("━━ Legend: what") && row(&buf, 1).contains("(any key closes) ━"));
+        assert!(row(&buf, 1).starts_with("╭─\u{E0B6}Legend: what") && row(&buf, 1).contains("(any key closes)\u{E0B4}─"));
     }
 
     #[test]
