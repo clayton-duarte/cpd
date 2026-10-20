@@ -2595,8 +2595,13 @@ fn conversation(fx: &Fx, id: &str) -> PathBuf {
 impl Titles {
     /// `fx`, a pane per id in `panes`, pi answering `pi` (a shell body, its stdin read first).
     fn new(panes: usize, pi: &str) -> Titles {
+        Titles::with_pi(panes, |_| pi.to_owned())
+    }
+
+    /// [`Titles::new`] with pi's script made from the env's root (where it keeps its state).
+    fn with_pi(panes: usize, pi: impl FnOnce(&Path) -> String) -> Titles {
         let fx = fx("");
-        fx.env.fake_pi(&format!("cat > /dev/null\n{pi}"));
+        fx.env.fake_pi(&format!("cat > /dev/null\n{}", pi(fx.env.root())));
         let mut ids = Vec::new();
         for n in 0..panes {
             let args: &[&str] = if n == 0 { &["new-session", "-d", "-s", "x"] } else { &["new-window", "-d", "-t", "=x:"] };
@@ -2664,6 +2669,22 @@ impl Titles {
             .unwrap()
     }
 
+    /// `fx.start()` with the 10 minutes a Session's titling must fail in a row before E10 reports it (contract §3.7 E10,
+    /// hs-d356) set to `seconds`: `CPD_TEST_TITLE_FAILING`, a test override (contract §1.2) the fix adds to its table.
+    fn start_reporting_after(&self, seconds: &str) -> Engine {
+        let vars: Vec<(&str, &str)> = common::PLAN_POLLS.iter().copied().chain([("CPD_TEST_TITLE_FAILING", seconds)]).collect();
+        self.fx.start_with(Path::new(CPD), &vars)
+    }
+
+    /// The answers of a fake pi (the first argument of [`Titles::new`]) in the real order of Session 4965bfc8
+    /// (hs-d356): its first call answers nothing, every later one the model's preamble, never a `TITLE:` line.
+    fn empty_then_preamble(root: &Path) -> String {
+        format!(
+            "calls='{}/pi-calls'\necho x >> \"$calls\"\n[ \"$(wc -l < \"$calls\")\" -lt 2 ] || echo '{PREAMBLE}'",
+            root.display()
+        )
+    }
+
     fn started(&self) -> Vec<String> {
         let mut logs: Vec<String> = fs::read_dir(self.fx.env.cpd_home().join("run/titles"))
             .map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().trim_end_matches(".log").to_owned()).collect())
@@ -2678,7 +2699,7 @@ impl Titles {
 /// not.
 #[test]
 fn e10_retitles_an_idle_session_whose_turn_ended_after_its_title_and_no_other() {
-    let mut t = Titles::new(7, "echo 'Auxiliary agent titles'");
+    let mut t = Titles::new(7, "echo 'TITLE: Auxiliary agent titles'");
     t.session("due-manager", "manager", "idle", 0, Some(5), Some(20));
     t.session("due-untitled", "lead", "idle", 1, Some(1), None);
     t.session("throttled", "lead", "idle", 2, Some(1), Some(5));
@@ -2711,7 +2732,7 @@ fn e10_runs_at_most_two_retitles_at_once() {
     let release = std::env::temp_dir().join(format!("e10-release-{}", std::process::id()));
     let mut t = Titles::new(
         3,
-        &format!("i=0\nuntil [ -e '{r}' ] || [ $i -ge 1200 ]; do sleep 0.1; i=$((i+1)); done\necho 'A title'", r = release.display()),
+        &format!("i=0\nuntil [ -e '{r}' ] || [ $i -ge 1200 ]; do sleep 0.1; i=$((i+1)); done\necho 'TITLE: A title'", r = release.display()),
     );
     for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
         t.session(id, "lead", "idle", n, Some(1), None);
@@ -2735,7 +2756,7 @@ fn e10_runs_at_most_two_retitles_at_once() {
 /// it takes one of the two places.
 #[test]
 fn e10_skips_a_session_whose_title_lock_is_held_and_counts_held_locks() {
-    let mut t = Titles::new(3, "echo 'A title'");
+    let mut t = Titles::new(3, "echo 'TITLE: A title'");
     for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
         t.session(id, "lead", "idle", n, Some(1), None);
     }
@@ -2771,7 +2792,7 @@ fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
     t.session("due", "lead", "idle", 0, Some(1), Some(20));
     t.session("throttled", "lead", "idle", 1, Some(1), Some(5));
 
-    let engine = t.fx.start();
+    let engine = t.start_reporting_after("0");
     wait_until("the failure is reported", || t.fx.count("error") == 1);
     wait_until("a retry", || t.fx.env.calls("pi").len() >= 2);
     t.ticks();
@@ -2789,6 +2810,98 @@ fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
     assert_eq!(t.fx.env.query::<Option<String>>("SELECT context FROM events WHERE kind = 'error'"), None);
     assert_eq!(t.retitled(), Vec::<String>::new());
     assert_eq!(t.fx.env.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Old title");
+}
+
+/// pi's answer to E10's retry of Session 4965bfc8 at 15:05:37Z: a preamble, which the old code wrote as the title.
+const PREAMBLE: &str = "Now I understand. I need to output just the title to stdout…";
+
+/// An empty answer and then the preamble (the two real answers, hs-d356) are no title and, while the Session's titling has
+/// failed for less than 10 minutes in a row (here: the limit, set to an hour), no `error` Event either: the Session stays
+/// due and E10 retries it at the next tick.
+#[test]
+fn e10_does_not_report_an_empty_answer_or_a_preamble_within_the_limit_and_writes_no_title() {
+    let mut t = Titles::with_pi(1, Titles::empty_then_preamble);
+    t.session("due", "lead", "idle", 0, Some(1), None);
+
+    let engine = t.start_reporting_after("3600");
+    wait_until("the empty answer and the preamble", || t.fx.env.calls("pi").len() >= 2);
+    t.ticks();
+    engine.stop();
+
+    assert_eq!(t.fx.count("error"), 0, "a failing titling is logged, not reported, before the limit: {:?}", t.fx.events("error"));
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT title FROM sessions WHERE id = 'due'"), None, "the preamble is no title");
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT titled_at FROM sessions WHERE id = 'due'"), None);
+    assert_eq!(t.retitled(), Vec::<String>::new());
+    assert!(t.fx.env.calls("pi").len() >= 2, "the Session stays due and is retried");
+}
+
+/// A titling that keeps failing past the limit (2 s here) is reported once, as an `error` Event of E10 that names the
+/// Session and sets no Session or Plan; not a moment before the limit.
+#[test]
+fn e10_reports_a_titling_that_keeps_failing_past_the_limit_once() {
+    const LIMIT: Duration = Duration::from_secs(2);
+    let mut t = Titles::with_pi(1, Titles::empty_then_preamble);
+    t.session("due", "lead", "idle", 0, Some(1), None);
+
+    let started = Instant::now();
+    let engine = t.start_reporting_after("2");
+    wait_until("a retry of the failed titling", || t.fx.env.calls("pi").len() >= 2);
+    if started.elapsed() < LIMIT {
+        assert_eq!(t.fx.count("error"), 0, "reported before the limit: {:?}", t.fx.events("error"));
+    }
+    wait_until("the report", || t.fx.count("error") >= 1);
+    assert!(started.elapsed() >= LIMIT, "reported {:?} after the engine started, before the limit", started.elapsed());
+    t.ticks();
+    engine.stop();
+
+    let errors = t.fx.events("error");
+    assert_eq!(errors.len(), 1, "reported once: {errors:?}");
+    let data = &errors[0].3;
+    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("title_failed")), "{data}");
+    assert_eq!(data["details"]["session"], "due");
+    assert!(data["details"]["log"].as_str().unwrap().ends_with("run/titles/due.log"), "{data}");
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT title FROM sessions WHERE id = 'due'"), None);
+    assert_eq!(t.retitled(), Vec::<String>::new());
+}
+
+/// A success clears the failure: the 10 minutes in a row start again. Here the limit is 2 s; the titling fails for 1 s,
+/// succeeds, is due again and fails for the rest of the time. More than 2 s after the first failure and less than 2 s
+/// after the last success there is no `error`; a streak of 2 s since the success then is reported, once.
+#[test]
+fn e10_counts_the_failures_in_a_row_from_the_last_success() {
+    const LIMIT: Duration = Duration::from_secs(2);
+    let mut t = Titles::with_pi(1, |root| {
+        format!("if [ \"$(cat '{}/mode')\" = ok ]; then echo 'TITLE: Dynamic session titles'; fi", root.display())
+    });
+    let mode = t.fx.env.root().join("mode");
+    fs::write(&mode, "fail").unwrap();
+    t.session("due", "lead", "idle", 0, Some(1), None);
+
+    let first_failure = Instant::now();
+    let engine = t.start_reporting_after("2");
+    wait_until("a failed titling", || t.fx.env.calls("pi").len() >= 1);
+    wait_until("half the limit of failures", || first_failure.elapsed() >= LIMIT / 2);
+    assert_eq!(t.fx.count("error"), 0, "reported before the limit: {:?}", t.fx.events("error"));
+
+    fs::write(&mode, "ok").unwrap();
+    wait_until("the success", || t.retitled().len() == 1);
+    assert_eq!(t.fx.env.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Dynamic session titles");
+    fs::write(&mode, "fail").unwrap();
+    let success = Instant::now();
+    t.fx.fixture(&format!("UPDATE sessions SET titled_at = '{}' WHERE id = 'due';", ago(20)));
+    let calls = t.fx.env.calls("pi").len();
+    wait_until("failures again", || t.fx.env.calls("pi").len() >= calls + 2);
+    wait_until("the limit after the first failure", || first_failure.elapsed() > LIMIT + Duration::from_millis(200));
+    if success.elapsed() < LIMIT {
+        assert_eq!(t.fx.count("error"), 0, "the success did not clear the failures in a row: {:?}", t.fx.events("error"));
+    }
+
+    wait_until("the report of the second streak", || t.fx.count("error") >= 1);
+    assert!(success.elapsed() >= LIMIT, "reported {:?} after the success, before the limit", success.elapsed());
+    t.ticks();
+    engine.stop();
+    assert_eq!(t.fx.count("error"), 1, "{:?}", t.fx.events("error"));
 }
 
 // ---------- E6 (removed) ----------
