@@ -30,11 +30,11 @@ function registry(open: Review[]) {
 }
 
 /** A fake `cpd`: records argv and answers `review list` with `listed` (the open rows). */
-function harness(open: Review[], listed: string[] = [], session: string | undefined = SESSION, store: Record<string, unknown> = { [REGISTRY_KEY]: registry(open) }) {
+function harness(open: Review[], listed: string[] = [], session: string | null = SESSION, store: Record<string, unknown> = { [REGISTRY_KEY]: registry(open) }) {
   const argvs: string[][] = [];
   const reports: string[] = [];
   const tracker = createTracker({
-    session,
+    session: session ?? undefined,
     store,
     cpd: async (argv: string[]) => {
       argvs.push(argv);
@@ -127,7 +127,7 @@ test("an absent registry is not a refusal while nothing was ever opened: no cpd 
 });
 
 test("(1) with no CPD_SESSION the tracker runs no `cpd review`, at start or at a poll", async () => {
-  const h = harness([review("pn-1")], ["pn-2"], undefined);
+  const h = harness([review("pn-1")], ["pn-2"], null);
   await h.tracker.start();
   await h.tracker.poll();
   assert.deepEqual(h.argvs, []);

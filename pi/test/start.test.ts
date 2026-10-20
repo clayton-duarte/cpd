@@ -35,6 +35,7 @@ test("start-up runs §15.2's steps in order and follows from the cursor", async 
     ["session", "show", ID],
     ["session", "state", "idle", "--session", ID],
     ["plan", "show", "--plan", "p1"],
+    ["review", "list", "--session", ID],
   ]);
   assert.deepEqual(f.follows()[0]!.argv, ["events", "follow", "--session", ID, "--since", "130"]);
   assert.equal(f.pi.sessionName, "the lead", "step 3: the Session's name applies when pi's differs");
@@ -132,7 +133,7 @@ test("a session show that fails once then succeeds starts the adapter normally (
   f.respond("session-show", sessionShow());
   await waitFor("the follower", () => f.follows().length > 0);
   assert.equal(f.pi.errors().length, 1, "the same code is reported once, however often it is retried");
-  assert.deepEqual(f.argvs().slice(-2), [["session", "state", "idle", "--session", ID], ["plan", "show", "--plan", "p1"]]);
+  assert.deepEqual(f.argvs().slice(-3), [["session", "state", "idle", "--session", ID], ["plan", "show", "--plan", "p1"], ["review", "list", "--session", ID]]);
   assert.equal(f.pi.sessionName, "the lead");
 });
 
@@ -203,7 +204,7 @@ test("a Manager reads no Plan, registers no plan-review tool, opens no plannotat
   f.emit(ev(101, "plan-review", { data: { review: "r1", status: "pending" } }), ev(102, "session-renamed", { session: ID, data: { name: "ctx-manager" } }));
   await waitFor("the rename", () => f.pi.sessionName === "ctx-manager");
   await f.quiet(); // the rename is the later Event: the plan-review before it was handled
-  assert.deepEqual(f.argvs().map((a) => a.slice(0, 2).join(" ")), ["session show", "session state"], "no plan show");
+  assert.deepEqual(f.argvs().map((a) => a.slice(0, 2).join(" ")), ["session show", "session state", "review list"], "no plan show");
   assert.deepEqual(stateCalls(f), ["idle"], "never blocked");
   assert.deepEqual(f.pi.tools, []);
   assert.deepEqual(f.pi.emitted, [], "nothing is asked of plannotator");
