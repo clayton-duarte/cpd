@@ -1887,7 +1887,10 @@ fn e4_a_restarted_engine_repeats_no_escalation() {
     let engine = fx.start();
     fx.env.wait_whole_ticks(3);
     engine.stop();
-    assert_eq!(fx.count("session-message"), 1);
+    // The restarted engine tells the Manager how long it was down (contract §3.7, hs-d328): that message
+    // is not an escalation, so only the others are counted.
+    let escalations: Vec<String> = fx.texts("session-message").into_iter().filter(|t| !t.contains("The engine was down for ")).collect();
+    assert_eq!(escalations.len(), 1, "{escalations:?}");
 }
 
 #[test]
