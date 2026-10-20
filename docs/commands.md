@@ -2422,7 +2422,7 @@ The lines (`╭`, `│`, `╰`), the arrows and the words are muted; the pill an
   - **Rows.** The Plans of that Context that are not archived and either not done, or done (`plans.done_at`) inside the window (the n buckets shown, see Buckets). In tree order (`plans.created_at`).
   - **Row layout,** inside the Plan view's margin (MARGIN: 2 columns left/right, 1 row top): `<plan id padded to the longest id>  <sparkline>  <age right-aligned in 9>`. The id is plain text. No icon: no dot before the id, no `󰗠`, no merge-count column (User, hs-d327); the sparkline takes the width they freed. The row is 13 + id_width + n columns.
   - **Buckets.** 5 minutes each, aligned to wall-clock multiples of 5 min since the Unix epoch; the last one is the current, partial bucket. The window is n buckets ending now, n = max(12, pane width - 2*2 (margin) - (13 + id_width)). If n < 12, 12 is used and the line is cut at the pane's edge.
-  - **Activity** (what a bucket counts). The Events of the Plan (`events.plan`) of kinds plan-phase, plan-review, plan-done, job-added, job-edited, job-merged, job-failed, job-retried, job-cancel-requested, job-cancelled, attempt-started, attempt-status, attempt-retry, attempt-nudge, all-merged, pr-feedback, pr-added, pr-edited, pr-cancelled, pr-started, pr-opened, pr-merged, escalation, escalation-answered, escalation-expired, error; plus Lead turns: `session-state` Events with `data.to = 'working'` whose Session has role `lead` (the Plan's Lead and its side forks). Not counted: session-moved, session-registered, session-renamed, session-archived, session-message, inbox-*, context-*, plan-created, plan-renamed, plan-archived, watch-*.
+  - **Activity** (what a bucket counts). The Events of the Plan (`events.plan`) of kinds plan-phase, plan-review, plan-outlined, plan-done, job-added, job-edited, job-merged, job-failed, job-retried, job-cancel-requested, job-cancelled, attempt-started, attempt-status, attempt-retry, attempt-nudge, all-merged, pr-feedback, pr-added, pr-edited, pr-cancelled, pr-started, pr-opened, pr-merged, escalation, escalation-answered, escalation-expired, error; plus Lead turns: `session-state` Events with `data.to = 'working'` whose Session has role `lead` (the Plan's Lead and its side forks). Not counted: session-moved, session-registered, session-renamed, session-archived, session-message, inbox-*, context-*, plan-created, plan-renamed, plan-archived, watch-*.
   - **Kinds** (User, hs-d327). Each counted Event has a kind of activity, by its Event kind; the kinds are what the bars are coloured by:
 
     | Kind | Colour | Events |
@@ -2639,7 +2639,7 @@ The `efforts` above are an illustration, not verified values. Idempotent: yes.
 
 ## 15. The pi adapter's protocol
 
-The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays TypeScript"), loaded in every pi session cpd starts (§6.5). It is the only pi-specific code: it turns Events into messages (§5.3), reports agent states (§3.6) and runs the Plan review through plannotator. It calls only `cpd` commands; it never reads the database and never types into a pane (cpd 1 §15, kept).
+The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays TypeScript"), loaded in every pi session cpd starts (§6.5). It is the only pi-specific code: it turns Events into messages (§5.3), reports agent states (§3.6) and runs the Plan review in the Lead's chat, with plannotator for the full render on request (§15.5). It calls only `cpd` commands; it never reads the database and never types into a pane (cpd 1 §15, kept).
 
 ### 15.1 Package and activation
 
@@ -2658,7 +2658,7 @@ At `session_start`, in this order:
 2. `cpd session state idle --session <id>` (`stopped → idle`, §3.6); then `working` if `ctx.isIdle()` is false.
 3. **Name:** if pi's session name differs from the Session's `name`, `pi.setSessionName(name)`: a `session-renamed` missed while pi was down still applies.
 4. **Cursor** (§5.3 "No loss, no duplicates"): the greater of `registered_event` and the `details.id` of the last `cpd` custom message in the session's entries whose `details.delivered_to` is this Session's id. The adapter puts `delivered_to` into every message it delivers (amendment 5, §19). Why: a fork's file starts with its source's messages, whose Event ids belong to the source's stream; counting them could skip Events addressed to the fork.
-5. **Blocking reasons** (Plan Lead only; a Manager has none): one per `open` Escalation of its Plan (`cpd plan show`), and one for the Plan's **latest** Plan review when it is pending and this session opened it (its `cpd-plan-review` entries, §15.5): the latest is the one `cpd plan show` reports (`review.id`), and an undecided older review never opens a reason (hs-d224).
+5. **Blocking reasons** (Plan Lead only; a Manager has none): one per `open` Escalation of its Plan (`cpd plan show`), and one for the Plan's **latest** Plan review when it is pending and this session opened it (its `cpd-plan-review` entries of either surface, §15.5; a pending chat entry also reopens its dialog, §15.5 "Recovery"): the latest is the one `cpd plan show` reports (`review.id`), and an undecided older review never opens a reason (hs-d224).
 6. **Follow:** spawn `cpd events follow --session <id> --since <cursor>`.
 
 The cursor in memory advances after each line is handled, delivered or not. Only delivered messages persist it, so after a restart the Events handled without a message (`escalation-answered`, `escalation-expired`, `session-renamed`, `plan-review`) are seen again; every handler below is idempotent for that reason.
@@ -2680,8 +2680,9 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `pr-base-changed` | message, no turn, `followUp` (informational, hs-d325: the PR's `base` followed GitHub, as after its base PR merged; no Gate is needed and the PR stays ready, hs-d326). `data` is in contract §5.2. Raises `protocol` to 5 | |
 | `escalation` | message, **turn**, **`steer`**; opens the blocking reason `escalation:<id>` labelled `cpd: Worker question` | |
 | `escalation-answered`, `escalation-expired` | closes `escalation:<id>`; no message | |
-| `plan-review` with `status: pending` | opens it in plannotator (§15.5); no message. A review with a higher id than another pending review of this session **closes** that one's `plan-review:<review>` reason: only the latest review of a Plan blocks the Lead (§15.5 "Latest only") | |
-| `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside plannotator (§15.5 "Deciding elsewhere"): closes `plan-review:<review>`; message `cpd-plan-decision`, **turn**, `followUp` (own custom type, not `cpd`). For any other review: ignored | |
+| `plan-review` with `status: pending` | opens it in the Lead's chat (§15.5): the summary as a `cpd-plan-summary` message (no turn) and the dialog; no `cpd` message for the Event itself. A review with a higher id than another pending review of this session **closes** that one's `plan-review:<review>` reason: only the latest review of a Plan blocks the Lead (§15.5 "Latest only") | |
+| `plan-review` with `status: approved` or `rejected`, for a pending entry of this session | a decision made outside this adapter (§15.5 "Deciding elsewhere"): closes `plan-review:<review>` and an open dialog of it; message `cpd-plan-decision`, **turn**, `followUp` (own custom type, not `cpd`). For any other review: ignored | |
+| `plan-outlined` | ignored: **no message, no turn** (the Lead wrote the outline itself, §4.13); it only **learns the kind** (`pi/lib/event.ts`, delivery `none`), because an unknown kind costs an error turn (hs-n122). Adding the kind raises `protocol` to 9 (contract §5.2) | ignored |
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
 | `session-message` (`session` = itself) | message, `followUp`, **turn only when `data.wake` is true** (`triggerTurn: false` otherwise, hs-d209 D3); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. With `data.wake`, an idle Lead starts a turn at once; a working, waiting or blocked one gets it after its running turn, never interrupted. Without it, the message is in the Lead's context at its next turn and starts none | |
@@ -2693,7 +2694,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 
 **Other notices** stay follow-ups, delivered as the User's pi settings say: `followUpMode` (and `steeringMode`, for steered ones) `"all"` delivers every queued message together, pi's default `"one-at-a-time"` one per finished run. cpd does not set them (the User set both to `all` in the global pi settings on 2026-10-19; contract §6.5 "Queue modes are the User's").
 
-**The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (plannotator, the tool `cpd_plan_review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.7), which only a Manager gets.
+**The Manager** (B3-A5) is a Session of role `manager`: it has no Plan, so §15.2 step 5 (blocking reasons) and §15.5 (the Plan review, the tool `cpd_plan_review`, the command `/plan-review`) do not apply to it and nothing is opened or registered for them. Its follower follows only Events addressed to it (§11), so of this table only `session-message` and `session-renamed` reach it: a Plan's Events never wake it. It learns of them through the digest at turn start (§15.7), which only a Manager gets.
 
 This is §5.3's table; the `plan-review` row is the Plan review protocol §5.3 leaves to this file (amendment 6, §19). A blocking reason opened twice or closed when not open changes nothing (cpd 1 `blocked.ts`, kept), which makes replays harmless.
 
@@ -2752,7 +2753,7 @@ If the summary was shown and the dialog was left with Esc, only `/plan-review` (
 
 **Deciding**, for a pending entry, on the dialog's `Approve` or `Change` or on `plannotator:review-result` `{reviewId, approved, feedback?}`:
 1. Write the feedback, if any, to `$CPD_HOME/run/<plan>/feedback-<review>.md` (the dialog's note, as above, or plannotator's; overwritten on a retry; no temporary directory is left behind); run `cpd plan decide <review> --approve | --reject [--feedback-file <f>] --plan <plan>`. `review_decided` means another caller decided it: the adapter reads the decision with `cpd plan show` and continues with it. A failed `plan decide` is an error message (turn); the entry stays pending and, for the dialog, the select opens again.
-2. Append the entry with `status` `approved` or `rejected` (the entry keeps its `surface`); close `plan-review:<review>`; close the dialog if it is open (a result from plannotator while the dialog is open cannot happen: the dialog is closed by `Open full plan`).
+2. Append the entry with `status` `approved` or `rejected` (the entry keeps its `surface`); close `plan-review:<review>`.
 3. Tell the Lead with `pi.sendMessage({customType: "cpd-plan-decision", …}, {triggerTurn: true, deliverAs: "followUp"})` (cpd 1 `decisionText`, kept; **the text is unchanged**): `Plan review r3 was APPROVED.` plus the feedback, then `Next: cpd plan lock` in phase `plan`, or in a later phase that the drafts are queued and no lock is needed (the Event's `data.jobs` lists them), or for a rejection `Revise the plan (job edit, job add, job cancel), then call cpd_plan_review again.`; when `current` is false, it says the Jobs changed since that review and asks for a new one. The custom type differs from `cpd`, so this message never moves the cursor.
 
 **Deciding elsewhere**, on a `plan-review` Event with `status` `approved` or `rejected` for a pending entry of this session: any caller other than this adapter decided the review (`cpd plan decide` from the CLI, the User or a script), and the database already holds the decision, so the adapter does **not** run `plan decide`. Otherwise the Lead would stay `blocked` and never be told. It does what "Deciding" does after its own `plan decide`:
@@ -2765,7 +2766,7 @@ A failure of `plan show` is an error message and leaves the entry pending. An Ev
 
 **Recovery** at `session_start` (t4 F5, kept for plannotator): for each pending entry,
 - `surface: "plannotator"` (or no `surface`): `plannotator:request` `review-status` every second until it is not pending: `completed` is handled as a result; `missing` (plannotator restarted) appends the entry as `lost`, closes the reason, and tells the Lead to call `cpd_plan_review` again, which reopens it (above).
-- `surface: "chat"`, the last entry of the Plan's **latest** review when `cpd plan show` reports that review `pending` (§15.2 step 5 has opened its reason): the dialog **reopens**, and the summary is **not** sent again (it is in the session). A review `plan show` reports decided is not reopened; its `plan-review` Event, replayed from the cursor, is "Deciding elsewhere". Without `host.ctx`, nothing reopens and `/plan-review` is not there either.
+- `surface: "chat"`, the last entry of the Plan's **latest** review when `cpd plan show` reports that review `pending` (§15.2 step 5 has opened its reason): the dialog **reopens**, and the summary is **not** sent again (it is in the session). A review `plan show` reports decided is not reopened; its `plan-review` Event, replayed from the cursor, is "Deciding elsewhere".
 
 **Several Leads at once** (follow-up "Plan reviews collide across Leads"; hs-d35, hs-d40, hs-d50). plannotator in remote mode listens on one port, `PLANNOTATOR_PORT` or 19432, and a second Lead's review fails with `Port 19432 in use after 5 retries` while the first is open (docs: plannotator 0.28.17 `server/network.ts`; seen on 2026-10-14). So each Plan gets its own port from the config range:
 - config `plannotator_ports` (contract §8.2), default `19432-19441`: up to 10 Plan reviews open at once; each Plan gets the lowest free port of the range and keeps it (`run/<plan>/plannotator-port`, contract §6.5); plannotator prints each review's URL in its Lead's chat;
@@ -2905,7 +2906,7 @@ It is added **at most once per run**, and once it has been added the reminder is
 
 Decision hs-d286 (User, 2026-10-19; it restyles hs-d221). **Display only:** every message below still reaches the model with its full `content` and `details`; only what the chat window draws changes. Nothing here changes a delivery (§15.1, §15.3), a cursor or an Event.
 
-**Which messages.** Every `customType` the adapter sends with `display: true`: `cpd` (Events §15.3, Session messages, and the adapter's errors §15.1), `cpd-context` (§15.7) and `cpd-plan-decision` (§15.5). A message with `display: false` (`cpd-reminder`, §15.8) is never drawn, so it has no renderer. A `customType` the adapter starts to display later is rendered by the same rule, its summary being the first line of its `content` (as an Event's, below). The adapter registers one pi message renderer per type, once at load (`pi.registerMessageRenderer`), from one module, `pi/lib/render.ts`; the renderer reads `options.expanded` and `options.outputPad` from pi.
+**Which messages.** Every `customType` the adapter sends with `display: true`: `cpd` (Events §15.3, Session messages, and the adapter's errors §15.1), `cpd-context` (§15.7), `cpd-plan-decision` and `cpd-plan-summary` (§15.5). A message with `display: false` (`cpd-reminder`, §15.8) is never drawn, so it has no renderer. A `customType` the adapter starts to display later is rendered by the same rule, its summary being the first line of its `content` (as an Event's, below). The adapter registers one pi message renderer per type, once at load (`pi.registerMessageRenderer`), from one module, `pi/lib/render.ts`; the renderer reads `options.expanded` and `options.outputPad` from pi.
 
 **The look is pi-compact-tools 0.16.6's tool row, copied.** The adapter does not import or vendor that extension (it exposes no API and draws tool rows only); it draws the same rows, from the same glyphs, theme tokens, bold and dim, laid out as the extension's source lays them out (`extensions/compact-tools.ts`, `compact-tools-layout.ts`, `compact-tools-claude.ts`, `compact-tools-codex-rows.ts`, `compact-tools-palette.ts`, `compact-tools-core.ts`). The message keeps the `customMessageBg` background of hs-d221 behind the rows (the extension's rows sit on pi's tool background, which a message has no part in).
 
@@ -2925,6 +2926,7 @@ Only the `style` key matters; the other keys are the extension's own. A file tha
 | `cpd`, an adapter error (`details.kind` is `error`) | `adapter: <what>`: the `<what>` of `cpd adapter: <what>: <code>: <message>` (§15.1) |
 | `cpd-context` | its counts line, `cpd-context: 6 records · 17 Plan Events · 10 Plans pending` (§15.7) |
 | `cpd-plan-decision` | `Plan review <id> approved` or `Plan review <id> rejected` (`<id>` the review's id, as in §15.5) |
+| `cpd-plan-summary` | `Plan review <id> summary` (`<id>` = `details.review`); never folded, see "No summary" |
 
 **Collapsed, style `compact`** (the default; hs-d339 restyles it to §17's fold look). Two rows:
 
@@ -2947,7 +2949,7 @@ Only the `style` key matters; the other keys are the extension's own. A file tha
 
 **The expand action** is the extension's: **a left click** on the `╰─ expand` / `╰─ collapse` line toggles that one message, and **Ctrl+O** (pi's `app.tools.expand`) expands or collapses every message and tool row at once. Pi hands the renderer `options.expanded` for Ctrl+O; a click is the renderer's own: it wraps its rows in pi-tui's `MouseRegion` that flips the message's own state, as pi does for a tool row (`createResultRegion`) and the extension does for its group row. The state is per rendered message and follows Ctrl+O both ways (the extension's group rule, `compact-tools-grouping.ts`); it is not persisted, so a reloaded session shows every message collapsed.
 
-**No summary** (`cpd-context` whose `details` lack the counts, §15.7). There is nothing short to say, so the row is always open: the title `╭⦁ cpd-context` and the full `content` as in "Expanded", with no closing row and no toggle.
+**No summary** (`cpd-context` whose `details` lack the counts, §15.7; and always `cpd-plan-summary`, hs-d502: the User reads it in the chat to decide, so it is never folded and Ctrl+O changes nothing for it; its content is Markdown, drawn as plain text like every message). There is nothing short to say, so the row is always open: the title `╭⦁ cpd-context` (for `cpd-plan-summary`, its summary above) and the full `content` as in "Expanded", with no closing row and no toggle.
 
 ### 15.10 Policy text
 
@@ -3011,25 +3013,19 @@ cpd: a Worker runs only the tests its change touches; the full suite is the Gate
 
 **Not affected:** a Lead or a Manager, whatever it runs; every other tool; the Gate itself.
 
-### 15.13 Plans go to plannotator
+### 15.13 Questions stay short
 
-Decision (User, 2026-10-20). A Lead presents a Plan, its drafts or a design for review only with `cpd_plan_review` (plannotator), never through `ask_user_question`. `ask_user_question` is for a few short choices; anything large goes through plannotator. The adapter enforces the rule with two guards, as §15.11 and §15.12 do for their rules.
+Decision (User, 2026-10-20, hs-d502, which supersedes hs-d468's rule that a Plan with drafts never uses `ask_user_question`; hs-d503 keeps the 1500-character limit). `ask_user_question` is for a few short choices, and a Plan's open choices go to the User through it, as rounds with a recommended option, **in every phase and whatever the Plan's Jobs**; the Plan review is a summary and a dialog in the chat (§15.5), and plannotator is for a long document. The adapter enforces what stays of the rule with one guard, as §15.11 and §15.12 do for their rules. **The guard G1** (a refusal of every `ask_user_question` of a Lead whose Plan has a `draft` Job, with the reason `cpd: a Plan with draft Jobs is presented for review with cpd_plan_review (plannotator), not ask_user_question; refused: <n> draft Jobs`) **is deleted**: its code, its message and its tests; the adapter no longer reads `cpd plan show` for it. The guard G2 stays as it was.
 
-**When.** At pi's `tool_call`, for an `ask_user_question` call (`event.toolName`; the input is `{questions: [{question, header, options: [{label, description, preview?}], multiSelect?}]}`), in the same handler as §15.11 and §15.12, with each guard in its own module.
+**When.** At pi's `tool_call`, for an `ask_user_question` call (`event.toolName`; the input is `{questions: [{question, header, options: [{label, description, preview?}], multiSelect?}]}`), in the same handler as §15.11 and §15.12, with the guard in its own module.
 
-**G1, a Plan with draft Jobs.** For a Session of role `lead` whose Plan has any Job in status `draft`, the call is refused. The adapter reads the Plan with `cpd plan show` when the call is made. A failed read refuses nothing (best effort; the failure is logged where the adapter logs). The reason, on one line:
-
-```
-cpd: a Plan with draft Jobs is presented for review with cpd_plan_review (plannotator), not ask_user_question; refused: <n> draft Jobs
-```
-
-**G2, a long question.** For any Session (Lead, Manager, side fork), the call is refused when its text is over **1500 characters**. The text counted is the sum of every question's `question` and `header` and every option's `label`, `description` and `preview`. The limit is one constant, with no config key. The reason, on one line:
+**G2, a long question** (the only guard). For any Session (Lead, Manager, side fork), the call is refused when its text is over **1500 characters**. The text counted is the sum of every question's `question` and `header` and every option's `label`, `description` and `preview`. The limit is one constant, with no config key. The reason, on one line:
 
 ```
 cpd: ask_user_question is for a few short choices; put anything larger in plannotator; refused: <n> characters (limit 1500)
 ```
 
-Each refusal is `{block: true, reason}`.
+The refusal is `{block: true, reason}`.
 
 **Not affected:** a Worker (it has no such tool); every other tool.
 
