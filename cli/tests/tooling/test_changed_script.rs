@@ -1,7 +1,8 @@
 //! `scripts/test-changed` (docs/implementing.md "The scoped loop"): which tests a change reaches.
 //! Every test runs `--dry-run <base>` in a scratch workspace with cpd's crate graph and layout
 //! (`core/` is `cpd-core`, `tui/` is `cpd-tui` on core, `cli/` is `cpd` on both, its integration
-//! tests one binary `cli/tests/it/` with a module per file), holding a copy of the script and of
+//! tests one binary per area, `cli/tests/<area>/` with a module per file, and `cli/tests/common/`
+//! shared by them), holding a copy of the script and of
 //! `scripts/cargo.sh`, and reads the one command it prints.
 
 use crate::common;
@@ -35,10 +36,13 @@ const FILES: &[(&str, &str)] = &[
     ),
     ("cli/build.rs", "fn main() {}\n"),
     ("cli/src/main.rs", "fn main() {}\n"),
-    ("cli/tests/it/main.rs", "mod common;\nmod alpha;\nmod beta;\n"),
-    ("cli/tests/it/common/mod.rs", "pub fn helper() {}\n"),
-    ("cli/tests/it/alpha.rs", "#[test]\nfn one() {}\n"),
-    ("cli/tests/it/beta.rs", "#[test]\nfn two() {}\n"),
+    ("cli/tests/common/mod.rs", "pub fn helper() {}\n"),
+    ("cli/tests/first/main.rs", "mod alpha;\nmod beta;\n"),
+    ("cli/tests/first/alpha.rs", "#[test]\nfn one() {}\n"),
+    ("cli/tests/first/beta.rs", "#[test]\nfn two() {}\n"),
+    ("cli/tests/first/data/sample.txt", "sample\n"),
+    ("cli/tests/second/main.rs", "mod gamma;\n"),
+    ("cli/tests/second/gamma.rs", "#[test]\nfn three() {}\n"),
     (".config/nextest.toml", "[profile.default]\nfail-fast = false\n"),
     ("docs/notes.md", "# Notes\n"),
     // Lockfile version 3: `cargo metadata` keeps a lockfile's version, so the change of a test
@@ -57,24 +61,31 @@ struct Scratch {
     base: String,
 }
 
-/// What the dry run printed: the full suite, or `-p` crates and `-E` filters.
+/// What the dry run printed: the full suite, or `-p` crates, `--test` binaries and `-E` filters.
 #[derive(Debug, PartialEq, Eq)]
 struct Selection {
     workspace: bool,
     packages: BTreeSet<String>,
+    binaries: BTreeSet<String>,
     filters: Vec<String>,
 }
 
 fn crates(names: &[&str]) -> Selection {
-    Selection { workspace: false, packages: names.iter().map(|n| n.to_string()).collect(), filters: Vec::new() }
+    Selection { workspace: false, packages: names.iter().map(|n| n.to_string()).collect(), binaries: BTreeSet::new(), filters: Vec::new() }
 }
 
-fn module(name: &str) -> Selection {
-    Selection { filters: vec![format!("test(/^{name}::/)")], ..crates(&["cpd"]) }
+/// Only the test binary (area) `area` of the crate `cpd`.
+fn binary(area: &str) -> Selection {
+    Selection { binaries: [area.to_string()].into(), ..crates(&["cpd"]) }
+}
+
+/// Only the module `name` in the one test binary `area`.
+fn module(area: &str, name: &str) -> Selection {
+    Selection { filters: vec![format!("test(/^{name}::/)")], ..binary(area) }
 }
 
 fn full_suite() -> Selection {
-    Selection { workspace: true, packages: BTreeSet::new(), filters: Vec::new() }
+    Selection { workspace: true, ..crates(&[]) }
 }
 
 struct Out {
@@ -146,7 +157,7 @@ impl Scratch {
     }
 
     /// The selection of a dry run that must print a command: exit 0 and exactly one line,
-    /// `<...>scripts/cargo.sh nextest run` and then `--workspace`, `-p <crate>` and `-E <filter>` only.
+    /// `<...>scripts/cargo.sh nextest run` and then `--workspace`, `-p <crate>`, `--test <binary>` and `-E <filter>` only.
     fn selection(&self) -> Selection {
         let out = self.dry_run();
         let what = format!("exit {}, stdout {:?}, stderr {:?}", out.exit, out.stdout, out.stderr);
@@ -158,7 +169,7 @@ impl Scratch {
             words.len() >= 3 && words[0].ends_with("scripts/cargo.sh") && words[1] == "nextest" && words[2] == "run",
             "not a `scripts/cargo.sh nextest run` command: {what}"
         );
-        let mut selection = Selection { workspace: false, packages: BTreeSet::new(), filters: Vec::new() };
+        let mut selection = crates(&[]);
         let mut rest = words[3..].iter();
         while let Some(word) = rest.next() {
             match word.as_str() {
@@ -166,6 +177,10 @@ impl Scratch {
                 "-p" => {
                     let name = rest.next().unwrap_or_else(|| panic!("-p without a crate: {what}"));
                     assert!(selection.packages.insert(name.clone()), "-p {name} twice: {what}");
+                }
+                "--test" => {
+                    let name = rest.next().unwrap_or_else(|| panic!("--test without a binary: {what}"));
+                    assert!(selection.binaries.insert(name.clone()), "--test {name} twice: {what}");
                 }
                 "-E" => selection.filters.push(rest.next().unwrap_or_else(|| panic!("-E without a filter: {what}")).clone()),
                 other => panic!("unexpected argument {other:?}: {what}"),
@@ -248,19 +263,71 @@ fn a_cli_source_change_runs_cli_only() {
 }
 
 #[test]
-fn a_change_to_one_integration_test_module_runs_that_module_only() {
+fn a_change_to_one_integration_test_module_runs_that_module_in_its_binary_only() {
     let s = Scratch::new();
-    s.commit_edit("cli/tests/it/alpha.rs");
-    assert_eq!(s.selection(), module("alpha"));
+    s.commit_edit("cli/tests/first/alpha.rs");
+    assert_eq!(s.selection(), module("first", "alpha"));
 }
 
 #[test]
-fn a_change_to_the_shared_files_of_the_integration_tests_runs_the_whole_cli_crate() {
-    for shared in ["cli/tests/it/main.rs", "cli/tests/it/common/mod.rs"] {
+fn a_change_to_an_area_s_main_or_other_file_runs_that_binary_only() {
+    for file in ["cli/tests/first/main.rs", "cli/tests/first/data/sample.txt"] {
         let s = Scratch::new();
-        s.commit_edit(shared);
-        assert_eq!(s.selection(), crates(&["cpd"]), "{shared}");
+        s.commit_edit(file);
+        assert_eq!(s.selection(), binary("first"), "{file}");
     }
+}
+
+#[test]
+fn a_new_module_file_of_an_area_runs_that_module_only() {
+    let s = Scratch::new();
+    s.edit("cli/tests/second/delta.rs");
+    assert_eq!(s.selection(), module("second", "delta"));
+}
+
+#[test]
+fn changes_in_two_areas_run_each_with_its_own_filter() {
+    let s = Scratch::new();
+    s.edit("cli/tests/first/alpha.rs");
+    s.edit("cli/tests/first/beta.rs");
+    s.edit("cli/tests/second/gamma.rs");
+    let want = Selection {
+        binaries: ["first".to_string(), "second".to_string()].into(),
+        filters: ["binary(first) & test(/^alpha::/)", "binary(first) & test(/^beta::/)", "binary(second) & test(/^gamma::/)"]
+            .map(String::from)
+            .into(),
+        ..crates(&["cpd"])
+    };
+    assert_eq!(s.selection(), want);
+}
+
+#[test]
+fn a_whole_binary_wins_over_a_module_of_the_same_area_and_keeps_the_other_area_s_module() {
+    let s = Scratch::new();
+    s.edit("cli/tests/first/main.rs");
+    s.edit("cli/tests/first/alpha.rs");
+    s.edit("cli/tests/second/gamma.rs");
+    let want = Selection {
+        binaries: ["first".to_string(), "second".to_string()].into(),
+        filters: ["binary(first)", "binary(second) & test(/^gamma::/)"].map(String::from).into(),
+        ..crates(&["cpd"])
+    };
+    assert_eq!(s.selection(), want);
+}
+
+#[test]
+fn a_change_to_the_shared_test_files_runs_every_binary_of_the_cli_crate() {
+    let s = Scratch::new();
+    s.commit_edit("cli/tests/common/mod.rs");
+    assert_eq!(s.selection(), crates(&["cpd"]));
+}
+
+#[test]
+fn a_module_change_beside_a_source_change_runs_the_whole_crate() {
+    let s = Scratch::new();
+    s.edit("cli/tests/first/alpha.rs");
+    s.edit("cli/src/main.rs");
+    assert_eq!(s.selection(), crates(&["cpd"]));
 }
 
 #[test]
