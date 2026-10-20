@@ -565,6 +565,16 @@ mod tests {
         assert_eq!(reference_entries(&Catalog::BUILT_IN, &home).unwrap(), reference_entries(&Catalog::BUILT_IN, &home).unwrap());
     }
 
+    /// Prints the hash a fresh store has, for `scripts/repin.sh` (§4.3), which writes it as `SCHEMA_HASH`.
+    /// `cargo test -p cpd-core --lib -- --ignored --nocapture prints_the_schema_hash`
+    #[test]
+    #[ignore = "prints the value of SCHEMA_HASH for scripts/repin.sh"]
+    fn prints_the_schema_hash() {
+        let (_dir, home) = tmp_home();
+        let conn = reference_database(&Catalog::BUILT_IN, &home).unwrap();
+        println!("SCHEMA_HASH={}", schema::canonical_hash(&conn).unwrap());
+    }
+
     fn mismatch_object(store: &Store) -> Option<&str> {
         store.schema_mismatch().and_then(|m| m.object.as_deref())
     }

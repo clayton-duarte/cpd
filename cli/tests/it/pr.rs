@@ -2175,6 +2175,91 @@ fn poll_reports_a_failing_gh_and_changes_nothing() {
     assert_eq!((fx.txns(), fx.event_count()), (txns, events));
 }
 
+// ---------- `pr poll`: a `gh` HTTP 5xx or timeout is a transient `gh_failed` (contract §7.6 step 4, hs-d354) ----------
+
+/// `pr poll` against a `gh` that runs `script` (with `vars` set); the `gh_failed` it exits 1 with, its `details`.
+/// Nothing is written.
+fn poll_failure(fx: &Fx, script: &str, vars: &[(&str, &str)]) -> Value {
+    let (txns, events) = (fx.txns(), fx.event_count());
+    fx.env.fake_gh(script);
+    let run = fx.env.cpd_with(fx.env.root(), &["pr", "poll", "--plan", "pay"], vars);
+    assert_eq!(code(&run), ("gh_failed".into(), 1), "{script}");
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "{script}");
+    run.error()["details"].clone()
+}
+
+/// A `gh` that answers the search with `search.json` and runs `lookup` for the lookup of the PR the search did not list.
+fn lookup_script(lookup: &str) -> String {
+    format!(r#"case "$4" in *"search(type"*) cat "$(dirname "$0")/../gh/search.json" ;; *) {lookup} ;; esac"#)
+}
+
+const NGINX: &str = "<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>";
+
+#[test]
+fn poll_says_an_http_5xx_of_the_search_is_transient() {
+    let fx = fx("deploy");
+    for (script, reason) in [
+        ("echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1".to_owned(), "HTTP 502"),
+        // nginx's page with the status in the message: the same case.
+        (format!("echo '{NGINX}'; echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1"), "HTTP 502"),
+        ("echo 'gh: Service Unavailable (HTTP 503)' >&2; exit 1".to_owned(), "HTTP 503"),
+        // The status in stdout when stderr is empty.
+        ("echo 'gh: HTTP 504: Gateway Timeout'; exit 1".to_owned(), "HTTP 504"),
+    ] {
+        let details = poll_failure(&fx, &script, &[]);
+        assert_eq!((&details["transient"], &details["call"], &details["reason"], &details["exit"]), (&json!(true), &json!("search"), &json!(reason), &json!(1)), "{script}: {details}");
+        assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"], "{details}");
+    }
+}
+
+#[test]
+fn poll_says_a_gh_that_hangs_past_its_deadline_is_transient_with_reason_timeout() {
+    let fx = fx("deploy");
+    // The 15 s kill of each call is shortened (contract §1.2, `CPD_TEST_DEADLINE_GH`).
+    let vars = [("CPD_TEST_DEADLINE_GH", "0.3")];
+    let details = poll_failure(&fx, &format!("exec sleep {SLEEP_SECONDS}"), &vars);
+    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("search"), &json!("timeout")), "{details}");
+    // The search answers, the lookup of the PR it did not list hangs.
+    let details = poll_failure(&fx, &lookup_script(&format!("exec sleep {SLEEP_SECONDS}")), &vars);
+    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("lookup"), &json!("timeout")), "{details}");
+}
+
+#[test]
+fn poll_says_an_http_5xx_of_the_lookup_is_transient_and_other_lookup_failures_are_not() {
+    let fx = fx("deploy");
+    let details = poll_failure(&fx, &lookup_script("echo 'gh: HTTP 502: Bad Gateway' >&2; exit 1"), &[]);
+    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("lookup"), &json!("HTTP 502")), "{details}");
+    for script in ["echo 'gh: HTTP 401: Bad credentials' >&2; exit 1", r#"echo '{"errors":[{"message":"Bad credentials"}]}'; exit 1"#] {
+        let details = poll_failure(&fx, &lookup_script(script), &[]);
+        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("lookup"), &Value::Null), "{script}: {details}");
+    }
+}
+
+#[test]
+fn poll_says_every_other_gh_failure_is_not_transient() {
+    let fx = fx("deploy");
+    for script in [
+        "echo 'gh: HTTP 401: Bad credentials' >&2; exit 1".to_owned(),
+        "echo 'gh: HTTP 403: Resource not accessible' >&2; exit 1".to_owned(),
+        "echo 'gh: HTTP 404: Not Found' >&2; exit 1".to_owned(),
+        "echo 'gh: HTTP 429: Too Many Requests' >&2; exit 1".to_owned(),
+        // An HTML page with no 5xx status in the message is not transient, whatever the exit.
+        format!("echo '{NGINX}'; echo 'gh: exit status 1' >&2; exit 1"),
+        format!("echo '{NGINX}'"),
+        // A 2xx answer with a bad or empty body.
+        "exit 0".to_owned(),
+        "echo 'not json'".to_owned(),
+        // GraphQL's own `errors`, a RATE_LIMITED among them.
+        r#"echo '{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}'; echo 'gh: API rate limit exceeded' >&2; exit 1"#.to_owned(),
+        // `HTTP 502` in a body that is a 2xx answer is not a status.
+        r#"echo '{"data":null,"errors":[{"message":"upstream said HTTP 502"}]}'"#.to_owned(),
+    ] {
+        let details = poll_failure(&fx, &script, &[]);
+        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("search"), &Value::Null), "{script}: {details}");
+        assert!(details["argv"].is_array() && details.get("exit").is_some() && details.get("stderr").is_some(), "{details}");
+    }
+}
+
 #[test]
 fn poll_refuses_a_gh_answer_that_is_not_an_answer_and_writes_nothing() {
     let fx = fx("deploy");

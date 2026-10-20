@@ -2760,7 +2760,8 @@ mod tests {
         assert_eq!(view.note, "already running");
         view.done(Err(Action::EnsureWatch.failed("watch_start_failed", "no tmux")));
         assert_eq!(view.note, "watch_start_failed: no tmux");
-    
+    }
+
     #[test]
     fn a_downtime_with_no_live_manager_says_nothing_and_a_failure_to_tell_or_list_is_the_note_and_the_log() {
         let t0 = Instant::now();
@@ -2787,5 +2788,4 @@ mod tests {
         assert_eq!(view.note, "engine down 60 s+: telling m-alpha failed: no tmux");
         assert!(lines.iter().any(|l| l.contains("no tmux")), "{lines:?}");
     }
-}
 }
