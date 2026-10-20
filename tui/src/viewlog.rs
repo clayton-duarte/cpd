@@ -1,5 +1,5 @@
 //! A view's log, `$CPD_HOME/run/tui/<view>.log` (commands.md §17, hs-d363): a view writes nothing to its terminal
-//! outside its frame, so what it has to say beyond the note goes here, appended, one timestamped line each.
+//! outside its frame, so what it has to say beyond the frame (and a dialog, when the User must see it) goes here, appended, one timestamped line each.
 
 use std::io::Write;
 use std::path::PathBuf;

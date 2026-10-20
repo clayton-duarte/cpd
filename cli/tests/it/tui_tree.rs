@@ -254,7 +254,7 @@ fn inbox_section(width: usize) -> Vec<String> {
 
 const SESSION: &str = "tree";
 
-/// The note the legend (`?`) leaves where no tmux client is attached.
+/// What the legend (`?`) logs where no tmux client is attached (a view draws no note, commands.md §17 "No notes").
 const NO_CLIENT: &str = "No tmux client is attached to the cockpit.";
 
 struct Pane<'a> {
@@ -338,11 +338,22 @@ impl<'a> Pane<'a> {
     }
 
     /// Waits until the view has handled every key sent so far: it handles them in order, and `?` always leaves a mark
-    /// (no tmux client is attached, so the legend fails and the note says so). The positive signal that nothing came
-    /// of the keys before it. Only where no note is shown yet, and the note is the marker's.
+    /// (no tmux client is attached, so the legend fails and a line of the log says so). The positive signal that nothing
+    /// came of the keys before it.
     fn settled(&self) {
+        let before = self.log().matches(NO_CLIENT).count();
         self.keys(&["?"]);
-        self.wait("the view to handle the keys sent before", |_| self.footer_has(NO_CLIENT));
+        self.wait("the view to handle the keys sent before", |_| self.log().matches(NO_CLIENT).count() > before);
+    }
+
+    /// The view's log, `run/tui/tree.log`: empty before its first line.
+    fn log(&self) -> String {
+        std::fs::read_to_string(self.env.cpd_home().join("run/tui/tree.log")).unwrap_or_default()
+    }
+
+    /// Waits until the view's log has a line with `text` (`ok: <what the command said>`, `failed: <command>: <why>`).
+    fn wait_logged(&self, what: &str, text: &str) {
+        self.wait(what, |_| self.log().contains(text));
     }
 
     /// [`Pane::settled`] where a fake tmux has a client (see [`popups`]): `?` then opens the legend's popup, the mark.
@@ -641,14 +652,15 @@ fn a_click_on_a_context_title_opens_its_manager_and_only_its_closing_row_folds_i
 }
 
 #[test]
-fn a_refused_context_manager_shows_its_error_and_opens_nothing() {
+fn a_refused_context_manager_logs_its_error_and_opens_nothing() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":false,"error":{"code":"archived","message":"The Context is archived."}}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.click(8, 1);
-    pane.wait("the error", |_| pane.footer_has("archived: The Context is archived."));
+    pane.wait_logged("the error", "failed: context manager --context=alpha: archived: The Context is archived.");
+    assert!(!pane.footer_has("archived"), "no note: {:?}", pane.screen());
     assert_eq!(calls(&env), [words(&["context", "manager", "--context=alpha"])], "no session open");
 }
 
@@ -680,10 +692,7 @@ fn no_key_but_the_references_does_anything() {
     pane.settled();
     assert!(!pane.dead(), "q does not end the view");
     assert!(calls(&env).is_empty());
-    // The marker's note is the one change: the rows without it are what they were. Its row is taken from the blank
-    // rows between the tree and the Inbox pinned below (the pane is tall enough to have some), so they are left out.
-    let without_note = |rows: Vec<String>| -> Vec<String> { rows.into_iter().filter(|r| !r.is_empty() && !r.contains(NO_CLIENT)).collect() };
-    assert_eq!(without_note(pane.screen()), without_note(before), "no prompt, nothing folded");
+    assert_eq!(pane.screen(), before, "no prompt, nothing folded, no note");
 }
 
 #[test]
@@ -707,7 +716,7 @@ fn n_opens_an_input_popup_for_the_plans_id_and_runs_plan_new_when_it_is_accepted
         [words(&["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521"]), words(&["session", "open", "l-new"])],
         "the new Lead is opened"
     );
-    pane.wait("the note", |_| pane.footer_has("forking pay-4521 in window park-pay-4521"));
+    pane.wait_logged("the result", "ok: forking pay-4521 in window park-pay-4521");
     assert!(!pane.footer_has("name:"), "no prompt row");
 }
 
@@ -750,7 +759,7 @@ fn x_opens_a_confirm_popup_and_runs_session_close_when_it_is_confirmed() {
         ["cpd tui view dialog confirm --title='Close' --text='Close Plan sketch? pi stops; the session file stays' --yes-label='Close'"]
     );
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "close", "l-sketch"])]);
-    pane.wait("the note", |_| pane.footer_has("closed"));
+    pane.wait_logged("the result", "ok: closed");
 }
 
 #[test]
@@ -768,17 +777,24 @@ fn x_warns_in_its_popup_when_the_session_is_working() {
 }
 
 #[test]
-fn x_refuses_the_session_in_the_chat_slot() {
+fn x_refuses_the_session_in_the_chat_slot_in_a_text_dialog() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
+    fake_dialogs(&env);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.down(1); // ship, whose Lead is in the chat slot
     pane.keys(&["x"]);
-    pane.wait("the refusal", |_| pane.footer_has("switch to another session first"));
+    let popups = wait_for_popups(&env, 1);
+    assert!(
+        popups[0].starts_with("cpd tui view dialog text --title='Close Session' ")
+            && popups[0].ends_with("--body='switch to another session first'"),
+        "a refusal is a `text` dialog, not a confirm: {popups:?}"
+    );
     assert!(calls(&env).is_empty());
-    assert!(popups(&env).is_empty(), "no popup for a refused key");
+    pane.settled_with_a_client();
+    assert!(!pane.footer_has("switch to another"), "no note: {:?}", pane.screen());
 }
 
 #[test]
@@ -794,7 +810,10 @@ fn x_refuses_a_session_that_moved_to_the_chat_slot_while_the_popup_was_open() {
     pane.keys(&["x"]);
     wait_for_popups(&env, 1);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "close", "l-sketch"])]);
-    pane.wait("the refusal", |_| pane.footer_has("switch to another session first"));
+    pane.wait_logged("the refusal", "failed: session close l-sketch: switch to another session first");
+    let popups = wait_for_popups(&env, 2);
+    assert!(popups[1].starts_with("cpd tui view dialog text --title='session close l-sketch' "), "{popups:?}");
+    assert!(popups[1].ends_with("--body='switch to another session first'"), "{popups:?}");
 }
 
 #[test]
@@ -803,9 +822,10 @@ fn question_mark_opens_the_legend_popup() {
     populate(&env);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    // `?` needs no cursor; with no client attached to the private server, the popup has nowhere to open
+    // `?` needs no cursor; with no client attached to the private server, the popup has nowhere to open: a line of the log
     pane.keys(&["?"]);
-    pane.wait("the failure", |_| pane.footer_has(NO_CLIENT));
+    pane.wait_logged("the failure", NO_CLIENT);
+    assert!(!pane.footer_has(NO_CLIENT), "no note: {:?}", pane.screen());
 }
 
 #[test]
@@ -818,14 +838,12 @@ fn the_tree_keeps_drawing_and_reading_keys_while_a_command_runs() {
     pane.down(1);
     let start = Instant::now();
     pane.keys(&["Enter"]);
-    pane.wait("the running note", |_| pane.footer_has("running: session open l-ship"));
-    // `?` asks for the legend popup, which needs a tmux client: none is attached, so its note comes at once (since #128
-    // `n` asks in a popup too, the same way)
-    pane.keys(&["?"]);
-    pane.wait("the legend's note, while the command still runs", |_| pane.footer_has(NO_CLIENT));
+    // `?` asks for the legend popup, which needs a tmux client: none is attached, so its failure is logged at once
+    pane.settled();
     // time-claim: the key is read while the command (slower than 3 s) still runs
     assert!(start.elapsed() < Duration::from_secs(3), "the key was read at once, not after the command: {:?}", start.elapsed());
-    pane.wait("the result", |_| pane.footer_has("slow: Took a while."));
+    assert!(!pane.log().contains("slow:"), "the command still runs: {}", pane.log());
+    pane.wait_logged("the result", "failed: session open l-ship: slow: Took a while.");
 }
 
 #[test]
@@ -852,7 +870,7 @@ fn a_failing_session_open_opens_a_text_dialog_and_draws_no_note() {
 }
 
 #[test]
-fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
+fn a_refused_command_logs_its_error_and_the_frame_shows_none() {
     let env = env();
     populate(&env);
     env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"no_cockpit","message":"No cockpit.","details":{}}}'; exit 3"#);
@@ -860,15 +878,10 @@ fn a_refused_command_shows_its_error_until_the_next_n_x_or_click() {
     pane.ready();
     pane.down(1);
     pane.keys(&["Enter"]);
-    pane.wait("the error", |_| pane.footer_has("no_cockpit: No cockpit."));
+    pane.wait_logged("the error", "failed: session open l-ship: no_cockpit: No cockpit.");
     assert_eq!(calls(&env), [words(&["session", "open", "l-ship"])]);
-    // The cursor is a style, not a glyph: it moved when the screen with its escapes changed.
-    let before = pane.styled_screen();
-    pane.keys(&["j"]);
-    common::wait_until("the cursor to move", || pane.styled_screen() != before);
-    assert!(pane.footer_has("no_cockpit"), "an arrow keeps it");
-    pane.keys(&["n", "Escape"]);
-    pane.wait("the note gone", |_| !pane.footer_has("no_cockpit"));
+    pane.settled();
+    assert!(!pane.footer_has("no_cockpit"), "no note: {:?}", pane.screen());
 }
 
 #[test]
@@ -1157,7 +1170,7 @@ fn archive_on_a_fork_confirms_in_a_popup_first_and_runs_session_archive_when_con
     pane.keys(&["Down", "Down", "Down", "Down", "Down", "Enter"]); // Archive is the sixth item
     assert_eq!(wait_for_popups(&env, 1), [ARCHIVE_FORK], "Archive confirms first (hs-d297)");
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "archive", "f-idle"])], "`f-idle` is not in the chat slot");
-    pane.wait("the note", |_| pane.footer_has("archived"));
+    pane.wait_logged("the result", "ok: archived");
     assert!(the_menu_is_closed(&pane.screen()), "the menu closes when an item is picked");
 }
 
@@ -1207,7 +1220,7 @@ fn archive_on_the_chat_slots_lead_opens_the_next_session_first_then_archives() {
 }
 
 #[test]
-fn a_refusal_of_a_step_shows_in_the_note_row_and_stops_the_archive() {
+fn a_refusal_of_a_step_is_a_text_dialog_and_stops_the_archive() {
     let env = env();
     populate(&env);
     env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"no_cockpit","message":"There is no cockpit.","details":{}}}'; exit 3"#);
@@ -1218,8 +1231,11 @@ fn a_refusal_of_a_step_shows_in_the_note_row_and_stops_the_archive() {
     pane.right_click(8, 2);
     pane.wait("the menu", |s| menu_open(s, "New session…"));
     pane.click(10, 6);
-    // The note comes when the whole action is over (the view runs it in its loop), so the archive step is not still to come.
-    pane.wait("the refusal", |_| pane.footer_has("no_cockpit: There is no cockpit."));
+    // The dialog comes when the whole action is over (the view runs it in its loop), so the archive step is not still to come.
+    let popups = wait_for_popups(&env, 2);
+    assert!(popups[1].starts_with("cpd tui view dialog text --title='session open l-sketch' "), "the failed step: {popups:?}");
+    assert!(popups[1].ends_with("--body='no_cockpit: There is no cockpit.'"), "{popups:?}");
+    pane.wait_logged("the refusal", "failed: session open l-sketch: no_cockpit: There is no cockpit.");
     assert_eq!(calls(&env), [words(&["session", "open", "l-sketch"])], "the archive did not run");
 }
 
@@ -1260,7 +1276,7 @@ fn a_click_on_an_archived_fork_runs_session_history() {
 }
 
 #[test]
-fn a_click_that_shows_a_history_is_refused_in_the_note_row() {
+fn a_click_that_shows_a_history_is_refused_in_the_log() {
     let env = env();
     populate(&env);
     sql(&mut open(&env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
@@ -1269,7 +1285,8 @@ fn a_click_that_shows_a_history_is_refused_in_the_note_row() {
     pane.ready();
     pane.wait("the archived fork", |s| s.iter().any(|r| r.contains(&format!("├─{IDLE} ship·f-bl"))));
     pane.click(10, 5);
-    pane.wait("the refusal", |_| pane.footer_has("file_unreadable: The session file is missing."));
+    pane.wait_logged("the refusal", "file_unreadable: The session file is missing.");
+    assert!(!pane.footer_has("file_unreadable"), "no note: {:?}", pane.screen());
 }
 
 #[test]
@@ -1317,7 +1334,7 @@ fn open_and_close_in_the_menu_run_session_open_and_after_a_confirmed_popup_sessi
 }
 
 #[test]
-fn unarchive_in_the_menu_runs_without_a_popup_and_a_refusal_shows_in_the_note_row() {
+fn unarchive_in_the_menu_runs_without_a_popup_and_a_refusal_is_logged() {
     let env = env();
     populate(&env);
     archive(&env);
@@ -1331,7 +1348,7 @@ fn unarchive_in_the_menu_runs_without_a_popup_and_a_refusal_shows_in_the_note_ro
     assert!(screen.iter().all(|r| !r.contains("New Plan") && !r.contains("Archive ")), "Rename…, Copy id and Unarchive only: {screen:?}");
     pane.keys(&["Down", "Down", "Enter"]); // Unarchive
     assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "unarchive", "--plan=old"])]);
-    pane.wait("the refusal", |_| pane.footer_has("archived: The Context is archived."));
+    pane.wait_logged("the refusal", "failed: plan unarchive --plan=old: archived: The Context is archived.");
 }
 
 #[test]
@@ -1374,7 +1391,7 @@ fn rename_on_a_plan_row_starts_from_its_title_and_runs_plan_rename() {
     );
     pane.wait("the menu closed", the_menu_is_closed);
     assert_eq!(wait_for_calls(&env, 1), [words(&["plan", "rename", "--plan=ship", "--title=Plan ship!"])]);
-    pane.wait("the note", |_| pane.footer_has("renamed"));
+    pane.wait_logged("the result", "ok: renamed");
 }
 
 #[test]
@@ -1395,7 +1412,27 @@ fn new_context_opens_an_input_popup_for_a_title_and_runs_context_new_with_the_de
     );
     // the instance has one owner policy (`acme`, which every test env has): used without asking
     assert_eq!(wait_for_calls(&env, 1), [words(&["context", "new", "building-cpd", "--title=Building cpd!", "--owner=acme"])]);
-    pane.wait("the note", |_| pane.footer_has("created building-cpd"));
+    pane.wait_logged("the result", "ok: created building-cpd");
+}
+
+#[test]
+fn a_title_no_id_can_be_made_of_is_refused_in_a_text_dialog_and_runs_nothing() {
+    let env = env();
+    populate(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    fake_dialogs(&env);
+    type_in(&env, "!!");
+    let pane = Pane::start(&env, 60, 22);
+    pane.ready();
+    pane.right_click(5, 15); // the empty area
+    pane.wait("the menu", |s| menu_open(s, "New Context…"));
+    pane.keys(&["Enter"]);
+    let popups = wait_for_popups(&env, 2);
+    assert!(popups[1].starts_with("cpd tui view dialog text --title='New Context' "), "the refusal is a `text` dialog: {popups:?}");
+    assert!(popups[1].contains("--body='A title needs at least two letters or digits"), "{popups:?}");
+    pane.settled_with_a_client();
+    assert!(calls(&env).is_empty(), "{:?}", calls(&env));
+    assert!(!pane.footer_has("A title needs"), "no note: {:?}", pane.screen());
 }
 
 #[test]
@@ -1451,7 +1488,7 @@ esac"#,
     pane.wait("the menu", |s| menu_open(s, "New Plan…"));
     pane.keys(&["Enter"]);
     wait_for_popups(&env, 1);
-    pane.wait("the refusal", |_| pane.footer_has("no_cockpit: There is no cockpit."));
+    pane.wait_logged("the refusal", "failed: session open l-new: no_cockpit: There is no cockpit.");
     assert_eq!(
         calls(&env),
         [words(&["plan", "new", "pay", "--context=alpha", "--title=Pay"]), words(&["session", "open", "l-new"])]
@@ -1470,7 +1507,7 @@ fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
         pane.wait("the menu", |s| menu_open(s, if id == "alpha" { "New Plan…" } else if id == "ship" { "New session…" } else { "Open" }));
         let downs = if id == "ship·f-id" { 3 } else { 2 };
         pane.keys(&[&["Down"; 3][..downs], &["Enter"]].concat());
-        pane.wait("the note", |_| pane.footer_has(&format!("copied {id}")));
+        pane.wait_logged("the result", &format!("ok: copied {id}\n"));
         let buffer = env.tmux(&["show-buffer"]);
         assert_eq!(String::from_utf8_lossy(&buffer.stdout), id);
     }
@@ -1544,14 +1581,16 @@ fn a_collapsed_context_and_an_expanded_archived_context_survive_a_restart_of_the
 }
 
 #[test]
-fn an_invalid_folds_file_starts_the_tree_with_the_defaults_and_a_note_and_the_next_fold_replaces_it() {
+fn an_invalid_folds_file_starts_the_tree_with_the_defaults_logs_it_and_the_next_fold_replaces_it() {
     let env = env();
     populate(&env);
     archive_for_folds(&env);
     std::fs::create_dir_all(folds_file(&env).parent().unwrap()).unwrap();
     std::fs::write(folds_file(&env), "{not json").unwrap();
     let pane = Pane::start(&env, 46, 26);
-    let screen = pane.wait("the note", |s| s.iter().any(|r| r.contains("fold state reset")));
+    let screen = pane.ready();
+    pane.wait_logged("the reset", "fold state reset: ");
+    assert!(screen.iter().all(|r| !r.contains("fold state")), "no note: {screen:?}");
     assert!(alpha_is_expanded(&screen), "the defaults: alpha is expanded: {screen:?}");
     assert_eq!(std::fs::read_to_string(folds_file(&env)).unwrap(), "{not json", "nothing is written until a fold changes");
     let toggle = screen.iter().position(|r| r.trim() == format!("╰{UP} collapse")).unwrap() as u16;
@@ -1664,46 +1703,39 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
         });
         assert_eq!(copy[copy.len() - 3..], words(&["-w", "--", url]));
     };
-    // a command runs off the UI thread with `running: …` in the footer, which moves the Inbox rows: the next row is
-    // looked up once it has ended
-    let ended = || pane.wait("the command to end", |_| !pane.footer_has("running:"));
     // dialog: `session open <its Session>`
     pane.click(10, row_of("f-blocked label"));
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
-    ended();
     // question: the Context's Manager
     pane.click(10, row_of("alpha: a question"));
     assert_eq!(wait_for_calls(&env, 3)[1..], [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]);
-    ended();
-    // plan-review: the Lead of its Plan, then its page's url copied, and the note says how to open it
+    // plan-review: its page's url is copied, and the log says how to open it; the Lead of its Plan is in the chat slot
+    // already (`populate`), so no `session open` runs, as for any item whose Session is in focus
     pane.click(10, row_of("ship plan review"));
-    assert_eq!(wait_for_calls(&env, 4)[3], words(&["session", "open", "l-ship"]));
-    ended();
     copied(1, "http://10.0.0.5:20000/");
-    pane.wait("the note", |_| pane.footer_has("copied http://10.0.0.5:20000/: Cmd-click the row to open"));
+    pane.wait_logged("the result", "ok: copied http://10.0.0.5:20000/: Cmd-click the row to open it");
+    assert!(!pane.footer_has("copied"), "no note: {:?}", pane.screen());
     // pr-ready: the merge popup of its pull request, whether a Plan owns it or not, and no command
     pane.click(10, row_of("acme/api#3 ready"));
     common::wait_until("the merge popup", || !popups(&env).is_empty());
     assert_eq!(popups(&env).len(), 1, "{:?}", popups(&env));
     assert_eq!(popups(&env)[0].last().unwrap(), "cpd tui view merge 'acme/api#3'");
     assert!(popups(&env)[0].contains(&" merge ".to_owned()), "{:?}", popups(&env)[0]);
-    ended();
-    // a pull request, a Plan's or not, and a review request: the url is copied, and the note says how to open it
+    // a pull request, a Plan's or not, and a review request: the url is copied, and the log says how to open it
     pane.click(10, row_of("acme/web#4 changes requested"));
     copied(2, "https://x.io/changes");
-    pane.wait("the note", |_| pane.footer_has("copied https://x.io/changes: Cmd-click the row to open it"));
+    pane.wait_logged("the result", "ok: copied https://x.io/changes: Cmd-click the row to open it");
     pane.click(10, row_of("acme/web#5 review requested"));
     copied(3, "https://x.io/review");
-    pane.wait("the note", |_| pane.footer_has("copied https://x.io/review: Cmd-click the row to open it"));
+    pane.wait_logged("the result", "ok: copied https://x.io/review: Cmd-click the row to open it");
     pane.click(10, row_of("acme/api#12 failing"));
     copied(4, "https://github.com/acme/api/pull/12");
-    ended();
-    pane.wait("the note", |_| pane.footer_has("copied https://github.com/acme/api/pull/12: Cmd-click the"));
+    pane.wait_logged("the result", "ok: copied https://github.com/acme/api/pull/12: Cmd-click the row to open it");
     // engine-error and job-stuck, rows an older engine opened (hs-d314, hs-d318): no click; `settled_with_a_client` fails on any popup but the legend's
     pane.click(10, row_of("engine: store busy"));
     pane.click(10, row_of("ship: c is stuck"));
     pane.settled_with_a_client();
-    assert_eq!(calls(&env).len(), 4, "the copies and the popups ran no cpd command: {:?}", calls(&env));
+    assert_eq!(calls(&env).len(), 3, "the copies and the popups ran no cpd command: {:?}", calls(&env));
 }
 
 /// Every Manager archived: none is live (`populate` makes one per Context).
@@ -1741,7 +1773,7 @@ fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_only_a_cli
     // the User's own click does
     pane.click(10, u16::try_from(first).unwrap());
     assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
-    pane.wait("the note", |_| pane.footer_has("engine started"));
+    pane.wait_logged("the result", "ok: engine started");
     pane.settled_with_a_client();
     assert_eq!(popups(&env).len(), 1, "only the legend's, from the settling: {:?}", popups(&env));
     assert_eq!(calls(&env).len(), 1, "the click ran `watch --ensure`, once: {:?}", calls(&env));
@@ -1882,14 +1914,14 @@ fn the_cursor_reaches_the_items_and_d_dismisses_and_s_snoozes_the_one_it_is_on()
     pane.ready();
     cursor_on_the_first_item(&pane);
     pane.keys(&["d"]);
-    pane.wait("dismissed", |_| pane.footer_has("dismissed"));
+    pane.wait_logged("dismissed", "ok: dismissed");
     assert_eq!(calls(&env), [words(&["inbox", "dismiss", "1"])]);
     pane.keys(&["j", "s"]);
     pane.wait("the snooze choices", |s| menu_open(s, "Snooze 15 min"));
     let screen = pane.screen();
     assert!(!screen.iter().any(|r| r.contains("Dismiss")), "the choices are the three snoozes:\n{}", screen.join("\n"));
     pane.keys(&["Down", "Enter"]);
-    pane.wait("snoozed", |_| pane.footer_has("snoozed"));
+    pane.wait_logged("snoozed", "ok: snoozed");
     assert_eq!(wait_for_calls(&env, 2)[1], words(&["inbox", "snooze", "2", "1h"]));
     pane.keys(&["j", "s", "Down", "Down", "Enter"]);
     assert_eq!(wait_for_calls(&env, 3)[2], words(&["inbox", "snooze", "4", "tomorrow"]));
@@ -1964,7 +1996,7 @@ fn a_right_click_on_an_item_opens_its_four_entries_and_each_runs_its_command() {
 }
 
 #[test]
-fn a_refusal_of_an_item_command_shows_in_the_prompt_row() {
+fn a_refusal_of_an_item_command_is_logged() {
     let env = env();
     populate(&env);
     env.fake("cpd", r#"echo '{"ok":false,"error":{"code":"item_closed","message":"Item 1 is closed.","details":{}}}'; exit 3"#);
@@ -1972,7 +2004,7 @@ fn a_refusal_of_an_item_command_shows_in_the_prompt_row() {
     pane.ready();
     cursor_on_the_first_item(&pane);
     pane.keys(&["d"]);
-    pane.wait("the refusal", |_| pane.footer_has("item_closed: Item 1 is closed."));
+    pane.wait_logged("the refusal", "failed: inbox dismiss 1: item_closed: Item 1 is closed.");
     assert_eq!(calls(&env), [words(&["inbox", "dismiss", "1"])]);
 }
 

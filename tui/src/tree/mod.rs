@@ -206,6 +206,7 @@ fn event_loop(
                 // `display-popup` returns when the popup closes; a cancel runs nothing. The tree is drawn first, so it
                 // shows the item picked, not the menu, behind the popup.
                 terminal.draw(|f| view.draw(f, frame))?;
+                let title = question.title();
                 match runner.ask(question) {
                     Ok(None) => {}
                     Ok(Some(action)) => {
@@ -214,7 +215,11 @@ fn event_loop(
                         dirty = true;
                         last_snapshot = Instant::now() - SNAPSHOT_EVERY;
                     }
-                    Err(why) => show(log.line(&format!("failed: dialog: {why}")), &mut popups, runner),
+                    // the dialog failed, or the answer is refused (a title no id can be made of): the User must see it
+                    Err(why) => {
+                        show(log.line(&format!("failed: {title}: {why}")), &mut popups, runner);
+                        show(Effect::Text { title: title.to_owned(), text: why }, &mut popups, runner);
+                    }
                 }
             }
             Effect::Legend => {

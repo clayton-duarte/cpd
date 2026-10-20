@@ -323,8 +323,11 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     assert_eq!(screen[1..9], want, "{}", screen.join("\n"));
     // the selection crosses from one box down into the one below it
     tmux_out(&env, &["send-keys", "-t", &pane, "Right", "Right", "Down", "Enter"]);
-    let screen = screen_when(&env, &pane, "the note", |s| s.iter().any(|l| l.contains("has not started yet")));
-    assert!(screen.iter().any(|l| l.trim() == "c has not started yet"), "{}", screen.join("\n"));
+    wait_until("the log line", || plan_log(&env).contains("c has not started yet"));
+    // the view draws no note: it redraws in the loop that logged, so a moment later the screen is the final one
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let after = screen_when(&env, &pane, "the chart", |s| s.len() > 8);
+    assert!(!after.iter().any(|l| l.contains("has not started yet")), "{}", after.join("\n"));
 }
 
 #[test]
@@ -671,6 +674,11 @@ fn tall_plan() -> String {
     plan_with("dispatch", None, &jobs)
 }
 
+/// The view's log, `run/tui/plan.log` (a view draws no note, commands.md §17 "No notes"): empty before its first line.
+fn plan_log(env: &TestEnv) -> String {
+    fs::read_to_string(env.cpd_home().join("run").join("tui").join("plan.log")).unwrap_or_default()
+}
+
 fn scroll_file(env: &TestEnv) -> std::path::PathBuf {
     env.cpd_home().join("run").join("tui").join("plan-scroll.json")
 }
@@ -722,14 +730,15 @@ fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not()
 }
 
 #[test]
-fn an_invalid_scroll_file_starts_the_view_at_the_top_with_a_note_and_the_next_write_replaces_it() {
+fn an_invalid_scroll_file_starts_the_view_at_the_top_logs_it_and_the_next_write_replaces_it() {
     let env = env();
     env.sql(&tall_plan());
     fs::create_dir_all(scroll_file(&env).parent().unwrap()).unwrap();
     fs::write(scroll_file(&env), "{not json").unwrap();
     let pane = start_view(&env);
-    let screen = screen_when(&env, &pane, "the note", |s| s.iter().any(|l| l.contains("scroll positions reset: ")));
-    assert!(screen[2].contains(" j10 "), "{}", screen.join("\n"));
+    wait_until("the log line", || plan_log(&env).contains("scroll positions reset: "));
+    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains(" j10 "));
+    assert!(screen.iter().all(|l| !l.contains("scroll positions reset")), "no note: {}", screen.join("\n"));
     assert_eq!(fs::read_to_string(scroll_file(&env)).unwrap(), "{not json", "nothing is written until an offset changes");
 
     // scroll down the chart: the file becomes a valid one

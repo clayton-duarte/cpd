@@ -137,14 +137,14 @@ fn machine() -> Machine {
 }
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
-    render_hits(width, height, w, "").0
+    render_hits(width, height, w).0
 }
 
-/// The column, and where a click reaches an owned PR; `note` is the last row's message.
-fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
+/// The column, and where a click reaches an owned PR.
+fn render_hits(width: u16, height: u16, w: &Widgets) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut hits = vec![];
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), note, 0, 0).hits).unwrap();
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0).hits).unwrap();
     (terminal.backend().buffer().clone(), hits)
 }
 
@@ -259,7 +259,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, gpus: vec![], mem: Some(7) } };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0, 0))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, 0, 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let prs_head = pill(30, "PRs", Some(0));
     assert_eq!(lines[..3], ["", " homeserver", " \u{F4BC} –%  \u{EFC5} 7%"], "no CPU % until a second sample");
@@ -573,7 +573,7 @@ fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
 /// The column drawn at spinner frame `frame`.
 fn render_at(width: u16, height: u16, w: &Widgets, frame: usize) -> Buffer {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0, frame))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine(), 0, frame))).unwrap();
     terminal.backend().buffer().clone()
 }
 
@@ -601,7 +601,7 @@ fn a_pr_whose_lead_works_shows_the_spinner_beside_its_state_and_the_frame_advanc
 fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    let (_, hits) = render_hits(46, 25, &w, "");
+    let (_, hits) = render_hits(46, 25, &w);
     let [hit] = &hits[..] else { panic!("{hits:?}") };
     assert_eq!(hit.lead.as_str(), "l-mine");
     let inside = |x, y| hit.contains(ratatui::layout::Position::new(x, y));
@@ -611,10 +611,17 @@ fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
 }
 
 #[test]
-fn a_note_is_the_last_row_in_the_note_colour() {
+fn a_snapshot_error_is_the_last_row_in_the_note_colour() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    let (buf, _) = render_hits(46, 25, &w, "no cockpit");
+    let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
+    terminal
+        .draw(|f| {
+            drop(widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0));
+            widgets::draw_error(f, f.area(), "no cockpit");
+        })
+        .unwrap();
+    let buf = terminal.backend().buffer().clone();
     assert_eq!(row(&buf, 24).trim_end(), "no cockpit");
     assert_eq!(buf[(0, 24)].fg, palette::note().fg.unwrap());
     assert_eq!(row(&buf, 23).trim_end(), "", "the rest is as without it");
@@ -852,8 +859,13 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
     wait_for_screen(&env, &pane, "the top", |s| s.iter().any(|r| *r == cue_row('▼', 5)) && has(s, "acme/repo#1") && !s.iter().any(|r| r.contains('▲')));
 }
 
+/// The view's log, `run/tui/widgets.log` (a view draws no note, commands.md §17 "No notes"): empty before its first line.
+fn widgets_log(env: &TestEnv) -> String {
+    std::fs::read_to_string(env.cpd_home().join("run").join("tui").join("widgets.log")).unwrap_or_default()
+}
+
 #[test]
-fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click() {
+fn a_refused_session_open_is_logged_and_draws_no_note() {
     let env = pane_env();
     prs_store(&env);
     // No cockpit session: `session open` is refused with `no_cockpit`.
@@ -863,24 +875,22 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
     let width = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_width}"]).parse::<u16>().unwrap();
     let last_row = |s: &[String]| s.get(height - 1).cloned().unwrap_or_default();
 
-    // The unowned rows and the arrow run nothing, so no note appears.
+    // The unowned rows and the arrow run nothing, so nothing is logged.
     click(&env, &pane, 3, 6);
     click(&env, &pane, width - 1, 10);
-    // time-claim: the clicks on the unowned rows and the arrow leave no note, over a few redraws of the view; a click
+    // time-claim: the clicks on the unowned rows and the arrow log nothing, over a few redraws of the view; a click
     // that runs nothing leaves no signal (the view opens sessions in its own process, not through a recorded `cpd`).
     std::thread::sleep(std::time::Duration::from_millis(600));
-    assert!(!last_row(&screen(&env, &pane)).contains("cockpit"), "nothing was refused");
+    assert_eq!(widgets_log(&env), "", "nothing was refused");
 
     click(&env, &pane, 3, 10);
-    let shown = wait_for_screen(&env, &pane, "the refusal", |s| last_row(s).contains("cockpit"));
-    assert!(last_row(&shown).contains("cpd tui"), "{:?}", last_row(&shown));
-    let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    let last = styled.lines().last().unwrap();
-    assert!(last.contains("\x1b[") && last.contains("cockpit"), "{last:?}");
+    wait_until("the refusal in the log", || widgets_log(&env).contains("failed: Go to Lead: no_cockpit: "));
+    assert!(widgets_log(&env).contains("cpd tui"), "{}", widgets_log(&env));
+    // time-claim: the view has drawn again since the click; no tmux client is attached, so no dialog opened either
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let shown = screen(&env, &pane);
+    assert!(!last_row(&shown).contains("cockpit"), "no note: {:?}", last_row(&shown));
     assert!(shown[..height - 1].iter().any(|r| r.contains("acme/repo#20")), "the PRs are as before");
-
-    click(&env, &pane, 3, 6);
-    wait_for_screen(&env, &pane, "the note gone", |s| !last_row(s).contains("cockpit"));
 }
 
 #[test]
@@ -892,7 +902,7 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     let mut drawn = None;
-    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0, 0))).unwrap();
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), 0, 0))).unwrap();
     let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
     let buf = terminal.backend().buffer().clone();
     for (y, icon) in [(7, false), (9, true), (11, true)] {
@@ -1058,7 +1068,7 @@ fn an_open_menu_takes_every_click_and_go_to_lead_opens_the_lead_and_focuses_the_
 }
 
 #[test]
-fn copy_link_puts_the_url_in_tmuxs_buffer_with_set_buffer_w_and_says_so() {
+fn copy_link_puts_the_url_in_tmuxs_buffer_with_set_buffer_w_and_says_nothing() {
     let env = pane_env();
     clean_prs(&env);
     let view = cockpit(&env);
@@ -1068,9 +1078,12 @@ fn copy_link_puts_the_url_in_tmuxs_buffer_with_set_buffer_w_and_says_so() {
     right_click(&env, &view, 3, first_line_of(&shown, " acme/repo#9"));
     wait_for_screen(&env, &view, "the menu", |s| menu_labels(s) == ["Merge", "Copy Link"]);
     tmux_out(&env, &["send-keys", "-t", &view, "Down", "Enter"]);
-    let note = format!("copied {url}");
-    wait_for_screen(&env, &view, "the note", |s| s.iter().any(|r| r == &note) && the_menu_is_closed(s));
-    let copies: Vec<Vec<String>> = env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "set-buffer")).collect();
+    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
+    let copies = common::wait_some("the copy", common::WAIT, || {
+        let copies: Vec<Vec<String>> = env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "set-buffer")).collect();
+        if copies.is_empty() { Err("no copy yet".to_owned()) } else { Ok(copies) }
+    });
+    assert!(!screen(&env, &view).iter().any(|r| r.contains("copied")), "no note");
     let [copy] = &copies[..] else { panic!("{copies:?}") };
     assert_eq!(&copy[copy.len() - 4..], ["set-buffer", "-w", "--", url], "{copy:?}");
     let buffer = env.tmux(&["show-buffer"]);
