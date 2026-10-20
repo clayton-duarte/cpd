@@ -1111,7 +1111,7 @@ mod tests {
         let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
         let listed = calls.lines().filter(|l| l.contains("list-sessions")).count();
         assert_eq!(listed, 4, "it waited until the connection was refused: {calls}");
-        assert!(calls.lines().any(|l| l == "-L dying -f /dev/null kill-server"), "{calls}");
+        assert!(calls.lines().any(|l| l == "-u -L dying -f /dev/null kill-server"), "{calls}");
     }
 
     #[test]
