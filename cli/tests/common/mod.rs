@@ -53,10 +53,11 @@ pub const SLEEP_SECONDS: u64 = 120;
 /// - The env's process group: its leader is the reaper, and every [`TestEnv::command`] joins it.
 /// - The private tmux server and its panes (a session each), whose pids tmux gives.
 /// - The detached children cpd records (each started with `setsid`, so out of the group): the
-///   drivers of the Attempts not ended (`attempts.driver_pid` in the env's store) and the holders
-///   of the flock locks under the env's `CPD_HOME/locks` (the engine, a distill run, the tmux
-///   restart) in the kernel's lock table, `/proc/locks`. Each is signalled only while
-///   `/proc/<pid>/environ` holds the env's `CPD_HOME` (a recorded pid may have been reused).
+///   drivers of the Attempts not ended (`attempts.driver_pid` in the env's store), and the engine's
+///   distill runs and tmux restart (`run/context-digests/*/distill.pid`, `run/tmux-restart.pid`).
+///   Each is signalled only while `/proc/<pid>/environ` holds the env's `CPD_HOME` (a recorded pid
+///   may have been reused). They are stopped after the group (nothing is left to start more), and
+///   the tmux server once more after them (a driver may have started it again).
 ///
 /// A process that leaves the group (`setsid`, `setpgid`) and that cpd does not record is not
 /// stopped. Each stop is SIGTERM, then SIGKILL to what is left after a grace of 1 s.
@@ -78,20 +79,16 @@ alive() {
 # mine PID: PID runs with this env's CPD_HOME.
 mine() { grep -qzxF "CPD_HOME=$home" "/proc/$1/environ" 2>/dev/null; }
 
-# The pids cpd records for its detached children: the drivers of the Attempts not ended, and
-# the holders of (and waiters for) its locks. Not checked with `mine` yet.
+# The pids cpd records for its detached children: the drivers of the Attempts not ended, the
+# engine's distill runs and its tmux restart. Not checked with `mine` yet.
 recorded() {
   if [ -f "$home/cpd.db" ]; then
     "$sqlite3" -readonly -cmd '.timeout 5000' "$home/cpd.db" \
       "SELECT driver_pid FROM attempts WHERE status <> 'ended' AND driver_pid IS NOT NULL"
   fi
-  set -- "$home"/locks/*.lock
-  [ -e "$1" ] || return 0
-  # /proc/locks: `<n>: [-> ]FLOCK ADVISORY WRITE <pid> <major>:<minor>:<inode> ...`.
-  stat -c %i "$@" | awk '
-    NR == FNR { want[$1] = 1; next }
-    { o = ($2 == "->"); n = split($(6 + o), d, ":"); if (d[n] in want) print $(5 + o) }
-  ' - /proc/locks
+  for _f in "$home"/run/context-digests/*/distill.pid "$home/run/tmux-restart.pid"; do
+    [ -f "$_f" ] && read -r _p < "$_f" && printf '%s\n' "$_p"
+  done
 }
 
 # left TARGET...: some TARGET (a -PGID or a PID) is still there.
@@ -112,24 +109,32 @@ stop() {
   done 2>/dev/null
 }
 
-# teardown PGID: stops the env's group, its tmux server and panes, then what cpd detached
-# (now that nothing is left to start more), and removes the directory.
-teardown() {
-  unset TMUX
-  groups=-$1
+# stop_tmux: stops the tmux server and its panes (a session each), whose pids tmux gives.
+stop_tmux() {
   for _s in "$dir"/tmux/*/"$socket"; do
-    [ -S "$_s" ] || continue
+    [ -S "$_s" ] || return 0
+    _g=
     for _p in $(TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); do
-      groups="$groups -$_p"
+      _g="$_g -$_p"
     done
     TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" kill-server >/dev/null 2>&1
+    stop $_g
   done
-  stop $groups
-  targets=
+}
+
+# teardown PGID: stops the env's group and its tmux server, then what cpd detached (now that
+# nothing is left to start more), then the tmux server again (a driver may have started one
+# since), and removes the directory.
+teardown() {
+  unset TMUX
+  stop "-$1"
+  stop_tmux
+  _r=
   for _p in $(recorded); do
-    ! mine "$_p" || targets="$targets -$_p $_p"
+    ! mine "$_p" || _r="$_r -$_p $_p"
   done
-  stop $targets
+  stop $_r
+  stop_tmux
   rm -rf "$dir"
 }
 

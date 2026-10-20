@@ -270,13 +270,18 @@ struct Up {
 }
 
 /// Starts `argv` as cpd starts its detached children: in a session of its own (`setsid`), so out
-/// of the env's process group, and not a child of the test process. Returns its pid.
+/// of the env's process group, and not a child of the test process. Returns its pid once it is
+/// in that session.
 fn detached(env: &TestEnv, argv: &[&str]) -> u32 {
     let mut cmd = env.command("sh");
     cmd.args(["-c", r#"setsid "$@" </dev/null >/dev/null 2>&1 & echo $!"#, "sh"]).args(argv);
     let out = common::output(&mut cmd).unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8(out.stdout).unwrap().trim().parse().unwrap()
+    let pid: u32 = String::from_utf8(out.stdout).unwrap().trim().parse().unwrap();
+    // `/proc/<pid>/stat`: `<pid> (<comm>) <state> <ppid> <pgrp> <session> ...`.
+    let session = || std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?.rsplit_once(") ")?.1.split(' ').nth(3)?.parse::<u32>().ok();
+    common::wait_until(&format!("process {pid} to be in a session of its own"), || session() == Some(pid));
+    pid
 }
 
 /// Records `pid` as the driver of Attempt `api-a1` (running) in the env's store.
@@ -307,25 +312,34 @@ fn record_driver(env: &TestEnv, pid: u32) {
 
 /// Puts up in `env` what its teardown must stop, each found its own way: the tmux server and
 /// its pane (through tmux), a process of the env's group, and two detached processes cpd
-/// records: a driver (`attempts.driver_pid`) and the holder of a lock (`locks/*.lock`).
+/// records: a driver (`attempts.driver_pid`) and a distill run (its pid file). The tmux server
+/// that the driver starts when it is stopped mentions the dir in its command line.
 fn put_up(env: &TestEnv) -> Up {
     let out = env.tmux(&["new-session", "-d", "-s", "t", "sleep 100"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let tmux = |format: &str| -> u32 { String::from_utf8(env.tmux(&["display-message", "-p", format]).stdout).unwrap().trim().parse().unwrap() };
     let group = common::output(env.command("sh").args(["-c", "sleep 100 >/dev/null 2>&1 & echo $!"])).unwrap();
     let group = String::from_utf8(group.stdout).unwrap().trim().parse().unwrap();
-    let driver = detached(env, &["sleep", "100"]);
+    // A driver that starts the tmux server again when it is stopped, as a driver may (its Worker's window).
+    let trapped = env.root().join("driver-trapped");
+    let restart = format!(
+        "trap 'tmux -L {} new-session -d \"sleep 100 # {}\"; exit 0' TERM; : > '{}'; while :; do sleep 1 & wait $!; done",
+        env.tmux_socket(),
+        env.root().display(),
+        trapped.display()
+    );
+    let driver = detached(env, &["sh", "-c", &restart]);
+    common::wait_until("the driver to trap SIGTERM", || trapped.exists());
     record_driver(env, driver);
-    let lock = env.cpd_home().join("locks/distill-ctx.lock");
-    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
-    let lock = lock.to_str().unwrap();
-    let holder = detached(env, &["flock", lock, "sleep", "100"]);
-    common::wait_until("the lock holder to take the lock", || {
-        !common::output(env.command("flock").args(["-n", lock, "true"])).unwrap().status.success()
-    });
+    // A distill run the engine started, recorded as the engine records it.
+    let distill = detached(env, &["sleep", "100"]);
+    let home = cpd_core::home::CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    let pid_file = home.distill_pid(&cpd_core::ids::ContextId::parse("ctx").unwrap());
+    std::fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
+    std::fs::write(pid_file, format!("{distill}\n")).unwrap();
     Up {
         dir: env.root().to_owned(),
-        pids: [("tmux server", tmux("#{pid}")), ("tmux pane", tmux("#{pane_pid}")), ("group process", group), ("driver", driver), ("lock holder", holder)]
+        pids: [("tmux server", tmux("#{pid}")), ("tmux pane", tmux("#{pane_pid}")), ("group process", group), ("driver", driver), ("distill run", distill)]
             .map(|(name, pid)| (name.to_owned(), pid))
             .into(),
     }
