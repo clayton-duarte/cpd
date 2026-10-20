@@ -1389,15 +1389,7 @@ fn folds_file(env: &TestEnv) -> std::path::PathBuf {
 
 /// Waits until `tree-folds.json` holds `want` (it is written at most once a second).
 fn wait_for_folds(env: &TestEnv, want: &str) {
-    let start = Instant::now();
-    loop {
-        let text = std::fs::read_to_string(folds_file(env)).unwrap_or_default();
-        if text == want {
-            return;
-        }
-        assert!(start.elapsed() < Duration::from_secs(10), "waiting for the folds file to hold {want}; it holds {text:?}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    common::wait_until(&format!("the folds file to hold {want}"), || std::fs::read_to_string(folds_file(env)).is_ok_and(|text| text == want));
 }
 
 #[test]

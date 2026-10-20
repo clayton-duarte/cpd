@@ -692,6 +692,8 @@ fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not()
     });
     let mut scrolled = screen(&env, &pane);
     wait_until("the chart to hold still", || {
+        // time-claim: the chart has settled when two captures 300 ms apart are the same; stillness has no Event to
+        // wait for.
         std::thread::sleep(Duration::from_millis(300));
         let now = screen(&env, &pane);
         std::mem::replace(&mut scrolled, now) == scrolled
@@ -704,6 +706,8 @@ fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not()
         serde_json::from_str::<serde_json::Value>(&text).ok()?.get("ship").cloned()
     };
     wait_until("the offset in the file", || offset(&env).is_some_and(|o| o[1].as_u64().unwrap_or(0) > 0));
+    // time-claim: the view writes the file at most once a second (SAVE_EVERY), so 1.5 s after the first write any
+    // write still due for the last scroll has happened; the final offset has no signal of its own.
     std::thread::sleep(Duration::from_millis(1500));
     let written = offset(&env).unwrap();
     tmux_out(&env, &["respawn-pane", "-k", "-t", &pane, CPD, "tui", "view", "plan"]);
