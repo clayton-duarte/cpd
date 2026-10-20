@@ -27,6 +27,7 @@ mod inbox_rules;
 mod install_script;
 mod interface;
 mod job;
+mod layout;
 mod merge;
 mod metrics;
 mod no_repo_lock;
