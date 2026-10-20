@@ -25,6 +25,8 @@ mod ask;
 mod cursor;
 mod inbox;
 mod kinds;
+#[cfg(test)]
+mod look;
 mod menu;
 mod rows;
 mod slug;
