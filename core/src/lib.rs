@@ -1,4 +1,4 @@
-//! cpd-core: the shared core of cpd (everything except the root command tree and the cockpit).
+//! cpd-core: the shared core of cpd (everything except the root command tree, the engine and the cockpit).
 //!
 //! The normative documents are `docs/contract.md`, `docs/commands.md`
 //! and `CONTEXT.md`; `docs/implementing.md` explains this crate's
@@ -21,7 +21,6 @@ pub mod ask;
 pub mod attempt;
 pub mod config;
 pub mod context;
-pub mod doctor;
 pub mod driver;
 pub mod events;
 pub mod git;
@@ -36,4 +35,3 @@ pub mod pr;
 pub mod session;
 pub mod spec;
 pub mod store;
-pub mod watch;

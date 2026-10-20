@@ -7,12 +7,12 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::check::{Check, Severity};
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
-use crate::ids::PlanId;
-use crate::lock;
-use crate::plan::jobs;
-use crate::store::Store;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::PlanId;
+use cpd_core::lock;
+use cpd_core::plan::jobs;
+use cpd_core::store::Store;
 
 const NO_STORE: &str = "the store did not open.";
 

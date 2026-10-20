@@ -4,9 +4,9 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 
-use crate::clock;
-use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
+use cpd_core::clock;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::home::CpdHome;
 
 pub(super) struct Log {
     file: File,

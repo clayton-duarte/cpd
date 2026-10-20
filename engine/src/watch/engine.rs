@@ -16,17 +16,17 @@ use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
 use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, team, titles, workers};
-use crate::clock;
-use crate::config::{Catalog, Config, load_catalog};
-use crate::error::{CpdError, ErrorCode};
-use crate::events::{self, NewEvent};
-use crate::home::CpdHome;
-use crate::host::Tmux;
-use crate::host::pi::{self, PiDirs};
-use crate::ids::{ContextId, PlanId, PrKey, SessionId};
-use crate::output::Output;
-use crate::pr::start::{self as start_pr, By, Failed};
-use crate::store::{Persist, Store};
+use cpd_core::clock;
+use cpd_core::config::{Catalog, Config, load_catalog};
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{self, NewEvent};
+use cpd_core::home::CpdHome;
+use cpd_core::host::Tmux;
+use cpd_core::host::pi::{self, PiDirs};
+use cpd_core::ids::{ContextId, PlanId, PrKey, SessionId};
+use cpd_core::output::Output;
+use cpd_core::pr::start::{self as start_pr, By, Failed};
+use cpd_core::store::{Persist, Store};
 
 /// Set by SIGTERM, SIGINT and SIGHUP: the loop ends at its next check.
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -192,7 +192,7 @@ fn start_prs(engine: &mut Engine) {
 pub(super) fn metrics(session: Option<&SessionId>) -> Option<Value> {
     let dirs = PiDirs::from_env().ok()?;
     let file = pi::session_file(&dirs, session?)?;
-    crate::metrics::parse_file(&file).ok().map(|m| m.to_json())
+    cpd_core::metrics::parse_file(&file).ok().map(|m| m.to_json())
 }
 
 fn catch_signals() -> Result<(), CpdError> {
@@ -200,7 +200,7 @@ fn catch_signals() -> Result<(), CpdError> {
     for signal in [Signal::SIGTERM, Signal::SIGINT, Signal::SIGHUP] {
         // SAFETY: the handler only stores to an atomic, which is async-signal-safe.
         unsafe { sigaction(signal, &action) }.map_err(|e| {
-            CpdError::new(crate::error::ErrorCode::StoreFailed, format!("Cannot handle {signal}: {e}."))
+            CpdError::new(cpd_core::error::ErrorCode::StoreFailed, format!("Cannot handle {signal}: {e}."))
         })?;
     }
     Ok(())

@@ -22,14 +22,14 @@ use time::format_description::well_known::Rfc3339;
 use super::SOURCE;
 use super::engine::{Engine, metrics};
 use super::report::{About, Step};
-use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
-use crate::driver::lock::{self, Free};
-use crate::driver::worker;
-use crate::error::{CpdError, ErrorCode};
-use crate::host::layout::{MAIN_WINDOW, View};
-use crate::host::tmux::{OPT_SESSION, Pane, Spawn};
-use crate::ids::{AttemptId, PlanId, SessionId};
-use crate::merge;
+use cpd_core::attempt::ledger::{self, Cause, End, Ladder, Stage};
+use cpd_core::driver::lock::{self, Free};
+use cpd_core::driver::worker;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::host::layout::{MAIN_WINDOW, View};
+use cpd_core::host::tmux::{OPT_SESSION, Pane, Spawn};
+use cpd_core::ids::{AttemptId, PlanId, SessionId};
+use cpd_core::merge;
 
 /// An Attempt not `ended`, as E2 reads it.
 struct Active {
@@ -361,7 +361,7 @@ fn stop_and_clean(engine: &mut Engine, session: &Live, why: &str, dead_lead: Opt
 /// and `@cpd_session` unset (§3.6): the placeholder `session park` builds.
 fn replace_with_placeholder(engine: &mut Engine, pane: &Pane) -> Result<(), CpdError> {
     let spawn = Spawn {
-        argv: [crate::session::PROGRAM, "tui", "view", "chat"].map(str::to_owned).into(),
+        argv: [cpd_core::session::PROGRAM, "tui", "view", "chat"].map(str::to_owned).into(),
         ..Spawn::default()
     };
     engine.tmux.respawn_pane_killing(&pane.pane, &spawn)?;
@@ -374,7 +374,7 @@ fn replace_with_placeholder(engine: &mut Engine, pane: &Pane) -> Result<(), CpdE
 fn stop(engine: &mut Engine, session: &Live, why: &str) -> Result<bool, CpdError> {
     let changed = engine
         .store
-        .write(SOURCE, |tx| crate::session::pane_gone(tx, &session.id, &session.state, session.pane.as_deref(), why))?;
+        .write(SOURCE, |tx| cpd_core::session::pane_gone(tx, &session.id, &session.state, session.pane.as_deref(), why))?;
     if changed {
         engine.log.line(&format!("E2: Session {} ({}) is stopped with no pane: {why}", session.id, session.name));
     }
@@ -390,8 +390,8 @@ mod tests {
     #[test]
     fn the_live_sessions_are_read_through_the_partial_index_not_by_scanning_every_session() {
         let dir = tempfile::tempdir().unwrap();
-        let home = crate::home::CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        let mut store = crate::store::Store::open(&home, 5000).unwrap();
+        let home = cpd_core::home::CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = cpd_core::store::Store::open(&home, 5000).unwrap();
         let plan: Vec<String> = store
             .read(|conn| {
                 let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {LIVE_SESSIONS}"))?;

@@ -8,11 +8,11 @@ use std::time::Duration;
 use time::OffsetDateTime;
 
 use super::engine::Engine;
-use crate::clock::timestamp;
+use cpd_core::clock::timestamp;
 use super::report::{About, Step, tell_stuck_job};
-use crate::error::CpdError;
-use crate::inbox::model::{Changes, reconcile};
-use crate::inbox::rules::{conditions, stuck_jobs};
+use cpd_core::error::CpdError;
+use cpd_core::inbox::model::{Changes, reconcile};
+use cpd_core::inbox::rules::{conditions, stuck_jobs};
 
 pub(super) fn run(engine: &mut Engine) {
     match reconcile_inbox(engine) {
