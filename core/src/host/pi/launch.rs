@@ -417,7 +417,7 @@ mod tests {
         assert_eq!(
             launch.argv,
             strs(&[
-                "pi", "--session", "/s/x.jsonl",
+                "pi", "--model", "p/m:high", "--session", "/s/x.jsonl",
                 "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
             ])
         );
