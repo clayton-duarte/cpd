@@ -136,7 +136,8 @@ fn assert_status_line(env: &TestEnv) {
         "#[range=user|logs]",
         "#[align=right]",
         "#{@cpd_inbox}",
-        "#{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{@cpd_preview}, #[fg=yellow]",
         "#{R:\u{2500},",
     ] {
         assert!(format.contains(range), "{range} in {format}");
