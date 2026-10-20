@@ -146,7 +146,7 @@ fn pull_request(env: &TestEnv, n: u32, set: &str) {
 fn the_polled_pull_requests_open_and_clear_their_items() {
     let env = TestEnv::new();
     setup(&env);
-    pull_request(&env, 1, "checks = 'passed', mergeable = 'conflicting'");
+    pull_request(&env, 1, "checks = 'passed', mergeable = 'conflicting', merge_state = 'dirty'");
     pull_request(&env, 2, "review_decision = 'changes_requested'");
     pull_request(&env, 3, "checks = 'passed', mergeable = 'mergeable'");
     pull_request(&env, 4, "authored = 0, review_requested = 1");
@@ -194,9 +194,10 @@ fn an_unowned_row_with_failed_checks_opens_no_item_whatever_its_policy() {
     // `acme` says none; its repo `shop` says any again; `nofile` has no owner file (cpd's default, any).
     env.owner_policy("acme", NO_CHECKS);
     policy_file(&env, "repos/acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
-    pull_request(&env, 1, "checks = 'failed'");
-    pull_request(&env, 2, "checks = 'failed', repo = 'acme/other', url = 'https://github.com/acme/other/pull/2'");
-    pull_request(&env, 3, "checks = 'failed', repo = 'nofile/shop', url = 'https://github.com/nofile/shop/pull/3'");
+    // Failed required checks on a mergeable PR: GitHub reports `blocked`.
+    pull_request(&env, 1, "checks = 'failed', merge_state = 'blocked'");
+    pull_request(&env, 2, "checks = 'failed', merge_state = 'blocked', repo = 'acme/other', url = 'https://github.com/acme/other/pull/2'");
+    pull_request(&env, 3, "checks = 'failed', merge_state = 'blocked', repo = 'nofile/shop', url = 'https://github.com/nofile/shop/pull/3'");
 
     assert!(found(&env).is_empty(), "failed checks open no item under any policy (hs-d470)");
 }
@@ -269,35 +270,26 @@ fn kinds(items: &[Condition]) -> Vec<(Kind, String)> {
 }
 
 #[test]
-fn a_row_whose_policy_does_not_resolve_is_one_error_condition_and_the_other_items_are_still_computed() {
+fn a_row_whose_owner_policy_does_not_resolve_opens_no_engine_error_and_pr_ready_follows_the_merge_state_only() {
     let env = TestEnv::new();
     setup(&env);
-    pull_request(&env, 5, "checks = 'failed', mergeable = 'mergeable'");
+    pull_request(&env, 5, "checks = 'passed', mergeable = 'mergeable'");
     own_pull_request(&env, 5);
     pull_request(&env, 6, "review_decision = 'changes_requested'");
-    pull_request(&env, 7, "checks = 'failed', repo = 'other/x', url = 'https://github.com/other/x/pull/7'");
+    pull_request(&env, 7, "checks = 'failed', merge_state = 'blocked', repo = 'other/x', url = 'https://github.com/other/x/pull/7'");
     fs::remove_file(env.cpd_home().join("policy/owners/acme.toml")).unwrap();
 
     let items = found(&env);
 
-    assert_eq!(
-        kinds(&items),
-        [
-            // no pr-failing or pr-changes for any row (hs-d470); `pr-ready` reads the owned row's policy and tells the error
-            (Kind::EngineError, "error:E8/pr:acme/shop#5/owner_unknown".to_owned()),
-        ]
-    );
-    let error = &items[0];
-    assert_eq!(error.urgency, Urgency::Red);
-    assert!(error.label.contains("owner_unknown") && error.label.contains("acme.toml"), "{}", error.label);
-    assert_eq!(error.plan.as_ref().map(|p| p.as_str()), Some("pay"));
+    // `pr-ready` reads no policy (hs-d481): the unknown owner opens no engine-error; no pr-failing or pr-changes (hs-d470).
+    assert_eq!(kinds(&items), [(Kind::PrReady, "pr:acme/shop#5".to_owned())]);
 }
 
 #[test]
-fn a_pr_of_a_context_with_no_owner_is_owned_and_raises_owner_unset_never_the_unowned_rule() {
+fn a_pr_of_a_context_with_no_owner_opens_no_engine_error_and_pr_ready_follows_the_merge_state_only() {
     let env = TestEnv::new();
     setup(&env);
-    pull_request(&env, 5, "checks = 'failed', mergeable = 'mergeable'");
+    pull_request(&env, 5, "checks = 'passed', mergeable = 'mergeable'");
     own_pull_request(&env, 5);
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     Store::open(&home, 5000)
@@ -310,7 +302,6 @@ fn a_pr_of_a_context_with_no_owner_is_owned_and_raises_owner_unset_never_the_uno
 
     let items = found(&env);
 
-    // The unowned rule would key the row by its GitHub `acme/shop` and raise `pr-failing`.
-    assert_eq!(kinds(&items), [(Kind::EngineError, "error:E8/pr:acme/shop#5/owner_unset".to_owned())]);
-    assert!(items[0].label.contains("owner_unset") && items[0].label.contains("ctx"), "{}", items[0].label);
+    // No policy is read (hs-d481): an unset owner opens no engine-error, and no pr-failing (hs-d470).
+    assert_eq!(kinds(&items), [(Kind::PrReady, "pr:acme/shop#5".to_owned())]);
 }
