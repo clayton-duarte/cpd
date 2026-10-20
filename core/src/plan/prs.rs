@@ -29,7 +29,8 @@ pub struct PrRow {
     pub lead_worktree: Option<PathBuf>,
     /// `waiting`, `dispatch`, `open`, `merged` or `cancelled` (§3.8).
     pub status: String,
-    /// Keys of the PRs it needs, sorted.
+    /// The PRs it needs, sorted, as PR references (contract §2.2): the bare key of a PR of its Plan,
+    /// `<plan>/<key>` of a PR of another.
     pub needs: Vec<String>,
     pub pull: Option<Pull>,
     /// The id of the PR's `pull_requests` row: set exactly when the status is `open` or `merged` (`prs` CHECK).
@@ -56,14 +57,24 @@ impl PrRow {
 
 type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>);
 
-/// Every PR of `plan` in key order, `cancelled` ones included.
-pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError> {
+/// The needs of every PR of `plan` by PR key, each list sorted, as PR references (contract §2.2): the
+/// bare key of a need of the Plan, `<plan>/<key>` of a need of another Plan.
+pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
     let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
+    let mut stmt = conn.prepare(
+        "SELECT pr, CASE WHEN needs_plan = plan THEN needs ELSE needs_plan || '/' || needs END FROM pr_needs WHERE plan = ?1",
+    )?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
         let (pr, need) = row?;
         needs.entry(pr).or_default().push(need);
     }
+    needs.values_mut().for_each(|list| list.sort());
+    Ok(needs)
+}
+
+/// Every PR of `plan` in key order, `cancelled` ones included.
+pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError> {
+    let mut needs = load_needs(conn, plan)?;
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request
            FROM prs WHERE plan = ?1 ORDER BY key",
@@ -111,7 +122,7 @@ mod tests {
                      INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                        VALUES ('pay', 'api', '/r/api', 'main', 'waiting', 'cpd/pay/api', cpd_txn(), 't'),
                               ('pay', 'web', '/r/web', 'dev', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
-                     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'api');
+                     INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'web', 'pay', 'api');
                      UPDATE prs SET status = 'dispatch', lead_worktree = '/w/api', started_at = 't' WHERE key = 'api';
                      INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                        VALUES ('acme/api', 7, 'https://x/7', 'T', 0, 'open', 'none', 'none', 't', 't');

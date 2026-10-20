@@ -1,13 +1,15 @@
 //! `pr edit` (commands.md §9.5, contract §3.8): changes a `waiting` PR's repo,
-//! base or needs before the lock. The plan fingerprint changes with them.
-
-use std::collections::BTreeMap;
+//! base (a branch, or a base PR to stack on) or needs before the lock. The plan
+//! fingerprint changes with them.
 
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::add::{key_repo, main_worktree, no_branch_clash, resolve_base};
-use super::{EditArgs, Env, check_needs, find_pr, plan_phase, pr_locked, sorted_needs};
+use super::add::{
+    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_prs, main_worktree, needs_refs, no_branch_clash, node_of,
+    resolve_refs, stacked_on, wanted_base,
+};
+use super::{EditArgs, Env, find_pr, plan_phase, pr_locked};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{PlanId, PrKey, RepoName};
@@ -23,7 +25,8 @@ struct Edits {
     repo: Option<String>,
     /// The new repo's name, from its `origin`; set with `repo`.
     name: Option<RepoName>,
-    base: Option<String>,
+    base: Option<BaseWanted>,
+    /// The new needs as the sorted references of the Plan (`needs_refs`).
     needs: Option<Vec<String>>,
 }
 
@@ -39,7 +42,7 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         return Err(CpdError::new(ErrorCode::NothingToEdit, "Nothing to edit: pass --repo, --base, --needs or --no-needs."));
     }
     let needs = match (&args.needs, args.no_needs) {
-        (Some(keys), _) => Some(sorted_needs(keys)?),
+        (Some(refs), _) => Some(needs_refs(&plan, refs)?),
         (None, true) => Some(Vec::new()),
         (None, false) => None,
     };
@@ -50,11 +53,14 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let stored = env.store.read(|conn| waiting_pr(conn, &plan, &key))?;
     let repo = args.repo.as_deref().map(main_worktree).transpose()?;
     let name = repo.as_deref().map(|r| key_repo(&mut env, &plan, r)).transpose()?;
-    if repo.is_some() || args.base.is_some() {
-        let in_repo = repo.clone().unwrap_or_else(|| stored.repo.clone().into());
-        resolve_base(&in_repo, Some(args.base.as_deref().unwrap_or(&stored.base)))?;
-    }
-    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), name, base: args.base, needs };
+    let in_repo = repo.clone().unwrap_or_else(|| stored.repo.clone().into());
+    let base = match args.base.as_deref() {
+        Some(_) => Some(wanted_base(&in_repo, env.store.read(|conn| classify_base(conn, args.base.as_deref()))?)?),
+        // A new repo keeps the stored base, which must exist there.
+        None if repo.is_some() => Some(wanted_base(&in_repo, BaseArg::Branch(Some(stored.base.clone())))?),
+        None => None,
+    };
+    let edits = Edits { repo: repo.as_ref().map(|r| r.display().to_string()), name, base, needs };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
     let (pr, fields, already) = match decision {
@@ -106,18 +112,30 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
     if let Some(repo) = &edits.repo {
         after.repo = repo.clone();
     }
-    if let Some(base) = &edits.base {
-        after.base = base.clone();
-    }
     if let Some(needs) = &edits.needs {
-        let prs = load_prs(conn, plan)?;
-        check_needs(&prs, plan, Some(key), needs)?;
         after.needs = needs.clone();
-        let others: Vec<PrRow> = prs.into_iter().filter(|p| p.key != after.key).chain([after.clone()]).collect();
-        if let Some(cycle) = cycle(&others) {
-            return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The new needs of {key} make a cycle: {}.", cycle.join(" → ")))
-                .with("plan", plan.as_str())
-                .with("cycle", cycle));
+    }
+    // Every reference the PR will hold is validated again, so a rule broken by the repo alone (a base PR of
+    // another repo) is refused too.
+    if edits.repo.is_some() || edits.base.is_some() || edits.needs.is_some() {
+        let base = match &edits.base {
+            Some(BaseWanted::Pr(p, k)) => BaseWanted::Pr(p.clone(), k.clone()),
+            Some(BaseWanted::Branch(b)) => BaseWanted::Branch(b.clone()),
+            None => BaseWanted::Branch(before.base.clone()),
+        };
+        let resolved = resolve_refs(conn, &Subject { plan, key, repo: &after.repo }, &base, &after.needs)?;
+        after.base = resolved.base;
+    }
+    if after.repo != before.repo {
+        let in_use = stacked_on(&known_prs(conn)?, plan, &before.repo, &before.lead_branch);
+        if !in_use.is_empty() {
+            return Err(CpdError::new(
+                ErrorCode::PrInUse,
+                format!("PR {key} keeps its repo: {} {} stacked on it.", in_use.join(", "), if in_use.len() == 1 { "is" } else { "are" }),
+            )
+            .with("plan", plan.as_str())
+            .with("pr", key.as_str())
+            .with("prs", in_use));
         }
     }
     let fields: Vec<&'static str> = [("repo", before.repo != after.repo), ("base", before.base != after.base), ("needs", before.needs != after.needs)]
@@ -140,62 +158,12 @@ fn update(tx: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, name: O
         )?;
     }
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
-        tx.execute("DELETE FROM pr_needs WHERE plan = ?1 AND pr = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
+        let (needs_plan, needs) = node_of(plan, need);
+        tx.execute(
+            "DELETE FROM pr_needs WHERE plan = ?1 AND pr = ?2 AND needs_plan = ?3 AND needs = ?4",
+            [plan.as_str(), after.key.as_str(), needs_plan.as_str(), needs.as_str()],
+        )?;
     }
-    for need in after.needs.iter().filter(|n| !before.needs.contains(n)) {
-        tx.execute("INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), after.key.as_str(), need.as_str()])?;
-    }
-    Ok(())
-}
-
-/// A cycle among the needs of the PRs that are not `cancelled`, as the keys
-/// along it (the first repeated at the end), if there is one.
-fn cycle(prs: &[PrRow]) -> Option<Vec<String>> {
-    let graph: BTreeMap<&str, &PrRow> = prs.iter().filter(|p| p.status != "cancelled").map(|p| (p.key.as_str(), p)).collect();
-    let mut done: Vec<&str> = Vec::new();
-    for start in graph.keys() {
-        if let Some(found) = visit(start, &graph, &mut done, &mut Vec::new()) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn visit<'a>(key: &'a str, graph: &BTreeMap<&'a str, &'a PrRow>, done: &mut Vec<&'a str>, path: &mut Vec<&'a str>) -> Option<Vec<String>> {
-    if let Some(at) = path.iter().position(|k| *k == key) {
-        let mut found: Vec<String> = path[at..].iter().map(|k| (*k).to_owned()).collect();
-        found.push(key.to_owned());
-        return Some(found);
-    }
-    if done.contains(&key) {
-        return None;
-    }
-    let pr = graph.get(key)?;
-    path.push(key);
-    for need in &pr.needs {
-        if let Some(found) = visit(need, graph, done, path) {
-            return Some(found);
-        }
-    }
-    path.pop();
-    done.push(key);
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn pr(key: &str, status: &str, needs: &[&str]) -> PrRow {
-        PrRow::fixture(key, "/r", "main", needs, status)
-    }
-
-    #[test]
-    fn finds_a_cycle_among_the_live_prs_only() {
-        assert_eq!(cycle(&[pr("a", "waiting", &[]), pr("b", "waiting", &["a"])]), None);
-        let found = cycle(&[pr("a", "waiting", &["c"]), pr("b", "waiting", &["a"]), pr("c", "waiting", &["b"])]).unwrap();
-        assert_eq!(found.first(), found.last());
-        assert_eq!(found.len(), 4);
-        assert_eq!(cycle(&[pr("a", "waiting", &["b"]), pr("b", "cancelled", &["a"])]), None);
-    }
+    let added: Vec<String> = after.needs.iter().filter(|n| !before.needs.contains(n)).cloned().collect();
+    insert_needs(tx, plan, &after.key, &added)
 }
