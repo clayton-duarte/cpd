@@ -2,6 +2,7 @@
 //! the hooks of `.config/wt.toml`, and the tamper check. No commands of its
 //! own: `plan lock`, `attempt submit`, the driver and the merge call it.
 
+pub mod gate;
 pub mod hooks;
 pub mod lead;
 pub mod run;
@@ -9,7 +10,7 @@ pub mod snapshot;
 pub mod tamper;
 pub mod worktree;
 
-pub use hooks::{HookError, HookOutcome, HookResult, Operation, Pipeline, run_hook, run_hook_as};
+pub use hooks::{HookError, HookOutcome, HookResult, Log, Operation, Pipeline, run_hook, run_hook_as};
 pub use lead::{Synced, sync_lead};
 pub use snapshot::{GateHooks, GateWorktree, Refused, gate, gate_worktree_path, sweep as sweep_gate_worktrees};
 pub use tamper::{check as tamper_check, protected_list, touched_protected};

@@ -222,7 +222,7 @@ fn start_log(env: &TestEnv, args: &[&str], width: u16, events: u16) -> String {
 fn wait_log(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
     let rows = common::wait_screen(what, || screen(env, pane), |r| r.len() > 3 && done(&r[3..]));
     assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "an empty row above and below the title: {rows:?}");
-    assert!(rows[1].starts_with("━━ logs ━"), "the title is a section title: {:?}", rows[1]);
+    assert!(rows[1].starts_with("╭─\u{E0B6}logs\u{E0B4}─"), "the title is a section title: {:?}", rows[1]);
     rows[3..].to_vec()
 }
 
@@ -334,13 +334,13 @@ fn the_logs_view_needs_a_terminal() {
 fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes_it() {
     let env = env();
     let pane = start(&env, &["legend"], 100, 10);
-    let rows = wait_screen(&env, &pane, "the legend", |r| r.get(1).is_some_and(|l| l.starts_with("━━ Legend: what")));
+    let rows = wait_screen(&env, &pane, "the legend", |r| r.get(1).is_some_and(|l| l.starts_with("╭─\u{E0B6}Legend: what")));
     assert!(rows[1].contains(" 1-8/"), "{:?}", rows[1]);
     assert_eq!(rows[0], "", "an empty row above the title");
     assert!(rows[3].contains("Meanings"), "{rows:?}");
     wheel(&env, &pane, false, 5, 5);
     let rows = wait_screen(&env, &pane, "the wheel down", |r| r.get(1).is_some_and(|l| l.contains(" 4-11/")));
-    assert!(rows[1].starts_with("━━ Legend: what"), "the title stays");
+    assert!(rows[1].starts_with("╭─\u{E0B6}Legend: what"), "the title stays");
     assert!(!rows.iter().any(|l| l.contains("Meanings")), "{rows:?}");
     wheel(&env, &pane, true, 5, 5);
     wait_screen(&env, &pane, "the wheel up", |r| r.get(1).is_some_and(|l| l.contains(" 1-8/")));
@@ -386,13 +386,12 @@ fn the_logs_action_opens_the_popup_on_the_clicking_client() {
     let popup = popups(&env).remove(0);
     let at = popup.iter().position(|a| a == "display-popup").unwrap();
     // `tmux -L <socket> -f /dev/null display-popup -c <client> -E -T ' logs ' -w <w> -h <h> cpd tui view logs`
+    // Sized like the legend, at most 80 % of the 200x60 client (`logs::popup_args`): 160x48.
     let (w, h) = cpd_tui::widgets::legend::size();
+    let (w, h) = ((w + 2).min(160), (h + 2).min(48));
     assert_eq!(
         popup[at..],
-        [
-            "display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).min(48).to_string(),
-            "cpd tui view logs"
-        ]
+        ["display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &w.to_string(), "-h", &h.to_string(), "cpd tui view logs"]
     );
     assert!(popup[..at].starts_with(&["-L".to_owned(), env.tmux_socket().to_owned()]), "{popup:?}");
 

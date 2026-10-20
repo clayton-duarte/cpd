@@ -59,17 +59,45 @@ pub const OPT_HISTORY: &str = "@cpd_history";
 /// nothing; the chat placeholder and a history pane have none, since pi and
 /// the placeholder say what they are; the
 /// views have their column titles; any other pane shows its command. Every
-/// title is drawn reversed (`#[reverse]`..`#[noreverse]`), a block in the border's
-/// colour with the text in the background colour.
-pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}";
+/// title is a pill (hs-d266): the title reversed (`#[reverse]`..`#[noreverse]`),
+/// a block in the border's colour with the text in the background colour, between
+/// a rounded cap on each side, `\u{e0b6}` and `\u{e0b4}`. The caps are drawn without
+/// reverse, so tmux gives them the border style's foreground: blue on the focused
+/// pane, the border colour elsewhere (checked on a private server).
+pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\u{e0b6}#[reverse] #{@cpd_title} #[noreverse]\u{e0b4},},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
+\u{e0b6}#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
+#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]\u{e0b4}}}}";
 
-/// The `pane-died` hook (contract §6.1): only a pane that carries `@cpd_view`
-/// (a view of the cockpit) is respawned when its program dies; a Lead or
-/// engine pane stays dead, as `remain-on-exit` leaves it, so engine E2 sees
-/// its death. tmux runs it with the dead pane as the current target.
-pub const PANE_DIED_HOOK: &str = r##"if -F "#{@cpd_view}" "respawn-pane""##;
+/// What the supervising hooks run when the engine's pane died or its window is
+/// gone (contract §6.6): `watch --ensure --wait`, which starts the engine again
+/// (commands.md §12). `cpd` is found on `PATH` as for every pane cpd starts
+/// (`session::PROGRAM`), and its output is dropped, since a `run-shell -b` that
+/// prints puts the active pane into view mode; `ensure` logs its failures in
+/// `run/watch.log`. A macro, so both hooks' strings are built from this one.
+macro_rules! engine_ensure {
+    () => {
+        "run-shell -b 'cpd watch --ensure --wait >/dev/null 2>&1'"
+    };
+}
+
+/// The `pane-died` hook (contract §6.1, §6.6): a pane that carries `@cpd_view`
+/// (a view of the cockpit) is respawned when its program dies; the pane of the
+/// engine (window `watch`, `host::layout::WATCH_WINDOW`) starts the engine
+/// again with `engine_ensure!`; any other pane (a Lead's) stays dead, as
+/// `remain-on-exit` leaves it, so engine E2 sees its death. tmux runs it with
+/// the dead pane as the current target.
+pub const PANE_DIED_HOOK: &str = concat!(
+    r##"if -F "#{@cpd_view}" "respawn-pane" "if -F '#{==:#{window_name},watch}' \""##,
+    engine_ensure!(),
+    r##"\"""##
+);
+
+/// The `window-unlinked` hook (contract §6.6): the engine's window is gone
+/// (`kill-window`, an install's restart), so no pane died to say so: start the
+/// engine again with `engine_ensure!`. The window is already gone, so its name
+/// is what tells it was the engine's (`hook_window_name`).
+pub const WINDOW_UNLINKED_HOOK: &str =
+    concat!(r##"if -F "#{==:#{hook_window_name},watch}" ""##, engine_ensure!(), r##"""##);
 
 /// Every global option, key binding and hook of contract §6.1, each as the
 /// arguments after `tmux -L <socket>`, in the order of the reference's
@@ -94,10 +122,17 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "pane-border-lines", "heavy"],
     &["set", "-g", "pane-border-format", BORDER_FORMAT],
     &["set", "-g", "pane-active-border-style", "fg=blue"],
+    // tmux 3.8 greys popups and menus by default (bg=themedarkgrey); the cockpit's dialogs keep the terminal's own
+    // background (User, hs-d353). `-q`: an older tmux does not know them.
+    &["set", "-gq", "popup-style", "default"],
+    &["set", "-gq", "popup-border-style", "default"],
+    &["set", "-gq", "menu-style", "default"],
     &["set", "-g", "remain-on-exit", "on"],
     &["set", "-g", "set-titles", "on"],
     &["set", "-g", "set-titles-string", SET_TITLES_STRING],
     &["set-hook", "-g", "pane-died", PANE_DIED_HOOK],
+    &["set-hook", "-g", "window-unlinked", WINDOW_UNLINKED_HOOK],
+    &["set", "-s", "exit-empty", "off"],
     &["bind", "-T", "root", "MouseDown1Pane", "select-pane -t = ; send-keys -M"],
     &["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK],
 ];
@@ -114,19 +149,62 @@ const SET_TITLES_STRING: &str = "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_s
 /// mode (research `statusbar-no-row.md` 2c).
 pub const STATUS_CLICK: &str = "cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null";
 
-/// The StatusBar (contract §6.1): the cockpit session's `status-format[0]`.
-/// Three one-glyph buttons, each a grey block in its own click range, one
-/// space apart outside the ranges (a range also owns the cell after it, so
-/// touching ranges would steal each other's first cell); at the right, the
-/// Inbox counter the engine keeps in `@cpd_inbox`, one space, then the workers
-/// counts (User, hs-d198): the long form the engine keeps in `@cpd_workers`
-/// when `#{client_width}` is at least `@cpd_workers_width` (the visible width
-/// of the counter, the space and the long form) plus 7 (the buttons' 5 cells
-/// and 2 of air), else the short form in `@cpd_workers_short`.
-pub const STATUS_FORMAT: &str = "#[range=user|reset]#[fg=colour8,reverse]⧉#[norange,default] \
-#[range=user|legend]#[fg=colour8,reverse]?#[norange,default] \
-#[range=user|logs]#[fg=colour8,reverse]▤#[norange,default]#[align=right]#{@cpd_inbox} \
-#{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},7}},#{@cpd_workers},#{@cpd_workers_short}}";
+// The StatusBar's button glyphs (hs-d235, Material Design). Macros, because `concat!` takes literals only.
+macro_rules! reset_glyph { () => { "\u{F0A1D}" }; } // md-view_dashboard_outline
+macro_rules! legend_glyph { () => { "\u{F0A01}" }; } // md-map_legend
+macro_rules! logs_glyph { () => { "\u{F09ED}" }; } // md-text_box_outline
+
+/// The reset-layout button's glyph, U+F0A1D md-view_dashboard_outline.
+pub const RESET_GLYPH: &str = reset_glyph!();
+/// The legend button's glyph, U+F0A01 md-map_legend.
+pub const LEGEND_GLYPH: &str = legend_glyph!();
+/// The logs button's glyph, U+F09ED md-text_box_outline.
+pub const LOGS_GLYPH: &str = logs_glyph!();
+
+// The preview pill's width (0 without a preview): the space before it, two caps, ` preview: ` and ` ` around the value.
+macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}" }; }
+// Whether the long workers form fits: the right items' long width, the buttons' 11 cells and 2 of air, and the preview.
+macro_rules! long_fits {
+    () => {
+        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},", preview_width!(), "}}")
+    };
+}
+
+/// The StatusBar (contract §6.1): the cockpit session's `status-format[0]`, a
+/// full line (hs-d266, hs-d322). Three one-glyph buttons, each a pill (a cap
+/// `\u{e0b6}`, the glyph as a grey block, a cap `\u{e0b4}`, 3 cells) in its own click
+/// range, one space apart outside the ranges (a range also owns the cell after
+/// it, so touching ranges would steal each other's first cell). Then a grey
+/// (colour 8) `\u{2500}` line, `#{R:\u{2500},n}`, over the free width: `#{client_width}` minus
+/// the buttons' 11 cells minus the width of the right items in the form drawn.
+/// At the right, each its own pill on `bg=colour236`: the Inbox counter the
+/// engine keeps in `@cpd_inbox`, one space, then the workers counts (User,
+/// hs-d198): the long form in `@cpd_workers` when `#{client_width}` is at least
+/// `@cpd_workers_width` (the visible width of the right items in the long form,
+/// caps included) plus 13 (the buttons' 11 cells and 2 of air), else the short
+/// form in `@cpd_workers_short`, whose width is `@cpd_workers_short_width`.
+///
+/// While `@cpd_preview` is set (`scripts/preview-tui.sh on`, hs-n264), a yellow
+/// pill ` preview: <value> ` follows the buttons, after one space, and the line
+/// is shorter by its width (`#{n:@cpd_preview}` + 14: the space, two caps and
+/// ` preview: ` and ` `). Styles inside a conditional are one attribute per
+/// `#[…]`, because a comma there would split the branch.
+///
+/// `push-default` makes `bg=colour236` the pill's default, so that the `#[default]`
+/// the engine's texts end their coloured parts with does not end the pill.
+pub const STATUS_FORMAT: &str = concat!(
+    "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]", reset_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange] ",
+    "#[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]", legend_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange] ",
+    "#[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]", logs_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
+    "#{?#{@cpd_preview}, #[fg=yellow]\u{e0b6}#[reverse] preview: #{@cpd_preview} #[noreverse]\u{e0b4}#[default],}",
+    "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{client_width},11},", preview_width!(), "},",
+    "#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}}}}",
+    "#[default]#[align=right]",
+    "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default] ",
+    "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]",
+    "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}",
+    "#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]"
+);
 
 /// The cockpit session's own options (contract §6.1), set with `-t`: `status`
 /// is a session option, and `-g` would give `cpd-work` a row too.
@@ -457,6 +535,14 @@ impl Tmux {
         Ok(())
     }
 
+    /// The server's option `@cpd_preview` (`show -gqv`), `None` when unset or empty:
+    /// `scripts/preview-tui.sh on` sets it while the views run a preview build.
+    pub fn preview(&self) -> Result<Option<String>, CpdError> {
+        let out = self.run(&strings(&["show", "-gqv", "@cpd_preview"]))?;
+        let value = out.trim();
+        Ok((!value.is_empty()).then(|| value.to_owned()))
+    }
+
     /// `display -p '#{version}'`: the version of the tmux the server runs
     /// (`3.4`, `next-3.7`), which is the one it was started with.
     pub fn server_version(&self) -> Result<String, CpdError> {
@@ -636,6 +722,10 @@ impl Tmux {
             // The server was starting (another caller's `new-session`) when the
             // first call connected: list again, once.
             out = self.output(&args)?;
+            // A server with no session (`exit-empty off`, §6.1) has no pane: tmux says "no current target".
+            if !out.status.success() && String::from_utf8_lossy(&out.stderr).trim() == "no current target" {
+                return Ok(Vec::new());
+            }
             if !out.status.success() {
                 return Err(self.failed(&args, &out));
             }
@@ -902,6 +992,15 @@ mod tests {
     fn a_status_click_runs_cpd_quietly() {
         assert!(STATUS_CLICK.starts_with(&format!("{} tui action ", crate::session::PROGRAM)));
         assert!(STATUS_CLICK.ends_with(" 2>/dev/null"));
+    }
+
+    #[test]
+    fn the_engines_hooks_name_its_window_and_start_it_again_quietly() {
+        for hook in [PANE_DIED_HOOK, WINDOW_UNLINKED_HOOK] {
+            assert!(hook.contains(&format!("_name}},{}}}", super::super::layout::WATCH_WINDOW)), "{hook}");
+            assert!(hook.contains("cpd watch --ensure --wait >/dev/null 2>&1"), "{hook}");
+        }
+        assert!(WINDOW_UNLINKED_HOOK.contains("#{hook_window_name}"));
     }
 
     #[test]

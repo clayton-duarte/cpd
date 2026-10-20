@@ -36,6 +36,7 @@ use std::time::Duration;
 use crate::args::{PlanArg, PrArg, PrTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
+use crate::git::gate::Slots;
 use crate::git::{self, GateHooks, HookOutcome, Refused, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName};
@@ -53,7 +54,7 @@ pub enum Command {
     Add(AddArgs),
     /// Change a waiting PR before the lock (§9.5)
     Edit(EditArgs),
-    /// Remove a PR from the Plan before the lock (§9.6)
+    /// Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6)
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
     Start(StartArgs),
@@ -150,6 +151,9 @@ pub struct CancelArgs {
     /// The PR key
     #[arg(value_name = "key")]
     key: PrKey,
+    /// Cancel a dispatch PR whose merged work another PR carried: that PR, as <plan>/<key> (a bare <key> is of the Plan)
+    #[arg(long = "superseded-by", value_name = "ref")]
+    superseded_by: Option<add::PrRef>,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -271,6 +275,7 @@ fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
         base: &pr.base,
         pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreStart) },
         pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
+        slots: Slots::new(&env.home, env.config.test_concurrency),
     }
 }
 

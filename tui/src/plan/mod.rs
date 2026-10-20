@@ -74,7 +74,7 @@ fn pulse_due(stale: bool, since: Duration) -> bool {
     since >= if stale { COALESCE } else { PULSE_REFRESH }
 }
 
-/// While a spinner is on screen ([`Centre::spins`], [`pulse_spins`]) the view redraws this often (one frame:
+/// While a spinner is on screen ([`Centre::spins`]; Pulse has none since hs-d327) the view redraws this often (one frame:
 /// palette.rs); a redraw reads nothing from the store. With none, it draws only when something changed.
 const FRAME: Duration = Duration::from_millis(100);
 
@@ -138,7 +138,7 @@ struct Centre {
 impl Centre {
     /// A Job runs: its pill's icon is the spinner, which turns with the clock.
     fn spins(&self) -> bool {
-        self.plan.jobs.iter().any(|j| flow::Live::of(j) == Some(flow::Live::Running))
+        self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == Some(flow::Live::Running))
     }
 
     /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
@@ -146,16 +146,11 @@ impl Centre {
     fn turn(&mut self, frame: usize) -> bool {
         let turned = frame != self.frame && self.spins();
         if turned {
-            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, frame).with_margin(MARGIN);
+            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, &self.plan.needs_user, frame).with_margin(MARGIN);
             self.frame = frame;
         }
         turned
     }
-}
-
-/// A Lead of Pulse is working: its dot is the spinner, which turns with the clock.
-fn pulse_spins(pulse: &Pulse) -> bool {
-    pulse.rows.iter().any(|r| r.dot == read::Dot::Working)
 }
 
 /// One read of the store: the Pulse of the Manager in the chat slot, or the Plan of the Lead there, if any, and the
@@ -179,7 +174,7 @@ fn snapshot(store: &mut Store, home: &CpdHome, width: u16, now_ms: i64) -> Resul
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, frame).with_margin(MARGIN);
+    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(MARGIN);
     let review = ReviewRow::of(&plan, home, || review_host(&mut std::io::sink()));
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, review, boxes, frame }), pulse: None })
 }
@@ -259,7 +254,7 @@ impl Ui {
     }
 
     /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`, the note).
-    fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse, frame: usize) {
+    fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse) {
         let mut window = f.area();
         let mut parts: Vec<Span<'static>> =
             self.error.iter().map(|e| Span::styled(e.clone(), palette::note())).collect();
@@ -278,7 +273,7 @@ impl Ui {
             window = rows;
         }
         self.body = window.inner(MARGIN);
-        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset, frame);
+        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset);
     }
 
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
@@ -438,8 +433,6 @@ fn show(
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
     // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
     let mut redraw = true;
-    // the spinner frame Pulse was last drawn at
-    let mut pulse_frame = palette::frame(SystemTime::now());
     // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); a result is the note to show, or none
     // to leave it
     let mut worker = Background::<Option<String>>::new();
@@ -454,7 +447,6 @@ fn show(
         if let Some(c) = snap.centre.as_mut() {
             redraw |= c.turn(frame);
         }
-        redraw |= snap.pulse.as_ref().is_some_and(pulse_spins) && frame != pulse_frame;
         // the scroll offsets file follows the chart's offset (a write only when they changed, at most every SAVE_EVERY)
         if let Some(c) = snap.centre.as_ref() {
             ui.remember(&c.plan.plan);
@@ -465,10 +457,10 @@ fn show(
         }
         if redraw {
             terminal.draw(|f| match snap.pulse.as_ref() {
-                Some(pulse) => ui.draw_pulse(f, pulse, frame),
+                Some(pulse) => ui.draw_pulse(f, pulse),
                 None => ui.draw(f, snap.centre.as_ref()),
             })?;
-            (redraw, pulse_frame) = (false, frame);
+            redraw = false;
         }
         if !event::poll(poll.min(FRAME))? {
             // idle: look for Events, every `poll`
@@ -644,6 +636,7 @@ mod tests {
                 state: read::PrState::Open,
                 url: "https://github.com/acme/api/pull/12".into(),
                 conflicting: false,
+                lead_working: false,
             }),
         }];
         let plan = PlanBoxes {
@@ -652,9 +645,10 @@ mod tests {
             prs,
             jobs: Vec::new(),
             review: None,
+            needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, 0).with_margin(MARGIN);
+        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("lead-ship").unwrap(),
             name: "lead".into(),
@@ -817,9 +811,10 @@ mod tests {
             prs: vec![node],
             jobs: (0..jobs).map(job).collect(),
             review: None,
+            needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, 0).with_margin(MARGIN);
+        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
             name: "lead".into(),
@@ -1013,7 +1008,7 @@ mod tests {
     }
 
     fn pulse_of(rows: &[&str]) -> Pulse {
-        let bucket = |count| read::Bucket { count, job_merged: false, pr_merged: false, worker_ran: false };
+        let bucket = |count| read::Bucket { count, kind: Some(read::Kind::Other), job_merged: false, pr_merged: false, worker_ran: false };
         let rows = rows
             .iter()
             .map(|id| read::PulseRow {
@@ -1031,7 +1026,7 @@ mod tests {
 
     fn pulse_screen(ui: &mut Ui, pulse: &Pulse, height: u16) -> (Buffer, Vec<String>) {
         let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
-        terminal.draw(|f| ui.draw_pulse(f, pulse, 0)).unwrap();
+        terminal.draw(|f| ui.draw_pulse(f, pulse)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = (0..height)
             .map(|y| (0..60).map(|x| buf[(x, y)].symbol().to_owned()).collect::<String>().trim_end().to_owned())
@@ -1045,8 +1040,7 @@ mod tests {
         let mut ui = Ui::default();
         let (_, rows) = pulse_screen(&mut ui, &pulse, 5); // margin row, then 3 rows, then the margin row
         assert_eq!(rows[0], "");
-        let idle = palette::dot_span(read::Dot::Idle, 0, false).content;
-        assert!(rows[1].starts_with(&format!("  {idle} aa  ")), "{:?}", rows[1]);
+        assert!(rows[1].starts_with("  aa  "), "{:?}", rows[1]);
         assert!(rows[1].ends_with("         3m"), "{:?}", rows[1]);
         assert_eq!(ui.body, Rect::new(2, 1, 56, 3));
         let lead = |ui: &Ui, y| {
@@ -1057,7 +1051,7 @@ mod tests {
         ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
         assert_eq!(ui.pulse_offset, 3, "clamped at the last row");
         let (_, rows) = pulse_screen(&mut ui, &pulse, 5);
-        assert!(rows[1].starts_with(&format!("  {idle} dd  ")), "{:?}", rows[1]);
+        assert!(rows[1].starts_with("  dd  "), "{:?}", rows[1]);
         assert_eq!(lead(&ui, 1).as_deref(), Some("lead-dd"));
         assert_eq!(lead(&ui, 3).as_deref(), Some("lead-ff"));
     }
@@ -1146,7 +1140,7 @@ mod tests {
         assert!(snap.centre.is_none());
         assert_eq!(pulse.context.as_str(), "ctx");
         assert_eq!(pulse.rows.iter().map(|r| r.plan.as_str()).collect::<Vec<_>>(), ["p1"]);
-        assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 21, "as wide as the pane allows for ids of any width");
+        assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 13, "as wide as the pane allows for ids of any width");
 
         fixture(&mut store, &moved("lead"));
         let snap = snapshot(&mut store, &home, 125, now).unwrap();

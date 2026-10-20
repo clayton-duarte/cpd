@@ -25,7 +25,7 @@ use ratatui::crossterm::event::{self, Event};
 use ratatui::style::Style;
 use ratatui::text::Line;
 
-use super::read::{self, Worker};
+use super::read::{self, AttemptStatus, Outcome, Worker};
 use super::runner::kept;
 use super::{Capture, run_view};
 use cpd_core::args::PlanArg;
@@ -138,22 +138,30 @@ fn event_loop(
     }
 }
 
+/// The foot's text: the Attempt, its status and its Session's state, then `failed: <cause>` once the Attempt ended failed
+/// (the same cause as its Job's `failed_cause`), so that the `job-stuck` click shows why the Job is stuck.
+fn foot(worker: &Worker) -> String {
+    let session = worker.session.as_ref().map_or_else(
+        || "no Session yet".to_owned(),
+        |s| match &s.state_label {
+            Some(label) => format!("{} {label}", s.state.as_str()),
+            None => s.state.as_str().to_owned(),
+        },
+    );
+    let mut foot = format!("{} {} · {session}", worker.attempt.id, worker.attempt.status.as_str());
+    if let (AttemptStatus::Ended, Some(Outcome::Failed), Some(cause)) =
+        (worker.attempt.status, worker.attempt.outcome, worker.attempt.cause)
+    {
+        foot.push_str(&format!(" · failed: {}", cause.as_str()));
+    }
+    foot
+}
+
 /// Takes the foot's status from `snapshot` and re-reads the session file when it is not the one `shown`.
 fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>) {
     let Some(worker) = snapshot else { return };
     let session = worker.session.as_ref();
-    view.status = format!(
-        "{} {} · {}",
-        worker.attempt.id,
-        worker.attempt.status.as_str(),
-        session.map_or_else(
-            || "no Session yet".to_owned(),
-            |s| match &s.state_label {
-                Some(label) => format!("{} {label}", s.state.as_str()),
-                None => s.state.as_str().to_owned(),
-            },
-        ),
-    );
+    view.status = foot(worker);
     let Some(path) = session.and_then(|s| s.file.as_deref()) else {
         *shown = None;
         view.set_lines(vec![placeholder("No session file yet: the Worker has not started its Session.")]);
@@ -182,4 +190,64 @@ fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>
 
 fn placeholder(text: &str) -> Line<'static> {
     Line::styled(format!(" {text}"), Style::new().dim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::read::{AttemptDetail, Cause, JobStatus, Origin};
+    use cpd_core::config::Tier;
+
+    fn worker(status: AttemptStatus, outcome: Option<Outcome>, cause: Option<Cause>) -> Worker {
+        Worker {
+            plan: PlanId::parse("ship").unwrap(),
+            attempt: AttemptDetail {
+                id: AttemptId::parse("api-a1").unwrap(),
+                tier: Tier::parse("S3").unwrap(),
+                origin: Origin::Ladder,
+                status,
+                outcome,
+                cause,
+                branch: "cpd/ship--api-a1".into(),
+                worktree: "/w".into(),
+                worker_session: None,
+                spec_path: None,
+                submitted_sha: None,
+                submitted_at: None,
+                check_tail: None,
+                merged_sha: None,
+                nudged: false,
+                stop_request: None,
+                metrics: None,
+                started_at: "2026-01-03T00:01:00.000Z".into(),
+                ended_at: None,
+            },
+            job_title: "Job api".into(),
+            job_status: JobStatus::Failed,
+            session: None,
+            escalations: Vec::new(),
+            events_cursor: 1,
+        }
+    }
+
+    #[test]
+    fn the_foot_of_an_attempt_that_ended_failed_says_why() {
+        let failed = worker(AttemptStatus::Ended, Some(Outcome::Failed), Some(Cause::Crashed));
+        assert_eq!(foot(&failed), "api-a1 ended · no Session yet · failed: crashed");
+        let merge = worker(AttemptStatus::Ended, Some(Outcome::Failed), Some(Cause::MergeConflict));
+        assert_eq!(foot(&merge), "api-a1 ended · no Session yet · failed: merge_conflict");
+    }
+
+    #[test]
+    fn the_foot_of_any_other_attempt_says_no_failure() {
+        assert_eq!(foot(&worker(AttemptStatus::Running, None, None)), "api-a1 running · no Session yet");
+        assert_eq!(
+            foot(&worker(AttemptStatus::Ended, Some(Outcome::Merged), Some(Cause::Merged))),
+            "api-a1 ended · no Session yet"
+        );
+        assert_eq!(
+            foot(&worker(AttemptStatus::Ended, Some(Outcome::Cancelled), Some(Cause::CancelRequested))),
+            "api-a1 ended · no Session yet"
+        );
+    }
 }

@@ -10,7 +10,8 @@
 //! - [`widgets()`]: slots, the engine, the Plans, the open pull requests, open Escalations and the latest Events
 //!   (`plan list`); the views read only what they draw: [`open_prs()`] (the Dispatch column) and [`slots()`] (the StatusBar);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
-//! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`).
+//! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`); [`latest_attempt()`]: the Attempt
+//!   a Job's Worker pane opens (the tree's `job-stuck` click).
 //!
 //! Each read is one [`Store::read`] transaction (contract §4.2): it takes no
 //! lock, waits for no writer, writes nothing, spawns nothing, and runs a fixed
@@ -36,7 +37,7 @@ mod widgets;
 mod worker;
 
 pub use flow::{
-    AttemptNode, ChatSlot, Flow, JobNode, OpenEscalation, PlanBoxes, PrNode, PrStatus, Pull, Review, WorkerRef, chat_slot, flow,
+    AttemptNode, ChatSlot, Flow, JobNode, NeedsUser, OpenEscalation, PlanBoxes, PrNode, PrStatus, Pull, Review, WorkerRef, chat_slot, flow,
     plan_boxes,
 };
 pub use shared::{
@@ -46,9 +47,9 @@ pub use shared::{
 pub use dot::Dot;
 pub use follow::{Changes, Follow};
 pub use logs::{Logs, logs, logs_after};
-pub use pulse::{BUCKET_MINUTES, Bucket, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
+pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
 pub use tree::{ContextNode, PlanNode, Tree, snooze_end, tree};
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, slots, widgets,
 };
-pub use worker::{AttemptDetail, AttemptEscalation, Worker, worker};
+pub use worker::{AttemptDetail, AttemptEscalation, Worker, latest_attempt, worker};

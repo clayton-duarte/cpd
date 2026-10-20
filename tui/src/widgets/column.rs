@@ -10,10 +10,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use super::host::Usage;
+use crate::dialog::scroll::{self, Cue};
 use crate::link;
-use crate::palette::{self, Meaning};
+use crate::palette;
 use crate::section;
-use crate::read::{OpenPr, PrState, ReviewDecision};
+use crate::read::{Dot, OpenPr, PrState, ReviewDecision};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
@@ -134,9 +135,11 @@ fn truncate(text: &str, max: usize) -> String {
 /// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󰏌` in the last column, then
 /// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󰏌`.
 /// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
-/// A conflicting one adds ` conflict` in red after the review (kept red under the active and dim styles).
+/// A conflicting one adds ` conflict` after the review (the colour is kept under the active and dim styles). A pull request
+/// a Plan owns draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them, hs-d302); one no Plan owns, in red.
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
-fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
+/// One whose Lead is working shows the Lead's dot, `palette::SPINNER[frame]` (the tree's), after the state word: `  open 󰝦 …`.
+fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
     let gap = " ".repeat(width.saturating_sub(name.chars().count() + 1));
     let state_text = if pr.draft { "draft" } else { "open" };
@@ -145,19 +148,27 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
         ReviewDecision::ChangesRequested => "changes requested",
         ReviewDecision::None => "no review",
     };
-    let (icon, checks) = palette::checks(pr.checks);
+    let owned = pr.lead.is_some();
+    let (icon, checks) = palette::checks_of(pr.checks, owned);
     let conflict = " conflict";
-    let used = 2 + state_text.chars().count() + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
+    let dot = pr.lead_working.then(|| palette::dot_span(Dot::Working, frame, false));
+    let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
     let mut spans = vec![
         "  ".into(),
         Span::styled(state_text, palette::fg(palette::pr_state(PrState::Open))),
+    ];
+    if let Some(dot) = dot {
+        spans.extend([" ".into(), dot]);
+    }
+    spans.extend([
         " ".into(),
         Span::styled(icon, palette::fg(checks)),
         " ".into(),
         review.into(),
-    ];
+    ]);
     if pr.conflicting {
-        spans.push(Span::styled(conflict, palette::fg(Meaning::Failed)));
+        let (_, meaning) = if owned { palette::PR_CONFLICT_OWNED } else { palette::PR_CONFLICT };
+        spans.push(Span::styled(conflict, palette::fg(meaning)));
     }
     let reserved = if pr.clean { 2 } else { 0 };
     let room = width.saturating_sub(used + 2 + reserved);
@@ -195,9 +206,9 @@ pub(crate) struct Window {
     pub first: usize,
     /// How many are drawn.
     pub shown: usize,
-    /// A ` ▲ <first> more` row opens the list.
+    /// A `▲ <first> more` row (right-aligned, `scroll::cue`) opens the list.
     pub cue_above: bool,
-    /// How many are hidden below: a ` ▼ <n> more` row ends the list when not 0.
+    /// How many are hidden below: a `▼ <n> more` row ends the list when not 0.
     pub below: usize,
 }
 
@@ -240,8 +251,9 @@ pub struct Drawn {
 
 /// Draws the column in `area`: a blank row, the machine, then the PRs under their header. The PRs section
 /// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. A non-empty `note`
-/// replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR or a merge icon.
-pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note: &str, scroll: usize) -> Drawn {
+/// replaces the column's last row, in `palette::note()`. `frame` is the spinner's frame (`palette::frame`) for the rows whose
+/// Lead is working. Returns where a click reaches an owned PR or a merge icon.
+pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note: &str, scroll: usize, frame: usize) -> Drawn {
     let [_top, home, _above_prs, prs_header, _below_prs, prs] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(2),
@@ -265,7 +277,7 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
     // The `󰏌` is the last column of the section's first line of each PR, the merge icon that of its second.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
-        text.extend(pr_lines(pr, usize::from(prs.width)));
+        text.extend(pr_lines(pr, usize::from(prs.width), frame));
         rows.push(PrRow {
             area: Rect::new(prs.x, *y, prs.width, 2),
             pull: format!("{}#{}", pr.repo, pr.number),
@@ -286,10 +298,12 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
     }
     f.render_widget(Paragraph::new(text), list);
     if win.cue_above {
-        f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), Rect::new(prs.x, prs.y, prs.width, 1));
+        let cue = scroll::cue(Cue::Above, win.first, usize::from(prs.width));
+        f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.y, prs.width, 1));
     }
     if win.below > 0 && prs.height > 0 {
-        f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
+        let cue = scroll::cue(Cue::Below, win.below, usize::from(prs.width));
+        f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
     }
     for (y, pr) in &shown {
         if let Some(x) = arrow_x {
@@ -310,6 +324,8 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
 
+    use crate::palette::Meaning;
+
     use super::*;
     fn drawn(width: u16, height: u16, open: &[OpenPr], note: &str) -> (Buffer, Vec<Hit>) {
         let (buf, d) = scrolled(width, height, open, note, 0);
@@ -317,10 +333,14 @@ mod tests {
     }
 
     fn scrolled(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize) -> (Buffer, Drawn) {
+        at_frame(width, height, open, note, scroll, 0)
+    }
+
+    fn at_frame(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize, frame: usize) -> (Buffer, Drawn) {
         let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
-        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, note, scroll))).unwrap();
+        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, note, scroll, frame))).unwrap();
         (terminal.backend().buffer().clone(), out.unwrap())
     }
 
@@ -345,6 +365,7 @@ mod tests {
             clean: false,
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
+            lead_working: false,
         }
     }
 
@@ -359,13 +380,13 @@ mod tests {
             terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
             row(terminal.backend().buffer(), 0)
         };
-        assert_eq!(header(20, Some(3)), "━━ PRs ━━━━━━━━ 3 ━━");
-        assert_eq!(header(30, Some(12)), "━━ PRs ━━━━━━━━━━━━━━━━━ 12 ━━");
-        assert_eq!(header(20, None), "━━ PRs ━━━━━━━━━━━━━");
+        assert_eq!(header(20, Some(3)), format!("╭─\u{E0B6}PRs\u{E0B4}{}3", "─".repeat(12)));
+        assert_eq!(header(30, Some(12)), format!("╭─\u{E0B6}PRs\u{E0B4}{}12", "─".repeat(30 - 9)));
+        assert_eq!(header(20, None), format!("╭─\u{E0B6}PRs\u{E0B4}{}", "─".repeat(13)));
         let buf = buffer(20, 15);
-        assert_eq!(row(&buf, 4), "━━ PRs ━━━━━━━━ 0 ━━");
+        assert_eq!(row(&buf, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)));
         let two = [pr(1, Some("l-a")), pr(2, None)];
-        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), "━━ PRs ━━━━━━━━ 2 ━━");
+        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}2", "─".repeat(12)));
     }
 
     #[test]
@@ -377,7 +398,7 @@ mod tests {
             " homeserver".to_owned(),
             " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
             "".to_owned(),
-            "━━ PRs ━━━━━━━━ 0 ━━".to_owned(),
+            format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
@@ -456,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_pr_shows_conflict_in_red_after_its_review_and_others_do_not() {
+    fn an_owned_conflicting_pr_shows_conflict_in_the_waiting_colour_after_its_review_and_others_do_not() {
         let mut p = pr(7, Some("l-a"));
         assert_eq!(second_line(&p, 40).0, format!("  open {} no review  A title", palette::CHECKS_PASSED));
         p.conflicting = true;
@@ -464,20 +485,44 @@ mod tests {
         assert_eq!(line, format!("  open {} no review conflict  A title", palette::CHECKS_PASSED));
         let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
         for dx in 0..8 {
-            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed));
+            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Waiting), "its Lead fixes it: waiting, not red");
         }
-        assert_ne!(buf[(x - 2, 7)].fg, palette::color(Meaning::Failed), "the review is not red");
+        assert_ne!(buf[(x - 2, 7)].fg, palette::color(Meaning::Waiting), "the review is not waiting");
     }
 
     #[test]
-    fn conflict_keeps_its_red_under_the_active_and_dim_styles() {
-        for (active, lead, modifier) in [(true, Some("l-a"), Modifier::REVERSED | Modifier::BOLD), (false, None, Modifier::DIM)] {
+    fn an_unowned_conflicting_pr_keeps_conflict_red() {
+        let mut p = pr(7, None);
+        p.conflicting = true;
+        let (line, buf) = second_line(&p, 40);
+        let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
+        for dx in 0..8 {
+            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed), "no Plan owns it: the User's to fix");
+        }
+    }
+
+    #[test]
+    fn failed_checks_are_waiting_on_an_owned_pr_and_red_on_an_unowned_one() {
+        for (lead, meaning) in [(Some("l-a"), Meaning::Waiting), (None, Meaning::Failed)] {
+            let mut p = pr(7, lead);
+            p.checks = crate::read::Checks::Failed;
+            let (line, buf) = second_line(&p, 40);
+            let x = line.find(palette::CHECKS_FAILED).map(|b| line[..b].chars().count() as u16).unwrap();
+            assert_eq!(buf[(x, 7)].fg, palette::color(meaning), "{lead:?}");
+        }
+    }
+
+    #[test]
+    fn conflict_keeps_its_colour_under_the_active_and_dim_styles() {
+        for (active, lead, modifier, meaning) in
+            [(true, Some("l-a"), Modifier::REVERSED | Modifier::BOLD, Meaning::Waiting), (false, None, Modifier::DIM, Meaning::Failed)]
+        {
             let mut p = pr(7, lead);
             p.conflicting = true;
             p.active = active;
             let (line, buf) = second_line(&p, 40);
             let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
-            assert_eq!(buf[(x, 7)].fg, palette::color(Meaning::Failed));
+            assert_eq!(buf[(x, 7)].fg, palette::color(meaning));
             assert!(buf[(x, 7)].modifier.contains(modifier));
         }
     }
@@ -490,6 +535,46 @@ mod tests {
         assert_eq!(second_line(&p, 28).0, open);
         assert_eq!(second_line(&p, 32).0, open);
         assert_eq!(second_line(&p, 33).0, format!("{open}  A t…"));
+    }
+
+    fn second_at(pr: &OpenPr, width: u16, frame: usize) -> (String, Buffer) {
+        let (buf, _) = at_frame(width, 20, &[pr.clone()], "", 0, frame);
+        (row(&buf, 7), buf)
+    }
+
+    #[test]
+    fn an_owned_pr_whose_lead_works_shows_the_spinner_frame_after_its_state_and_it_turns_with_the_frame() {
+        let mut p = pr(7, Some("l-a"));
+        p.lead_working = true;
+        for frame in 0..palette::SPINNER.len() {
+            let (line, buf) = second_at(&p, 40, frame);
+            assert_eq!(line, format!("  open {} {} no review  A title", palette::SPINNER[frame], palette::CHECKS_PASSED), "frame {frame}");
+            assert_eq!(buf[(2, 7)].fg, palette::color(palette::pr_state(PrState::Open)), "the state keeps its colour");
+        }
+        // the frame is the only change between two draws
+        assert_ne!(second_at(&p, 40, 1).1, second_at(&p, 40, 2).1);
+    }
+
+    #[test]
+    fn an_idle_lead_or_an_unowned_pr_shows_no_spinner() {
+        let owned = pr(7, Some("l-a"));
+        let unowned = pr(8, None);
+        for p in [&owned, &unowned] {
+            for frame in 0..palette::SPINNER.len() {
+                let (line, _) = second_at(p, 40, frame);
+                assert_eq!(line, format!("  open {} no review  A title", palette::CHECKS_PASSED), "frame {frame}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_spinner_keeps_the_conflict_flag_and_the_title_cut_to_the_width() {
+        let mut p = pr(7, Some("l-a"));
+        p.lead_working = true;
+        p.conflicting = true;
+        let open = |frame: usize| format!("  open {} {} no review conflict", palette::SPINNER[frame], palette::CHECKS_PASSED);
+        assert_eq!(second_at(&p, 30, 2).0, open(2), "the title is cut first");
+        assert_eq!(second_at(&p, 35, 2).0, format!("{}  A t…", open(2)));
     }
 
     #[test]
@@ -604,10 +689,10 @@ mod tests {
         let (buf, d) = scrolled(30, height(5), &many(5), "", 0);
         let got = section(&buf);
         assert_eq!(names(&got), ["acme/repo#1", "acme/repo#2"]);
-        assert_eq!(got.last().unwrap(), " ▼ 3 more", "{got:#?}");
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"), "{got:#?}");
         assert!(!got.iter().any(|r| r.contains('▲')));
         let y = 6 + 4;
-        assert!((0..9).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "the cue is dim");
+        assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "the cue is dim");
         assert_eq!(d.prs, Rect::new(0, 6, 30, 5));
         assert_eq!(d.max_scroll, 3);
     }
@@ -616,11 +701,11 @@ mod tests {
     fn a_cue_above_appears_after_a_scroll_and_each_cue_takes_a_row_of_the_list() {
         let (buf, _) = scrolled(30, height(5), &many(5), "", 1);
         let got = section(&buf);
-        assert_eq!(got[0], " ▲ 1 more", "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 1 more"), "{got:#?}");
         // 5 rows less both cues leave 3: one pull request, and a spare row
         assert_eq!(names(&got), ["acme/repo#2"]);
-        assert_eq!(got.last().unwrap(), " ▼ 3 more");
-        assert!(buf[(1, 6)].modifier.contains(Modifier::DIM));
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"));
+        assert!(buf[(29, 6)].modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -629,7 +714,7 @@ mod tests {
         let (buf, d) = scrolled(30, height(5), &many(5), "", 99);
         let got = section(&buf);
         assert_eq!(d.max_scroll, 3);
-        assert_eq!(got[0], " ▲ 3 more", "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 3 more"), "{got:#?}");
         assert_eq!(names(&got), ["acme/repo#4", "acme/repo#5"]);
         assert!(!got.iter().any(|r| r.contains('▼')), "{got:#?}");
         assert_eq!(scrolled(30, height(5), &many(5), "", 3).0, buf);
@@ -642,8 +727,8 @@ mod tests {
     fn a_hit_area_is_that_of_the_row_drawn_after_a_scroll() {
         let (buf, d) = scrolled(30, height(7), &many(6), "", 2);
         let got = section(&buf);
-        assert_eq!(got[0], " ▲ 2 more", "{got:#?}");
-        assert_eq!(got.last().unwrap(), " ▼ 2 more", "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 2 more"), "{got:#?}");
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 2 more"), "{got:#?}");
         let leads: Vec<(&str, Rect)> = d.hits.iter().map(|h| (h.lead.as_str(), h.area)).collect();
         assert_eq!(leads, [("l-3", Rect::new(0, 7, 30, 2)), ("l-4", Rect::new(0, 9, 30, 2))]);
         for hit in &d.hits {
@@ -651,5 +736,74 @@ mod tests {
             assert!(row(&buf, hit.area.y).contains(&format!("acme/repo#{n}")), "{hit:?}");
         }
         assert!(!d.hits.iter().any(|h| h.contains(Position::new(0, 6))), "the cue row is no hit");
+    }
+
+    // ---- section look v3 (commands.md §13.2 `widgets`, §17; hs-d348, hs-d349): red until the column draws them ----
+
+    /// The pill's caps, U+E0B6 and U+E0B4.
+    const CAPS: (&str, &str) = ("\u{E0B6}", "\u{E0B4}");
+
+    fn all_rows(buf: &Buffer) -> Vec<String> {
+        (0..buf.area.height).map(|y| row(buf, y)).collect()
+    }
+
+    /// The rows that are a section title: they start with the pill's `╭─`.
+    fn titles(buf: &Buffer) -> Vec<(u16, String)> {
+        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with('╭')).map(|(y, r)| (y as u16, r)).collect()
+    }
+
+    #[test]
+    fn the_prs_title_is_the_pill_with_the_count_one_empty_row_above_it() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let (open, close) = CAPS;
+        let (y, title) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
+        assert_eq!(title, format!("╭─{open}PRs{close}{}5", "─".repeat(30 - 2 - 5 - 1)));
+        assert_eq!(title.chars().count(), 30, "full width, no margin");
+        assert_eq!(row(&buf, y - 1), "", "one empty row above the title");
+    }
+
+    #[test]
+    fn the_prs_pill_text_is_inverted_and_its_lines_are_muted() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let muted = palette::color(palette::Meaning::Nothing);
+        let (y, _) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
+        let at = |x: u16| &buf[(x, y)];
+        assert_eq!((at(0).symbol(), at(0).fg), ("╭", muted), "the corner");
+        assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "its line");
+        for x in 3..6 {
+            assert!(at(x).modifier.contains(Modifier::REVERSED), "the title text is inverted: column {x} {:?}", at(x));
+        }
+        assert_eq!((at(10).symbol(), at(10).fg), ("─", muted), "the line to the edge");
+    }
+
+    #[test]
+    fn the_prs_title_is_the_pill_with_its_count_and_there_is_no_other_title() {
+        let (buf, _) = scrolled(30, height(5), &many(2), "", 0);
+        let (open, close) = CAPS;
+        let got: Vec<String> = titles(&buf).into_iter().map(|(_, t)| t).collect();
+        assert_eq!(got, [format!("╭─{open}PRs{close}{}2", "─".repeat(30 - 2 - 5 - 1))]);
+    }
+
+    /// The cue rows of the section, top to bottom.
+    fn cue_rows(buf: &Buffer) -> Vec<String> {
+        all_rows(buf).into_iter().filter(|r| r.contains('▲') || r.contains('▼')).collect()
+    }
+
+    #[test]
+    fn the_cues_are_right_aligned_at_the_end_of_their_rows() {
+        let (buf, _) = scrolled(30, height(7), &many(6), "", 2);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▲ 2 more"), format!("{:>30}", "▼ 2 more")]);
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▼ 3 more")]);
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 99);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▲ 3 more")]);
+    }
+
+    #[test]
+    fn a_right_aligned_cue_is_dim_and_leaves_the_left_of_its_row_blank() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let y = all_rows(&buf).iter().position(|r| r.contains('▼')).expect("a ▼ cue row") as u16;
+        assert!((0..22).all(|x| buf[(x, y)].symbol() == " "), "nothing on the left of the cue");
+        assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "`▼ 3 more` is dim and ends at the last column");
     }
 }

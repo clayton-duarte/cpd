@@ -48,6 +48,28 @@ pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 /// The longest any fake sleeps, so the leftovers of a killed test run end by themselves.
 pub const SLEEP_SECONDS: u64 = 120;
 
+/// The engine tests' tick, `watch.tick_seconds` (its minimum, contract §8.2): an absence window of a few whole ticks
+/// ([`TestEnv::wait_whole_ticks`]) is a few tenths of a second.
+pub const TICK_SECONDS: &str = "0.1";
+
+/// The variable an engine test starts `cpd watch` with, so that E5 polls [`TICK_SECONDS`] after the previous poll
+/// ended (`CPD_TEST_PR_POLL`, contract §1.2 "Test overrides"), not every `pr_poll_seconds` (whole seconds): one poll
+/// about every tick, which [`TestEnv::wait_whole_ticks`] counts.
+pub const PR_POLL_EVERY_TICK: (&str, &str) = ("CPD_TEST_PR_POLL", TICK_SECONDS);
+
+/// The poll periods of a whole Plan's processes, as test overrides (contract §1.2), for a test that runs an engine or
+/// a Plan end to end: the engine's E5 every tick, A9's kill pauses (the engine's and the drivers'), the drivers (A4, a
+/// review Job's Lead) and the wrappers (pi's file, a fork's source) every 50 ms. What such a test waits for is the
+/// next look of each.
+pub const PLAN_POLLS: [(&str, &str); 6] = [
+    PR_POLL_EVERY_TICK,
+    ("CPD_TEST_DRIVER_POLL", "0.05"),
+    ("CPD_TEST_LEAD_POLL", "0.05"),
+    ("CPD_TEST_KILL_PAUSE", "0.05"),
+    ("CPD_TEST_FILE_POLL", "0.05"),
+    ("CPD_TEST_SOURCE_POLL", "0.05"),
+];
+
 /// The teardown script. It finds nothing by scanning: it stops what the env tracks.
 ///
 /// - The env's process group: its leader is the reaper, and every [`TestEnv::command`] joins it.
@@ -169,6 +191,11 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Where every env's directory is made: a tmpfs, so the `fsync`s of the store's writes (several per `cpd` command
+/// that writes) and git's cost no disk flush. On a disk shared with builds and other test runs one such `fsync` waits
+/// for their writeback, from tens of ms to seconds; no test claims durability across a power loss.
+const ENVS_DIR: &str = "/dev/shm";
+
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
 /// The tools a test never runs for real: `TestEnv::new` installs a deny shim for each.
@@ -235,8 +262,10 @@ pub fn backdate(path: &Path, by: Duration) {
 /// enough for a loaded machine. A wait that needs longer says so with [`wait_until_for`].
 pub const WAIT: Duration = Duration::from_secs(30);
 
-/// How often a wait looks again.
-const POLL: Duration = Duration::from_millis(100);
+/// How often a wait looks again: 10 ms, so a wait ends at most a few ms after its signal (half a poll on average),
+/// against a look that costs about 1 ms (a read of the store on a read-only connection, a file, `/proc`) up to a few
+/// ms (a `tmux capture-pane`).
+const POLL: Duration = Duration::from_millis(10);
 
 /// Waits until `ready` is true, at most [`WAIT`]; panics `timed out waiting for <what>`.
 pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
@@ -245,9 +274,22 @@ pub fn wait_until(what: &str, ready: impl FnMut() -> bool) {
 
 /// [`wait_until`] with its own `timeout`.
 pub fn wait_until_for(what: &str, timeout: Duration, mut ready: impl FnMut() -> bool) {
+    poll(timeout, || ready().then_some(())).unwrap_or_else(|| panic!("timed out waiting for {what}"));
+}
+
+/// The suite's one poll loop: looks at `ready` every [`POLL`] until it gives a value, and at
+/// least once; `None` once `timeout` has passed without one. A wait panics on `None` ([`wait_until`],
+/// [`wait_some`], or its own message); a check that something does not happen within a window
+/// asserts `None`.
+pub fn poll<T>(timeout: Duration, mut ready: impl FnMut() -> Option<T>) -> Option<T> {
     let deadline = Instant::now() + timeout;
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+    loop {
+        if let Some(value) = ready() {
+            return Some(value);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
         std::thread::sleep(POLL);
     }
 }
@@ -268,17 +310,74 @@ pub fn wait_for_flock_waiter(path: &Path) {
     });
 }
 
+/// What [`answer_reads`] does after answering a read.
+pub enum Next {
+    /// Put the next FIFO in the file's place: the next read is answered too.
+    Hold,
+    /// Stop answering: the answer has put in the file's place what later reads find.
+    Done,
+}
+
+/// Holds `target`, a file the code under test reads, so that the test is there for each read of it: the rendezvous
+/// for "after the first read failed", where a sleep would be luck. Runs `run` and returns its result with the number
+/// of reads answered.
+///
+/// `target` is replaced by a FIFO (the caller has kept a copy of what it held, to put back). A read of a FIFO blocks
+/// in `open(2)` until a writer opens it: that is the observation of the read. Then `answer(n, file)` runs for the
+/// `n`th read (from 0) with the reader still blocked in the file's other end: what it writes is what the reader
+/// reads, and the reader reads the end of the file once `answer` returns and the file is dropped. After the answer
+/// [`Next::Hold`] puts the next FIFO in place **before** the reader is released, so a retry reads a file of its own
+/// and is answered in its turn: every FIFO is read once, which is what makes the count exact. At most `rounds` reads
+/// are answered; a read after the last gets an empty regular file. The FIFOs are `<target>.held-<n>`.
+pub fn answer_reads<R: Send>(
+    target: &Path,
+    rounds: usize,
+    mut answer: impl FnMut(usize, &mut fs::File) -> Next + Send,
+    run: impl FnOnce() -> R,
+) -> (R, usize) {
+    let held = |n: usize| target.with_extension(format!("held-{n}"));
+    for n in 0..rounds {
+        nix::unistd::mkfifo(&held(n), nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR).expect("make a FIFO");
+    }
+    fs::rename(held(0), target).expect("put the first FIFO in place");
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|s| {
+        let served = s.spawn(|| {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut n = 0;
+            while n < rounds && !stop.load(Ordering::SeqCst) {
+                // O_NONBLOCK: the open of a FIFO's write end fails (ENXIO) until a reader has the other end open.
+                let open = || fs::OpenOptions::new().write(true).custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits()).open(target).ok();
+                let Some(mut file) = poll(Duration::from_millis(100), open) else { continue };
+                let next = answer(n, &mut file);
+                n += 1;
+                if matches!(next, Next::Done) {
+                    break;
+                }
+                if n < rounds {
+                    fs::rename(held(n), target).expect("put the next FIFO in place");
+                } else {
+                    fs::write(held(n), "").expect("write the empty file");
+                    fs::rename(held(n), target).expect("put the empty file in place");
+                }
+            }
+            n
+        });
+        let result = run();
+        stop.store(true, Ordering::SeqCst);
+        let served = served.join().expect("the thread that answers the reads");
+        for n in 0..=rounds {
+            let _ = fs::remove_file(held(n));
+        }
+        (result, served)
+    })
+}
+
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
 /// where it is; the last `state` is in the panic message.
 pub fn wait_some<T>(what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
-    let deadline = Instant::now() + timeout;
-    loop {
-        match ready() {
-            Ok(value) => return value,
-            Err(state) => assert!(Instant::now() < deadline, "timed out waiting for {what}: {state}"),
-        }
-        std::thread::sleep(POLL);
-    }
+    let mut state = String::new();
+    poll(timeout, || ready().map_err(|s| state = s).ok()).unwrap_or_else(|| panic!("timed out waiting for {what}: {state}"))
 }
 
 /// Waits until `done` accepts the screen `screen` reads, at most [`WAIT`]; returns that
@@ -329,8 +428,11 @@ pub struct TestEnv {
     tmux_socket: String,
     /// The env's process group: the reaper's pid.
     pgid: u32,
-    /// The reaper ([`TestEnv::new`]), until the teardown stops it.
+    /// The reaper ([`TestEnv::empty`]), until the teardown stops it.
     reaper: Mutex<Option<Child>>,
+    /// The read-only connection [`TestEnv::read`] reads on, kept open across reads (a new connection parses the whole
+    /// schema at its first query: ~10-15 ms a read), with the identity (device, inode) of the `cpd.db` it opened.
+    reader: Mutex<Option<((u64, u64), rusqlite::Connection)>>,
 }
 
 /// The `sqlite3` CLI, which the teardown reads the env's store with: found on `PATH` at the
@@ -383,9 +485,19 @@ impl Run {
 }
 
 impl TestEnv {
+    /// A new env whose `$CPD_HOME` already has a store: a copy of [`store_template`], so the
+    /// first command opens it instead of creating and migrating one (~0.2 s). A test of what
+    /// happens before the store exists uses [`TestEnv::empty`].
     pub fn new() -> TestEnv {
+        let env = TestEnv::empty();
+        fs::copy(store_template(), env.cpd_home().join("cpd.db")).expect("copy the store template");
+        env
+    }
+
+    /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
+    pub fn empty() -> TestEnv {
         let sqlite3 = sqlite3();
-        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir().expect("temp dir");
+        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(ENVS_DIR).unwrap_or_else(|e| panic!("a temp dir in {ENVS_DIR}: {e}"));
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
         let tmux_socket = format!("cpdt-{}-{n}", std::process::id());
         let script = dir.path().join("teardown.sh");
@@ -400,7 +512,7 @@ impl TestEnv {
         )
         .expect("write teardown script");
         let reaper = start_reaper(&script);
-        let env = TestEnv { dir, tmux_socket, pgid: reaper.id(), reaper: Mutex::new(Some(reaper)) };
+        let env = TestEnv { dir, tmux_socket, pgid: reaper.id(), reaper: Mutex::new(Some(reaper)), reader: Mutex::new(None) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -515,6 +627,31 @@ impl TestEnv {
         Store::open(&CpdHome::resolve(Some(self.cpd_home().into()), None).unwrap(), 5000).unwrap()
     }
 
+    /// `f` on a read-only connection to this env's store, for a test that only looks: no
+    /// [`Store::open`] (its migration and schema check cost ~30 ms per open in a debug build).
+    /// One connection serves every read (each statement sees the last commit); it is opened again
+    /// when `cpd.db` is another file than the one it opened (replaced, or removed and created).
+    /// Panics when the store does not exist or `f` fails.
+    pub fn read<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> T {
+        use std::os::unix::fs::MetadataExt;
+        let db = self.cpd_home().join("cpd.db");
+        let file = fs::metadata(&db).map(|m| (m.dev(), m.ino())).unwrap_or_else(|e| panic!("stat {}: {e}", db.display()));
+        let mut reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
+        if reader.as_ref().is_none_or(|(opened, _)| *opened != file) {
+            let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
+            conn.busy_timeout(Duration::from_secs(5)).expect("set the busy timeout");
+            *reader = Some((file, conn));
+        }
+        let (_, conn) = reader.as_ref().expect("opened above");
+        f(conn).unwrap_or_else(|e| panic!("read {}: {e}", db.display()))
+    }
+
+    /// The first column of the one row `sql` returns, read with [`TestEnv::read`].
+    pub fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
+        self.read(|conn| conn.query_row(sql, [], |r| r.get(0)))
+    }
+
     /// Runs `sql` as a write of this env's store (a fixture).
     pub fn sql(&self, text: &str) {
         sql(&mut self.store(), text);
@@ -542,7 +679,12 @@ impl TestEnv {
 
     /// Runs `cpd <args>` from `cwd`.
     pub fn cpd_in(&self, cwd: &Path, args: &[&str]) -> Run {
-        let out = output(self.command(CPD).args(args).current_dir(cwd)).expect("run cpd");
+        self.cpd_with(cwd, args, &[])
+    }
+
+    /// Runs `cpd <args>` from `cwd` with the variables `vars` added to its environment.
+    pub fn cpd_with(&self, cwd: &Path, args: &[&str], vars: &[(&str, &str)]) -> Run {
+        let out = output(self.command(CPD).args(args).envs(vars.iter().copied()).current_dir(cwd)).expect("run cpd");
         Run {
             exit: out.status.code().expect("cpd was killed by a signal"),
             stdout: String::from_utf8(out.stdout).expect("stdout is UTF-8"),
@@ -562,14 +704,29 @@ impl TestEnv {
         self.run_ok(dir, "git", args).trim_end().to_owned()
     }
 
-    /// A new git repo `repos/<name>` on branch `main` with one commit (`README.md`).
+    /// A new git repo `repos/<name>` on branch `main` with one commit (`README.md`): a copy of
+    /// [`git_repo_template`] (one git process instead of three), made here when there is none.
     pub fn git_repo(&self, name: &str) -> PathBuf {
         let repo = self.root().join("repos").join(name);
+        let template = git_repo_template(name);
+        if template.exists() {
+            copy_tree(&template, &repo);
+            // The index holds the template's inodes and times: refresh it, so that plumbing
+            // (`diff-index`, `diff-files`) sees the clean tree it is.
+            self.git(&repo, &["update-index", "-q", "--refresh"]);
+            return repo;
+        }
         fs::create_dir_all(&repo).expect("create repo dir");
         self.git(&repo, &["init", "-q", "-b", "main"]);
         fs::write(repo.join("README.md"), format!("# {name}\n")).expect("write README");
         self.git(&repo, &["add", "-A"]);
         self.git(&repo, &["commit", "-q", "-m", "initial"]);
+        // Put it in place for the next env (atomic: a concurrent maker's whole copy wins).
+        let partial = template.with_extension(format!("partial-{}-{}", std::process::id(), NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)));
+        copy_tree(&repo, &partial);
+        if fs::rename(&partial, &template).is_err() {
+            fs::remove_dir_all(&partial).expect("remove the partial git repo template");
+        }
         repo
     }
 
@@ -707,7 +864,7 @@ unset _d _n _f _a
     }
 
     /// The poll searches the fake `gh` has recorded: one per `cpd pr poll`, which engine E5 runs
-    /// once per tick when the config says `tick_seconds = 1` and `pr_poll_seconds = 1`.
+    /// about once per tick when the engine runs with [`PR_POLL_EVERY_TICK`].
     pub fn poll_searches(&self) -> usize {
         self.calls("gh").iter().filter(|c| c.get(3).is_some_and(|q| q.contains("search(type"))).count()
     }
@@ -715,7 +872,8 @@ unset _d _n _f _a
     /// Waits until the engine has run `ticks` whole ticks (E1-E8) since this call: the poll of
     /// a tick comes before E7, so once poll `n + 1` has begun, the tick of poll `n` is over.
     /// The positive signal an absence test waits for before it asserts that nothing happened.
-    /// Needs `tick_seconds = 1` and `pr_poll_seconds = 1` and a fake `gh` that answers the search.
+    /// Needs an engine with [`PR_POLL_EVERY_TICK`] (else each whole tick waits for a whole `pr_poll_seconds`) and a
+    /// fake `gh` that answers the search.
     pub fn wait_whole_ticks(&self, ticks: usize) {
         let from = self.poll_searches();
         wait_until(&format!("{ticks} whole engine ticks (polls {from} -> {})", from + ticks + 1), || self.poll_searches() > from + ticks);
@@ -740,4 +898,58 @@ fn assert_ok(program: &str, args: &[&str], out: &Output) {
         out.status,
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// A store as `cpd` creates it in an empty `$CPD_HOME` (migrated, checkpointed, no WAL), made
+/// once per build of `cpd` and shared by the test processes: a file under Cargo's
+/// `CARGO_TARGET_TMPDIR` named after the binary's size and modification time. A process that
+/// finds none makes one in an [`TestEnv::empty`] env with the real binary and renames it into
+/// place (atomic: concurrent makers each write a whole one).
+fn store_template() -> &'static Path {
+    static TEMPLATE: OnceLock<PathBuf> = OnceLock::new();
+    TEMPLATE.get_or_init(|| {
+        use std::os::unix::fs::MetadataExt;
+        let binary = fs::metadata(CPD).expect("stat the cpd binary");
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"));
+        let path = dir.join(format!("cpd-store-{}-{}.{}.db", binary.len(), binary.mtime(), binary.mtime_nsec()));
+        if path.exists() {
+            return path;
+        }
+        let env = TestEnv::empty();
+        env.write_config("version = 1\nmachine = \"m1\"\n");
+        env.cpd(&["events", "list"]).ok();
+        let db = env.cpd_home().join("cpd.db");
+        assert!(!env.cpd_home().join("cpd.db-wal").exists(), "cpd left a WAL beside the template store");
+        let partial = dir.join(format!("cpd-store-{}.partial", std::process::id()));
+        fs::copy(&db, &partial).expect("copy the new store");
+        fs::rename(&partial, &path).expect("put the store template in place");
+        path
+    })
+}
+
+/// Where [`TestEnv::git_repo`] keeps its template of repo `name`: under Cargo's
+/// `CARGO_TARGET_TMPDIR`, named after this test binary's size and modification time (the recipe
+/// is in the binary), shared by its test processes.
+fn git_repo_template(name: &str) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    static KEY: OnceLock<String> = OnceLock::new();
+    let key = KEY.get_or_init(|| {
+        let binary = fs::metadata(std::env::current_exe().expect("this test binary")).expect("stat this test binary");
+        format!("{}-{}.{}", binary.len(), binary.mtime(), binary.mtime_nsec())
+    });
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("git-repo-{key}-{name}"))
+}
+
+/// Copies the directory tree `from` (directories and regular files) to the new directory `to`.
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap_or_else(|e| panic!("create {}: {e}", to.display()));
+    for entry in fs::read_dir(from).unwrap_or_else(|e| panic!("read {}: {e}", from.display())) {
+        let entry = entry.expect("read a directory entry");
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        if entry.file_type().expect("the entry's type").is_dir() {
+            copy_tree(&src, &dst);
+        } else {
+            fs::copy(&src, &dst).unwrap_or_else(|e| panic!("copy {}: {e}", src.display()));
+        }
+    }
 }

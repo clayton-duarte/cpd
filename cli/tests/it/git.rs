@@ -3,6 +3,7 @@
 use crate::common;
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -14,7 +15,8 @@ use cpd_core::git::{
     discard_worktree, push_commit, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
     touched_protected,
 };
-use cpd_core::home::Hook;
+use cpd_core::git::gate::Slots;
+use cpd_core::home::{CpdHome, Hook};
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
 
 fn plan() -> PlanId {
@@ -486,18 +488,17 @@ fn only_the_last_60_lines_are_returned_and_the_log_has_all() {
 
 #[test]
 fn the_log_has_a_hooks_line_before_the_hook_ends() {
-    let h = hooks("pre-merge = \"echo first; sleep 3; echo last\"\n");
+    // The hook ends only once the test has read the log (`go`): its first line must be there before.
+    let h = hooks("pre-merge = \"echo first; until [ -e go ]; do sleep 0.05; done; echo last\"\n");
     let (repo, log) = (h.repo.clone(), h.log.clone());
     let runner = std::thread::spawn(move || {
         let op = Operation { branch: "main" };
         run_hook(Hook::PreMerge, &repo, Some(&op), Duration::from_secs(30), &log).unwrap()
     });
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while fs::read_to_string(&h.log).unwrap_or_default() != "first\n" && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::poll(Duration::from_secs(2), || (fs::read_to_string(&h.log).unwrap_or_default() == "first\n").then_some(()));
     let seen = fs::read_to_string(&h.log).unwrap_or_default();
     let ended = runner.is_finished();
+    fs::write(h.repo.join("go"), "").unwrap();
     let result = runner.join().unwrap();
     assert_eq!(seen, "first\n", "the log before the hook ended");
     assert!(!ended, "the hook ended before the log was read");
@@ -656,7 +657,7 @@ fn a_hook_is_killed_with_its_process_group_at_the_timeout() {
     // The background child would touch survivor.txt after 10 s; the kill must end it long
     // before, and the test waits for its death rather than for the clock.
     let h = hooks("pre-merge = \"(sleep 10; touch survivor.txt) & echo $! > pid; wait\"\n");
-    let result = h.run_for(Hook::PreMerge, Duration::from_secs(2));
+    let result = h.run_for(Hook::PreMerge, Duration::from_secs(1));
     assert_eq!(result.outcome, HookOutcome::Error(HookError::Timeout));
     let pid = h.file("pid").trim().to_owned();
     common::wait_until("the background child to die with the hook's process group", || is_dead(&pid));
@@ -774,7 +775,7 @@ fn touched(repo: &Path) -> Vec<String> {
 
 #[test]
 fn each_protected_path_is_refused() {
-    for path in [
+    let paths = [
         ".config/wt.toml",
         ".config/cpd.toml",
         ".cpd/anything",
@@ -782,8 +783,11 @@ fn each_protected_path_is_refused() {
         "verify.sh",
         "scripts/ci/run.sh",
         "scripts/ci/new/nested.sh",
-    ] {
-        let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    ];
+    // One repo: each case starts `att` again at the Lead tip, so it holds that case's change only.
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    for path in paths {
+        env.git(&repo, &["branch", "-f", "att", "cpd/pay-4521"]);
         on_att(&env, &repo, |r| {
             let full = r.join(path);
             fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -871,15 +875,20 @@ fn no_list_file_means_only_the_fixed_protected_paths() {
 
 #[test]
 fn a_bad_list_file_is_config_invalid() {
-    for text in [
+    let texts = [
         "protected = \"verify.sh\"\n",
         "protected = [1]\n",
         "protect = [\"verify.sh\"]\n",
         "protected = [\"\"]\n",
         "protected = [\"/abs\"]\n",
         "protected = [\n",
-    ] {
-        let (_env, repo) = tamper_repo(Some(text));
+    ];
+    // One repo: each case commits its list on `main` and moves the Lead tip and `att` there.
+    let (env, repo) = tamper_repo(Some(DEFAULT_LIST));
+    for text in texts {
+        commit_file(&env, &repo, LIST, text);
+        env.git(&repo, &["branch", "-f", "cpd/pay-4521", "main"]);
+        env.git(&repo, &["branch", "-f", "att", "main"]);
         let err = protected_list(&repo, "cpd/pay-4521").unwrap_err();
         assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{text}");
         let err = touched_protected(&repo, "cpd/pay-4521", "main", "cpd/pay-4521", "att").unwrap_err();
@@ -1129,6 +1138,7 @@ fn gate_hooks<'a>(env: &TestEnv, lead_branch: &'a str) -> GateHooks<'a> {
         base: "main",
         pre_start: setup(env, "pr-api.pre-start.log"),
         pre_merge: setup(env, "pr-api.pre-merge.log"),
+        slots: Slots::new(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 2),
     }
 }
 
@@ -1201,7 +1211,8 @@ fn a_failing_pre_merge_refuses_the_gate_and_removes_the_worktree() {
     assert_eq!(refused.hook, Hook::PreMerge);
     assert_eq!(refused.outcome, HookOutcome::Failed { exit: 6 });
     assert_eq!(refused.tail.as_deref(), Some("red"));
-    assert_eq!(fs::read_to_string(&hooks.pre_merge.log).unwrap(), "red\n");
+    // The hook's output follows the slot's line at the head of the log (contract §7.6 "The test slot").
+    assert_eq!(fs::read_to_string(&hooks.pre_merge.log).unwrap(), "gate: slot 0 taken after 0 s\nred\n");
     assert!(!worktrees(&env, &repo).contains(".gate-"));
 }
 
@@ -1340,4 +1351,119 @@ fn a_git_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() {
     assert_eq!(d["argv"], serde_json::json!(["git", "-C", repo.display().to_string(), "hang"]));
     let pid: i32 = fs::read_to_string(&pidfile).unwrap().trim().parse().unwrap();
     common::wait_until("git's child to die with its process group", || !running(pid));
+}
+
+// ------------------------------------------------ `worktree::list` over a half-written admin dir (contract §7)
+//
+// `git worktree list --porcelain` reads `.git/worktrees/<id>/commondir` of every linked worktree. Another cpd operation
+// in the same repo adding a worktree (git creates `commondir` empty, then writes it) or removing one (git deletes its
+// files one after another) leaves an admin dir half-written for a moment, and git dies on it: exit 128, `fatal: failed
+// to read .git/worktrees/<id>/commondir: Success` (reproduced by hand, git 2.43). Each test below holds that file as a
+// FIFO (`common::answer_reads`): the read of it is observed, answered with an empty file, and the dir is completed or
+// removed before the read ends, so what the second read finds does not depend on timing.
+
+/// A repo with one linked worktree, `held` on branch `held`: returns the repo, the worktree and its admin dir.
+fn repo_with_a_linked_worktree(env: &TestEnv) -> (PathBuf, PathBuf, PathBuf) {
+    let repo = env.git_repo("pay");
+    let worktree = env.root().join("pay.held");
+    env.git(&repo, &["worktree", "add", "-q", "-b", "held", worktree.to_str().unwrap()]);
+    let admin = repo.join(".git/worktrees/pay.held");
+    assert!(admin.join("commondir").is_file(), "git writes commondir in {}", admin.display());
+    (repo, worktree, admin)
+}
+
+/// The paths `worktree::list` found, symlinks resolved.
+fn listed(repo: &Path) -> Result<Vec<PathBuf>, cpd_core::error::CpdError> {
+    Ok(cpd_core::git::worktree::list(repo)?.into_iter().map(|w| w.path.canonicalize().unwrap_or(w.path)).collect())
+}
+
+#[test]
+fn list_reads_again_when_the_admin_dir_it_read_half_written_is_completed() {
+    let env = TestEnv::new();
+    let (repo, worktree, admin) = repo_with_a_linked_worktree(&env);
+    let commondir = admin.join("commondir");
+    let whole = admin.join("commondir.whole");
+    fs::copy(&commondir, &whole).unwrap();
+
+    let (found, reads) = common::answer_reads(
+        &commondir,
+        4,
+        |_, _| {
+            // The first read got an empty `commondir`; the writer has finished before the read ends.
+            fs::rename(&whole, &commondir).unwrap();
+            common::Next::Done
+        },
+        || listed(&repo),
+    );
+
+    assert_eq!(reads, 1, "the first read of commondir");
+    let found = found.expect("list reads again: the admin dir is complete at the second read");
+    assert_eq!(found, [repo.canonicalize().unwrap(), worktree.canonicalize().unwrap()]);
+}
+
+#[test]
+fn list_reads_again_when_the_admin_dir_it_read_is_removed() {
+    let env = TestEnv::new();
+    let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
+
+    let (found, reads) = common::answer_reads(
+        &admin.join("commondir"),
+        4,
+        |_, _| {
+            // `git worktree remove` deleted the dir while the first read was in it.
+            fs::remove_dir_all(&admin).unwrap();
+            common::Next::Done
+        },
+        || listed(&repo),
+    );
+
+    assert_eq!(reads, 1, "the first read of commondir");
+    let found = found.expect("list reads again: the admin dir is gone at the second read");
+    assert_eq!(found, [repo.canonicalize().unwrap()]);
+}
+
+#[test]
+fn an_admin_dir_that_stays_half_written_is_one_git_failed_after_twenty_reads() {
+    let env = TestEnv::new();
+    let (repo, _worktree, admin) = repo_with_a_linked_worktree(&env);
+
+    let (found, reads) = common::answer_reads(&admin.join("commondir"), 40, |_, _| common::Next::Hold, || listed(&repo));
+
+    // The bound is the one of `worktree add` (§7): 20 rounds; the 20th failure is the error.
+    assert_eq!(reads, 20, "git ran 20 times, each read the half-written commondir");
+    let error = found.unwrap_err();
+    assert_eq!(error.code(), ErrorCode::GitFailed);
+    let details = error.details();
+    assert_eq!(details["exit"], 128);
+    assert_eq!(details["argv"].as_array().unwrap()[3..], [serde_json::json!("worktree"), serde_json::json!("list"), serde_json::json!("--porcelain")]);
+    let stderr = details["stderr"].as_str().unwrap();
+    assert!(stderr.contains("fatal: failed to read ") && stderr.contains("worktrees/pay.held/commondir: Success"), "{stderr}");
+}
+
+#[test]
+fn any_other_worktree_list_failure_is_git_failed_at_once() {
+    let env = TestEnv::new();
+    let (repo, _worktree, _admin) = repo_with_a_linked_worktree(&env);
+    let config = repo.join(".git/config");
+    let whole = repo.join(".git/config.whole");
+    fs::copy(&config, &whole).unwrap();
+
+    let (found, reads) = common::answer_reads(
+        &config,
+        4,
+        |_, file| {
+            // The first read of the config finds a line git cannot parse: not the half-written admin dir. Then the
+            // config is whole again, so a read after it would succeed.
+            file.write_all(b"[broken\n").unwrap();
+            fs::rename(&whole, &config).unwrap();
+            common::Next::Done
+        },
+        || listed(&repo),
+    );
+
+    assert_eq!(reads, 1, "git read the config once");
+    let error = found.expect_err("no second read: the failure is not the half-written admin dir");
+    assert_eq!(error.code(), ErrorCode::GitFailed);
+    assert_eq!(error.details()["exit"], 128);
+    assert!(error.details()["stderr"].as_str().unwrap().contains("bad config"), "{error:?}");
 }

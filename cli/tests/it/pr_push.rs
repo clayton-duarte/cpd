@@ -8,7 +8,7 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, Run, TestEnv};
 use cpd_core::config::{Catalog, Config, TierModel};
@@ -119,8 +119,14 @@ impl Fx {
         self.git(&self.origin, &["rev-parse", "refs/heads/cpd/pay"])
     }
 
+    /// The `pre-merge` hook's output: the log without the Gate's own `gate: ...` lines at its head (the slot's, §7.6).
     fn gate_log(&self) -> String {
-        fs::read_to_string(self.home.plan_dir(&plan()).join("logs/pr-repo.pre-merge.log")).unwrap_or_default()
+        let log = fs::read_to_string(self.home.plan_dir(&plan()).join("logs/pr-repo.pre-merge.log")).unwrap_or_default();
+        let mut rest = log.as_str();
+        while let Some(line) = rest.lines().next().filter(|l| l.starts_with("gate: ")) {
+            rest = &rest[line.len() + 1..];
+        }
+        rest.to_owned()
     }
 
     /// `cpd pr push --plan pay`, started in the background.
@@ -224,11 +230,7 @@ fn paused_gate(root: &Path) -> String {
 
 /// Waits until the [`paused_gate`] has started.
 fn await_gate(root: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !root.join("gate-started").exists() {
-        assert!(Instant::now() < deadline, "the Gate never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until_for("the Gate to start", Duration::from_secs(120), || root.join("gate-started").exists());
 }
 
 /// Lets the [`paused_gate`] finish.

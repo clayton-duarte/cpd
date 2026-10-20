@@ -8,9 +8,9 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId};
@@ -184,6 +184,12 @@ impl Fx {
         fs::write(self.env.root().join("gh").join(file), format!("{text}\n")).unwrap();
     }
 
+    /// Sets `test_concurrency` (a top-level key, so before the tables) in `config.toml`.
+    fn test_concurrency(&self, n: u32) {
+        let config = fs::read_to_string(self.home.config()).unwrap();
+        fs::write(self.home.config(), config.replacen("machine = \"t\"\n", &format!("machine = \"t\"\ntest_concurrency = {n}\n"), 1)).unwrap();
+    }
+
     /// Commits the Lead worktree's `.config/wt.toml`.
     fn hooks(&self, toml: &str) {
         fs::create_dir_all(self.lead.join(".config")).unwrap();
@@ -256,8 +262,14 @@ impl Fx {
         self.env.calls("gh")
     }
 
+    /// The `pre-merge` hook's output: the log without the Gate's own `gate: ...` lines at its head (the slot's, §7.6).
     fn gate_log(&self) -> String {
-        self.pr_log("pre-merge")
+        let log = self.pr_log("pre-merge");
+        let mut rest = log.as_str();
+        while let Some(line) = rest.lines().next().filter(|l| l.starts_with("gate: ")) {
+            rest = &rest[line.len() + 1..];
+        }
+        rest.to_owned()
     }
 
     /// `run/pay/logs/pr-repo.<hook>.log`.
@@ -397,11 +409,7 @@ fn paused_gate(root: &Path) -> String {
 
 /// Waits until the [`paused_gate`] has started.
 fn await_gate(root: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !root.join("gate-started").exists() {
-        assert!(Instant::now() < deadline, "the Gate never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until_for("the Gate to start", Duration::from_secs(120), || root.join("gate-started").exists());
 }
 
 /// Lets the [`paused_gate`] finish.
@@ -2141,11 +2149,7 @@ fn a_second_poll_waits_for_the_lock() {
     let child = Child(Some(fx.env.command(CPD).args(["pr", "poll"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()));
     let pid = child.pid();
     // The poll has the lock file open and waits for it: it has made no gh call.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !has_open(pid, &path) {
-        assert!(Instant::now() < deadline, "the poll never opened {}", path.display());
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until(&format!("the poll to open {}", path.display()), || has_open(pid, &path));
     assert!(fx.gh_calls().is_empty(), "{:?}", fx.gh_calls());
 
     drop(held);
@@ -2169,6 +2173,91 @@ fn poll_reports_a_failing_gh_and_changes_nothing() {
     assert_eq!(details["exit"], 1);
     assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"]);
     assert_eq!((fx.txns(), fx.event_count()), (txns, events));
+}
+
+// ---------- `pr poll`: a `gh` HTTP 5xx or timeout is a transient `gh_failed` (contract §7.6 step 4, hs-d354) ----------
+
+/// `pr poll` against a `gh` that runs `script` (with `vars` set); the `gh_failed` it exits 1 with, its `details`.
+/// Nothing is written.
+fn poll_failure(fx: &Fx, script: &str, vars: &[(&str, &str)]) -> Value {
+    let (txns, events) = (fx.txns(), fx.event_count());
+    fx.env.fake_gh(script);
+    let run = fx.env.cpd_with(fx.env.root(), &["pr", "poll", "--plan", "pay"], vars);
+    assert_eq!(code(&run), ("gh_failed".into(), 1), "{script}");
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "{script}");
+    run.error()["details"].clone()
+}
+
+/// A `gh` that answers the search with `search.json` and runs `lookup` for the lookup of the PR the search did not list.
+fn lookup_script(lookup: &str) -> String {
+    format!(r#"case "$4" in *"search(type"*) cat "$(dirname "$0")/../gh/search.json" ;; *) {lookup} ;; esac"#)
+}
+
+const NGINX: &str = "<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>";
+
+#[test]
+fn poll_says_an_http_5xx_of_the_search_is_transient() {
+    let fx = fx("deploy");
+    for (script, reason) in [
+        ("echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1".to_owned(), "HTTP 502"),
+        // nginx's page with the status in the message: the same case.
+        (format!("echo '{NGINX}'; echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1"), "HTTP 502"),
+        ("echo 'gh: Service Unavailable (HTTP 503)' >&2; exit 1".to_owned(), "HTTP 503"),
+        // The status in stdout when stderr is empty.
+        ("echo 'gh: HTTP 504: Gateway Timeout'; exit 1".to_owned(), "HTTP 504"),
+    ] {
+        let details = poll_failure(&fx, &script, &[]);
+        assert_eq!((&details["transient"], &details["call"], &details["reason"], &details["exit"]), (&json!(true), &json!("search"), &json!(reason), &json!(1)), "{script}: {details}");
+        assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"], "{details}");
+    }
+}
+
+#[test]
+fn poll_says_a_gh_that_hangs_past_its_deadline_is_transient_with_reason_timeout() {
+    let fx = fx("deploy");
+    // The 15 s kill of each call is shortened (contract §1.2, `CPD_TEST_DEADLINE_GH`).
+    let vars = [("CPD_TEST_DEADLINE_GH", "0.3")];
+    let details = poll_failure(&fx, &format!("exec sleep {SLEEP_SECONDS}"), &vars);
+    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("search"), &json!("timeout")), "{details}");
+    // The search answers, the lookup of the PR it did not list hangs.
+    let details = poll_failure(&fx, &lookup_script(&format!("exec sleep {SLEEP_SECONDS}")), &vars);
+    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("lookup"), &json!("timeout")), "{details}");
+}
+
+#[test]
+fn poll_says_an_http_5xx_of_the_lookup_is_transient_and_other_lookup_failures_are_not() {
+    let fx = fx("deploy");
+    let details = poll_failure(&fx, &lookup_script("echo 'gh: HTTP 502: Bad Gateway' >&2; exit 1"), &[]);
+    assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(true), &json!("lookup"), &json!("HTTP 502")), "{details}");
+    for script in ["echo 'gh: HTTP 401: Bad credentials' >&2; exit 1", r#"echo '{"errors":[{"message":"Bad credentials"}]}'; exit 1"#] {
+        let details = poll_failure(&fx, &lookup_script(script), &[]);
+        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("lookup"), &Value::Null), "{script}: {details}");
+    }
+}
+
+#[test]
+fn poll_says_every_other_gh_failure_is_not_transient() {
+    let fx = fx("deploy");
+    for script in [
+        "echo 'gh: HTTP 401: Bad credentials' >&2; exit 1".to_owned(),
+        "echo 'gh: HTTP 403: Resource not accessible' >&2; exit 1".to_owned(),
+        "echo 'gh: HTTP 404: Not Found' >&2; exit 1".to_owned(),
+        "echo 'gh: HTTP 429: Too Many Requests' >&2; exit 1".to_owned(),
+        // An HTML page with no 5xx status in the message is not transient, whatever the exit.
+        format!("echo '{NGINX}'; echo 'gh: exit status 1' >&2; exit 1"),
+        format!("echo '{NGINX}'"),
+        // A 2xx answer with a bad or empty body.
+        "exit 0".to_owned(),
+        "echo 'not json'".to_owned(),
+        // GraphQL's own `errors`, a RATE_LIMITED among them.
+        r#"echo '{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}'; echo 'gh: API rate limit exceeded' >&2; exit 1"#.to_owned(),
+        // `HTTP 502` in a body that is a 2xx answer is not a status.
+        r#"echo '{"data":null,"errors":[{"message":"upstream said HTTP 502"}]}'"#.to_owned(),
+    ] {
+        let details = poll_failure(&fx, &script, &[]);
+        assert_eq!((&details["transient"], &details["call"], &details["reason"]), (&json!(false), &json!("search"), &Value::Null), "{script}: {details}");
+        assert!(details["argv"].is_array() && details.get("exit").is_some() && details.get("stderr").is_some(), "{details}");
+    }
 }
 
 #[test]
@@ -2751,7 +2840,7 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     assert_eq!(out["pr"]["pr"]["url"], WEB_URL);
     assert_eq!(fx.phase(), "deploy");
     let log = fs::read_to_string(fx.home.plan_dir(&plan()).join("logs/pr-web.pre-merge.log")).unwrap();
-    assert!(log.trim().starts_with("gate ran in web.pay.web.gate-"), "{log}");
+    assert!(log.starts_with("gate: slot 0 taken after 0 s\ngate ran in web.pay.web.gate-"), "{log}");
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
     assert_eq!(fx.git(&web.parent().unwrap().join("web"), &["rev-parse", "refs/heads/cpd/pay/web"]), fx.git(&web, &["rev-parse", "HEAD"]));
     let calls = fx.gh_calls();
@@ -3197,4 +3286,136 @@ fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_it_is_behind
     // The stacked Lead takes the new commits by merge, as `next` says, and opens.
     fx.git(&web.lead, &["merge", "-q", "--no-edit", "origin/cpd/pay"]);
     assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
+}
+
+// ------------------------------------------------------------ the test slots
+
+/// Holds the test slot file `path` as another Gate would.
+fn hold_slot(path: &Path) -> Flock<fs::File> {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap();
+    Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
+}
+
+/// Whether some process holds the test slot file `path`.
+fn slot_is_held(path: &Path) -> bool {
+    let file = fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
+    Flock::lock(file, FlockArg::LockExclusiveNonblock).is_err()
+}
+
+#[test]
+fn with_one_slot_a_second_gate_waits_until_the_first_lets_go_and_logs_the_wait() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(1);
+    let ran = fx.env.root().join("pre-start-ran");
+    fx.hooks(&format!("pre-start = \"touch {}\"\npre-merge = \"echo gate ran\"\n", ran.display()));
+    let held = hold_slot(&fx.home.test_slot(0));
+
+    let child = fx.spawn_pr("open");
+    let waiting = "gate: waiting for a slot (1 of 1 busy; test_concurrency 1)\n";
+    wait_until("the Gate to log that it waits", || fx.pr_log("pre-merge").contains(waiting));
+    assert!(!ran.exists(), "pre-start ran while the only slot was held");
+    drop(held);
+    let out = child.finish();
+
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(ran.exists());
+    let log = fx.pr_log("pre-merge");
+    let mut lines = log.lines();
+    assert_eq!(lines.next(), Some(waiting.trim_end()), "{log}");
+    let taken = lines.next().unwrap();
+    assert!(taken.starts_with("gate: slot 0 taken after ") && taken.ends_with(" s"), "{log}");
+    assert_eq!(lines.collect::<Vec<_>>(), ["gate ran"], "the hook's output follows the lines: {log}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains(waiting) && stderr.contains(taken), "the wait is on stderr too: {stderr}");
+    fx.assert_no_gate_worktree();
+}
+
+#[test]
+fn both_hooks_see_the_slot_the_gate_holds_and_no_other_cpd_variable() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(1);
+    let seen = fx.env.root().join("seen");
+    // `cpd` is run with CPD_HOME and more in its environment, and none of it reaches a hook.
+    fx.hooks(&format!(
+        "pre-start = \"env | grep '^CPD_' | sort > {seen}.start\"\npre-merge = \"env | grep '^CPD_' | sort > {seen}.merge\"\n",
+        seen = seen.display()
+    ));
+
+    fx.pr("open").ok();
+
+    for hook in ["start", "merge"] {
+        let path = fx.env.root().join(format!("seen.{hook}"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "CPD_TEST_SLOT=0\n", "pre-{hook}");
+    }
+}
+
+#[test]
+fn a_gate_that_finds_a_free_slot_logs_it_in_the_log_only() {
+    let fx = fx("dispatch");
+    fx.hooks("pre-merge = \"echo gate ran\"\n");
+
+    let child = fx.spawn_pr("open");
+    let out = child.finish();
+
+    assert!(out.status.success());
+    assert_eq!(fx.pr_log("pre-merge"), "gate: slot 0 taken after 0 s\ngate ran\n");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("gate: "), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(!slot_is_held(&fx.home.test_slot(0)), "the slot is released when the Gate ends");
+}
+
+#[test]
+fn a_slot_held_by_a_killed_gate_is_free_at_once() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(1);
+    let root = fx.env.root().to_path_buf();
+    fx.hooks(&paused_gate(&root));
+
+    let first = fx.spawn_pr("open");
+    await_gate(&root);
+    assert!(slot_is_held(&fx.home.test_slot(0)), "the running Gate holds the only slot");
+    // SIGKILL: no clean-up runs; its hook (a child) outlives it, and must not keep the slot.
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(first.pid() as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
+    first.finish();
+    release_gate(&root);
+
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["pr"]["status"], "open");
+    let log = fx.pr_log("pre-merge");
+    assert!(log.starts_with("gate: slot 0 taken after 0 s\n") && !log.contains("waiting"), "{log}");
+}
+
+#[test]
+fn with_two_slots_two_gates_run_together_and_a_third_waits() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(2);
+    let root = fx.env.root().to_path_buf();
+    // Each Gate marks itself `in-<pid of its shell>`, waits for `gate-go`, and fails, so no Gate changes the PR.
+    let go = root.join("gate-go");
+    fx.hooks(&format!(
+        "pre-merge = \"touch {root}/in-$$; i=0; while [ ! -e {go} ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done; exit 1\"\n",
+        root = root.display(),
+        go = go.display()
+    ));
+    let running = || fs::read_dir(&root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("in-")).count();
+
+    let (a, b) = (fx.spawn_pr("open"), fx.spawn_pr("open"));
+    wait_until("two Gates to run together", || running() == 2);
+    let third = fx.spawn_pr("open");
+    wait_until("the third Gate to log that it waits", || {
+        fx.pr_log("pre-merge").contains("gate: waiting for a slot (2 of 2 busy; test_concurrency 2)\n")
+    });
+    assert_eq!(running(), 2, "the third Gate runs nothing while both slots are held");
+    assert!(slot_is_held(&fx.home.test_slot(0)) && slot_is_held(&fx.home.test_slot(1)));
+    release_gate(&root);
+
+    let outs = [a.finish(), b.finish(), third.finish()];
+
+    assert_eq!(running(), 3, "the third Gate ran once a slot was free");
+    for out in &outs {
+        assert_eq!(out.status.code(), Some(3), "gate_failed: {}", String::from_utf8_lossy(&out.stdout));
+    }
+    let waited = outs.iter().filter(|o| String::from_utf8_lossy(&o.stderr).contains("gate: waiting for a slot (2 of 2 busy")).count();
+    assert_eq!(waited, 1, "only the third Gate waited");
 }

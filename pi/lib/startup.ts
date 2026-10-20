@@ -150,13 +150,13 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
       const show = await host.call(["plan", "show", "--plan", plan]);
       latest = isObject(show.review) && typeof show.review.id === "string" ? show.review.id : undefined;
       if (Array.isArray(show.escalations)) {
-        for (const q of show.escalations) if (isObject(q) && typeof q.id === "string") facts.open(`escalation:${q.id}`, QUESTION_LABEL);
+        for (const q of show.escalations) if (isObject(q) && typeof q.id === "string") facts.open(`escalation:${q.id}`, QUESTION_LABEL, "agent");
       }
     } catch (e) {
       host.deliver("plan show", e);
     }
     for (const entry of r.reviews.values()) {
-      if (entry.status === "pending" && entry.review === latest) facts.open(`plan-review:${entry.review}`, REVIEW_LABEL);
+      if (entry.status === "pending" && entry.review === latest) facts.open(`plan-review:${entry.review}`, REVIEW_LABEL, "human");
     }
     registerTool(host);
   }

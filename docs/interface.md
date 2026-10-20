@@ -52,7 +52,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr` | Pull requests (commands.md §9) | | |
 | `cpd pr add` | Add a PR to the Plan (§9.4) | Lead | |
 | `cpd pr edit` | Change a waiting PR before the lock (§9.5) | Lead | |
-| `cpd pr cancel` | Remove a PR from the Plan before the lock (§9.6) | Lead | |
+| `cpd pr cancel` | Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6) | Lead | |
 | `cpd pr start` | Start a waiting PR whose needs are merged, after a failed start (§9.7) | Lead | |
 | `cpd pr open` | Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1) | Lead | |
 | `cpd pr poll` | Poll every open pull request of the User (§9.2) | Lead | |
@@ -105,3 +105,4 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
+| `cpd slot` | Run a command inside a test slot (commands.md §23) | Manager, Lead, Worker | |

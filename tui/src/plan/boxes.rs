@@ -22,7 +22,7 @@ use ratatui::{
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
-use crate::read::{JobNode, PrNode, PrState, PrStatus, Pull};
+use crate::read::{Dot, JobNode, NeedsUser, PrNode, PrState, PrStatus, Pull};
 
 /// Rows between two rows of boxes: the run of lines, then the arrowheads.
 const GAP: u16 = 2;
@@ -83,25 +83,33 @@ fn state_text(state: PrState) -> &'static str {
     }
 }
 
-/// The word and colour of a pull request's state in a title: `conflict` (failed) for an open one that conflicts, else
-/// its state in the palette's PR state colour. The title and its link's width both use it.
-fn state_word(pull: &Pull) -> (&'static str, Meaning) {
+/// The word and colour of a pull request's state in a title: `conflict` (waiting: every box's pull request is one a
+/// Plan owns, so its Lead fixes it, hs-d302) for an open one that conflicts, else
+/// its state in the palette's PR state colour; a `closed` one is waiting too, and red only when `asked`: its Plan's Lead
+/// has an open `dialog` item, it asks the User (audit Q4). The title and its link's width both use it.
+fn state_word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
     match pull.state {
-        PrState::Open if pull.conflicting => palette::PR_CONFLICT,
+        PrState::Open if pull.conflicting => palette::PR_CONFLICT_OWNED,
+        PrState::Closed if asked => palette::PR_CLOSED_ASKED,
         state => (state_text(state), palette::pr_state(state)),
     }
 }
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󰏌` once the PR has
-/// a pull request, the state in the palette's PR state colour (`conflict`, failed, for an open one that conflicts), else the PR's status, dim.
-pub fn title(pr: &PrNode) -> Line<'static> {
+/// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
+/// waiting, red when the Plan's Lead `asked` the User, see [`state_word`]), else the PR's status, dim. While the Plan's Lead
+/// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󰏌`.
+pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
     let mut spans: Vec<Span<'static>> =
         vec![" ".into(), pr.key.to_string().bold(), format!(" · {} {TO} {} · ", pr.repo_name, pr.base).into()];
     match &pr.pull {
         Some(pull) => {
             spans.push(format!("#{} ", pull.number).into());
-            let (word, meaning) = state_word(pull);
+            let (word, meaning) = state_word(pull, asked);
             spans.push(Span::styled(word, palette::fg(meaning)));
+            if pull.lead_working {
+                spans.extend([" ".into(), palette::dot_span(Dot::Working, frame, false)]);
+            }
             spans.push(format!(" {CUE}").into());
         }
         None => spans.push(pr.status.as_str().dim()),
@@ -112,10 +120,13 @@ pub fn title(pr: &PrNode) -> Line<'static> {
 
 /// The whole canvas of boxes: one per PR of `prs` (the PRs that are not `cancelled`), each holding the chart of its
 /// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
-pub fn layout(prs: &[PrNode], jobs: &[JobNode], frame: usize) -> Boxes {
-    let charts: Vec<Chart> =
-        prs.iter().map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key)), frame)).collect();
-    let titles: Vec<Line> = prs.iter().map(title).collect();
+/// `needs_user` says which failed Jobs and closed pull requests are red, the rest waiting.
+pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
+    let charts: Vec<Chart> = prs
+        .iter()
+        .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.stuck_jobs), frame))
+        .collect();
+    let titles: Vec<Line> = prs.iter().map(|p| title(p, needs_user.lead_dialog, frame)).collect();
     // each box: its border around the chart, or around ` no Jobs `, and at least as wide as its title
     let size: Vec<(u16, u16)> = charts
         .iter()
@@ -194,8 +205,9 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], frame: usize) -> Boxes {
         Block::bordered().border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
         if let Some(pull) = &prs[i].pull {
             // the title starts after the corner and ends with one space; the `󰏌` is the cell before it, and the link
-            // runs back from there over `#<number> <state> 󰏌`
-            let len = format!("#{} {} {CUE}", pull.number, state_word(pull).0).chars().count() as u16;
+            // runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󰏌`
+            let dot = if pull.lead_working { 2 } else { 0 };
+            let len = format!("#{} {} {CUE}", pull.number, state_word(pull, false).0).chars().count() as u16 + dot;
             link(&mut buf, Rect::new(rect.x + titles[i].width() as u16 - len, rect.y, len, 1), &pull.url);
         }
         let inner = rect.inner(Margin { horizontal: 1, vertical: 1 });
@@ -304,7 +316,7 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, lead_working: false }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
@@ -364,7 +376,7 @@ mod tests {
         assert_eq!(levels(&prs), [0, 0, 1, 2, 2, 3]);
         // laid out: every pill of a PR not merged is below every pill of a merged one
         let jobs: Vec<JobNode> = prs.iter().map(|p| job(p.key.as_str(), &format!("j-{}", p.key.as_str()), &[])).collect();
-        let c = layout(&prs, &jobs, 0).chart;
+        let c = layout(&prs, &jobs, &NeedsUser::default(), 0).chart;
         let y = |key: &str| c.pills.iter().find(|p| p.key == format!("j-{key}")).unwrap().rect.y;
         let last_merged = ["cpd", "drafts", "followups"].iter().map(|k| y(k)).max().unwrap();
         let first_other = ["cleanup", "flake", "status"].iter().map(|k| y(k)).min().unwrap();
@@ -377,7 +389,7 @@ mod tests {
     fn a_pr_not_merged_that_needs_a_merged_one_sits_below_it_with_an_arrow() {
         let prs = [merged("api", &[]), pr("web", &["api"])];
         assert_eq!(levels(&prs), [0, 1]);
-        let b = layout(&prs, &[], 0);
+        let b = layout(&prs, &[], &NeedsUser::default(), 0);
         snap(&b.chart, "
 ┌ api · api-repo 󱦰 main · merged ┐
 │ no Jobs                        │
@@ -421,7 +433,7 @@ mod tests {
     fn boxes_of_one_level_sit_side_by_side_by_key() {
         // given out of key order: the row still puts them by key, one column apart
         let prs = [pr("zed", &[]), pr("alpha", &[])];
-        let b = layout(&prs, &[job("zed", "z", &[]), job("alpha", "a", &[])], 0);
+        let b = layout(&prs, &[job("zed", "z", &[]), job("alpha", "a", &[])], &NeedsUser::default(), 0);
         let c = &b.chart;
         let rect = |key: &str| c.pills.iter().find(|p| p.key == key).unwrap().rect;
         assert!(rect("a").x < rect("z").x && rect("a").y == rect("z").y, "alpha left of zed");
@@ -429,15 +441,15 @@ mod tests {
         assert_eq!(b.row_of, [0, 0]);
         snap(c, "
 ┌ alpha · alpha-repo 󱦰 main · dispatch ┐ ┌ zed · zed-repo 󱦰 main · dispatch ┐
-│  󰝦 a │S1                             │ │  󰝦 z │S1                         │
+│  󰝦 a │S1                           │ │  󰝦 z │S1                       │
 └──────────────────────────────────────┘ └──────────────────────────────────┘");
     }
 
     #[test]
     fn one_pr_is_one_box_and_its_chart_is_the_single_chart_inside() {
         let jobs = [job("api", "a", &[]), job("api", "b", &[]), job("api", "c", &["a", "b"])];
-        let c = layout(&[pr("api", &[])], &jobs, 0).chart;
-        let single = flow::layout(&flow::flow_jobs(&jobs), 0);
+        let c = layout(&[pr("api", &[])], &jobs, &NeedsUser::default(), 0).chart;
+        let single = flow::layout(&flow::flow_jobs(&jobs, &[]), 0);
         let rows: Vec<String> = text(&c).lines().map(str::to_owned).collect();
         assert_eq!(rows.len(), single.buf.area.height as usize + 2);
         for (y, want) in text(&single).lines().enumerate() {
@@ -446,63 +458,159 @@ mod tests {
         }
         snap(&c, "
 ┌ api · api-repo 󱦰 main · dispatch ┐
-│  󰝦 a │S1 ──╮                     │
-│            ├── 󰝦 c │S1           │
-│  󰝦 b │S1 ──╯                     │
+│  󰝦 a │S1 ──╮                   │
+│              ├── 󰝦 c │S1       │
+│  󰝦 b │S1 ──╯                   │
 └──────────────────────────────────┘");
     }
 
     #[test]
     fn a_pr_with_no_jobs_is_an_empty_box() {
-        let c = layout(&[pr("api", &[])], &[], 0).chart;
+        let c = layout(&[pr("api", &[])], &[], &NeedsUser::default(), 0).chart;
         snap(&c, "
 ┌ api · api-repo 󱦰 main · dispatch ┐
 │ no Jobs                          │
 └──────────────────────────────────┘");
         assert!(c.buf[(1, 1)].modifier.contains(Modifier::DIM));
         assert!((c.pills.len(), c.columns.len()) == (0, 0));
-        assert_eq!(layout(&[], &[], 0).chart.buf.area.area(), 0);
+        assert_eq!(layout(&[], &[], &NeedsUser::default(), 0).chart.buf.area.area(), 0);
     }
 
     #[test]
-    fn an_open_pull_request_that_conflicts_reads_conflict_in_the_failed_colour() {
-        let failed = palette::fg(Meaning::Failed).fg;
+    fn an_open_pull_request_that_conflicts_reads_conflict_in_the_waiting_colour() {
+        // every box is a PR a Plan owns: its Lead fixes the conflict (hs-d302), so it is waiting, never red
+        let failed = palette::fg(Meaning::Waiting).fg;
         let mut p = pr("api", &[]);
         p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
-        let t = title(&p);
+        let t = title(&p, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󰏌 ");
         assert_eq!(t.spans[4].style.fg, failed);
-        // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the failed colour
+        assert_ne!(t.spans[4].style.fg, palette::fg(Meaning::Failed).fg);
+        // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the waiting colour
         p.pull = Some(pull(12, PrState::Open));
-        let t = title(&p);
+        let t = title(&p, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
         assert_ne!(t.spans[4].style.fg, failed);
         // merged and closed never read `conflict`
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
             p.pull = Some(Pull { conflicting: true, ..pull(12, state) });
-            let t = title(&p);
+            let t = title(&p, false, 0);
             assert_eq!(t.spans[4].content, word);
             assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(state)).fg);
         }
+    }
+
+    #[test]
+    fn a_working_lead_puts_its_dot_after_the_state_word_and_turns_with_the_frame() {
+        let mut p = pr("api", &[]);
+        p.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
+        for frame in 0..palette::SPINNER.len() {
+            let t = title(&p, false, frame);
+            assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 open {} 󰏌 ", palette::SPINNER[frame]), "frame {frame}");
+            assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(PrState::Open)).fg, "the state keeps its colour");
+        }
+        // the dot goes with the state, in the waiting colour of `conflict` too
+        p.pull = Some(Pull { lead_working: true, conflicting: true, ..pull(12, PrState::Open) });
+        let t = title(&p, false, 3);
+        assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 conflict {} 󰏌 ", palette::SPINNER[3]));
+        assert_eq!(t.spans[4].style.fg, palette::fg(Meaning::Waiting).fg);
+    }
+
+    #[test]
+    fn an_idle_lead_shows_no_dot_and_a_pr_without_a_pull_request_none() {
+        let mut p = pr("api", &[]);
+        p.pull = Some(pull(12, PrState::Open));
+        for frame in 0..palette::SPINNER.len() {
+            let text = title(&p, false, frame).to_string();
+            assert_eq!(text, " api · api-repo 󱦰 main · #12 open 󰏌 ");
+            assert!(!palette::SPINNER.iter().any(|g| text.contains(g)), "{text}");
+        }
+        // no pull request yet: nothing to show beside
+        let mut waiting = pr("web", &["api"]);
+        waiting.status = PrStatus::Waiting;
+        assert_eq!(title(&waiting, false, 4).to_string(), " web · web-repo 󱦰 main · waiting ");
+    }
+
+    #[test]
+    fn the_working_dot_is_drawn_in_the_box_title_inside_the_link_and_widens_the_box_by_its_cell() {
+        let mut p = pr("api", &[]);
+        p.pull = Some(pull(12, PrState::Open));
+        let mut w = p.clone();
+        w.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
+        let plain = layout(&[p], &[], &NeedsUser::default(), 5).chart;
+        let working = layout(&[w], &[], &NeedsUser::default(), 5).chart;
+        assert_eq!(working.buf.area.width, plain.buf.area.width + 2);
+        let top: String = (0..working.buf.area.width).map(|x| working.buf[(x, 0)].symbol().to_owned()).collect();
+        assert!(top.contains(palette::SPINNER[5]), "{top}");
+        // one frame later: the next glyph
+        let w2 = layout(&[PrNode { pull: Some(Pull { lead_working: true, ..pull(12, PrState::Open) }), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
+        let top: String = (0..w2.buf.area.width).map(|x| w2.buf[(x, 0)].symbol().to_owned()).collect();
+        assert!(top.contains(palette::SPINNER[6]) && !top.contains(palette::SPINNER[5]), "{top}");
+    }
+
+    #[test]
+    fn a_closed_pull_request_is_waiting_and_red_only_when_its_lead_asked_the_user() {
+        let mut p = pr("api", &[]);
+        p.pull = Some(pull(12, PrState::Closed));
+        let colour = |asked| title(&p, asked, 0).spans[4].style.fg;
+        assert_eq!(colour(false), palette::fg(Meaning::Waiting).fg, "its Lead handles it");
+        assert_eq!(colour(true), palette::fg(Meaning::Failed).fg, "its Lead has a dialog open: it asks the User");
+        // the question concerns the closed pull request only
+        for state in [PrState::Open, PrState::Merged] {
+            p.pull = Some(pull(12, state));
+            assert_eq!(title(&p, true, 0).spans[4].style.fg, title(&p, false, 0).spans[4].style.fg, "{state:?}");
+        }
+        // through the layout: the title is drawn in the colour
+        p.pull = Some(pull(12, PrState::Closed));
+        let cell = |needs: &NeedsUser| {
+            let c = layout(&[p.clone()], &[], needs, 0).chart;
+            let x = (0..c.buf.area.width).find(|&x| c.buf[(x, 0)].symbol().contains("\x07cl")).unwrap();
+            c.buf[(x, 0)].fg
+        };
+        assert_eq!(cell(&NeedsUser::default()), palette::color(Meaning::Waiting));
+        assert_eq!(cell(&NeedsUser { lead_dialog: true, ..NeedsUser::default() }), palette::color(Meaning::Failed));
+    }
+
+    #[test]
+    fn a_failed_job_is_waiting_and_red_only_when_it_is_stuck() {
+        let mut stuck = job("api", "stuck", &[]);
+        stuck.status = JobStatus::Failed;
+        let mut handled = job("api", "handled", &[]);
+        handled.status = JobStatus::Failed;
+        let jobs = [stuck.clone(), handled];
+        let bg = |needs: &NeedsUser, i: usize| {
+            let b = layout(&[pr("api", &[])], &jobs, needs, 0);
+            let pill = &b.chart.pills[i];
+            // the body, after the left cap
+            b.chart.buf[(pill.rect.x + 1, pill.rect.y)].bg
+        };
+        let none = NeedsUser::default();
+        let one = NeedsUser { stuck_jobs: vec![stuck.key.clone()], ..NeedsUser::default() };
+        assert_eq!((bg(&none, 0), bg(&none, 1)), (palette::color(Meaning::Waiting), palette::color(Meaning::Waiting)));
+        assert_eq!((bg(&one, 0), bg(&one, 1)), (palette::color(Meaning::Failed), palette::color(Meaning::Waiting)), "only the stuck one");
+        // a queued Job is never stuck, whatever the list says
+        let queued = job("api", "stuck", &[]);
+        let c = layout(&[pr("api", &[])], &[queued], &one, 0);
+        assert_eq!(c.chart.buf[(c.chart.pills[0].rect.x + 1, c.chart.pills[0].rect.y)].bg, palette::color(Meaning::NotStarted));
     }
 
     #[test]
     fn the_title_names_the_pull_request_in_its_colour_else_the_status_dim() {
         let mut open = pr("api", &[]);
         open.pull = Some(pull(12, PrState::Open));
-        let t = title(&open);
+        let t = title(&open, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
         assert!(t.spans[1].style.add_modifier.contains(Modifier::BOLD), "the key is bold");
         assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(PrState::Open)).fg);
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
             open.pull = Some(pull(12, state));
-            let t = title(&open);
+            let t = title(&open, false, 0);
             assert_eq!(t.spans[4].content, word);
             assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(state)).fg);
         }
         let mut waiting = pr("web", &["api"]);
         waiting.status = PrStatus::Waiting;
-        let t = title(&waiting);
+        let t = title(&waiting, false, 0);
         assert_eq!(t.to_string(), " web · web-repo 󱦰 main · waiting ");
         assert!(t.spans[3].style.add_modifier.contains(Modifier::DIM));
     }
@@ -545,7 +653,7 @@ mod tests {
     fn a_conflicting_pull_request_links_exactly_its_number_conflict_and_arrow() {
         let mut api = pr("api", &[]);
         api.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
-        let c = layout(&[api], &[], 0).chart;
+        let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
 ┌ api · api-repo 󱦰 main · #12 conflict 󰏌 ┐
@@ -558,9 +666,9 @@ mod tests {
     #[test]
     fn a_pull_request_adds_its_arrow_to_the_title_and_widens_the_box_by_it() {
         let mut api = pr("api", &[]);
-        let before = layout(&[api.clone()], &[], 0).chart;
+        let before = layout(&[api.clone()], &[], &NeedsUser::default(), 0).chart;
         api.pull = Some(pull(12, PrState::Open));
-        let c = layout(&[api], &[], 0).chart;
+        let c = layout(&[api], &[], &NeedsUser::default(), 0).chart;
         let plain = without_links(&c);
         snap(&plain, "
 ┌ api · api-repo 󱦰 main · #12 open 󰏌 ┐
@@ -576,15 +684,15 @@ mod tests {
     fn two_prs_in_a_chain_are_two_boxes_one_below_the_other_linked_by_an_arrow() {
         let prs = [pr("api", &[]), pr("web", &["api"])];
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("web", "c", &[])];
-        let c = layout(&prs, &jobs, 0).chart;
+        let c = layout(&prs, &jobs, &NeedsUser::default(), 0).chart;
         snap(&c, "
 ┌ api · api-repo 󱦰 main · dispatch ┐
-│  󰝦 a │S1 ───── 󰝦 b │S1           │
+│  󰝦 a │S1 ───── 󰝦 b │S1       │
 └────────────────┬─────────────────┘
                  │
                  󱦳
 ┌ web · web-repo 󱦰 main · dispatch ┐
-│  󰝦 c │S1                         │
+│  󰝦 c │S1                       │
 └──────────────────────────────────┘");
         // the arrow is in the lines' colour
         let exit = c.buf.content.iter().find(|cell| cell.symbol() == EXIT).unwrap();
@@ -595,14 +703,14 @@ mod tests {
     fn one_pr_feeding_two_shares_one_run_into_both() {
         let prs = [pr("docs", &["schema"]), pr("schema", &[]), pr("web", &["schema"])];
         let jobs = [job("schema", "types", &[]), job("schema", "gql", &["types"]), job("web", "page", &[]), job("docs", "readme", &[])];
-        snap(&layout(&prs, &jobs, 0).chart, "
+        snap(&layout(&prs, &jobs, &NeedsUser::default(), 0).chart, "
 ┌ schema · schema-repo 󱦰 main · dispatch ┐
-│  󰝦 types │S1 ───── 󰝦 gql │S1           │
+│  󰝦 types │S1 ───── 󰝦 gql │S1       │
 └───────────────────┬────────────────────┘
                   ╭─┴───────────────────────────────────╮
                   󱦳                                     󱦳
 ┌ docs · docs-repo 󱦰 main · dispatch ┐ ┌ web · web-repo 󱦰 main · dispatch ┐
-│  󰝦 readme │S1                      │ │  󰝦 page │S1                      │
+│  󰝦 readme │S1                    │ │  󰝦 page │S1                    │
 └────────────────────────────────────┘ └──────────────────────────────────┘");
     }
 
@@ -610,21 +718,21 @@ mod tests {
     fn two_prs_feeding_one_join_one_run_into_it() {
         let prs = [pr("api", &[]), pr("db", &[]), pr("web", &["api", "db"])];
         let jobs = [job("api", "a", &[]), job("db", "d", &[]), job("web", "w", &[])];
-        snap(&layout(&prs, &jobs, 0).chart, "
+        snap(&layout(&prs, &jobs, &NeedsUser::default(), 0).chart, "
 ┌ api · api-repo 󱦰 main · dispatch ┐ ┌ db · db-repo 󱦰 main · dispatch ┐
-│  󰝦 a │S1                         │ │  󰝦 d │S1                       │
+│  󰝦 a │S1                       │ │  󰝦 d │S1                     │
 └────────────────┬─────────────────┘ └───────────────┬────────────────┘
                  ├───────────────────────────────────╯
                  󱦳
 ┌ web · web-repo 󱦰 main · dispatch ┐
-│  󰝦 w │S1                         │
+│  󰝦 w │S1                       │
 └──────────────────────────────────┘");
     }
 
     #[test]
     fn a_need_that_skips_a_row_rides_a_column_free_of_boxes() {
         let prs = [pr("a", &[]), pr("b", &["a"]), pr("c", &["a", "b"])];
-        snap(&layout(&prs, &[], 0).chart, "
+        snap(&layout(&prs, &[], &NeedsUser::default(), 0).chart, "
 ┌ a · a-repo 󱦰 main · dispatch ┐
 │ no Jobs                      │
 └──────────────┬───────────────┘
@@ -650,7 +758,7 @@ mod tests {
         // api and docs side by side; web below them
         let prs = [pr("api", &[]), pr("docs", &[]), pr("web", &["api"])];
         let jobs = [job("api", "a", &[]), job("api", "b", &["a"]), job("docs", "d", &[]), job("web", "w", &[])];
-        let b = layout(&prs, &jobs, 0);
+        let b = layout(&prs, &jobs, &NeedsUser::default(), 0);
         let at = |key: &str| at(&b.chart, key);
         assert_eq!(b.chart.columns, [vec![at("a")], vec![at("b")], vec![at("d")], vec![at("w")]]);
         assert_eq!(b.row_of, [0, 0, 0, 1]);
@@ -661,7 +769,8 @@ mod tests {
         // a pill is found where it is drawn
         let r = b.chart.pills[at("w")].rect;
         assert_eq!(b.chart.pill_at(r.x, r.y), Some(at("w")));
-        assert_eq!(b.chart.buf[(r.x + 1, r.y)].symbol(), crate::palette::QUEUED);
+        assert_eq!(b.chart.buf[(r.x + 2, r.y)].symbol(), crate::palette::QUEUED);
+        assert_eq!((b.chart.buf[(r.x, r.y)].symbol(), b.chart.buf[(r.right() - 1, r.y)].symbol()), ("\u{e0b6}", "\u{e0b4}"), "the caps are on the whole pill's rectangle");
     }
 
     #[test]
@@ -677,7 +786,7 @@ mod tests {
             job("web", "x", &["w"]),
             job("e2e", "e", &[]),
         ];
-        let b = layout(&prs, &jobs, 0);
+        let b = layout(&prs, &jobs, &NeedsUser::default(), 0);
         let at = |key: &str| at(&b.chart, key);
         assert_eq!((b.step(at("b"), Dir::Down), b.step(at("c"), Dir::Up)), (at("c"), at("b")), "within a box's column");
         // down from the bottom of a box: the nearest pill below by column
@@ -694,7 +803,7 @@ mod tests {
     #[test]
     fn the_view_s_arrow_keys_cross_rows_of_boxes_and_scroll_to_the_selection() {
         let prs = [pr("api", &[]), pr("web", &["api"])];
-        let b = layout(&prs, &[job("api", "a", &[]), job("web", "w", &[])], 0).with_margin(Margin { horizontal: 2, vertical: 1 });
+        let b = layout(&prs, &[job("api", "a", &[]), job("web", "w", &[])], &NeedsUser::default(), 0).with_margin(Margin { horizontal: 2, vertical: 1 });
         let mut s = Selection::default();
         crate::plan::arrow(&mut s, &b, Dir::Down); // the first arrow selects the first pill
         assert_eq!((s.key.as_deref(), s.follow), (Some("a"), true));
@@ -710,14 +819,14 @@ mod tests {
     #[test]
     fn up_and_down_skip_a_row_of_boxes_with_no_jobs() {
         let prs = [pr("a", &[]), pr("b", &["a"]), pr("c", &["b"])];
-        let b = layout(&prs, &[job("a", "x", &[]), job("c", "z", &[])], 0);
+        let b = layout(&prs, &[job("a", "x", &[]), job("c", "z", &[])], &NeedsUser::default(), 0);
         let at = |key: &str| at(&b.chart, key);
         assert_eq!((b.step(at("x"), Dir::Down), b.step(at("z"), Dir::Up)), (at("z"), at("x")));
     }
 
     /// The pane's body of `w`×`h` cells showing the margined chart of one empty PR at `scroll`, one row per string.
     fn body(w: u16, h: u16, scroll: (u16, u16)) -> Vec<String> {
-        let c = layout(&[pr("api", &[])], &[], 0).chart.with_margin(Margin { horizontal: 2, vertical: 1 });
+        let c = layout(&[pr("api", &[])], &[], &NeedsUser::default(), 0).chart.with_margin(Margin { horizontal: 2, vertical: 1 });
         let mut dst = Buffer::empty(Rect::new(0, 0, w, h));
         c.blit(&mut dst, Rect::new(0, 0, w, h), scroll, None);
         (0..h).map(|y| (0..w).map(|x| dst[(x, y)].symbol()).collect()).collect()

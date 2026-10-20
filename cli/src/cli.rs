@@ -10,7 +10,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
-use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, policy, pr, session, watch};
+use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, policy, pr, session, slot, watch};
 
 /// The build's version string: `<Cargo.toml version>-<short commit hash>` (or `-unknown`).
 pub fn version() -> &'static str {
@@ -69,6 +69,8 @@ pub enum Command {
     Config(config::ConfigArgs),
     /// Print the Tiers and their valid efforts (commands.md §14.3)
     Tiers(config::TiersArgs),
+    /// Run a command inside a test slot (commands.md §23)
+    Slot(slot::Args),
 }
 
 /// Parses `argv` and runs the command.
@@ -117,6 +119,19 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
+        Command::Slot(a) => slot_exit(slot::run(a)),
+    }
+}
+
+/// `cpd slot` is transparent to its command (commands.md §23): it ends the process with the command's exit status, and
+/// its own refusals are the error envelope on stderr. It never returns.
+fn slot_exit(result: Result<u8, CpdError>) -> ! {
+    match result {
+        Ok(status) => std::process::exit(i32::from(status)),
+        Err(err) => {
+            eprint!("{}", cpd_core::output::to_line(&err));
+            std::process::exit(i32::from(err.exit().code()))
+        }
     }
 }
 
@@ -237,7 +252,7 @@ mod tests {
         keys.sort();
         assert_eq!(keys, ["protocol", "store", "version"]);
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 6);
+        assert_eq!(fields["protocol"], 7);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors
