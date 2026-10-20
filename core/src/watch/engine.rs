@@ -114,13 +114,17 @@ impl Engine {
     }
 }
 
-/// The PRs E7 starts: `waiting` in a Plan in `dispatch`, every need `merged`, and
-/// not marked `start_failed_at` (§3.7). Oldest Plan first, then by key.
-const STARTABLE: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
-  WHERE p.phase = 'dispatch' AND r.status = 'waiting' AND r.start_failed_at IS NULL
-    AND NOT EXISTS (SELECT 1 FROM pr_needs n JOIN prs q ON q.plan = n.plan AND q.key = n.needs
-                     WHERE n.plan = r.plan AND n.pr = r.key AND q.status <> 'merged')
-  ORDER BY p.created_at, r.plan, r.key";
+/// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
+/// another Plan too, and the base PR, if any, started), and not marked `start_failed_at` (§3.7). Oldest Plan first,
+/// then by key.
+fn startable() -> String {
+    format!(
+        "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
+          WHERE p.phase = 'dispatch' AND r.status = 'waiting' AND r.start_failed_at IS NULL AND {}
+          ORDER BY p.created_at, r.plan, r.key",
+        start_pr::READY
+    )
+}
 
 /// E7, PR start (§3.7, §3.8): starts each startable PR. A failed setup (worktree,
 /// remote check or `pre-start`) marks the PR `start_failed_at` and appends one
@@ -128,7 +132,7 @@ const STARTABLE: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = 
 /// the Lead retries with `cpd pr start`.
 fn start_prs(engine: &mut Engine) {
     let waiting = engine.store.read(|conn| {
-        let mut stmt = conn.prepare(STARTABLE)?;
+        let mut stmt = conn.prepare(&startable())?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter().map(|(plan, key)| Ok((PlanId::parse(&plan)?, PrKey::parse(&key)?))).collect::<Result<Vec<_>, CpdError>>()
     });

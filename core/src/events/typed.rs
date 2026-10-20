@@ -217,6 +217,23 @@ impl NewEvent {
         )
     }
 
+    /// `pr-base-changed` (§5.2): `number` and `url` are the pull request's, set by the poll (`by` `poll`) only.
+    pub fn pr_base_changed(
+        text: impl Into<String>,
+        pr: impl Serialize,
+        (from, to): (&str, &str),
+        (from_pr, to_pr): (Option<&str>, Option<&str>),
+        by: &str,
+        pull_request: Option<(i64, &str)>,
+    ) -> NewEvent {
+        let mut data = json!({"pr": pr, "from": from, "to": to, "from_pr": from_pr, "to_pr": to_pr, "by": by});
+        if let Some((number, url)) = pull_request {
+            data["number"] = json!(number);
+            data["url"] = json!(url);
+        }
+        make(Kind::PrBaseChanged, text, data)
+    }
+
     pub fn pr_opened(text: impl Into<String>, pr: impl Serialize, number: i64, url: &str) -> NewEvent {
         make(Kind::PrOpened, text, json!({"pr": pr, "number": number, "url": url}))
     }
@@ -375,6 +392,10 @@ mod tests {
             Kind::PrEdited => vec![NewEvent::pr_edited(T, s, [s])],
             Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s)],
             Kind::PrStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
+            Kind::PrBaseChanged => vec![
+                NewEvent::pr_base_changed(T, s, (s, s), (None, Some(s)), s, None),
+                NewEvent::pr_base_changed(T, s, (s, s), (Some(s), None), s, Some((1, s))),
+            ],
             Kind::PrOpened => vec![NewEvent::pr_opened(T, s, n, s)],
             Kind::PrMerged => vec![NewEvent::pr_merged(T, s, n, s, None)],
             Kind::Escalation => vec![NewEvent::escalation(T, s, s)],
