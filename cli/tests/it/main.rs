@@ -51,6 +51,7 @@ mod review;
 mod session_reload;
 mod session;
 mod session_send;
+mod session_titles;
 mod session_watchdog;
 mod spec;
 mod store;

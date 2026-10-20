@@ -29,7 +29,7 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
     let lead = SessionId::parse(&lead)?;
     if old == title {
         // A rerun repairs the pane's header too.
-        retitle(&env, &lead, title)?;
+        retitle(&mut env, &lead, title)?;
         out["already"] = json!(true);
         return Ok(Output::success(out));
     }
@@ -40,6 +40,6 @@ pub(super) fn rename(args: RenameArgs) -> Result<Output, CpdError> {
         append(tx, event)?;
         Ok(())
     })?;
-    retitle(&env, &lead, title)?;
+    retitle(&mut env, &lead, title)?;
     Ok(Output::success(out))
 }

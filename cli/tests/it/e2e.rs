@@ -315,7 +315,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(calls[0][calls[0].len() - 2..], ["--".to_owned(), format!("@{}", message_file.display())]);
     assert!(!calls[0].contains(&"--fork".to_owned()), "{calls:?}");
     cursor = fx.cursor();
-    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--title", "Change the PR", "--plan", PLAN]);
     assert_eq!(out["pr"]["base"], "main");
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay/pay");
     assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);
@@ -337,7 +337,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
     assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
-    let review = fx.ok(&["plan", "review", "--plan", PLAN]);
+    let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     assert_eq!(review["review"]["id"], "r1");
     let decided = fx.ok(&["plan", "decide", "r1", "--approve", "--plan", PLAN]);
     assert_eq!(decided["current"], true);
@@ -463,7 +463,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     // The engine's polls (`api graphql`) aside, `pr open` made these two calls.
     let gh: Vec<_> = fx.env.calls("gh").into_iter().filter(|c| c[0] != "api").collect();
     assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "all", "--json", "number,url,state"]);
-    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Retry failed payouts"]);
+    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Change the PR"]);
     let body = &gh[1][9];
     for sha in [&api_merged["data"]["sha"], &ui_merged["data"]["sha"]] {
         assert!(body.contains(sha.as_str().unwrap()), "{body}");
