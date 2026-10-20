@@ -500,7 +500,12 @@ struct Outer<'a> {
 
 impl<'a> Outer<'a> {
     fn attach(env: &'a TestEnv, width: u16, height: u16) -> Outer<'a> {
-        let outer = Outer { env, socket: format!("{}-outer", env.tmux_socket()) };
+        // A socket of its own for each client: `kill-server` (on drop) returns before the server is gone, so a
+        // test that attaches again (one client per width) on the same socket could reach the dying server ("server
+        // exited unexpectedly").
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let outer = Outer { env, socket: format!("{}-outer{n}", env.tmux_socket()) };
         let attach = format!("env -u TMUX tmux -L {} attach -t cpd", env.tmux_socket());
         let (w, h) = (width.to_string(), height.to_string());
         // without its own status line, so the client is the whole window
