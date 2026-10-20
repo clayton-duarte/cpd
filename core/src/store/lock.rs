@@ -28,7 +28,7 @@ const RETRY: Duration = Duration::from_millis(20);
 
 /// What the holder of `locks/store.lock` writes into it while it migrates
 /// (contract §1.4, "The migration marker").
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Marker {
     migrating: bool,
     pid: u32,
@@ -63,7 +63,9 @@ fn unix_ms() -> u64 {
 }
 
 /// The held setup lock. Dropping it releases the `flock` and, first, empties
-/// the file: a marker never outlives the migration, however it ended.
+/// the file: the marker stays until the holder's whole setup is over and goes
+/// as the last step before the release, however the setup ended, so a waiter
+/// that saw it never finds the lock held with no marker (§1.4).
 pub(super) struct SetupLock {
     file: File,
     path: PathBuf,
@@ -89,6 +91,7 @@ impl SetupLock {
 
 impl Drop for SetupLock {
     fn drop(&mut self) {
+        // The last step; `file` closes, and the `flock` goes, right after.
         let _ = self.file.set_len(0);
     }
 }
@@ -100,7 +103,8 @@ fn failed(what: &str, path: &Path, e: std::io::Error) -> CpdError {
 /// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
 /// use. Waits for a holder that is not migrating at most `busy_ms` (the
 /// config's `store_busy_ms`) and for one that migrates at most
-/// [`MIGRATION_WAIT_CEILING`]: then `lock_timeout` (exit 5) naming the lock
+/// [`MIGRATION_WAIT_CEILING`], also after the marker is gone while the `flock`
+/// stays held (the holder is in the last steps of its setup): then `lock_timeout` (exit 5) naming the lock
 /// file and the time waited (§4.2). On its first wait for a migration it says
 /// so, once, on stderr.
 pub(super) fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<SetupLock, CpdError> {
@@ -116,6 +120,8 @@ fn acquire(home: &CpdHome, busy_ms: u64, ceiling: Duration) -> Result<SetupLock,
     let busy = Duration::from_millis(busy_ms);
     let mut deadline = Instant::now() + busy;
     let mut said = false;
+    // The last live marker this wait read: the migrating holder, while it still holds the `flock`.
+    let mut seen: Option<Marker> = None;
     loop {
         if flock::try_lock(&file).map_err(|e| failed("lock", &path, e))? {
             let lock = SetupLock { file, path };
@@ -123,7 +129,16 @@ fn acquire(home: &CpdHome, busy_ms: u64, ceiling: Duration) -> Result<SetupLock,
             lock.file.set_len(0).map_err(|e| failed("clear", &lock.path, e))?;
             return Ok(lock);
         }
-        match read_marker(&path).filter(Marker::live) {
+        // A marker that is not a live migration's (a dead pid, `migrating: false`) is not the holder we saw; an
+        // empty or unreadable file is the same holder in the instants around its marker, or just before it
+        // releases: it truncates the file as the last step before it releases the `flock` (§1.4).
+        let holder = match read_marker(&path) {
+            Some(marker) if marker.live() => Some(marker),
+            Some(_) => None,
+            None => seen.clone().filter(Marker::live),
+        };
+        seen = holder.clone();
+        match holder {
             Some(holder) => {
                 let migrated = holder.migrated_for();
                 if migrated >= ceiling {

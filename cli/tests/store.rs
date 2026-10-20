@@ -1671,6 +1671,13 @@ fn hold_setup_lock(h: &CpdHome, marker: Option<Value>) -> Holder {
     Holder { _lock: lock }
 }
 
+impl Holder {
+    /// The migrating holder's marker going away while it still holds the lock.
+    fn clear_marker(&self) {
+        self._lock.set_len(0).unwrap();
+    }
+}
+
 fn migrating_marker(pid: u32) -> Value {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
     json!({"migrating": true, "pid": pid, "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd test-migration"})
@@ -1693,6 +1700,29 @@ fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
     release.join().unwrap();
     store.expect("the open waits for the migration");
     assert!(waited >= Duration::from_millis(1400), "did not wait for the migration: {waited:?}");
+}
+
+/// hs-n278, contract §4.2: a waiter that saw the migrating holder's marker keeps waiting while the same holder
+/// holds the lock after the marker is gone, until the release, whatever its own `busy_ms`.
+#[test]
+fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone() {
+    let env = TestEnv::new();
+    let h = home(&env);
+    let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
+    // time-claim: the waiter (1 ms bound) polls every 20 ms, so it reads the marker within the first 300 ms, then the
+    // lock stays held for 300 ms more without a marker; no per-poll signal from the waiter.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        holder.clear_marker();
+        std::thread::sleep(Duration::from_millis(300));
+        drop(holder);
+    });
+    let start = Instant::now();
+    let store = Store::open(&h, 1);
+    let waited = start.elapsed();
+    release.join().unwrap();
+    store.expect("the waiter outlasts the marker, until the release");
+    assert!(waited >= Duration::from_millis(550), "did not wait for the release: {waited:?}");
 }
 
 /// hs-n278: a holder with no marker keeps the `store_busy_ms` bound.
