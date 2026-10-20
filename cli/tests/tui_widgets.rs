@@ -8,6 +8,7 @@ mod common;
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
 use cpd_core::home::CpdHome;
+use cpd_core::host::tmux::PANE_DIED_HOOK;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
 use cpd_tui::read::{self, Dot, Widgets};
@@ -143,7 +144,7 @@ fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
 fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut hits = vec![];
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note, 0).hits).unwrap();
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), note, 0).hits).unwrap();
     (terminal.backend().buffer().clone(), hits)
 }
 
@@ -240,7 +241,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, "", 0))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
@@ -672,6 +673,59 @@ fn in_a_pane_each_arrow_is_a_link_at_the_right_edge_and_the_view_captures_the_mo
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{mouse_any_flag}"]), "1", "mouse capture is on");
 }
 
+/// `q` does nothing in the column: with the cockpit's `pane-died` hook a view that exits is started again, so a `q` that
+/// ended the program would be a restart (tui-W1).
+#[test]
+fn q_does_not_end_the_view() {
+    let env = pane_env();
+    prs_store(&env);
+    let pane = start(&env, "view");
+    tmux_out(&env, &["set", "-p", "-t", &pane, "@cpd_view", "widgets"]);
+    tmux_out(&env, &["set", "-g", "remain-on-exit", "on"]);
+    tmux_out(&env, &["set-hook", "-g", "pane-died", PANE_DIED_HOOK]);
+    wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    let pid = tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid}"]);
+    tmux_out(&env, &["send-keys", "-t", &pane, "q"]);
+    // time-claim: for 2 s after the `q`, the program has not ended (the same pid, not dead).
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_pid} #{pane_dead}"]), format!("{pid} 0"), "the program ended");
+    assert!(screen(&env, &pane).iter().any(|r| r.contains("acme/repo#20")));
+}
+
+/// A failed read keeps the column on screen and shows the error in its last row; the next refresh reads again, and the
+/// error goes when a read succeeds (tui-W4). The read is made to fail by renaming the table it reads.
+#[test]
+fn a_failed_read_keeps_the_column_and_shows_the_error_until_a_read_succeeds() {
+    let env = pane_env();
+    prs_store(&env);
+    let pane = start(&env, "view");
+    wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    // not through `Store`, which refuses a changed schema
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("ALTER TABLE pull_requests RENAME TO pull_requests_gone;");
+    let screen = wait_for_screen(&env, &pane, "the error in the last row", |s| s.iter().any(|r| r.contains("no such table")));
+    assert!(screen.iter().any(|r| r.contains("acme/repo#20")), "the column stays: {screen:?}");
+    raw("ALTER TABLE pull_requests_gone RENAME TO pull_requests;");
+    wait_for_screen(&env, &pane, "the error to go", |s| {
+        !s.iter().any(|r| r.contains("no such table")) && s.iter().any(|r| r.contains("acme/repo#20"))
+    });
+}
+
+/// A follow that fails is shown in the column's last row, the column stays (tui-G4): the highest Event id fell below
+/// the cursor, which is what a replaced database looks like.
+#[test]
+fn a_follow_that_fails_is_shown_and_the_column_stays() {
+    let env = pane_env();
+    prs_store(&env);
+    let pane = start(&env, "view");
+    wait_for_screen(&env, &pane, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    // not through `Store`, which keeps the Events append-only
+    let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
+    raw("DROP TRIGGER events_no_delete; DELETE FROM events;");
+    let screen = wait_for_screen(&env, &pane, "the error in the last row", |s| s.iter().any(|r| r.contains("Event cursor")));
+    assert!(screen.iter().any(|r| r.contains("acme/repo#20")), "the column stays: {screen:?}");
+}
+
 #[test]
 fn a_click_on_an_owned_row_opens_its_lead_and_focuses_the_chat_and_the_others_run_nothing() {
     let env = pane_env();
@@ -798,7 +852,7 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     let mut drawn = None;
-    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w, &machine(), "", 0))).unwrap();
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0))).unwrap();
     let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
     let buf = terminal.backend().buffer().clone();
     for (y, icon) in [(7, false), (9, true), (11, true)] {
