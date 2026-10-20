@@ -132,8 +132,8 @@ fn pull_request(env: &TestEnv, n: u32, set: &str) {
     store
         .write("test", |tx| {
             tx.execute(
-                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
-                 VALUES ('acme/shop', ?1, 'https://github.com/acme/shop/pull/' || ?1, 'T', 0, 'open', 'none', 'none', 't', 't')",
+                "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state)
+                 VALUES ('acme/shop', ?1, 'https://github.com/acme/shop/pull/' || ?1, 'T', 0, 'open', 'none', 'none', 't', 't', 'clean')",
                 [n],
             )?;
             tx.execute(&format!("UPDATE pull_requests SET {set} WHERE number = {n}"), [])?;
@@ -150,6 +150,8 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
     pull_request(&env, 2, "review_decision = 'changes_requested'");
     pull_request(&env, 3, "checks = 'passed', mergeable = 'mergeable'");
     pull_request(&env, 4, "authored = 0, review_requested = 1");
+    // #2385 of missionlane/cc-api-orc-apollo (hs-d481): everything looks ready, but GitHub's merge state is BLOCKED.
+    pull_request(&env, 5, "checks = 'passed', mergeable = 'mergeable', merge_state = 'blocked', review_decision = 'none'");
     let items = found(&env);
     let seen: Vec<_> = items.iter().map(|c| (c.kind, c.urgency, c.label.as_str())).collect();
     assert_eq!(
@@ -157,7 +159,7 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
         [
             (Kind::PrReady, Urgency::Yellow, "shop#3 ready to merge"),
         ],
-        "a conflict (1) and changes requested (2) open no item (hs-d470); pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
+        "a conflict (1) and changes requested (2) open no item (hs-d470); a blocked merge state (5, #2385) is not ready (hs-d481); pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
     );
     assert_eq!(items[0].subject, "pr:acme/shop#3");
     assert_eq!(items[0].url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
@@ -237,10 +239,10 @@ fn an_owned_row_takes_its_prs_policy_not_the_default_of_an_unowned_row() {
     };
     own("shop");
     assert!(failing(&env).is_empty(), "an owned row opens no pr-failing (hs-d302)");
-    assert_eq!(ready(&env), ["pr:acme/shop#5"], "the PR's key is acme/shop: owner none, so its failed checks do not count");
+    assert_eq!(ready(&env), ["pr:acme/shop#5"], "ready by merge state and review, whatever its checks (hs-d481)");
 
     policy_file(&env, "repos/acme/shop.toml", "[pr.feedback]\nchecks = \"any\"\n");
-    assert!(ready(&env).is_empty(), "its repo says any: failed checks keep it from ready");
+    assert_eq!(ready(&env), ["pr:acme/shop#5"], "its repo says any: failed checks no longer keep it from ready (hs-d481)");
     assert!(failing(&env).is_empty(), "and still no pr-failing for an owned row (hs-d302)");
 }
 

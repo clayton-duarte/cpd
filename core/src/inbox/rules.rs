@@ -990,9 +990,9 @@ mod tests {
     fn pull_request(f: &mut Fixture, n: i64, checks: &str, mergeable: &str, review: &str) {
         f.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
-                                        mergeable, authored, review_requested)
+                                        mergeable, authored, review_requested, merge_state)
              VALUES ('acme/shop', {n}, 'https://github.com/acme/shop/pull/{n}', 'T', 0, 'open', '{review}', '{checks}', '{T}', '{T}',
-                     '{mergeable}', 1, 0);"
+                     '{mergeable}', 1, 0, 'clean');"
         ));
     }
 
@@ -1055,7 +1055,65 @@ mod tests {
         set(&mut f, 4, "draft = 0, review_decision = 'changes_requested'");
         assert!(f.of(Kind::PrReady).is_empty());
         set(&mut f, 4, "review_decision = 'approved', checks = 'pending'");
-        assert!(f.of(Kind::PrReady).is_empty());
+        assert_eq!(f.of(Kind::PrReady).len(), 1, "checks no longer matter (hs-d481)");
+    }
+
+    /// The exact row of missionlane/cc-api-orc-apollo#2385 (hs-d481): everything looks ready but GitHub says BLOCKED.
+    #[test]
+    fn the_state_of_cc_api_orc_apollo_2385_is_not_ready() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 5, "passed", "mergeable", "none");
+        set(&mut f, 5, "merge_state = 'blocked'");
+        assert!(f.of(Kind::PrReady).is_empty(), "unowned");
+        own(&mut f, 5);
+        assert!(f.of(Kind::PrReady).is_empty(), "owned");
+    }
+
+    #[test]
+    fn pr_ready_is_decided_by_merge_state_and_review_decision_hs_d481() {
+        let ready = |merge_state: &str, review: &str| {
+            let mut f = fixture("dispatch");
+            pull_request(&mut f, 1, "passed", "mergeable", review);
+            set(&mut f, 1, &format!("merge_state = '{merge_state}'"));
+            !f.of(Kind::PrReady).is_empty()
+        };
+        for merge_state in ["clean", "unstable", "has_hooks"] {
+            for review in ["approved", "none"] {
+                assert!(ready(merge_state, review), "{merge_state} {review} is ready");
+            }
+            assert!(!ready(merge_state, "changes_requested"), "{merge_state} with changes requested is not ready");
+        }
+        for merge_state in ["blocked", "behind", "dirty", "unknown", "draft"] {
+            for review in ["approved", "none", "changes_requested"] {
+                assert!(!ready(merge_state, review), "{merge_state} {review} is not ready");
+            }
+        }
+    }
+
+    #[test]
+    fn checks_no_longer_matter_to_pr_ready_hs_d481() {
+        let mut f = fixture("dispatch");
+        let owners = f.home.root().join("policy/owners");
+        std::fs::create_dir_all(&owners).unwrap();
+        std::fs::write(owners.join("acme.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"any\"\n").unwrap();
+        for (n, checks) in [(1, "failed"), (2, "pending")] {
+            pull_request(&mut f, n, checks, "mergeable", "none");
+        }
+        own(&mut f, 1);
+        set(&mut f, 1, "merge_state = 'unstable'");
+        assert_eq!(f.of(Kind::PrReady).len(), 2, "clean or unstable is ready under `any`, whatever the checks");
+    }
+
+    #[test]
+    fn an_open_pr_ready_item_closes_when_its_pull_request_becomes_blocked_hs_d481() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 5, "passed", "mergeable", "none");
+        let found = conditions(&mut f.store, &f.home).unwrap();
+        assert_eq!(reconcile(&mut f.store, &found, T).unwrap().opened.len(), 1);
+        set(&mut f, 5, "merge_state = 'blocked'");
+        let found = conditions(&mut f.store, &f.home).unwrap();
+        let changes = reconcile(&mut f.store, &found, T).unwrap();
+        assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1), "the open item closes");
     }
 
     #[test]
@@ -1068,20 +1126,21 @@ mod tests {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
         assert_eq!(f.of(Kind::PrReady).len(), 3);
-        assert!(f.of(Kind::PrFailing).is_empty());
         set(&mut f, 1, "draft = 1");
         set(&mut f, 2, "review_decision = 'changes_requested'");
-        set(&mut f, 3, "mergeable = 'conflicting'");
-        assert!(f.of(Kind::PrReady).is_empty(), "draft, changes requested and conflict still bar it");
+        set(&mut f, 3, "merge_state = 'blocked'");
+        assert!(f.of(Kind::PrReady).is_empty(), "draft, changes requested and a blocked merge state still bar it");
     }
 
     #[test]
-    fn with_feedback_checks_any_a_pr_is_ready_only_when_its_checks_passed() {
+    fn with_feedback_checks_any_a_pr_is_ready_by_merge_state_and_review_alone() {
         let mut f = fixture("dispatch");
         for (n, checks) in [(1, "none"), (2, "failed"), (3, "pending"), (4, "passed")] {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
-        assert_eq!(one(f.of(Kind::PrReady)).subject, "pr:acme/shop#4");
+        assert_eq!(f.of(Kind::PrReady).len(), 4, "checks do not decide (hs-d481)");
+        set(&mut f, 4, "merge_state = 'blocked'");
+        assert_eq!(f.of(Kind::PrReady).len(), 3);
     }
 
     #[test]
