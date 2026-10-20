@@ -29,7 +29,7 @@ use crate::host::limit::limit;
 use crate::host::git_guard;
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
-use crate::ids::{PlanId, SessionId};
+use crate::ids::SessionId;
 use crate::output::Output;
 use crate::store;
 
@@ -165,20 +165,14 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
 /// a change after it is a pi the Lead has not run yet. `None` when the range
 /// of ports is full and the User ended the input.
 fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, Option<Watched>)>, CpdError> {
-    // A Lead with a Plan gets the Plan's port; a Context's Manager gets none (§6.5).
-    let port = match &row.plan {
-        Some(plan) => match assign_port(env, plan)? {
-            Some(port) => Some(port),
-            None => return Ok(None),
-        },
-        None => None,
-    };
+    // A Lead with a Plan gets the Plan's port; a Context's Manager gets its Context's (§6.5, hs-d496).
+    let Some(port) = assign_port(env, row)? else { return Ok(None) };
     // `None`: a fork whose source can never become idle reached the end of input (main #60, hs-d196).
     let Some(start) = start(env, dirs, row)? else { return Ok(None) };
     let candidates = pi::lead_candidates(&env.config.pi_adapter_dir()?, &env.config.lead_pi_packages);
     let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), dirs, &mut std::io::stderr());
     // The port is the Plan's, whatever the environment holds; the host is the review host (§6.5).
-    let plannotator = Plannotator { port: port.map(|p| p.to_string()), url_host: review_host(&mut std::io::stderr()) };
+    let plannotator = Plannotator { port: Some(port.to_string()), url_host: review_host(&mut std::io::stderr()) };
     git_guard::install(&env.home)?;
     let launch = pi::lead(&LeadLaunch {
         home: &env.home,
@@ -296,9 +290,13 @@ pub(super) fn patiently<T>(what: &str, mut access: impl FnMut() -> Result<T, Cpd
 
 /// The Plan's plannotator port. When the range is full the pane says so, names the
 /// Plans that hold it and waits for Enter to try again; `None` at the end of input.
-fn assign_port(env: &mut Env, plan: &PlanId) -> Result<Option<u16>, CpdError> {
+fn assign_port(env: &mut Env, row: &Row) -> Result<Option<u16>, CpdError> {
     loop {
-        match patiently("assigning the Plan's port", || port::assign(&env.home, &mut env.store, &env.config, plan)) {
+        let assigned = patiently("assigning the plannotator port", || match &row.plan {
+            Some(plan) => port::assign(&env.home, &mut env.store, &env.config, plan),
+            None => port::assign_manager(&env.home, &mut env.store, &env.config, &row.context),
+        });
+        match assigned {
             Ok(port) => return Ok(Some(port)),
             Err(e) if e.code() == ErrorCode::NoPort => {
                 print!("\n  {}: {}\n  Press Enter to retry.\n", e.code(), e.message());
