@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, run_hook};
-use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run};
+use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run, worktree_list};
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
@@ -67,7 +67,7 @@ pub struct Worktree {
 
 /// Every worktree of the repo `dir` belongs to; the first is the main one.
 pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
-    let text = ok(dir, &["worktree", "list", "--porcelain"])?;
+    let text = worktree_list(dir)?;
     let mut found = Vec::new();
     for block in text.split("\n\n") {
         let mut path = None;
