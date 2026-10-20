@@ -1727,7 +1727,7 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             let mut rows_before = rows_before;
             assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
             // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(47));
+            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(48));
             assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
             assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
             let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
@@ -2572,4 +2572,23 @@ fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     // Before the lock any PR may change, as before.
     write(&mut store, "UPDATE prs SET base = 'develop' WHERE plan = 'other'").unwrap();
+}
+
+// ---------- named migration `event-pr-base-changed` (§4.5, §5.2) ----------
+
+#[test]
+fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
+    let migration = NAMED.iter().find(|n| n.name.ends_with("-event-pr-base-changed")).unwrap();
+    assert_eq!(migration.compat, Compat::Additive);
+    assert_eq!(migration.sql.lines().next().unwrap(), "-- cpd-migration: additive");
+
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-event-pr-base-changed")).collect();
+    drop(crate::store::tests::open_named(&home, &earlier).unwrap());
+    let before: i64 = connection(&home.db()).query_row("SELECT count(*) FROM event_kinds", [], |r| r.get(0)).unwrap();
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1])]);
 }
