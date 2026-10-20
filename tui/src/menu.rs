@@ -281,4 +281,63 @@ mod tests {
         assert!(buf[(5, 2)].modifier.contains(Modifier::REVERSED), "the selected item");
         assert!(!buf[(5, 3)].modifier.contains(Modifier::REVERSED));
     }
+
+    // ---- a busy entry (hs-d495): the spinner in place of the button, and not selectable ----
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct Maybe(&'static str, bool);
+
+    impl Entry for Maybe {
+        fn label(self) -> &'static str {
+            self.0
+        }
+
+        fn busy(self) -> bool {
+            self.1
+        }
+    }
+
+    /// `Merge` (busy) and `Copy Link`, at (5, 2): the box is x 5..=17, y 2..=5.
+    fn merging() -> Menu<Maybe> {
+        Menu::new(vec![Maybe("Merge", true), Maybe("Copy Link", false)], Position::new(5, 2))
+    }
+
+    #[test]
+    fn a_busy_entry_is_never_picked_by_enter_whatever_the_selection() {
+        let mut menu = merging();
+        let key = |menu: &mut Menu<Maybe>, code| menu.key(KeyEvent::new(code, KeyModifiers::NONE));
+        assert_ne!(key(&mut menu, KeyCode::Enter), Outcome::Pick(Maybe("Merge", true)), "Enter on the busy entry, where the selection starts");
+        key(&mut menu, KeyCode::Down);
+        assert_eq!(key(&mut menu, KeyCode::Enter), Outcome::Pick(Maybe("Copy Link", false)), "the entry below it is picked");
+        key(&mut menu, KeyCode::Up);
+        assert_ne!(key(&mut menu, KeyCode::Enter), Outcome::Pick(Maybe("Merge", true)), "Enter on it again");
+        assert_ne!(key(&mut menu, KeyCode::Enter), Outcome::Close, "Enter on it does not even close the menu: it does nothing");
+    }
+
+    #[test]
+    fn a_click_on_a_busy_entry_does_nothing_and_the_rest_of_the_menu_works() {
+        let mut menu = merging();
+        let left = |x, y| mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+        assert_eq!(menu.mouse(PANE, left(7, 3)), Outcome::Stay, "the busy entry: not picked, not closed");
+        assert_eq!(menu.click(PANE, Position::new(7, 3)), Outcome::Stay);
+        assert_eq!(menu.mouse(PANE, left(7, 4)), Outcome::Pick(Maybe("Copy Link", false)));
+        assert_eq!(menu.mouse(PANE, left(30, 10)), Outcome::Close, "outside closes as ever");
+    }
+
+    #[test]
+    fn a_busy_entry_is_drawn_with_the_spinner_frame_beside_its_label_and_the_others_are_as_before() {
+        let menu = merging();
+        for frame in 0..crate::palette::SPINNER.len() {
+            let mut terminal = Terminal::new(TestBackend::new(30, 8)).unwrap();
+            terminal.draw(|f| menu.draw_at(f, f.area(), frame)).unwrap();
+            let buf = terminal.backend().buffer();
+            let rect = menu.rect(Rect::new(0, 0, 30, 8));
+            let line = |y: u16| (rect.x..rect.right()).map(|x| buf[(x, y)].symbol()).collect::<String>();
+            let (merge, copy) = (line(rect.y + 1), line(rect.y + 2));
+            assert!(merge.starts_with('│') && merge.ends_with('│'), "frame {frame}: the box holds the whole row: {merge:?}");
+            assert!(merge.contains("Merge") && merge.contains(crate::palette::SPINNER[frame]), "frame {frame}: {merge:?}");
+            assert!(crate::palette::SPINNER.iter().all(|s| !copy.contains(s)), "frame {frame}: only the busy entry shows it: {copy:?}");
+            assert!(copy.contains("Copy Link") && copy.starts_with('│') && copy.ends_with('│'), "frame {frame}: {copy:?}");
+        }
+    }
 }

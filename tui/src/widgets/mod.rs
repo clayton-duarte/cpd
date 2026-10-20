@@ -426,6 +426,14 @@ mod tests {
     }
 
     #[test]
+    fn the_view_redraws_every_spinner_frame_while_a_shown_pr_merges_too() {
+        let merging = read::OpenPr { clean: true, merging: true, ..pr(false) };
+        assert_eq!(tick(&[pr(false), merging.clone()]), FRAME, "the merge spinner turns");
+        assert!(spins(&[merging]));
+        assert_eq!(tick(&[pr(false)]), TICK);
+    }
+
+    #[test]
     fn the_view_redraws_every_spinner_frame_while_a_shown_leads_works_and_every_tick_otherwise() {
         assert_eq!(tick(&[]), TICK);
         assert_eq!(tick(&[pr(false), pr(false)]), TICK);

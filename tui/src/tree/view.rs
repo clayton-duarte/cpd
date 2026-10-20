@@ -2111,6 +2111,63 @@ mod tests {
         assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::History(sid("f-blocked"))));
     }
 
+    /// Two `pr-ready` items, `acme/api#3` and `acme/api#4`, and a `plan-review` between them, on the sample tree.
+    fn two_ready() -> View {
+        let ready = |id, number: i64| {
+            let mut ready = item(id, InboxKind::PrReady, Urgency::Yellow, &format!("api#{number} ready"), "2026-01-02T23:00:00.000Z");
+            ready.subject = format!("pr:acme/api#{number}");
+            ready
+        };
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![ready(1, 3), ready(2, 4)];
+        view
+    }
+
+    fn merging(pulls: &[&str]) -> BTreeSet<String> {
+        pulls.iter().map(|p| (*p).to_owned()).collect()
+    }
+
+    /// The glyph cell of the Inbox row `row`, drawn at `frame`.
+    fn glyph(view: &mut View, row: u16, frame: usize) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
+        terminal.draw(|f| view.draw_at(f, frame, now())).unwrap();
+        terminal.backend().buffer()[(4, row)].symbol().to_owned()
+    }
+
+    #[test]
+    fn a_pr_ready_item_whose_merge_runs_shows_the_spinner_in_its_glyph_cell_and_the_others_keep_their_glyph() {
+        let mut view = two_ready();
+        draw_now(&mut view, 43, 16);
+        let (first, second) = (inbox_row(&view, 0), inbox_row(&view, 1));
+        assert_eq!((glyph(&mut view, first, 0).as_str(), glyph(&mut view, second, 0).as_str()), (crate::palette::TIER_YELLOW, crate::palette::TIER_YELLOW));
+        view.set_merging(merging(&["acme/api#3"]));
+        for frame in 0..SPINNER.len() {
+            assert_eq!(glyph(&mut view, first, frame), SPINNER[frame], "the merging item, frame {frame}: the shared clock's spinner");
+            assert_eq!(glyph(&mut view, second, frame), crate::palette::TIER_YELLOW, "the other item, frame {frame}");
+        }
+        // the markers go with the merge: the next snapshot's set is empty and the glyph is back
+        view.set_merging(BTreeSet::new());
+        assert_eq!(glyph(&mut view, first, 5), crate::palette::TIER_YELLOW);
+    }
+
+    #[test]
+    fn a_click_on_a_pr_ready_item_whose_merge_runs_does_nothing_and_the_other_still_opens_its_popup() {
+        let mut view = two_ready();
+        view.set_merging(merging(&["acme/api#3"]));
+        draw_now(&mut view, 43, 16);
+        let (first, second) = (inbox_row(&view, 0), inbox_row(&view, 1));
+        for column in [4, 10, 41] {
+            assert_eq!(click(&mut view, column, first), Effect::None, "the glyph cell, the label, the age: column {column}");
+        }
+        assert_eq!(click(&mut view, 10, second), Effect::Merge(Pull::from_subject("pr:acme/api#4").unwrap()), "another pull request");
+        // Enter on it, as a click
+        into_the_inbox(&mut view);
+        assert_eq!(view.inbox_cursor, Some(0));
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "Enter on the running item");
+        view.set_merging(BTreeSet::new());
+        assert_eq!(click(&mut view, 10, first), Effect::Merge(Pull::from_subject("pr:acme/api#3").unwrap()), "once the merge ends, the click merges again");
+    }
+
     /// The row of the Inbox item `i`, as the last frame drew it: under the empty row and the title.
     fn inbox_row(view: &View, i: u16) -> u16 {
         view.inbox_area.y + 2 + i
