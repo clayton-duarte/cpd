@@ -519,3 +519,187 @@ fn when_the_dialog_cannot_open_the_log_line_is_first_then_the_client_gets_the_me
     let saw = fs::read_to_string(&seen).unwrap();
     assert!(saw.lines().count() >= 1 && saw.lines().all(|l| l == "log"), "{saw:?}");
 }
+
+// ---------- the merge marker (hs-d495; commands.md §13.2 "A merge in progress", contract §1.4) ----------
+//
+// `cpd tui action merge` writes `$CPD_HOME/run/tui/merging/<owner>__<repo>__<n>.json` first, before `cpd pr merge`, and
+// removes it when the request ends. The fake `gh` of these tests notes whether that marker exists at each of its calls.
+
+/// The directory of the merge markers.
+pub(crate) fn markers(env: &TestEnv) -> PathBuf {
+    env.cpd_home().join("run/tui/merging")
+}
+
+/// The names of the files in it.
+pub(crate) fn marker_files(env: &TestEnv) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(markers(env))
+        .map(|entries| entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// A pid that is not alive: a child that has ended and been waited for.
+pub(crate) fn dead_pid() -> u32 {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+/// Writes the marker `file` (`<owner>__<repo>__<n>.json`) as the action does: `{"pid", "at"}`, by rename.
+pub(crate) fn put_marker(env: &TestEnv, file: &str, pid: u32) {
+    let dir = markers(env);
+    fs::create_dir_all(&dir).unwrap();
+    let temporary = dir.join(format!("{file}.tmp"));
+    fs::write(&temporary, format!(r#"{{"pid": {pid}, "at": "2026-10-20T12:00:00Z"}}"#)).unwrap();
+    fs::rename(&temporary, dir.join(file)).unwrap();
+}
+
+/// The marker of [`REF`].
+fn marker(env: &TestEnv) -> PathBuf {
+    markers(env).join("o__r__7.json")
+}
+
+/// What the fake `gh` noted for `call` (`view`, `merge`, `poll`): one `present` or `absent` line per call, by whether
+/// [`marker`] existed then.
+fn saw(env: &TestEnv, call: &str) -> Vec<String> {
+    fs::read_to_string(env.root().join(format!("saw-{call}"))).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+/// [`gh_with`] that notes, at each `pr view`, `pr merge` and `api graphql` (the poll), whether the marker exists
+/// ([`saw`]) and, at `pr merge`, keeps a copy of its text in `<root>/saw-merge-text`.
+fn gh_noting(env: &TestEnv, merge_state: &str, merge_exit: i32, release: Option<&Path>) {
+    let wait = release.map_or(String::new(), |file| {
+        format!("_i=0; while [ ! -e '{}' ] && [ $_i -lt 1200 ]; do _i=$((_i+1)); sleep 0.05; done; ", file.display())
+    });
+    env.fake_gh(&format!(
+        "_m='{marker}'; _r='{root}'\nnote() {{ if [ -e \"$_m\" ]; then echo present >> \"$_r/saw-$1\"; else echo absent >> \"$_r/saw-$1\"; fi; }}\n\
+         case \"$1 $2\" in\n\"pr view\") note view; echo '{{\"state\":\"OPEN\",\"mergeStateStatus\":\"{merge_state}\",\"headRefOid\":\"{SHA}\",\"title\":\"Add the thing\"}}'; exit 0;;\n\
+         \"pr merge\") note merge; [ -e \"$_m\" ] && cp \"$_m\" \"$_r/saw-merge-text\"; {wait}echo 'merge said no' >&2; exit {merge_exit};;\n\
+         \"api graphql\") note poll; {POLL_OK};;\nesac\nexit 9",
+        marker = marker(env).display(),
+        root = env.root().display()
+    ));
+}
+
+/// `cpd tui action merge o/r#7 --client <client>`, running in the background; killed when dropped.
+struct Running(std::process::Child);
+
+impl Running {
+    fn start(env: &TestEnv, client: &str) -> Running {
+        let mut cmd = env.command(CPD);
+        cmd.args(["tui", "action", "merge", REF, "--client", client]).stdout(Stdio::null()).stderr(Stdio::null());
+        Running(common::spawn(&mut cmd).unwrap())
+    }
+
+    fn pid(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Waits for it to end; whether it exited 0.
+    fn wait_ok(&mut self) -> bool {
+        let mut status = None;
+        wait_until("the action to end", || {
+            status = self.0.try_wait().unwrap();
+            status.is_some()
+        });
+        status.unwrap().success()
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The marker's JSON: its `pid` and its `at`, which must be an RFC 3339 time, and nothing else.
+fn marker_json(env: &TestEnv) -> serde_json::Value {
+    let text = fs::read_to_string(marker(env)).unwrap_or_else(|e| panic!("the marker {}: {e}", marker(env).display()));
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+    let at = json["at"].as_str().unwrap_or_else(|| panic!("an `at` string: {text}"));
+    assert!(time::OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).is_ok(), "{at:?} is RFC 3339");
+    assert_eq!(json.as_object().unwrap().len(), 2, "pid and at only: {text}");
+    json
+}
+
+#[test]
+fn the_action_writes_the_marker_before_the_merge_keeps_it_through_the_merge_and_the_poll_and_removes_it_after_a_success() {
+    let env = env();
+    gh_noting(&env, "CLEAN", 0, Some(&release_file(&env)));
+    fake_tmux(&env);
+    let mut action = Running::start(&env, CLIENT);
+    wait_until("pr merge to start", || !merges(&env).is_empty());
+    // first: it was there at the first `gh` call of `pr merge`, and while `gh pr merge` runs it names this action
+    assert_eq!(saw(&env, "view"), ["present"], "written before `cpd pr merge` runs anything");
+    assert_eq!(saw(&env, "merge"), ["present"]);
+    let json = marker_json(&env);
+    assert_eq!(json["pid"], action.pid(), "the action's pid: {json}");
+    assert_eq!(marker_files(&env), ["o__r__7.json"], "one file, and no temporary file beside it");
+
+    release(&env);
+    assert!(action.wait_ok(), "the action exits 0");
+    assert!(!saw(&env, "poll").is_empty() && saw(&env, "poll").iter().all(|s| s == "present"), "the marker stays through the poll: {:?}", saw(&env, "poll"));
+    assert_eq!(marker_files(&env), Vec::<String>::new(), "removed after the poll, and nothing left behind");
+    assert_eq!(merge_log(&env), Vec::<String>::new(), "a success says nothing");
+}
+
+#[test]
+fn a_refused_or_failed_merge_removes_the_marker_before_the_failure_dialog_opens() {
+    for (state, exit) in [("BLOCKED", 0), ("CLEAN", 1)] {
+        let env = env();
+        gh_noting(&env, state, exit, None);
+        // `display-popup` notes whether the marker exists when the dialog is opened, and fails (no client to show it on)
+        let marker = marker(&env);
+        fake_tmux_before(
+            &env,
+            &format!(
+                "case \"$*\" in *display-popup*) if [ -e '{m}' ]; then echo present >> '{r}/saw-popup'; else echo absent >> '{r}/saw-popup'; fi; echo 'no popup' >&2; exit 1;; esac",
+                m = marker.display(),
+                r = env.root().display()
+            ),
+        );
+        action(&env, "/dev/pts/nobody");
+        assert_eq!(saw(&env, "view"), ["present"], "{state}: written before `cpd pr merge` runs anything");
+        assert_eq!(saw(&env, "popup"), ["absent"], "{state}: the dialog opens after the marker is gone");
+        assert_eq!(marker_files(&env), Vec::<String>::new(), "{state}: no exit leaves it behind");
+        assert!(call_order(&env).iter().all(|c| c != "api graphql"), "{state}: a failed merge runs no poll");
+    }
+}
+
+#[test]
+fn a_second_action_while_a_live_marker_exists_runs_no_merge_opens_no_dialog_and_logs_merge_already_running() {
+    let env = env();
+    gh_noting(&env, "CLEAN", 0, None);
+    fake_tmux(&env);
+    // a merge of o/r#7 is running: its marker names a live process (this one)
+    put_marker(&env, "o__r__7.json", std::process::id());
+    let before = fs::read_to_string(marker(&env)).unwrap();
+    action(&env, CLIENT);
+    assert_eq!(env.calls("gh"), Vec::<Vec<String>>::new(), "no `pr merge` and not a `gh` call at all: {:?}", env.calls("gh"));
+    assert!(tmux_calls(&env, "display-popup").is_empty() && tmux_calls(&env, "display-message").is_empty(), "no dialog: {:?}", env.calls("tmux"));
+    assert_eq!(fs::read_to_string(marker(&env)).unwrap(), before, "the running merge's marker is not the second action's to touch");
+    let log = merge_log(&env);
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(log[0].contains("merge already running"), "{log:?}");
+}
+
+#[test]
+fn a_stale_marker_is_replaced_by_the_next_merge_action_and_another_pull_requests_marker_is_not_touched() {
+    let env = env();
+    gh_noting(&env, "CLEAN", 0, Some(&release_file(&env)));
+    fake_tmux(&env);
+    put_marker(&env, "o__r__7.json", dead_pid());
+    put_marker(&env, "o__r__8.json", std::process::id());
+    let other = fs::read_to_string(markers(&env).join("o__r__8.json")).unwrap();
+    let mut action = Running::start(&env, CLIENT);
+    wait_until("pr merge to start", || !merges(&env).is_empty());
+    assert_eq!(marker_json(&env)["pid"], action.pid(), "the dead pid's marker is replaced by this action's");
+    release(&env);
+    assert!(action.wait_ok());
+    assert_eq!(merges(&env).len(), 1, "the stale marker did not stop the merge");
+    assert_eq!(marker_files(&env), ["o__r__8.json"], "its own marker is removed, the other one stays");
+    assert_eq!(fs::read_to_string(markers(&env).join("o__r__8.json")).unwrap(), other);
+}
