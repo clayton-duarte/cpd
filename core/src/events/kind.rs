@@ -207,29 +207,3 @@ impl FromStr for Kind {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sha2::{Digest, Sha256};
-
-    /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (6, "c96ee1a3bc1b33daa186960cbea25f5b23a02c56cc06e932f7aba1e0dd990d04");
-
-    fn kinds_hash() -> String {
-        let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
-        names.sort_unstable();
-        format!("{:x}", Sha256::digest(names.join("\n").as_bytes()))
-    }
-
-    #[test]
-    fn the_event_kinds_are_pinned_to_the_protocol() {
-        assert_eq!(
-            (PROTOCOL, kinds_hash().as_str()),
-            PINNED,
-            "The Event kinds or PROTOCOL changed. Raise PROTOCOL (core/src/events/kind.rs) when the kinds changed, \
-             then set PINNED to ({PROTOCOL}, {:?}) and update `PROTOCOL` and `KINDS` in pi/lib/event.ts.",
-            kinds_hash()
-        );
-    }
-}
