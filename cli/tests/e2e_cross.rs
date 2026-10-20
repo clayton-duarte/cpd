@@ -335,7 +335,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
 
     // ---------- 2. the PRs: a1 -> b -> a2, two of them in one repo (A4)
     let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--plan", PLAN]);
-    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
+    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "base_pr": null, "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
     let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--needs", "a1", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/b"), &json!(["a1"])));
     let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--needs", "b", "--plan", PLAN]);
