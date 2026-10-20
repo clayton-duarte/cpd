@@ -274,6 +274,13 @@ On `all-merged` (it carries `data.pr`) run `cpd pr open --pr <key>`. When the PR
 
 Once the Gate passes (when `pr.gate = local`), or at once otherwise, `cpd pr open` pushes the Lead Branch and opens the pull request. Give the User the PR URL. Never run `cpd pr open` again for a PR that is open. Once every PR is open the phase becomes `deploy`. A PR that needs another starts only after that one is merged (`pr-started`).
 
+**Stacked PRs.** The next PR in an area is built on the previous PR's last commit (its Lead Branch head), never in parallel from the base. Open it only when it is ready: its Gate passed on a head that contains its base (the base branch, or the PR below it); never as a draft.
+
+- While the previous PR is open, the next PR targets the previous PR's branch: run `gh pr edit <n> --base <branch>` right after `cpd pr open`, or add a later PR with `cpd pr add <key> --repo <path> --base <branch>` (`cpd pr edit` cannot change a base after the lock). GitHub then cannot land it first.
+- While stacked, take the previous branch's new commits with a merge and push with `cpd pr push --pr <key>`, not `cpd pr rebase` (cpd still records the base as the default branch).
+- When the previous PR lands, its branch is deleted and GitHub repoints the next PR to the base: merge the base, then `cpd pr push --pr <key>` runs the Gate (when `pr.gate = local`) and pushes.
+- Merging the earlier branch into a PR that targets the base is not stacking.
+
 ### Reviewing and Monitoring
 
 The PR's reviewers and CI, as the owner's policy says, review each PR on GitHub. The engine polls every open PR and sends `pr-feedback` with its key. You may run `cpd pr poll` right after `cpd pr open` or whenever you need the current status.
