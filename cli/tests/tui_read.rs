@@ -964,6 +964,31 @@ fn an_open_pull_request_carries_its_url_and_the_lead_of_its_owner() {
 }
 
 #[test]
+fn a_pull_request_is_worked_only_while_its_owners_lead_is_working() {
+    let (_env, mut store) = fixture();
+    // `acme/work#70` is no Plan's: nobody works it.
+    sql(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+         VALUES ('acme/work', 70, 'https://github.com/acme/work/pull/70', 'Mine', 0, 'open', 'none', 'none',
+                 '2026-01-07T00:00:00.000Z', NULL, '2026-01-07T00:00:00.000Z');",
+    );
+    let worked = |store: &mut Store| {
+        let w = read::widgets(store, 3, 0).unwrap();
+        let boxes = read::plan_boxes(store, &plan("rel")).unwrap();
+        (w.prs.iter().map(|p| (p.number, p.lead_working)).collect::<Vec<_>>(), boxes.prs[0].pull.as_ref().unwrap().lead_working)
+    };
+    for state in ["blocked", "idle", "waiting", "stopped"] {
+        sql(&mut store, &format!(
+                "UPDATE sessions SET state = '{state}', state_label = CASE WHEN '{state}' IN ('waiting', 'blocked') THEN 'why' END WHERE id = 'l-rel'"
+            ));
+        assert_eq!(worked(&mut store), (vec![(7, false), (70, false)], false), "{state}");
+    }
+    sql(&mut store, "UPDATE sessions SET state = 'working', state_label = NULL WHERE id = 'l-rel'");
+    assert_eq!(worked(&mut store), (vec![(7, true), (70, false)], true), "the Lead of acme/repo#7 works; nobody owns #70");
+}
+
+#[test]
 fn the_widgets_list_every_open_escalation_of_the_machine() {
     let (_env, mut store) = fixture();
     let w = read::widgets(&mut store, 3, 0).unwrap();
