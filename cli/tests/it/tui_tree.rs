@@ -21,6 +21,31 @@ const WORKING: &str = SPINNER[0];
 
 // The tree's glyphs. `cpd_tui::tree` is private, so the tests repeat them (the unit tests of `tui/src/tree/` use the constants).
 const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
+/// The closing row's arrows (md-arrow_down_drop_circle_outline, md-arrow_up_drop_circle_outline) and the pill's caps.
+const DOWN: &str = "\u{F004B}";
+const UP: &str = "\u{F0063}";
+const CAP_LEFT: &str = "\u{E0B6}";
+const CAP_RIGHT: &str = "\u{E0B4}";
+
+/// The closing row of a block that folds, folded, after the pane's margin.
+fn expand() -> String {
+    format!(" ╰{DOWN} expand")
+}
+
+/// The same, expanded.
+fn collapse() -> String {
+    format!(" ╰{UP} collapse")
+}
+
+/// The Inbox's pill title for `count` items in `inner` columns (the pane less its margins), after the margin.
+fn pill(inner: usize, count: usize) -> String {
+    format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{count}", "─".repeat(inner - 2 - "Inbox".len() - 2 - count.to_string().len()))
+}
+
+/// An Inbox item row in `inner` columns: the muted `│`, the icon, the label and the age (`5m`) at the last column.
+fn item_row_of(inner: usize, label: &str) -> String {
+    format!(" │ {NEEDS_YOU} {label}{}5m", " ".repeat(inner - 4 - label.len() - 2))
+}
 
 // ---------- the prepared store ----------
 
@@ -211,16 +236,17 @@ fn opened_ago() -> String {
     at.format(&time::macros::format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z")).unwrap()
 }
 
-/// The Inbox section of `populate`'s four items in a pane `width` wide: the header, three rows and the fold widget's `╰─ expand`.
+/// The Inbox section of `populate`'s four items in a pane `width` wide: the empty row, the pill title, three rows and the
+/// fold widget's `╰󰁋 expand`.
 fn inbox_section(width: usize) -> Vec<String> {
     let inner = width - 2;
-    let item = |label: &str| format!(" │  {label}{}5m", " ".repeat(inner - 3 - label.len() - 2));
     vec![
-        format!(" ┯━━ Inbox {} 4 ━━", "━".repeat(inner - 3 - " Inbox ".len() - " 4 ".len() - 2)),
-        item("f-blocked label"),
-        item("l-rel label"),
-        item("m-beta label"),
-        " ╰─ expand".to_owned(),
+        String::new(),
+        pill(inner, 4),
+        item_row_of(inner, "f-blocked label"),
+        item_row_of(inner, "l-rel label"),
+        item_row_of(inner, "m-beta label"),
+        expand(),
     ]
 }
 
@@ -460,7 +486,7 @@ fn wait_for_popups(env: &TestEnv, n: usize) -> Vec<String> {
 fn the_tree_of_a_prepared_store() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 18);
+    let pane = Pane::start(&env, 46, 19);
     let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
     let mut expected = vec![
         String::new(),
@@ -469,46 +495,47 @@ fn the_tree_of_a_prepared_store() {
         row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!(" ├─{IDLE} ship·f-id"),
         format!(" ├─{NEEDS_YOU} ship·f-bl"),
-        " ╰─ collapse".to_owned(),
+        " ╰─".to_owned(),
         format!(" ╭{NEEDS_YOU} beta"),
         row(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
         row(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
-        " ╰─ collapse".to_owned(),
+        " ╰─".to_owned(),
         format!(" ╭{STOPPED} gamma"),
-        " ╰─ collapse".to_owned(),
-    ]; // each Context is a fold: its rows behind `├`, then the `╰─ collapse` row; the Inbox section is pinned below
+        " ╰─".to_owned(),
+    ]; // each Context is a fold: its rows behind `├`, then a plain `╰─` (nothing archived); the Inbox section is pinned below
     expected.extend(inbox_section(46));
     let screen = pane.screen_is(&expected);
     assert_eq!(
         screen,
         expected,
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the Contexts' `╰─ collapse` rows; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: its header, three items with their age, `╰─ expand`"
+        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the Contexts' plain `╰─` rows (nothing archived); the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰁋 expand`"
     );
 }
 
 #[test]
-fn an_inbox_of_two_items_is_the_joined_title_and_two_rows_with_no_dots_and_no_toggle() {
+fn an_inbox_of_two_items_is_the_pill_title_and_two_rows_with_no_toggle_and_a_plain_close() {
     let env = env();
     populate(&env);
     reconcile(&mut open(&env), &items()[..2], &opened_ago()).unwrap();
     let pane = Pane::start(&env, 46, 18);
-    let item = |label: &str| format!(" │  {label}{}5m", " ".repeat(44 - 3 - label.len() - 2));
     let expected = [
-        format!(" ┯━━ Inbox {} 2 ━━", "━".repeat(44 - 3 - " Inbox ".len() - " 2 ".len() - 2)),
-        item("f-blocked label"),
-        item("l-rel label"),
+        String::new(),
+        pill(44, 2),
+        item_row_of(44, "f-blocked label"),
+        item_row_of(44, "l-rel label"),
+        " ╰─".to_owned(),
     ];
-    let screen = pane.wait("the two items", |s| s.len() == 18 && s[15..] == expected);
-    assert!(screen.iter().all(|r| !r.contains("╰─ expand")), "two items have nothing to expand: {screen:?}");
+    let screen = pane.wait("the two items", |s| s.len() == 18 && s[13..] == expected);
+    assert!(screen.iter().all(|r| !r.contains("expand")), "two items have nothing to expand: {screen:?}");
 }
 
 #[test]
 fn the_tree_leaves_the_first_and_the_last_column_blank() {
     let env = env();
     populate(&env);
-    let pane = Pane::start(&env, 46, 18);
+    let pane = Pane::start(&env, 46, 19);
     pane.ready();
-    let screen = pane.wait("the whole tree", |s| s.last().is_some_and(|r| r == " ╰─ expand"));
+    let screen = pane.wait("the whole tree", |s| s.last().is_some_and(|r| *r == expand()));
     // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
     assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
     assert!(screen.iter().all(|r| r.chars().count() <= 45), "the last column: {screen:?}");
@@ -520,7 +547,7 @@ fn an_empty_store_says_so() {
     let env = env();
     drop(open(&env));
     let pane = Pane::start(&env, 30, 5);
-    let header = format!(" ┯━━ Inbox {} 0 ━━", "━".repeat(28 - 3 - " Inbox ".len() - " 0 ".len() - 2));
+    let header = pill(28, 0);
     assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", "", header.as_str()], "the section is there with no item");
 }
 
@@ -549,9 +576,10 @@ fn enter_opens_the_lead_of_a_plan_and_a_fork_with_session_open() {
 }
 
 #[test]
-fn a_click_on_a_context_title_opens_its_manager_and_only_its_toggle_row_folds_it() {
+fn a_click_on_a_context_title_opens_its_manager_and_only_its_closing_row_folds_its_archived_rows() {
     let env = env();
     populate(&env);
+    sql(&mut open(&env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
     fake_cpd(&env, r#"{"ok":true,"manager":{"session":"m-alpha","name":"alpha-manager","state":"idle","pane":"%1","window":"@1"},"started":false,"session":"m-alpha","displaced":null}"#);
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
@@ -564,16 +592,17 @@ fn a_click_on_a_context_title_opens_its_manager_and_only_its_toggle_row_folds_it
     assert_eq!(calls(&env).len(), 2, "no more commands");
     let screen = pane.screen();
     assert!(screen[1].starts_with(&format!(" ╭{NEEDS_YOU} alpha")) && screen.iter().any(|r| r.contains("ship")), "the title click folds nothing: {screen:?}");
-    assert_eq!(screen[6], " ╰─ collapse", "alpha's toggle row");
+    assert_eq!(screen[6], collapse(), "alpha's closing row");
     pane.click(1, 1); // the first cell of the title row: its dot
     pane.settled();
     assert_eq!(wait_for_calls(&env, 4).len(), 4, "the dot is the title row's: it opens the Manager too");
-    pane.click(8, 6); // its `╰─ collapse` row
-    let folded = pane.wait("alpha folded", |s| !s.iter().any(|r| r.contains("ship")));
-    assert_eq!((folded[1].as_str(), folded[2].as_str()), (format!(" ╭{NEEDS_YOU} alpha 2").as_str(), " ╰─ expand"), "a folded Context draws its Manager's dot (its unread item), its number of Plans and a `╰─ expand` row");
-    assert_eq!(calls(&env).len(), 4, "the toggle row runs no command");
-    pane.click(8, 2);
-    pane.wait("alpha unfolded", |s| s.iter().any(|r| r.contains("ship")));
+    pane.click(8, 6); // its `╰󰁣 collapse` row
+    let folded = pane.wait("alpha's archived row hidden", |s| !s.iter().any(|r| r.contains("ship·f-bl")));
+    assert_eq!((folded[1].as_str(), folded[4].as_str(), folded[5].as_str()), (format!(" ╭{NEEDS_YOU} alpha").as_str(), format!(" ├─{IDLE} ship·f-id").as_str(), expand().as_str()), "a folded Context draws its Manager's dot (its unread item), its live rows and a `╰󰁋 expand` row: {folded:?}");
+    assert!(folded.iter().any(|r| r.contains("ship")) && folded.iter().any(|r| r.contains("sketch")), "the live rows stay: {folded:?}");
+    assert_eq!(calls(&env).len(), 4, "the closing row runs no command");
+    pane.click(8, 5);
+    pane.wait("alpha's archived row back", |s| s.iter().any(|r| r.contains("ship·f-bl")));
     assert_eq!(calls(&env).len(), 4);
 }
 
@@ -611,7 +640,7 @@ fn no_key_but_the_references_does_anything() {
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 22);
     pane.ready();
-    let before = pane.wait("the whole view, the Inbox section's last row included", |s| s.last().is_some_and(|r| r == " ╰─ expand"));
+    let before = pane.wait("the whole view, the Inbox section's last row included", |s| s.last().is_some_and(|r| *r == expand()));
     pane.down(2); // on sketch
     pane.keys(&["q", "f", "r", "p", "Space", "G", "Escape"]);
     pane.settled();
@@ -882,7 +911,7 @@ fn archive(env: &TestEnv) {
 }
 
 #[test]
-fn archived_plans_are_inside_their_contexts_block_and_archived_contexts_follow_the_live_ones_folded() {
+fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_only_them() {
     let env = env();
     populate(&env);
     archive(&env);
@@ -896,35 +925,37 @@ fn archived_plans_are_inside_their_contexts_block_and_archived_contexts_follow_t
         row(&format!("├─{IDLE} sketch"), "2⋅0⋅0⋅0⋅0"),
         format!(" ├─{IDLE} ship·f-id"),
         format!(" ├─{NEEDS_YOU} ship·f-bl"),
-        " ╰─ collapse".to_owned(),
+        " ╰─".to_owned(),
         format!(" ╭{NEEDS_YOU} beta"),
         row(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅1"),
         row(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
-        " ╰─ collapse".to_owned(),
-        format!(" ╭{STOPPED} gamma 0"),
-        " ╰─ expand".to_owned(),
+        collapse(),
+        format!(" ╭{STOPPED} gamma"),
+        " ╰─".to_owned(),
     ];
-    expected.extend(["", "", "", "", "", "", "", ""].map(String::from)); // the rest of the tree's rows
+    expected.extend(["", "", "", "", "", "", ""].map(String::from)); // the rest of the tree's rows
     expected.extend(inbox_section(46));
     let screen = pane.screen_is(&expected);
     assert_eq!(
         screen,
         expected,
-        "the archived Plan `old` is inside beta's block after the live rows, with beta's one toggle row; the archived Context `gamma` follows the live ones, folded: its title row, then `╰─ expand`; no `󰇘` row"
+        "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰁣 collapse`; alpha and the archived Context `gamma` have nothing to fold and close with a plain `╰─`; no `󰇘` row"
     );
     assert!(screen.iter().all(|r| !r.contains('\u{F01D8}')), "no `󰇘` row: {screen:?}");
-    // a click on the archived Plan shows its history; the archived Context's title does nothing, its toggle row unfolds it
+    // a click on the archived Plan shows its history; the archived Context's title and its plain closing row do nothing
     pane.click(10, 9);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "l-old"])]);
     pane.click(5, 11);
-    pane.settled();
     pane.click(1, 12);
-    let shown = [format!(" ╭{STOPPED} gamma"), " ╰─ collapse".to_owned()];
-    assert_eq!(pane.rows_are(11, &shown)[11..13], shown);
-    // beta's toggle row folds its live and its archived rows together
+    pane.settled();
+    // beta's closing row hides its archived row only: the live row stays
     pane.click(5, 10);
-    let shown = [format!(" ╭{NEEDS_YOU} beta 1"), " ╰─ expand".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰─ collapse".to_owned()];
-    assert_eq!(pane.rows_are(7, &shown)[7..11], shown);
+    let shown = [format!(" ╭{NEEDS_YOU} beta")];
+    let screen = pane.wait("beta folded", |s| s.get(9) == Some(&expand()));
+    assert_eq!(screen[7..8], shown);
+    assert!(screen[8].starts_with(&format!(" ├─{NEEDS_YOU} rel")), "the live row stays: {screen:?}");
+    assert!(!screen.iter().any(|r| r.contains(" old")), "the archived row is hidden: {screen:?}");
+    assert_eq!((screen[10].as_str(), screen[11].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰─"));
     assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
 }
 
@@ -1033,9 +1064,9 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     pane.right_click(5, 15); // the empty area
     pane.wait("the empty area's menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Escape"]);
-    pane.right_click(5, 6); // the `╰─ collapse` row of the Context `alpha`: no menu
+    pane.right_click(5, 6); // the closing row of the Context `alpha`: no menu
     pane.settled();
-    assert!(the_menu_is_closed(&pane.screen()), "a toggle row has no menu");
+    assert!(the_menu_is_closed(&pane.screen()), "a closing row has no menu");
     pane.wait("the menu closed", the_menu_is_closed);
     assert!(calls(&env).is_empty(), "{:?}", calls(&env));
     assert!(!pane.footer_has("Archive"), "no prompt");
@@ -1151,7 +1182,7 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
-    let shown = [format!(" ├─{IDLE} ship·f-bl"), " ╰─ collapse".to_owned()];
+    let shown = [format!(" ├─{IDLE} ship·f-bl"), collapse()];
     assert_eq!(pane.rows_are(5, &shown)[5..7], shown, "the archived fork is inside alpha's block, after the live rows");
     pane.click(10, 5);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "f-blocked"])]);
@@ -1380,26 +1411,25 @@ fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
 // ---------- the Inbox section (commands.md §13.2) ----------
 
 #[test]
-fn the_inbox_sections_toggle_row_expands_the_list_inline_and_folds_it_and_the_header_does_not() {
+fn the_inbox_sections_toggle_row_expands_the_list_inline_and_folds_it_and_the_title_does_not() {
     let env = env();
     populate(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
     // the section is pinned to the bottom, the Session rows above it
-    assert_eq!(pane.rows_are(15, &inbox_section(46))[15..], inbox_section(46));
-    pane.click(10, 19); // `╰─ expand`
-    let item = |label: &str| format!(" │  {label}{}5m", " ".repeat(44 - 3 - label.len() - 2));
-    let expanded = [inbox_section(46)[..4].to_vec(), vec![item("m-alpha label"), " ╰─ collapse".to_owned()]].concat();
-    assert_eq!(pane.rows_are(14, &expanded)[14..], expanded);
-    pane.click(3, 19); // `╰─ collapse`
-    assert_eq!(pane.rows_are(15, &inbox_section(46))[15..], inbox_section(46));
+    assert_eq!(pane.rows_are(14, &inbox_section(46))[14..], inbox_section(46));
+    pane.click(10, 19); // `╰󰁋 expand`
+    let expanded = [inbox_section(46)[..5].to_vec(), vec![item_row_of(44, "m-alpha label"), collapse()]].concat();
+    assert_eq!(pane.rows_are(13, &expanded)[13..], expanded);
+    pane.click(3, 19); // `╰󰁣 collapse`
+    assert_eq!(pane.rows_are(14, &inbox_section(46))[14..], inbox_section(46));
     assert!(calls(&env).is_empty(), "expanding and folding are no commands");
-    pane.click(10, 15); // the header: the title line toggles nothing
+    pane.click(10, 15); // the title: the pill toggles nothing
     pane.settled();
     let without_note = |rows: Vec<String>| -> Vec<String> { rows.into_iter().filter(|r| !r.contains(NO_CLIENT)).collect() };
     let rows = without_note(pane.screen());
-    assert_eq!(rows[rows.len() - 5..], inbox_section(46), "still folded");
+    assert_eq!(rows[rows.len() - 6..], inbox_section(46), "still folded");
 }
 
 /// `populate`'s items and one of each kind that jumps or links; the engine-error is caused by Event `event`.
@@ -1452,10 +1482,10 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     );
     let pane = Pane::start(&env, 60, 40);
     pane.ready();
-    pane.wait("the more row", |s| s.last().is_some_and(|r| r == " ╰─ expand"));
+    pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
     let more = pane.screen().len() as u16 - 1;
     pane.click(10, more);
-    pane.wait("the expanded list", |s| s.last().is_some_and(|r| r == " ╰─ collapse"));
+    pane.wait("the expanded list", |s| s.last().is_some_and(|r| *r == collapse()));
     let row_of = |label: &str| {
         let screen = pane.screen();
         screen.iter().position(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n"))) as u16
@@ -1527,12 +1557,13 @@ fn with_no_engine_the_inbox_leads_with_engine_down_and_a_click_on_it_opens_the_l
     pane.ready();
     // counted in the header, first of the rows
     let section = inbox_section(46);
-    let header = format!(" ┯━━ Inbox {} 5 ━━", "━".repeat(44 - 3 - " Inbox ".len() - " 5 ".len() - 2));
-    let screen = pane.wait("the whole Inbox section", |s| s.len() == 20 && s[15] == header && s[17..19] == section[1..3] && s[19] == " ╰─ expand");
+    let header = pill(44, 5);
+    let screen = pane.wait("the whole Inbox section", |s| s.len() == 20 && s[15] == header && s[17..19] == section[2..4] && s[19] == expand());
+    assert_eq!(screen[14], "", "the empty row above the title");
     assert_eq!(screen[15], header);
-    assert!(screen[16].starts_with(" │  engine is down"), "{:?}", screen[16]);
-    assert_eq!(screen[17..19], section[1..3]);
-    assert_eq!(screen[19], " ╰─ expand");
+    assert!(screen[16].starts_with(&format!(" │ {NEEDS_YOU} engine is down")), "{:?}", screen[16]);
+    assert_eq!(screen[17..19], section[2..4]);
+    assert_eq!(screen[19], expand());
     pane.click(10, 16);
     common::wait_until("the logs popup", || !popups(&env).is_empty());
     let popups = popups(&env);
@@ -1554,15 +1585,15 @@ fn the_inbox_follows_an_engine_that_starts_and_a_snooze_that_ends_with_no_event(
     );
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
-    pane.wait("engine-down and three stored items", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with(" 4 ━━")));
+    pane.wait("engine-down and three stored items", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with('4')));
     // time-claim: past the snapshot the first poll takes, within 2 s (it cannot tell a change of the pull request rows
     // from none)
     std::thread::sleep(Duration::from_secs(2));
     let path = env.cpd_home().join("locks/watch.lock");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let _engine = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
-    pane.wait("engine-down gone", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with(" 3 ━━")));
-    pane.wait("the snoozed item back", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with(" 4 ━━")));
+    pane.wait("engine-down gone", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with('3')));
+    pane.wait("the snoozed item back", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with('4')));
 }
 
 /// The `display-popup` calls of a fake tmux.
@@ -1579,10 +1610,10 @@ fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
     reconcile(&mut store, &jumping_items(event), &opened_ago()).unwrap();
     let pane = Pane::start(&env, 46, 26);
     pane.ready();
-    pane.wait("the more row", |s| s.last().is_some_and(|r| r == " ╰─ expand"));
+    pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
     pane.click(10, pane.screen().len() as u16 - 1);
     let screen = pane.wait("the link's row", |s| s.iter().any(|r| r.contains("acme/api#12")));
-    let expected = format!(" │  acme/api#12 failing{}5m", " ".repeat(44 - 3 - "acme/api#12 failing".len() - 2));
+    let expected = item_row_of(44, "acme/api#12 failing");
     let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
     assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
 }
@@ -1683,9 +1714,9 @@ fn a_right_click_on_an_item_opens_its_four_entries_and_each_runs_its_command() {
     pane.wait("the item's menu", |s| menu_open(s, "Snooze 15 min"));
     pane.keys(&["Down", "Down", "Down", "Enter"]);
     assert_eq!(wait_for_calls(&env, 4)[3], words(&["inbox", "dismiss", "4"]));
-    // the header has no menu
+    // the title has no menu
     pane.wait("the menu closed", the_menu_is_closed);
-    pane.right_click(10, item_row(&pane, "┯━━ Inbox"));
+    pane.right_click(10, item_row(&pane, "Inbox"));
     pane.settled();
     assert!(the_menu_is_closed(&pane.screen()));
     assert_eq!(calls(&env).len(), 4);

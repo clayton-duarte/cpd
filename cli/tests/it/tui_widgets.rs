@@ -188,13 +188,27 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 
 // ---------- the Dispatch column ----------
 
-/// A section title on the 46-column test pane: `━━`, ` <title> `, then `━` to the edge, or to ` <count> ━━`.
-fn header(title: &str, count: Option<usize>) -> String {
+/// The pill's caps, U+E0B6 and U+E0B4.
+const CAP_LEFT: &str = "\u{E0B6}";
+const CAP_RIGHT: &str = "\u{E0B4}";
+
+/// A section title on a `width`-column pane: `╭─`, the pill (the title between its caps), then `─` to the edge, or to the count.
+fn pill(width: usize, title: &str, count: Option<usize>) -> String {
     let used = 4 + title.chars().count();
     match count {
-        None => format!("━━ {title} {}", "━".repeat(46 - used)),
-        Some(n) => format!("━━ {title} {} {n} ━━", "━".repeat(46 - used - 4 - n.to_string().len())),
+        None => format!("╭─{CAP_LEFT}{title}{CAP_RIGHT}{}", "─".repeat(width - used)),
+        Some(n) => format!("╭─{CAP_LEFT}{title}{CAP_RIGHT}{}{n}", "─".repeat(width - used - n.to_string().len())),
     }
+}
+
+/// A section title on the 46-column test pane.
+fn header(title: &str, count: Option<usize>) -> String {
+    pill(46, title, count)
+}
+
+/// A scroll cue row on the 120-column pane of [`start`]: the cue right-aligned at the last column.
+fn cue_row(arrow: char, n: usize) -> String {
+    format!("{:>120}", format!("{arrow} {n} more"))
 }
 
 /// The column on the prepared store as the User sees it: the open pull requests, oldest first.
@@ -247,8 +261,8 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
     terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
-    let head = |title: &str| format!("━━ {title} {}", "━".repeat(30 - 4 - title.chars().count()));
-    let prs_head = format!("━━ PRs {} 0 ━━", "━".repeat(30 - 4 - 3 - 4 - 1));
+    let head = |title: &str| pill(30, title, None);
+    let prs_head = pill(30, "PRs", Some(0));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
     assert_eq!(lines[3..6], ["", prs_head.as_str(), ""]);
     assert_eq!(lines[6], " no open PRs");
@@ -465,12 +479,13 @@ fn the_column_takes_every_colour_from_the_palette() {
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
     assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Failed));
     assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
-    // The titles: the heavy rules grey, the title bold.
+    // The titles: the corner and the line grey, the title inverted inside its caps.
     for title in ["PRs", "git", "Jira"] {
-        let (x, y) = find(&buf, &format!("━━ {title} "));
+        let (x, y) = find(&buf, &format!("╭─{CAP_LEFT}{title}"));
         assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
+        assert_eq!(buf[(x + 1, y)].fg, c(Meaning::Nothing), "{title}");
         let word = buf[(x + 3, y)].clone();
-        assert!(word.modifier.contains(Modifier::BOLD) && !word.modifier.contains(Modifier::REVERSED), "{title}");
+        assert!(word.modifier.contains(Modifier::REVERSED), "{title}");
         assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD), "{title}");
     }
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
@@ -778,7 +793,7 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
     // 40 rows less the 14 of the rest of the column leave 26 for the PRs: 12 whole ones beside the `▼` row.
     // (polling for the whole screen: a capture can catch the pane mid-draw)
     wait_for_screen(&env, &pane, "the first PRs and the cue below", |s| {
-        s.iter().any(|r| r == " ▼ 9 more")
+        s.iter().any(|r| *r == cue_row('▼', 9))
             && has(s, "acme/repo#1")
             && has(s, "acme/repo#12")
             && !has(s, "acme/repo#13")
@@ -792,7 +807,7 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
     wheel(&env, &pane, true, 3, 1);
     wheel(&env, &pane, true, 3, 10);
     wait_for_screen(&env, &pane, "one pull request down", |s| {
-        s.iter().any(|r| r == " ▲ 1 more") && s.iter().any(|r| r == " ▼ 8 more") && has(s, "acme/repo#2") && !has(s, "acme/repo#1")
+        s.iter().any(|r| *r == cue_row('▲', 1)) && s.iter().any(|r| *r == cue_row('▼', 8)) && has(s, "acme/repo#2") && !has(s, "acme/repo#1")
     });
 
     // Past the end it stops, with the last pull request at the bottom and no cue below.
@@ -800,7 +815,7 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
         wheel(&env, &pane, true, 3, 10);
     }
     wait_for_screen(&env, &pane, "the end", |s| {
-        s.iter().any(|r| r == " ▲ 9 more")
+        s.iter().any(|r| *r == cue_row('▲', 9))
             && has(s, "acme/repo#21")
             && has(s, "acme/repo#10")
             && !has(s, "acme/repo#9")
@@ -809,11 +824,11 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
 
     // And back up, one at a time.
     wheel(&env, &pane, false, 3, 10);
-    wait_for_screen(&env, &pane, "one back up", |s| s.iter().any(|r| r == " ▲ 8 more") && s.iter().any(|r| r == " ▼ 1 more") && has(s, "acme/repo#9") && !has(s, "acme/repo#21"));
+    wait_for_screen(&env, &pane, "one back up", |s| s.iter().any(|r| *r == cue_row('▲', 8)) && s.iter().any(|r| *r == cue_row('▼', 1)) && has(s, "acme/repo#9") && !has(s, "acme/repo#21"));
     for _ in 0..20 {
         wheel(&env, &pane, false, 3, 10);
     }
-    wait_for_screen(&env, &pane, "the top", |s| s.iter().any(|r| r == " ▼ 9 more") && has(s, "acme/repo#1") && !s.iter().any(|r| r.contains('▲')));
+    wait_for_screen(&env, &pane, "the top", |s| s.iter().any(|r| *r == cue_row('▼', 9)) && has(s, "acme/repo#1") && !s.iter().any(|r| r.contains('▲')));
 }
 
 #[test]
