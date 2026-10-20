@@ -1830,8 +1830,9 @@ fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
     pane.ready();
     pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
     pane.click(10, pane.screen().len() as u16 - 1);
-    let screen = pane.wait("the link's row", |s| s.iter().any(|r| r.contains("acme/api#12")));
     let expected = item_row_of(44, "acme/api#12 failing");
+    // Wait for the whole row: the link is drawn in chunks, so a capture can land mid-draw.
+    let screen = pane.wait("the link's whole row", |s| s.iter().any(|r| *r == expected));
     let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
     assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
 }
