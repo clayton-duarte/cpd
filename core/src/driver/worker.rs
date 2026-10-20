@@ -15,6 +15,7 @@ use crate::git;
 use crate::home::CpdHome;
 use crate::host::git_guard;
 use crate::host::layout::attempt_window;
+use crate::host::limit::limit;
 use crate::host::pi::{self, PiDirs, WorkerLaunch, extensions_to_pass, worker_candidates};
 use crate::host::{PaneId, Tmux, WindowId};
 use crate::ids::{AttemptId, EscalationId, PlanId, SessionId};
@@ -24,7 +25,8 @@ use crate::session::run::{quiet_since, turn_finished};
 use crate::spec::{self, Answer, Cause, Input, Previous};
 use crate::store::Store;
 
-/// How often a review Job's driver looks at the Lead while it waits for it to be idle (§6.7 step 1).
+/// How often a review Job's driver looks at the Lead while it waits for it to be idle (§6.7 step 1; tests:
+/// `CPD_TEST_LEAD_POLL`, [`limit`]).
 const LEAD_POLL: Duration = Duration::from_secs(2);
 
 /// A3's wait for the Lead logs one line this often (§3.4 A4).
@@ -273,7 +275,7 @@ pub fn wait_for_lead(
         if waits.due(Instant::now()) {
             log(&format!("A3: still waiting for the Lead to be idle ({} minutes so far)", began.elapsed().as_secs() / 60));
         }
-        std::thread::sleep(LEAD_POLL);
+        std::thread::sleep(limit("LEAD_POLL", LEAD_POLL));
     }
 }
 
@@ -332,7 +334,7 @@ pub fn start(
     Ok(Pane { pane, window })
 }
 
-/// A9 (§3.4): `kill-window` is tried this many times, `KILL_PAUSE` apart.
+/// A9 (§3.4): `kill-window` is tried this many times, `KILL_PAUSE` apart (tests: `CPD_TEST_KILL_PAUSE`).
 const KILL_TRIES: u32 = 3;
 const KILL_PAUSE: Duration = Duration::from_secs(1);
 
@@ -376,7 +378,7 @@ pub fn kill_attempt_window(config: &Config, tmux: &Tmux, plan: &PlanId, id: &Att
         .collect();
     for window in windows {
         let gone = || tmux.list_panes().is_ok_and(|panes| panes.iter().all(|p| p.window != window));
-        retry_kill(KILL_TRIES, KILL_PAUSE, || tmux.kill_window(&window), gone)?;
+        retry_kill(KILL_TRIES, limit("KILL_PAUSE", KILL_PAUSE), || tmux.kill_window(&window), gone)?;
     }
     Ok(())
 }

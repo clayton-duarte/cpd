@@ -43,10 +43,6 @@ fn fixture(env: &TestEnv, sql: &str) {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap();
 }
 
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
-
 /// O supports efforts 0–5, S 1–5, H 0–3.
 const EFFORTS: [(&str, &str, &str); 3] = [("O", "p/opus", "[0,1,2,3,4,5]"), ("S", "p/sonnet", "[1,2,3,4,5]"), ("H", "p/haiku", "[0,1,2,3]")];
 
@@ -145,7 +141,7 @@ fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
 }
 
 fn count(env: &TestEnv, table: &str) -> i64 {
-    query(env, &format!("SELECT count(*) FROM {table}"))
+    env.query(&format!("SELECT count(*) FROM {table}"))
 }
 
 /// A Plan `p` in phase `plan` with draft Jobs `a` and `b` (needs `a`).
@@ -243,7 +239,7 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     assert_eq!(job_row(&env, "pl", "b", "appended"), 0);
     assert_eq!(job_row(&env, "pl", "b", "fingerprint"), Value::Null);
     assert!(job_row(&env, "pl", "b", "seq").as_i64() > job_row(&env, "pl", "a", "seq").as_i64());
-    assert_eq!(query::<String>(&env, "SELECT needs FROM dependencies WHERE job = 'b'"), "a");
+    assert_eq!(env.query::<String>("SELECT needs FROM dependencies WHERE job = 'b'"), "a");
 
     let added = events(&env, "job-added");
     assert_eq!(added.len(), 2);
@@ -251,7 +247,7 @@ fn add_in_phase_plan_writes_a_draft_job_its_needs_and_an_event() {
     assert_eq!(added[1]["plan"], "pl");
     assert_eq!(added[1]["context"], "ctx");
     assert_eq!(added[1]["data"], json!({"pr": "repo", "status": "draft", "appended": false, "tier": "O3", "needs": ["a"], "review": false, "urgent": false}));
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'insert'"), 2);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM history WHERE tbl = 'jobs' AND op = 'insert'"), 2);
 }
 
 #[test]
@@ -419,7 +415,7 @@ fn edit_changes_the_given_fields_and_lists_only_those_that_changed() {
     assert_eq!(out["job"], json!({"key": "b", "status": "draft"}));
     assert_eq!(out["fields"], json!(["tier", "needs"]));
     assert_eq!(job_row(&env, "pl", "b", "tier"), "O4");
-    assert_eq!(query::<String>(&env, "SELECT group_concat(needs) FROM (SELECT needs FROM dependencies WHERE job = 'b' ORDER BY needs)"), "a,c");
+    assert_eq!(env.query::<String>("SELECT group_concat(needs) FROM (SELECT needs FROM dependencies WHERE job = 'b' ORDER BY needs)"), "a,c");
 
     let out = job(&env, &["edit", "b", "--spec", &spec, "--title", "New title"], "pl").ok();
     assert_eq!(out["fields"], json!(["title", "goal", "out_of_scope"]));
@@ -429,7 +425,7 @@ fn edit_changes_the_given_fields_and_lists_only_those_that_changed() {
 
     let out = job(&env, &["edit", "b", "--no-needs"], "pl").ok();
     assert_eq!(out["fields"], json!(["needs"]));
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM dependencies WHERE job = 'b'"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM dependencies WHERE job = 'b'"), 0);
 
     let edited = events(&env, "job-edited");
     assert_eq!(edited.len(), 3);
@@ -478,7 +474,7 @@ fn edit_refusals_write_nothing() {
     refused(&job(&env, &["edit", "b", "--tier", "S0"], "pl"), "tier_invalid", 2);
     refused(&job(&env, &["edit", "b", "--spec", "/no/such/file"], "pl"), "file_unreadable", 2);
     assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM dependencies"), 2);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM dependencies"), 2);
 }
 
 #[test]
@@ -550,7 +546,7 @@ fn cancel_of_a_running_job_only_records_the_request() {
     assert_eq!(job_row(&env, "pl", "w", "status"), "running");
     assert_eq!(job_row(&env, "pl", "w", "cancel_reason"), "Wrong approach.");
     assert!(job_row(&env, "pl", "w", "cancel_requested_at").is_string());
-    assert_eq!(query::<Option<String>>(&env, "SELECT stop_request FROM attempts WHERE id = 'w-a1'"), None, "E2 sets the stop request, not the command");
+    assert_eq!(env.query::<Option<String>>("SELECT stop_request FROM attempts WHERE id = 'w-a1'"), None, "E2 sets the stop request, not the command");
     assert_eq!(events(&env, "job-cancelled").len(), 0);
     let requested = events(&env, "job-cancel-requested");
     assert_eq!(requested.len(), 1);
@@ -655,7 +651,7 @@ fn retry_refuses_a_job_whose_fingerprint_does_not_match() {
     lock(&env, "pl");
     engine(&env, "pl", "a", "failed");
     // Written around the trigger, the way a tamper would be; the schema is whole again afterwards.
-    let trigger: String = query(&env, "SELECT sql FROM sqlite_schema WHERE name = 'jobs_locked'");
+    let trigger: String = env.query("SELECT sql FROM sqlite_schema WHERE name = 'jobs_locked'");
     fixture(&env, &format!("DROP TRIGGER jobs_locked; UPDATE jobs SET goal = 'Changed.' WHERE key = 'a'; {trigger};"));
     let e = refused(&job(&env, &["retry", "a", "--tier", "S3"], "pl"), "locked_job_tampered", 3);
     assert_eq!(e["details"]["job"], "a");
@@ -933,13 +929,13 @@ fn edit_moves_a_draft_job_to_another_pr() {
     let out = job(&env, &["edit", "b", "--pr", "web", "--needs", "w"], "pl").ok();
     assert_eq!(out["fields"], json!(["pr", "needs"]));
     assert_eq!(job_row(&env, "pl", "b", "pr"), "web");
-    assert_eq!(query::<String>(&env, "SELECT needs FROM dependencies WHERE job = 'b'"), "w");
+    assert_eq!(env.query::<String>("SELECT needs FROM dependencies WHERE job = 'b'"), "w");
     assert_eq!(events(&env, "job-edited").last().unwrap()["data"], json!({"fields": ["pr", "needs"]}));
 
     // A Job with old needs may move with `--no-needs`.
     let out = job(&env, &["edit", "b", "--pr", "repo", "--no-needs"], "pl").ok();
     assert_eq!(out["fields"], json!(["pr", "needs"]));
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM dependencies"), 0);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM dependencies"), 0);
     // A Job with no needs and no dependents moves alone.
     let out = job(&env, &["edit", "b", "--pr", "web"], "pl").ok();
     assert_eq!(out["fields"], json!(["pr"]));

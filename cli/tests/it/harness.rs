@@ -56,12 +56,21 @@ fn cpd_runs_and_prints_one_json_value() {
 
 #[test]
 fn git_repo_has_one_commit_on_main() {
-    let env = TestEnv::new();
-    let repo = env.git_repo("pay");
-    assert!(repo.starts_with(env.root()));
-    assert_eq!(env.git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
-    assert_eq!(env.git(&repo, &["rev-list", "--count", "HEAD"]), "1");
-    assert_eq!(env.git(&repo, &["log", "-1", "--format=%ae"]), "test@cpd.invalid");
+    // Twice: the second repo is a copy of the template (the first makes it if there is none).
+    for _ in 0..2 {
+        let env = TestEnv::new();
+        let repo = env.git_repo("pay");
+        assert!(repo.starts_with(env.root()));
+        assert_eq!(env.git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
+        assert_eq!(env.git(&repo, &["rev-list", "--count", "HEAD"]), "1");
+        assert_eq!(env.git(&repo, &["log", "-1", "--format=%ae"]), "test@cpd.invalid");
+        assert_eq!(std::fs::read_to_string(repo.join("README.md")).unwrap(), "# pay\n");
+        // Clean to plumbing, which trusts the index's stat data (first: `status` refreshes the
+        // index), and to porcelain.
+        env.git(&repo, &["diff-files", "--quiet"]);
+        env.git(&repo, &["diff-index", "--quiet", "HEAD", "--"]);
+        assert_eq!(env.git(&repo, &["status", "--porcelain"]), "");
+    }
 }
 
 #[test]
@@ -100,13 +109,8 @@ fn tmux_server_is_private_and_killed_on_drop() {
     let pid = pid.trim().to_owned();
     assert!(!pid.is_empty());
     drop(env);
-    let gone = (0..50).any(|_| {
-        let alive = std::process::Command::new("kill").args(["-0", &pid]).stderr(std::process::Stdio::null()).status().unwrap();
-        if alive.success() {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-        !alive.success()
-    });
+    let pid: u32 = pid.parse().unwrap();
+    let gone = common::poll(std::time::Duration::from_secs(5), || (!alive(pid)).then_some(())).is_some();
     assert!(gone, "the tmux server {pid} outlived its TestEnv");
 }
 
@@ -262,17 +266,28 @@ fn executables_are_written_and_copied_only_through_the_harness() {
 
 #[test]
 fn the_shared_helpers_are_defined_only_in_the_harness() {
-    // One wait policy, one refusal check, one fixture writer (tests-build-G2, commands-G4): a file
+    // One wait policy, one refusal check, one fixture writer, one store query (tests-build-G2, commands-G4): a file
     // that needs another shape calls the harness's and wraps it, it does not copy it.
     let found = test_lines_with(&[
         "fn wait_until(",
         "fn wait_until_for(",
+        "fn wait_some<",
+        "fn poll<",
         "fn refused(run: &Run, code: &str, exit: i32)",
         "fn sql(&self",
         "fn sql(env: &TestEnv",
         "fn sql(store: &mut Store",
+        "fn query<T",
     ]);
-    assert!(found.is_empty(), "use common::wait_until, wait_until_for, refused and sql:\n{}", found.join("\n"));
+    assert!(found.is_empty(), "use common::wait_until, wait_until_for, wait_some, poll, refused, sql and TestEnv::query:\n{}", found.join("\n"));
+}
+
+#[test]
+fn every_wait_polls_through_the_harness() {
+    // One poll loop, at one period (common::poll, every 10 ms): a wait or an absence window calls wait_until,
+    // wait_some, wait_screen or poll; it keeps no deadline and no sleep of its own.
+    let found = test_lines_with(&["Instant::now() +"]);
+    assert!(found.is_empty(), "wait with common::wait_until, wait_some, wait_screen or poll:\n{}", found.join("\n"));
 }
 
 // ---- teardown: a dropped or killed test leaves no tmux server, process, dir or reaper ----
@@ -383,18 +398,16 @@ fn processes_mentioning(dir: &std::path::Path) -> Vec<u32> {
 
 /// Waits up to WAIT until nothing of `up` is left; returns what is left otherwise.
 fn leftovers_after_wait(up: &Up) -> Vec<String> {
-    let start = std::time::Instant::now();
-    loop {
-        let mut left: Vec<String> = up.pids.iter().filter(|(_, p)| alive(*p)).map(|(n, p)| format!("{n} {p}")).collect();
+    let mut left = Vec::new();
+    common::poll(WAIT, || {
+        left = up.pids.iter().filter(|(_, p)| alive(*p)).map(|(n, p)| format!("{n} {p}")).collect();
         if up.dir.exists() {
             left.push(format!("dir {}", up.dir.display()));
         }
         left.extend(processes_mentioning(&up.dir).into_iter().map(|p| format!("process {p} (reaper?) mentioning the dir")));
-        if left.is_empty() || start.elapsed() > WAIT {
-            return left;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+        left.is_empty().then_some(())
+    });
+    left
 }
 
 /// Not a test of its own: the child process the killed-test test kills. Does nothing
@@ -553,4 +566,23 @@ fn sql_writes_the_envs_store() {
     env.cpd(&["context", "new", "c1", "--title", "Before", "--owner", "acme"]).ok();
     env.sql("UPDATE contexts SET title = 'After' WHERE id = 'c1'");
     assert_eq!(env.cpd(&["context", "list"]).ok()["contexts"][0]["title"], "After");
+}
+
+#[test]
+fn a_new_env_has_a_migrated_store_of_its_own_and_an_empty_env_has_none() {
+    let a = TestEnv::new();
+    let b = TestEnv::new();
+    for env in [&a, &b] {
+        let store = env.store();
+        assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    }
+    a.write_tmux_config("");
+    b.write_tmux_config("");
+    a.cpd(&["context", "new", "c1", "--title", "Only in a", "--owner", "acme"]).ok();
+    assert_eq!(a.cpd(&["context", "list"]).ok()["contexts"].as_array().unwrap().len(), 1);
+    assert_eq!(b.cpd(&["context", "list"]).ok()["contexts"], serde_json::json!([]));
+
+    let empty = TestEnv::empty();
+    // main's harness gives every env the owner policy `acme` (policy/owners/acme.toml): no store is what makes it empty.
+    assert!(!empty.cpd_home().join("cpd.db").exists(), "an empty env has no store");
 }

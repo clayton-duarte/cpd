@@ -14,6 +14,7 @@ use serde_json::json;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::limit::limit;
 use crate::output::Output;
 use crate::store::Store;
 use crate::watch;
@@ -22,6 +23,12 @@ use check::{Check, Severity};
 /// Each probe's deadline (commands.md §14.1): `doctor` is run when something is wrong,
 /// so a hung tool is a failed check, not a hung `doctor`.
 const DEADLINE: Duration = Duration::from_secs(10);
+
+/// [`DEADLINE`], or the test's `CPD_TEST_DOCTOR_DEADLINE` ([`limit`]). A probe's own
+/// `CPD_TEST_DEADLINE_<TOOL>` wins over both (`host::deadline`).
+fn deadline() -> Duration {
+    limit("DOCTOR_DEADLINE", DEADLINE)
+}
 
 /// The `tmux_restart` check, present only while a restart of the tmux server is pending or has
 /// failed (contract §6.1): pending is a planned hold, not an error (the engine starts no Attempt
@@ -75,4 +82,15 @@ pub fn run(_args: Args) -> Result<Output, CpdError> {
     }
     Err(CpdError::new(ErrorCode::DoctorFailed, format!("These checks failed: {}.", failed.join(", ")))
         .with("checks", serde_json::to_value(&checks).expect("checks serialize")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_probes_deadline_is_10_seconds_unless_a_test_sets_it() {
+        // No test sets CPD_TEST_DOCTOR_DEADLINE in this process (a test sets variables on the commands it runs).
+        assert_eq!(deadline(), Duration::from_secs(10));
+    }
 }
