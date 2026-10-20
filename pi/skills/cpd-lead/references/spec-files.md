@@ -13,7 +13,7 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
   "touches": ["src/routes/health.ts", "src/routes/index.ts", "test/routes/health.test.ts"],
   "acceptance": [
     "GET /health returns 200 with body {\"status\":\"ok\"}",
-    "`npm test -- test/routes/health.test.ts` passes",
+    "`timeout 300 node --test test/routes/health.test.ts` passes",
     "The repo's quick check passes"
   ],
   "out_of_scope": ["Do not change the existing routes", "Do not add a dependency"]
@@ -25,7 +25,7 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
 | `goal` | One outcome, in the imperative. |
 | `context` | Everything the Worker needs and cannot ask the User for: facts, paths, names, signatures, how to run things, decisions from the interview and the Context's records, the accepted assumptions that apply. |
 | `touches` | Exact paths the Worker may change, at least one. New files included. The Worker may touch nothing else. |
-| `acceptance` | At least one item, each checkable by a command or an observable result. |
+| `acceptance` | At least one item, each checkable by a command or an observable result. Test items name the targeted tests: the test files or modules of what the Job changes plus its new tests (for example `scripts/cargo.sh nextest run -p cpd --test plan_overlap`, `node --test pi/test/updates.test.ts`). Never a full unfiltered run (the whole workspace, `npm test` of everything): the full suite is the Gate's, at `pr open`. |
 | `out_of_scope` | The adjacent temptations to refuse. May be empty, rarely should be. |
 
 Write the text in GFM only: tables, lists, code and Mermaid. Footnotes render as literal text and raw HTML is not rendered, so the User would see them broken in the Plan.
@@ -44,7 +44,7 @@ The Worker's submit runs only the repo's quick check (its `pre-commit` hook). Th
 Put these in the `context` of every Spec (they are a Worker's only rules):
 
 - Commit a skeleton within 10 minutes, then at least every 20 minutes.
-- Wrap every measurement and test run in `timeout` (for example `timeout 300 npm test`).
+- Wrap every measurement and test run in `timeout` (for example `timeout 300 node --test test/routes/health.test.ts`), and run only the tests your change touches, never the full suite.
 - Write no synthetic benchmarks.
 - Never start a command that does not exit: `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run`.
 
