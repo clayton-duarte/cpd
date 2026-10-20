@@ -49,11 +49,12 @@ A command is **internal** when cpd runs it by itself and neither an agent nor th
 
 ### 1.2 Output and exit codes
 
-Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Four kinds of command print something other than one JSON value, and are the only exceptions (amendment 10, §19):
+Kept from §1.2 (D1). Every command prints exactly one JSON value on stdout. Five kinds of command print something other than one JSON value, and are the only exceptions (amendment 10, §19):
 
 | Command | What it prints | Why |
 |---|---|---|
 | `cpd events follow` | one Event per line (§5.4) | the one streaming command (§1.2) |
+| `cpd slot` (§23) | what the command it runs prints, and its exit status | it runs a command inside a test slot and is transparent to it; only its own refusals print the envelope, on stderr |
 | `cpd session run`, `cpd tui view` (internal) | they run pi or draw a ratatui view in their pane | they are the programs inside cockpit panes (§6.2), not commands an agent calls. If they fail before taking the terminal, they print the failure envelope and exit with its code |
 | `cpd tui action` (internal) | nothing, ever | the StatusBar's click binding runs it with `run-shell -b`, which puts the active pane into view mode on a failure or any output (§13.2); it reports a failure with `display-message -c <client>` |
 | `cpd` (no arguments), `cpd tui --attach` | nothing on success: it replaces itself with `tmux attach` | the approved outline says `tui` "builds and attaches the cockpit"; without `--attach`, `cpd tui` prints JSON like every command. Bare `cpd` is §13.3 (hs-d259) |
@@ -161,6 +162,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 |---|---|---|---|
 | `cpd context owner` (§3.13) | Manager, Lead | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
+| `cpd slot` (§23) | Manager, Lead, Worker | no | no |
 
 `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged.
 
@@ -1218,7 +1220,7 @@ Effects:
 - **No lock** (hs-d243, contract §7): merges into the PR go on during the command; no R first (an unrecorded merge leaves its Job `running`, which `jobs_not_done` refuses).
 - **Adopting a merged pull request** (before the Gate; contract §7.6 `pr open` step 0): `gh pr list --head <lead branch> --state all --json number,url,state`, the newest decides. When it is `MERGED`, the Gate and the push are skipped (hs-d267 forbids skipping the Gate only when *opening* a pull request whose `pr.gate` is `local`, hs-d292): one transaction records the pull request (its `pull_requests` row, `state` `merged`; the PR's `pr_number`, `pr_url`, `pull_request`) and moves the PR `dispatch → open → merged` exactly as `pr poll` does when it sees a merge: `pr-merged` (no `pr-opened`); `plan-phase` `dispatch → deploy` when every PR that is not `cancelled` is then `open` or `merged`, and `plan-done` (`deploy → done`) when every one is `merged`. The next `pr poll` cleans up the merged PR's worktrees. The output carries `"adopted": "merged"`. When it is `CLOSED` without a merge the command is refused `pr_closed` (reopen it on GitHub, or move the work to a new branch); when it is `OPEN`, it is adopted after the Gate and the push, as below.
 - **Base check** (contract §7.6 step 1, hs-d329): `git -C <repo> fetch origin <base>` (no `origin`: skipped, `refs/heads/<base>` used), `B = rev-parse origin/<base>` read once, `merge-base --is-ancestor B refs/heads/<lead branch>`, then `G = rev-parse refs/heads/<lead branch>`, read once, and `merge-base --is-ancestor B G`; any failing test is `base_behind` with nothing run, pushed or written. It also applies to the adoption of an open pull request, not to a merged one. B is not fetched again after the Gate.
-- **Hooks:** with `pr.gate` `local` (contract §8.3, hs-d292), the Gate on a snapshot (contract §7.6); with `ci`, none and no gate worktree: G as above; leftover gate worktrees of the PR whose pid is dead removed; `git -C <repo> worktree add --detach --lock --reason "cpd gate <pid>" <repo-parent>/<repo-name>.<plan>.<key>.gate-<pid> G`; in it `pre-start` (output `run/<plan>/logs/pr-<key>.pre-start.log`), then `pre-merge` from its `.config/wt.toml` (R19; output `run/<plan>/logs/pr-<key>.pre-merge.log`), with the template variable `branch` = the Lead Branch; then `git worktree remove --force --force`, whatever the result. **The Gate slot** (contract §7.6 "The Gate slot", hs-d336): before `pre-start` it takes one of `gate_concurrency` machine-wide slots (`run/gate-<i>.lock`, default 2), trying them in order without blocking and, when all are busy, polling every 1000 ms with no cap and no new refusal; the wait is logged on stderr and at the head of `run/<plan>/logs/pr-<key>.pre-merge.log` (`gate: waiting for a slot (<n> of <n> busy; gate_concurrency <n>)`, `gate: still waiting for a slot (<s> s)` every 60 s, `gate: slot <i> taken after <s> s`); released after `pre-merge`; a process that dies frees it. Merges, guard R and conflict work take none. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
+- **Hooks:** with `pr.gate` `local` (contract §8.3, hs-d292), the Gate on a snapshot (contract §7.6); with `ci`, none and no gate worktree: G as above; leftover gate worktrees of the PR whose pid is dead removed; `git -C <repo> worktree add --detach --lock --reason "cpd gate <pid>" <repo-parent>/<repo-name>.<plan>.<key>.gate-<pid> G`; in it `pre-start` (output `run/<plan>/logs/pr-<key>.pre-start.log`), then `pre-merge` from its `.config/wt.toml` (R19; output `run/<plan>/logs/pr-<key>.pre-merge.log`), with the template variable `branch` = the Lead Branch; then `git worktree remove --force --force`, whatever the result. **The test slot** (contract §7.6 "The test slot", hs-d336): before `pre-start` it takes one of `test_concurrency` machine-wide slots (`run/test-<i>.lock`, default 2, shared with `cpd slot`, §23), trying them in order without blocking and, when all are busy, polling every 1000 ms with no cap and no new refusal; the wait is logged on stderr and at the head of `run/<plan>/logs/pr-<key>.pre-merge.log` (`gate: waiting for a slot (<n> of <n> busy; test_concurrency <n>)`, `gate: still waiting for a slot (<s> s)` every 60 s, `gate: slot <i> taken after <s> s`); released after `pre-merge`; a process that dies frees it. It sets `CPD_TEST_SLOT=<i>` in the environment of both hooks, so a `cpd slot` inside them takes no second slot (§23). Merges, guard R and conflict work take none. On `gate_failed` or `gate_error` nothing is pushed, no row is written and the PR stays `dispatch`: the Lead appends fix Jobs to it (`job add --pr <key>`) and runs `pr open --pr <key>` again once they are Merged.
 - **Re-read:** after the Gate the PR is read again; when it is no longer `dispatch` (a concurrent `pr open` opened it), the first precondition answers (`already`) and nothing is pushed.
 - **git:** rule P (contract §7.4): `git -C <lead worktree> push --porcelain origin G:refs/heads/<lead branch>` (no `-u`). The Lead Branch is usually on the remote already: the PR's start pushed it and every merge pushed it (§7.2, §7.4, R35), so this push is normally a no-op, and it pushes again what an earlier `push_failed` left behind. A rejection when the remote tip already contains G (a merge during the Gate pushed a descendant) is a success with `pushed` false; any other git failure is `git_failed`.
 - **gh:** the lookup above (`--state all`); when it found an open pull request (an earlier run died before its transaction) that one is adopted; else `gh pr create --base <base> --head <lead branch> --title <title> --body <summary>` (never `--draft`). When `gh pr create` fails, the `gh pr list` lookup runs again and a pull request it finds (a concurrent `pr open` created it) is adopted; otherwise the failure stands. `<title>` is the Plan's title when the Plan has one PR that is not `cancelled`, else `<plan title> (<key>)`; `<summary>` is the table of the PR's own Jobs and its Merged commits (cpd 1 §11, kept).
@@ -2979,3 +2981,43 @@ Output: `key`, `{owner, repo}` (`repo` null for an `Owner` key); `role`, the Ses
 ```
 
 Idempotent: yes; it only reads. It is also the check to run after editing a policy file.
+
+## 23. `slot`
+
+Runs a command inside one of the machine's test slots (contract §7.6 "The test slot", hs-d336, hs-d301): the way any repo's scripts make a full test run take one of `test_concurrency` slots, so that Gates and test runs together never load the machine beyond it. Area `core/` (the slot routine shared with the Gate) and `cli/`.
+
+### 23.1 `slot`
+
+```
+cpd slot -- <cmd> [args…]
+```
+
+| Argument | Meaning |
+|---|---|
+| `<cmd> [args…]` | the command and its arguments, after `--`, run as given (looked up on `PATH`, no shell). Required |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| a command is given after `--` | `usage` | 2 |
+| `test_concurrency` in `$CPD_HOME/config.toml` is valid (1–64; contract §8.2) | `config_invalid` | 1 |
+| `$CPD_HOME/run/` can be created and a slot file opened (a failure is a fault of the machine, not a refusal of the command) | `internal` | 1 |
+
+Nothing else is checked: `slot` opens no store, needs no Plan, Session or selection (`CPD_*` selectors are ignored), and works in any directory.
+
+Effects:
+- **Inside a slot already.** When `CPD_TEST_SLOT` is set and non-empty in the environment (the command runs inside a Gate, whose hooks have it, or inside another `cpd slot`), no slot is taken, nothing is written and the command runs at once; so nesting cannot deadlock.
+- **Otherwise** it reads `test_concurrency` once, then takes a slot exactly as the Gate does (contract §7.6 "The test slot"): a non-blocking `flock` on `run/test-<i>.lock` for `i` in `0..test_concurrency` in order, and when all are busy it polls every 1000 ms with no cap and no refusal. **The wait lines** go to stderr only (no log file; stdout is never touched, the command's stdout stays the caller's): `slot: waiting for a slot (<n> of <n> busy; test_concurrency <n>)` when the first try finds every slot busy; `slot: still waiting for a slot (<s> s)` every 60 s; `slot: slot <i> taken after <s> s` when taken after a wait. A slot taken at once writes nothing.
+- It then starts the command with the environment of `slot` plus `CPD_TEST_SLOT=<i>`, **the variable**, whose value is the held slot number. The command inherits stdin, stdout and stderr and runs in `slot`'s working directory. The slot's file descriptor is not inherited (`O_CLOEXEC`), so a background process the command leaves behind does not hold the slot.
+- **The slot is held until the command ends**, then released; a `slot` that dies frees it by itself (§1.4). `SIGINT`, `SIGTERM` and `SIGHUP` received by `slot` are forwarded to the command, and `slot` goes on waiting for it, holding the slot, so a signal never frees a slot under a command that is still running.
+
+**Exit status** (one more exception to §1.2's one JSON value: `slot` prints no JSON of its own on success, the command's output is the output): the command's exit status; `128 + n` when the command was ended by signal `n`; `127` when the command is not found and `126` when it cannot be executed, each with one line on stderr naming the command (the shell's convention). The refusals above print the usual error envelope on stderr and exit as listed; they happen only before the command starts, so a command's own exit 1, 2 or 3 cannot be told from them by status alone (accepted: the refusals are config or disk faults, not a normal path).
+
+**Use in this repo** (contract §7.6): `scripts/cargo.sh` runs `cargo test` and `cargo nextest` through `cpd slot --`, and `package.json`'s `test` script does too; `cargo build`, `check` and every other subcommand take no slot. When `cpd` is not on `PATH` the scripts run the command directly. So `npm run typecheck` and `scripts/cargo.sh build` (the quick check) wait for nothing, and a full test run does.
+
+Idempotent: yes; it holds nothing after it exits. Example:
+
+```
+$ cpd slot -- scripts/cargo.sh nextest run
+slot: waiting for a slot (2 of 2 busy; test_concurrency 2)
+slot: slot 1 taken after 94 s
+```
