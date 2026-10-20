@@ -279,7 +279,7 @@ Once the Gate passes (when `pr.gate = local`), or at once otherwise, `cpd pr ope
 
 **Stacked PRs.** The next PR in an area is built on the previous PR's last commit (its Lead Branch head), never in parallel from the base. Open it only when it is ready: its Gate passed on a head that contains its base (the base branch, or the PR below it); never as a draft.
 
-- While the previous PR is open, the next PR targets the previous PR's branch: run `gh pr edit <n> --base <branch>` right after `cpd pr open`, or add a later PR with `cpd pr add <key> --repo <path> --base <branch>` (`cpd pr edit` cannot change a base after the lock). GitHub then cannot land it first.
+- While the previous PR is open, the next PR targets the previous PR's branch: run `gh pr edit <n> --base <branch>` right after `cpd pr open`, or add a later PR with `cpd pr add <key> --repo <path> --base <branch> --title "<title>"` (`cpd pr edit` cannot change a base after the lock). GitHub then cannot land it first.
 - While stacked, take the previous branch's new commits with a merge and push with `cpd pr push --pr <key>`, not `cpd pr rebase` (cpd still records the base as the default branch).
 - When the previous PR lands, its branch is deleted and GitHub repoints the next PR to the base: merge the base, then `cpd pr push --pr <key>` runs the Gate (when `pr.gate = local`) and pushes.
 - Merging the earlier branch into a PR that targets the base is not stacking.
