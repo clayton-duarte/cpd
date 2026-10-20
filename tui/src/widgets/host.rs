@@ -5,7 +5,10 @@
 //! The macOS GPU parse ([`parse_ioreg`]) is UNVERIFIED on hardware: it is written from the documented shape of `ioreg -r -d 1
 //! -w 0 -c IOAccelerator` and tested on a captured sample only.
 
-use std::process::Command;
+use std::collections::BTreeMap;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 /// CPU %, GPU % and memory %, whole numbers; `None` is drawn as `–`. `cpu` is `None` until a second CPU sample exists, and any
 /// is `None` when it cannot be read: like the hostname, that is no error of the view (tui-W10). `gpus` has one entry per GPU,
@@ -24,10 +27,12 @@ pub struct CpuTimes {
     total: u64,
 }
 
-/// Reads [`Usage`]; it holds the previous CPU sample, which Linux needs for the share over an interval.
+/// Reads [`Usage`]; it holds the previous CPU sample, which Linux needs for the share over an interval, and on Linux the
+/// one `nvidia-smi` that reports the GPUs ([`Gpus`]), started at the first sample.
 #[derive(Debug, Default)]
 pub struct Sampler {
     previous: Option<CpuTimes>,
+    gpus: Option<Gpus>,
 }
 
 impl Sampler {
@@ -40,7 +45,8 @@ impl Sampler {
             if times.is_some() {
                 self.previous = times;
             }
-            Usage { cpu, gpus: linux_gpus(), mem: read_file("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
+            let gpus = self.gpus.get_or_insert_with(Gpus::start).now();
+            Usage { cpu, gpus, mem: read_file("/proc/meminfo").and_then(|text| parse_meminfo(&text)) }
         }
     }
 }
@@ -55,9 +61,62 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// A missing tool, or one that fails, is no GPU: an empty list, never an error.
-fn linux_gpus() -> Vec<Option<u8>> {
-    run("nvidia-smi", &["--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"]).map_or_else(Vec::new, |t| parse_nvidia_smi(&t))
+/// The GPUs' utilization on Linux, from **one** `nvidia-smi` that prints it every 2 s for as long as the view runs (`-lms`).
+/// A tool spawned and reaped at every sample would count its reads and writes against the view's idle budget (the kernel
+/// adds a reaped child's I/O to its parent's: tui-F1, tui-F2, `cli/tests/it/tui_idle.rs`). A missing tool, or one that fails
+/// or stops, is no GPU: an empty list, never an error. When the view dies without dropping it, the tool's next write finds
+/// no reader and it ends (SIGPIPE).
+#[derive(Debug)]
+struct Gpus {
+    /// The latest % of each GPU, by index.
+    latest: Arc<Mutex<Vec<Option<u8>>>>,
+    child: Option<Child>,
+}
+
+impl Gpus {
+    fn start() -> Gpus {
+        let latest = Arc::new(Mutex::new(Vec::new()));
+        let mut child = Command::new("nvidia-smi")
+            .args(["--query-gpu=index,utilization.gpu", "--format=csv,noheader,nounits", "-lms", "2000"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok();
+        if let Some(out) = child.as_mut().and_then(|c| c.stdout.take()) {
+            let latest = Arc::clone(&latest);
+            std::thread::spawn(move || {
+                let mut by_index = BTreeMap::new();
+                for line in BufReader::new(out).lines() {
+                    let Ok(line) = line else { break };
+                    if let Some((index, value)) = parse_nvidia_smi_line(&line) {
+                        by_index.insert(index, value);
+                        if let Ok(mut l) = latest.lock() {
+                            *l = by_index.values().copied().collect();
+                        }
+                    }
+                }
+                // the tool stopped: no GPU from now on
+                if let Ok(mut l) = latest.lock() {
+                    l.clear();
+                }
+            });
+        }
+        Gpus { latest, child }
+    }
+
+    fn now(&self) -> Vec<Option<u8>> {
+        self.latest.lock().map(|l| l.clone()).unwrap_or_default()
+    }
+}
+
+impl Drop for Gpus {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 fn macos_gpus() -> Vec<Option<u8>> {
@@ -122,10 +181,11 @@ pub fn parse_vm_stat(text: &str, memsize: u64) -> Option<u8> {
     percent(used * page_size, memsize)
 }
 
-/// `nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits`: one line per GPU holding an integer; a line that is not
-/// one (`[N/A]`, an error text) is `None` in that GPU's place. Blank lines are no GPU.
-pub fn parse_nvidia_smi(text: &str) -> Vec<Option<u8>> {
-    text.lines().map(str::trim).filter(|l| !l.is_empty()).map(|l| l.parse::<u8>().ok().filter(|v| *v <= 100)).collect()
+/// A line of `nvidia-smi --query-gpu=index,utilization.gpu --format=csv,noheader,nounits`: `<index>, <percent>`. A percent that
+/// is no number from 0 to 100 (`[N/A]`) is `None` for that GPU; a line with no index is no GPU.
+pub fn parse_nvidia_smi_line(line: &str) -> Option<(u32, Option<u8>)> {
+    let (index, value) = line.split_once(',')?;
+    Some((index.trim().parse().ok()?, value.trim().parse::<u8>().ok().filter(|v| *v <= 100)))
 }
 
 /// `ioreg -r -d 1 -w 0 -c IOAccelerator`: each accelerator starts at a line `+-o <name>` in column 0; its `"PerformanceStatistics"`
@@ -179,13 +239,14 @@ mod tests {
 
     #[test]
     fn nvidia_smi_is_one_integer_per_line_in_the_tools_order() {
-        assert_eq!(parse_nvidia_smi("61\n"), [Some(61)]);
-        assert_eq!(parse_nvidia_smi("61\n0\n"), [Some(61), Some(0)]);
-        assert_eq!(parse_nvidia_smi(" 7 \r\n100\n"), [Some(7), Some(100)]);
-        assert_eq!(parse_nvidia_smi("61\n[N/A]\n3\n"), [Some(61), None, Some(3)], "a line that is no number keeps its place");
-        assert_eq!(parse_nvidia_smi("101\n-1\n"), [None, None]);
-        assert_eq!(parse_nvidia_smi(""), [], "no GPU");
-        assert_eq!(parse_nvidia_smi("\n  \n"), []);
+        assert_eq!(parse_nvidia_smi_line("0, 61"), Some((0, Some(61))));
+        assert_eq!(parse_nvidia_smi_line("1, 0\r"), Some((1, Some(0))));
+        assert_eq!(parse_nvidia_smi_line(" 2 , 100 "), Some((2, Some(100))));
+        assert_eq!(parse_nvidia_smi_line("1, [N/A]"), Some((1, None)), "a GPU with no number keeps its place");
+        assert_eq!(parse_nvidia_smi_line("0, 101"), Some((0, None)));
+        assert_eq!(parse_nvidia_smi_line("61"), None, "no index, no GPU");
+        assert_eq!(parse_nvidia_smi_line(""), None);
+        assert_eq!(parse_nvidia_smi_line("NVIDIA-SMI has failed"), None);
     }
 
     #[test]
