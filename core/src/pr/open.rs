@@ -10,6 +10,7 @@ use super::row::PlanPrs;
 use crate::plan::PrRow;
 use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
+use super::start::base_pr;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use super::{Args, Env, gate, illegal_phase, pr_policy, short};
 use crate::error::{CpdError, ErrorCode};
@@ -65,6 +66,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     // 1. The base check on the Lead Branch's head, then G, read once, and the same check on G (hs-d329), before the
     // Gate, under `pr.gate` `ci` as under `local`; 2. the Gate on G, in a gate worktree of its own.
     let repo = Path::new(&pr.repo);
+    require_base_on_remote(&mut env, repo, pr)?;
     let base_sha = fresh_base(repo, &pr.base)?;
     let lead_ref = format!("refs/heads/{branch}");
     require_base(repo, &lead, pr, &base_sha, &git::run::rev_parse(repo, &lead_ref)?)?;
@@ -161,6 +163,33 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(
         json!({"plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, &key).to_json(), "sha": sha, "pushed": pushed, "remote": remote}),
     ))
+}
+
+/// A stacked PR's base branch, its base PR's Lead Branch, is on the remote (contract §7.6 `pr open` step 1), else
+/// `base_not_found` (exit 4): the pull request targets it, and the base PR's Lead pushes it. A PR that is not stacked
+/// has its base fetched next, and a repo with no `origin` has no pull request to target a branch of.
+fn require_base_on_remote(env: &mut Env, repo: &Path, pr: &PrRow) -> Result<(), CpdError> {
+    let Some(base_pr) = env.store.read(|conn| base_pr(conn, pr))? else { return Ok(()) };
+    if !git::run::has_origin(repo)? {
+        return Ok(());
+    }
+    let listed = git::run::run(repo, &["ls-remote", "--exit-code", "--heads", "origin", &pr.base])?;
+    match listed.code {
+        0 => Ok(()),
+        2 => Err(CpdError::new(
+            ErrorCode::BaseNotFound,
+            format!(
+                "PR {}'s base {}, the Lead Branch of {base_pr}, is not on origin: the pull request cannot target it. Its Lead pushes it (cpd pr push), then run cpd pr open again. Nothing was gated, pushed or opened.",
+                pr.key, pr.base
+            ),
+        )
+        .with("pr", pr.key.as_str())
+        .with("base", pr.base.as_str())
+        .with("base_pr", base_pr)),
+        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git ls-remote origin {} exited {code}.", pr.base))
+            .with("exit", code)
+            .with("stderr", listed.stderr)),
+    }
 }
 
 /// B (contract §7.6 `pr open` step 1): `origin/<base>` after `git fetch origin <base>`, read once; a repo with no

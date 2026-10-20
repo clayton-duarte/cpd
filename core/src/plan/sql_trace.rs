@@ -60,7 +60,7 @@ pub(super) fn ledger(dir: &std::path::Path, plans: usize) -> Store {
                        't', (SELECT id FROM pull_requests WHERE number = {n}), cpd_txn(), 't', 't');
              INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                VALUES ('plan-{n}', 'db', '/r/db', 'main', 'waiting', 'cpd/plan-{n}/db', cpd_txn(), 't');
-             INSERT INTO pr_needs (plan, pr, needs) VALUES ('plan-{n}', 'api', 'db');
+             INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('plan-{n}', 'api', 'plan-{n}', 'db');
              INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
                VALUES ('plan-{n}', 'api', 'a', 'A', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't'),
                       ('plan-{n}', 'api', 'b', 'B', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');
