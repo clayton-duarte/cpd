@@ -1408,6 +1408,85 @@ fn copy_id_puts_the_shown_id_in_tmuxs_buffer_and_says_so() {
     assert!(calls(&env).is_empty(), "Copy id runs no cpd command: {:?}", calls(&env));
 }
 
+// ---------- the folds survive a restart of the view (hs-d260) ----------
+
+fn folds_file(env: &TestEnv) -> std::path::PathBuf {
+    env.cpd_home().join("run").join("tui").join("tree-folds.json")
+}
+
+/// The tree's rows above the Inbox section (whose own fold row is a `╰─ expand` too).
+fn above_inbox(screen: &[String]) -> &[String] {
+    &screen[..screen.iter().position(|r| r.contains("Inbox")).unwrap_or(screen.len())]
+}
+
+/// Every Context drawn is open: its block ends in `╰─ collapse`, and no Context shows `╰─ expand`.
+fn every_context_open(screen: &[String]) -> bool {
+    let tree = above_inbox(screen);
+    tree.iter().any(|r| r.trim() == "╰─ collapse") && !tree.iter().any(|r| r.trim() == "╰─ expand")
+}
+
+/// Waits until `tree-folds.json` holds `want` (it is written at most once a second).
+fn wait_for_folds(env: &TestEnv, want: &str) {
+    common::wait_until(&format!("the folds file to hold {want}"), || std::fs::read_to_string(folds_file(env)).is_ok_and(|text| text == want));
+}
+
+#[test]
+fn a_collapsed_context_and_an_expanded_archived_context_survive_a_restart_of_the_view() {
+    let env = env();
+    populate(&env);
+    archive(&env);
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 26);
+    let screen = pane.ready();
+    assert!(!folds_file(&env).exists(), "a start with no fold writes nothing");
+    // alpha's `╰─ collapse` row (the fold widget's toggle row is the only one that folds, commands.md §13.2)
+    let toggle = screen.iter().position(|r| r.trim() == "╰─ collapse").unwrap() as u16;
+    pane.click(5, toggle);
+    pane.wait("alpha folded", |s| s.get(2).is_some_and(|r| r.trim() == "╰─ expand"));
+    // the archived Context gamma starts folded: its `╰─ expand` row, right under its title row
+    let screen = pane.wait("gamma, folded", |s| s.iter().any(|r| r.contains("gamma")));
+    let gamma = screen.iter().position(|r| r.contains("gamma")).unwrap();
+    assert_eq!(screen[gamma + 1].trim(), "╰─ expand", "{screen:#?}");
+    pane.click(5, gamma as u16 + 1);
+    let before = pane.wait("gamma expanded", |s| s.iter().position(|r| r.contains("gamma")).is_some_and(|g| s[g + 1].trim() != "╰─ expand"));
+    wait_for_folds(&env, r#"{"collapsed":["alpha"],"expanded":[["gamma"]]}"#);
+
+    // respawn the pane: the same screen comes back (frames can arrive in two writes, hs-n206: poll for all of it)
+    let out = env.tmux(&["respawn-pane", "-k", "-t", SESSION, &format!("{CPD} tui view tree")]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let after = pane.wait("the folds restored", |s| s == before.as_slice());
+    assert_eq!(after, before);
+    assert_eq!(calls(&env), Vec::<Vec<String>>::new(), "no command ran");
+    let leftovers: Vec<_> = std::fs::read_dir(folds_file(&env).parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(leftovers, ["tree-folds.json"], "no temporary file is left");
+}
+
+#[test]
+fn an_invalid_folds_file_starts_the_tree_with_the_defaults_and_a_note_and_the_next_fold_replaces_it() {
+    let env = env();
+    populate(&env);
+    std::fs::create_dir_all(folds_file(&env).parent().unwrap()).unwrap();
+    std::fs::write(folds_file(&env), "{not json").unwrap();
+    let pane = Pane::start(&env, 46, 26);
+    let screen = pane.wait("the note", |s| s.iter().any(|r| r.contains("fold state reset")));
+    assert!(every_context_open(&screen), "every Context is open: {screen:?}");
+    assert_eq!(std::fs::read_to_string(folds_file(&env)).unwrap(), "{not json", "nothing is written until a fold changes");
+    let toggle = screen.iter().position(|r| r.trim() == "╰─ collapse").unwrap() as u16;
+    pane.click(5, toggle);
+    pane.wait("alpha folded", |s| s.get(2).is_some_and(|r| r.trim() == "╰─ expand"));
+    wait_for_folds(&env, r#"{"collapsed":["alpha"],"expanded":[]}"#);
+}
+
+#[test]
+fn a_missing_folds_file_is_every_context_open() {
+    let env = env();
+    populate(&env);
+    let pane = Pane::start(&env, 46, 26);
+    let screen = pane.ready();
+    assert!(every_context_open(&screen), "{screen:?}");
+    assert!(screen.iter().all(|r| !r.contains("fold state")), "{screen:?}");
+}
+
 // ---------- the Inbox section (commands.md §13.2) ----------
 
 #[test]

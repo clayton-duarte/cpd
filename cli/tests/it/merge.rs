@@ -14,6 +14,7 @@ use std::time::Duration;
 use common::{TestEnv, write_executable};
 use cpd_core::config::{Catalog, Config, TierModel};
 use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::git::worktree::prepare_stacked_lead_worktree;
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
@@ -257,6 +258,28 @@ impl Fx {
             })
             .unwrap();
         Pr { key: key.into(), repo: repo.to_owned(), branch, lead: path, origin }
+    }
+
+    /// Adds PR `key` of Plan `pay`, **stacked** on `base_pr` and started as `pr start` does: its Lead Branch
+    /// `cpd/pay/<key>` is cut from the head of `base_pr`'s Lead Branch, which is its `base` (contract §7.2).
+    fn add_stacked_pr(&self, key: &str, base_pr: &Pr) -> Pr {
+        let repo = &base_pr.repo;
+        let branch = format!("cpd/pay/{key}");
+        let path = pr_lead_worktree_path(repo, &plan(), &PrKey::parse(key).unwrap(), &branch).unwrap();
+        let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("lead.log") };
+        let prepared = prepare_stacked_lead_worktree(repo, &plan(), &path, &branch, &base_pr.branch, &setup).map_err(|f| f.error).unwrap();
+        prepared.push().unwrap();
+        self.store()
+            .write("fixture", |tx| {
+                tx.execute(
+                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                     VALUES ('pay', ?1, ?2, ?3, 'dispatch', ?4, ?5, ?6, 't', 't')",
+                    params![key, repo.to_str().unwrap(), base_pr.branch, branch, path.to_str().unwrap(), tx.id()],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        Pr { key: key.into(), repo: repo.clone(), branch, lead: path, origin: base_pr.origin.clone() }
     }
 
     /// The tip of `pr`'s Lead Branch, read in its repo.
@@ -662,6 +685,95 @@ fn a_protected_file_deleted_on_the_base_and_in_the_attempt_is_merged() {
 
         assert_eq!(result.end, End::Merged { sha: tip }, "{path}");
     }
+}
+
+/// PR `base` (Lead Branch `cpd/pay/base`) with a bare `origin`, a PR `web` stacked on it (Lead Branch `cpd/pay/web`),
+/// and a Job of `web` whose Attempt has one commit.
+fn stacked_job() -> (Fx, Pr, Pr, AttemptId, PathBuf) {
+    let fx = plan_without_prs("");
+    let origin = add_origin(&fx.env, &fx.repo);
+    let base = fx.add_pr("base", &fx.repo, Some(origin));
+    let web = fx.add_stacked_pr("web", &base);
+    let (attempt, worktree) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
+    (fx, base, web, attempt, worktree)
+}
+
+/// The Attempt's worktree merges `reference` (the Lead tip is its ancestor, so no rebase) and is submitted again.
+fn merge_ref(fx: &Fx, attempt: &AttemptId, worktree: &Path, reference: &str) {
+    fx.git(worktree, &["merge", "-q", "--no-ff", "-m", "merge the base", reference]);
+    fx.resubmit(attempt, worktree);
+}
+
+/// `pr`'s Lead Branch moves on (another Job's merge, a commit writing `path`) and is pushed.
+fn advance_and_push(fx: &Fx, pr: &Pr, path: &str, content: &str) {
+    fx.advance(pr, path, content);
+    fx.git(&pr.lead, &["push", "-q", "origin", &pr.branch]);
+}
+
+#[test]
+fn a_stacked_prs_job_that_merges_the_base_prs_protected_file_changes_is_merged() {
+    for path in [".config/wt.toml", ".config/cpd.toml", ".cpd/x"] {
+        let (fx, base, web, attempt, worktree) = stacked_job();
+        // The base PR's Lead Branch moves on, a protected file with it, and is pushed.
+        advance_and_push(&fx, &base, path, "protected = [\"verify.sh\"]\n");
+        merge_ref(&fx, &attempt, &worktree, "origin/cpd/pay/base");
+        let tip = fx.git(&worktree, &["rev-parse", "HEAD"]);
+
+        let result = fx.merge(&attempt);
+
+        assert_eq!(result.end, End::Merged { sha: tip.clone() }, "{path}");
+        assert_eq!(fx.tip(&web), tip, "{path}");
+    }
+}
+
+#[test]
+fn a_stacked_prs_job_that_merges_the_root_base_brings_its_protected_file_changes_without_tampering() {
+    for path in [".config/wt.toml", ".config/cpd.toml", ".cpd/x"] {
+        let (fx, _, web, attempt, worktree) = stacked_job();
+        // `main`, the branch the stack lands on, changes a protected file the base PR's branch does not have yet.
+        base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
+        merge_ref(&fx, &attempt, &worktree, "origin/main");
+        let tip = fx.git(&worktree, &["rev-parse", "HEAD"]);
+
+        let result = fx.merge(&attempt);
+
+        assert_eq!(result.end, End::Merged { sha: tip.clone() }, "{path}");
+        assert_eq!(fx.tip(&web), tip, "{path}");
+    }
+}
+
+#[test]
+fn a_stacked_prs_job_that_changes_a_protected_file_to_anything_else_is_tampered() {
+    for path in [".config/wt.toml", ".config/cpd.toml"] {
+        let (fx, base, web, attempt, worktree) = stacked_job();
+        base_edits(&fx, path, Some("protected = [\"verify.sh\"]\n"));
+        advance_and_push(&fx, &base, path, "protected = [\"base-pr\"]\n");
+        merge_ref(&fx, &attempt, &worktree, "origin/main");
+        fx.commit(&worktree, path, "protected = [\"mine\"]\n");
+        fx.resubmit(&attempt, &worktree);
+        let old = fx.tip(&web);
+
+        let result = fx.merge(&attempt);
+
+        assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{path}: {result:?}");
+        assert_eq!(fx.tip(&web), old, "{path}");
+    }
+}
+
+#[test]
+fn a_job_of_a_pr_that_is_not_stacked_gets_no_extra_base_for_a_protected_file_only_another_branch_has() {
+    // The root base is the stacked PR's extra: a PR that is not stacked accepts the Lead tip's and `origin/main`'s only.
+    let fx = plan_without_prs("");
+    let origin = add_origin(&fx.env, &fx.repo);
+    let one = fx.add_pr("one", &fx.repo, Some(origin.clone()));
+    let other = fx.add_pr("other", &fx.repo, Some(origin));
+    let (attempt, worktree) = fx.submitted_on(&one, "api", "api.txt", "api\n");
+    advance_and_push(&fx, &other, ".config/wt.toml", "pre-start = \"other\"\n");
+    merge_ref(&fx, &attempt, &worktree, "origin/cpd/pay/other");
+
+    let result = fx.merge(&attempt);
+
+    assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
 }
 
 #[test]
