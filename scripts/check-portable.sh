@@ -15,7 +15,7 @@ set -eu
 dir=$(cd "$(dirname "$0")" && pwd)
 
 # What a Mac runs (dotfiles' install and sync, bare cpd, a Worker or Lead there, the Gate there).
-covered="install-cpd.sh pi-check.sh check-portable.sh check-migrations-frozen.sh cargo.sh npm-fresh.sh new-migration.sh preview-tui.sh repin.sh"
+covered="install-cpd.sh pi-check.sh check-portable.sh check-migrations-frozen.sh cargo.sh npm-fresh.sh new-migration.sh preview-tui.sh repin.sh test-changed"
 
 # Linux-only, not covered, each with its reason; a script in neither list fails.
 linux_only="release.sh: hs only, its header says so
@@ -101,6 +101,30 @@ echo "$files" | while IFS= read -r file; do
   echo "#file"
   awk -v name="$file" -v tbl="$tbl" '
     function trim(s) { gsub(/^[ \t(;|&$`"]+/, "", s); gsub(/[ \t]+$/, "", s); return s }
+    # Whether the line has `tmux` in command position, not followed by `-u`.
+    function bare_tmux(line,    segs, n, i, w, m, j, skip) {
+      gsub(/[|;&(`{]/, ";", line)
+      n = split(line, segs, ";")
+      for (i = 1; i <= n; i++) {
+        m = split(segs[i], w, /[ \t]+/)
+        skip = 0
+        for (j = 1; j <= m; j++) {
+          if (w[j] == "") continue
+          if (skip) { skip = 0; continue }
+          if (w[j] == "env") { inenv = 1; continue }
+          if (w[j] == "!" || w[j] == "then" || w[j] == "do" || w[j] == "else" || w[j] == "if" || w[j] == "while" || w[j] == "until" || w[j] == "cleanenv") continue
+          if (w[j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
+          if (inenv && w[j] ~ /^-/) { if (w[j] == "-u" || w[j] == "-C" || w[j] == "-S") skip = 1; continue }
+          inenv = 0
+          if (w[j] == "tmux" || w[j] ~ /\/tmux$/) {
+            if (j == m || w[j + 1] != "-u") return 1
+          }
+          break
+        }
+        inenv = 0
+      }
+      return 0
+    }
     BEGIN {
       boundary = "(^|[^A-Za-z0-9_./-])"
       while ((getline row < tbl) > 0) {
@@ -120,6 +144,10 @@ echo "$files" | while IFS= read -r file; do
         } else {
           print "#exempt"
         }
+        next
+      }
+      if (bare_tmux($0)) {
+        printf "%s:%d: bare tmux: use tmux -u, through the script'"'"'s one tmux function (hs-d463)\n", name, NR
         next
       }
       for (k = 1; k <= n; k++) {

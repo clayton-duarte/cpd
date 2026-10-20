@@ -12,7 +12,7 @@
 mod archive;
 mod contexts;
 pub mod digest;
-pub(crate) mod distill;
+pub mod distill;
 pub mod inforce;
 mod list;
 pub(crate) mod legacy;

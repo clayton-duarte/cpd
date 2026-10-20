@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "cli", "tui"]
+members = ["core", "engine", "cli", "tui"]
 
 [workspace.package]
 version = "0.0.5"
@@ -24,11 +24,16 @@ tui-tree-widget = "0.24"
 uuid = { version = "1.28", features = ["v4"] }
 tempfile = "3.27"
 
-# Deviation from the default (full debuginfo): tests-build-F2. Line tables keep
-# backtraces and panics readable; a clean `test --workspace --no-run` (N=3)
-# took 48-62 s and 4.7G of target/ with `true`, 33-40 s and 2.4G with this.
+# Deviation from the default (full debuginfo): no debuginfo at all. It costs
+# build time and target/ space and the tests never read it (tests-build-F2: full
+# debuginfo 48-62 s and 4.7G, line tables 33-40 s and 2.4G, for a clean test
+# build; measurement for 0 against line tables: the commit that set it). A panic
+# still prints its message and file:line:col (compiled in, not debuginfo); a
+# backtrace lists function names without `at file:line` (docs/implementing.md
+# "Debuginfo"). Back for one session, no edit:
+# CARGO_PROFILE_DEV_DEBUG=line-tables-only. `test` inherits `dev`.
 [profile.dev]
-debug = "line-tables-only"
+debug = 0
 
 # Deviation from the default (opt-level 0 for everything): dependencies only.
 # The tests spend their time in dependency code (rusqlite's bundled SQLite

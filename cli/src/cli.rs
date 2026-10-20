@@ -10,9 +10,13 @@ use clap::{CommandFactory, Parser, Subcommand};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
-use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, policy, pr, session, slot, watch};
+use cpd_core::config::Config;
+use cpd_core::store::Store;
+use cpd_core::{ask, attempt, config, context, events, inbox, job, plan, policy, pr, session, slot};
+use cpd_engine::watch::restart;
+use cpd_engine::{doctor, watch};
 
-/// The build's version string: `<Cargo.toml version>-<short commit hash>` (or `-unknown`).
+/// The build's version string: `<Cargo.toml version>-<commit>`: the short hash the build was given in `CPD_COMMIT`, `dev` when it was given none.
 pub fn version() -> &'static str {
     env!("CPD_VERSION")
 }
@@ -85,7 +89,7 @@ fn run_with(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
         Ok(Cli { command: Some(command) }) => dispatch(command),
-        Ok(Cli { command: None }) if terminal => cpd_tui::bare(run_command),
+        Ok(Cli { command: None }) if terminal => cpd_tui::bare(run_command, RESTART),
         Ok(Cli { command: None }) => {
             let required = Cli::command().subcommand_required(true).arg_required_else_help(true);
             match required.try_get_matches_from(&argv) {
@@ -115,7 +119,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Events(c) => events::run(c),
         Command::Inbox(c) => inbox::cmd::run(c),
         Command::Watch(a) => watch::run(a),
-        Command::Tui(a) => cpd_tui::run(a, run_command),
+        Command::Tui(a) => cpd_tui::run(a, run_command, RESTART),
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),
@@ -133,6 +137,25 @@ fn slot_exit(result: Result<u8, CpdError>) -> ! {
             std::process::exit(i32::from(err.exit().code()))
         }
     }
+}
+
+/// The engine's tmux restart, which `cpd tui` and bare `cpd` hand the cockpit (`cpd-tui` does not depend on `cpd-engine`).
+const RESTART: cpd_tui::Restart =
+    cpd_tui::Restart { failed: restart_failed, clear: restart::clear, mark: restart::mark, now: restart_now };
+
+/// [`cpd_tui::Restart::failed`]: the pending restart's line when it failed.
+fn restart_failed(home: &CpdHome) -> Result<Option<String>, CpdError> {
+    Ok(restart::read(home)?.filter(|p| p.failed.is_some()).map(|p| p.describe()))
+}
+
+/// [`cpd_tui::Restart::now`]: the restart, logging nothing.
+fn restart_now(home: &CpdHome, config: &Config, store: &mut Store) -> Result<cpd_tui::RestartOutcome, CpdError> {
+    Ok(match restart::restart(home, config, store, &mut |_| ())? {
+        restart::Outcome::NotNeeded => cpd_tui::RestartOutcome::NotNeeded,
+        restart::Outcome::Running => cpd_tui::RestartOutcome::Running,
+        restart::Outcome::Busy(why) => cpd_tui::RestartOutcome::Busy(why),
+        restart::Outcome::Restarted { reopened } => cpd_tui::RestartOutcome::Restarted { reopened },
+    })
 }
 
 /// The runner `cpd tui` hands the cockpit, which runs commands in this process.
@@ -245,7 +268,7 @@ mod tests {
             .and_then(|rest| rest.strip_prefix('-'))
             .expect("version is <Cargo version>-<hash>");
         assert!(
-            hash == "unknown" || (hash.len() >= 7 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
+            hash == "dev" || (hash.len() >= 7 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
             "bad hash {hash}"
         );
         let mut keys: Vec<_> = fields.keys().map(String::as_str).collect();
