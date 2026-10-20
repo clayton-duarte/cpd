@@ -2,7 +2,7 @@
 
 /** The rule's reason, one line naming it (§15.12). */
 export const reasonText = (matched: string): string =>
-  `cpd: a Worker runs only the tests its change touches; the full suite is the Gate's, at pr open; refused: ${matched}`;
+  `cpd: a Worker runs only the tests its change touches; the full suite is the Gate's, run by the PR's open Job; refused: ${matched}`;
 
 /** Words a simple command may start with that are not the command (`FOO=1 sudo timeout 60 x`, `do cargo test`). */
 const PREFIXES = new Set(["do", "then", "else", "elif", "if", "!", "{", "}", "time", "nohup", "exec", "command", "sudo", "env", "while", "until"]);
