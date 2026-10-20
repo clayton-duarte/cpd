@@ -194,6 +194,11 @@ impl CpdHome {
         self.run_dir().join("tmux-restart.log")
     }
 
+    /// `run/tmux-restart.pid`: the pid of the detached tmux restart the engine started, while it runs.
+    pub fn tmux_restart_pid(&self) -> PathBuf {
+        self.run_dir().join("tmux-restart.pid")
+    }
+
     /// `run/context-digests/<context>/`: a Context's digest files (contract §1.4, §4.6).
     pub fn context_digest_dir(&self, context: &ContextId) -> PathBuf {
         self.run_dir().join("context-digests").join(context.as_str())
@@ -207,6 +212,11 @@ impl CpdHome {
     /// `run/context-digests/<context>/<upto_seq>.md.tmp`: the distiller's output before it is validated.
     pub fn context_digest_tmp(&self, context: &ContextId, upto_seq: u64) -> PathBuf {
         self.context_digest_dir(context).join(format!("{upto_seq}.md.tmp"))
+    }
+
+    /// `run/context-digests/<context>/distill.pid`: the pid of the distill run the engine started (§3.7 E9), while it runs.
+    pub fn distill_pid(&self, context: &ContextId) -> PathBuf {
+        self.context_digest_dir(context).join("distill.pid")
     }
 
     /// `run/<plan>/`.
@@ -412,6 +422,7 @@ mod tests {
         assert_eq!(h.tmux_restart_lock(), p("/h/.cpd/locks/tmux-restart.lock"));
         assert_eq!(h.tmux_restart_pending(), p("/h/.cpd/run/tmux-restart.pending"));
         assert_eq!(h.tmux_restart_log(), p("/h/.cpd/run/tmux-restart.log"));
+        assert_eq!(h.tmux_restart_pid(), p("/h/.cpd/run/tmux-restart.pid"));
         assert_eq!(h.plan_md(&plan()), p("/h/.cpd/run/pay-4521/plan.md"));
         assert_eq!(h.worker_spec(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/specs/api-schema-a2.md"));
         assert_eq!(h.review_brief(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.md"));
@@ -461,6 +472,7 @@ mod tests {
         assert_eq!(h.context_digest(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.md"));
         assert_eq!(h.context_digest_tmp(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.md.tmp"));
         assert_eq!(h.distill_lock(&ctx), p("/h/.cpd/locks/distill-building-cpd.lock"));
+        assert_eq!(h.distill_pid(&ctx), p("/h/.cpd/run/context-digests/building-cpd/distill.pid"));
     }
 
     #[test]
