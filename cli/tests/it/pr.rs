@@ -3048,7 +3048,7 @@ struct Stacked {
     lead: PathBuf,
 }
 
-fn stacked(fx: &Fx) -> Stacked {
+fn stacked_pr(fx: &Fx) -> Stacked {
     let ship = PlanId::parse("ship").unwrap();
     let path = fx.repo.parent().unwrap().join("pay.ship.web");
     let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("web.log") };
@@ -3094,7 +3094,7 @@ impl Fx {
 #[test]
 fn open_of_a_stacked_pr_gates_a_head_with_the_base_prs_work_and_targets_its_lead_branch() {
     let fx = fx("dispatch");
-    let web = stacked(&fx);
+    let web = stacked_pr(&fx);
     // The Gate sees the base PR's work in the gated commit, and its `target` is the base PR's Lead Branch, whose
     // worktree is `target_worktree_path`.
     let marker = fx.env.root().join("gate-saw");
@@ -3123,7 +3123,7 @@ fn open_of_a_stacked_pr_gates_a_head_with_the_base_prs_work_and_targets_its_lead
 #[test]
 fn open_of_a_stacked_pr_is_refused_while_its_base_prs_branch_is_not_on_origin() {
     let fx = fx("dispatch");
-    stacked(&fx);
+    stacked_pr(&fx);
     let pushed = fx.remote_branch("cpd/ship/web");
     fx.git(&fx.repo, &["push", "-q", "origin", "--delete", "cpd/pay"]);
 
@@ -3141,7 +3141,7 @@ fn open_of_a_stacked_pr_is_refused_while_its_base_prs_branch_is_not_on_origin() 
 #[test]
 fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_it_is_behind() {
     let fx = fx("dispatch");
-    let web = stacked(&fx);
+    let web = stacked_pr(&fx);
     // A merge into the base PR's Lead Branch, pushed: the stacked head lacks it.
     fs::write(fx.lead.join("more.txt"), "more\n").unwrap();
     fx.git(&fx.lead, &["add", "-A"]);
