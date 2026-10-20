@@ -35,12 +35,14 @@ tempfile = "3.27"
 [profile.dev]
 debug = 0
 
-# Deviation from the default (opt-level 0 for everything): dependencies only.
-# The tests spend their time in dependency code (rusqlite's bundled SQLite
-# creating, migrating and checking a store at every `cpd` command and every
-# `Store::open`; serde, toml, time, minijinja), and unoptimised that is several
-# times slower (docs/research/test-speed.md §7.1). Only dependencies change: the
-# workspace's own crates (cli, core, tui) stay at opt-level 0, so editing them
-# recompiles as before. Cost: a clean build compiles the dependencies optimised.
+# Deviation from the default (opt-level 0 for everything): dependencies only,
+# at opt-level 1. The tests spend their time in dependency code (rusqlite's
+# bundled SQLite creating, migrating and checking a store at every `cpd` command
+# and every `Store::open`; serde, toml, time, minijinja), and unoptimised that is
+# about twice as slow (docs/research/test-speed.md §7.1, #159). Level 1 keeps
+# that whole gain: the tests run as fast as at 3, and a clean test build is
+# about 35 % cheaper (wall and CPU) than at 3 (docs/implementing.md "Dependency
+# opt-level": the paired numbers). Only dependencies change: the workspace's own
+# crates (cli, core, tui) stay at opt-level 0, so editing them recompiles as before.
 [profile.dev.package."*"]
-opt-level = 3
+opt-level = 1

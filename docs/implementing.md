@@ -273,6 +273,28 @@ The `dev` profile builds with `debug = 0` (no debuginfo), and `test` inherits it
 - **What a failure shows.** A panic still prints its message and `file:line:col` (the panic location is compiled in, it is not debuginfo). A backtrace (`RUST_BACKTRACE=1`) lists the function names, from the symbol table, with no `at file:line` under a frame; neither do the frames of dependencies and `std`.
 - **Line tables back for a debugging session**, with no edit to `Cargo.toml`: set `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, for example `CARGO_PROFILE_DEV_DEBUG=line-tables-only RUST_BACKTRACE=1 scripts/cargo.sh nextest run -p cpd-core -E 'test(/^<module>::/)'` (it applies to `test` too). `CARGO_PROFILE_DEV_DEBUG=true` gives full debuginfo, for a debugger. A different setting is a different build: cargo rebuilds the crates when you switch it on and again when you unset it, so use a `CARGO_TARGET_DIR` of its own for a long session.
 
+## Dependency opt-level
+
+`[profile.dev.package."*"]` builds the dependencies at `opt-level = 1`; the workspace's own crates (`cli`, `core`, `tui`) stay at 0, so editing them recompiles as before. #159 set it to 3 because the tests spend their time in dependency code (the bundled SQLite, `sha2`, `serde_json`, `toml`) and unoptimised that is about twice as slow. Plan quality's dc-optcost2 measured 3 against 1 and 0 and kept the whole gain at 1, for a cheaper build. Measured on hs (16 CPUs) on main with `debug = 0`, sccache off (`RUSTC_WRAPPER=`), 3 rounds in rotating order (the order of the builds: 3 0 1, then 1 3 0, then 0 3 1), one build at a time in a target directory of its own, **normal load: 1-minute load average 21-64** (shared with other Workers' builds and Gates). Each cell is round 1 / 2 / 3.
+
+| | opt-level 3 | opt-level 1 | opt-level 0 |
+|---|---|---|---|
+| cold `nextest run --workspace --no-run`, wall (s) | 146 / 143 / 124 | 98 / 87 / 69 | 67 / 55 / 77 |
+| the same, CPU (s) | 543 / 538 / 514 | 368 / 392 / 367 | 222 / 217 / 253 |
+| fresh directory, `nextest run -p cpd-core -E 'test(/^error::/)'` (121 units), wall (s) | 116 / 92 / 109 | 53 / 68 / 52 | 71 / 41 / 44 |
+| the same, CPU (s) | 434 / 409 / 443 | 294 / 313 / 275 | 136 / 132 / 152 |
+| `-p cpd-core` after the workspace build | 0 units, 0.4-0.6 s | 0 units, 0.4-0.8 s | 0 units, 0.7-1.5 s |
+| tests `binary_id(cpd-core)` (575), nextest time (s) | 10.2 / 6.3 / 13.0 | 9.5 / 10.6 / 8.2 | 24.1 / 18.2 / 16.7 |
+| tests `binary_id(cpd::store)` (106), nextest time (s) | 3.0 / 2.5 / 2.6 | 2.6 / 3.0 / 2.6 | 7.4 / 3.5 / 3.7 |
+| tests `cpd::engine` + `cpd::flow` (512), wall (s) | 27 / 42 / 27 | 26 / 36 / 26 | 36 / 47 / 55 |
+| the same, CPU (s) | 142 / 168 / 158 | 139 / 142 / 152 | 211 / 232 / 247 |
+| `target/` after the cold build (MiB) | 1,330 | 1,313 | 1,387 |
+
+- **The first `-p` run costs nothing at any level** since `core` has `ratatui` as a dev-dependency (the unification fix of #185): after a workspace build it compiles 0 units. What a first `-p` run costs is a **fresh** target directory, where it builds every dependency: 3 is 92-116 s, 1 is 52-68 s, 0 is 41-71 s.
+- **3 against 0**: a clean test build costs about 70 s of wall and 300 CPU-s more; the tests run about 2x faster (CPU of the two integration binaries 142-168 against 211-247 s, `cpd-core` 6-13 against 17-24 s). 3 against 1: no test difference beyond the noise (the rounds overlap in every row), 35 % less wall and CPU for the clean build at 1.
+- **Not measured**: level 2; the full suite (the Gate's run is the number for it); sccache on (it saves CPU in the dependency phase at every level, `docs/research/build-cycle.md`). One run of `cpd::engine` + `cpd::flow` at level 1 failed one test at load 34-50 (the test's name was not kept); two reruns at load 40-42 passed (unverified: a load flake).
+- **Another level for one session**, no edit: `--config 'profile.dev.package."*".opt-level=3'` (what the measurement used), with a `CARGO_TARGET_DIR` of its own, since a different setting rebuilds the dependencies.
+
 ## The version string
 
 `cpd --version`'s `version` is `<Cargo.toml version>-<commit>` (commands.md §1.2): the workspace version, then a short commit hash.
