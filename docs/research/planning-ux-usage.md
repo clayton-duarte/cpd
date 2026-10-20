@@ -95,7 +95,7 @@ def rng(x, f='{:.1f}'): return f"median {f.format(med(x))}, range {f.format(min(
 # ---------- plan reviews ----------
 ev = cpd('events','list','--context','building-cpd','--kind','plan-review','--limit','1000')['events']
 ev = [e for e in ev if e['at'] <= CUTOFF]
-cancels = cpd('events','list','--context','building-cpd','--kind','job-cancelled','--limit','5000')['events']
+cancels = [j for j in cpd('events','list','--context','building-cpd','--kind','job-cancelled','--limit','5000')['events'] if j['at'] <= CUTOFF]
 idx = []
 for p in glob.glob(f'{RUN}/*/plannotator/feedback/*/index.jsonl'):
     d = p[len(RUN)+1:].split('/')[0]
@@ -719,4 +719,4 @@ Event 9153 (2026-10-18T14:34:05Z) has status `rejected` and this feedback: "Supe
 
 - **Declined (cancelled): 1.** `pr-view-sync` (`a0eb7d2c`), 2026-10-18T01:11:44Z, after 7.2 min: the dialog returned "User declined to answer questions" with `cancelled: true` and the typed text "looking good, up to date" (question: "After you merged #19 and #90, what did the Deploy/Dispatch column's PRs section show?").
 - **No result: 3 calls** have a `toolCall` and no matching `toolResult` in the session file: `reopen-done` `e52815a2` 2026-10-16T21:08:44Z (1 question), `dev-speed` `353dd1a1` 2026-10-18T13:06:49Z (1 question), Manager `97de2471` 2026-10-18T13:49:07Z (4 questions). Why: unverified (a session ended or was restarted; not read further).
-- **Longest waits.** Ask: Manager 2026-10-16T20:02:59Z, 1598.7 min (26.6 h); `tui-visuals` 551.1 min and `release` 548.9 min (both called 2026-10-20 ~03:50Z); `repo-policy` 451.8 min; Manager 2026-10-18T15:06Z, 395.4 min. Plan reviews: `quality` r8, 500.2 min (2026-10-20T04:39Z to 12:59Z); `cross-repo` r10 63.6 min; `dev-speed` r4 31.3 min. No cause is recorded for any of them (unverified: the User's hours are not in the data).
+- **Longest waits.** Ask: Plan `manager`'s Lead (`46b9faa6`) 2026-10-16T20:02:59Z, 1598.7 min (26.6 h; the session's first round, one minute after it started); `tui-visuals` 551.1 min and `release` 548.9 min (both called 2026-10-20 ~03:50Z); `repo-policy` 451.8 min; the Manager (`97de2471`) 2026-10-18T15:06Z, 395.4 min. Plan reviews: `quality` r8, 500.2 min (2026-10-20T04:39Z to 12:59Z); `cross-repo` r10 63.6 min; `dev-speed` r4 31.3 min. No cause is recorded for any of them (unverified: the User's hours are not in the data).
