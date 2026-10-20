@@ -115,6 +115,11 @@ chmod 755 "$CARGO_TARGET_DIR/release/cpd"
             .collect()
     }
 
+    /// The `set` calls of the fake tmux, as argv after the tmux prefix.
+    fn sets(&self) -> Vec<Vec<String>> {
+        self.env.calls("tmux").into_iter().filter(|c| c[4] == "set").map(|c| c[4..].to_vec()).collect()
+    }
+
     fn state(&self) -> PathBuf {
         self.dir.join("state")
     }
@@ -148,6 +153,41 @@ fn on_respawns_the_five_views_with_the_preview_and_leaves_lead_and_worker_alone(
     assert!(out.stderr.contains("preview-tui.sh off"), "{}", out.stderr);
     assert!(out.stderr.contains("Worker view pane is open"), "{}", out.stderr);
     assert!(out.stderr.contains("reinstall"), "{}", out.stderr);
+}
+
+#[test]
+fn on_sets_the_preview_option_to_the_worktree_and_sha_after_the_views_are_respawned() {
+    let p = Preview::new();
+    assert_eq!(p.on(&[]).exit, 0);
+    let sha = p.env.git(&p.worktree, &["rev-parse", "--short", "HEAD"]);
+    let name = p.worktree.file_name().unwrap().to_str().unwrap();
+    let sets = p.sets();
+    assert_eq!(sets, [vec!["set", "-g", "@cpd_preview", &format!("{name} {sha}")]], "{sets:?}");
+    let calls = p.env.calls("tmux");
+    let at = |verb: &str| calls.iter().rposition(|c| c[4] == verb).unwrap();
+    assert!(at("respawn-pane") < at("set"), "{calls:?}");
+    // Twice is the same: the option is set again to the same value.
+    assert_eq!(p.on(&[]).exit, 0);
+    assert_eq!(p.sets().len(), 2);
+    assert_eq!(p.sets()[0], p.sets()[1]);
+}
+
+#[test]
+fn off_unsets_the_preview_option_and_twice_is_the_same() {
+    let p = Preview::new();
+    for _ in 0..2 {
+        let out = p.run(&["off"], &[]);
+        assert_eq!(out.exit, 0, "{}", out.stderr);
+    }
+    let unset = vec!["set", "-gu", "@cpd_preview"];
+    assert_eq!(p.sets(), [unset.clone(), unset]);
+}
+
+#[test]
+fn a_refused_on_and_a_missing_cockpit_leave_the_preview_option_alone() {
+    let p = Preview::new();
+    assert_eq!(p.on(&[("NO_COCKPIT", "1")]).exit, 1);
+    assert!(p.sets().is_empty(), "{:?}", p.sets());
 }
 
 #[test]

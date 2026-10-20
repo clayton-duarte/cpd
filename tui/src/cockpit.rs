@@ -65,6 +65,13 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand) -> Resul
 
     let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, respawn, run_command)?;
     let watch = command(run_command, &["watch", "--ensure"])?;
+    if respawn {
+        if let Some(preview) = tmux.preview()? {
+            eprintln!(
+                "a preview is on ({preview}); its views keep the preview build until 'preview-tui.sh off'"
+            );
+        }
+    }
     // An older server is restarted by the engine once nothing is in the way (contract §6.1).
     let after = match mark_if_older(&home, &tmux) {
         Ok(Some(why)) => {

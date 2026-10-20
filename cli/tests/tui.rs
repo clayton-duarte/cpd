@@ -765,6 +765,53 @@ fn the_status_line_draws_the_inbox_counter_then_the_short_workers_form_on_a_narr
     assert!(styled.contains("\x1b[31minbox 2"), "the counter in red: {styled:?}");
 }
 
+const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
+
+#[test]
+fn the_status_line_shows_the_preview_in_yellow_after_the_buttons_while_the_option_is_set() {
+    let (env, _engine) = env_with_workers();
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    let (line, styled) = status_line(&env, 100, "preview:");
+    assert!(line.starts_with(&format!("{BUTTONS}  preview: {PREVIEW} ")), "one plain space after the buttons, then the segment: {line:?}");
+    assert!(line.ends_with("inbox 2 workers 6/6 · 4 waiting · 9 queued"), "{line:?}");
+    assert!(styled.contains(&format!("\x1b[7m\x1b[33m preview: {PREVIEW} ")), "yellow, reversed: {styled:?}");
+}
+
+#[test]
+fn the_status_line_shows_no_preview_once_the_option_is_unset() {
+    let (env, _engine) = env_with_workers();
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    status_line(&env, 100, "preview:");
+    tmux_out(&env, &["set", "-gu", "@cpd_preview"]);
+    // The unset shows once a fresh client has drawn the whole line.
+    let (line, _) = status_line(&env, 100, "queued");
+    assert!(!line.contains("preview"), "{line:?}");
+    assert!(line.starts_with(BUTTONS), "{line:?}");
+}
+
+#[test]
+fn tui_respawn_warns_on_stderr_while_a_preview_is_on_and_not_otherwise() {
+    let env = env();
+    let quiet = env.cpd(&["tui", "--respawn"]);
+    assert_eq!(quiet.exit, 0, "{quiet:?}");
+    assert!(!quiet.stderr.contains("preview"), "{quiet:?}");
+
+    tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
+    let warned = env.cpd(&["tui", "--respawn"]);
+    assert_eq!(warned.exit, 0, "{warned:?}");
+    assert!(
+        warned.stderr.contains(&format!(
+            "a preview is on ({PREVIEW}); its views keep the preview build until 'preview-tui.sh off'"
+        )),
+        "{warned:?}"
+    );
+    // Without --respawn nothing is said; the option's JSON does not change.
+    assert!(!env.cpd(&["tui"]).stderr.contains("preview"));
+
+    tmux_out(&env, &["set", "-gu", "@cpd_preview"]);
+    assert!(!env.cpd(&["tui", "--respawn"]).stderr.contains("preview"));
+}
+
 #[test]
 fn an_unfaked_gh_is_denied_with_exit_97() {
     let env = TestEnv::new();

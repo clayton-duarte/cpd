@@ -114,10 +114,14 @@ pub const STATUS_CLICK: &str = "cpd tui action #{mouse_status_range} --client #{
 /// counts (User, hs-d198): the long form the engine keeps in `@cpd_workers`
 /// when `#{client_width}` is at least `@cpd_workers_width` (the visible width
 /// of the counter, the space and the long form) plus 7 (the buttons' 5 cells
-/// and 2 of air), else the short form in `@cpd_workers_short`.
+/// and 2 of air), else the short form in `@cpd_workers_short`. While
+/// `@cpd_preview` is set (`scripts/preview-tui.sh on`, hs-n264), a yellow
+/// reversed ` preview: <value> ` follows the buttons; the style is two `#[…]`
+/// because a comma inside a conditional's branch would split it.
 pub const STATUS_FORMAT: &str = "#[range=user|reset]#[fg=colour8,reverse]⧉#[norange,default] \
 #[range=user|legend]#[fg=colour8,reverse]?#[norange,default] \
-#[range=user|logs]#[fg=colour8,reverse]▤#[norange,default]#[align=right]#{@cpd_inbox} \
+#[range=user|logs]#[fg=colour8,reverse]▤#[norange,default]\
+#{?#{@cpd_preview}, #[fg=yellow]#[reverse] preview: #{@cpd_preview} #[default],}#[align=right]#{@cpd_inbox} \
 #{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},7}},#{@cpd_workers},#{@cpd_workers_short}}";
 
 /// The cockpit session's own options (contract §6.1), set with `-t`: `status`
@@ -428,6 +432,14 @@ impl Tmux {
             self.run(&strings(&["set", "-t", &format!("={session}:"), option, value]))?;
         }
         Ok(())
+    }
+
+    /// The server's option `@cpd_preview` (`show -gqv`), `None` when unset or empty:
+    /// `scripts/preview-tui.sh on` sets it while the views run a preview build.
+    pub fn preview(&self) -> Result<Option<String>, CpdError> {
+        let out = self.run(&strings(&["show", "-gqv", "@cpd_preview"]))?;
+        let value = out.trim();
+        Ok((!value.is_empty()).then(|| value.to_owned()))
     }
 
     /// `display -p '#{version}'`: the version of the tmux the server runs
