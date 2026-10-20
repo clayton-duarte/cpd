@@ -10,6 +10,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -19,6 +20,7 @@ use super::engine::{Engine, stopping};
 use super::report::{About, Failure, Step};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
+use crate::host::limit::limit;
 use crate::ids::SessionId;
 
 /// A title is rewritten at most this often per Session.
@@ -26,6 +28,10 @@ const THROTTLE: time::Duration = time::Duration::minutes(10);
 
 /// Retitle runs in flight, machine-wide, at most.
 const AT_ONCE: usize = 2;
+
+/// A Session's titling is reported (an `error` Event) only once it has failed this long in a row, no success in
+/// between (hs-d356; tests: `CPD_TEST_TITLE_FAILING`, [`limit`]). Until then a failed run is logged and retried.
+const FAILING: Duration = Duration::from_secs(10 * 60);
 
 /// How many lines of a failed run's output the `error` Event carries.
 const TAIL_LINES: usize = 20;
@@ -37,10 +43,12 @@ struct Run {
     offset: u64,
 }
 
-/// What E10 remembers: the runs it started and has not seen end, and the Sessions it reported.
+/// What E10 remembers: the runs it started and has not seen end, when each Session's titling began failing (until
+/// a run succeeds), and the Sessions it reported.
 #[derive(Default)]
 pub(super) struct Runs {
     running: HashMap<SessionId, Run>,
+    failing_since: HashMap<SessionId, Instant>,
     reported: HashSet<SessionId>,
 }
 
@@ -164,7 +172,8 @@ fn held(engine: &Engine) -> Result<HashSet<String>, CpdError> {
     Ok(held)
 }
 
-/// Collects the runs that ended; reports one that failed (once per Session until a run succeeds).
+/// Collects the runs that ended. A run that failed is logged; it is reported (once per Session until a run succeeds)
+/// only when the Session's titling has failed for [`FAILING`] in a row. The Session stays due, so it is retried.
 fn reap(engine: &mut Engine) {
     let sessions: Vec<SessionId> = engine.titles.running.keys().cloned().collect();
     for session in sessions {
@@ -185,14 +194,20 @@ fn reap(engine: &mut Engine) {
         let output = output_since(&log, run.offset);
         if status.success() {
             engine.log.line(&format!("E10: the retitle of Session {session} ended"));
+            engine.titles.failing_since.remove(&session);
             engine.titles.reported.remove(&session);
             engine.clear(Step::E10, &about);
         } else if lost_the_lock(&output) {
             // Another run held the Session's lock: that run is the one that counts (commands.md §10.14).
             engine.log.line(&format!("E10: the retitle of Session {session} found another run of it"));
         } else {
-            let tail: Vec<&str> = output.lines().rev().take(TAIL_LINES).collect::<Vec<_>>().into_iter().rev().collect();
+            let since = *engine.titles.failing_since.entry(session.clone()).or_insert_with(Instant::now);
             let exit = status.code().map_or("a signal".to_owned(), |c| format!("exit {c}"));
+            engine.log.line(&format!("E10: the retitle of Session {session} failed ({exit})"));
+            if since.elapsed() < limit("TITLE_FAILING", FAILING) {
+                continue;
+            }
+            let tail: Vec<&str> = output.lines().rev().take(TAIL_LINES).collect::<Vec<_>>().into_iter().rev().collect();
             let failure = Failure {
                 code: ErrorCode::TitleFailed.as_str().to_owned(),
                 message: format!("Its retitle run failed ({exit})."),

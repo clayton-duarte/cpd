@@ -58,8 +58,6 @@ pub fn conditions_with(store: &mut Store, home: &CpdHome, now: OffsetDateTime, t
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
-    all.extend(store.read(|conn| pr_failing(conn, home))?);
-    all.extend(store.read(|conn| pr_changes(conn, home))?);
     all.extend(store.read(|conn| pr_ready(conn, home))?);
     all.extend(review_requested(store, home, now, team)?);
     Ok(all)
@@ -295,22 +293,10 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
     })
 }
 
-// ---- Pull requests: pr-failing, pr-changes, pr-ready, review-requested -------------------------------------------
-
-/// How a kind reads a row's checks against its `pr.feedback.checks` policy (§8.3).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ChecksRule {
-    /// Checks are no part of the kind.
-    Ignore,
-    /// Failed checks count only under `any` (`pr-failing`).
-    Failing,
-    /// Checks must have passed only under `any`; under `none` any checks do (`pr-ready`).
-    Ready,
-}
+// ---- Pull requests: pr-ready, review-requested -------------------------------------------
 
 /// The open `pull_requests` rows that match `filter`, a SQL condition over `r`, oldest first, as conditions of `kind`
-/// and `urgency`. `label` makes the label from the row's repo without its owner, its number, and whether checks
-/// failed. A `prs` row that points to the pull request links its Plan, Context and Lead. A `rule`d row whose policy
+/// and `urgency`. `label` makes the label from the row's repo without its owner and its number. A `prs` row that points to the pull request links its Plan, Context and Lead. A row whose checks did not pass and whose policy
 /// does not resolve is one `engine-error` condition naming the file and code, beside the others (§8.3).
 fn pull_request_conditions(
     conn: &Connection,
@@ -318,11 +304,10 @@ fn pull_request_conditions(
     kind: Kind,
     urgency: Urgency,
     filter: &str,
-    rule: ChecksRule,
-    label: fn(&str, i64, bool) -> String,
+    label: fn(&str, i64) -> String,
 ) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT r.repo, r.number, r.url, r.checks = 'failed', r.checks, p.context, prs.plan, p.lead_session, r.mergeable = 'conflicting',
+        "SELECT r.repo, r.number, r.url, r.checks, p.context, prs.plan, p.lead_session,
                 c.owner, prs.name
            FROM pull_requests r
            LEFT JOIN prs ON prs.pull_request = r.id
@@ -334,13 +319,11 @@ fn pull_request_conditions(
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        let (repo, number, url, mut checks_failed): (String, i64, String, bool) =
-            (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
-        let checks: String = row.get(4)?;
-        let conflicting: bool = row.get(8)?;
-        let (owner, pr_name): (Option<String>, Option<String>) = (row.get(9)?, row.get(10)?);
+        let (repo, number, url): (String, i64, String) = (row.get(0)?, row.get(1)?, row.get(2)?);
+        let checks: String = row.get(3)?;
+        let (owner, pr_name): (Option<String>, Option<String>) = (row.get(7)?, row.get(8)?);
         let (context, plan, lead): (Option<String>, Option<String>, Option<String>) =
-            (row.get(5)?, row.get(6)?, row.get(7)?);
+            (row.get(4)?, row.get(5)?, row.get(6)?);
         let name = repo.split_once('/').map_or(repo.as_str(), |(_, name)| name);
         let links = |kind, urgency, subject, label, url| -> Result<Condition, CpdError> {
             Ok(Condition {
@@ -357,23 +340,16 @@ fn pull_request_conditions(
                 event: None,
             })
         };
-        // Checks count only where the row's policy says `any` (§8.3): `pr-failing` counts failed ones, and `pr-ready`
-        // needs passed ones, so it asks the policy for any row whose checks did not pass.
-        let asks = match rule {
-            ChecksRule::Ignore => false,
-            ChecksRule::Failing => checks_failed,
-            ChecksRule::Ready => checks != "passed",
-        };
-        if asks {
+        // `pr-ready` needs passed checks only where the row's policy says `any` (§8.3), so it asks the policy for any
+        // row whose checks did not pass.
+        if checks != "passed" {
             // A PR points to the row: its Context's owner keys it, and an unset one is `owner_unset`, never the unowned rule.
             let owned = plan.as_ref().map(|_| Owned { context: context.as_deref().unwrap_or_default(), owner: owner.as_deref(), name: pr_name.as_deref() });
             let counts = match checks_policy(home, &repo, owned)? {
                 Ok(policy) => policy == Checks::Any,
                 Err(error) => {
-                    // The row's checks are unknown. `pr-failing` tells the error of a failed row (its conflict still as
-                    // `kind`); `pr-ready` tells the others, since a failed row's error is already `pr-failing`'s, except
-                    // for a row a Plan owns, which `pr-failing` never reads (hs-d302).
-                    if rule == ChecksRule::Failing || checks != "failed" || plan.is_some() {
+                    // The row's checks are unknown. A failed row of no Plan is no `pr-ready` candidate: its error is not told (hs-d470).
+                    if checks != "failed" || plan.is_some() {
                         let code = error.code().as_str();
                         out.push(links(
                             Kind::EngineError,
@@ -383,24 +359,14 @@ fn pull_request_conditions(
                             Some(url.clone()),
                         )?);
                     }
-                    if rule == ChecksRule::Ready {
-                        continue;
-                    }
-                    false
+                    continue;
                 }
             };
-            match rule {
-                ChecksRule::Ready if counts => continue,
-                ChecksRule::Failing => {
-                    checks_failed = counts;
-                    if !checks_failed && !conflicting {
-                        continue;
-                    }
-                }
-                _ => {}
+            if counts {
+                continue;
             }
         }
-        out.push(links(kind, urgency, format!("pr:{repo}#{number}"), label(name, number, checks_failed), Some(url))?);
+        out.push(links(kind, urgency, format!("pr:{repo}#{number}"), label(name, number), Some(url))?);
     }
     Ok(out)
 }
@@ -450,39 +416,6 @@ fn checks_policy(home: &CpdHome, repo: &str, owned: Option<Owned<'_>>) -> Result
     Ok(resolved.map(|resolved| resolved.policy.pr.feedback.checks))
 }
 
-/// A condition over `r`: no Plan's `prs` row points to the pull request (hs-d302: a Plan's Lead handles the feedback
-/// on the pull requests its Plan owns, so those open no `pr-failing` or `pr-changes` item).
-const UNOWNED: &str = "NOT EXISTS (SELECT 1 FROM prs o WHERE o.pull_request = r.id)";
-
-/// `pr-failing`: an authored open pull request no Plan owns has failed checks or a merge conflict (`unknown` is no
-/// conflict). The label names the conflict only when checks did not fail.
-fn pr_failing(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-    pull_request_conditions(
-        conn,
-        home,
-        Kind::PrFailing,
-        Urgency::Red,
-        &format!("r.authored = 1 AND {UNOWNED} AND (r.checks = 'failed' OR r.mergeable = 'conflicting')"),
-        ChecksRule::Failing,
-        |name, n, checks_failed| {
-            if checks_failed { format!("{name}#{n} checks failed") } else { format!("{name}#{n} merge conflict") }
-        },
-    )
-}
-
-/// `pr-changes`: an authored open pull request no Plan owns has `changes_requested`.
-fn pr_changes(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-    pull_request_conditions(
-        conn,
-        home,
-        Kind::PrChanges,
-        Urgency::Red,
-        &format!("r.authored = 1 AND {UNOWNED} AND r.review_decision = 'changes_requested'"),
-        ChecksRule::Ignore,
-        |name, n, _| format!("{name}#{n} changes requested"),
-    )
-}
-
 /// `pr-ready`: an authored, open, non-draft pull request has passed checks (any checks under `feedback.checks = none`), no conflict and no changes requested.
 fn pr_ready(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
@@ -492,8 +425,7 @@ fn pr_ready(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdErro
         Urgency::Yellow,
         "r.authored = 1 AND r.draft = 0 AND r.mergeable = 'mergeable'
          AND r.review_decision <> 'changes_requested'",
-        ChecksRule::Ready,
-        |name, n, _| format!("{name}#{n} ready to merge"),
+        |name, n| format!("{name}#{n} ready to merge"),
     )
 }
 
@@ -1074,26 +1006,21 @@ mod tests {
     }
 
     #[test]
-    fn failed_checks_open_pr_failing_and_clear_when_they_pass() {
+    fn failed_checks_open_no_pr_failing_condition_hs_d470() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 7, "failed", "mergeable", "none");
-        let c = one(f.of(Kind::PrFailing));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "pr:acme/shop#7", "shop#7 checks failed"));
-        assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/7"));
-        assert_eq!((c.context, c.plan, c.session, c.job, c.record, c.event), (None, None, None, None, None, None));
-        set(&mut f, 7, "checks = 'passed'");
         assert!(f.of(Kind::PrFailing).is_empty());
+        assert!(pr_kinds(&mut f).is_empty());
     }
 
     #[test]
-    fn a_conflicting_pr_is_failing_with_the_conflict_label_and_never_ready() {
+    fn a_conflicting_pr_opens_no_pr_failing_condition_and_is_never_ready() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 8, "passed", "conflicting", "approved");
-        let c = one(f.of(Kind::PrFailing));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "pr:acme/shop#8", "shop#8 merge conflict"));
+        assert!(f.of(Kind::PrFailing).is_empty());
         assert!(f.of(Kind::PrReady).is_empty());
         set(&mut f, 8, "checks = 'failed'");
-        assert_eq!(one(f.of(Kind::PrFailing)).label, "shop#8 checks failed", "failed checks name themselves first");
+        assert!(f.of(Kind::PrFailing).is_empty());
         set(&mut f, 8, "checks = 'passed', mergeable = 'mergeable'");
         assert!(f.of(Kind::PrFailing).is_empty());
         assert_eq!(f.of(Kind::PrReady).len(), 1);
@@ -1107,14 +1034,11 @@ mod tests {
     }
 
     #[test]
-    fn a_pr_with_changes_requested_is_pr_changes_and_clears_with_the_decision() {
+    fn a_pr_with_changes_requested_opens_no_pr_changes_condition() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
-        let c = one(f.of(Kind::PrChanges));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "pr:acme/shop#3", "shop#3 changes requested"));
-        assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
-        set(&mut f, 3, "review_decision = 'approved'");
         assert!(f.of(Kind::PrChanges).is_empty());
+        assert!(pr_kinds(&mut f).is_empty());
     }
 
     #[test]
@@ -1161,10 +1085,11 @@ mod tests {
     }
 
     #[test]
-    fn only_authored_pull_requests_are_failing_changed_or_ready_and_a_github_request_opens_nothing() {
+    fn only_authored_pull_requests_are_ready_and_a_github_request_opens_nothing() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady], "authored: only the ready one opens an item");
         f.sql("UPDATE pull_requests SET authored = 0, review_requested = 1");
         assert!(pr_kinds(&mut f).is_empty(), "review_requested alone is no item (hs-d320)");
     }
@@ -1174,7 +1099,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
-        assert_eq!(pr_kinds(&mut f).len(), 3);
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady]);
         f.sql("UPDATE pull_requests SET state = 'closed'");
         assert!(pr_kinds(&mut f).is_empty());
     }
@@ -1227,7 +1152,7 @@ mod tests {
     }
 
     #[test]
-    fn the_same_states_on_an_unowned_authored_pull_request_still_open_their_items() {
+    fn the_same_states_on_an_unowned_authored_pull_request_open_no_item_either() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "mergeable", "none");
         pull_request(&mut f, 2, "passed", "conflicting", "approved");
@@ -1235,7 +1160,26 @@ mod tests {
         pull_request(&mut f, 6, "failed", "conflicting", "changes_requested");
         own(&mut f, 6);
         let seen: Vec<_> = f.of(Kind::PrFailing).into_iter().chain(f.of(Kind::PrChanges)).map(|c| c.subject).collect();
-        assert_eq!(seen, ["pr:acme/shop#1", "pr:acme/shop#2", "pr:acme/shop#3"]);
+        assert!(seen.is_empty(), "{seen:?}");
+    }
+
+    /// hs-d470: `pr-failing` and `pr-changes` are dropped, so items an older engine opened close at the next reconcile.
+    #[test]
+    fn open_pr_failing_and_pr_changes_items_an_older_engine_opened_are_closed_by_the_next_reconcile() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 1, "failed", "mergeable", "none");
+        pull_request(&mut f, 2, "passed", "mergeable", "changes_requested");
+        for (kind, n) in [("pr-failing", 1), ("pr-changes", 2)] {
+            f.sql(&format!(
+                "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at)
+                 VALUES ('{kind}', 'red', 'pr:acme/shop#{n}', 'shop#{n} {kind}', '{T}')"
+            ));
+        }
+        let found = conditions(&mut f.store, &f.home).unwrap();
+        let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
+        assert_eq!(changes.closed.len(), 2);
+        let open: i64 = f.store.read(|c| Ok(c.query_row("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind IN ('pr-failing','pr-changes')", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(open, 0);
     }
 
     #[test]
@@ -1487,7 +1431,7 @@ mod tests {
         f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
                VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
         let tail: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).skip(3).collect();
-        assert_eq!(tail, [Kind::PrFailing, Kind::PrChanges, Kind::PrReady]);
+        assert_eq!(tail, [Kind::PrReady]);
         write_cache(&f, &[post("acme/pay", 812)]);
         let lookup = lookup(&[("acme/pay", 812, open_pr())]);
         let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(lookup.clone()))))
@@ -1495,6 +1439,6 @@ mod tests {
             .into_iter()
             .map(|c| c.kind)
             .collect();
-        assert_eq!(kinds[3..], [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
+        assert_eq!(kinds[3..], [Kind::PrReady, Kind::ReviewRequested]);
     }
 }

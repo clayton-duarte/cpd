@@ -155,14 +155,12 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
     assert_eq!(
         seen,
         [
-            (Kind::PrFailing, Urgency::Red, "shop#1 merge conflict"),
-            (Kind::PrChanges, Urgency::Red, "shop#2 changes requested"),
             (Kind::PrReady, Urgency::Yellow, "shop#3 ready to merge"),
         ],
-        "pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
+        "a conflict (1) and changes requested (2) open no item (hs-d470); pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
     );
-    assert_eq!(items[0].subject, "pr:acme/shop#1");
-    assert_eq!(items[0].url.as_deref(), Some("https://github.com/acme/shop/pull/1"));
+    assert_eq!(items[0].subject, "pr:acme/shop#3");
+    assert_eq!(items[0].url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
 
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
     Store::open(&home, 5000)
@@ -188,7 +186,7 @@ fn policy_file(env: &TestEnv, rel: &str, toml: &str) {
 const NO_CHECKS: &str = "[pr.feedback]\nchecks = \"none\"\n";
 
 #[test]
-fn an_unowned_row_raises_failed_checks_only_where_its_policy_says_any() {
+fn an_unowned_row_with_failed_checks_opens_no_item_whatever_its_policy() {
     let env = TestEnv::new();
     setup(&env);
     // `acme` says none; its repo `shop` says any again; `nofile` has no owner file (cpd's default, any).
@@ -198,21 +196,18 @@ fn an_unowned_row_raises_failed_checks_only_where_its_policy_says_any() {
     pull_request(&env, 2, "checks = 'failed', repo = 'acme/other', url = 'https://github.com/acme/other/pull/2'");
     pull_request(&env, 3, "checks = 'failed', repo = 'nofile/shop', url = 'https://github.com/nofile/shop/pull/3'");
 
-    assert_eq!(
-        failing(&env),
-        [("pr:acme/shop#1".to_owned(), "shop#1 checks failed".to_owned()), ("pr:nofile/shop#3".to_owned(), "shop#3 checks failed".to_owned())]
-    );
+    assert!(found(&env).is_empty(), "failed checks open no item under any policy (hs-d470)");
 }
 
 #[test]
-fn a_conflict_stays_pr_failing_when_checks_are_not_feedback() {
+fn a_conflict_opens_no_pr_failing_when_checks_are_not_feedback() {
     let env = TestEnv::new();
     setup(&env);
     env.owner_policy("acme", NO_CHECKS);
     pull_request(&env, 1, "checks = 'failed', mergeable = 'conflicting'");
     pull_request(&env, 2, "checks = 'failed', mergeable = 'mergeable'");
 
-    assert_eq!(failing(&env), [("pr:acme/shop#1".to_owned(), "shop#1 merge conflict".to_owned())]);
+    assert!(failing(&env).is_empty(), "a conflict opens no pr-failing (hs-d470)");
 }
 
 #[test]
@@ -286,13 +281,11 @@ fn a_row_whose_policy_does_not_resolve_is_one_error_condition_and_the_other_item
     assert_eq!(
         kinds(&items),
         [
-            (Kind::PrFailing, "pr:other/x#7".to_owned()),
-            (Kind::PrChanges, "pr:acme/shop#6".to_owned()),
-            // the owned row opens no pr-failing (hs-d302); `pr-ready` reads its policy and tells the error
+            // no pr-failing or pr-changes for any row (hs-d470); `pr-ready` reads the owned row's policy and tells the error
             (Kind::EngineError, "error:E8/pr:acme/shop#5/owner_unknown".to_owned()),
         ]
     );
-    let error = &items[2];
+    let error = &items[0];
     assert_eq!(error.urgency, Urgency::Red);
     assert!(error.label.contains("owner_unknown") && error.label.contains("acme.toml"), "{}", error.label);
     assert_eq!(error.plan.as_ref().map(|p| p.as_str()), Some("pay"));

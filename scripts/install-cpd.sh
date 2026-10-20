@@ -11,9 +11,27 @@
 # existing real directory to pi.legacy (two renames in one process, not atomic, once). Layout,
 # migration, cleanup and what pi sees: contract §3.7 "The adapter swap";
 # algorithm and tests: docs/implementing.md "The adapter swap".
+#
+# Engine order (hs-d463; contract §3.7 "The install's engine order", docs/implementing.md
+# "The install's engine order"): the running engine is never stopped before the new
+# binary is known to be able to start one. After the swap: `cpd config`, then
+# `cpd watch --check` (read-only: config, store, tmux listing, the home); a failure
+# prints "the engine was not touched" and runs no kill-window. Then `cpd tui --respawn`
+# (its own check before its first respawn-pane -k), then retire the old engine
+# (kill-window, wait for locks/watch.lock, bounded) and start the new one (`watch
+# --ensure` once, then check the lock is held). A failure after the kill-window says
+# "the old engine was stopped and no engine is running"; every failure prints
+# `cpd install follow-up failed: ...` and the exit is non-zero at the end.
+#
+# Every tmux call is a UTF-8 client (hs-d463; contract §6.1): `tmux -u`, in the one
+# function `tmx` below, whatever LANG/LC_ALL the caller has (a launchd agent sets only
+# PATH, and without a UTF-8 locale tmux prints the -F tabs as `_`).
+# scripts/check-portable.sh refuses a bare `tmux` in this file.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+# Every tmux call of this script, a UTF-8 client: `-u` (hs-d463). $socket is set before the first call.
+tmx() { env -u TMUX -u TMUX_PANE tmux -u -L "$socket" -f /dev/null "$@"; }
 dest_dir="${HOME:?HOME is not set}/.local/bin"
 # <dir of the binary>/../share/cpd, where cpd finds the adapter; $adapter_dir is the symlink.
 share="$HOME/.local/share/cpd"
@@ -168,13 +186,16 @@ done
 echo "installed $dest_dir/cpd and $adapter_dir" >&2
 
 # A running cockpit's views keep the old binary until restarted (commands.md
-# §13.1): when the configured server has a cockpit with its main window, restart
-# its views. No server or no main: nothing to restart. Likewise a running engine
-# keeps running the old code (contract §3.7): when the work session has its
-# `watch` window, kill it and start the engine again. No follow-up is skipped
-# silently (hs-n278): each failure prints what failed and why, the later
-# follow-ups still run, and the script exits non-zero at the end. cpd waits out a
-# migration holding the setup lock (contract §4.2), so these run after it.
+# §13.1), and a running engine keeps running the old code (contract §3.7). The
+# order (hs-d463, contract §3.7 "The install's engine order"): verify with the new
+# binary everything its start depends on (`cpd config`, `cpd watch --check`, which
+# writes nothing), and only then respawn the views, retire the old engine and
+# start the new one. A failure before the retirement leaves the engine and the
+# views as they are; one after it says that the old engine was stopped. No
+# follow-up is skipped silently (hs-n278): each failure prints what failed and
+# why, the later follow-ups that can still run do, and the script exits non-zero
+# at the end. cpd waits out a migration holding the setup lock (contract §4.2),
+# so these run after it.
 # How long to wait for the killed engine to release locks/watch.lock (tests set it).
 lock_wait_secs="${CPD_INSTALL_LOCK_WAIT_SECS:-60}"
 failed=0
@@ -190,48 +211,71 @@ fail() {
   echo "cpd install follow-up failed: $1" >&2
   failed=1
 }
+# The code and the message of a cpd error value, else its text as it is.
+describe() {
+  code=$(printf '%s' "$1" | sed -n 's/.*"error": *{[^}]*"code": *"\([^"]*\)".*/\1/p')
+  message=$(printf '%s' "$1" | sed -n 's/.*"error": *{.*"message": *"\(\(\\.\|[^"\\]\)*\)".*/\1/p')
+  if [ -n "$code" ] && [ -n "$message" ]; then printf '%s (%s)' "$message" "$code"; else printf '%s' "$1"; fi
+}
+untouched="the engine was not touched: the engine that runs, if one does, is the old one and keeps running; the views were not respawned"
 errfile=$(mktemp)
 trap 'rm -f "$errfile"' EXIT
 
 if ! config=$("$dest_dir/cpd" config 2>"$errfile"); then
-  fail "cpd config: $config $(cat "$errfile"); the views were not respawned and the engine was not restarted"
+  fail "cpd config: $config $(cat "$errfile"); $untouched"
 else
   tmux_conf=$(printf '%s' "$config" | sed -n 's/.*"tmux":{\([^}]*\)}.*/\1/p')
   socket=$(printf '%s' "$tmux_conf" | sed -n 's/.*"socket":"\([^"]*\)".*/\1/p')
   cockpit=$(printf '%s' "$tmux_conf" | sed -n 's/.*"cockpit_session":"\([^"]*\)".*/\1/p')
   work=$(printf '%s' "$tmux_conf" | sed -n 's/.*"work_session":"\([^"]*\)".*/\1/p')
-  if [ -n "$socket" ] && [ -n "$cockpit" ] &&
-    env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$cockpit" -F '#{window_name}' 2>/dev/null | grep -qx main; then
-    "$dest_dir/cpd" tui --respawn >&2 || fail "cpd tui --respawn exited $?: the views still run the old binary"
-  fi
-  if [ -n "$socket" ] && [ -n "$work" ] &&
-    env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx watch; then
-    echo "restarting the running engine (cpd watch) to run the new binary" >&2
-    if ! env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null kill-window -t "=$work:watch" >&2; then
-      fail "tmux kill-window $work:watch failed: the engine still runs the old binary"
-    else
-      # The killed engine releases its lock a moment later, possibly well after
-      # (it finishes its tick, waits for a store write): wait for the lock
-      # itself, bounded, then start the engine once and check that it holds the
-      # lock (hs-n288). Nothing gives up silently.
-      lock="${CPD_HOME:-$HOME/.cpd}/locks/watch.lock"
-      mkdir -p "$(dirname "$lock")"
-      waited=0
-      while ! lock_free "$lock"; do
-        waited=$((waited + 1))
-        if [ "$waited" -gt $((lock_wait_secs * 4)) ]; then
-          break
-        fi
-        sleep 0.25
-      done
-      if ! lock_free "$lock"; then
-        fail "the old engine still holds $lock after ${lock_wait_secs}s: the new engine was not started"
-      elif ! out=$("$dest_dir/cpd" watch --ensure 2>"$errfile"); then
-        fail "cpd watch --ensure: $out $(cat "$errfile"); the engine is not running"
-      elif lock_free "$lock"; then
-        fail "cpd watch --ensure answered $out, but no engine holds $lock: the engine is not running"
-      else
+  # Step 1, verify with the new binary, nothing stopped: config, store, tmux, its listing, the home.
+  if ! checked=$("$dest_dir/cpd" watch --check 2>"$errfile"); then
+    fail "cpd watch --check: $(describe "$checked") $(cat "$errfile"); $untouched"
+  else
+    # Step 2, the views: `cpd tui --respawn` checks before its first respawn-pane -k.
+    if [ -n "$socket" ] && [ -n "$cockpit" ] &&
+      tmx list-windows -t "=$cockpit" -F '#{window_name}' 2>/dev/null | grep -qx main; then
+      if out=$("$dest_dir/cpd" tui --respawn 2>"$errfile"); then
         echo "$out" >&2
+      else
+        code=$?
+        fail "cpd tui --respawn exited $code: $(describe "$out") $(cat "$errfile"); the views still run the old binary"
+      fi
+    fi
+    # Step 3, retire the old engine, then start the new one.
+    if [ -n "$socket" ] && [ -n "$work" ] &&
+      tmx list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx watch; then
+      echo "restarting the running engine (cpd watch) to run the new binary" >&2
+      # Mark the restart as planned (hs-d471): the new engine then only logs a restart that is back within 10 s.
+      if ! mark=$("$dest_dir/cpd" watch --mark-restart 2>"$errfile"); then
+        fail "cpd watch --mark-restart: $mark $(cat "$errfile"); the engine restart is not marked as planned"
+      fi
+      if ! killed=$(tmx kill-window -t "=$work:watch" 2>&1); then
+        fail "tmux kill-window $work:watch failed: $killed; the engine was not stopped and still runs the old binary"
+      else
+        # The killed engine releases its lock a moment later, possibly well after
+        # (it finishes its tick, waits for a store write): wait for the lock
+        # itself, bounded, then start the engine once and check that it holds the
+        # lock (hs-n288). Nothing gives up silently.
+        lock="${CPD_HOME:-$HOME/.cpd}/locks/watch.lock"
+        mkdir -p "$(dirname "$lock")"
+        waited=0
+        while ! lock_free "$lock"; do
+          waited=$((waited + 1))
+          if [ "$waited" -gt $((lock_wait_secs * 4)) ]; then
+            break
+          fi
+          sleep 0.25
+        done
+        if ! lock_free "$lock"; then
+          fail "the old engine still holds $lock after ${lock_wait_secs}s: it was told to stop and has not; the new engine was not started"
+        elif ! out=$("$dest_dir/cpd" watch --ensure 2>"$errfile"); then
+          fail "cpd watch --ensure: $(describe "$out") $(cat "$errfile"); the old engine was stopped and no engine is running: run cpd watch --ensure, the server's hooks also retry it every few seconds"
+        elif lock_free "$lock"; then
+          fail "cpd watch --ensure answered $out, but no engine holds $lock: the old engine was stopped and no engine is running"
+        else
+          echo "$out" >&2
+        fi
       fi
     fi
   fi

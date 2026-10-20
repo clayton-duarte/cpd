@@ -73,7 +73,7 @@ const PLAN_KINDS: [Kind; 3] = [Kind::PlanReview, Kind::JobStuck, Kind::PrReady];
 
 /// The urgency of the most urgent of the `visible` items that fill the dot of `session`: its `dialog` and `unread`
 /// items (`inbox_items.session`) and, when it is the Lead of `lead_of`, the Plan's `plan-review`, `job-stuck` and
-/// `pr-ready` items (§17; `pr-failing` and `pr-changes` are only for pull requests no Plan owns, hs-d302). `visible` is the open items that are neither snoozed nor dismissed.
+/// `pr-ready` items (§17; `pr-failing` and `pr-changes` are no longer opened and fill no dot, hs-d470). `visible` is the open items that are neither snoozed nor dismissed.
 pub fn urgency(visible: &[Item], session: &SessionId, lead_of: Option<&PlanId>) -> Option<Urgency> {
     visible
         .iter()
@@ -190,6 +190,18 @@ mod tests {
         for kind in [Kind::PrFailing, Kind::PrChanges] {
             let items = [item(kind, Urgency::Red, None, Some("pp"))];
             assert_eq!(urgency(&items, &id("s-lead"), Some(&plan("pp"))), None, "{kind:?}");
+        }
+    }
+
+    /// hs-d470: the dropped kinds (an older engine's history rows) fill no dot, whoever they name.
+    #[test]
+    fn pr_failing_and_pr_changes_rows_fill_no_dot_at_all() {
+        for kind in [Kind::PrFailing, Kind::PrChanges] {
+            for (session, plan) in [(None, None), (None, Some("pp")), (Some("s-lead"), None), (Some("s-lead"), Some("pp"))] {
+                let items = [item(kind, Urgency::Red, session, plan)];
+                let p = plan.map(self::plan);
+                assert_eq!(urgency(&items, &id("s-lead"), p.as_ref()), None, "{kind:?} {session:?} {plan:?}");
+            }
         }
     }
 
