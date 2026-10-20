@@ -116,7 +116,7 @@ echo "$files" | while IFS= read -r file; do
       if (match($0, /#[ \t]*portable:/)) {
         reason = substr($0, RSTART + RLENGTH)
         if (reason ~ /^[ \t]*$/) {
-          printf "%s:%d: # portable: with no reason: write why this line is portable after the colon\n", name, NR
+          printf "%s:%d: a portable-exemption comment with no reason: write why this line is portable after the colon\n", name, NR
         } else {
           print "#exempt"
         }
