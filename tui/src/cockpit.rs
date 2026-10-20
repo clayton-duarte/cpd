@@ -42,7 +42,7 @@ use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
 use cpd_core::host::exe::started_as;
 use cpd_core::host::layout::{LEGACY_STATUSBAR, MAIN_WINDOW, chat_slot, view_pane};
-use cpd_core::host::tmux::{installed_version, older_version};
+use cpd_core::host::tmux::{client, installed_version, older_version};
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, View};
 use cpd_core::ids::SessionId;
 use cpd_core::output::Output;
@@ -397,10 +397,29 @@ fn on_client(mut popup: Vec<String>, client: &str) -> Vec<String> {
 fn respawn_live_views(tmux: &Tmux, home: &CpdHome, main: &[Pane]) -> Result<Vec<PaneId>, CpdError> {
     let rerun = home_spawn(home, Vec::new());
     let views: Vec<PaneId> = main.iter().filter(|p| !p.dead && p.cpd_view.is_some()).map(|p| p.pane.clone()).collect();
+    // One at a time; a pane that fails does not stop the others (hs-d463): the views that could be restarted
+    // are better than views that all keep the old binary. The command then fails after the last.
+    let mut restarted = Vec::new();
+    let mut failed = Vec::new();
+    let mut first = None;
     for pane in &views {
-        tmux.respawn_pane_killing(pane, &rerun)?;
+        match tmux.respawn_pane_killing(pane, &rerun) {
+            Ok(()) => restarted.push(pane.as_str()),
+            Err(e) => {
+                failed.push(pane.as_str());
+                first.get_or_insert(e);
+            }
+        }
     }
-    Ok(views)
+    match first {
+        None => Ok(views),
+        Some(e) => Err(CpdError::new(
+            ErrorCode::TmuxFailed,
+            format!("{} of {} views were not restarted: {}", failed.len(), views.len(), e.message()),
+        )
+        .with("failed", failed)
+        .with("respawned", restarted)),
+    }
 }
 
 /// Respawns each dead pane of `main`'s layout in place (`respawn-pane`,
@@ -465,8 +484,8 @@ fn command(run_command: RunCommand, words: &[&str]) -> Result<Map<String, Value>
 fn exec_attach(tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
     let argv = tmux.argv(&["attach".to_owned(), "-t".to_owned(), cockpit.to_owned()]);
     let program = program.map_or_else(|| PathBuf::from(&argv[0]), Path::to_path_buf);
-    let error =
-        std::process::Command::new(program).args(&argv[1..]).env_remove("TMUX").env_remove("TMUX_PANE").exec();
+    // `client` puts `-u` first (hs-d463); `argv` is the same line, for the error.
+    let error = client(program).args(&argv[2..]).exec();
     CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux attach: {error}."))
         .with("argv", argv)
         .with("exit", Value::Null)

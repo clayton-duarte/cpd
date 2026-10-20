@@ -486,7 +486,7 @@ mod tests {
             assert_eq!(copy.done(&json!(null)), format!("copied {id}"));
         }
         let argv = Tmux::new("sock").argv(&Action::CopyId("ship".into()).argv());
-        assert_eq!(argv, ["tmux", "-L", "sock", "-f", "/dev/null", "set-buffer", "-w", "--", "ship"]);
+        assert_eq!(argv, ["tmux", "-u", "-L", "sock", "-f", "/dev/null", "set-buffer", "-w", "--", "ship"]);
     }
 
     #[test]
