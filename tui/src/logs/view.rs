@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn end_and_g_go_to_the_bottom_and_follow_again() {
         let mut log = Log::new(events(10));
-        log.fit(5);
+        log.fit(7);
         assert!(log.key(key(KeyCode::Char('k'))));
         assert!(!log.follows());
         assert!(log.key(key(KeyCode::End)));
@@ -235,35 +235,35 @@ mod tests {
     #[test]
     fn the_error_takes_the_last_row_until_it_is_cleared() {
         let mut log = Log::new(events(10));
-        log.fit(5);
+        log.fit(7);
         assert_eq!(log.page(), 4);
         log.error = Some("no such table: events".into());
-        log.fit(5);
+        log.fit(7);
         assert_eq!(log.page(), 3);
         assert_eq!(log.visible().last().unwrap().id, 10, "still at the bottom");
         log.error = None;
-        log.fit(5);
+        log.fit(7);
         assert_eq!(log.page(), 4);
     }
 
     #[test]
     fn keys_and_the_wheel_scroll_and_scrolling_to_the_bottom_follows_again() {
         let mut log = Log::new(events(20));
-        // 5 rows: the title and 4 Events
-        assert_eq!(shown(&mut log, 5), ["event 16", "event 17", "event 18", "event 19"]);
+        // 7 rows: the title with its two empty rows and 4 Events
+        assert_eq!(shown(&mut log, 7), ["event 16", "event 17", "event 18", "event 19"]);
         assert!(log.follows());
         assert!(log.key(key(KeyCode::Up)) && !log.follows());
-        assert_eq!(shown(&mut log, 5)[0], "event 15");
+        assert_eq!(shown(&mut log, 7)[0], "event 15");
         assert!(log.key(key(KeyCode::Char('k'))));
         assert!(log.key(key(KeyCode::PageUp)));
-        assert_eq!(shown(&mut log, 5)[0], "event 10");
+        assert_eq!(shown(&mut log, 7)[0], "event 10");
         assert!(log.mouse(wheel(MouseEventKind::ScrollUp)));
-        assert_eq!(shown(&mut log, 5)[0], format!("event {}", 10 - WHEEL_ROWS));
+        assert_eq!(shown(&mut log, 7)[0], format!("event {}", 10 - WHEEL_ROWS));
         assert!(log.mouse(wheel(MouseEventKind::ScrollDown)) && log.mouse(wheel(MouseEventKind::ScrollDown)));
-        assert!(!log.follows(), "{:?}", shown(&mut log, 5));
+        assert!(!log.follows(), "{:?}", shown(&mut log, 7));
         assert!(log.key(key(KeyCode::PageDown)) && log.key(key(KeyCode::Char('j'))));
         assert!(log.follows());
-        assert_eq!(shown(&mut log, 5)[3], "event 19");
+        assert_eq!(shown(&mut log, 7)[3], "event 19");
         // keys that do not scroll are left to the view
         for code in [KeyCode::Char('q'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char('J')] {
             assert!(!log.key(key(code)), "{code:?}");
@@ -274,13 +274,13 @@ mod tests {
     #[test]
     fn the_view_follows_at_the_bottom_and_stays_put_when_scrolled_up() {
         let mut log = Log::new(events(10));
-        shown(&mut log, 5);
+        shown(&mut log, 7);
         log.push(events(12)[10..].to_vec());
-        assert_eq!(shown(&mut log, 5), ["event 8", "event 9", "event 10", "event 11"]);
+        assert_eq!(shown(&mut log, 7), ["event 8", "event 9", "event 10", "event 11"]);
         log.mouse(wheel(MouseEventKind::ScrollUp));
-        let before = shown(&mut log, 5);
+        let before = shown(&mut log, 7);
         log.push(events(15)[12..].to_vec());
-        assert_eq!(shown(&mut log, 5), before);
+        assert_eq!(shown(&mut log, 7), before);
         assert!(!log.follows());
         // the wheel back to the bottom (the 3 Events that came are 3 rows more), and it follows again
         log.mouse(wheel(MouseEventKind::ScrollDown));
@@ -288,33 +288,33 @@ mod tests {
         log.mouse(wheel(MouseEventKind::ScrollDown));
         assert!(log.follows());
         log.push(events(16)[15..].to_vec());
-        assert_eq!(shown(&mut log, 5)[3], "event 15");
+        assert_eq!(shown(&mut log, 7)[3], "event 15");
     }
 
     #[test]
     fn a_taller_area_that_shows_everything_follows_and_cannot_scroll() {
         let mut log = Log::new(events(3));
-        assert_eq!(shown(&mut log, 10).len(), 3);
+        assert_eq!(shown(&mut log, 12).len(), 3);
         assert!(log.follows());
         log.scroll_up(5);
         assert!(log.follows() && log.visible().len() == 3);
     }
 
     #[test]
-    fn the_title_is_the_section_header_and_the_events_start_under_it() {
+    fn the_title_is_a_section_title_between_two_empty_rows_and_the_events_start_under_it() {
         let mut log = Log::at(events(30), 11);
-        log.fit(6);
-        let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
+        log.fit(8);
+        let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
         terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
-        let mut expected = Terminal::new(TestBackend::new(24, 1)).unwrap();
-        expected.draw(|f| f.render_widget(Paragraph::new(section_header("logs", 24)), f.area())).unwrap();
-        let (got, want) = (terminal.backend().buffer(), expected.backend().buffer());
-        assert!((0..24).all(|x| got[(x, 0)] == want[(x, 0)]), "{got:?}");
-        assert_eq!(got[(3, 0)].symbol(), "l");
+        let got = terminal.backend().buffer();
         let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
-        assert!(row(1).starts_with(" 00:00:08 event 8"), "{}", row(1));
+        // an empty row, the title, an empty row, then the Events
+        assert_eq!(row(0).trim_end(), "");
+        assert_eq!(row(1), format!("━━ logs {}", "━".repeat(16)));
+        assert_eq!(row(2).trim_end(), "");
+        assert!(row(3).starts_with(" 00:00:08 event 8"), "{}", row(3));
         // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows
-        assert!(row(3).contains("event 10") && got[(0, 3)].modifier.contains(Modifier::REVERSED));
-        assert!(!got[(0, 2)].modifier.contains(Modifier::REVERSED));
+        assert!(row(5).contains("event 10") && got[(0, 5)].modifier.contains(Modifier::REVERSED));
+        assert!(!got[(0, 4)].modifier.contains(Modifier::REVERSED));
     }
 }

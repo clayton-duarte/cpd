@@ -371,10 +371,10 @@ mod tests {
     #[test]
     fn the_popup_is_sized_to_its_content_and_capped_at_the_client() {
         let client = (200, 60);
-        // short content: the narrowest inside (40), header + 1 row + blank + buttons = 4, and the border
-        assert_eq!(popup_size(client, "T", 10, |_| 1), (42, 6));
+        // short content: the narrowest inside (40), empty + title + empty + 1 row + blank + buttons = 6, and the border
+        assert_eq!(popup_size(client, "T", 10, |_| 1), (42, 8));
         // long content: the widest inside (76), wrapped
-        assert_eq!(popup_size(client, "T", 300, |w| 300usize.div_ceil(w)), (78, 5 + 3 + 2));
+        assert_eq!(popup_size(client, "T", 300, |w| 300usize.div_ceil(w)), (78, 5 + 5 + 2));
         // a long title widens it
         assert_eq!(popup_size(client, &"t".repeat(50), 10, |_| 1).0, 58);
         // capped

@@ -401,13 +401,15 @@ mod tests {
     }
 
     #[test]
-    fn the_title_is_drawn_by_section_header() {
+    fn the_title_is_a_section_title_under_an_empty_row_and_over_one() {
         let (w, h) = size();
         let buf = render(w, h, &mut Scroll::default());
         let mut want = Terminal::new(TestBackend::new(w, 1)).unwrap();
-        want.draw(|f| f.render_widget(Paragraph::new(section_header(INTRO, usize::from(w))), f.area())).unwrap();
-        assert!((0..w).all(|x| buf[(x, 0)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 0));
-        assert!(row(&buf, 0).starts_with("── Legend: what") && row(&buf, 0).contains("(any key closes) ─"));
+        want.draw(|f| f.render_widget(Paragraph::new(section::title(INTRO, None, usize::from(w))), f.area())).unwrap();
+        assert!((0..w).all(|x| buf[(x, 1)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 1));
+        assert_eq!(row(&buf, 0), "");
+        assert_eq!(row(&buf, 2), "");
+        assert!(row(&buf, 1).starts_with("━━ Legend: what") && row(&buf, 1).contains("(any key closes) ━"));
     }
 
     #[test]
@@ -426,17 +428,18 @@ mod tests {
         let (w, h) = size();
         let full = render(w, h, &mut Scroll::default());
         let mut scroll = Scroll::default();
-        let page = h - 1 - 6;
+        let hr = HEADER_ROWS;
+        let page = h - hr - 6;
         let top = render(w, h - 6, &mut scroll);
-        assert!(scroll.scrollable() && (scroll.total(), scroll.page()) == (usize::from(h - 1), usize::from(page)));
-        assert!(row(&top, 0).ends_with(&format!(" 1-{page}/{}", h - 1)), "{}", row(&top, 0));
-        for y in 1..=page {
+        assert!(scroll.scrollable() && (scroll.total(), scroll.page()) == (usize::from(h - hr), usize::from(page)));
+        assert!(row(&top, 1).ends_with(&format!(" 1-{page}/{}", h - hr)), "{}", row(&top, 1));
+        for y in hr..hr + page {
             assert_eq!(row(&top, y), row(&full, y), "unscrolled, row {y}");
         }
         // ↓ and j: one row each
         assert!(!closes(&key(KeyCode::Down), &mut scroll) && !closes(&key(KeyCode::Char('j')), &mut scroll));
         let moved = render(w, h - 6, &mut scroll);
-        for y in 1..=page {
+        for y in hr..hr + page {
             assert_eq!(row(&moved, y), row(&full, y + 2), "two rows down, row {y}");
         }
         // the wheel: a notch is three rows; PgDn stops at the last row, which is the legend's
@@ -449,8 +452,8 @@ mod tests {
         }
         let bottom = render(w, h - 6, &mut scroll);
         assert_eq!(scroll.offset(), scroll.max_offset());
-        assert_eq!(row(&bottom, page), row(&full, h - 1));
-        assert!(row(&bottom, 0).ends_with(&format!(" {}-{}/{}", scroll.max_offset() + 1, h - 1, h - 1)), "{}", row(&bottom, 0));
+        assert_eq!(row(&bottom, hr + page - 1), row(&full, h - 1));
+        assert!(row(&bottom, 1).ends_with(&format!(" {}-{}/{}", scroll.max_offset() + 1, h - hr, h - hr)), "{}", row(&bottom, 1));
     }
 
     #[test]

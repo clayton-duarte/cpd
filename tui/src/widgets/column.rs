@@ -298,39 +298,32 @@ mod tests {
     }
 
     #[test]
-    fn a_header_is_two_rules_the_title_block_and_rules_to_the_edge() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 1)).unwrap();
-        terminal.draw(|f| render_header(f, f.area(), "PRs")).unwrap();
-        let buf = terminal.backend().buffer().clone();
-        assert_eq!(row(&buf, 0), format!("── PRs {}", "─".repeat(13)));
-        for x in 0..20 {
-            let cell = &buf[(x, 0)];
-            let title = (2..7).contains(&x);
-            assert_eq!(cell.fg, palette::color(Meaning::Nothing), "x={x}");
-            assert_eq!(cell.modifier.contains(Modifier::REVERSED), title, "x={x}");
-            assert!(!cell.modifier.contains(Modifier::BOLD), "x={x}");
-        }
-    }
-
-    #[test]
-    fn a_header_narrower_than_its_title_cuts_the_title() {
-        let text = |width| section_header("Jira", width).spans.iter().map(|s| s.content.to_string()).collect::<String>();
-        assert_eq!(text(5), "── Ji");
-        assert_eq!(text(1), "─");
-        assert_eq!(text(0), "");
+    fn the_prs_header_carries_the_count_of_the_open_pull_requests() {
+        let header = |width: u16, count| {
+            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+            terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
+            row(terminal.backend().buffer(), 0)
+        };
+        assert_eq!(header(20, Some(3)), "━━ PRs ━━━━━━━━ 3 ━━");
+        assert_eq!(header(30, Some(12)), "━━ PRs ━━━━━━━━━━━━━━━━━ 12 ━━");
+        assert_eq!(header(20, None), "━━ PRs ━━━━━━━━━━━━━");
+        let buf = buffer(20, 15);
+        assert_eq!(row(&buf, 4), "━━ PRs ━━━━━━━━ 0 ━━");
+        let two = [pr(1, Some("l-a")), pr(2, None)];
+        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), "━━ PRs ━━━━━━━━ 2 ━━");
     }
 
     #[test]
     fn the_column_has_a_blank_row_an_untitled_machine_and_three_headers() {
         let buf = buffer(20, 15);
-        let rule = |title: &str| format!("── {title} {}", "─".repeat(20 - 4 - title.chars().count()));
+        let rule = |title: &str| format!("━━ {title} {}", "━".repeat(20 - 4 - title.chars().count()));
         let got: Vec<String> = (0..15).map(|y| row(&buf, y)).collect();
         let expected = [
             "".to_owned(),
             " homeserver".to_owned(),
             " load 0.52 0.41 0.30".to_owned(),
             "".to_owned(),
-            rule("PRs"),
+            "━━ PRs ━━━━━━━━ 0 ━━".to_owned(),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),

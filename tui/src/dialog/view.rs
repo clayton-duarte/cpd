@@ -367,29 +367,32 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_draws_its_title_as_the_section_header() {
+    fn every_kind_draws_its_title_as_a_section_title_between_two_empty_rows() {
         for mut d in [confirm(), input(""), text(3)] {
-            let buf = render(&mut d, 40, 8);
+            let buf = render(&mut d, 40, 10);
             let mut expected = Terminal::new(TestBackend::new(40, 1)).unwrap();
-            expected.draw(|f| f.render_widget(Paragraph::new(section_header(&d.title, 40)), f.area())).unwrap();
+            expected.draw(|f| f.render_widget(Paragraph::new(section::title(&d.title, None, 40)), f.area())).unwrap();
             for x in 0..40 {
-                assert_eq!(buf[(x, 0)], expected.backend().buffer()[(x, 0)], "{} column {x}", d.title);
+                assert_eq!(buf[(x, 1)], expected.backend().buffer()[(x, 0)], "{} column {x}", d.title);
             }
+            let rows = rows(&buf);
+            assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "{}", d.title);
         }
-        assert_eq!(rows(&render(&mut confirm(), 20, 6))[0], format!("── Archive {}", "─".repeat(9)));
+        let rows = rows(&render(&mut confirm(), 20, 8));
+        assert_eq!(rows[1], format!("━━ Archive {}", "━".repeat(9)));
     }
 
     #[test]
     fn confirm_draws_the_question_and_both_buttons() {
-        let buf = rows(&render(&mut confirm(), 40, 5));
-        assert_eq!(buf[1..], [" Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
+        let buf = rows(&render(&mut confirm(), 40, 7));
+        assert_eq!(buf[1..], [format!("━━ Archive {}", "━".repeat(29)).as_str(), "", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
     }
 
     #[test]
     fn a_long_question_wraps_at_the_width() {
         let mut d = Dialog::new("T".into(), "aaaa bbbb cccc dddd".into(), Mode::Confirm { yes: "Yes".into() });
-        let buf = rows(&render(&mut d, 12, 8));
-        assert_eq!(buf[1..4], [" aaaa bbbb", " cccc dddd", ""]);
+        let buf = rows(&render(&mut d, 12, 10));
+        assert_eq!(buf[3..6], [" aaaa bbbb", " cccc dddd", ""]);
     }
 
     #[test]
@@ -423,20 +426,20 @@ mod tests {
     #[test]
     fn a_click_on_a_button_acts_and_nothing_else_does() {
         let mut d = confirm();
-        render(&mut d, 40, 5);
-        let [yes, cancel] = d.buttons(Rect::new(0, 0, 40, 5))[..] else { panic!() };
-        assert_eq!((yes, cancel), (Rect::new(2, 4, 9, 1), Rect::new(14, 4, 8, 1)));
-        assert_eq!(d.press_mouse(click(2, 4)), Some(Outcome::confirmed()));
-        assert_eq!(d.press_mouse(click(10, 4)), Some(Outcome::confirmed()));
-        assert_eq!(d.press_mouse(click(14, 4)), Some(Outcome::cancelled()));
-        assert_eq!(d.press_mouse(click(21, 4)), Some(Outcome::cancelled()));
-        for (column, row) in [(1, 4), (11, 4), (13, 4), (22, 4), (2, 3), (2, 0)] {
+        render(&mut d, 40, 7);
+        let [yes, cancel] = d.buttons(Rect::new(0, 0, 40, 7))[..] else { panic!() };
+        assert_eq!((yes, cancel), (Rect::new(2, 6, 9, 1), Rect::new(14, 6, 8, 1)));
+        assert_eq!(d.press_mouse(click(2, 6)), Some(Outcome::confirmed()));
+        assert_eq!(d.press_mouse(click(10, 6)), Some(Outcome::confirmed()));
+        assert_eq!(d.press_mouse(click(14, 6)), Some(Outcome::cancelled()));
+        assert_eq!(d.press_mouse(click(21, 6)), Some(Outcome::cancelled()));
+        for (column, row) in [(1, 6), (11, 6), (13, 6), (22, 6), (2, 5), (2, 0)] {
             assert_eq!(d.press_mouse(click(column, row)), None, "{column},{row}");
         }
-        let right = MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), ..click(2, 4) };
+        let right = MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), ..click(2, 6) };
         assert_eq!(d.press_mouse(right), None);
         // the buttons are where they are drawn
-        let buf = render(&mut d, 40, 5);
+        let buf = render(&mut d, 40, 7);
         assert_eq!(buf[(yes.x, yes.y)].symbol(), "[");
         assert_eq!(buf[(cancel.x + cancel.width - 1, cancel.y)].symbol(), "]");
     }
@@ -444,59 +447,59 @@ mod tests {
     #[test]
     fn text_has_one_button_and_scrolls_with_keys_and_the_wheel() {
         let mut d = text(20);
-        let buf = rows(&render(&mut d, 30, 8));
-        // header, 5 body rows, blank, buttons
-        assert_eq!(buf[1..6], [" line 1", " line 2", " line 3", " line 4", " line 5"]);
-        assert!(buf[7].starts_with("  [Close]"), "{:?}", buf[7]);
-        assert!(buf[7].ends_with("1-5/20"), "{:?}", buf[7]);
+        let buf = rows(&render(&mut d, 30, 10));
+        // an empty row, the title, an empty row, 5 body rows, blank, buttons
+        assert_eq!(buf[3..8], [" line 1", " line 2", " line 3", " line 4", " line 5"]);
+        assert!(buf[9].starts_with("  [Close]"), "{:?}", buf[9]);
+        assert!(buf[9].ends_with("1-5/20"), "{:?}", buf[9]);
         assert_eq!(d.press_key(press(KeyCode::Down)), None);
-        assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 2");
+        assert_eq!(rows(&render(&mut d, 30, 10))[3], " line 2");
         assert_eq!(d.press_mouse(wheel(MouseEventKind::ScrollDown)), None);
-        assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 5");
+        assert_eq!(rows(&render(&mut d, 30, 10))[3], " line 5");
         d.press_key(press(KeyCode::PageDown));
-        assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 10");
+        assert_eq!(rows(&render(&mut d, 30, 10))[3], " line 10");
         d.press_mouse(wheel(MouseEventKind::ScrollUp));
         d.press_key(press(KeyCode::Char('k')));
-        assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 6");
+        assert_eq!(rows(&render(&mut d, 30, 10))[3], " line 6");
         d.press_key(press(KeyCode::Char('j')));
         d.press_key(press(KeyCode::PageUp));
-        assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 2");
+        assert_eq!(rows(&render(&mut d, 30, 10))[3], " line 2");
         for _ in 0..10 {
             d.press_mouse(wheel(MouseEventKind::ScrollDown));
         }
-        let end = rows(&render(&mut d, 30, 8));
-        assert_eq!(end[1..6], [" line 16", " line 17", " line 18", " line 19", " line 20"]);
-        assert!(end[7].ends_with("16-20/20"), "{:?}", end[7]);
+        let end = rows(&render(&mut d, 30, 10));
+        assert_eq!(end[3..8], [" line 16", " line 17", " line 18", " line 19", " line 20"]);
+        assert!(end[9].ends_with("16-20/20"), "{:?}", end[9]);
     }
 
     #[test]
     fn text_that_fits_shows_no_position_and_does_not_scroll() {
         let mut d = text(3);
-        let buf = rows(&render(&mut d, 30, 8));
-        assert_eq!(buf[7], "  [Close]");
+        let buf = rows(&render(&mut d, 30, 10));
+        assert_eq!(buf[9], "  [Close]");
         d.press_mouse(wheel(MouseEventKind::ScrollDown));
-        assert_eq!(rows(&render(&mut d, 30, 8))[1], " line 1");
+        assert_eq!(rows(&render(&mut d, 30, 10))[3], " line 1");
     }
 
     #[test]
     fn a_confirm_taller_than_its_area_scrolls_too() {
         let mut d = Dialog::new("T".into(), "a\nb\nc\nd\ne".into(), Mode::Confirm { yes: "Yes".into() });
-        assert_eq!(rows(&render(&mut d, 30, 6))[1..4], [" a", " b", " c"]);
+        assert_eq!(rows(&render(&mut d, 30, 8))[3..6], [" a", " b", " c"]);
         d.press_key(press(KeyCode::Down));
-        assert_eq!(rows(&render(&mut d, 30, 6))[1..4], [" b", " c", " d"]);
+        assert_eq!(rows(&render(&mut d, 30, 8))[3..6], [" b", " c", " d"]);
     }
 
     #[test]
     fn input_draws_the_prompt_the_field_with_its_cursor_and_the_buttons() {
         let mut d = input("abc");
-        let buf = render(&mut d, 44, 7);
+        let buf = render(&mut d, 44, 9);
         assert_eq!(
-            rows(&buf)[1..],
+            rows(&buf)[3..],
             [" Fork cpd-ui into a new Plan, name:", " abc", "", "", "", "  [OK]   [Cancel]"][..]
         );
         // the cursor is the reversed cell after the text
-        assert!(buf[(4, 2)].modifier.contains(Modifier::REVERSED));
-        assert!(!buf[(3, 2)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(4, 4)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(3, 4)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -540,14 +543,14 @@ mod tests {
         let mut d = input("");
         type_str(&mut d, "Bad");
         assert_eq!(d.press_key(press(KeyCode::Enter)), None);
-        let buf = rows(&render(&mut d, 60, 9));
-        assert!(buf[3].starts_with(" Invalid Plan id"), "{buf:?}");
-        assert_eq!(buf[2], " Bad");
+        let buf = rows(&render(&mut d, 60, 11));
+        assert!(buf[5].starts_with(" Invalid Plan id"), "{buf:?}");
+        assert_eq!(buf[4], " Bad");
         // typing clears the refusal, and a fixed value is accepted
         for _ in 0..3 {
             d.press_key(press(KeyCode::Backspace));
         }
-        assert!(rows(&render(&mut d, 60, 9))[3].is_empty());
+        assert!(rows(&render(&mut d, 60, 11))[5].is_empty());
         type_str(&mut d, "good");
         assert_eq!(d.press_key(press(KeyCode::Enter)), Some(Outcome::value("good".into())));
     }
@@ -562,12 +565,12 @@ mod tests {
     #[test]
     fn the_buttons_of_an_input_accept_and_cancel() {
         let mut d = input("ok-id");
-        render(&mut d, 44, 7);
-        assert_eq!(d.press_mouse(click(3, 6)), Some(Outcome::value("ok-id".into())));
-        assert_eq!(d.press_mouse(click(11, 6)), Some(Outcome::cancelled()));
+        render(&mut d, 44, 9);
+        assert_eq!(d.press_mouse(click(3, 8)), Some(Outcome::value("ok-id".into())));
+        assert_eq!(d.press_mouse(click(11, 8)), Some(Outcome::cancelled()));
         let mut bad = input("Bad");
-        render(&mut bad, 44, 7);
-        assert_eq!(bad.press_mouse(click(3, 6)), None);
+        render(&mut bad, 44, 9);
+        assert_eq!(bad.press_mouse(click(3, 8)), None);
         assert!(matches!(&bad.mode, Mode::Input { refused: Some(_), .. }));
     }
 
@@ -575,10 +578,10 @@ mod tests {
     fn a_field_longer_than_the_width_shows_the_end_where_the_cursor_is() {
         let mut d = input(&"x".repeat(60));
         type_str(&mut d, "END");
-        let buf = rows(&render(&mut d, 20, 8));
-        assert_eq!(buf[3], format!(" {}END", "x".repeat(14)));
+        let buf = rows(&render(&mut d, 20, 10));
+        assert_eq!(buf[5], format!(" {}END", "x".repeat(14)));
         d.press_key(press(KeyCode::Home));
-        assert_eq!(rows(&render(&mut d, 20, 8))[3], format!(" {}", "x".repeat(18)));
+        assert_eq!(rows(&render(&mut d, 20, 10))[5], format!(" {}", "x".repeat(18)));
     }
 
     #[test]
