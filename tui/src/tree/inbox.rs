@@ -589,13 +589,13 @@ mod tests {
         terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"))).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let row = |y: u16| (0..41).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
-        let title = format!("╭─\u{E0B6}Inbox\u{E0B4}{}0", "─".repeat(41 - 2 - 2 - "Inbox".len() - 1));
-        let close = "╰\u{F005A} up to date, drink some water";
+        let title = format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(39 - 2 - 2 - "Inbox".len() - 3));
+        let close = " ╰\u{F005A} up to date, drink some water";
         let rows: Vec<String> = (0..6).map(row).collect();
         assert_eq!(rows[..3], ["".to_owned(), title, close.to_owned()], "the empty row, the title with count 0, the closing row: {rows:?}");
         assert!(rows[3..].iter().all(String::is_empty), "no other row: {rows:?}");
         let muted = palette::fg(Meaning::Nothing).fg.unwrap();
-        for x in 0..close.chars().count() as u16 {
+        for x in 1..close.chars().count() as u16 {
             assert_eq!(buffer[(x, 2)].fg, muted, "cell {x} of the closing row is muted");
         }
         for y in 0..4 {
