@@ -11,6 +11,7 @@ use std::time::Duration;
 use common::{SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::ErrorCode;
 use cpd_core::host::layout::{self, View};
+use cpd_core::host::tmux::SERVER_OPTIONS;
 use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux};
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 
@@ -82,6 +83,33 @@ fn a_right_click_is_tmuxs_default_binding_that_passes_it_to_a_pane_that_captures
     assert!(String::from_utf8_lossy(&own.stdout).contains("cpd tui action"));
 }
 
+/// Contract §6.1 (hs-d353): tmux 3.8 defaults the popup, popup border and menu styles to a grey background, so
+/// cpd sets each to `default`, with `-gq`, right after `pane-active-border-style`.
+#[test]
+fn the_popup_and_menu_styles_are_server_options_set_to_default_after_the_active_border() {
+    let at = SERVER_OPTIONS.iter().position(|o| *o == ["set", "-g", "pane-active-border-style", "fg=blue"]).unwrap();
+    let want: [&[&str]; 3] = [
+        &["set", "-gq", "popup-style", "default"],
+        &["set", "-gq", "popup-border-style", "default"],
+        &["set", "-gq", "menu-style", "default"],
+    ];
+    assert_eq!(&SERVER_OPTIONS[at + 1..at + 4], &want);
+}
+
+#[test]
+fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
+    let s = server();
+    s.tmux.ensure_session("cpd", "main", &sleeper(s.env.root())).unwrap();
+    for option in ["popup-style", "popup-border-style", "menu-style"] {
+        let shown = s.env.tmux(&["show", "-gv", option]);
+        if shown.status.success() {
+            assert_eq!(String::from_utf8_lossy(&shown.stdout).trim(), "default", "{option}");
+        } else {
+            eprintln!("{option} not asserted: this tmux does not know the option");
+        }
+    }
+}
+
 /// Every option, binding and hook of contract §6.1: the reference's
 /// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.
 fn assert_server_options(s: &Server) {
@@ -119,8 +147,20 @@ fn assert_server_options(s: &Server) {
     for feature in ["xterm*:extkeys", "xterm-ghostty:extkeys", "xterm-ghostty:hyperlinks"] {
         assert_eq!(features.matches(feature).count(), 1, "{feature} in {features}");
     }
+    // A view is respawned; the engine's window (`watch`) starts the engine again, as does its window's loss (contract §6.6, hs-d328).
     let hook = s.env.tmux(&["show-hooks", "-g", "pane-died"]);
-    assert_eq!(String::from_utf8_lossy(&hook.stdout), "pane-died[0] if-shell -F \"#{@cpd_view}\" respawn-pane\n", "{hook:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&hook.stdout),
+        "pane-died[0] if-shell -F \"#{@cpd_view}\" respawn-pane \"if -F '#{==:#{window_name},watch}' \\\"run-shell -b 'cpd watch --ensure --wait >/dev/null 2>&1'\\\"\"\n",
+        "{hook:?}"
+    );
+    let hook = s.env.tmux(&["show-hooks", "-g", "window-unlinked"]);
+    assert_eq!(
+        String::from_utf8_lossy(&hook.stdout),
+        "window-unlinked[0] if-shell -F \"#{==:#{hook_window_name},watch}\" \"run-shell -b 'cpd watch --ensure --wait >/dev/null 2>&1'\"\n",
+        "{hook:?}"
+    );
+    assert_eq!(s.env.tmux(&["show", "-sv", "exit-empty"]).stdout, b"off\n");
     let binding = |key| {
         let out = s.env.tmux(&["list-keys", "-T", "root", key]);
         String::from_utf8_lossy(&out.stdout).split_whitespace().collect::<Vec<_>>().join(" ")

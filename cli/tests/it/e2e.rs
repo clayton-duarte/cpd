@@ -448,6 +448,10 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     }
     let session = fx.session(&lead_session);
     assert_eq!((&session["state"], &session["place"]), (&json!("idle"), &json!("parked")), "{session}");
+    // The engine is supervised (contract §6.6, hs-d328): a stopped engine comes back at once, through the tmux hook `pane-died`
+    // (its pane dies with it) and, were its window killed, `window-unlinked`. This test needs it to stay stopped, so that its own
+    // `pr poll` is the only one: it takes the one hook that its SIGTERM triggers off this private server, by name.
+    assert!(fx.env.tmux(&["set-hook", "-gu", "pane-died"]).status.success());
     kill(Pid::from_raw(engine), Signal::SIGTERM).unwrap();
     fx.wait_event(cursor, "watch-stopped", 30, |e| e["data"]["pid"] == engine);
     let events = fx.events_since(cursor);

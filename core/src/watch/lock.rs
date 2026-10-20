@@ -3,7 +3,8 @@
 //! engine dies and a free lock always means no engine.
 
 use std::fs::{self, File, OpenOptions};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
@@ -11,7 +12,8 @@ use crate::lock;
 
 /// The engine's lock, held while this value lives.
 pub(super) struct WatchLock {
-    _file: File,
+    file: File,
+    path: PathBuf,
 }
 
 fn failed(path: &Path, what: impl std::fmt::Display) -> CpdError {
@@ -40,10 +42,24 @@ impl WatchLock {
     pub(super) fn take(home: &CpdHome) -> Result<WatchLock, CpdError> {
         let path = home.watch_lock();
         match try_take(&path)? {
-            Some(file) => Ok(WatchLock { _file: file }),
+            Some(file) => Ok(WatchLock { file, path }),
             None => Err(CpdError::new(ErrorCode::WatchRunning, "The engine is already running on this machine: there is one per machine.")
                 .with("lock", path.display().to_string())),
         }
+    }
+}
+
+impl WatchLock {
+    /// Marks the engine alive now: the lock file's modification time, which
+    /// the next engine reads when this one left no `watch-stopped` (crash,
+    /// SIGKILL), to say when it stopped (contract §3.7). No row, no Event.
+    pub(super) fn touch(&self) -> Result<(), CpdError> {
+        self.file.set_modified(SystemTime::now()).map_err(|e| failed(&self.path, format!("cannot mark it alive: {e}")))
+    }
+
+    /// When the engine that held the lock last [`touch`](Self::touch)ed it.
+    pub(super) fn last_alive(&self) -> Result<SystemTime, CpdError> {
+        self.file.metadata().and_then(|m| m.modified()).map_err(|e| failed(&self.path, format!("cannot read when it was alive: {e}")))
     }
 }
 

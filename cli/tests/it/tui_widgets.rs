@@ -1127,6 +1127,12 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         assert_eq!(buf[(pill_at, y)].bg, palette::color(m), "{name}: pill");
         assert_eq!(buf[(pill_at, y)].fg, palette::pill(m).fg.unwrap(), "{name}: pill text");
         assert!(text.contains(" key │S1 "), "{name}: {text}");
+        // a rounded cap on each end, in the status colour on the default background
+        let (left, right) = (pill_at - 2, pill_at + " key │S1 ".chars().count() as u16 + 1);
+        for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
+            let cap = &buf[(cap_at, y)];
+            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, palette::color(m), Color::Reset), "{name}: cap at {cap_at}: {text}");
+        }
         let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
         assert_eq!(buf[(counter, y)].fg, palette::color(palette::job_status(status, merging).1), "{name}: counter");
     }

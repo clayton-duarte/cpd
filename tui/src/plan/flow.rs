@@ -118,6 +118,10 @@ pub enum Dir {
     Right,
 }
 
+/// The rounded caps of a pill (powerline, U+E0B6 and U+E0B4), each one cell, drawn in the pill's status colour.
+pub const CAP_L: &str = "\u{e0b6}";
+pub const CAP_R: &str = "\u{e0b4}";
+
 /// Columns between a column's right bracket and the next column's left bracket: line, bus, line.
 const GAP: u16 = 3;
 
@@ -311,7 +315,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     // x: the left bracket column, then each column's pills, `GAP` + both bracket columns between columns
     let parts: Vec<(String, String)> = jobs.iter().map(|j| pill_parts(j, usize::MAX, frame)).collect();
     let pill_w = |i: usize| (Line::from(parts[i].0.as_str()).width() + Line::from(parts[i].1.as_str()).width()) as u16;
-    let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i)).max().unwrap_or(0)).collect();
+    let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i) + 2).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
     let xs: Vec<u16> = starts(1, col_w.iter().copied(), spacing);
@@ -411,15 +415,25 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
                 let rect = Rect::new(xs[l], top[c] + k as u16, col_w[l], 1);
                 let style = palette::pill(jobs[i].status.icon(frame).1);
-                // the icon and key to the left, the tier (and `aN`) to the right, whatever the column's width
-                Line::from(parts[i].0.as_str()).style(style).left_aligned().render(rect, &mut buf);
-                Line::from(parts[i].1.as_str()).style(style).right_aligned().render(rect, &mut buf);
+                // a cap on each side in the status colour, on the default background; between them the icon and key to
+                // the left, the tier (and `aN`) to the right, whatever the column's width
+                let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+                buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
+                buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
+                let body = body_of(rect);
+                Line::from(parts[i].0.as_str()).style(style).left_aligned().render(body, &mut buf);
+                Line::from(parts[i].1.as_str()).style(style).right_aligned().render(body, &mut buf);
                 pills[i] = Some(Pill { key: jobs[i].key.clone(), rect, column: l });
                 columns[l].push(i);
             }
         }
     }
     Chart { buf, pills: pills.into_iter().flatten().collect(), columns }
+}
+
+/// A pill's rectangle without its two caps.
+fn body_of(rect: Rect) -> Rect {
+    Rect { x: rect.x + 1, width: rect.width.saturating_sub(2), ..rect }
 }
 
 /// The User's selection in the Plan view: a Job key, held by key so a refresh keeps it. Nothing is selected until the User
@@ -524,7 +538,7 @@ impl Chart {
         (fit(ox, r.x.saturating_sub(1), r.right() + 1, w), fit(oy, r.y, r.bottom(), h))
     }
 
-    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill bold and reversed. Offsets are clamped to
+    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill's body bold and reversed (its caps keep the status colour). Offsets are clamped to
     /// the chart; the clamped offsets are returned. (Hand-written: ratatui has no widget that copies a window of a `Buffer`.)
     pub fn blit(&self, dst: &mut Buffer, area: Rect, (ox, oy): (u16, u16), selected: Option<usize>) -> (u16, u16) {
         let ox = ox.min(self.buf.area.width.saturating_sub(area.width));
@@ -534,7 +548,7 @@ impl Chart {
                 dst[(area.x + x, area.y + y)] = self.buf[(x + ox, y + oy)].clone();
             }
         }
-        if let Some(r) = selected.map(|i| self.pills[i].rect) {
+        if let Some(r) = selected.map(|i| body_of(self.pills[i].rect)) {
             let seen = Rect::new(ox, oy, area.width, area.height).intersection(r);
             if !seen.is_empty() {
                 let on_dst = Rect::new(area.x + seen.x - ox, area.y + seen.y - oy, seen.width, seen.height);
@@ -578,9 +592,15 @@ mod tests {
         let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
             let (icon, meaning) = status.icon(0);
-            assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status:?}");
-            let cell = &c.buf[(p.rect.x, p.rect.y)];
+            assert_eq!(c.buf[(p.rect.x + 2, p.rect.y)].symbol(), icon, "{status:?}");
+            // the body keeps the pill's colours
+            let cell = &c.buf[(p.rect.x + 1, p.rect.y)];
             assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status:?}");
+            // a rounded cap on each end: the status colour on the default background
+            for (x, glyph) in [(p.rect.x, "\u{e0b6}"), (p.rect.right() - 1, "\u{e0b4}")] {
+                let cap = &c.buf[(x, p.rect.y)];
+                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, palette::pill(meaning).bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
+            }
         }
     }
 
@@ -590,14 +610,15 @@ mod tests {
         assert_eq!(Live::Stuck.icon(0).1, Meaning::Failed, "job-stuck: it needs the User");
         assert_eq!(Live::Stuck.icon(0).0, Live::Failed.icon(0).0, "the same glyph");
         let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
-        let bg = |i: usize| c.buf[(c.pills[i].rect.x, c.pills[i].rect.y)].bg;
+        // the body, after the left cap
+        let bg = |i: usize| c.buf[(c.pills[i].rect.x + 1, c.pills[i].rect.y)].bg;
         assert_eq!((bg(0), bg(1)), (palette::color(Meaning::Waiting), palette::color(Meaning::Failed)));
     }
 
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.
     fn icon_at(status: Live, frame: usize) -> String {
         let c = layout(&[FlowJob { status, ..job("a", &[]) }], frame);
-        c.buf[(c.pills[0].rect.x + 1, c.pills[0].rect.y)].symbol().to_string()
+        c.buf[(c.pills[0].rect.x + 2, c.pills[0].rect.y)].symbol().to_string()
     }
 
     #[test]
@@ -646,7 +667,7 @@ mod tests {
     fn columns_run_left_to_right() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1");
+  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1 ");
         assert_eq!(c.columns, vec![vec![0], vec![1], vec![2]]);
     }
 
@@ -655,7 +676,7 @@ mod tests {
         // c needs a through b, so its own need of a is dropped: a has one line out, to b
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])], 0);
         snap(&c, "
-  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1");
+  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1 ");
         // the same with the implied need listed first
         assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])], 0)), text(&c));
     }
@@ -664,9 +685,9 @@ mod tests {
     fn jobs_with_the_same_needs_share_a_card_stacked_with_no_space() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])], 0);
         snap(&c, "
-              ╭ 󰝦 b │S1 ╮
-  󰝦 a │S1 ────┤ 󰝦 c │S1 │
-              ╰ 󰝦 d │S1 ╯");
+                ╭ 󰝦 b │S1 ╮
+  󰝦 a │S1 ────┤ 󰝦 c │S1 │
+                ╰ 󰝦 d │S1 ╯");
         assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [1, 0, 1, 2]);
     }
 
@@ -675,23 +696,23 @@ mod tests {
         // three Jobs: both brackets are joined at the middle row, where the line in and the line out meet them
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])], 0);
         snap(&c, "
-              ╭ 󰝦 b │S1 ╮
-  󰝦 a │S1 ────┤ 󰝦 c │S1 ├──── 󰝦 d │S1
-              ╰ 󰝦 e │S1 ╯");
+                ╭ 󰝦 b │S1 ╮
+  󰝦 a │S1 ────┤ 󰝦 c │S1 ├──── 󰝦 d │S1 
+                ╰ 󰝦 e │S1 ╯");
         // two Jobs: the middle row is the upper one
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])], 0);
         snap(&c, "
-  󰝦 a │S1 ────┬ 󰝦 b │S1 ╮
-              ╰ 󰝦 c │S1 ╯");
+  󰝦 a │S1 ────┬ 󰝦 b │S1 ╮
+                ╰ 󰝦 c │S1 ╯");
     }
 
     #[test]
     fn single_cards_are_one_row_apart_and_have_plain_line_ends() {
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──┬── 󰝦 c │S1
-            │
-  󰝦 b │S1 ──┴── 󰝦 d │S1");
+  󰝦 a │S1 ──┬── 󰝦 c │S1 
+              │
+  󰝦 b │S1 ──┴── 󰝦 d │S1 ");
     }
 
     #[test]
@@ -700,14 +721,16 @@ mod tests {
         long.attempt = 2;
         let c = layout(&[job("a", &[]), long, job("b", &[])], 0);
         snap(&c, "
-  󰝦 a               │S1
+  󰝦 a               │S1 
 
-  󰝦 a-longer-key │S1│a2
+  󰝦 a-longer-key │S1│a2 
 
-  󰝦 b               │S1");
+  󰝦 b               │S1 ");
         // the last cell of the widest pill is a hit, the one after it is not
         let r = c.pills[1].rect;
         assert_eq!((c.pill_at(r.right() - 1, r.y), c.pill_at(r.right(), r.y)), (Some(1), None));
+        // so is the left cap, the pill's first cell; the cell before it is not
+        assert_eq!((c.pill_at(r.x, r.y), c.pill_at(r.x - 1, r.y)), (Some(1), None));
     }
 
     #[test]
@@ -719,18 +742,18 @@ mod tests {
         assert_eq!(glyphs, ["┬", "│", "┴"]);
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──╮
-            ├── 󰝦 c │S1
-  󰝦 b │S1 ──╯");
+  󰝦 a │S1 ──╮
+              ├── 󰝦 c │S1 
+  󰝦 b │S1 ──╯");
     }
 
     #[test]
     fn a_line_that_skips_columns_rides_a_free_row() {
         let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──╮
-            ├── 󰝦 b │S1 ──┬── 󰝦 c │S1
-  󰝦 x │S1 ──┴─────────────╯");
+  󰝦 a │S1 ──╮
+              ├── 󰝦 b │S1 ──┬── 󰝦 c │S1 
+  󰝦 x │S1 ──┴───────────────╯");
     }
 
     #[test]
@@ -894,8 +917,9 @@ mod tests {
         let mut dst = Buffer::empty(Rect::new(0, 0, 30, 3));
         let (ox, oy) = c.blit(&mut dst, Rect::new(2, 1, 20, 1), (0, 100), Some(3)); // clamped to the chart
         assert_eq!((ox, oy), (0, 6));
-        let cell = &dst[(3, 1)];
-        assert!(cell.modifier.contains(Modifier::REVERSED | Modifier::BOLD));
+        // the pill's body is reversed, its caps are not
+        assert!(dst[(4, 1)].modifier.contains(Modifier::REVERSED | Modifier::BOLD));
+        assert!(!dst[(3, 1)].modifier.contains(Modifier::REVERSED));
         assert_eq!(dst[(3, 0)].symbol(), " "); // the padding is untouched
     }
 
@@ -906,7 +930,7 @@ mod tests {
         assert_eq!((c.buf.area.width, c.buf.area.height), (plain.buf.area.width + 4, plain.buf.area.height + 2));
         for (p, q) in c.pills.iter().zip(&plain.pills) {
             assert_eq!((p.rect.x, p.rect.y), (q.rect.x + 2, q.rect.y + 1));
-            assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), plain.buf[(q.rect.x + 1, q.rect.y)].symbol());
+            assert_eq!(c.buf[(p.rect.x + 2, p.rect.y)].symbol(), plain.buf[(q.rect.x + 2, q.rect.y)].symbol());
             assert_eq!(c.pill_at(p.rect.x, p.rect.y), c.pills.iter().position(|r| r.key == p.key));
         }
         assert_eq!(c.pill_at(q_x(&plain), 0), None, "the margin is not a pill");
