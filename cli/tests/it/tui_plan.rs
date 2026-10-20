@@ -860,6 +860,82 @@ fn another_job_retargets_the_worker_pane_in_place() {
     wait_until("the Worker view to be started", || env.calls("cpd").contains(&started));
 }
 
+// ---------- Pulse (a Manager in the chat slot; User, hs-d327) ----------
+
+/// An Event of `plan` in `ctx` that happened `minutes` minutes ago by the clock (the view reads the real time).
+fn event_ago(kind: &str, plan: &str, minutes: u32) -> String {
+    format!(
+        "INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-{minutes} minutes'), '{kind}', 'ctx', '{plan}', NULL, 'fixture {kind}', '{{}}');"
+    )
+}
+
+/// The bars of a row of a styled screen with their foreground: the number of the 256-colour palette tmux captures
+/// (`1` red, `2` green, `3` yellow, `4` blue, `5` magenta, `8` dark grey, `15` bright white), or `default`.
+fn bars_with_colours(styled_row: &str) -> Vec<(char, String)> {
+    let (mut out, mut colour, mut rest) = (Vec::new(), "default".to_owned(), styled_row);
+    while let Some(c) = rest.chars().next() {
+        if let Some(seq) = rest.strip_prefix("\x1b[") {
+            let end = seq.find('m').expect("an SGR ends in m");
+            let params: Vec<&str> = seq[..end].split(';').collect();
+            match params.as_slice() {
+                ["38", "5", n] => colour = (*n).to_owned(),
+                ["" | "0" | "39"] => colour = "default".to_owned(),
+                _ => {}
+            }
+            rest = &seq[end + 1..];
+        } else {
+            if ('▁'..='█').contains(&c) {
+                out.push((c, colour.clone()));
+            }
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
+}
+
+#[test]
+fn pulse_rows_have_no_icon_and_bars_take_the_colour_of_their_kind_with_a_grey_low_bar_for_zero() {
+    let env = env();
+    let mut s = context("ctx") + &lead_row("g-ctx", "ctx", "", "2026-01-01T00:00:00.000Z");
+    s += &lead_row("mgr", "ctx", "", "2026-01-01T00:00:01.000Z").replace("'lead'", "'manager'");
+    s += &plan_row("p1", "ctx", "dispatch", "lead-p1", "2026-01-02T00:00:00.000Z", None);
+    s += &lead_row("lead-p1", "ctx", "p1", "2026-01-02T00:00:00.000Z");
+    // five slots, ten minutes apart (two buckets), oldest first; each with a lower-precedence kind beside the winner
+    for (minutes, kinds) in [
+        (52, &["job-added"][..]),
+        (42, &["pr-opened", "job-merged"]),
+        (32, &["error", "plan-phase"]),
+        (22, &["plan-phase", "job-merged", "job-added"]),
+        (12, &["escalation", "job-merged"]),
+        (2, &["job-merged"]),
+    ] {
+        for kind in kinds {
+            s += &event_ago(kind, "p1", minutes);
+        }
+    }
+    s += &event("session-moved", "ctx", None, Some("mgr"), r#"{"pane":"%1","window":"@1","place":"chat"}"#);
+    env.sql(&s);
+    let pane = start_view(&env);
+
+    let screen = screen_when(&env, &pane, "the Pulse row", |s| s.get(1).is_some_and(|l| l.contains("p1") && l.contains('▁')));
+    let row = &screen[1];
+    assert!(row.starts_with("  p1  "), "the id first, no dot: {row:?}");
+    assert!(!row.contains('󰗠') && !row.contains('󰪥') && !row.contains('󰝦'), "no icon: {row:?}");
+    let age = row.chars().rev().take(9).collect::<String>();
+    assert!(age.trim().chars().next().is_some(), "the age cell stays: {row:?}");
+    let n = 260 - 4 - ("p1".len() + 2 + 2 + 9);
+    assert_eq!(row.chars().filter(|c| ('▁'..='█').contains(c)).count(), n, "the sparkline takes the width the icons freed: {row:?}");
+
+    let styled = styled_screen(&env, &pane);
+    let bars = bars_with_colours(styled.lines().nth(1).expect("the first row"));
+    assert_eq!(bars.len(), n);
+    let coloured: Vec<&str> = bars.iter().filter(|(_, c)| c != "8").map(|(_, c)| c.as_str()).collect();
+    assert_eq!(coloured, ["15", "3", "1", "5", "4", "2"], "white, yellow, red, magenta, blue, green: {bars:?}");
+    assert!(bars.iter().filter(|(_, c)| c == "8").all(|(g, _)| *g == '▁'), "an empty slot is a grey ▁: {bars:?}");
+    assert!(bars.iter().any(|(_, c)| c == "8"), "{bars:?}");
+}
+
 #[test]
 fn q_does_not_quit_the_view() {
     let env = env();
