@@ -62,8 +62,14 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
             HeadState::Open => existing = Some(PrRef { number: head.number, url: head.url }),
         }
     }
-    // 1. G, read once; 2. the Gate on it, in a gate worktree of its own.
-    let sha = git::run::rev_parse(std::path::Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
+    // 1. The base check on the Lead Branch's head, then G, read once, and the same check on G (hs-d329), before the
+    // Gate, under `pr.gate` `ci` as under `local`; 2. the Gate on G, in a gate worktree of its own.
+    let repo = Path::new(&pr.repo);
+    let base_sha = fresh_base(repo, &pr.base)?;
+    let lead_ref = format!("refs/heads/{branch}");
+    require_base(repo, &lead, pr, &base_sha, &git::run::rev_parse(repo, &lead_ref)?)?;
+    let sha = git::run::rev_parse(repo, &lead_ref)?;
+    require_base(repo, &lead, pr, &base_sha, &sha)?;
     gate(&env, &policy, &id, pr, &sha, &format!("pr open --pr {key}"))?;
 
     // The PR is read again: another `pr open` may have opened it during the Gate.
@@ -155,6 +161,49 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(
         json!({"plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, &key).to_json(), "sha": sha, "pushed": pushed, "remote": remote}),
     ))
+}
+
+/// B (contract §7.6 `pr open` step 1): `origin/<base>` after `git fetch origin <base>`, read once; a repo with no
+/// `origin` skips the fetch and reads `refs/heads/<base>`.
+fn fresh_base(repo: &Path, base: &str) -> Result<String, CpdError> {
+    if git::run::has_origin(repo)? {
+        git::run::fetch(repo, &["origin", base])?;
+        git::run::rev_parse(repo, &format!("refs/remotes/origin/{base}"))
+    } else {
+        git::run::rev_parse(repo, &format!("refs/heads/{base}"))
+    }
+}
+
+/// `base_behind` (exit 3) unless `base_sha` is an ancestor of `sha`: a pull request is opened only when its head
+/// contains its base (hs-d329). `details.next` is what the Lead runs, as written.
+fn require_base(repo: &Path, lead: &Path, pr: &PrRow, base_sha: &str, sha: &str) -> Result<(), CpdError> {
+    let out = git::run::run(repo, &["merge-base", "--is-ancestor", base_sha, sha])?;
+    match out.code {
+        0 => Ok(()),
+        1 => {
+            let remote = if git::run::has_origin(repo)? { format!("origin/{}", pr.base) } else { pr.base.clone() };
+            Err(CpdError::new(
+                ErrorCode::BaseBehind,
+                format!(
+                    "{} of PR {} does not contain {remote} ({}): merge it into the Lead Branch, then run cpd pr open again. Nothing was gated, pushed or opened.",
+                    short(sha),
+                    pr.key,
+                    short(base_sha)
+                ),
+            )
+            .with("pr", pr.key.as_str())
+            .with("base", pr.base.as_str())
+            .with("base_sha", base_sha)
+            .with("sha", sha)
+            .with(
+                "next",
+                json!([format!("git -C {} merge --no-edit {remote}", lead.display()), format!("cpd pr open --pr {}", pr.key)]),
+            ))
+        }
+        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-base --is-ancestor exited {code}."))
+            .with("exit", code)
+            .with("stderr", out.stderr)),
+    }
 }
 
 /// The open pull request of the PR's head, adopted when it exists (an earlier run

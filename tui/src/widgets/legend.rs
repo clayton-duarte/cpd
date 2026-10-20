@@ -9,13 +9,13 @@
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind};
+use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::CpdError;
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
@@ -23,7 +23,7 @@ use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, JobCounts};
 use crate::widgets::section_header;
-use crate::{not_a_terminal, on_a_terminal};
+use crate::{Capture, run_view};
 
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
@@ -263,20 +263,7 @@ pub fn popup_args(client: (u16, u16)) -> Vec<String> {
 
 /// `cpd tui view legend`: draws the legend until a key that does not scroll, or a click.
 pub(crate) fn run() -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view legend"));
-    }
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.and_then(|()| show(&mut terminal));
-    let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-    ratatui::restore();
-    match result {
-        Ok(()) => Ok(Output::Owned),
-        Err(e) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view legend failed: {e}."))
-            .with("command", "tui view legend")),
-    }
+    run_view("legend", Capture::Mouse, || Ok(()), |terminal, ()| Ok(show(terminal)?))
 }
 
 /// What `event` does: the kit's scrolling moves `scroll` (↑↓, j/k, PgUp/PgDn, the wheel); whether it closes the legend:

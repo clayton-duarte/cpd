@@ -827,7 +827,7 @@ fn a_locked_pr_with_no_job_is_cancelled_and_the_plan_waits_for_the_others() {
 }
 
 #[test]
-fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_an_open_one_too() {
+fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_merged_one_too() {
     let fx = fx("dispatch");
     for key in ["queued", "running", "merged"] {
         fx.locked_pr(key, &fx.pay, "dispatch");
@@ -856,14 +856,122 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_an
     let error = fx.refused(&fx.pr(&["cancel", "base"]), "pr_in_use", 3, writes);
     assert_eq!(error["details"]["prs"], json!(["dependent"]));
 
-    // An open pull request is out of scope, a merged one too.
-    fx.locked_pr("opened", &fx.web, "open");
+    // A merged PR is refused.
+    fx.locked_pr("opened", &fx.web, "merged");
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["cancel", "opened"]), "illegal_transition", 3, writes);
-    assert_eq!(error["details"]["from"], "open");
-    fx.env.sql("UPDATE prs SET status = 'merged', merged_at = 't' WHERE key = 'opened'");
+    assert_eq!(error["details"]["from"], "merged");
+}
+
+// ---------- pr cancel of an open PR whose pull request is closed (hs-d329) ----------
+
+impl Fx {
+    fn pull_state(&self, state: &str) {
+        self.env.sql(&format!("UPDATE pull_requests SET state = '{state}', merged_at = iif('{state}' = 'merged', 't', NULL) WHERE number = 7"));
+    }
+}
+
+#[test]
+fn an_open_pr_whose_pull_request_is_closed_is_cancelled_and_the_plan_reaches_done() {
+    let fx = fx("deploy");
+    fx.locked_pr("api", &fx.pay, "merged");
+    fx.locked_pr("web", &fx.web, "open");
+    fx.pull_state("closed");
+    // Its Jobs are `merged` or `cancelled` and are not checked.
+    fx.job("a", "web", "cancelled");
+
+    let out = fx.pr(&["cancel", "web"]).ok();
+    assert_eq!(out["pr"], json!({"key": "web", "status": "cancelled"}));
+    assert_eq!(out["phase"], "done");
+    assert_eq!(out["released"], json!({"number": 7, "url": "u", "lead_worktree": "/w/web", "lead_branch": "cpd/pay-1/web"}));
+    assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
+    // The table's checks: no Lead worktree, start time or pull request on a cancelled PR; the old values stay in `history`.
+    assert_eq!(
+        fx.query::<i64>(
+            "SELECT count(*) FROM prs WHERE key = 'web' AND lead_worktree IS NULL AND started_at IS NULL AND pr_number IS NULL
+               AND pr_url IS NULL AND pr_opened_at IS NULL AND pull_request IS NULL"
+        ),
+        1
+    );
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM history WHERE tbl = 'prs' AND op = 'update' AND before LIKE '%\"/w/web\"%'"), 1);
+    // The pull request's row stays for the poll to delete.
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM pull_requests WHERE number = 7"), 1);
+
+    let cancelled = fx.events("pr-cancelled");
+    assert_eq!((cancelled.len(), cancelled[0]["data"].clone()), (1, json!({"pr": "web"})));
+    let text = cancelled[0]["text"].as_str().unwrap();
+    for named in ["#7", "/w/web", "cpd/pay-1/web"] {
+        assert!(text.contains(named), "{named} in {text}");
+    }
+    assert!(fx.events("plan-phase").is_empty());
+    let done = fx.events("plan-done");
+    assert_eq!((done.len(), done[0]["data"]["prs"][0]["key"].clone()), (1, json!("api")));
+
+    // Idempotent: a cancelled PR is `already`, in any phase.
     let writes = fx.writes();
-    fx.refused(&fx.pr(&["cancel", "opened"]), "illegal_transition", 3, writes);
+    assert_eq!(fx.pr(&["cancel", "web"]).ok()["already"], true);
+    assert_eq!(fx.writes(), writes);
+}
+
+#[test]
+fn cancelling_an_open_pr_leaves_the_phase_while_another_pr_remains_to_open_or_merge() {
+    // `dispatch`: a PR is still to start.
+    let fx = fx("dispatch");
+    fx.locked_pr("web", &fx.web, "open");
+    fx.locked_pr("api", &fx.pay, "dispatch");
+    fx.pull_state("closed");
+    let out = fx.pr(&["cancel", "web"]).ok();
+    assert!(out.get("phase").is_none(), "{out}");
+    assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "dispatch".to_string()));
+    assert!(fx.events("plan-phase").is_empty() && fx.events("plan-done").is_empty());
+
+    // `deploy`: another PR is still `open`.
+    let fx = self::fx("deploy");
+    fx.locked_pr("web", &fx.web, "open");
+    fx.locked_pr("api", &fx.pay, "open");
+    fx.pull_state("closed");
+    let out = fx.pr(&["cancel", "web"]).ok();
+    assert!(out.get("phase").is_none(), "{out}");
+    assert_eq!((fx.pr_status("web"), fx.phase()), ("cancelled".to_string(), "deploy".to_string()));
+
+    // `deploy` with nothing merged: no PR is left, the Plan stays.
+    fx.pr(&["cancel", "api"]).ok();
+    assert_eq!(fx.phase(), "deploy");
+    assert!(fx.events("plan-done").is_empty());
+}
+
+#[test]
+fn an_open_pr_whose_pull_request_is_open_or_merged_is_refused_pr_not_closed() {
+    let fx = fx("deploy");
+    fx.locked_pr("web", &fx.web, "open");
+    for state in ["open", "merged"] {
+        fx.pull_state(state);
+        let writes = fx.writes();
+        let error = fx.refused(&fx.pr(&["cancel", "web"]), "pr_not_closed", 3, writes);
+        assert_eq!(error["details"]["pr"], "web");
+        assert_eq!((error["details"]["number"].clone(), error["details"]["url"].clone(), error["details"]["state"].clone()), (json!(7), json!("u"), json!(state)));
+        assert_eq!((fx.pr_status("web"), fx.phase()), ("open".to_string(), "deploy".to_string()));
+    }
+    // Closed, reopened, closed: the stored row decides.
+    fx.pull_state("closed");
+    fx.pr(&["cancel", "web"]).ok();
+}
+
+#[test]
+fn an_open_pr_that_another_pr_needs_is_refused_pr_in_use() {
+    let fx = fx("dispatch");
+    fx.locked_pr("base", &fx.pay, "open");
+    fx.pull_state("closed");
+    fx.env.sql(&format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay-1', 'dependent', '{}', 'main', 'waiting', 'cpd/pay-1/dependent', cpd_txn(), 't');
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', 'dependent', 'base')",
+        fx.web.display()
+    ));
+    let writes = fx.writes();
+    let error = fx.refused(&fx.pr(&["cancel", "base"]), "pr_in_use", 3, writes);
+    assert_eq!(error["details"]["prs"], json!(["dependent"]));
+    assert_eq!(fx.pr_status("base"), "open");
 }
 
 // ---------- the plan fingerprint ----------

@@ -1,5 +1,5 @@
 //! The kit's scrolling (commands.md §13.2, "The dialog kit"): an offset into `total` rows seen through a window of
-//! `page` rows. ↑↓, j/k, PgUp/PgDn and the mouse wheel move it, and it never leaves `0..=max_offset`. It draws
+//! `page` rows. ↑↓, j/k, PgUp/PgDn, End/G and the mouse wheel move it, and it never leaves `0..=max_offset`. It draws
 //! nothing: the view reads [`Scroll::offset`] and [`Scroll::page`]. The `text` and `confirm` kinds use it, and so do
 //! the logs and the legend popups.
 
@@ -52,7 +52,8 @@ impl Scroll {
         self.offset = moved.min(self.max_offset());
     }
 
-    /// A key press: ↑ or k one row up, ↓ or j one down, PgUp and PgDn a page. Whether the key was one of these.
+    /// A key press: ↑ or k one row up, ↓ or j one down, PgUp and PgDn a page, End or G to the last page (tui-G1).
+    /// Whether the key was one of these.
     pub(crate) fn key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press || key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
             return false;
@@ -63,6 +64,7 @@ impl Scroll {
             KeyCode::Down | KeyCode::Char('j') => self.by(1),
             KeyCode::PageUp => self.by(-page),
             KeyCode::PageDown => self.by(page),
+            KeyCode::End | KeyCode::Char('G') => self.by(isize::MAX),
             _ => return false,
         }
         true
@@ -139,6 +141,15 @@ mod tests {
         assert_eq!(s.offset(), 30);
         assert!(s.key(press(KeyCode::PageUp)));
         assert_eq!(s.offset(), 20);
+    }
+
+    #[test]
+    fn end_and_g_go_to_the_last_page() {
+        for code in [KeyCode::End, KeyCode::Char('G')] {
+            let mut s = new(40, 10);
+            assert!(s.key(press(code)), "{code:?}");
+            assert_eq!(s.offset(), 30, "{code:?}");
+        }
     }
 
     #[test]

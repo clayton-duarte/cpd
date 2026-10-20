@@ -57,12 +57,12 @@ pub enum Command {
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
     Start(StartArgs),
-    /// Push the Lead Branch and open the PR (§9.1)
+    /// Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1)
     Open(Args),
     /// Poll every open pull request of the User (§9.2)
     Poll(PollArgs),
-    /// Rebase the Lead Branch onto the base and push (§9.3)
-    Rebase(Args),
+    /// Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3)
+    Rebase(RebaseArgs),
     /// Gate, then push the Lead Branch as it is, without a rebase (§9.9)
     Push(Args),
     /// Show the PR's checks, reviews and comments (§9.8)
@@ -77,6 +77,18 @@ pub struct Args {
     pr: PrArg,
     #[command(flatten)]
     plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RebaseArgs {
+    #[command(flatten)]
+    args: Args,
+    /// Finish the rebase stopped at a conflict, then Gate and push
+    #[arg(long = "continue", conflicts_with = "abort")]
+    resume: bool,
+    /// Give up the rebase stopped at a conflict
+    #[arg(long)]
+    abort: bool,
 }
 
 #[derive(clap::Args, Debug)]

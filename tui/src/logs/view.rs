@@ -28,11 +28,13 @@ pub struct Log {
     selected: Option<i64>,
     /// The selected Event is to be scrolled into view by the next [`Log::fit`], which knows the height.
     reveal: bool,
+    /// The error of the last failed read (one row), shown in the last row until a read succeeds.
+    pub error: Option<String>,
 }
 
 impl Log {
     pub fn new(events: Vec<Event>) -> Log {
-        Log { events, scroll: Scroll::default(), follow: true, selected: None, reveal: false }
+        Log { events, scroll: Scroll::default(), follow: true, selected: None, reveal: false, error: None }
     }
 
     /// The view opened at the Event `id`: its line is selected and, at the first [`Log::fit`], scrolled to the middle of
@@ -61,9 +63,9 @@ impl Log {
         }
     }
 
-    /// The area is `height` rows tall, the title's row included.
+    /// The area is `height` rows tall, the title's row included, and its last row for the error while there is one.
     pub fn fit(&mut self, height: u16) {
-        let page = usize::from(height.saturating_sub(HEADER_ROWS));
+        let page = usize::from(height.saturating_sub(HEADER_ROWS + u16::from(self.error.is_some())));
         self.scroll.resize(self.events.len(), page);
         if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected) {
             if let Some(i) = self.events.iter().position(|e| e.id == id) {
@@ -96,7 +98,8 @@ impl Log {
         self.settle();
     }
 
-    /// A key press: ↑ or k, ↓ or j, PgUp, PgDn scroll (the kit's keys). Whether the key was one of these.
+    /// A key press: ↑ or k, ↓ or j, PgUp, PgDn scroll; End or G goes to the bottom, which follows (the kit's keys).
+    /// Whether the key was one of these.
     pub fn key(&mut self, key: KeyEvent) -> bool {
         let scrolled = self.scroll.key(key);
         self.settle();
@@ -145,10 +148,19 @@ fn line(e: &Event, width: usize) -> Line<'static> {
     Line::from(vec![" ".into(), dim(clock(&e.at)), " ".into(), Span::styled(text, style)])
 }
 
-/// Draws the title, then the visible Events, in `area`. Call [`Log::fit`] with its height first.
+/// Draws the title, then the visible Events, in `area`, and the error in its last row. Call [`Log::fit`] with its
+/// height first.
 pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let [head, area] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
     f.render_widget(Paragraph::new(section_header("logs", usize::from(head.width))), head);
+    let area = match &log.error {
+        Some(error) => {
+            let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
+            f.render_widget(Paragraph::new(Span::styled(format!(" {error}"), palette::note())), foot);
+            events
+        }
+        None => area,
+    };
     let lines: Vec<Line<'static>> = if log.events.is_empty() {
         vec![Line::from(dim(" none yet"))]
     } else {
@@ -200,6 +212,36 @@ mod tests {
     fn shown(log: &mut Log, height: u16) -> Vec<String> {
         log.fit(height);
         log.visible().iter().map(|e| e.text.clone()).collect()
+    }
+
+    /// tui-G1: the log's keys are the Worker and history views' (the kit's), `End` and `G` included.
+    #[test]
+    fn end_and_g_go_to_the_bottom_and_follow_again() {
+        let mut log = Log::new(events(10));
+        log.fit(5);
+        assert!(log.key(key(KeyCode::Char('k'))));
+        assert!(!log.follows());
+        assert!(log.key(key(KeyCode::End)));
+        assert!(log.follows(), "End follows the bottom again");
+        assert_eq!(log.visible().last().unwrap().id, 10);
+        assert!(log.key(key(KeyCode::PageUp)));
+        assert!(log.key(key(KeyCode::Char('G'))));
+        assert!(log.follows(), "so does G");
+    }
+
+    /// tui-W4: the error of a failed read takes the last row; the Events keep the rows above it.
+    #[test]
+    fn the_error_takes_the_last_row_until_it_is_cleared() {
+        let mut log = Log::new(events(10));
+        log.fit(5);
+        assert_eq!(log.page(), 4);
+        log.error = Some("no such table: events".into());
+        log.fit(5);
+        assert_eq!(log.page(), 3);
+        assert_eq!(log.visible().last().unwrap().id, 10, "still at the bottom");
+        log.error = None;
+        log.fit(5);
+        assert_eq!(log.page(), 4);
     }
 
     #[test]
