@@ -36,3 +36,33 @@ impl RepoTests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(text: &str) -> Result<RepoTests, String> {
+        let tests: RepoTests = toml::from_str(text).map_err(|e| e.to_string())?;
+        tests.validate()?;
+        Ok(tests)
+    }
+
+    #[test]
+    fn build_and_run_are_required_and_list_is_optional() {
+        let tests = parse("build = \"true\"\nrun = \"echo {{ tests }}\"\n").unwrap();
+        assert_eq!((tests.build.as_str(), tests.list), ("true", None));
+        assert!(parse("build = \"true\"\nrun = \"true\"\nlist = \"grep -q {{ test }}\"\n").is_ok());
+        assert!(parse("build = \"true\"\n").unwrap_err().contains("run"));
+        assert!(parse("run = \"true\"\n").unwrap_err().contains("build"));
+    }
+
+    #[test]
+    fn list_must_use_the_variable_test_and_no_other_key_is_known() {
+        let err = parse("build = \"true\"\nrun = \"true\"\nlist = \"true\"\n").unwrap_err();
+        assert!(err.contains("list") && err.contains("test"), "{err}");
+        // `tests` is the plural of `run`, not `list`'s variable.
+        assert!(parse("build = \"true\"\nrun = \"true\"\nlist = \"{{ tests }}\"\n").is_err());
+        assert!(parse("build = \"true\"\nrun = \"true\"\nextra = \"x\"\n").unwrap_err().contains("extra"));
+        assert!(parse("build = \" \"\nrun = \"true\"\n").unwrap_err().contains("build"));
+    }
+}

@@ -214,6 +214,12 @@ impl Fx {
     /// [`Fx::submitted_on`] for a Job of `kind`, whose Attempt commits `change` (a path and its content) or, when there is none,
     /// nothing: an `open` or `update` Worker whose base did not move submits the Lead tip as it is (contract §7.7).
     fn submitted_as(&self, pr: &Pr, key: &str, kind: &str, change: Option<(&str, &str)>) -> (AttemptId, PathBuf) {
+        self.submitted_needing(pr, key, kind, change, None)
+    }
+
+    /// [`Fx::submitted_as`] for a Job that needs the merged `test` Job `t`, whose `test_files` are `guarded` (a JSON array): `t` and the
+    /// Dependency are written in the Job's own transaction (a Dependency of a Locked Job is refused later, `dependencies_locked`).
+    fn submitted_needing(&self, pr: &Pr, key: &str, kind: &str, change: Option<(&str, &str)>, guarded: Option<&str>) -> (AttemptId, PathBuf) {
         let attempt = AttemptId::parse(&format!("{key}-a1")).unwrap();
         let setup = Setup { timeout: Duration::from_secs(30), log: self.env.root().join("attempt.log") };
         let made = create_attempt_worktree(&pr.repo, &pr.lead, &plan(), &attempt, &setup).unwrap();
@@ -229,6 +235,16 @@ impl Fx {
                      VALUES ('pay', ?4, ?1, 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', ?5, ?6, ?2, ?3, 't')",
                     params![key, "f".repeat(64), tx.id(), pr.key, i64::from(kind != "work"), kind],
                 )?;
+                if let Some(files) = guarded {
+                    tx.execute(
+                        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
+                                           fingerprint, created_txn, created_at, kind, tests, test_files, merged_sha)
+                         VALUES ('pay', ?1, 't', 'T', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, printf('%064d', 1),
+                                 ?2, 't', 'test', '[\"t::one\"]', ?3, 'c0ffee')",
+                        params![pr.key, tx.id(), files],
+                    )?;
+                    tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', ?1, 't')", params![key])?;
+                }
                 tx.execute(
                     "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha,
                                            submitted_sha, submitted_at, started_at, driver_pid)
@@ -593,6 +609,31 @@ fn tampered_when_the_diff_touches_a_protected_path() {
     assert_eq!(fx.lead_sha(), old);
     let data = fx.assert_failed(&attempt, "api", "tampered");
     assert!(data["detail"].as_str().unwrap().contains(".config/wt.toml"));
+}
+
+#[test]
+fn an_impl_jobs_diff_that_changes_a_guarded_red_test_ends_tampered_unless_the_lead_approved_the_path() {
+    // Contract §7.5, §7.7: the files of the `test` Jobs an `impl` Job needs are guarded at the merge as at the submit.
+    for (approved, tampered) in [(None, true), (Some("[\"tests/\"]"), false)] {
+        let fx = fx();
+        fx.advance_lead("tests/t.rs", "// red\n");
+        let (attempt, _) = fx.submitted_needing(&fx.first_pr(), "api", "impl", Some(("tests/t.rs", "// edited to pass\n")), Some("[\"tests/\"]"));
+        if let Some(paths) = approved {
+            fx.store().write("fixture", |tx| exec(tx, &format!("UPDATE jobs SET test_approved = '{paths}' WHERE key = 'api'"))).unwrap();
+        }
+        let old = fx.lead_sha();
+
+        let result = fx.merge(&attempt);
+
+        if tampered {
+            assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
+            assert_eq!(fx.lead_sha(), old);
+            let data = fx.assert_failed(&attempt, "api", "tampered");
+            assert!(data["detail"].as_str().unwrap().contains("tests/t.rs"), "{data}");
+        } else {
+            assert!(matches!(result.end, End::Merged { .. }), "an approved path is merged: {result:?}");
+        }
+    }
 }
 
 #[test]
