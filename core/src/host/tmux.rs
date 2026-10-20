@@ -9,6 +9,14 @@
 //! (exit 1) with `argv`, `exit` and the last 60 lines of stderr (commands.md §1.3).
 //! A call that runs past [`DEADLINE`] is killed and fails `tool_timeout` (§6.3),
 //! except the [`INTERACTIVE`] ones.
+//!
+//! Every call is a UTF-8 client, whatever the caller's locale (hs-d463; contract
+//! §6.1): the argv is `tmux -u -L <socket> -f /dev/null …`. Without a UTF-8 locale
+//! tmux prints the tabs of a `-F` format as `_`, and `list-panes` then fails to
+//! parse. `-u` and not `LANG`: tmux reads `LC_ALL` before `LANG`, and `-u` needs no
+//! installed locale. This file is the one place that spawns tmux (`Tmux::argv`,
+//! `Tmux::command`, `client`, which `installed_version` and `doctor` use); a test
+//! refuses a spawn of tmux anywhere else.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

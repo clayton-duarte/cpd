@@ -11,6 +11,22 @@
 # existing real directory to pi.legacy (two renames in one process, not atomic, once). Layout,
 # migration, cleanup and what pi sees: contract §3.7 "The adapter swap";
 # algorithm and tests: docs/implementing.md "The adapter swap".
+#
+# Engine order (hs-d463; contract §3.7 "The install's engine order", docs/implementing.md
+# "The install's engine order"): the running engine is never stopped before the new
+# binary is known to be able to start one. After the swap: `cpd config`, then
+# `cpd watch --check` (read-only: config, store, tmux listing, the home); a failure
+# prints "the engine was not touched" and runs no kill-window. Then `cpd tui --respawn`
+# (its own check before its first respawn-pane -k), then retire the old engine
+# (kill-window, wait for locks/watch.lock, bounded) and start the new one (`watch
+# --ensure` once, then check the lock is held). A failure after the kill-window says
+# "the old engine was stopped and no engine is running"; every failure prints
+# `cpd install follow-up failed: ...` and the exit is non-zero at the end.
+#
+# Every tmux call is a UTF-8 client (hs-d463; contract §6.1): `tmux -u`, in the one
+# function `tmx` below, whatever LANG/LC_ALL the caller has (a launchd agent sets only
+# PATH, and without a UTF-8 locale tmux prints the -F tabs as `_`).
+# scripts/check-portable.sh refuses a bare `tmux` in this file.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)

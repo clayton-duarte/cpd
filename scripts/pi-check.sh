@@ -19,6 +19,14 @@
 #   PI_CODING_AGENT_DIR PI_OFFLINE PI_SKIP_VERSION_CHECK CPD_SESSION CPD_HOME,
 #   which it sets itself): no provider key, no proxy, no base URL.
 # - It runs on macOS too: scripts/check-portable.sh covers this file.
+# - A pass stays a pass (hs-d463; docs/implementing.md "Checking a pi version"): the
+#   exit status is fixed before the cleanup runs and the cleanup cannot change it.
+#   The cleanup kills the private tmux server and waits (2 s, then SIGKILL of the
+#   pane's process group, 1 s) for its processes, retries `rm -rf` every 0.5 s for
+#   at most PI_CHECK_CLEANUP_SECS (default 5), and on failure only warns
+#   (`pi-check: warning: could not remove <tmp>`); it never prints FAIL.
+# - Every tmux call is a UTF-8 client (hs-d463; contract §6.1): `tmux -u`, in the one
+#   function `tmx`, whatever LANG/LC_ALL the caller has.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
