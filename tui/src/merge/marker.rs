@@ -64,12 +64,10 @@ pub fn live(home: &CpdHome) -> BTreeSet<String> {
         .collect()
 }
 
-/// A marker file's content; `at` is for the reader of the file, no view uses it.
+/// A marker file's content: only the `pid` is read (`at` is for whoever reads the file).
 #[derive(Deserialize)]
 struct Marker {
     pid: i64,
-    #[allow(dead_code)]
-    at: String,
 }
 
 /// The directory of the markers.

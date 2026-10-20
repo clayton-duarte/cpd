@@ -67,6 +67,10 @@ impl crate::menu::Entry for PrItem {
             PrItem::GoToLead => "Go to Lead",
         }
     }
+
+    fn busy(self) -> bool {
+        self == PrItem::Merging
+    }
 }
 
 /// A PR row on the screen, whatever its owner: a right click on its two lines opens its menu.
