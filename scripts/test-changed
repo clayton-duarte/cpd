@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stub (Plan quality, lp-tests): the behaviour is docs/implementing.md "The scoped loop";
+# lp-scoped implements it. Until then it does nothing and fails.
+echo "scripts/test-changed: not implemented yet (docs/implementing.md \"The scoped loop\")" >&2
+exit 1
