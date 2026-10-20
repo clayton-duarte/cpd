@@ -9,8 +9,8 @@ import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
  * Every cpd message in a pi pane is one fold, drawn like every block that folds: a bold title led by a muted `╭` and `⦁`; expanded, each
- * content line led by a muted `│ ` and a muted `╰󰁣 collapse` line; folded, a muted `╰󰁋 expand` line (hs-d484: U+F0063 and U+F004B, the
- * cockpit's own toggle, `toggle` in `tui/src/fold.rs`; glyphs `UP` / `DOWN` in `tui/src/tree/look.rs`; contract §5.3). Today's code still draws `╰─`. Colours come from pi's theme (`muted`, bold).
+ * content line led by a muted `│ ` and a muted `╰󰁣 collapse` line; folded, a muted `╰󰁋 expand` line (U+F0063 and U+F004B, the
+ * cockpit's own toggle, `toggle` in `tui/src/fold.rs`; glyphs `UP` / `DOWN` in `tui/src/tree/look.rs`; contract §5.3). Colours come from pi's theme (`muted`, bold).
  * Expanding is pi's own mechanism, the renderer's `expanded` option (Ctrl+O), plus a left click anywhere on the message: pi gives the
  * renderer one mouse region per message, so the click cannot be limited to the toggle line. Display only: the message's `content` and
  * `details` are read, never changed. The style `off` (pi-compact-tools' config) still hands the message to pi's own box.
@@ -165,11 +165,13 @@ const withinWidth = (lines: string[], width: number): string[] => lines.map((l) 
 
 // ---- the fold ----
 
-const INDICATOR = "⦁";
+const INDICATOR = "\u{2981}";
 const MARGIN = " ";
 const TOP = "╭";
 const RAIL = "│ ";
-const CLOSE = "╰─";
+const CLOSE = "╰";
+const DOWN = "\u{F004B}";
+const UP = "\u{F0063}";
 const EXPAND = "expand";
 const COLLAPSE = "collapse";
 
@@ -185,7 +187,7 @@ function rowsOf(summary: string, content: string, theme: Theme): Rows {
   return {
     head: (width) => hardWrap(theme.bold(`cpd ${summary}`), width - visibleWidth(lead)).map((l, i) => `${i === 0 ? lead : indent}${l}`),
     body: text === "" ? () => [] : prefixedText(text, rail),
-    toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE} ${expanded ? COLLAPSE : EXPAND}`)}`],
+    toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE}${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`)}`],
   };
 }
 
