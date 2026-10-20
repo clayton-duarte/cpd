@@ -499,8 +499,13 @@ fn places() -> Vec<(String, String)> {
     PLACES.iter().map(|(s, w)| ((*s).to_owned(), (*w).to_owned())).collect()
 }
 
+macro_rules! rstress { ($($n:ident),*) => { $( #[test] fn $n() { safe_restart_body() } )* } }
+rstress!(rstress_0, rstress_1, rstress_2, rstress_3, rstress_4, rstress_5, rstress_6, rstress_7);
 #[test]
 fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_place_and_plain_tmux_attaches() {
+    safe_restart_body()
+}
+fn safe_restart_body() {
     let env = env();
     fake_cpd_with_sleeping_sessions(&env);
     let flag = older_server(&env);
@@ -513,6 +518,7 @@ fn when_it_is_safe_an_older_server_is_restarted_every_session_comes_back_in_its_
 
     let t = run_in_terminal(&env, "restart", false, "");
     assert_eq!(t.exit_code(), 0, "{}", t.stderr());
+    eprintln!("TEMP-STDERR {}", t.stderr());
     assert_eq!(kill_server_calls(&env), 0, "the old server is killed by its own binary, not by the installed tmux on PATH");
     assert_ne!(server_pid(&env), before, "the server was not restarted");
     assert_eq!(session_windows(&env), places());
@@ -807,3 +813,18 @@ fn a_real_older_tmux_server_is_restarted_onto_the_installed_tmux() {
     wait_idle_in_live_panes(&env, &["lead1", "lead2", "manager1"]);
     assert!(!pending_file(&env).exists());
 }
+
+// TEMP-STRESS
+fn stress_tui_body() {
+    let mut bad = Vec::new();
+    for i in 0..12 {
+        let env = env();
+        let run = env.cpd(&["tui"]);
+        if run.exit != 0 || !run.stdout.contains("\"ok\":true") {
+            bad.push(format!("iter {i} load {}: {run:?}", std::fs::read_to_string("/proc/loadavg").unwrap()));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+macro_rules! stress { ($($n:ident),*) => { $( #[test] fn $n() { stress_tui_body() } )* } }
+stress!(stress_tui_0, stress_tui_1, stress_tui_2, stress_tui_3, stress_tui_4, stress_tui_5, stress_tui_6, stress_tui_7, stress_tui_8, stress_tui_9, stress_tui_10, stress_tui_11);
