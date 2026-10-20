@@ -3,8 +3,9 @@
 //! `all_merged_at` null gets `all-merged` `{pr, merged, cancelled}` and that
 //! `all_merged_at`, once. A `draft` is an unapproved batch: the PR waits for it.
 //! `all-merged` is steered to the Lead (§5.3, hs-d334); a PR still in `dispatch`
-//! `pr_open_escalate_minutes` after it is escalated to the Context's Manager,
-//! once per all-merged moment ([`escalate`]).
+//! `pr_open_escalate_minutes` after its clock start is escalated to the Context's Manager,
+//! once per all-merged moment ([`escalate`]). A stacked PR's clock starts only once its base PR is
+//! open or merged ([`clock_start`], hs-d301).
 
 use super::SOURCE;
 use super::engine::Engine;
@@ -102,7 +103,13 @@ fn complete(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrKey) -> Result<bool, CpdErr
 }
 
 /// A PR whose Jobs are all merged and which is still in `dispatch`: E4's escalation looks at it.
-const WAITING: &str = "SELECT r.plan, r.key, r.all_merged_at, p.title, p.context, p.lead_session FROM prs r JOIN plans p ON p.id = r.plan
+/// The base PR `q` is the PR of the same repo whose Lead Branch is this PR's base (§2.2); the last column is the latest
+/// `pr-base-changed` of this PR that had a base PR before.
+const WAITING: &str = "SELECT r.plan, r.key, r.all_merged_at, p.title, p.context, p.lead_session,
+         q.key IS NOT NULL, CASE WHEN q.status IN ('open', 'merged') THEN COALESCE(q.pr_opened_at, q.merged_at) END,
+         (SELECT e.at FROM events e WHERE e.kind = 'pr-base-changed' AND e.plan = r.plan AND json_extract(e.data, '$.pr') = r.key
+            AND json_extract(e.data, '$.from_pr') IS NOT NULL ORDER BY e.id DESC LIMIT 1)
+  FROM prs r JOIN plans p ON p.id = r.plan LEFT JOIN prs q ON q.repo = r.repo AND q.lead_branch = r.base
   WHERE r.status = 'dispatch' AND r.all_merged_at IS NOT NULL
     AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.status IN ('draft', 'queued', 'running'))
   ORDER BY r.plan, r.key";
@@ -133,30 +140,83 @@ enum Escalated {
     NoManager,
 }
 
-/// The PRs of `waiting` unopened for at least `limit` minutes at `now`, with their age in whole minutes.
-fn overdue(rows: Vec<(String, String, String, String, String, String)>, now: OffsetDateTime, limit: u32) -> Result<Vec<Waiting>, CpdError> {
+/// What E4's escalation reads of a PR in [`WAITING`].
+struct Row {
+    plan: String,
+    pr: String,
+    all_merged_at: String,
+    title: String,
+    context: String,
+    lead: String,
+    /// Its base is another PR's Lead Branch.
+    stacked: bool,
+    /// When that base PR became ready (open or merged); null while it is not.
+    base_ready_at: Option<String>,
+    /// The `at` of its latest `pr-base-changed` that had a base PR before.
+    unstacked_at: Option<String>,
+}
+
+fn time(row: &Row, what: &str, at: &str) -> Result<OffsetDateTime, CpdError> {
+    OffsetDateTime::parse(at, &Rfc3339).map_err(|e| {
+        CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid value: PR {} of Plan {} has {what} {at:?}: {e}.", row.pr, row.plan))
+    })
+}
+
+/// When the PR's escalation clock starts (contract §3.7 E4, hs-d301): the later of `all_merged_at` and, for a stacked
+/// PR, the moment its base PR was ready (`None`: it is not, so there is no clock); for a PR unstacked by its base PR's
+/// merge, the latest repoint instead. A PR never stacked has `all_merged_at` alone.
+fn clock_start(row: &Row) -> Result<Option<OffsetDateTime>, CpdError> {
+    let all_merged = time(row, "all_merged_at", &row.all_merged_at)?;
+    let candidate = match (row.stacked, &row.base_ready_at, &row.unstacked_at) {
+        (true, None, _) => return Ok(None),
+        (true, Some(at), _) => Some(time(row, "a base PR ready at", at)?),
+        (false, _, Some(at)) => Some(time(row, "a pr-base-changed at", at)?),
+        (false, _, None) => None,
+    };
+    Ok(Some(candidate.map_or(all_merged, |c| c.max(all_merged))))
+}
+
+/// The PRs of `rows` unopened for at least `limit` minutes at `now`, with the age of their clock start in whole minutes.
+fn overdue(rows: Vec<Row>, now: OffsetDateTime, limit: u32) -> Result<Vec<Waiting>, CpdError> {
     let mut out = Vec::new();
-    for (plan, pr, at, title, context, lead) in rows {
-        let at = OffsetDateTime::parse(&at, &Rfc3339).map_err(|e| {
-            CpdError::new(ErrorCode::StoreFailed, format!("The store holds an invalid value: PR {pr} of Plan {plan} has all_merged_at {at:?}: {e}."))
-        })?;
-        let minutes = (now - at).whole_minutes();
+    for row in rows {
+        let Some(start) = clock_start(&row)? else { continue };
+        let minutes = (now - start).whole_minutes();
         if minutes >= i64::from(limit) {
-            out.push(Waiting { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, title, context: ContextId::parse(&context)?, lead: SessionId::parse(&lead)?, minutes });
+            out.push(Waiting {
+                plan: PlanId::parse(&row.plan)?,
+                pr: PrKey::parse(&row.pr)?,
+                title: row.title,
+                context: ContextId::parse(&row.context)?,
+                lead: SessionId::parse(&row.lead)?,
+                minutes,
+            });
         }
     }
     Ok(out)
 }
 
 /// E4's second half (§3.7, hs-d334): each PR in `dispatch` with no Job to run, `pr_open_escalate_minutes` after its
-/// `all-merged`, is told once to the Context's Manager; with no Manager, to the Lead as an `error` (the step rule).
+/// clock start ([`clock_start`]), is told once to the Context's Manager; with no Manager, to the Lead as an `error` (the step rule).
 fn escalate_all(engine: &mut Engine) {
     let now = OffsetDateTime::now_utc();
     let limit = engine.config.pr_open_escalate_minutes;
     let due = engine.store.read(|conn| {
         let mut stmt = conn.prepare(WAITING)?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+            .query_map([], |r| {
+                Ok(Row {
+                    plan: r.get(0)?,
+                    pr: r.get(1)?,
+                    all_merged_at: r.get(2)?,
+                    title: r.get(3)?,
+                    context: r.get(4)?,
+                    lead: r.get(5)?,
+                    stacked: r.get(6)?,
+                    base_ready_at: r.get(7)?,
+                    unstacked_at: r.get(8)?,
+                })
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         overdue(rows, now, limit)
     });
