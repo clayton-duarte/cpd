@@ -9,6 +9,8 @@
 //! - [`action`]: the merge the confirm starts, in the background: `pr merge`, then `pr poll`; a failed merge opens
 //!   the cockpit's one failure dialog ([`dialog::show_error_on`]), a failed poll is a line of the log.
 
+pub mod marker;
+
 use std::ffi::OsString;
 use std::fmt;
 
@@ -281,8 +283,19 @@ fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str
 /// only: the pull request did merge. A failed merge runs no poll; it is a line of the log, written before any tmux
 /// call so that it is always there, then the cockpit's one failure dialog on `client`. The `Err` is what the dialog
 /// could not show: the caller shows it with `display-message -c <client>`.
+///
+/// The merge marker ([`marker`], hs-d495) is written first, before `pr merge`, and removed when the request ends:
+/// after the poll on a success, before the dialog on a failure, on any other exit. While a live marker of `pull`
+/// exists, the action does nothing but log `merge already running`.
 pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
     let log = ViewLog::of(home, LOG);
+    if marker::live(home).contains(&pull.to_string()) {
+        // A merge of it runs: its marker is not this action's to touch, and the User is told nothing.
+        let _ = log.append(&format!("merge already running {pull}"));
+        return Ok(());
+    }
+    marker::write(home, pull)?;
+    let marked = Marked { home, pull };
     let cpd = |words: &[&str]| run_command(std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect());
     let failed = match cpd(&["pr", "merge", &pull.to_string()]) {
         Ok(_) => {
@@ -294,12 +307,26 @@ pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run
         }
         Err(e) => e,
     };
+    // The request has ended: the spinner goes before the dialog opens.
+    drop(marked);
     let mut text = format!("merge {pull}: {}: {}", failed.code(), failed.message());
     if let Err(unwritten) = log.append(&text) {
         text = format!("{text}\n{unwritten}");
     }
     dialog::show_error_on(tmux, client, &format!("merge {pull}"), &text)
         .map_err(|unshown| CpdError::new(unshown.code(), text).with("dialog", unshown.message()))
+}
+
+/// The marker of a merge this process runs, removed when it is dropped: no exit, a panic included, leaves it behind.
+struct Marked<'a> {
+    home: &'a CpdHome,
+    pull: &'a Pull,
+}
+
+impl Drop for Marked<'_> {
+    fn drop(&mut self) {
+        marker::remove(self.home, self.pull);
+    }
 }
 
 #[cfg(test)]

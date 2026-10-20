@@ -197,7 +197,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318). `engine-down`
 /// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
-/// one); the `url` is copied for `review-requested` (their OSC 8 link stays for the
+/// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (their OSC 8 link stays for the
 /// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
@@ -209,6 +209,14 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         Kind::PlanReview => {
             let open = open_lead(tree, item.plan.as_ref()?)?;
             // with no port file yet there is no page to copy: the Lead opens, and nothing else happens
+            Some(match item.url.as_ref() {
+                Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
+                None => Jump::Run(open),
+            })
+        }
+        // hs-d496: the Session that opened the plannotator session, then the review page's url (when known)
+        Kind::ReviewWaiting => {
+            let open = open_or_history(tree, item.session.as_ref()?);
             Some(match item.url.as_ref() {
                 Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
                 None => Jump::Run(open),
@@ -229,19 +237,24 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
 
 /// The kinds whose label is an OSC 8 link to the item's `url`.
 fn is_link(kind: Kind) -> bool {
-    matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::ReviewRequested)
+    matches!(kind, Kind::PlanReview | Kind::ReviewWaiting | Kind::PrReady | Kind::ReviewRequested)
 }
 
 /// An item's row: the fold's muted `│`, two spaces, the item's tier glyph in its urgency's colour, a space, the label cut with
 /// `…` so that it never reaches the age, and the age. Returns the line and the number of cells of the label.
-fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
+/// A merge of the item's pull request runs (hs-d495): `spin` is the spinner's frame, and the glyph cell shows it.
+fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line<'static>, usize) {
     let room = width.saturating_sub(LEAD_WIDTH + 1 + age.chars().count());
     let label = truncate(&item.label, room);
     let label_width = label.chars().count();
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
+    let mut glyph = palette::tier_span(item.urgency);
+    if let Some(frame) = spin {
+        glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();
+    }
     let line = fold::content(fold::BRANCH, Line::from(vec![
         "  ".into(),
-        palette::tier_span(item.urgency),
+        glyph,
         " ".into(),
         label.into(),
         " ".repeat(gap).into(),
@@ -258,8 +271,9 @@ fn cue_line(which: Cue, n: usize, width: usize) -> Line<'static> {
 /// Draws the section into `area`, the panel's full width (its first row is the empty one; rows that do not fit are cut;
 /// the title keeps the padding of one column on each side, the rows are drawn inside it): `items` are the
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
-/// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled.
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime) {
+/// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled. `spinning` says, of an
+/// item whose merge runs, the frame of the spinner its glyph cell shows instead of its tier glyph (hs-d495).
+pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) {
     let win = shape.window();
     let list = shape.list_rows();
     for dy in 0..area.height.min(shape.height()) {
@@ -273,7 +287,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
             }
             Some(Hit::Item(i)) => {
                 let item = &items[i];
-                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), width);
+                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), width, spinning(item));
                 f.render_widget(Paragraph::new(line), row);
                 if cursor == Some(i) {
                     f.buffer_mut().set_style(row, Modifier::REVERSED);
@@ -528,7 +542,7 @@ mod tests {
         let url = "https://github.com/acme/api/pull/12";
         let mut linked = item(1, Kind::ReviewRequested, Urgency::Red, "api#12 failing", OPENED);
         linked.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         let bytes = sink.0.borrow().clone();
         let pieces: String = ["ap", "i#", "12", " f", "ai", "li", "ng"]
             .iter()
@@ -547,8 +561,46 @@ mod tests {
         let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
         dialog.url = Some(url.into());
         let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
-        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
+    }
+
+    // ---- review-waiting (hs-d496): the click opens the item's Session then copies its url; the label is an OSC 8 link ----
+
+    #[test]
+    fn a_review_waiting_click_opens_its_session_then_copies_its_url() {
+        let tree = sample();
+        let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "pn:m-alpha/pn-0a1b2c", OPENED);
+        waiting.session = Some(sid("m-alpha"));
+        waiting.url = Some("http://review.example:20000/".into());
+        assert_eq!(
+            jump(&tree, &waiting),
+            Some(Jump::Steps(vec![Action::Open(sid("m-alpha")), Action::CopyUrl("http://review.example:20000/".into())])),
+            "the Session first, then the page's url"
+        );
+        waiting.url = None;
+        assert_eq!(jump(&tree, &waiting), Some(Jump::Run(Action::Open(sid("m-alpha")))), "no url: the Session opens and nothing else happens");
+        waiting.session = None;
+        assert_eq!(jump(&tree, &waiting), None, "no Session: nowhere to go");
+        let mut archived_session = item(2, Kind::ReviewWaiting, Urgency::Magenta, "pn:f-blocked/pn-0a1b2c", OPENED);
+        archived_session.session = Some(sid("f-blocked"));
+        assert_eq!(jump(&archived(), &archived_session), Some(Jump::Run(Action::History(sid("f-blocked")))), "an archived Session shows its history");
+    }
+
+    #[test]
+    fn a_review_waiting_label_is_written_as_an_osc_8_link() {
+        let sink = Sink::default();
+        let mut terminal = Terminal::with_options(
+            CrosstermBackend::new(sink.clone()),
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
+        )
+        .unwrap();
+        let url = "http://review.example:20000/";
+        let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "ab", OPENED);
+        waiting.url = Some(url.into());
+        terminal.draw(|f| draw(f, f.area(), &[waiting], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
+        let text = printed(&sink.0.borrow());
+        assert!(text.contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "the label is a link to the review page: {text:?}");
     }
 
     // ---- spacing v2 (hs-d476): the section is a collapsible widget with an empty row above and one below; red until `Shape` has the row below ----
@@ -586,7 +638,7 @@ mod tests {
     fn with_no_item_the_section_is_the_title_with_count_0_then_the_one_closing_row_and_it_is_no_click() {
         use ratatui::backend::TestBackend;
         let mut terminal = Terminal::new(TestBackend::new(41, 6)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"), &|_| None)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let row = |y: u16| (0..41).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
         let title = format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(39 - 2 - 2 - "Inbox".len() - 3));

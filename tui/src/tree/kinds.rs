@@ -35,6 +35,8 @@ pub const KINDS: &[Kind] = &[
     Kind::Escalation,
     Kind::EscalationAnswered,
     Kind::EscalationExpired,
+    Kind::ReviewOpened,
+    Kind::ReviewClosed,
     Kind::SessionRegistered,
     Kind::SessionState,
     Kind::SessionMoved,

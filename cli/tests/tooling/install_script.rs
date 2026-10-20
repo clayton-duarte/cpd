@@ -593,8 +593,7 @@ use std::time::{Duration, SystemTime};
 
 /// The first `python3` of the real `PATH`.
 fn real_python3() -> PathBuf {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).map(|dir| dir.join("python3")).find(|p| p.is_file()).expect("python3 on PATH")
+    std::env::split_paths(common::inherited_path()).map(|dir| dir.join("python3")).find(|p| p.is_file()).expect("python3 on PATH")
 }
 
 /// A `python3` first on `PATH` that behaves as macOS's: `ctypes.CDLL(None).renameat2` raises
@@ -900,12 +899,12 @@ fn a_pi_that_is_a_regular_file_is_refused_before_the_binary_is_replaced() {
 fn path_without_python3(env: &TestEnv) -> String {
     let tools = env.root().join("tools");
     fs::create_dir_all(&tools).unwrap();
-    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = common::inherited_path();
     for tool in [
         "git", "sed", "grep", "cmp", "basename", "dirname", "cp", "mv", "rm", "mkdir", "mktemp", "cat", "chmod", "date", "find", "ln", "readlink", "sleep", "kill", "tr",
         "uname", "env", "tmux", "flock", "touch", "true", "false", "test", "head", "tail", "id", "wc", "sort", "awk", "sh", "printf", "echo", "ls", "pwd", "expr",
     ] {
-        if let Some(found) = std::env::split_paths(&path).map(|d| d.join(tool)).find(|p| p.is_file()) {
+        if let Some(found) = std::env::split_paths(path).map(|d| d.join(tool)).find(|p| p.is_file()) {
             let _ = symlink(found, tools.join(tool));
         }
     }
@@ -1293,4 +1292,59 @@ fn a_mark_restart_that_fails_is_printed_and_the_retirement_goes_on() {
     );
     assert_eq!(lines_with(&log, "kill-window").len(), 1, "the retirement went on: {log:?}");
     assert_eq!(lines_with(&log, "cpd watch --ensure").len(), 1, "{log:?}");
+}
+
+// ---- The compact-tools extension travels with the adapter (contract §6.9; docs/implementing.md "The compact-tools extension" point 5) ----
+//
+// The install copies `pi/` minus `test/`: `pi/compact-tools/` (the sources, the schema, LICENSE, NOTICE) is installed whole, so the
+// installed `package.json`'s entry resolves, and `pi/test/compact-tools/` goes with `pi/test`. These run the install over the real
+// `pi/` of this checkout, not the small adapter of the `Checkout` fixture.
+
+/// The checkout's `pi/` replaced by a copy of this repository's own `pi/`.
+fn real_adapter(checkout: &Checkout) {
+    let ours = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../pi"));
+    let pi = checkout.root.join("pi");
+    fs::remove_dir_all(&pi).unwrap();
+    let copied = Command::new("cp").arg("-R").arg(ours).arg(&pi).status().unwrap();
+    assert!(copied.success(), "cp -R {} {}", ours.display(), pi.display());
+}
+
+/// Every directory under `dir` (at any depth) named `name`.
+fn directories_named(dir: &Path, name: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            if path.file_name().is_some_and(|n| n == name) {
+                found.push(path.clone());
+            }
+            found.extend(directories_named(&path, name));
+        }
+    }
+    found
+}
+
+#[test]
+fn an_install_carries_the_compact_tools_extension_listed_in_its_package_json_and_leaves_every_test_directory_out() {
+    let env = TestEnv::new();
+    let checkout = Checkout::new(&env, &[]);
+    real_adapter(&checkout);
+    assert!(checkout.root.join("pi/test/compact-tools").is_dir(), "the source tree has the extension's tests under pi/test/compact-tools");
+
+    let run = install(&env, &checkout, &version("null"));
+
+    assert_eq!(run.exit, 0, "{}", run.stderr);
+    let id = linked_version(&env);
+    let pi = share(&env).join("pi");
+    let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(pi.join("package.json")).unwrap()).unwrap();
+    let extensions: Vec<&str> = manifest["pi"]["extensions"].as_array().unwrap().iter().map(|e| e.as_str().unwrap()).collect();
+    assert_eq!(extensions, ["./extension.ts", "./compact-tools/extensions/compact-tools.ts"], "the installed package.json");
+    for entry in &extensions {
+        assert!(pi.join(entry).is_file(), "the installed entry {entry} resolves");
+    }
+    for file in ["extensions/compact-tools-config.ts", "extensions/compact-tools-double-load.ts", "schemas/compact-tools.schema.json", "LICENSE", "NOTICE", "header.ts"] {
+        assert!(pi.join("compact-tools").join(file).is_file(), "compact-tools/{file} is installed");
+    }
+    // The tests are under pi/test, which the install leaves out whole: pi/test/compact-tools goes with it.
+    assert_eq!(directories_named(&share(&env).join(&id), "test"), Vec::<PathBuf>::new(), "no test directory anywhere under {id}");
 }
