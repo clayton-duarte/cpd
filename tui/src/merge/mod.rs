@@ -1,10 +1,13 @@
-//! The `merge` view (commands.md §13.2; hs-d273): the confirmation of the Deploy column's merge icon, in a tmux
-//! popup. It shows the pull request (`owner/repo#n` and its title, from the store) and the method (`squash`), with
-//! `[Merge]` and `[Cancel]`. Enter or `y`, or a click on `[Merge]`, runs `cpd pr merge <owner>/<repo>#<n>` in this
-//! process (§9.10); Esc, `n`, `q` or a click on `[Cancel]` closes it with nothing done. After a merge it shows the
-//! result, or the command's error message in `palette::note()`, until any key closes it. It writes nothing itself.
+//! The `merge` view (commands.md §13.2; hs-d273, hs-d473): the confirmation of the Deploy column's merge icon, in a
+//! tmux popup. It shows the pull request (`owner/repo#n` and its title, from the store) and the method (`squash`), with
+//! `[Merge]` and `[Cancel]`. Enter or `y`, or a click on `[Merge]`, starts `cpd tui action merge <owner>/<repo>#<n>
+//! --client <name>` with tmux `run-shell -b` and exits, so the popup closes at once; Esc, `n`, `q` or a click on
+//! `[Cancel]` closes it with nothing done. It shows nothing after the confirm and writes nothing itself.
 //!
-//! - [`popup_args`] and [`open`]: the popup, which the merge icon runs.
+//! - [`popup_args`] and [`open`]: the popup, on the newest client, which the merge icon, the menu's Merge and the
+//!   Inbox `pr-ready` item run;
+//! - [`action`]: the merge the confirm starts, in the background: `pr merge`, then `pr poll`; a failed merge opens
+//!   the cockpit's one failure dialog ([`dialog::show_error_on`]), a failed poll is a line of the log.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -17,12 +20,11 @@ use ratatui::crossterm::event::{
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 use rusqlite::OptionalExtension;
 
-use super::widgets::newest_client;
-use super::{RunCommand, not_a_terminal, on_a_terminal};
-use crate::palette;
+use super::viewlog::ViewLog;
+use super::{RunCommand, dialog, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
@@ -41,6 +43,9 @@ const CANCEL: &str = "[Cancel]";
 const BUTTON_ROW: u16 = 4;
 const MERGE_COLUMN: u16 = 2;
 const CANCEL_COLUMN: u16 = MERGE_COLUMN + MERGE.len() as u16 + 3;
+/// The view the merge's log is named after (`$CPD_HOME/run/tui/merge.log`, hs-d364): the action is the `merge`
+/// view's.
+const LOG: &str = "merge";
 
 /// `<owner>/<repo>#<n>`, checked only as far as the view needs it (a `/` in the repository, a positive number);
 /// `pr merge` is the authority on the rest.
@@ -56,7 +61,7 @@ impl Pull {
         Pull::parse(subject.strip_prefix("pr:")?).ok()
     }
 
-    fn parse(text: &str) -> Result<Pull, String> {
+    pub(crate) fn parse(text: &str) -> Result<Pull, String> {
         let bad = || format!("{text:?} is not <owner>/<repo>#<n>, with n a positive integer.");
         let (repo, number) = text.split_once('#').ok_or_else(bad)?;
         let number = number.parse::<i64>().ok().filter(|n| *n > 0).ok_or_else(bad)?;
@@ -79,9 +84,8 @@ pub struct Args {
     /// The pull request to merge
     #[arg(value_name = "owner/repo#n", value_parser = Pull::parse)]
     pull: Pull,
-    /// The tmux client the popup opened on (`#{client_name}`)
+    /// The tmux client the popup opened on (`#{client_name}`), where the merge's failure dialog opens
     #[arg(long)]
-    #[allow(dead_code)] // stub (hs-d473): the confirm passes it to `cpd tui action merge`, which the next Job writes
     client: String,
 }
 
@@ -90,34 +94,17 @@ pub struct Args {
 enum Action {
     Merge,
     Cancel,
-    /// Any key, once the result shows.
-    Close,
 }
 
-/// Where the dialog is.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Phase {
-    Ask,
-    Merging,
-    /// Merged; the string is the reload's error, if the poll failed.
-    Merged(Option<String>),
-    Failed(String),
-}
-
-/// The action of a key press in `phase`, if any.
-fn on_key(phase: &Phase, key: KeyEvent) -> Option<Action> {
-    if key.kind != KeyEventKind::Press {
+/// The action of a key press, if any.
+fn on_key(key: KeyEvent) -> Option<Action> {
+    if key.kind != KeyEventKind::Press || key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
         return None;
     }
-    match phase {
-        Phase::Ask if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => None,
-        Phase::Ask => match key.code {
-            KeyCode::Enter | KeyCode::Char('y') => Some(Action::Merge),
-            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => Some(Action::Cancel),
-            _ => None,
-        },
-        Phase::Merged(_) | Phase::Failed(_) => Some(Action::Close),
-        Phase::Merging => None,
+    match key.code {
+        KeyCode::Enter | KeyCode::Char('y') => Some(Action::Merge),
+        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => Some(Action::Cancel),
+        _ => None,
     }
 }
 
@@ -129,9 +116,9 @@ fn buttons(area: Rect) -> [Rect; 2] {
     [at(MERGE_COLUMN, MERGE), at(CANCEL_COLUMN, CANCEL)]
 }
 
-/// The action of a mouse event in `phase` over a dialog in `area`: a left click on a button.
-fn on_mouse(phase: &Phase, area: Rect, mouse: MouseEvent) -> Option<Action> {
-    if *phase != Phase::Ask || mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+/// The action of a mouse event over a dialog in `area`: a left click on a button.
+fn on_mouse(area: Rect, mouse: MouseEvent) -> Option<Action> {
+    if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
         return None;
     }
     let at = Position::new(mouse.column, mouse.row);
@@ -154,7 +141,7 @@ fn cut(text: &str, width: usize) -> String {
 }
 
 /// Draws the dialog in `area`. `title` is the stored title, if the store has the pull request.
-fn draw(f: &mut Frame, area: Rect, pull: &Pull, title: Option<&str>, phase: &Phase) {
+fn draw(f: &mut Frame, area: Rect, pull: &Pull, title: Option<&str>) {
     let width = usize::from(area.width).saturating_sub(2);
     fn row(f: &mut Frame, area: Rect, n: u16, line: Line<'static>) {
         f.render_widget(Paragraph::new(line), Rect::new(area.x, area.y + n, area.width, 1).intersection(area));
@@ -163,31 +150,10 @@ fn draw(f: &mut Frame, area: Rect, pull: &Pull, title: Option<&str>, phase: &Pha
     if let Some(title) = title {
         row(f, area, 1, Line::from(format!(" {}", cut(title, width))));
     }
-    match phase {
-        Phase::Ask => {
-            row(f, area, 2, Line::from(format!(" method: {METHOD}")));
-            let [merge, cancel] = buttons(area);
-            f.render_widget(Paragraph::new(MERGE).style(Style::new().add_modifier(Modifier::REVERSED)), merge);
-            f.render_widget(Paragraph::new(CANCEL), cancel);
-        }
-        Phase::Merging => row(f, area, 2, Line::from(" merging…")),
-        Phase::Merged(reload) => {
-            row(f, area, 2, Line::from(format!(" Merged {pull} ({METHOD}).")));
-            if let Some(message) = reload {
-                let line = Line::from(Span::styled(format!(" {}", cut(&format!("poll failed: {message}"), width)), palette::note()));
-                row(f, area, 3, line);
-            }
-            row(f, area, 4, Line::from(" any key closes").style(Style::new().add_modifier(Modifier::DIM)));
-        }
-        Phase::Failed(message) => {
-            let body = Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(3)).intersection(area);
-            f.render_widget(
-                Paragraph::new(Line::from(Span::styled(format!(" {message}"), palette::note()))).wrap(Wrap { trim: false }),
-                body,
-            );
-            row(f, area, 4, Line::from(" any key closes").style(Style::new().add_modifier(Modifier::DIM)));
-        }
-    }
+    row(f, area, 2, Line::from(format!(" method: {METHOD}")));
+    let [merge, cancel] = buttons(area);
+    f.render_widget(Paragraph::new(MERGE).style(Style::new().add_modifier(Modifier::REVERSED)), merge);
+    f.render_widget(Paragraph::new(CANCEL), cancel);
 }
 
 /// The popup's size, border included, at most the client's `(columns, rows)`.
@@ -200,31 +166,60 @@ fn sh_quote(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', r"'\''"))
 }
 
-/// The tmux arguments that open the dialog for `arg` (`<owner>/<repo>#<n>`) in a popup on the client `_name`, at most
-/// the client's size `(columns, rows)`. Stub (hs-d473): `_name` is not used yet.
-pub fn popup_args(_name: &str, client: (u16, u16), arg: &str) -> Vec<String> {
+/// The tmux arguments that open the dialog for `arg` (`<owner>/<repo>#<n>`) in a popup on the client `name`, at most
+/// the client's size `(columns, rows)`. The view gets `--client <name>`, for the merge it starts. (tmux does not
+/// expand formats in `display-popup`'s shell command, so the `#` of `arg` stays as it is.)
+pub fn popup_args(name: &str, client: (u16, u16), arg: &str) -> Vec<String> {
     let (w, h) = popup_size(client);
     [
         "display-popup".to_owned(),
         "-E".to_owned(),
+        "-c".to_owned(),
+        name.to_owned(),
         "-T".to_owned(),
         " merge ".to_owned(),
         "-w".to_owned(),
         w.to_string(),
         "-h".to_owned(),
         h.to_string(),
-        format!("{PROGRAM} tui view merge {}", sh_quote(arg)),
+        "--".to_owned(),
+        format!("{PROGRAM} tui view merge {} --client {}", sh_quote(arg), sh_quote(name)),
     ]
     .to_vec()
 }
 
-/// The merge icon's click, and an Inbox `pr-ready` item's: the dialog for `arg` in a tmux popup over the cockpit.
+/// The name and the size `(columns, rows)` of the most recently active client in `list-clients`'
+/// `#{client_activity} #{client_width} #{client_height} #{client_name}` lines.
+fn newest_named_client(listing: &str) -> Option<(String, (u16, u16))> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.splitn(4, ' ');
+            let activity: u64 = words.next()?.parse().ok()?;
+            let size = (words.next()?.parse().ok()?, words.next()?.parse().ok()?);
+            Some((activity, words.next().filter(|n| !n.is_empty())?.to_owned(), size))
+        })
+        .max_by_key(|(activity, _, _)| *activity)
+        .map(|(_, name, size)| (name, size))
+}
+
+/// The merge icon's click, the menu's Merge and an Inbox `pr-ready` item's: the dialog for `arg` in a tmux popup over
+/// the cockpit, on the most recently active client.
 pub(crate) fn open(tmux: &Tmux, arg: &str) -> Result<(), CpdError> {
-    let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
-    let client = newest_client(&clients).ok_or_else(|| {
+    let format = "#{client_activity} #{client_width} #{client_height} #{client_name}";
+    let clients = tmux.run(&["list-clients", "-F", format].map(str::to_owned))?;
+    let (name, size) = newest_named_client(&clients).ok_or_else(|| {
         CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
     })?;
-    tmux.run(&popup_args("", client, arg)).map(drop)
+    tmux.run(&popup_args(&name, size, arg)).map(drop)
+}
+
+/// The tmux arguments the confirm runs: `run-shell -b 'cpd tui action merge <ref> --client <name>'`. The command is
+/// quoted for the shell, then every `#` doubled for `run-shell`'s format expansion, so it reaches `cpd` unchanged;
+/// stderr is dropped, as the StatusBar's binding drops it (`run-shell -b` shows any output in view mode).
+fn start_args(pull: &Pull, client: &str) -> Vec<String> {
+    let command = format!("{PROGRAM} tui action merge {} --client {} 2>/dev/null", sh_quote(&pull.to_string()), sh_quote(client));
+    ["run-shell".to_owned(), "-b".to_owned(), command.replace('#', "##")].to_vec()
 }
 
 /// The stored title of `pull`, if the store has it.
@@ -236,7 +231,7 @@ fn stored_title(store: &mut Store, pull: &Pull) -> Result<Option<String>, CpdErr
     })
 }
 
-pub(super) fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdError> {
+pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view merge"));
     }
@@ -247,51 +242,64 @@ pub(super) fn run(args: Args, run_command: RunCommand) -> Result<Output, CpdErro
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
     let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-    let result = mouse.and_then(|()| show(&mut terminal, &args.pull, title.as_deref(), run_command));
+    let result = mouse.and_then(|()| show(&mut terminal, &args.pull, title.as_deref()));
     let _ = ratatui::crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
-    match result {
-        Ok(()) => Ok(Output::Owned),
-        Err(e) => Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view merge failed: {e}."))
-            .with("command", "tui view merge")),
+    let action = result.map_err(|e| {
+        CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view merge failed: {e}."))
+            .with("command", "tui view merge")
+    })?;
+    if action == Action::Merge {
+        // The merge runs in the background, owned by the tmux server: this process ends now, and the popup closes.
+        Tmux::new(config.tmux.socket).run(&start_args(&args.pull, &args.client))?;
     }
+    Ok(Output::Owned)
 }
 
-/// The cockpit's reload after an action changed a pull request (hs-d312): the full refresh the periodic poll runs,
-/// `cpd pr poll`, in process. Later actions call it too. The error is the command's message.
-fn reload(run_command: RunCommand) -> Result<(), String> {
-    let argv: Vec<OsString> = [PROGRAM, "pr", "poll"].map(OsString::from).into();
-    run_command(argv).map(drop).map_err(|e| e.message().to_owned())
-}
-
-/// Draws and takes input until the dialog closes.
-fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str>, run_command: RunCommand) -> std::io::Result<()> {
-    let mut phase = Phase::Ask;
+/// Draws and takes input until the User confirms or cancels.
+fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str>) -> std::io::Result<Action> {
     loop {
         let mut area = Rect::default();
         terminal.draw(|f| {
             area = f.area();
-            draw(f, area, pull, title, &phase);
+            draw(f, area, pull, title);
         })?;
         let action = match event::read()? {
-            Event::Key(key) => on_key(&phase, key),
-            Event::Mouse(mouse) => on_mouse(&phase, area, mouse),
+            Event::Key(key) => on_key(key),
+            Event::Mouse(mouse) => on_mouse(area, mouse),
             _ => None,
         };
-        match action {
-            Some(Action::Cancel | Action::Close) => return Ok(()),
-            Some(Action::Merge) => {
-                phase = Phase::Merging;
-                terminal.draw(|f| draw(f, f.area(), pull, title, &phase))?;
-                let argv: Vec<OsString> = [PROGRAM, "pr", "merge", &pull.to_string()].map(OsString::from).into();
-                phase = match run_command(argv) {
-                    Ok(_) => Phase::Merged(reload(run_command).err()),
-                    Err(e) => Phase::Failed(e.message().to_owned()),
-                };
-            }
-            None => {}
+        if let Some(action) = action {
+            return Ok(action);
         }
     }
+}
+
+/// `cpd tui action merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2, the `merge` action; hs-d473,
+/// hs-d312): runs `cpd pr merge` in process and, once it succeeds, `cpd pr poll`, the full refresh the periodic poll
+/// runs, so the Deploy column shows the merge at once. A success says nothing. A failed poll is a line of the log
+/// only: the pull request did merge. A failed merge runs no poll; it is a line of the log, written before any tmux
+/// call so that it is always there, then the cockpit's one failure dialog on `client`. The `Err` is what the dialog
+/// could not show: the caller shows it with `display-message -c <client>`.
+pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
+    let log = ViewLog::of(home, LOG);
+    let cpd = |words: &[&str]| run_command(std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect());
+    let failed = match cpd(&["pr", "merge", &pull.to_string()]) {
+        Ok(_) => {
+            if let Err(e) = cpd(&["pr", "poll"]) {
+                // Nothing else to show it with: the next periodic poll refreshes the column.
+                let _ = log.append(&format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()));
+            }
+            return Ok(());
+        }
+        Err(e) => e,
+    };
+    let mut text = format!("merge {pull}: {}: {}", failed.code(), failed.message());
+    if let Err(unwritten) = log.append(&text) {
+        text = format!("{text}\n{unwritten}");
+    }
+    dialog::show_error_on(tmux, client, &format!("merge {pull}"), &text)
+        .map_err(|unshown| CpdError::new(unshown.code(), text).with("dialog", unshown.message()))
 }
 
 #[cfg(test)]
@@ -314,9 +322,9 @@ mod tests {
         MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column, row, modifiers: KeyModifiers::NONE }
     }
 
-    fn render(phase: &Phase, title: Option<&str>, width: u16, height: u16) -> Buffer {
+    fn render(title: Option<&str>, width: u16, height: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), &pull(), title, phase)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &pull(), title)).unwrap();
         terminal.backend().buffer().clone()
     }
 
@@ -336,35 +344,35 @@ mod tests {
 
     #[test]
     fn the_dialog_shows_the_pull_request_its_title_the_method_and_both_buttons() {
-        let buf = render(&Phase::Ask, Some("Add the thing"), 58, 5);
+        let buf = render(Some("Add the thing"), 58, 5);
         assert_eq!(rows(&buf), [" o/r#7", " Add the thing", " method: squash", "", "  [Merge]   [Cancel]"]);
     }
 
     #[test]
     fn a_missing_title_shows_no_title_and_a_long_one_is_cut() {
-        assert_eq!(rows(&render(&Phase::Ask, None, 58, 5))[1], "");
-        assert_eq!(rows(&render(&Phase::Ask, Some("a very long title indeed"), 12, 5))[1], " a very lo…");
+        assert_eq!(rows(&render(None, 58, 5))[1], "");
+        assert_eq!(rows(&render(Some("a very long title indeed"), 12, 5))[1], " a very lo…");
     }
 
     #[test]
     fn a_dialog_in_a_tiny_area_draws_without_panicking() {
         for (w, h) in [(0, 0), (1, 1), (10, 2), (58, 3)] {
-            render(&Phase::Ask, Some("T"), w, h);
+            render(Some("T"), w, h);
         }
     }
 
     #[test]
     fn enter_or_y_merges_and_esc_n_or_q_cancels() {
         for code in [KeyCode::Enter, KeyCode::Char('y')] {
-            assert_eq!(on_key(&Phase::Ask, press(code)), Some(Action::Merge), "{code:?}");
+            assert_eq!(on_key(press(code)), Some(Action::Merge), "{code:?}");
         }
         for code in [KeyCode::Esc, KeyCode::Char('n'), KeyCode::Char('q')] {
-            assert_eq!(on_key(&Phase::Ask, press(code)), Some(Action::Cancel), "{code:?}");
+            assert_eq!(on_key(press(code)), Some(Action::Cancel), "{code:?}");
         }
         for code in [KeyCode::Char('Y'), KeyCode::Char(' '), KeyCode::Tab, KeyCode::Char('j')] {
-            assert_eq!(on_key(&Phase::Ask, press(code)), None, "{code:?}");
+            assert_eq!(on_key(press(code)), None, "{code:?}");
         }
-        assert_eq!(on_key(&Phase::Ask, KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)), None);
+        assert_eq!(on_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)), None);
     }
 
     #[test]
@@ -372,17 +380,17 @@ mod tests {
         let area = Rect::new(0, 0, 58, 5);
         let [merge, cancel] = buttons(area);
         assert_eq!((merge, cancel), (Rect::new(2, 4, 7, 1), Rect::new(12, 4, 8, 1)));
-        assert_eq!(on_mouse(&Phase::Ask, area, click(2, 4)), Some(Action::Merge));
-        assert_eq!(on_mouse(&Phase::Ask, area, click(8, 4)), Some(Action::Merge));
-        assert_eq!(on_mouse(&Phase::Ask, area, click(12, 4)), Some(Action::Cancel));
-        assert_eq!(on_mouse(&Phase::Ask, area, click(19, 4)), Some(Action::Cancel));
+        assert_eq!(on_mouse(area, click(2, 4)), Some(Action::Merge));
+        assert_eq!(on_mouse(area, click(8, 4)), Some(Action::Merge));
+        assert_eq!(on_mouse(area, click(12, 4)), Some(Action::Cancel));
+        assert_eq!(on_mouse(area, click(19, 4)), Some(Action::Cancel));
         for (column, row) in [(1, 4), (9, 4), (11, 4), (20, 4), (2, 3), (2, 0)] {
-            assert_eq!(on_mouse(&Phase::Ask, area, click(column, row)), None, "{column},{row}");
+            assert_eq!(on_mouse(area, click(column, row)), None, "{column},{row}");
         }
         let right = MouseEvent { kind: MouseEventKind::Down(MouseButton::Right), ..click(2, 4) };
-        assert_eq!(on_mouse(&Phase::Ask, area, right), None);
+        assert_eq!(on_mouse(area, right), None);
         // the buttons are where they are drawn
-        let buf = render(&Phase::Ask, None, 58, 5);
+        let buf = render(None, 58, 5);
         assert_eq!(buf[(merge.x, merge.y)].symbol(), "[");
         assert_eq!(buf[(cancel.x + cancel.width - 1, cancel.y)].symbol(), "]");
     }
@@ -391,5 +399,22 @@ mod tests {
     fn the_argument_is_quoted_for_the_popups_shell() {
         assert_eq!(sh_quote("o/r#7"), "'o/r#7'");
         assert_eq!(sh_quote("a'b"), r"'a'\''b'");
+    }
+
+    #[test]
+    fn the_confirm_starts_the_action_in_the_background_with_every_hash_doubled_for_run_shell() {
+        assert_eq!(
+            start_args(&pull(), "/dev/pts/9"),
+            ["run-shell", "-b", "cpd tui action merge 'o/r##7' --client '/dev/pts/9' 2>/dev/null"]
+        );
+    }
+
+    #[test]
+    fn the_popup_opens_on_the_newest_named_client() {
+        let listing = "100 80 24 /dev/pts/1\n300 215 62 /dev/pts/4\n200 120 30 /dev/pts/2\n";
+        assert_eq!(newest_named_client(listing), Some(("/dev/pts/4".to_owned(), (215, 62))));
+        for bad in ["", "junk\n", "100 80 24\n", "100 80 24 \n", "x 80 24 /dev/pts/1\n"] {
+            assert_eq!(newest_named_client(bad), None, "{bad:?}");
+        }
     }
 }

@@ -36,7 +36,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Map, Value, json};
 
 use super::widgets::legend;
-use super::{RunCommand, logs, not_a_terminal, on_a_terminal};
+use super::{RunCommand, logs, merge, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
 use cpd_core::error::{CpdError, ErrorCode, Exit};
 use cpd_core::home::CpdHome;
@@ -318,12 +318,14 @@ fn reset_layout(tmux: &Tmux, cockpit: &str) -> Result<(), CpdError> {
     Ok(())
 }
 
-/// What a StatusBar button does: the range names of contract §6.1.
+/// What a `cpd tui action` does: a StatusBar button's (the range names of
+/// contract §6.1), or the `merge` popup's confirm (hs-d473).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Action {
     Reset,
     Legend,
     Logs,
+    Merge,
 }
 
 impl Action {
@@ -332,19 +334,22 @@ impl Action {
             "reset" => Some(Action::Reset),
             "legend" => Some(Action::Legend),
             "logs" => Some(Action::Logs),
+            "merge" => Some(Action::Merge),
             _ => None,
         }
     }
 }
 
-/// `cpd tui action <reset|legend|logs> --client <name>` (commands.md §13.2):
-/// runs the click of a StatusBar button on client `client`. It prints
-/// nothing, on stdout or stderr, and always exits 0: tmux's `run-shell -b`
-/// puts the active pane into view mode on a failure or any output. A failure
-/// is shown with `display-message -c <client>` instead, and if even that
-/// fails, it is dropped.
-pub(super) fn action(name: Option<&str>, client: &str) -> Output {
-    if let Err(e) = run_action(name, client) {
+/// `cpd tui action <reset|legend|logs> --client <name>` and `cpd tui action
+/// merge <owner>/<repo>#<n> --client <name>` (commands.md §13.2): runs the
+/// click of a StatusBar button, or the merge the `merge` popup confirmed, on
+/// client `client`. It prints nothing, on stdout or stderr, and always exits
+/// 0: tmux's `run-shell -b` puts the active pane into view mode on a failure
+/// or any output. A failure is shown with `display-message -c <client>`
+/// instead, and if even that fails, it is dropped (a failed merge is first
+/// the merge action's own, [`merge::action`]).
+pub(super) fn action(name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand) -> Output {
+    if let Err(e) = run_action(name, pull, client, run_command) {
         if let Ok(tmux) = action_tmux() {
             let message = format!("cpd tui action: {}", e.message());
             // `-l`: the message is shown as is, not expanded as a format.
@@ -359,31 +364,37 @@ fn action_tmux() -> Result<Tmux, CpdError> {
     Ok(Tmux::new(Config::load(&CpdHome::from_env()?)?.tmux.socket))
 }
 
-fn run_action(name: Option<&str>, client: &str) -> Result<(), CpdError> {
+fn run_action(name: Option<&str>, pull: Option<&str>, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
     let action = name.and_then(Action::parse).ok_or_else(|| {
-        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend or logs.", name.unwrap_or("")))
+        CpdError::new(ErrorCode::Usage, format!("unknown action {:?}: reset, legend, logs or merge.", name.unwrap_or("")))
     })?;
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let tmux = Tmux::new(config.tmux.socket.clone());
-    let popup = match action {
-        Action::Reset => return reset_layout(&tmux, &config.tmux.cockpit_session),
-        Action::Legend => legend::popup_args(client_size(&tmux, client)?),
-        Action::Logs => logs::popup_args(client_size(&tmux, client)?, None),
+    let popup = match (action, pull) {
+        (Action::Merge, Some(pull)) => {
+            let pull = merge::Pull::parse(pull).map_err(|e| CpdError::new(ErrorCode::Usage, e))?;
+            return merge::action(&home, &tmux, &pull, client, run_command);
+        }
+        (Action::Merge, None) => return Err(CpdError::new(ErrorCode::Usage, "merge needs <owner>/<repo>#<n>.")),
+        (_, Some(extra)) => return Err(CpdError::new(ErrorCode::Usage, format!("unexpected argument {extra:?}."))),
+        (Action::Reset, None) => return reset_layout(&tmux, &config.tmux.cockpit_session),
+        (Action::Legend, None) => legend::popup_args(client_size(&tmux, client)?),
+        (Action::Logs, None) => logs::popup_args(client_size(&tmux, client)?, None),
     };
     tmux.run(&on_client(popup, client)).map(drop)
 }
 
 /// `(columns, rows)` of client `client` (`display -p -c`). tmux prints an
 /// empty line, and exits 0, for a client that does not exist.
-fn client_size(tmux: &Tmux, client: &str) -> Result<(u16, u16), CpdError> {
+pub(crate) fn client_size(tmux: &Tmux, client: &str) -> Result<(u16, u16), CpdError> {
     let out = tmux.run(&["display", "-p", "-c", client, "#{client_width} #{client_height}"].map(str::to_owned))?;
     let size = out.trim().split_once(' ').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
     size.ok_or_else(|| CpdError::new(ErrorCode::TmuxFailed, format!("no tmux client {client:?}.")).with("socket", tmux.socket()))
 }
 
 /// `display-popup …` aimed at `client` (`-c`), so it opens there only.
-fn on_client(mut popup: Vec<String>, client: &str) -> Vec<String> {
+pub(crate) fn on_client(mut popup: Vec<String>, client: &str) -> Vec<String> {
     popup.splice(1..1, ["-c".to_owned(), client.to_owned()]);
     popup
 }
