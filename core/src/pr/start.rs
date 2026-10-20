@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::{Env, StartArgs, plan_phase, wrong_phase};
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{NewEvent, append};
+use crate::events::{BasePull, NewEvent, append};
 use crate::git::{self, Setup, Step};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{PlanId, PrKey};
@@ -122,6 +122,77 @@ pub(super) fn base_pr(conn: &rusqlite::Connection, pr: &PrRow) -> Result<Option<
     Ok(conn
         .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))
         .optional()?)
+}
+
+/// A merged base PR a `waiting` or `dispatch` PR is still stacked on (§3.8 "Stacked PRs" step 7, hs-d301).
+struct MergedBase {
+    repo: String,
+    /// The PR's `base`: the merged base PR's Lead Branch.
+    from: String,
+    /// The merged base PR as `<plan>/<key>`.
+    from_pr: String,
+    /// The merged base PR's own `base`.
+    to: String,
+}
+
+fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<Option<MergedBase>, CpdError> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row(
+            "SELECT r.repo, r.base, b.plan || '/' || b.key, b.base FROM prs r, prs b
+              WHERE r.plan = ?1 AND r.key = ?2 AND r.status IN ('waiting', 'dispatch')
+                AND b.repo = r.repo AND b.lead_branch = r.base AND b.status = 'merged'",
+            [plan.as_str(), key.as_str()],
+            |r| Ok(MergedBase { repo: r.get(0)?, from: r.get(1)?, from_pr: r.get(2)?, to: r.get(3)? }),
+        )
+        .optional()?)
+}
+
+/// The unstack of a PR whose base PR merged (contract §3.8 "Stacked PRs" step 7, hs-d301): while PR `key` of `plan` is
+/// `waiting` or `dispatch` and its base PR (§2.2, derived from `base`) is `merged`, its `base` becomes that PR's own
+/// `base` and `pr-base-changed` is appended for its Plan, once per step down a chain of merged base PRs. GitHub deleted
+/// the merged branch, so it is never looked up. `by` is who unstacks (`poll`, `engine`, `pr start`, `pr open`); the
+/// poll's Event has `number` and `url` null. Whether anything changed.
+pub(super) fn unstack(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, by: &str) -> Result<bool, CpdError> {
+    use rusqlite::OptionalExtension;
+    let mut seen = Vec::new();
+    while let Some(MergedBase { repo, from, from_pr, to }) = merged_base(tx, plan, key)? {
+        if seen.contains(&from) {
+            return Err(CpdError::bad_row(format!("The base PRs of {repo} form a cycle at {from}")));
+        }
+        let moved = tx.execute(
+            "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status IN ('waiting', 'dispatch') AND base = ?4",
+            [plan.as_str(), key.as_str(), to.as_str(), from.as_str()],
+        )?;
+        if moved == 0 {
+            return Err(CpdError::new(ErrorCode::CasLost, format!("PR {key} of Plan {plan} changed while it was unstacked: rerun the command."))
+                .with("plan", plan.as_str())
+                .with("pr", key.as_str()));
+        }
+        let to_pr: Option<String> = tx
+            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), to.as_str()], |r| r.get(0))
+            .optional()?;
+        let text = format!(
+            "PR {key} of Plan {plan} now targets {to} (was {from}): its base PR {from_pr} merged before its pull request existed. \
+             Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan {plan}."
+        );
+        let pull = if by == "poll" { BasePull::Null } else { BasePull::Absent };
+        let event = NewEvent::pr_base_changed(text, key, (&from, &to), (Some(&from_pr), to_pr.as_deref()), by, pull);
+        append(tx, event.plan(plan.clone()))?;
+        seen.push(from);
+    }
+    Ok(!seen.is_empty())
+}
+
+/// [`unstack`] in a transaction of its own when the PR needs it (a PR already unstacked writes nothing), then the PR as
+/// it is stored.
+pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey, by: &str) -> Result<PrRow, CpdError> {
+    if store.read(|conn| Ok(merged_base(conn, plan, key)?.is_some()))? {
+        store.write(source, |tx| unstack(tx, plan, key, by))?;
+    }
+    store
+        .read(|conn| Ok(load(conn, plan)?.into_iter().find(|p| &p.key == key)))?
+        .ok_or_else(|| CpdError::bad_row(format!("PR {key} of Plan {plan} vanished while it was unstacked")))
 }
 
 /// The root base of a PR of `repo` whose `base` is `base` (§2.2, §7.5): the `base` of the first PR down the chain
@@ -299,6 +370,8 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
 /// then [`record`] in a transaction of its own. On failure the worktree and
 /// branch are removed and nothing is written.
 pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, by: By) -> Result<Pushed, Failed> {
+    // A base PR that merged unstacks the PR first: its branch is gone, the Lead Branch is cut from the new base (hs-d301).
+    let pr = &unstack_stored(store, by.source(), plan, &pr.key, by.as_str()).map_err(Failed::Other)?;
     let stacked = store.read(|conn| base_pr(conn, pr)).map_err(Failed::Other)?.is_some();
     let pushed = prepare_as(home, config, plan, pr, stacked)?.push();
     match store.write(by.source(), |tx| record(tx, plan, &pushed, by)) {

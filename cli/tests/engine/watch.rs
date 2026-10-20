@@ -3,7 +3,7 @@
 //! prepared database, with a private tmux server and fake `pi` and `cpd`.
 
 use crate::common;
-#[path = "common/checkout.rs"]
+#[path = "../common/checkout.rs"]
 mod checkout;
 
 use std::fs::{self, File, OpenOptions};
@@ -2363,6 +2363,75 @@ fn e5_counts_the_failing_window_from_pr_poll_transient_minutes() {
     }
 }
 
+/// `gh`'s own failure to parse a response that GitHub cut off mid-body (hs-d354, 2026-10-20 16:43:13Z): exit 1, this on stderr, an empty stdout.
+const GH_CUT: &str = "echo 'unexpected end of JSON input' >&2; exit 1";
+
+#[test]
+fn e5_a_cut_gh_response_raises_no_error_and_no_message_logs_a_line_and_the_next_poll_heals() {
+    let fx = fx("");
+    fx.add_manager();
+    let healed = fx.env.root().join("healed");
+    fx.env.fake_gh(&format!("if [ -e '{}' ]; then echo '{EMPTY_SEARCH}'; else {GH_CUT}; fi", healed.display()));
+
+    let engine = fx.start();
+    wait_until("three failing polls", || fx.env.calls("gh").len() >= 3);
+    wait_until("the engine's record of the failure", || failing(&fx).is_some());
+    assert_eq!(failing(&fx).unwrap()["call"], "search");
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+
+    // The next poll heals it: the record is gone, and nothing was ever raised.
+    fs::write(&healed, "").unwrap();
+    wait_until("the record to be deleted by a poll that succeeded", || failing(&fx).is_none());
+    fx.env.wait_whole_ticks(2);
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    let log = watch_log(&fx);
+    assert!(log.contains("pr poll: gh search failed transiently (unexpected end of JSON input), failing since "), "{log}");
+    assert!(log.contains("): retrying at the next poll"), "{log}");
+}
+
+#[test]
+fn e5_a_cut_gh_response_is_an_error_only_after_the_window_and_then_once() {
+    // Nine minutes of failing: still nothing.
+    let fx = fx("");
+    fx.add_manager();
+    fx.env.fake_gh(GH_CUT);
+    fail_since(&fx, "search", 9);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    assert_eq!(failing(&fx).unwrap()["call"], "search");
+
+    // Eleven: one error Event and one message to the Manager, not one per tick.
+    let fx = fx_with_manager_failing(11);
+    fx.env.fake_gh(GH_CUT);
+    let since = failing(&fx).unwrap()["since"].clone();
+    let engine = fx.start();
+    wait_until("the error", || fx.count("error") >= 1);
+    fx.env.wait_whole_ticks(4);
+    engine.stop();
+
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let data = &errors[0].3;
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
+    let details = &data["details"];
+    assert_eq!(
+        (&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"]),
+        (&json!("search"), &since, &json!(11), &json!("unexpected end of JSON input"), &json!(1))
+    );
+    assert!(details["stderr"].as_str().unwrap().contains("unexpected end of JSON input"), "{details}");
+    let sent = messages(&fx);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].contains("pr poll: gh search has failed for 11 minutes (unexpected end of JSON input): unexpected end of JSON input"),
+        "{}",
+        sent[0]
+    );
+    assert_eq!(failing(&fx).unwrap()["since"], since);
+}
+
 #[test]
 fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record() {
     for (name, script, line) in [
@@ -3008,47 +3077,89 @@ fn install_puts_the_adapter_at_share_cpd_pi_without_its_tests() {
 
     // `install` runs the script from the fake checkout (`Checkout::new`): compare with its `pi/`.
     let checkout = env.root().join("repos/install-clone");
-    let adapter = env.home().join(".local/share/cpd/pi");
+    let share = env.home().join(".local/share/cpd");
+    let adapter = share.join("pi");
     let expected: Vec<String> = tree(&checkout.join("pi")).into_iter().filter(|p| p != "test" && !p.starts_with("test/")).collect();
     assert!(expected.contains(&"extension.ts".to_string()) && expected.contains(&"lib/cpd.ts".to_string()), "{expected:?}");
     assert!(tree(&checkout.join("pi")).contains(&"test/cpd.test.ts".to_string()));
+    // `pi` is a symlink to a `pi.<id>` beside it, which holds the checkout's `pi/` minus `test/`.
+    assert!(fs::symlink_metadata(&adapter).unwrap().file_type().is_symlink(), "pi is not a symlink");
+    let target = fs::read_link(&adapter).unwrap().to_string_lossy().into_owned();
+    assert!(target.starts_with("pi.") && !target.contains('/'), "the target `{target}` is not a relative pi.<id>");
+    assert_eq!(tree(&share.join(&target)), expected);
     assert_eq!(tree(&adapter), expected);
-    // No temporary directory is left beside it.
-    assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
+    // Nothing else is left beside it: no tmp directory, no scratch link, no legacy.
+    assert_eq!(names(&share), ["pi".to_string(), target]);
+}
+
+/// Counts, until `stop` is set, the polls that find `manifest` missing, and all polls: `(missing, polls)`.
+fn watch_missing(manifest: PathBuf) -> (std::sync::Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<(u32, u64)>) {
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handle = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let (mut missing, mut polls) = (0u32, 0u64);
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                polls += 1;
+                if !manifest.exists() {
+                    missing += 1;
+                }
+            }
+            (missing, polls)
+        })
+    };
+    (stop, handle)
 }
 
 #[test]
 fn install_replaces_an_installed_adapter_as_a_whole_and_it_is_never_missing() {
     let env = TestEnv::new();
-    let adapter = env.home().join(".local/share/cpd/pi");
+    let share = env.home().join(".local/share/cpd");
+    let adapter = share.join("pi");
+    // An installed adapter as an earlier install left it: `pi` -> `pi.<id>`. (One `Checkout` per `TestEnv`, so the
+    // first version is laid out by hand; the install under watch swaps the link over it.)
+    let first = "pi.20200101T000000-1";
+    fs::create_dir_all(share.join(first)).unwrap();
+    fs::write(share.join(first).join("package.json"), "{}").unwrap();
+    fs::write(share.join(first).join("stale.ts"), "").unwrap();
+    std::os::unix::fs::symlink(first, &adapter).unwrap();
+    let (stop, watcher) = watch_missing(adapter.join("package.json"));
+    let (out, _) = install_with(&env, OPENS);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let (missing, _polls) = watcher.join().unwrap();
+
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(missing, 0, "the adapter's package.json was missing {missing} times during the swap of a symlink");
+    assert_ne!(fs::read_link(&adapter).unwrap().to_string_lossy(), first, "pi points to the new version");
+    assert!(!adapter.join("stale.ts").exists(), "the old adapter was not replaced as a whole");
+    assert!(adapter.join("package.json").exists());
+}
+
+#[test]
+fn install_over_a_real_adapter_directory_misses_it_for_a_tiny_fraction_of_polls_at_most() {
+    let env = TestEnv::new();
+    let share = env.home().join(".local/share/cpd");
+    let adapter = share.join("pi");
     fs::create_dir_all(adapter.join("old")).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
     fs::write(adapter.join("stale.ts"), "").unwrap();
-    // A big old adapter, so that removing it in place takes a while.
+    // A big old adapter: the migration renames it, so its size does not widen the window.
     for i in 0..5000 {
         fs::write(adapter.join("old").join(format!("f{i}.ts")), "").unwrap();
     }
 
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let watcher = {
-        let (stop, manifest) = (stop.clone(), adapter.join("package.json"));
-        std::thread::spawn(move || {
-            let mut missing = 0u32;
-            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                if !manifest.exists() {
-                    missing += 1;
-                }
-            }
-            missing
-        })
-    };
+    let (stop, watcher) = watch_missing(adapter.join("package.json"));
     let (out, _) = install_with(&env, OPENS);
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let missing = watcher.join().unwrap();
+    let (missing, polls) = watcher.join().unwrap();
 
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(missing, 0, "the adapter's package.json was missing {missing} times during the install");
+    // The migration is two renames of one process, back to back (docs/implementing.md "The adapter swap"):
+    // the window holds no process start-up, so a poller finds `pi` missing in a tiny fraction of its polls (at most 1%;
+    // with the renames in two processes it is the start-up of python3, a tenth of the install), once per machine.
+    assert!(u64::from(missing) * 100 <= polls, "the adapter's package.json was missing in {missing} of {polls} polls during the migration");
+    assert!(fs::symlink_metadata(&adapter).unwrap().file_type().is_symlink(), "pi is a symlink afterwards");
     assert!(!adapter.join("stale.ts").exists() && !adapter.join("old").exists(), "the old adapter was not replaced as a whole");
+    assert!(share.join("pi.legacy/stale.ts").exists(), "pi.legacy holds the old files");
     assert!(adapter.join("package.json").exists());
-    assert_eq!(names(adapter.parent().unwrap()), ["pi"]);
 }

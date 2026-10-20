@@ -32,7 +32,9 @@ pub mod read;
 mod runner;
 mod scroll;
 pub mod section;
+mod terminal_writes;
 mod tree;
+mod viewlog;
 pub mod widgets;
 mod worker;
 

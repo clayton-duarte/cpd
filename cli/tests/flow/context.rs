@@ -288,11 +288,11 @@ fn a_record_write_needs_a_context() {
 }
 
 #[test]
-fn decide_refuses_a_missing_or_wrong_kind_of_supersedes() {
+fn decide_refuses_a_missing_supersedes() {
     let env = hs();
     new_context(&env);
     env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
-    for target in ["hs-d9", "hs-n1"] {
+    for target in ["hs-d9", "hs-n9"] {
         let run = env.cpd(&["context", "decide", "New.", "--supersedes", target, "--context", CTX]);
         refused(run, 3, "record_not_found");
     }
@@ -300,6 +300,165 @@ fn decide_refuses_a_missing_or_wrong_kind_of_supersedes() {
     // Nothing was written by the refusals.
     assert_eq!(record_ids(&env), ["hs-n1"]);
     assert_eq!(events(&env, "context-record").len(), 1);
+}
+
+// ---- notes in supersession (contract §2.2, §4.6 "A write"; commands.md §3.4) ----------
+
+/// The line of `md` that starts with `- <id> (`.
+fn item_line<'a>(md: &'a str, id: &str) -> &'a str {
+    md.lines().find(|l| l.starts_with(&format!("- {id} ("))).unwrap_or_else(|| panic!("{id} in {md}"))
+}
+
+#[test]
+fn a_note_supersedes_an_older_note_which_leaves_force_and_is_labelled_in_show() {
+    let env = hs();
+    new_context(&env);
+    env.cpd(&["context", "note", "Old fact.", "--context", CTX]).ok();
+    let n2 = env.cpd(&["context", "note", "New fact.", "--supersedes", "hs-n1", "--context", CTX]).ok();
+    assert_eq!(n2["record"]["id"], "hs-n2", "{n2}");
+    assert_eq!(n2["record"]["kind"], "note");
+    assert_eq!(n2["record"]["supersedes"], "hs-n1");
+    assert_eq!(n2["seq"], 2);
+    assert_eq!(events(&env, "context-record").len(), 2);
+
+    // JSON: both records stay, the successor names what it replaced.
+    let shown = env.cpd(&["context", "show", "--context", CTX]).ok();
+    let records = shown["records"].as_array().unwrap();
+    assert_eq!(records.len(), 2, "{shown}");
+    assert!(records[0].get("supersedes").is_none());
+    assert_eq!(records[1]["supersedes"], "hs-n1");
+
+    // Markdown: the older note is listed, labelled superseded and naming its successor, after the active one.
+    let md = shown["markdown"].as_str().unwrap();
+    let old = item_line(md, "hs-n1");
+    assert!(old.contains("Old fact.") && old.contains("superseded by hs-n2"), "{md}");
+    let new = item_line(md, "hs-n2");
+    assert!(new.contains("New fact.") && !new.contains("superseded by"), "{md}");
+    let (at_notes, at_old, at_new) = (md.find("## Notes").expect("## Notes"), md.find(old).unwrap(), md.find(new).unwrap());
+    assert!(at_notes < at_new && at_new < at_old, "the active note comes before the superseded one: {md}");
+
+    // The superseded note stays readable.
+    let one = env.cpd(&["context", "show", "--record", "hs-n1", "--context", CTX]).ok();
+    assert_eq!(one["records"][0]["text"], "Old fact.", "{one}");
+}
+
+#[test]
+fn a_decision_supersedes_a_note_which_is_then_labelled_superseded() {
+    let env = hs();
+    new_context(&env);
+    env.cpd(&["context", "note", "A fact.", "--context", CTX]).ok();
+    let d1 = env.cpd(&["context", "decide", "Decided otherwise.", "--supersedes", "hs-n1", "--context", CTX]).ok();
+    assert_eq!(d1["record"]["id"], "hs-d1", "{d1}");
+    assert_eq!(d1["record"]["supersedes"], "hs-n1");
+    let shown = env.cpd(&["context", "show", "--context", CTX]).ok();
+    assert_eq!(shown["records"][1]["supersedes"], "hs-n1");
+    let md = shown["markdown"].as_str().unwrap();
+    let old = item_line(md, "hs-n1");
+    assert!(old.contains("A fact.") && old.contains("superseded by hs-d1"), "{md}");
+    assert!(!item_line(md, "hs-d1").contains("superseded by"), "{md}");
+}
+
+#[test]
+fn a_note_naming_a_decision_is_supersedes_invalid_and_writes_nothing() {
+    let env = hs();
+    new_context(&env);
+    env.cpd(&["context", "decide", "A decision.", "--context", CTX]).ok();
+    let run = env.cpd(&["context", "note", "A fact.", "--supersedes", "hs-d1", "--context", CTX]);
+    let error = refused(run, 3, "supersedes_invalid");
+    assert_eq!(error["details"]["record"], "hs-d1", "{error}");
+    assert_eq!(error["details"]["kind"], "decision", "{error}");
+    assert_eq!(error["details"]["allowed"], json!(["note"]), "{error}");
+    assert_eq!(record_ids(&env), ["hs-d1"]);
+    assert_eq!(events(&env, "context-record").len(), 1);
+}
+
+#[test]
+fn a_record_of_another_kind_cannot_be_superseded_by_a_decision_or_a_note() {
+    let env = hs();
+    new_context(&env);
+    env.cpd(&["context", "ask", "Why?", "--context", CTX]).ok();
+    env.cpd(&["context", "answer", "hs-q1", "Because.", "--context", CTX]).ok();
+    for (target, kind) in [("hs-q1", "question"), ("hs-a1", "answer")] {
+        let run = env.cpd(&["context", "decide", "New.", "--supersedes", target, "--context", CTX]);
+        let error = refused(run, 3, "supersedes_invalid");
+        assert_eq!(error["details"]["record"], target, "{error}");
+        assert_eq!(error["details"]["kind"], kind, "{error}");
+        assert_eq!(error["details"]["allowed"], json!(["decision", "note"]), "{error}");
+
+        let run = env.cpd(&["context", "note", "New.", "--supersedes", target, "--context", CTX]);
+        let error = refused(run, 3, "supersedes_invalid");
+        assert_eq!(error["details"]["record"], target, "{error}");
+        assert_eq!(error["details"]["kind"], kind, "{error}");
+        assert_eq!(error["details"]["allowed"], json!(["note"]), "{error}");
+    }
+    assert_eq!(record_ids(&env), ["hs-q1", "hs-a1"]);
+    assert_eq!(events(&env, "context-record").len(), 2);
+}
+
+#[test]
+fn a_note_superseding_an_unknown_record_is_record_not_found() {
+    let env = hs();
+    new_context(&env);
+    env.cpd(&["context", "new", "other-ctx", "--title", "Other", "--owner", "acme"]).ok();
+    env.cpd(&["context", "note", "In the other Context.", "--context", "other-ctx"]).ok();
+    env.cpd(&["context", "note", "Also in the other Context.", "--context", "other-ctx"]).ok();
+    env.cpd(&["context", "note", "Here.", "--context", CTX]).ok();
+    // hs-n9 exists nowhere; hs-n2 is a note of the other Context only, so it is not in this one.
+    for target in ["hs-n9", "hs-n2"] {
+        let run = env.cpd(&["context", "note", "New.", "--supersedes", target, "--context", CTX]);
+        refused(run, 3, "record_not_found");
+    }
+    refused(env.cpd(&["context", "note", "New.", "--supersedes", "nonsense", "--context", CTX]), 2, "invalid_record_id");
+    assert_eq!(record_ids(&env), ["hs-n1"]);
+    assert_eq!(events(&env, "context-record").len(), 3);
+}
+
+/// `S2` is the distiller's Tier: a fake `pi` whose digest cites every record of `records.md`.
+fn distilling(env: &TestEnv) {
+    fs::write(
+        env.cpd_home().join("config.toml"),
+        "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n",
+    )
+    .unwrap();
+    env.fake_pi(
+        r##"digest() {
+  echo "# Digest"
+  while IFS= read -r line; do
+    case "$line" in "["*) echo "- $line" ;; esac
+  done < records.md
+}
+text=$(digest | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/$/\\n/' | tr -d '\n')
+printf '%s\n' '{"type":"session","version":3,"id":"x","timestamp":"2026-10-19T01:59:25.851Z","cwd":"/"}' '{"type":"agent_start"}'
+printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"%s"}],"usage":{"input":2,"output":4,"cacheRead":0,"cacheWrite":0,"totalTokens":6,"cost":{"total":0.1}},"stopReason":"stop"}}\n' "$text"
+printf '%s\n' '{"type":"agent_settled","aborted":false}'"##,
+    );
+}
+
+#[test]
+fn a_superseded_note_is_absent_from_the_records_a_distill_run_reads() {
+    let env = hs();
+    new_context(&env);
+    distilling(&env);
+    env.cpd(&["context", "decide", "Keep this decision.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "Stale fact one.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "Stale fact two.", "--context", CTX]).ok();
+    env.cpd(&["context", "note", "Fresh fact.", "--supersedes", "hs-n1", "--context", CTX]).ok();
+    env.cpd(&["context", "decide", "Decided over a fact.", "--supersedes", "hs-n2", "--context", CTX]).ok();
+
+    let out = env.cpd(&["context", "distill", "--context", CTX]).ok();
+    // In force: hs-d1, hs-n3, hs-d2.
+    assert_eq!((out["distilled"].clone(), out["records_in_force"].clone()), (json!(true), json!(3)), "{out}");
+    let dir = out["digest"]["file"].as_str().map(|f| PathBuf::from(f).parent().unwrap().to_owned()).expect("a digest file");
+    let records = fs::read_to_string(dir.join("records.md")).unwrap();
+    for gone in ["[hs-n1]", "[hs-n2]", "Stale fact"] {
+        assert!(!records.contains(gone), "{gone} is out of force: {records}");
+    }
+    for kept in ["[hs-d1]", "[hs-n3]", "[hs-d2]"] {
+        assert!(records.contains(kept), "{kept} is in force: {records}");
+    }
+    // No digest cites a record out of force.
+    let digest = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
+    assert!(!digest.contains("hs-n1") && !digest.contains("hs-n2"), "{digest}");
 }
 
 #[test]
