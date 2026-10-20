@@ -20,8 +20,8 @@ pub enum Letter {
 }
 
 impl Letter {
-    /// The ladder's order of models, weakest to strongest (contract §9).
-    pub const LADDER: [Letter; 3] = [Letter::H, Letter::S, Letter::O];
+    /// The ladder's order of models, weakest to strongest: Workers never use `O` (contract §9, hs-d506).
+    pub const LADDER: [Letter; 2] = [Letter::H, Letter::S];
 
     pub fn as_char(self) -> char {
         match self {
@@ -59,6 +59,9 @@ pub(super) fn effort_of_level(level: &str) -> Option<Option<u8>> {
     LEVELS.iter().position(|l| *l == level).map(|i| Some(i as u8))
 }
 
+/// The Tiers a Worker may have (hs-d506), as `details.allowed` and the message give them.
+const WORKER_RANGE: &str = "S0-S4, H0-H4";
+
 /// A Tier: a model letter and an effort 0–5, `^(O|S|H)([0-5])$`, e.g. `S3`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Tier {
@@ -90,6 +93,30 @@ impl Tier {
             )
             .with("tier", s)
         })
+    }
+
+    /// The highest effort any agent may use (hs-d506, contract §9 "Tier rules").
+    pub const MAX_EFFORT: u8 = 4;
+
+    /// What a Worker may have: letter `S` or `H`, effort 0–4 (hs-d506).
+    pub fn is_worker_allowed(self) -> bool {
+        self.letter != Letter::O && self.effort <= Tier::MAX_EFFORT
+    }
+
+    /// `tier_not_allowed` (exit 2) unless a Worker may have this Tier (hs-d506).
+    pub fn check_worker(self) -> Result<(), CpdError> {
+        if self.is_worker_allowed() {
+            return Ok(());
+        }
+        Err(CpdError::new(
+            ErrorCode::TierNotAllowed,
+            format!(
+                "Tier {self} is not allowed for a Worker: Workers use only the S and H tiers ({WORKER_RANGE}), never O, and never effort 5, to keep cost down (hs-d506)."
+            ),
+        )
+        .with("tier", self.to_string())
+        .with("allowed", WORKER_RANGE)
+        .with("rule", "hs-d506"))
     }
 
     pub fn letter(self) -> Letter {
@@ -179,19 +206,25 @@ impl Catalog {
         Ok(format!("{}:{}", self.model(tier.letter).model, tier.level()))
     }
 
-    /// The ladder's next step (contract §9): the same model at effort + 1 if
-    /// valid; otherwise the next model in `H → S → O` at the lowest valid
-    /// effort ≥ the current one; otherwise none.
+    /// The ladder's next step (contract §9, hs-d506): the same model at effort
+    /// + 1 if valid and allowed (effort ≤ 4); otherwise the next model in
+    /// `H → S` at the lowest valid effort ≥ the current one that is allowed;
+    /// otherwise none. It never enters `O` and never reaches effort 5; a Tier
+    /// a Worker may not have (a stored `O` Job) has no ladder.
     pub fn next(&self, tier: Tier) -> Result<Option<Tier>, CpdError> {
         self.check(tier)?;
-        if let Some(up) = Tier::new(tier.letter, tier.effort + 1).filter(|t| self.is_valid(*t)) {
+        if !tier.is_worker_allowed() {
+            return Ok(None);
+        }
+        let allowed = |t: &Tier| t.is_worker_allowed();
+        if let Some(up) = Tier::new(tier.letter, tier.effort + 1).filter(|t| allowed(t) && self.is_valid(*t)) {
             return Ok(Some(up));
         }
-        let at = Letter::LADDER.iter().position(|l| *l == tier.letter).expect("every letter is on the ladder");
+        let at = Letter::LADDER.iter().position(|l| *l == tier.letter).expect("an allowed letter is on the ladder");
         for letter in &Letter::LADDER[at + 1..] {
             let lowest = self.model(*letter).efforts.iter().copied().find(|e| *e >= tier.effort);
-            if let Some(effort) = lowest {
-                return Ok(Tier::new(*letter, effort));
+            if let Some(next) = lowest.and_then(|effort| Tier::new(*letter, effort)).filter(allowed) {
+                return Ok(Some(next));
             }
         }
         Ok(None)

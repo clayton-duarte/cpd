@@ -192,9 +192,11 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
 
 impl Env {
     /// `tier_invalid` (exit 2, `details.efforts`) unless the Tier's effort is
-    /// one pi supports for its model (§9).
+    /// one pi supports for its model (§9); then `tier_not_allowed` (exit 2)
+    /// unless a Worker may have it: S0-S4 or H0-H4 (hs-d506).
     fn check_tier(&mut self, tier: Tier) -> Result<(), CpdError> {
-        config::catalog::load_with(&self.config, &mut self.store)?.check(tier)
+        config::catalog::load_with(&self.config, &mut self.store)?.check(tier)?;
+        tier.check_worker()
     }
 }
 

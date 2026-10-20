@@ -120,6 +120,7 @@ error_codes! {
     FileUnreadable = "file_unreadable" => Usage,
     SpecInvalid = "spec_invalid" => Usage,
     TierInvalid = "tier_invalid" => Usage,
+    TierNotAllowed = "tier_not_allowed" => Usage,
     NothingToEdit = "nothing_to_edit" => Usage,
 
     // Exit 3: refused by an invariant.
