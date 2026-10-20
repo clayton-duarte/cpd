@@ -223,6 +223,10 @@ else
   if [ -n "$socket" ] && [ -n "$work" ] &&
     env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null list-windows -t "=$work" -F '#{window_name}' 2>/dev/null | grep -qx watch; then
     echo "restarting the running engine (cpd watch) to run the new binary" >&2
+    # Mark the restart as planned (hs-d471): the new engine then only logs a restart that is back within 10 s.
+    if ! mark=$("$dest_dir/cpd" watch --mark-restart 2>"$errfile"); then
+      fail "cpd watch --mark-restart: $mark $(cat "$errfile"); the engine restart is not marked as planned"
+    fi
     if ! env -u TMUX -u TMUX_PANE tmux -L "$socket" -f /dev/null kill-window -t "=$work:watch" >&2; then
       fail "tmux kill-window $work:watch failed: the engine still runs the old binary"
     else

@@ -217,6 +217,63 @@ fn watch_event(store: &mut Store, event: NewEvent) -> Result<i64, CpdError> {
     store.write(SOURCE, |tx| events::append(tx, event.clone()))
 }
 
+/// A restart that is back within this many seconds is logged only (User, hs-d471).
+const PLANNED_RESTART_QUIET_SECS: f64 = 10.0;
+/// The oldest an install's marker may be when the new engine starts (contract §3.7 "A planned restart").
+const PLANNED_RESTART_MARKER_MAX_AGE_SECS: i64 = 120;
+
+/// The install's marker of a planned restart, `run/install-restart.json`.
+fn marker_path(home: &CpdHome) -> std::path::PathBuf {
+    home.run_dir().join("install-restart.json")
+}
+
+/// `cpd watch --mark-restart`: writes the marker for the latest `watch-started`'s pid, by rename.
+pub(super) fn mark_restart() -> Result<Output, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
+    let data: Option<String> = store.read(|conn| {
+        Ok(conn.query_row("SELECT data FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).optional()?)
+    })?;
+    let pid = data
+        .and_then(|d| serde_json::from_str::<Value>(&d).ok())
+        .and_then(|d| d["pid"].as_i64())
+        .ok_or_else(|| CpdError::new(ErrorCode::WatchNotStarted, "No engine has started in this home."))?;
+    let marker = json!({"by": "install-cpd.sh", "at": clock::now(), "engine_pid": pid});
+    let io = |e: std::io::Error| CpdError::new(ErrorCode::Internal, format!("Cannot write {}: {e}.", marker_path(&home).display()));
+    std::fs::create_dir_all(home.run_dir()).map_err(io)?;
+    let tmp = home.run_dir().join(format!("install-restart.json.tmp.{}", std::process::id()));
+    std::fs::write(&tmp, marker.to_string()).map_err(io)?;
+    std::fs::rename(&tmp, marker_path(&home)).map_err(io)?;
+    Ok(Output::success(json!({"marked": true, "engine_pid": pid})))
+}
+
+/// Reads and deletes the marker; the pid of the engine it says is being retired when it is well formed and
+/// was written at `at <= now` and at most the max age ago. Nothing else is a marker; an unreadable file is logged once.
+fn consume_marker(home: &CpdHome, log: &mut Log, now: OffsetDateTime) -> Option<i64> {
+    let path = marker_path(home);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            log.line(&format!("cannot read {}: {e}", path.display()));
+            let _ = std::fs::remove_file(&path);
+            return None;
+        }
+    };
+    let _ = std::fs::remove_file(&path);
+    let parsed = serde_json::from_str::<Value>(&text).ok().and_then(|v| {
+        v.get("by")?.as_str()?;
+        let at = OffsetDateTime::parse(v.get("at")?.as_str()?, &Rfc3339).ok()?;
+        Some((at, v.get("engine_pid")?.as_i64()?))
+    });
+    let Some((at, pid)) = parsed else {
+        log.line(&format!("{} is not a marker ({}), ignored and deleted", path.display(), text.trim().chars().take(80).collect::<String>()));
+        return None;
+    };
+    (at <= now && now - at <= time::Duration::seconds(PLANNED_RESTART_MARKER_MAX_AGE_SECS)).then_some(pid)
+}
+
 /// How long the engine was down before this start (contract §3.7, hs-d328).
 struct Downtime {
     /// When the previous engine stopped: its `watch-stopped`, else the last time it was alive.
@@ -224,6 +281,10 @@ struct Downtime {
     /// Whether the previous engine said it stopped (`watch-stopped`): otherwise it crashed or was killed.
     said: bool,
     down: time::Duration,
+    /// The previous engine's pid and the install's marker for it, when the stop was an install's planned restart.
+    planned: bool,
+    /// The marker was valid but the engine stayed down past the quiet bound.
+    overdue: bool,
 }
 
 impl Downtime {
@@ -231,7 +292,7 @@ impl Downtime {
     /// (its `at` is when it stopped), or `watch-started` with no stop (a crash, SIGKILL): then it was last
     /// alive at the lock file's modification time (the engine marks it every tick), or at its start when
     /// that engine did not mark it.
-    fn since_previous(store: &mut Store, lock: &WatchLock) -> Result<Option<Downtime>, CpdError> {
+    fn since_previous(store: &mut Store, lock: &WatchLock, marker: Option<i64>) -> Result<Option<Downtime>, CpdError> {
         let last: Option<(String, String)> = store.read(|conn| {
             Ok(conn
                 .query_row(
@@ -241,18 +302,35 @@ impl Downtime {
                 )
                 .optional()?)
         })?;
+        // The engine whose stop is reported: the latest `watch-started`.
+        let previous_pid: Option<i64> = store.read(|conn| {
+            let data: Option<String> =
+                conn.query_row("SELECT data FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).optional()?;
+            Ok(data.and_then(|d| serde_json::from_str::<Value>(&d).ok()).and_then(|d| d["pid"].as_i64()))
+        })?;
+        let marked = marker.is_some() && marker == previous_pid;
         let Some((kind, at)) = last else { return Ok(None) };
         let at = OffsetDateTime::parse(&at, &Rfc3339)
             .map_err(|e| CpdError::new(ErrorCode::StoreFailed, format!("A {kind} Event has an `at` that is not RFC 3339: {e}.")))?;
         let said = kind == "watch-stopped";
         let since = if said { at } else { at.max(OffsetDateTime::from(lock.last_alive()?)) };
-        Ok(Some(Downtime { since, said, down: (OffsetDateTime::now_utc() - since).max(time::Duration::ZERO) }))
+        let down = (OffsetDateTime::now_utc() - since).max(time::Duration::ZERO);
+        let quiet = down.as_seconds_f64() <= PLANNED_RESTART_QUIET_SECS;
+        Ok(Some(Downtime { since, said, down, planned: marked && quiet, overdue: marked && !quiet }))
     }
 
     /// `The engine was down for 3.2 s: it stopped at … ` (the one sentence of the log, the Event and the message).
     fn sentence(&self) -> String {
         let how = if self.said { "it stopped" } else { "it was last alive (it left no watch-stopped: a crash or a kill)" };
-        format!("The engine was down for {:.1} s: {how} at {}.", self.down.as_seconds_f64(), clock::timestamp(self.since))
+        let at = clock::timestamp(self.since);
+        let secs = self.down.as_seconds_f64();
+        if self.overdue {
+            format!("The engine was down for {secs:.1} s: {how} at {at}; it was an install's restart that took longer than {PLANNED_RESTART_QUIET_SECS:.0} s.")
+        } else if self.planned {
+            format!("The engine was down for {secs:.1} s: {how} at {at} (an install's planned restart).")
+        } else {
+            format!("The engine was down for {secs:.1} s: {how} at {at}.")
+        }
     }
 
     /// One `session-message` (no `--wake`) to each Manager that is not archived, as `cpd session send` appends
@@ -288,15 +366,20 @@ pub(super) fn run() -> Result<Output, CpdError> {
     catch_signals()?;
     let pid = std::process::id();
     // What the previous engine left, read before this one's `watch-started` hides it.
-    let down = Downtime::since_previous(&mut store, &lock)?;
+    let marker = consume_marker(&home, &mut log, OffsetDateTime::now_utc());
+    let down = Downtime::since_previous(&mut store, &lock, marker)?;
     let how_long = down.as_ref().map(|d| format!(" {}", d.sentence())).unwrap_or_default();
     watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}).{how_long} See: cpd doctor"), pid))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
     if let Some(down) = down {
         log.line(&down.sentence());
-        match down.tell_managers(&mut store, pid) {
-            Ok(told) => log.line(&format!("told {told} Manager(s) how long the engine was down")),
-            Err(e) => log.line(&format!("cannot tell the Managers: {} ({})", e.message(), e.code().as_str())),
+        if down.planned {
+            log.line("a planned restart: no Manager is told");
+        } else {
+            match down.tell_managers(&mut store, pid) {
+                Ok(told) => log.line(&format!("told {told} Manager(s) how long the engine was down")),
+                Err(e) => log.line(&format!("cannot tell the Managers: {} ({})", e.message(), e.code().as_str())),
+            }
         }
     }
 
