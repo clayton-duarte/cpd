@@ -66,11 +66,55 @@ for name in PATH LANG LC_ALL LC_CTYPE TERM; do
 done
 allow="$allow HOME=$(shq "$tmp/home") TMPDIR=$(shq "$tmp") PI_CODING_AGENT_DIR=$(shq "$tmp/agent") PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1"
 cleanenv() { eval "env -i $allow \"\$@\""; }
-tmx() { cleanenv tmux -L "$socket" "$@"; }
+tmx() { cleanenv tmux -u -L "$socket" "$@"; }
 
+# The process ids of the private server's panes, recorded while they live (tmux >= 3.8 prints none once a pane's tty closed).
+pane_pids=
+record_panes() { pane_pids="$pane_pids $(tmx list-panes -a -F '#{pane_pid}' 2>/dev/null || true)"; }
+
+# True while a process of the group $1 lives (tmux makes a pane's process a session leader: its group id is its pid).
+group_alive() { kill -0 -- "-$1" 2>/dev/null; }
+
+# Waits, polling every 0.1 s, for at most $1 tenths of a second, until no pane's process group lives.
+wait_panes() {
+  waits=0
+  while [ "$waits" -lt "$1" ]; do
+    alive=0
+    for pid in $pane_pids; do
+      if group_alive "$pid"; then alive=1; fi
+    done
+    [ "$alive" -eq 1 ] || return 0
+    waits=$((waits + 1))
+    sleep 0.1
+  done
+  return 1
+}
+
+# The cleanup never changes the check's exit status (hs-d463): the status is saved first,
+# every command here may fail, and the last line exits with it. It stops the private
+# server and waits for its processes (a child still writing into $tmp made `rm -rf` fail
+# `Directory not empty` on macOS), retries the removal, and only warns when it cannot.
 cleanup() {
-  tmx kill-server >/dev/null 2>&1 || true
-  rm -rf "$tmp"
+  status=$?
+  set +e
+  record_panes
+  tmx kill-server >/dev/null 2>&1
+  if ! wait_panes 20; then
+    for pid in $pane_pids; do kill -9 -- "-$pid" 2>/dev/null; done
+    wait_panes 10
+  fi
+  tries=0
+  limit=$((${PI_CHECK_CLEANUP_SECS:-5} * 2))
+  while :; do
+    if err=$(rm -rf "$tmp" 2>&1); then break; fi
+    tries=$((tries + 1))
+    if [ "$tries" -ge "$limit" ]; then
+      echo "pi-check: warning: could not remove $tmp: $err" >&2
+      break
+    fi
+    sleep 0.5
+  done
+  exit "$status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -107,6 +151,7 @@ tmx -f /dev/null new-session -d -x 120 -y 30 -c "$tmp/home" \
   "env -i $allow PATH=$(shq "$tmp/bin:$PATH") CPD_SESSION='$session' CPD_HOME=$(shq "$tmp/home") \
    $pi_cmd --no-extensions --no-session --session-id '$session' -e '$adapter_dir' 2>'$tmp/tui.err'; echo \"pi exited \$?\" >>'$tmp/tui.err'" \
   || fail "step 3 (activation): cannot start tmux"
+record_panes
 
 tries=0
 until grep -q '^events follow' "$calls"; do
