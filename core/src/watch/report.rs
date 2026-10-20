@@ -32,6 +32,7 @@ pub(super) enum Step {
     Workers,
     E8,
     E9,
+    E10,
 }
 
 impl fmt::Display for Step {
@@ -46,6 +47,7 @@ impl fmt::Display for Step {
             Step::Workers => "the @cpd_workers step",
             Step::E8 => "E8 (Inbox)",
             Step::E9 => "E9 (Context digests)",
+            Step::E10 => "E10 (Session titles)",
         })
     }
 }
@@ -63,6 +65,7 @@ impl Step {
             Step::E8 => "E8",
             Step::Workers => "@cpd_workers",
             Step::E9 => "E9",
+            Step::E10 => "E10",
         }
     }
 }
@@ -77,6 +80,9 @@ pub(super) enum About {
     Job(PlanId, JobKey),
     Attempt(PlanId, AttemptId),
     Session(SessionId),
+    /// A Session's retitle run (E10): the Inbox scope and the command are the Session's, but the
+    /// `error` Event sets no Session, so no Lead gets a turn for it (contract §3.7 E10).
+    TitleRun(SessionId),
 }
 
 impl About {
@@ -86,7 +92,7 @@ impl About {
             About::Plan(p) => format!("Plan {p}"),
             About::Job(p, j) => format!("Job {j} of Plan {p}"),
             About::Attempt(p, a) => format!("Attempt {a} of Plan {p}"),
-            About::Session(s) => format!("Session {s}"),
+            About::Session(s) | About::TitleRun(s) => format!("Session {s}"),
         }
     }
 
@@ -95,7 +101,7 @@ impl About {
         match self {
             About::Machine => "cpd doctor".to_owned(),
             About::Plan(p) => format!("cpd plan show --plan {p}"),
-            About::Session(s) => format!("cpd session show {s}"),
+            About::Session(s) | About::TitleRun(s) => format!("cpd session show {s}"),
             About::Job(p, j) => format!("cpd job show {j} --plan {p}"),
             About::Attempt(p, a) => format!("cpd attempt show {a} --plan {p}"),
         }
@@ -108,14 +114,14 @@ impl About {
             About::Plan(p) => format!("plan:{p}"),
             About::Job(p, j) => format!("job:{p}/{j}"),
             About::Attempt(_, a) => format!("attempt:{a}"),
-            About::Session(s) => format!("session:{s}"),
+            About::Session(s) | About::TitleRun(s) => format!("session:{s}"),
         }
     }
 
     fn event(&self, text: String, failure: &Failure) -> NewEvent {
         let event = NewEvent::error(text, SOURCE, &failure.code, &failure.message, &failure.details);
         match self {
-            About::Machine => event,
+            About::Machine | About::TitleRun(_) => event,
             About::Plan(p) => event.plan(p.clone()),
             About::Session(s) => event.session(s.clone()),
             About::Job(p, j) => event.plan(p.clone()).job(j.clone()),
@@ -259,6 +265,15 @@ mod tests {
             report.clear(Step::E2, &About::Machine);
         }
         assert_eq!(errors(&mut store), 5);
+    }
+
+    /// A retitle failure is about its Session for the Inbox but sets no scope on its `error` Event.
+    #[test]
+    fn a_title_run_failure_names_its_session_and_sets_none_on_the_event() {
+        let about = About::TitleRun(SessionId::parse("lead1").unwrap());
+        assert_eq!((about.scope(), about.see()), ("session:lead1".to_owned(), "cpd session show lead1".to_owned()));
+        let event = about.event("x".to_owned(), &failure("title_failed"));
+        assert_eq!(format!("{event:?}").matches("session: None").count(), 1, "{event:?}");
     }
 
     /// engine-G6: a failure that cleared leaves nothing in the maps once the repeat period has passed.
