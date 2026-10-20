@@ -4,7 +4,7 @@
 //! mouse bytes sent to the pane.
 
 use crate::common;
-use crate::titles;
+use crate::tui_titles;
 
 use std::fs;
 use std::path::PathBuf;
@@ -70,7 +70,7 @@ fn confirm_draws_the_title_the_question_and_the_buttons() {
     let (pane, _) = start(&env, "confirm", &CONFIRM, 40, 7);
     let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[Archive]")));
     // an empty row, the title, an empty row, the question, two empty rows, the buttons
-    assert_eq!(rows[..2], ["", titles::title(40, "Title", None).as_str()]);
+    assert_eq!(rows[..2], ["", tui_titles::title(40, "Title", None).as_str()]);
     assert_eq!(rows[2..7], ["", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
 }
 
@@ -110,7 +110,7 @@ fn input_types_a_refused_value_stays_open_and_a_fixed_one_is_written() {
     let env = TestEnv::new();
     let (pane, out) = start(&env, "input", &INPUT, 60, 9);
     let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[OK]")));
-    assert_eq!(rows[1], titles::title(60, "Title", None));
+    assert_eq!(rows[1], tui_titles::title(60, "Title", None));
     assert_eq!(rows[3..5], [" Fork cpd-ui into a new Plan, name:", " ab"]);
     // "abBad" is no Plan id: refused inside the popup, which stays
     keys(&env, &pane, &["B", "a", "d", "Enter"]);
@@ -165,7 +165,7 @@ fn text_the_wheel_and_the_keys_scroll_it() {
     let body = format!("--body={}", body());
     let (pane, out) = start(&env, "text", &[&body], 30, 10);
     let rows = wait_screen(&env, &pane, "the dialog", |r| r.iter().any(|l| l.contains("[Close]")));
-    assert_eq!(rows[1], titles::title(30, "Title", None));
+    assert_eq!(rows[1], tui_titles::title(30, "Title", None));
     assert_eq!(rows[3], " line 1");
     assert_eq!(rows[7], " line 5");
     assert!(rows[9].ends_with("1-5/20"), "{rows:?}");

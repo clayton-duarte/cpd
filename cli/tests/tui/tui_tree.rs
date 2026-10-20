@@ -6,7 +6,7 @@
 //! in `tui/src/tree/`.
 
 use crate::common;
-use crate::titles;
+use crate::tui_titles;
 
 use std::time::{Duration, Instant};
 
@@ -39,7 +39,7 @@ fn collapse() -> String {
 /// The Inbox's pill title for `count` items in `inner` columns (the pane less its margins), after the margin: the collapsible form
 /// (hs-d478), the count a pill too (hs-d480).
 fn pill(inner: usize, count: usize) -> String {
-    titles::collapsible_title(inner + 2, "Inbox", Some(count))
+    tui_titles::collapsible_title(inner + 2, "Inbox", Some(count))
 }
 
 /// An Inbox item row in `inner` columns: the muted `│`, the icon, the label and the age (`5m`) at the last column.

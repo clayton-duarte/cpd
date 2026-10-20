@@ -4,7 +4,7 @@
 //! their areas), and the palette the two share.
 
 use crate::common;
-use crate::titles::{self, CAP_LEFT};
+use crate::tui_titles::{self, CAP_LEFT};
 
 use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
 use cpd_core::home::CpdHome;
@@ -190,7 +190,7 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 
 /// A section title on a `width`-column pane (hs-d475, hs-d476, hs-d478, hs-d480): the Deploy column's titles are not collapsible.
 fn pill(width: usize, title: &str, count: Option<usize>) -> String {
-    titles::title(width, title, count)
+    tui_titles::title(width, title, count)
 }
 
 /// A section title on the 46-column test pane.
