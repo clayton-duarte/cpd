@@ -1189,3 +1189,55 @@ fn a_linux_only_script_is_not_covered_and_a_covered_one_is_checked_by_the_defaul
     assert_eq!(run.exit, 1, "{}", run.stderr);
     assert!(run.stderr.contains("scripts/npm-fresh.sh:"), "{}", run.stderr);
 }
+
+// ---- The guard that a new tmux call cannot skip `-u` (hs-d463; docs/implementing.md "The row that guards tmux") ----
+
+/// `tmux` in command position whose next word is not `-u`: each is a hit, `fx.sh:2: bare tmux: use tmux -u, ...`.
+const BARE_TMUX: &[&str] = &[
+    "tmux -L s list-windows",
+    "env -u TMUX tmux -L s kill-window",
+    "env -u TMUX -u TMUX_PANE tmux -L \"$socket\" -f /dev/null list-windows",
+    "tmux -V",
+    "echo | tmux load-buffer -",
+    "tmux -f /dev/null new-session",
+    "x=$(tmux -L s list-panes)",
+    "! tmux -L s has-session",
+    "TMUX_TMPDIR=/tmp tmux -L s kill-server",
+];
+
+/// Not a call of tmux without `-u`: each passes.
+const TMUX_OK: &[&str] = &[
+    "tmux -u -L s list-windows",
+    "env -u TMUX -u TMUX_PANE tmux -u -L \"$socket\" -f /dev/null \"$@\"",
+    "tmx() { cleanenv tmux -u -L \"$socket\" \"$@\"; }",
+    "command -v tmux >/dev/null",
+    "for tool in tmux node; do :; done",
+    "# tmux -L s list-windows is what a bare call looks like",
+    "echo \"needs tmux\"",
+];
+
+#[test]
+fn a_bare_tmux_in_a_script_is_refused_and_tmux_u_is_not() {
+    let mut wrong = Vec::new();
+    for line in BARE_TMUX {
+        let run = check_line(line);
+        let named = run.stderr.lines().any(|l| l.starts_with("fx.sh:2: bare tmux: use tmux -u"));
+        if run.exit != 1 || !named || !run.stderr.trim_end().ends_with("check-portable: FAIL (1 hits)") {
+            wrong.push(format!("`{line}` is not refused as `fx.sh:2: bare tmux: use tmux -u ...`: exit {}, stderr {:?}", run.exit, run.stderr));
+        }
+    }
+    for line in TMUX_OK {
+        let run = check_line(line);
+        if run.exit != 0 || !run.all().contains("check-portable: ok (1 files, 0 exempt)") {
+            wrong.push(format!("`{line}` is refused: exit {}, output {:?}", run.exit, run.all()));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn a_bare_tmux_in_a_message_may_be_exempted_with_a_reason() {
+    let ok = check_line("echo tmux -L s # portable: a message, not a call");
+    assert_eq!(ok.exit, 0, "{}", ok.stderr);
+    assert!(ok.all().contains("check-portable: ok (1 files, 1 exempt)"), "{}", ok.all());
+}
