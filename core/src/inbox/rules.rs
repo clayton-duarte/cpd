@@ -18,8 +18,7 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::addr::review_host;
-use crate::ids::{ContextId, JobKey, OwnerLogin, PlanId, RepoName, SessionId};
-use crate::policy::{Checks, PolicyKey, owner_unset, resolve, resolve_unowned_row};
+use crate::ids::{ContextId, JobKey, PlanId, SessionId};
 use crate::plan::Phase;
 use crate::store::Store;
 
@@ -58,7 +57,7 @@ pub fn conditions_with(store: &mut Store, home: &CpdHome, now: OffsetDateTime, t
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
-    all.extend(store.read(|conn| pr_ready(conn, home))?);
+    all.extend(store.read(|conn| pr_ready(conn))?);
     all.extend(review_requested(store, home, now, team)?);
     Ok(all)
 }
@@ -296,23 +295,20 @@ pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration)
 // ---- Pull requests: pr-ready, review-requested -------------------------------------------
 
 /// The open `pull_requests` rows that match `filter`, a SQL condition over `r`, oldest first, as conditions of `kind`
-/// and `urgency`. `label` makes the label from the row's repo without its owner and its number. A `prs` row that points to the pull request links its Plan, Context and Lead. A row whose checks did not pass and whose policy
-/// does not resolve is one `engine-error` condition naming the file and code, beside the others (§8.3).
+/// and `urgency`. `label` makes the label from the row's repo without its owner and its number. A `prs` row that
+/// points to the pull request links its Plan, Context and Lead. The filter alone decides (hs-d481): no checks or policy are read.
 fn pull_request_conditions(
     conn: &Connection,
-    home: &CpdHome,
     kind: Kind,
     urgency: Urgency,
     filter: &str,
     label: fn(&str, i64) -> String,
 ) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT r.repo, r.number, r.url, r.checks, p.context, prs.plan, p.lead_session,
-                c.owner, prs.name
+        "SELECT r.repo, r.number, r.url, p.context, prs.plan, p.lead_session
            FROM pull_requests r
            LEFT JOIN prs ON prs.pull_request = r.id
            LEFT JOIN plans p ON p.id = prs.plan
-           LEFT JOIN contexts c ON c.id = p.context
           WHERE r.state = 'open' AND {filter}
           ORDER BY r.id"
     ))?;
@@ -320,111 +316,35 @@ fn pull_request_conditions(
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         let (repo, number, url): (String, i64, String) = (row.get(0)?, row.get(1)?, row.get(2)?);
-        let checks: String = row.get(3)?;
-        let (owner, pr_name): (Option<String>, Option<String>) = (row.get(7)?, row.get(8)?);
         let (context, plan, lead): (Option<String>, Option<String>, Option<String>) =
-            (row.get(4)?, row.get(5)?, row.get(6)?);
+            (row.get(3)?, row.get(4)?, row.get(5)?);
         let name = repo.split_once('/').map_or(repo.as_str(), |(_, name)| name);
-        let links = |kind, urgency, subject, label, url| -> Result<Condition, CpdError> {
-            Ok(Condition {
-                kind,
-                urgency,
-                subject,
-                label,
-                url,
-                context: context.as_deref().map(|c| id("Context id", c, ContextId::parse)).transpose()?,
-                plan: plan.as_deref().map(|p| id("Plan id", p, PlanId::parse)).transpose()?,
-                job: None,
-                session: lead.as_deref().map(|s| id("Session id", s, SessionId::parse)).transpose()?,
-                record: None,
-                event: None,
-            })
-        };
-        // `pr-ready` needs passed checks only where the row's policy says `any` (§8.3), so it asks the policy for any
-        // row whose checks did not pass.
-        if checks != "passed" {
-            // A PR points to the row: its Context's owner keys it, and an unset one is `owner_unset`, never the unowned rule.
-            let owned = plan.as_ref().map(|_| Owned { context: context.as_deref().unwrap_or_default(), owner: owner.as_deref(), name: pr_name.as_deref() });
-            let counts = match checks_policy(home, &repo, owned)? {
-                Ok(policy) => policy == Checks::Any,
-                Err(error) => {
-                    // The row's checks are unknown. A failed row of no Plan is no `pr-ready` candidate: its error is not told (hs-d470).
-                    if checks != "failed" || plan.is_some() {
-                        let code = error.code().as_str();
-                        out.push(links(
-                            Kind::EngineError,
-                            Urgency::Red,
-                            format!("error:E8/pr:{repo}#{number}/{code}"),
-                            format!("policy of {name}#{number}: {code} ({})", failed_file(home, &error)),
-                            Some(url.clone()),
-                        )?);
-                    }
-                    continue;
-                }
-            };
-            if counts {
-                continue;
-            }
-        }
-        out.push(links(kind, urgency, format!("pr:{repo}#{number}"), label(name, number), Some(url))?);
+        out.push(Condition {
+            kind,
+            urgency,
+            subject: format!("pr:{repo}#{number}"),
+            label: label(name, number),
+            url: Some(url),
+            context: context.as_deref().map(|c| id("Context id", c, ContextId::parse)).transpose()?,
+            plan: plan.as_deref().map(|p| id("Plan id", p, PlanId::parse)).transpose()?,
+            job: None,
+            session: lead.as_deref().map(|s| id("Session id", s, SessionId::parse)).transpose()?,
+            record: None,
+            event: None,
+        });
     }
     Ok(out)
 }
 
-/// What a resolve error names: the policy file (`policy_invalid`, `owner_unknown`), or the Context (`owner_unset`).
-fn failed_file(home: &CpdHome, error: &CpdError) -> String {
-    let detail = |key: &str| error.details().get(key).and_then(|v| v.as_str());
-    match (detail("file"), detail("owner"), detail("context")) {
-        (Some(file), _, _) => file.to_owned(),
-        (_, Some(owner), _) => home.root().join("policy").join("owners").join(format!("{owner}.toml")).display().to_string(),
-        (_, _, Some(context)) => format!("Context {context}"),
-        _ => error.message().to_owned(),
-    }
-}
-
-/// The PR a `pull_requests` row points to, as the Inbox query reads it: the Context's `owner` (NULL for a legacy
-/// Context) and the PR's repo `name` (NULL before the migration).
-struct Owned<'a> {
-    context: &'a str,
-    owner: Option<&'a str>,
-    name: Option<&'a str>,
-}
-
-/// `pr.feedback.checks` of a pull request row: the key of the PR that points to it (`Some`), else `Repo` of the
-/// row's `owner/name` through the unowned-row entry point (`None`). The outer error is a stored value that does not
-/// parse; the inner one the resolve's, which the caller reports for its row.
-fn checks_policy(home: &CpdHome, repo: &str, owned: Option<Owned<'_>>) -> Result<Result<Checks, CpdError>, CpdError> {
-    let parse = |what: &str| corrupt(what, repo);
-    let resolved = match owned {
-        Some(Owned { context, owner: None, .. }) => Err(owner_unset(&id("Context id", context, ContextId::parse)?)),
-        Some(Owned { owner: Some(owner), name, .. }) => {
-            let owner = OwnerLogin::parse(owner)?;
-            match name {
-                Some(name) => resolve(home, &PolicyKey::Repo(owner, RepoName::parse(name)?)),
-                None => resolve(home, &PolicyKey::Owner(owner)),
-            }
-        }
-        None => {
-            let (owner, name) = repo.split_once('/').ok_or_else(|| parse("pull request repo"))?;
-            let key = PolicyKey::Repo(
-                OwnerLogin::parse(owner).map_err(|_| parse("pull request repo owner"))?,
-                RepoName::parse(name).map_err(|_| parse("pull request repo name"))?,
-            );
-            resolve_unowned_row(home, &key)
-        }
-    };
-    Ok(resolved.map(|resolved| resolved.policy.pr.feedback.checks))
-}
-
-/// `pr-ready`: an authored, open, non-draft pull request has passed checks (any checks under `feedback.checks = none`), no conflict and no changes requested.
-fn pr_ready(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+/// `pr-ready` (hs-d481): GitHub would merge the pull request now. It is open, not a draft, authored, its merge state is
+/// clean, unstable or has_hooks, and its review decision is approved or none. Checks and `pr.feedback.checks` are not read.
+fn pr_ready(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
-        home,
         Kind::PrReady,
         Urgency::Yellow,
-        "r.authored = 1 AND r.draft = 0 AND r.mergeable = 'mergeable'
-         AND r.review_decision <> 'changes_requested'",
+        "r.authored = 1 AND r.draft = 0 AND r.merge_state IN ('clean', 'unstable', 'has_hooks')
+         AND r.review_decision IN ('approved', 'none')",
         |name, n| format!("{name}#{n} ready to merge"),
     )
 }
@@ -988,11 +908,17 @@ mod tests {
 
     /// An open, authored, non-draft pull request `acme/shop#n` with the given checks, mergeable and review values.
     fn pull_request(f: &mut Fixture, n: i64, checks: &str, mergeable: &str, review: &str) {
+        // GitHub's merge state follows mergeable (hs-d481): a conflict is dirty, an unknown mergeable unknown.
+        let merge_state = match (mergeable, checks) {
+            ("conflicting", _) => "dirty",
+            ("unknown", _) => "unknown",
+            _ => "clean",
+        };
         f.sql(&format!(
             "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at,
-                                        mergeable, authored, review_requested)
+                                        mergeable, authored, review_requested, merge_state)
              VALUES ('acme/shop', {n}, 'https://github.com/acme/shop/pull/{n}', 'T', 0, 'open', '{review}', '{checks}', '{T}', '{T}',
-                     '{mergeable}', 1, 0);"
+                     '{mergeable}', 1, 0, '{merge_state}');"
         ));
     }
 
@@ -1009,6 +935,7 @@ mod tests {
     fn failed_checks_open_no_pr_failing_condition_hs_d470() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 7, "failed", "mergeable", "none");
+        set(&mut f, 7, "merge_state = 'blocked'"); // a required check failed (hs-d481)
         assert!(f.of(Kind::PrFailing).is_empty());
         assert!(pr_kinds(&mut f).is_empty());
     }
@@ -1021,7 +948,7 @@ mod tests {
         assert!(f.of(Kind::PrReady).is_empty());
         set(&mut f, 8, "checks = 'failed'");
         assert!(f.of(Kind::PrFailing).is_empty());
-        set(&mut f, 8, "checks = 'passed', mergeable = 'mergeable'");
+        set(&mut f, 8, "checks = 'passed', mergeable = 'mergeable', merge_state = 'clean'");
         assert!(f.of(Kind::PrFailing).is_empty());
         assert_eq!(f.of(Kind::PrReady).len(), 1);
     }
@@ -1055,7 +982,65 @@ mod tests {
         set(&mut f, 4, "draft = 0, review_decision = 'changes_requested'");
         assert!(f.of(Kind::PrReady).is_empty());
         set(&mut f, 4, "review_decision = 'approved', checks = 'pending'");
-        assert!(f.of(Kind::PrReady).is_empty());
+        assert_eq!(f.of(Kind::PrReady).len(), 1, "checks no longer matter (hs-d481)");
+    }
+
+    /// The exact row of missionlane/cc-api-orc-apollo#2385 (hs-d481): everything looks ready but GitHub says BLOCKED.
+    #[test]
+    fn the_state_of_cc_api_orc_apollo_2385_is_not_ready() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 5, "passed", "mergeable", "none");
+        set(&mut f, 5, "merge_state = 'blocked'");
+        assert!(f.of(Kind::PrReady).is_empty(), "unowned");
+        own(&mut f, 5);
+        assert!(f.of(Kind::PrReady).is_empty(), "owned");
+    }
+
+    #[test]
+    fn pr_ready_is_decided_by_merge_state_and_review_decision_hs_d481() {
+        let ready = |merge_state: &str, review: &str| {
+            let mut f = fixture("dispatch");
+            pull_request(&mut f, 1, "passed", "mergeable", review);
+            set(&mut f, 1, &format!("merge_state = '{merge_state}'"));
+            !f.of(Kind::PrReady).is_empty()
+        };
+        for merge_state in ["clean", "unstable", "has_hooks"] {
+            for review in ["approved", "none"] {
+                assert!(ready(merge_state, review), "{merge_state} {review} is ready");
+            }
+            assert!(!ready(merge_state, "changes_requested"), "{merge_state} with changes requested is not ready");
+        }
+        for merge_state in ["blocked", "behind", "dirty", "unknown", "draft"] {
+            for review in ["approved", "none", "changes_requested"] {
+                assert!(!ready(merge_state, review), "{merge_state} {review} is not ready");
+            }
+        }
+    }
+
+    #[test]
+    fn checks_no_longer_matter_to_pr_ready_hs_d481() {
+        let mut f = fixture("dispatch");
+        let owners = f.home.root().join("policy/owners");
+        std::fs::create_dir_all(&owners).unwrap();
+        std::fs::write(owners.join("acme.toml"), "[pr]\ngate = \"local\"\nfeedback.checks = \"any\"\n").unwrap();
+        for (n, checks) in [(1, "failed"), (2, "pending")] {
+            pull_request(&mut f, n, checks, "mergeable", "none");
+        }
+        own(&mut f, 1);
+        set(&mut f, 1, "merge_state = 'unstable'");
+        assert_eq!(f.of(Kind::PrReady).len(), 2, "clean or unstable is ready under `any`, whatever the checks");
+    }
+
+    #[test]
+    fn an_open_pr_ready_item_closes_when_its_pull_request_becomes_blocked_hs_d481() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 5, "passed", "mergeable", "none");
+        let found = conditions(&mut f.store, &f.home).unwrap();
+        assert_eq!(reconcile(&mut f.store, &found, T).unwrap().opened.len(), 1);
+        set(&mut f, 5, "merge_state = 'blocked'");
+        let found = conditions(&mut f.store, &f.home).unwrap();
+        let changes = reconcile(&mut f.store, &found, T).unwrap();
+        assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1), "the open item closes");
     }
 
     #[test]
@@ -1068,20 +1053,21 @@ mod tests {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
         assert_eq!(f.of(Kind::PrReady).len(), 3);
-        assert!(f.of(Kind::PrFailing).is_empty());
         set(&mut f, 1, "draft = 1");
         set(&mut f, 2, "review_decision = 'changes_requested'");
-        set(&mut f, 3, "mergeable = 'conflicting'");
-        assert!(f.of(Kind::PrReady).is_empty(), "draft, changes requested and conflict still bar it");
+        set(&mut f, 3, "merge_state = 'blocked'");
+        assert!(f.of(Kind::PrReady).is_empty(), "draft, changes requested and a blocked merge state still bar it");
     }
 
     #[test]
-    fn with_feedback_checks_any_a_pr_is_ready_only_when_its_checks_passed() {
+    fn with_feedback_checks_any_a_pr_is_ready_by_merge_state_and_review_alone() {
         let mut f = fixture("dispatch");
         for (n, checks) in [(1, "none"), (2, "failed"), (3, "pending"), (4, "passed")] {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
-        assert_eq!(one(f.of(Kind::PrReady)).subject, "pr:acme/shop#4");
+        assert_eq!(f.of(Kind::PrReady).len(), 4, "checks do not decide (hs-d481)");
+        set(&mut f, 4, "merge_state = 'blocked'");
+        assert_eq!(f.of(Kind::PrReady).len(), 3);
     }
 
     #[test]
@@ -1146,6 +1132,9 @@ mod tests {
         ] {
             let mut f = fixture("dispatch");
             pull_request(&mut f, 6, checks, mergeable, review);
+            if checks == "failed" {
+                set(&mut f, 6, "merge_state = 'blocked'"); // a required check failed (hs-d481)
+            }
             own(&mut f, 6);
             assert!(pr_kinds(&mut f).is_empty(), "{checks} {mergeable} {review}");
         }
