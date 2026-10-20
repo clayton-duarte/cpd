@@ -1273,9 +1273,11 @@ The PR poller (hs-d96, D8; contract §7.6): one poll of **all of the User's open
 |---|---|---|
 | the lock `locks/pr-poll.lock` within 60 s | `lock_timeout` | 5 |
 | `--plan` names no Plan | `plan_not_found` | 4 |
-| a `gh` call fails, times out (15 s each), prints an empty or non-JSON body, answers the search with `errors`, or answers the lookup with no `data`; `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
+| a `gh` call fails, times out (15 s each), prints an empty or non-JSON body, answers the search with `errors`, or answers the lookup with no `data`; `details` is `{argv, exit, stderr, call, transient, reason}`: `call` is `search` or `lookup`, `transient` is true for an HTTP 5xx (`gh`'s `HTTP 5xx` in its message) or a 15 s timeout, false for everything else, and `reason` is `HTTP <status>`, `timeout` or null (contract §7.6 step 4, hs-d354) | `gh_failed` | 1 |
 
 There is no phase precondition: a Plan in any phase gets the poll.
+
+**A transient `gh_failed`** (`details.transient` true) is still exit 1 and writes nothing: the command never retries, waits or keeps state, so a Lead's `pr poll` by hand fails at once. The tolerance is engine E5's (contract §3.7): it logs a `watch.log` line, polls again at the next due time, and raises an `error` Event only after `watch.pr_poll_transient_minutes` (default 10) of the same call failing, keeping the first failure's time in `run/pr-poll-failing.json`. Every other `gh_failed` is an `error` Event at once.
 
 Effects (contract §7.6 gives the query, the mapping and the caveats):
 - **Lock:** `flock` on `locks/pr-poll.lock`, held for the whole poll, so two polls never overlap.

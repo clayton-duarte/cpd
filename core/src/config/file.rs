@@ -187,6 +187,8 @@ pub struct Watch {
     pub team_review_seconds: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
+    /// E5 raises an `error` once the same `gh` call of the poll has failed with an HTTP 5xx or a timeout this long (§3.7, §8.2).
+    pub pr_poll_transient_minutes: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -316,6 +318,7 @@ impl Config {
             pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
             team_review_seconds: positive(&mut r, "watch.team_review_seconds", 1800)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
+            pr_poll_transient_minutes: positive(&mut r, "watch.pr_poll_transient_minutes", 10)?,
         };
         let slack_id = |first: char| move |v: Value| {
             let id = text_of(&v)?;
