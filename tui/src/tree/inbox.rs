@@ -197,8 +197,8 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318). `engine-down`
 /// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
-/// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (or says there is
-/// none yet); the `url` is copied for `review-requested` (their OSC 8 link stays for the
+/// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
+/// one); the `url` is copied for `review-requested` (their OSC 8 link stays for the
 /// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
@@ -209,8 +209,11 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
         Kind::PlanReview => {
             let open = open_lead(tree, item.plan.as_ref()?)?;
-            let page = item.url.as_ref().map_or_else(|| Action::Note(NO_REVIEW_PAGE.into()), |url| Action::CopyUrl(url.clone()));
-            Some(Jump::Steps(vec![open, page]))
+            // with no port file yet there is no page to copy: the Lead opens, and nothing else happens
+            Some(match item.url.as_ref() {
+                Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
+                None => Jump::Run(open),
+            })
         }
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
@@ -218,9 +221,6 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         }
     }
 }
-
-/// The note of a `plan-review` click when the Plan has no port file, so no page to copy.
-const NO_REVIEW_PAGE: &str = "no review page yet";
 
 /// `session open` of the Lead of Plan `plan` (`session history` if archived); none for a Plan the tree does not have.
 fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
@@ -464,8 +464,8 @@ mod tests {
         );
         assert_eq!(
             jump(&tree, &with(Kind::PlanReview, &plan)),
-            steps(Action::Note("no review page yet".into())),
-            "no port file: the Lead, and the note says so"
+            Some(Jump::Run(Action::Open(sid("l-ship")))),
+            "no port file: the Lead opens and nothing else happens"
         );
         let merge = |subject: &str| Pull::from_subject(subject).map(Jump::Merge);
         let ready = |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
