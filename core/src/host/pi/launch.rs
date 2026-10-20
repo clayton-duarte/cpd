@@ -128,13 +128,19 @@ pub fn lead(launch: &LeadLaunch) -> Launch {
 fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
     let Some(plan) = launch.plan else {
         // A Context's Manager (contract §6.5, "Manager").
-        return BTreeMap::from([
+        let mut env = BTreeMap::from([
             session_path(launch.home),
             ("CPD_HOME".to_owned(), launch.home.root().display().to_string()),
             ("CPD_SESSION".to_owned(), launch.session.to_string()),
             ("PLANNOTATOR_UPDATE_CHECK".to_owned(), "0".to_owned()),
+            ("PLANNOTATOR_REMOTE".to_owned(), "1".to_owned()),
+            (URL_HOST.to_owned(), launch.plannotator.url_host.clone()),
             (SKIP_VERSION_CHECK.0.to_owned(), SKIP_VERSION_CHECK.1.to_owned()),
         ]);
+        if let Some(port) = &launch.plannotator.port {
+            env.insert("PLANNOTATOR_PORT".into(), port.clone());
+        }
+        return env;
     };
     let mut env = base_env(launch.home, launch.session, plan);
     env.insert("PLANNOTATOR_DATA_DIR".into(), launch.home.plan_dir(plan).join("plannotator").display().to_string());
