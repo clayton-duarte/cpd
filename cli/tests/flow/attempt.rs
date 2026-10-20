@@ -585,16 +585,23 @@ fn a_test_or_impl_job_in_a_repo_with_no_tests_table_is_refused_tests_unconfigure
 
 #[test]
 fn a_tests_table_that_is_not_as_documented_is_config_invalid() {
-    for toml in [
-        "[tests]\nbuild = \"true\"\n",                                          // `run` missing
-        "[tests]\nrun = \"true\"\n",                                            // `build` missing
-        "[tests]\nbuild = \"true\"\nrun = \"true\"\nlist = \"true\"\n",          // `list` without the variable `test`
-        "[tests]\nbuild = \"true\"\nrun = \"true\"\nextra = \"true\"\n",         // any other key
+    // The table is part of `.config/cpd.toml` (contract §7.5, §7.7): a valid one, `list` included, is read.
+    let fx = red("protected = [\"verify.sh\"]\n[tests]\nbuild = \"true\"\nlist = \"echo {{ test }}\"\nrun = \"false\"\n");
+    fx.commit("tests/t.rs", "// red\n");
+    fx.submit().ok();
+    assert_eq!(fx.status(), "merging");
+
+    for (toml, key) in [
+        ("[tests]\nbuild = \"true\"\n", "run"),                                          // `run` missing
+        ("[tests]\nrun = \"true\"\n", "build"),                                           // `build` missing
+        ("[tests]\nbuild = \"true\"\nrun = \"true\"\nlist = \"true\"\n", "list"),         // `list` without the variable `test`
+        ("[tests]\nbuild = \"true\"\nrun = \"true\"\nextra = \"true\"\n", "extra"),       // any other key
     ] {
         let fx = red(toml);
         fx.commit("tests/t.rs", "// red\n");
         let error = refused(&fx.submit(), "config_invalid", 1);
         assert_eq!(error["details"]["file"], ".config/cpd.toml", "{toml}");
+        assert!(error["message"].as_str().unwrap().contains(key), "the message names `{key}`: {error}");
         assert_eq!(fx.status(), "running", "{toml}");
     }
 }
@@ -622,7 +629,7 @@ fn list_refuses_a_name_that_matches_no_test_for_an_impl_job_too_and_passes_when_
     assert_eq!(fx.seen("ran.txt"), None);
 
     // Every name exists: `list` does not decide, `run` does (here it fails: a red test Job passes).
-    let fx = red(&TESTS_LIST.replace("t::typo", "t::one"));
+    let fx = red(TESTS_LIST);
     fx.commit("tests/t.rs", "// red\n");
     fx.submit().ok();
     assert_eq!(fx.seen("listed.txt").as_deref(), Some("t::one\n"));
