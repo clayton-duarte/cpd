@@ -49,7 +49,8 @@ use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 
 use crate::fold;
 use crate::palette::{self, Meaning};
-use crate::widgets::{Window, dim, max_scroll, window};
+use crate::dialog::scroll::{Cue, cue};
+use crate::widgets::{Window, max_scroll, window};
 use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, PlanNode, SessionNode, Tree};
 use cpd_core::inbox::model::Kind;
@@ -347,7 +348,7 @@ pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -
 }
 
 /// The tree's scroll (commands.md §13.2, hs-d307): the first row drawn, which the wheel and the cursor move. View state
-/// only. The rows scroll in their area with a dim ` ▲ <n> more` / ` ▼ <n> more` cue row where some are hidden (the Deploy
+/// only. The rows scroll in their area with a dim, right-aligned `▲ <n> more` / `▼ <n> more` cue row (`dialog::scroll::cue`, hs-d348) where some are hidden (the Deploy
 /// column's PR list and the Inbox section scroll with the same code, one row a row).
 #[derive(Debug, Default)]
 pub struct Scroll {
@@ -425,10 +426,10 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
     state.scroll_down(win.first);
     f.render_stateful_widget(widget(), rows, state);
     if win.cue_above {
-        f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), Rect::new(area.x, area.y, area.width, 1));
+        f.render_widget(Paragraph::new(cue(Cue::Above, win.first, usize::from(area.width))), Rect::new(area.x, area.y, area.width, 1));
     }
     if win.below > 0 {
-        f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), Rect::new(area.x, area.bottom() - 1, area.width, 1));
+        f.render_widget(Paragraph::new(cue(Cue::Below, win.below, usize::from(area.width))), Rect::new(area.x, area.bottom() - 1, area.width, 1));
     }
     let buf = f.buffer_mut();
     for (y, flat_row) in (rows.y..rows.bottom()).zip(flat.iter().skip(win.first)) {
@@ -757,7 +758,7 @@ mod tests {
     fn a_context_has_the_dot_of_its_manager_and_not_of_any_session_inside() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 9, false);
-        assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha 3"), "its Manager's, not its working Lead's");
+        assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha"), "its Manager's, not its working Lead's, and no Plan count: a fold hides only archived rows");
         let calm = super::super::fixture::tree(vec![managed(context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])]), Dot::Idle)]);
         assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), format!("╭{IDLE} cc"));
         let blocked = super::super::fixture::tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Red)]), Dot::Idle)]);
