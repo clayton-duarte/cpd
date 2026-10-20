@@ -22,7 +22,7 @@ The levels, the cpd objects and their roles:
 ```sh
 sh scripts/install-cpd.sh   # ~/.local/bin/cpd and ~/.local/share/cpd/pi
 cpd tui --attach            # open the cockpit
-sh scripts/preview-tui.sh on   # preview this checkout's cockpit views
+sh scripts/preview-tui.sh on   # preview this checkout's cockpit views (the status line shows 'preview: <worktree> <sha>')
 sh scripts/preview-tui.sh off  # back to the installed cpd
 ```
 
