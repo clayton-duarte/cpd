@@ -429,7 +429,7 @@ fn set_pane_title_runs_set_p_on_cpd_title_and_a_missing_pane_fails_with_its_argv
     let (_, pane_id) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap().unwrap();
     t.set_pane_title(&pane_id, "Retry #{x} payouts; ok").unwrap();
     let shown = s.env.tmux(&["show", "-pv", "-t", pane_id.as_str(), "@cpd_title"]);
-    assert_eq!(String::from_utf8_lossy(&shown.stdout), "Retry #{x} payouts; ok\n");
+    assert_eq!(String::from_utf8_lossy(&shown.stdout), "Retry #{x} Payouts; Ok\n");
 
     let missing = PaneId::parse("%999").unwrap();
     let err = t.set_pane_title(&missing, "X").unwrap_err();

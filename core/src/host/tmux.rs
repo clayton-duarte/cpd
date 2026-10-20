@@ -57,16 +57,22 @@ pub const OPT_HISTORY: &str = "@cpd_history";
 /// The pane border titles (contract §6.1), keyed by the pane options, first
 /// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` when set, else
 /// nothing; the chat placeholder and a history pane have none, since pi and
-/// the placeholder say what they are; the
-/// views have their column titles; any other pane shows its command. Every
-/// title is a pill (hs-d266): the title reversed (`#[reverse]`..`#[noreverse]`),
-/// a block in the border's colour with the text in the background colour, between
-/// a rounded cap on each side, `\u{e0b6}` and `\u{e0b4}`. The caps are drawn without
-/// reverse, so tmux gives them the border style's foreground: blue on the focused
-/// pane, the border colour elsewhere (checked on a private server).
-pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\u{e0b6}#[reverse] #{@cpd_title} #[noreverse]\u{e0b4},},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-\u{e0b6}#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]\u{e0b4}}}}";
+/// the placeholder say what they are; the views have their column titles; any
+/// other pane shows its command. Every title is a pill (hs-d266, hs-d475): the
+/// text reversed (`#[reverse]`..`#[noreverse]`) with no padding, between a
+/// rounded cap on each side, `\u{e0b6}` and `\u{e0b4}`. The pill is grey (colour 8)
+/// and blue on the focused pane, set in the format itself (`pane_active`), so the
+/// caps and the block take it whatever the border lines' colour is. tmux draws two
+/// border line characters before the format; one `━` more in the pill's colour
+/// puts the left cap at column 3 from the pane's edge (hs-d478, checked on a
+/// private server).
+pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]\
+#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
+#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
+#[noreverse]\u{e0b4}}}}";
 
 /// What the supervising hooks run when the engine's pane died or its window is
 /// gone (contract §6.6): `watch --ensure --wait`, which starts the engine again
@@ -574,7 +580,7 @@ impl Tmux {
 
     /// `set -p -t <pane> @cpd_title <title>`, the title in Title Case (hs-d475, [`title_case`]).
     pub fn set_pane_title(&self, pane: &PaneId, title: &str) -> Result<(), CpdError> {
-        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_TITLE, title])).map(drop)
+        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_TITLE, &title_case(title)])).map(drop)
     }
 
     /// `set -p -t <pane> @cpd_view <view>`.
@@ -897,8 +903,18 @@ fn parse_pane(line: &str) -> Option<Line> {
 
 /// The text in Title Case (contract §6.1, hs-d475): the first letter of each space-separated word upper-cased, the
 /// rest of each word unchanged, so ids, acronyms and `E10` stay.
-pub fn title_case(_text: &str) -> String {
-    todo!("title_case (hs-d475)")
+pub fn title_case(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut word_start = true;
+    for c in text.chars() {
+        if word_start {
+            out.extend(c.to_uppercase());
+        } else {
+            out.push(c);
+        }
+        word_start = c == ' ';
+    }
+    out
 }
 
 fn strings(args: &[&str]) -> Vec<String> {
