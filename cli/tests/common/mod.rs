@@ -337,6 +337,9 @@ pub struct TestEnv {
     reaper: Mutex<Option<Child>>,
     /// The reaper's start: every process this env starts starts at or after it.
     since: OnceLock<Since>,
+    /// The read-only connection [`TestEnv::read`] reads on, kept open across reads (a new connection parses the whole
+    /// schema at its first query: ~10-15 ms a read), with the identity (device, inode) of the `cpd.db` it opened.
+    reader: Mutex<Option<((u64, u64), rusqlite::Connection)>>,
 }
 
 /// When a process started: its pid and its start time.
@@ -399,7 +402,7 @@ impl TestEnv {
     pub fn empty() -> TestEnv {
         let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir().expect("temp dir");
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
-        let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None), since: OnceLock::new() };
+        let env = TestEnv { dir, tmux_socket: format!("cpdt-{}-{n}", std::process::id()), reaper: Mutex::new(None), since: OnceLock::new(), reader: Mutex::new(None) };
         for sub in ["cpd-home", "home", "bin", "tmux", "repos"] {
             fs::create_dir_all(env.dir.path().join(sub)).expect("create test dir");
         }
@@ -549,13 +552,22 @@ impl TestEnv {
 
     /// `f` on a read-only connection to this env's store, for a test that only looks: no
     /// [`Store::open`] (its migration and schema check cost ~30 ms per open in a debug build).
+    /// One connection serves every read (each statement sees the last commit); it is opened again
+    /// when `cpd.db` is another file than the one it opened (replaced, or removed and created).
     /// Panics when the store does not exist or `f` fails.
     pub fn read<T>(&self, f: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>) -> T {
+        use std::os::unix::fs::MetadataExt;
         let db = self.cpd_home().join("cpd.db");
-        let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
-        conn.busy_timeout(Duration::from_secs(5)).expect("set the busy timeout");
-        f(&conn).unwrap_or_else(|e| panic!("read {}: {e}", db.display()))
+        let file = fs::metadata(&db).map(|m| (m.dev(), m.ino())).unwrap_or_else(|e| panic!("stat {}: {e}", db.display()));
+        let mut reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
+        if reader.as_ref().is_none_or(|(opened, _)| *opened != file) {
+            let conn = rusqlite::Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap_or_else(|e| panic!("open {} read-only: {e}", db.display()));
+            conn.busy_timeout(Duration::from_secs(5)).expect("set the busy timeout");
+            *reader = Some((file, conn));
+        }
+        let (_, conn) = reader.as_ref().expect("opened above");
+        f(conn).unwrap_or_else(|e| panic!("read {}: {e}", db.display()))
     }
 
     /// The first column of the one row `sql` returns, read with [`TestEnv::read`].
