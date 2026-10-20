@@ -212,11 +212,15 @@ export class Fixture {
   /** Start the adapter under test with fast timing; into `pi` (default the fixture's) to run a second adapter on the same fake `cpd`. */
   load(options: Options = {}, pi: FakePi = this.pi): void {
     const start = options.spawn ?? spawn;
+    // The caller's own `reload` object, completed: the adapter reads it at every poll, so a test can change `timeoutMs` while it runs.
+    const reload = options.reload ?? {};
+    reload.dir ??= this.adapterDir;
+    reload.intervalMs ??= 20;
     adapter(pi, {
       ...options,
       spawn: ((...args: Parameters<typeof spawn>) => pi.track(start(...args))) as typeof spawn,
       timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
-      reload: { dir: this.adapterDir, intervalMs: 20, ...options.reload },
+      reload,
     });
   }
 
@@ -405,8 +409,8 @@ export class FakePi implements PiApi {
   };
 
   /** Runs a registered tool like pi does. The adapter's tool reads nothing of the tool context, so the fake passes none of pi's. */
-  async runTool(tool: ToolDefinition<any, any, any>): Promise<{ text: string; details: unknown }> {
-    const out = await tool.execute("call-1", {}, undefined, undefined, undefined as never);
+  async runTool(tool: ToolDefinition<any, any, any>, params: Record<string, unknown> = {}): Promise<{ text: string; details: unknown }> {
+    const out = await tool.execute("call-1", params, undefined, undefined, undefined as never);
     return { text: out.content.map((c) => (c.type === "text" ? c.text : "")).join(""), details: out.details };
   }
 

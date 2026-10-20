@@ -1,6 +1,6 @@
 //! The Dispatch column's drawing (commands.md §13.2), a port of the reference's `draw_dispatch` and `pr::render`
-//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine, the open pull requests (two lines each), git and Jira (the last two
-//! still future), under one blank row; each section but the first starts with a header. Pure: [`draw`] only writes to the frame.
+//! (`tui/src/main.rs`, `tui/src/pr.rs`): the machine (hostname, CPU %, one % per GPU, memory %) and the open pull
+//! requests (two lines each), under one blank row; each section but the first starts with a header. Pure: [`draw`] only writes to the frame.
 
 use cpd_core::ids::SessionId;
 use ratatui::Frame;
@@ -9,9 +9,11 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
+use super::host::Usage;
 use crate::link;
 use crate::palette::{self, Meaning};
-use crate::read::{OpenPr, PrState, ReviewDecision, Widgets};
+use crate::section;
+use crate::read::{OpenPr, PrState, ReviewDecision};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
@@ -42,11 +44,71 @@ pub struct MergeIcon {
     pub pull: String,
 }
 
-/// The machine the column names: its hostname and the first three fields of its load average.
+/// An entry of a PR row's right-click menu (commands.md §13.2, hs-d296).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrItem {
+    /// The `merge` popup: only on a row that shows the merge icon.
+    Merge,
+    /// `tmux set-buffer -w -- <url>`.
+    CopyLink,
+    /// `session open` of the owner's Lead, then the focus on the chat: only on a PR a Plan owns.
+    GoToLead,
+}
+
+impl crate::menu::Entry for PrItem {
+    fn label(self) -> &'static str {
+        match self {
+            PrItem::Merge => "Merge",
+            PrItem::CopyLink => "Copy Link",
+            PrItem::GoToLead => "Go to Lead",
+        }
+    }
+}
+
+/// A PR row on the screen, whatever its owner: a right click on its two lines opens its menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrRow {
+    /// The PR's two rows, the column's full width.
+    pub area: Rect,
+    /// `<owner>/<repo>#<n>`.
+    pub pull: String,
+    pub url: String,
+    /// The row shows the merge icon.
+    pub clean: bool,
+    pub lead: Option<SessionId>,
+}
+
+impl PrRow {
+    /// The menu's entries, in order: Merge (a clean row), Copy Link, Go to Lead (an owned one).
+    pub fn items(&self) -> Vec<PrItem> {
+        [self.clean.then_some(PrItem::Merge), Some(PrItem::CopyLink), self.lead.as_ref().map(|_| PrItem::GoToLead)]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+}
+
+/// Nerd Font `nf-oct-cpu` and `nf-md-memory`: one cell each.
+const CPU_ICON: &str = "\u{F4BC}";
+const GPU_ICON: &str = "\u{E266}";
+const MEM_ICON: &str = "\u{EFC5}";
+
+/// The machine the column names: its hostname and its CPU % and memory %.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Machine {
     pub name: String,
-    pub load: Vec<String>,
+    pub usage: Usage,
+}
+
+impl Machine {
+    /// ` <cpu icon> N%  <gpu icon> A% B%  <mem icon> M%`, one % per GPU and no GPU part when there is none; a value not known (the
+    /// CPU until a second sample, or one that cannot be read) is `–`.
+    fn usage_line(&self) -> String {
+        let known = |v: Option<u8>| v.map_or("–".to_owned(), |v| v.to_string());
+        let gpus = &self.usage.gpus;
+        let gpu = if gpus.is_empty() { String::new() } else { format!("{GPU_ICON} {}  ", gpus.iter().map(|g| format!("{}%", known(*g))).collect::<Vec<_>>().join(" ")) };
+        format!(" {CPU_ICON} {}%  {gpu}{MEM_ICON} {}%", known(self.usage.cpu), known(self.usage.mem))
+    }
 }
 
 fn bold(text: impl Into<String>) -> Span<'static> {
@@ -121,22 +183,8 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
     [first.patch_style(style), second.patch_style(style)]
 }
 
-/// A section header, one line: `──`, then ` <title> ` as a grey reversed block (not bold), then `─` to the right edge, all in
-/// the Nothing colour. A title wider than `width` is cut; the line never wraps.
-pub(crate) fn section_header(title: &str, width: usize) -> Line<'static> {
-    let grey = palette::fg(Meaning::Nothing);
-    let lead = width.min(2);
-    let block: String = format!(" {title} ").chars().take(width - lead).collect();
-    let rest = width - lead - block.chars().count();
-    Line::from(vec![
-        Span::styled("─".repeat(lead), grey),
-        Span::styled(block, grey.add_modifier(Modifier::REVERSED)),
-        Span::styled("─".repeat(rest), grey),
-    ])
-}
-
-fn render_header(f: &mut Frame, area: Rect, title: &str) {
-    f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
+fn render_header(f: &mut Frame, area: Rect, title: &str, count: Option<usize>) {
+    f.render_widget(Paragraph::new(section::title(title, count, usize::from(area.width))), area);
 }
 
 /// Which items a scrolling list draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section"; the
@@ -186,49 +234,45 @@ pub struct Drawn {
     pub max_scroll: usize,
     /// Where a click reaches a merge icon: the pull requests on screen that show one.
     pub icons: Vec<MergeIcon>,
+    /// Where a right click reaches a pull request: every one on screen, owned or not.
+    pub rows: Vec<PrRow>,
 }
 
-/// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header. The PRs section
+/// Draws the column in `area`: a blank row, the machine, then the PRs under their header. The PRs section
 /// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. A non-empty `note`
 /// replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR or a merge icon.
-pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &str, scroll: usize) -> Drawn {
-    let [_top, home, _above_prs, prs_header, _below_prs, prs, _above_git, git_header, _below_git, git, _above_jira, jira_header, _below_jira, jira] =
-        Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(2),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-        ])
+pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note: &str, scroll: usize) -> Drawn {
+    let [_top, home, _above_prs, prs_header, _below_prs, prs] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
     .areas(area);
-    render_header(f, prs_header, "PRs");
-    render_header(f, git_header, "git");
-    render_header(f, jira_header, "Jira");
-    f.render_widget(
-        Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(format!(" load {}", machine.load.join(" ")))]),
-        home,
-    );
+    render_header(f, prs_header, "PRs", Some(open.len()));
+    f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(machine.usage_line())]), home);
     let height = usize::from(prs.height);
-    let win = window(w.prs.len(), height, 2, scroll);
+    let win = window(open.len(), height, 2, scroll);
     // The list sits under the `▲` row, if any; whole pull requests only.
     let list = Rect::new(prs.x, prs.y + u16::from(win.cue_above), prs.width, prs.height - u16::from(win.cue_above));
-    let shown: Vec<(u16, &OpenPr)> = (list.y..).step_by(2).zip(w.prs.iter().skip(win.first).take(win.shown)).collect();
+    let shown: Vec<(u16, &OpenPr)> = (list.y..).step_by(2).zip(open.iter().skip(win.first).take(win.shown)).collect();
     let mut text = vec![];
     let mut hits = vec![];
     let mut icons = vec![];
+    let mut rows = vec![];
     // The `󰏌` is the last column of the section's first line of each PR, the merge icon that of its second.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
         text.extend(pr_lines(pr, usize::from(prs.width)));
+        rows.push(PrRow {
+            area: Rect::new(prs.x, *y, prs.width, 2),
+            pull: format!("{}#{}", pr.repo, pr.number),
+            url: pr.url.clone(),
+            clean: pr.clean,
+            lead: pr.lead.clone(),
+        });
         let icon = arrow_x.filter(|_| pr.clean).map(|x| Position::new(x, y + 1));
         if let Some(at) = icon {
             icons.push(MergeIcon { area: Rect::new(at.x, at.y, 1, 1), pull: format!("{}#{}", pr.repo, pr.number) });
@@ -237,7 +281,7 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
             hits.push(Hit { area: Rect::new(prs.x, *y, prs.width, 2), arrow: Position::new(x, *y), icon, lead: lead.clone() });
         }
     }
-    if w.prs.is_empty() {
+    if open.is_empty() {
         text.push(Line::from(dim(" no open PRs")));
     }
     f.render_widget(Paragraph::new(text), list);
@@ -252,14 +296,12 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
             link::link(f.buffer_mut(), Rect::new(x, *y, 1, 1), &pr.url);
         }
     }
-    f.render_widget(Paragraph::new(dim(" (future)")), git);
-    f.render_widget(Paragraph::new(dim(" (future)")), jira);
     if !note.is_empty() {
         let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
         f.render_widget(Clear, last);
         f.render_widget(Paragraph::new(Span::styled(note.to_owned(), palette::note())), last);
     }
-    Drawn { hits, prs, max_scroll: max_scroll(w.prs.len(), height, 2), icons }
+    Drawn { hits, prs, max_scroll: max_scroll(open.len(), height, 2), icons, rows }
 }
 
 #[cfg(test)]
@@ -269,40 +311,25 @@ mod tests {
     use ratatui::buffer::Buffer;
 
     use super::*;
-    use crate::read::{Engine, Slots};
-    use cpd_core::ids::SessionId;
-
-    fn widgets(prs: Vec<OpenPr>) -> Widgets {
-        Widgets {
-            slots: Slots { limit: 3, held: vec![] },
-            engine: Engine::Never,
-            plans: vec![],
-            prs,
-            escalations: vec![],
-            events: vec![],
-            events_cursor: 0,
-        }
-    }
-
-    fn drawn(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
-        let (buf, d) = scrolled(width, height, w, note, 0);
+    fn drawn(width: u16, height: u16, open: &[OpenPr], note: &str) -> (Buffer, Vec<Hit>) {
+        let (buf, d) = scrolled(width, height, open, note, 0);
         (buf, d.hits)
     }
 
-    fn scrolled(width: u16, height: u16, w: &Widgets, note: &str, scroll: usize) -> (Buffer, Drawn) {
-        let machine = Machine { name: "homeserver".to_owned(), load: ["0.52", "0.41", "0.30"].map(str::to_owned).to_vec() };
+    fn scrolled(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize) -> (Buffer, Drawn) {
+        let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
-        terminal.draw(|f| out = Some(draw(f, f.area(), w, &machine, note, scroll))).unwrap();
+        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, note, scroll))).unwrap();
         (terminal.backend().buffer().clone(), out.unwrap())
     }
 
-    fn icons(width: u16, w: &Widgets) -> Vec<MergeIcon> {
-        scrolled(width, 20, w, "", 0).1.icons
+    fn icons(width: u16, open: &[OpenPr]) -> Vec<MergeIcon> {
+        scrolled(width, 20, open, "", 0).1.icons
     }
 
     fn buffer(width: u16, height: u16) -> Buffer {
-        drawn(width, height, &widgets(vec![]), "").0
+        drawn(width, height, &[], "").0
     }
 
     fn pr(number: i64, lead: Option<&str>) -> OpenPr {
@@ -326,69 +353,76 @@ mod tests {
     }
 
     #[test]
-    fn a_header_is_two_rules_the_title_block_and_rules_to_the_edge() {
-        let mut terminal = Terminal::new(TestBackend::new(20, 1)).unwrap();
-        terminal.draw(|f| render_header(f, f.area(), "PRs")).unwrap();
-        let buf = terminal.backend().buffer().clone();
-        assert_eq!(row(&buf, 0), format!("── PRs {}", "─".repeat(13)));
-        for x in 0..20 {
-            let cell = &buf[(x, 0)];
-            let title = (2..7).contains(&x);
-            assert_eq!(cell.fg, palette::color(Meaning::Nothing), "x={x}");
-            assert_eq!(cell.modifier.contains(Modifier::REVERSED), title, "x={x}");
-            assert!(!cell.modifier.contains(Modifier::BOLD), "x={x}");
-        }
-    }
-
-    #[test]
-    fn a_header_narrower_than_its_title_cuts_the_title() {
-        let text = |width| section_header("Jira", width).spans.iter().map(|s| s.content.to_string()).collect::<String>();
-        assert_eq!(text(5), "── Ji");
-        assert_eq!(text(1), "─");
-        assert_eq!(text(0), "");
-    }
-
-    #[test]
-    fn the_column_has_a_blank_row_an_untitled_machine_and_three_headers() {
+    fn the_prs_header_carries_the_count_of_the_open_pull_requests() {
+        let header = |width: u16, count| {
+            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+            terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
+            row(terminal.backend().buffer(), 0)
+        };
+        assert_eq!(header(20, Some(3)), "━━ PRs ━━━━━━━━ 3 ━━");
+        assert_eq!(header(30, Some(12)), "━━ PRs ━━━━━━━━━━━━━━━━━ 12 ━━");
+        assert_eq!(header(20, None), "━━ PRs ━━━━━━━━━━━━━");
         let buf = buffer(20, 15);
-        let rule = |title: &str| format!("── {title} {}", "─".repeat(20 - 4 - title.chars().count()));
-        let got: Vec<String> = (0..15).map(|y| row(&buf, y)).collect();
+        assert_eq!(row(&buf, 4), "━━ PRs ━━━━━━━━ 0 ━━");
+        let two = [pr(1, Some("l-a")), pr(2, None)];
+        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), "━━ PRs ━━━━━━━━ 2 ━━");
+    }
+
+    #[test]
+    fn the_column_has_a_blank_row_an_untitled_machine_with_cpu_and_memory_and_the_prs_header_only() {
+        let buf = buffer(20, 10);
+        let got: Vec<String> = (0..10).map(|y| row(&buf, y)).collect();
         let expected = [
             "".to_owned(),
             " homeserver".to_owned(),
-            " load 0.52 0.41 0.30".to_owned(),
+            " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
             "".to_owned(),
-            rule("PRs"),
+            "━━ PRs ━━━━━━━━ 0 ━━".to_owned(),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
-            rule("git"),
             "".to_owned(),
-            " (future)".to_owned(),
             "".to_owned(),
-            rule("Jira"),
-            "".to_owned(),
-            " (future)".to_owned(),
         ];
         assert_eq!(got, expected, "{got:#?}");
         assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
-        assert!(buf[(1, 10)].modifier.contains(Modifier::DIM), "(future) is dim");
+        for x in 0..20 {
+            let cell = &buf[(x, 2)];
+            assert!(!cell.modifier.contains(Modifier::BOLD | Modifier::DIM) && cell.fg == buf[(0, 0)].fg, "no style on the usage row, x={x}");
+        }
+        assert!(!got.iter().any(|r| r.contains("git") || r.contains("Jira") || r.contains("future") || r.contains("load")));
+    }
+
+    #[test]
+    fn a_value_not_known_is_a_dash() {
+        let usage = |cpu, mem| Machine { name: "homeserver".to_owned(), usage: Usage { cpu, gpus: vec![], mem } }.usage_line();
+        assert_eq!(usage(None, Some(100)), " \u{F4BC} –%  \u{EFC5} 100%", "the CPU until a second sample");
+        assert_eq!(usage(Some(7), None), " \u{F4BC} 7%  \u{EFC5} –%", "a memory that cannot be read");
+    }
+
+    #[test]
+    fn the_gpu_part_has_one_percent_per_gpu_and_is_absent_with_none() {
+        let row = |gpus: Vec<Option<u8>>| Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus, mem: Some(41) } }.usage_line();
+        assert_eq!(row(vec![]), " \u{F4BC} 23%  \u{EFC5} 41%", "no GPU, no GPU part");
+        assert_eq!(row(vec![Some(61)]), " \u{F4BC} 23%  \u{E266} 61%  \u{EFC5} 41%");
+        assert_eq!(row(vec![Some(61), Some(0)]), " \u{F4BC} 23%  \u{E266} 61% 0%  \u{EFC5} 41%");
+        assert_eq!(row(vec![None, Some(5)]), " \u{F4BC} 23%  \u{E266} –% 5%  \u{EFC5} 41%", "an unknown GPU is –%");
     }
 
     #[test]
     fn a_pr_ends_its_first_line_in_a_linked_arrow_and_the_name_never_reaches_it() {
-        let (buf, _) = drawn(24, 20, &widgets(vec![pr(7, Some("l-a"))]), "");
+        let (buf, _) = drawn(24, 20, &[pr(7, Some("l-a"))], "");
         // the arrow's cell carries the link: its symbol is wrapped in the OSC 8 escapes
         let link = format!("\x1b]8;;https://github.com/acme/repo/pull/7\x07{}\x1b]8;;\x07", link::CUE);
         assert_eq!(row(&buf, 6), format!(" acme/repo#7{}{link}", " ".repeat(11)));
         // the name is cut before the arrow's column and its gap
-        let (buf, _) = drawn(9, 20, &widgets(vec![pr(7, Some("l-a"))]), "");
+        let (buf, _) = drawn(9, 20, &[pr(7, Some("l-a"))], "");
         assert_eq!(row(&buf, 6).replace(&link, link::CUE), format!(" acme/… {}", link::CUE));
     }
 
     #[test]
     fn an_unowned_pr_is_dim_on_both_lines_and_has_no_hit_area() {
-        let (buf, hits) = drawn(30, 20, &widgets(vec![pr(7, None), pr(8, Some("l-a"))]), "");
+        let (buf, hits) = drawn(30, 20, &[pr(7, None), pr(8, Some("l-a"))], "");
         for (y, dim) in [(6, true), (7, true), (8, false), (9, false)] {
             assert_eq!(buf[(1, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
             assert_eq!(buf[(2, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
@@ -401,7 +435,7 @@ mod tests {
 
     #[test]
     fn a_hit_area_is_the_two_rows_except_the_arrow_cell() {
-        let (_, hits) = drawn(30, 20, &widgets(vec![pr(7, Some("l-a"))]), "");
+        let (_, hits) = drawn(30, 20, &[pr(7, Some("l-a"))], "");
         let hit = &hits[0];
         for (x, y, inside) in [(0, 6, true), (28, 6, true), (29, 6, false), (29, 7, true), (0, 7, true), (0, 8, false), (0, 5, false)] {
             assert_eq!(hit.contains(Position::new(x, y)), inside, "({x}, {y})");
@@ -410,14 +444,14 @@ mod tests {
 
     #[test]
     fn a_note_replaces_the_last_row_in_the_note_style() {
-        let (buf, _) = drawn(30, 15, &widgets(vec![]), "no_cockpit: nothing here");
+        let (buf, _) = drawn(30, 15, &[], "no_cockpit: nothing here");
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
         assert_eq!(buf[(0, 14)].fg, palette::note().fg.unwrap());
-        assert_eq!(row(&buf, 10), " (future)", "the rest is as drawn");
+        assert_eq!(row(&buf, 6), " no open PRs", "the rest is as drawn");
     }
 
     fn second_line(pr: &OpenPr, width: u16) -> (String, Buffer) {
-        let (buf, _) = drawn(width, 20, &widgets(vec![pr.clone()]), "");
+        let (buf, _) = drawn(width, 20, &[pr.clone()], "");
         (row(&buf, 7), buf)
     }
 
@@ -466,7 +500,7 @@ mod tests {
         let (line, _) = second_line(&p, 40);
         assert_eq!(line, format!("  open \u{F05E0} no review  A title{}{MERGE}", " ".repeat(40 - 27 - 1)));
         assert_eq!(line.chars().count(), 40, "the icon is the last column");
-        assert!(!row(&drawn(40, 20, &widgets(vec![p]), "").0, 6).contains(MERGE), "never on the first line");
+        assert!(!row(&drawn(40, 20, &[p], "").0, 6).contains(MERGE), "never on the first line");
     }
 
     #[test]
@@ -486,7 +520,7 @@ mod tests {
         let mut unowned = pr(8, None);
         unowned.clean = true;
         let blocked = pr(9, Some("l-a"));
-        let w = widgets(vec![clean, unowned, blocked]);
+        let w = [clean, unowned, blocked];
         assert_eq!(
             icons(30, &w),
             [
@@ -504,19 +538,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_row_offers_merge_only_when_clean_and_go_to_lead_only_when_owned() {
+        let labels = |clean: bool, lead: Option<&str>| {
+            let mut p = pr(7, lead);
+            p.clean = clean;
+            let (_, d) = scrolled(30, 20, &[p], "", 0);
+            let [row] = &d.rows[..] else { panic!("{:?}", d.rows) };
+            row.items().into_iter().map(crate::menu::Entry::label).collect::<Vec<_>>()
+        };
+        assert_eq!(labels(true, Some("l-a")), ["Merge", "Copy Link", "Go to Lead"]);
+        assert_eq!(labels(false, Some("l-a")), ["Copy Link", "Go to Lead"], "not clean");
+        assert_eq!(labels(true, None), ["Merge", "Copy Link"], "no owner");
+        assert_eq!(labels(false, None), ["Copy Link"], "neither");
+    }
+
+    #[test]
+    fn every_row_on_screen_is_a_right_click_target_with_its_two_lines_its_pull_and_its_url() {
+        let (_, d) = scrolled(30, 20, &[pr(7, Some("l-a")), pr(8, None)], "", 0);
+        let got: Vec<_> = d.rows.iter().map(|r| (r.area, r.pull.as_str(), r.url.as_str())).collect();
+        assert_eq!(
+            got,
+            [
+                (Rect::new(0, 6, 30, 2), "acme/repo#7", "https://github.com/acme/repo/pull/7"),
+                (Rect::new(0, 8, 30, 2), "acme/repo#8", "https://github.com/acme/repo/pull/8"),
+            ]
+        );
+        let (_, d) = scrolled(30, height(7), &many(6), "", 2);
+        assert_eq!(d.rows.iter().map(|r| r.pull.as_str()).collect::<Vec<_>>(), ["acme/repo#3", "acme/repo#4"], "the rows drawn after a scroll");
+    }
+
     /// `count` owned pull requests, numbers 1.., each with its own Lead `l-<n>`.
-    fn many(count: i64) -> Widgets {
-        widgets((1..=count).map(|n| pr(n, Some(&format!("l-{n}")))).collect())
+    fn many(count: i64) -> Vec<OpenPr> {
+        (1..=count).map(|n| pr(n, Some(&format!("l-{n}")))).collect()
     }
 
-    /// The PRs section's rows: 14 rows of the rest of the column, and `lines` for the section.
+    /// The PRs section's rows: below the 6 rows of the rest of the column, to the bottom.
     fn section(buf: &Buffer) -> Vec<String> {
-        (6..buf.area.height - 8).map(|y| row(buf, y)).collect()
+        (6..buf.area.height).map(|y| row(buf, y)).collect()
     }
 
-    /// A column whose PRs section is `lines` rows tall (the rest of the column takes 14).
+    /// A column whose PRs section is `lines` rows tall (the rest of the column takes 6).
     fn height(lines: u16) -> u16 {
-        14 + lines
+        6 + lines
     }
 
     fn names(rows: &[String]) -> Vec<&str> {

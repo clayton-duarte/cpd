@@ -25,6 +25,8 @@ use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::addr::review_host;
 use crate::host::exe::{Exe, Watched};
+use crate::host::limit::limit;
+use crate::host::git_guard;
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
@@ -34,9 +36,10 @@ use crate::store;
 // Shared with the review Worker's fork wait (`driver::worker`), which reads them here.
 pub(crate) use super::fork_wait::{quiet_since, turn_finished};
 
-/// How often it looks for pi's session file while pi runs.
+/// How often it looks for pi's session file while pi runs (tests: `CPD_TEST_FILE_POLL`, [`limit`]).
 const FILE_POLL: Duration = Duration::from_millis(500);
-/// How often the adapter watchdog reads the Session's state while pi runs (commands.md §10.8).
+/// How often the adapter watchdog reads the Session's state while pi runs (commands.md §10.8;
+/// tests: `CPD_TEST_WATCHDOG_POLL`).
 const WATCHDOG_POLL: Duration = Duration::from_secs(2);
 /// How long it waits for `new-window`'s caller to set `@cpd_session` on its pane.
 const PANE_WAIT: Duration = Duration::from_secs(5);
@@ -56,6 +59,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
     let dirs = PiDirs::from_env()?;
     // How long a reload waits for pi to exit after `SIGTERM` before it sends `SIGKILL`.
     let pi_stop = Duration::from_secs(u64::from(env.config.timeouts.pi_stop_seconds));
+    let (file_poll, watchdog_poll) = (limit("FILE_POLL", FILE_POLL), limit("WATCHDOG_POLL", WATCHDOG_POLL));
     // The pi a previous wrapper left running across its `exec` (§6.7 "Reload on install"): the first round adopts it.
     let mut adopted = args.adopt.map(|pid| (PiProc::adopt(Pid::from_raw(pid)), args.pi_stale));
     // Store errors the loop has logged, so each code is said once (a store error never ends a wrapper while pi runs).
@@ -116,7 +120,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                 stop_pi(&mut pi, pi_stop);
                 return Err(reload(&exe, &row.id, None));
             }
-            if watched.elapsed() >= WATCHDOG_POLL {
+            if watched.elapsed() >= watchdog_poll {
                 watched = Instant::now();
                 let missing = logged.once(adapter_missing(&mut env, &row.id, started.elapsed()), "cannot read the adapter's state");
                 if missing.unwrap_or(false) {
@@ -126,7 +130,7 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
                     continue 'run;
                 }
             }
-            std::thread::sleep(FILE_POLL);
+            std::thread::sleep(file_poll);
         };
         // The adapter reports `stopped` at shutdown; report it here when it did not.
         if let Err(e) = patiently("reporting the Session stopped", || {
@@ -175,6 +179,7 @@ fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, 
     let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), dirs, &mut std::io::stderr());
     // The port is the Plan's, whatever the environment holds; the host is the review host (§6.5).
     let plannotator = Plannotator { port: port.map(|p| p.to_string()), url_host: review_host(&mut std::io::stderr()) };
+    git_guard::install(&env.home)?;
     let launch = pi::lead(&LeadLaunch {
         home: &env.home,
         session: &row.id,

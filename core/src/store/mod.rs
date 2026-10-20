@@ -5,11 +5,12 @@
 //! Every module reads through [`Store::read`] and writes through
 //! [`Store::write`]; nothing else writes the database (§4.3).
 
+mod lock;
 mod schema;
 #[doc(hidden)] pub mod testing;
 mod verdict;
 
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,8 +27,9 @@ use serde_json::{Value, json};
 use crate::context::legacy;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::lock;
 
+use lock::{MIGRATION_SETTLE_MS, SetupLock, setup_lock};
+pub use lock::MIGRATION_WAIT_CEILING;
 use schema::{LEGACY, Named};
 pub use schema::{SCHEMA_HASH, VERSION, canonical_hash};
 use verdict::verdict_with;
@@ -199,9 +201,13 @@ impl Store {
     fn open_with(home: &CpdHome, busy_ms: u64, catalog: &Catalog<'_>) -> Result<Store, CpdError> {
         let path = home.db();
         let setup = setup_lock(home, busy_ms)?;
-        let mut store = Store::connect(&path, busy_ms).map_err(|e| enrich(e, &path, busy_ms))?;
-        store.migrate(home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
+        // An opener that waited out a migration may meet its holder still finishing (closing its connection, which
+        // checkpoints): its own setup waits for SQLite at least `MIGRATION_SETTLE_MS`, whatever `busy_ms` (§4.2).
+        let setup_ms = if setup.waited_for_migration() { busy_ms.max(MIGRATION_SETTLE_MS) } else { busy_ms };
+        let mut store = Store::connect(&path, busy_ms, setup_ms).map_err(|e| enrich(e, &path, busy_ms))?;
+        store.migrate(home, catalog, &setup).map_err(|e| enrich(e, &path, busy_ms))?;
         drop(setup);
+        store.conn.busy_timeout(Duration::from_millis(busy_ms)).map_err(|e| enrich(e.into(), &path, busy_ms))?;
         store.schema = schema_mismatch(&store.conn, home, catalog).map_err(|e| enrich(e, &path, busy_ms))?;
         Ok(store)
     }
@@ -226,7 +232,9 @@ impl Store {
         self.persist = Some(persist);
     }
 
-    fn connect(path: &Path, busy_ms: u64) -> Result<Store, CpdError> {
+    /// `setup_ms` is the connection's busy timeout until the caller sets it back to `busy_ms` (the setup's, see
+    /// [`MIGRATION_SETTLE_MS`]).
+    fn connect(path: &Path, busy_ms: u64, setup_ms: u64) -> Result<Store, CpdError> {
         let conn = Connection::open(path)?;
         let txn = Arc::new(AtomicI64::new(0));
         let current = Arc::clone(&txn);
@@ -239,7 +247,7 @@ impl Store {
                 id => Ok(id),
             }
         })?;
-        conn.busy_timeout(Duration::from_millis(busy_ms))?;
+        conn.busy_timeout(Duration::from_millis(setup_ms))?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
 
@@ -277,16 +285,31 @@ impl Store {
     ///
     /// When the migration that imports the old Context stores (§4.5 legacy
     /// migration 0007) committed, the folders are moved to `archive/contexts/` (§1.4).
-    fn migrate(&mut self, home: &CpdHome, catalog: &Catalog<'_>) -> Result<(), CpdError> {
-        if verdict_with(&self.conn, catalog)?.into_plan()?.is_none() {
-            return Ok(());
-        }
+    fn migrate(&mut self, home: &CpdHome, catalog: &Catalog<'_>, setup: &SetupLock) -> Result<(), CpdError> {
+        let Some(plan) = verdict_with(&self.conn, catalog)?.into_plan()? else { return Ok(()) };
+        // Before the first write, and while the `flock` is held: whoever waits for it learns that it is a migration.
+        let (from, to) = match plan.start {
+            Start::Fresh => (0, LEGACY.len() + plan.pending.len()),
+            Start::Convert(version) => (version as usize, LEGACY.len() + plan.pending.len()),
+            Start::Named => {
+                let applied: i64 = self.conn.query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))?;
+                (applied as usize, applied as usize + plan.pending.len())
+            }
+        };
+        setup.migrating(from, to)?;
         self.conn.pragma_update(None, "foreign_keys", "OFF")?;
         self.conn.pragma_update(None, "legacy_alter_table", "ON")?;
+        // The commit appends the migration's pages to the WAL and nothing more. The checkpoint SQLite runs inside a
+        // commit past 1000 pages (a rebuilt `events` is thousands) copies them into the database and syncs it; a
+        // plain commit's checkpoint took 1.3 to 2.4 s under load (`run/store-slow.log`), and this one would hold
+        // `locks/store.lock` for it (hs-n278). The next commit of any process checkpoints, outside the setup lock.
+        let autocheckpoint: i64 = self.conn.pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0))?;
+        self.conn.pragma_update(None, "wal_autocheckpoint", 0)?;
         let migrated = self.migrate_in_txn(home, catalog);
         let restored = self
             .conn
-            .pragma_update(None, "legacy_alter_table", "OFF")
+            .pragma_update(None, "wal_autocheckpoint", autocheckpoint)
+            .and_then(|()| self.conn.pragma_update(None, "legacy_alter_table", "OFF"))
             .and_then(|()| self.conn.pragma_update(None, "foreign_keys", "ON"));
         let imported_old_stores = migrated?;
         restored?;
@@ -597,44 +620,6 @@ fn archive_old_stores(home: &CpdHome) -> Result<(), CpdError> {
     ))
     .with("problems", problems))
 }
-
-/// Takes `locks/store.lock` (§1.4), creating `$CPD_HOME` and `locks/` on first
-/// use, and waits for it at most `busy_ms` (the config's `store_busy_ms`): then
-/// `lock_timeout` (exit 5) naming the lock file and the time waited (§4.3). A
-/// holder that hangs does not hang every other cpd command. Dropping the
-/// result releases it.
-fn setup_lock(home: &CpdHome, busy_ms: u64) -> Result<File, CpdError> {
-    let failed = |what: &str, path: &Path, e: std::io::Error| {
-        CpdError::new(ErrorCode::StoreFailed, format!("Cannot {what} {}: {e}.", path.display()))
-            .with("path", path.display().to_string())
-    };
-    let dir = home.locks_dir();
-    fs::create_dir_all(&dir).map_err(|e| failed("create", &dir, e))?;
-    // `home.rs` has no method for this lock; it is the store's alone.
-    let path = dir.join("store.lock");
-    let file = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| failed("open", &path, e))?;
-    let deadline = Instant::now() + Duration::from_millis(busy_ms);
-    loop {
-        if lock::try_lock(&file).map_err(|e| failed("lock", &path, e))? {
-            return Ok(file);
-        }
-        if Instant::now() >= deadline {
-            return Err(CpdError::new(
-                ErrorCode::LockTimeout,
-                format!(
-                    "Another cpd process held the store's setup lock {} for longer than store_busy_ms ({busy_ms} ms).",
-                    path.display()
-                ),
-            )
-            .with("lock", path.display().to_string())
-            .with("waited_ms", busy_ms));
-        }
-        std::thread::sleep(SETUP_LOCK_RETRY);
-    }
-}
-
-/// How often `setup_lock` retries a held lock.
-const SETUP_LOCK_RETRY: Duration = Duration::from_millis(20);
 
 /// The database's `PRAGMA user_version`, or `None` when the file does not
 /// exist. Opens it read-only: no migration, no schema check, no write.
@@ -969,8 +954,9 @@ mod tests {
         // Migration 1 cannot apply: a table `history` already exists.
         Connection::open(dir.path().join("cpd.db")).unwrap().execute_batch("CREATE TABLE history (x)").unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        let mut store = Store::connect(&dir.path().join("cpd.db"), 5000).unwrap();
-        let err = store.migrate(&home, &Catalog::BUILT_IN).unwrap_err();
+        let mut store = Store::connect(&dir.path().join("cpd.db"), 5000, 5000).unwrap();
+        let setup = setup_lock(&home, 5000).unwrap();
+        let err = store.migrate(&home, &Catalog::BUILT_IN, &setup).unwrap_err();
         assert_eq!(err.code(), ErrorCode::MigrationFailed, "{err:?}");
         let get = |name: &str| store.conn.pragma_query_value(None, name, |r| r.get::<_, i64>(0)).unwrap();
         assert_eq!((get("foreign_keys"), get("legacy_alter_table")), (1, 0));
@@ -1306,5 +1292,93 @@ mod tests {
             assert!(n.name > LEGACY[LEGACY.len() - 1].name, "{}: names sort after the legacy set", n.name);
         }
         assert!(schema::NAMED[0].name.ends_with("-kind-tables"), "no named migration sorts before kind-tables (§4.5)");
+    }
+
+    // ---------- the conversion's cost (hs-n278) ----------
+
+    /// A legacy store at the last legacy version (what the conversion reads) with `events` Events and as many
+    /// `history` rows, each about 2 KB, as one `txns` row: a store of a size that makes `kind-tables` rebuild
+    /// thousands of pages. Its Events and history rows have no Context, Plan or Session.
+    fn big_legacy_store(home: &CpdHome, events: usize) {
+        fs::create_dir_all(home.db().parent().unwrap()).unwrap();
+        let conn = Connection::open(home.db()).unwrap();
+        conn.create_scalar_function("cpd_txn", 0, FunctionFlags::SQLITE_UTF8, |_| Ok(1_i64)).unwrap();
+        conn.pragma_update(None, "application_id", APPLICATION_ID).unwrap();
+        conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+        conn.pragma_update(None, "legacy_alter_table", "ON").unwrap();
+        for legacy in LEGACY {
+            (legacy.apply)(&conn).unwrap();
+        }
+        conn.pragma_update(None, "user_version", LEGACY.len() as i64).unwrap();
+        conn.execute_batch(&format!(
+            "BEGIN;
+             INSERT INTO txns (id, at, command, pid, session, cwd) VALUES (1, '2026-01-01T00:00:00.000Z', 'x', 1, NULL, '/');
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {events})
+               INSERT INTO events (txn, at, kind, text, data)
+               SELECT 1, '2026-01-01T00:00:00.000Z', 'session-state', 'Event ' || i, json_object('x', hex(randomblob(1000))) FROM n;
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {events})
+               INSERT INTO history (txn, tbl, pk, op, before, after)
+               SELECT 1, 'jobs', json_array('p', i), 'update', json_object('x', hex(randomblob(500))), json_object('x', hex(randomblob(500))) FROM n;
+             COMMIT;"
+        ))
+        .unwrap();
+    }
+
+    /// Converts the store of [`big_legacy_store`] as `Store::open` does, on a connection that counts SQLite's
+    /// virtual machine steps (in thousands). Returns the converted store and the steps.
+    fn convert_counting_steps(home: &CpdHome) -> (Store, u64) {
+        let mut store = Store::connect(&home.db(), 5000, 5000).unwrap();
+        let steps = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let counter = Arc::clone(&steps);
+        store
+            .conn
+            .progress_handler(1000, Some(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                false
+            }))
+            .unwrap();
+        let setup = setup_lock(home, 5000).unwrap();
+        store.migrate(home, &Catalog::BUILT_IN, &setup).unwrap();
+        store.conn.progress_handler(1000, None::<fn() -> bool>).unwrap();
+        (store, steps.load(Ordering::SeqCst))
+    }
+
+    #[test]
+    fn the_conversion_of_a_large_store_is_one_transaction_with_work_linear_in_its_size() {
+        let mut steps = Vec::new();
+        for events in [500, 2000] {
+            let (_dir, home) = tmp_home();
+            big_legacy_store(&home, events);
+            let (mut store, counted) = convert_counting_steps(&home);
+            let (txns, migrated, history): (i64, i64, i64) = store
+                .read(|c| {
+                    Ok((
+                        c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?,
+                        c.query_row("SELECT count(*) FROM schema_migrations WHERE txn = (SELECT max(id) FROM txns)", [], |r| r.get(0))?,
+                        c.query_row("SELECT count(*) FROM history", [], |r| r.get(0))?,
+                    ))
+                })
+                .unwrap();
+            assert_eq!((txns, migrated), (2, (LEGACY.len() + schema::NAMED.len()) as i64), "{events}: one migrating transaction, which recorded every migration");
+            assert_eq!(history, events as i64, "{events}: the conversion writes no history row for an Event or a history row");
+            steps.push(counted);
+        }
+        // Four times the rows, at most five times the work (index builds sort): a per-row statement of Rust, or a
+        // pass over the table per row, would be four times that or more.
+        assert!(steps[1] <= steps[0] * 5, "500 Events took {} thousand steps, 2000 took {}", steps[0], steps[1]);
+    }
+
+    #[test]
+    fn the_conversion_commit_leaves_the_checkpoint_to_the_next_commit_and_restores_the_threshold() {
+        let (_dir, home) = tmp_home();
+        big_legacy_store(&home, 2000);
+        let (store, _) = convert_counting_steps(&home);
+        // `NOOP`: reports the WAL without checkpointing it. Frames of the migration, none copied to the database.
+        let (log, checkpointed): (i64, i64) =
+            store.conn.query_row("PRAGMA wal_checkpoint(NOOP)", [], |r| Ok((r.get(1)?, r.get(2)?))).unwrap();
+        assert!(log > 1000, "the fixture is smaller than the default threshold: {log} frames");
+        assert_eq!(checkpointed, 0, "the migrating commit checkpointed {checkpointed} of {log} frames, under the setup lock");
+        let threshold: i64 = store.conn.pragma_query_value(None, "wal_autocheckpoint", |r| r.get(0)).unwrap();
+        assert_eq!(threshold, 1000, "SQLite's default, for every later commit");
     }
 }

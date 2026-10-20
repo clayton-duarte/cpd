@@ -46,6 +46,8 @@ pub struct Config {
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
+    /// How long a PR whose Jobs are all merged may stay unopened before E4 tells the Manager (§3.7 E4, hs-d334).
+    pub pr_open_escalate_minutes: u32,
     /// One port per Plan's plannotator review (§6.5).
     pub plannotator_ports: PortRange,
     pub tiers: Tiers,
@@ -273,6 +275,7 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
+        let pr_open_escalate_minutes = r.get("pr_open_escalate_minutes", 10, |v| int(v, 1, u32::MAX))?;
         let plannotator_ports = r.get("plannotator_ports", PortRange { first: 19432, last: 19441 }, |v| {
             PortRange::parse(text_of(&v)?)
         })?;
@@ -324,6 +327,7 @@ impl Config {
             context_distill_tier,
             lead_pi_packages,
             pi_adapter,
+            pr_open_escalate_minutes,
             plannotator_ports,
             tiers,
             timeouts,

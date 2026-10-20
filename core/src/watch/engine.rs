@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5 and E7–E9 (E6 was removed) every
+//! `watch-started`, then E1–E5 and E7–E10 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, workers};
+use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, titles, workers};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -57,6 +57,8 @@ pub(super) struct Engine {
     pub workers: Option<String>,
     /// E9: the highest record `seq` of each Context a distill run was started for in this engine's life.
     pub distill_started: HashMap<ContextId, i64>,
+    /// E10: the retitle runs this engine started and has not seen end.
+    pub titles: titles::Runs,
     /// When the engine last started the detached tmux restart (contract §6.1).
     pub restart_started: Option<Instant>,
 }
@@ -87,10 +89,10 @@ impl Engine {
         self.report.active()
     }
 
-    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5 and E7–E9 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5 and E7–E10 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 10] = [
+        let steps: [fn(&mut Engine); 11] = [
             restart::drain,
             workers::run,
             escalations::run,
@@ -101,6 +103,7 @@ impl Engine {
             start_prs,
             inbox::run,
             distill::run,
+            titles::run,
         ];
         for step in steps {
             if stopping() {
@@ -111,13 +114,17 @@ impl Engine {
     }
 }
 
-/// The PRs E7 starts: `waiting` in a Plan in `dispatch`, every need `merged`, and
-/// not marked `start_failed_at` (§3.7). Oldest Plan first, then by key.
-const STARTABLE: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
-  WHERE p.phase = 'dispatch' AND r.status = 'waiting' AND r.start_failed_at IS NULL
-    AND NOT EXISTS (SELECT 1 FROM pr_needs n JOIN prs q ON q.plan = n.plan AND q.key = n.needs
-                     WHERE n.plan = r.plan AND n.pr = r.key AND q.status <> 'merged')
-  ORDER BY p.created_at, r.plan, r.key";
+/// The PRs E7 starts: `waiting` in a Plan in `dispatch`, ready (`start_pr::READY`: every need `merged`, a need of
+/// another Plan too, and the base PR, if any, started), and not marked `start_failed_at` (§3.7). Oldest Plan first,
+/// then by key.
+fn startable() -> String {
+    format!(
+        "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = r.plan
+          WHERE p.phase = 'dispatch' AND r.status = 'waiting' AND r.start_failed_at IS NULL AND {}
+          ORDER BY p.created_at, r.plan, r.key",
+        start_pr::READY
+    )
+}
 
 /// E7, PR start (§3.7, §3.8): starts each startable PR. A failed setup (worktree,
 /// remote check or `pre-start`) marks the PR `start_failed_at` and appends one
@@ -125,7 +132,7 @@ const STARTABLE: &str = "SELECT r.plan, r.key FROM prs r JOIN plans p ON p.id = 
 /// the Lead retries with `cpd pr start`.
 fn start_prs(engine: &mut Engine) {
     let waiting = engine.store.read(|conn| {
-        let mut stmt = conn.prepare(STARTABLE)?;
+        let mut stmt = conn.prepare(&startable())?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter().map(|(plan, key)| Ok((PlanId::parse(&plan)?, PrKey::parse(&key)?))).collect::<Result<Vec<_>, CpdError>>()
     });
@@ -231,6 +238,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         paused_until: None,
         workers: None,
         distill_started: HashMap::new(),
+        titles: titles::Runs::default(),
         restart_started: None,
     };
 

@@ -24,8 +24,9 @@ use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
 use crate::git::{self, Setup};
-use crate::home::{CpdHome, Hook};
+use crate::home::{CpdHome, Hook, Infra};
 use crate::host::exe::{Exe, Refusal};
+use crate::host::limit::limit;
 use crate::host::pi::{self, PiDirs};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{AttemptId, PlanId, SessionId};
@@ -38,7 +39,7 @@ use crate::store::{Persist, Store};
 /// The `txns.command` and the `source` of the driver's `error` Events.
 const SOURCE: &str = "attempt run";
 
-/// How often A4 looks at the Attempt, its Session and its pane.
+/// How often A4 looks at the Attempt, its Session and its pane (tests: `CPD_TEST_DRIVER_POLL`, [`limit`]).
 const POLL: Duration = Duration::from_millis(500);
 
 /// What A4 knows of the Worker's pane at a poll.
@@ -200,19 +201,43 @@ pub fn run(args: RunArgs) -> Result<Output, CpdError> {
     let exe = Exe::current()?;
     // A transient store error never ends the Attempt: every read and write of
     // this driver waits it out (§3.4), the open included.
-    let Env { home, config, store } = Env::open_home_persistent(home, Persist::new(|line| log(line), || false))?;
+    let opened = Env::open_home_persistent(home.clone(), Persist::new(|line| log(line), || false));
+    let Env { home, config, store } = match opened {
+        Ok(env) => env,
+        Err(e) => {
+            leave_infra(&home, &plan, &id, &e);
+            return Err(e);
+        }
+    };
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let mut driver = Driver { home, config, store, tmux, plan, id, lock, exe, catalog: None };
 
-    let target = driver.load()?;
-    let entry = entry(&target.id, &target.status)?;
-    let task = driver.task(entry, &target)?;
-    match driver.drive(task, target) {
-        Ok(ended) => Ok(Output::success(json!({"attempt": driver.id, "outcome": ended.outcome, "cause": ended.cause}))),
-        Err(e) => {
-            driver.fail(&e);
-            Err(e)
+    let outcome = (|| {
+        let target = driver.load()?;
+        let entry = entry(&target.id, &target.status)?;
+        let task = driver.task(entry, &target)?;
+        match driver.drive(task, target) {
+            Ok(ended) => Ok(Output::success(json!({"attempt": driver.id, "outcome": ended.outcome, "cause": ended.cause}))),
+            Err(e) => {
+                driver.fail(&e);
+                Err(e)
+            }
         }
+    })();
+    if let Err(e) = &outcome {
+        leave_infra(&driver.home, &driver.plan, &driver.id, e);
+    }
+    outcome
+}
+
+/// An install or a store migration ended this driver, not its Worker (hs-n278): `error` is `lock_timeout` or
+/// `store_too_new`. Leaves the marker E2 reads to end the Attempt as one whose driver never started. Call it
+/// while the driver lock is still held: a free lock is what E2 acts on.
+fn leave_infra(home: &CpdHome, plan: &PlanId, id: &AttemptId, error: &CpdError) {
+    let Some(infra) = Infra::of(error.code()) else { return };
+    match home.leave_infra(plan, id, infra, error.message()) {
+        Ok(()) => log(&format!("{}: not the Worker's failure; the Job will be queued again at the same Tier", infra.code())),
+        Err(e) => log(&format!("cannot leave the infrastructure marker: {}", e.message())),
     }
 }
 
@@ -474,8 +499,9 @@ impl Driver {
         let mut nudged_at: Option<u64> = self.nudge_baseline(session)?;
         let mut stall = stall::Watch::new(self.config.timeouts.stall_seconds);
         let mut watch = PaneWatch::default();
+        let poll = limit("DRIVER_POLL", POLL);
         loop {
-            std::thread::sleep(POLL);
+            std::thread::sleep(poll);
             // The pane before the row: a Worker that submits and exits is seen `merging`.
             let look = watch.look(&self.tmux, pane)?;
             if file.is_none() {
@@ -681,12 +707,18 @@ impl Driver {
     /// Attempt `failed` / `crashed` when it is `starting` or `running`. A
     /// `merging` Attempt is left to R (§7.4), which runs once this driver is
     /// dead. Without the catalog the ladder cannot be applied, so the
-    /// Attempt is left to E2, which ends it `crashed` once this driver is dead.
+    /// Attempt is left to E2, which ends it `crashed` once this driver is dead. So is one that failed on an
+    /// install or a store migration ([`Infra`]), which E2 ends uncounted.
     fn fail(&mut self, error: &CpdError) {
         log(&format!("failed: {}: {}", error.code().as_str(), error.message()));
         let Ok(target) = self.load() else { return };
         if let Err(e) = self.store.write(SOURCE, |tx| append_error(tx, &target, error)) {
             log(&format!("cannot append the error Event: {}", e.message()));
+        }
+        // An install or a store migration, not the Worker (hs-n278): the marker is left; E2 ends the Attempt
+        // at the same Tier and uncounted, as one whose driver never started.
+        if Infra::of(error.code()).is_some() {
+            return;
         }
         if !matches!(target.status.as_str(), "starting" | "running") || self.catalog.is_none() {
             return;

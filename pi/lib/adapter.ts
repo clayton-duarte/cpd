@@ -1,16 +1,18 @@
 import { toCpdError } from "./cpd.ts";
 import { registerAgentState } from "./agent-state.ts";
 import { createHost, type Options } from "./host.ts";
+import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
 import { start, stop } from "./startup.ts";
+import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
 import { registerReminderCheck } from "./turns.ts";
 
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
 
-/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`. */
+/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`. */
 export function adapter(pi: PiApi, options: Options = {}): void {
   const host = createHost(pi, options);
 
@@ -33,6 +35,20 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     } catch (e) {
       host.deliver("shutdown", e);
     }
+  });
+
+  // §15.11, §15.12: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
+  pi.on("tool_call", (event) => {
+    const role = host.run?.info.role;
+    if ((role !== "manager" && role !== "worker") || event.toolName !== "bash") return undefined;
+    const input = event.input as { command?: unknown; timeout?: unknown };
+    const command = typeof input.command === "string" ? input.command : "";
+    if (role === "manager") {
+      const matched = blockingReason(command, typeof input.timeout === "number" ? input.timeout : undefined);
+      return matched === undefined ? undefined : { block: true, reason: reasonText(matched) };
+    }
+    const matched = unfilteredTestRun(command);
+    return matched === undefined ? undefined : { block: true, reason: testReasonText(matched) };
   });
 
   registerAgentState(host);

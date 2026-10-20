@@ -2,7 +2,12 @@
 //! in a gate worktree, guard U, a compare-and-swap of the Lead Branch, rule S,
 //! the Gate on the rebased commit in that gate worktree, and the push with a
 //! lease. No lock (hs-d243): merges into the PR go on meanwhile.
+//!
+//! A conflict is not abandoned (hs-d289): the rebase stays in progress in the Lead
+//! worktree, and `--continue` (the rest of the rebase, the Gate, the push) or
+//! `--abort` ends it.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -10,9 +15,9 @@ use serde_json::json;
 
 use super::row::PlanPrs;
 use crate::plan::PrRow;
-use super::{Args, Env, gate_hooks, illegal_phase, pr_policy, refusal, short};
+use super::{Args, Env, RebaseArgs, gate, gate_hooks, illegal_phase, pr_policy, refusal, short};
 use crate::config::{self, Catalog};
-use crate::policy::Gate;
+use crate::policy::{Gate, Policy};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::git::{self, GateWorktree, Push, TAIL_LINES, tail};
@@ -29,7 +34,19 @@ const GUARD_WAIT: Duration = Duration::from_secs(60);
 /// How often guard U reads the store while it waits.
 const GUARD_POLL: Duration = Duration::from_millis(200);
 
-pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
+/// git's options for a rebase that never opens an editor (`GIT_EDITOR=true`, contract §7.6;
+/// `run` has no environment to set, and the config does the same).
+const NO_EDITOR: [&str; 4] = ["-c", "core.editor=true", "-c", "sequence.editor=true"];
+
+pub(super) fn rebase(args: RebaseArgs) -> Result<Output, CpdError> {
+    match (args.resume, args.abort) {
+        (true, _) => resume(args.args),
+        (_, true) => abort(args.args),
+        _ => onto_base(args.args),
+    }
+}
+
+fn onto_base(args: Args) -> Result<Output, CpdError> {
     let id = args.plan.require()?.clone();
     let mut env = Env::open()?;
 
@@ -40,28 +57,35 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     let lead = pr.lead(&id)?.clone();
     let repo = std::path::Path::new(&pr.repo);
     let branch = pr.lead_branch.as_str();
-    let lead_ref = format!("refs/heads/{branch}");
     let onto = format!("origin/{}", pr.base);
 
     // 1. The base, fresh (the ref lock on `origin/<base>` is waited for, §7).
     git::run::fetch(repo, &["origin", &pr.base])?;
+    // A rebase stopped by an earlier run: that one is finished or given up first.
+    if in_progress(&lead)? {
+        return Err(in_progress_error(&id, &key));
+    }
 
     let mut retries = 0;
     let (old, new, lease, worktree) = loop {
         // 2. The snapshot S.
-        let old = git::run::rev_parse(repo, &lead_ref)?;
-        // 3. A conflict refuses before anything changes.
+        let old = git::run::rev_parse(repo, &format!("refs/heads/{branch}"))?;
+        // 3. A conflict stops the rebase in the Lead worktree, before anything else changes.
         if let Some(files) = conflicts(repo, &onto, &old)? {
-            return Err(conflict(&id, &key, branch, &onto, files));
+            return rebase_in_lead(&mut env, &args, &id, &pr, &policy, files);
         }
         // 4. A gate worktree at S, rebased there: R'.
         git::sweep_gate_worktrees(repo, &id, &key)?;
         let worktree = GateWorktree::add(repo, &id, &key, &old)?;
-        let new = match rebase_onto(worktree.path(), &onto).and_then(|files| match files {
-            Some(files) => Err(conflict(&id, &key, branch, &onto, files)),
-            None => git::run::rev_parse(worktree.path(), "HEAD"),
-        }) {
-            Ok(new) => new,
+        let new = match rebase_onto(worktree.path(), &onto) {
+            Ok(None) => match git::run::rev_parse(worktree.path(), "HEAD") {
+                Ok(new) => new,
+                Err(e) => return Err(removing(worktree, e)),
+            },
+            Ok(Some(files)) => {
+                worktree.remove()?;
+                return rebase_in_lead(&mut env, &args, &id, &pr, &policy, files);
+            }
             Err(e) => return Err(removing(worktree, e)),
         };
         // 5. Guard U: no merge in S that the Ledger has not recorded.
@@ -73,6 +97,7 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
         };
         // 6. The compare-and-swap of the Lead Branch, S to R'.
         let message = format!("cpd: pr rebase {id}/{key}");
+        let lead_ref = format!("refs/heads/{branch}");
         let out = match git::run::run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old]) {
             Ok(out) => out,
             Err(e) => return Err(removing(worktree, e)),
@@ -100,7 +125,7 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
 
     // 7. Rule S on the Lead worktree; a stop is reported and fails nothing.
     if let Err(stale) = git::sync_lead(&lead, branch) {
-        if let Err(e) = report_stale(&mut env, &id, &key, &lead, &stale) {
+        if let Err(e) = report_stale(&mut env, &id, &key, &lead, "rebased", &stale) {
             return Err(removing(worktree, e));
         }
     }
@@ -113,31 +138,163 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     } else {
         worktree.remove()?;
     }
-    // The PR is read again: merged during the Gate, nothing is pushed.
-    let plan = env.plan(&id)?;
-    require_open(&plan, &args)?;
+    push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
+}
 
-    // 9. R' with the lease X0, then the merges that landed during the Gate, by rule P.
+/// `pr rebase --continue` (contract §7.6 C0–C6): the stopped rebase finished, then the Gate and the push.
+fn resume(args: Args) -> Result<Output, CpdError> {
+    let id = args.plan.require()?.clone();
+    let mut env = Env::open()?;
+
+    // C0.
+    let plan = env.plan(&id)?;
+    let pr = require_open(&plan, &args)?.clone();
+    let key = pr.key.clone();
+    let policy = pr_policy(&mut env, &id, &key)?;
+    let lead = pr.lead(&id)?.clone();
+    let repo = Path::new(&pr.repo);
+    let branch = pr.lead_branch.as_str();
+    let lead_ref = format!("refs/heads/{branch}");
+
+    // C1.
+    if !in_progress(&lead)? {
+        return Err(no_rebase_error(&id, &key));
+    }
+    // C2.
+    let files = unresolved(&lead)?;
+    if !files.is_empty() {
+        let message = format!("{branch} still has conflicts in {} files: resolve them and `git add` them (no commit, no push), then run the command again.", files.len());
+        return Err(conflict(&id, &key, &lead, message, files));
+    }
+    // C3.
+    let old = orig_head(&lead)?;
+    let tip = git::run::rev_parse(repo, &lead_ref)?;
+    if tip != old {
+        return Err(moved(&id, &key, &tip));
+    }
+    guard_u(&mut env, &id, &key, repo, &old)?;
+    let lease = last_seen(repo, branch)?;
+    // C4.
+    let out = git::run::run(&lead, &[NO_EDITOR.as_slice(), &["rebase", "--continue"]].concat())?;
+    if out.code != 0 {
+        let files = unmerged(&lead)?;
+        if !files.is_empty() {
+            return Err(stopped(&id, &key, &lead, branch, files));
+        }
+        let tip = git::run::rev_parse(repo, &lead_ref)?;
+        if tip != old && !in_progress(&lead)? {
+            return Err(moved(&id, &key, &tip));
+        }
+        return Err(CpdError::new(ErrorCode::GitFailed, "git rebase --continue failed: the rebase stays in progress.")
+            .with("exit", out.code)
+            .with("stderr", tail(&out.stderr, TAIL_LINES)));
+    }
+    let new = git::run::rev_parse(&lead, "HEAD")?;
+    // C5 and C6: no rule S, the Lead worktree is the one that was rebased.
+    gate(&env, &policy, &id, &pr, &new, &format!("pr rebase --pr {key}"))?;
+    push_rebased(&mut env, &args, &id, &pr, &old, &new, &lease)
+}
+
+/// `pr rebase --abort`: the stopped rebase given up, the Lead Branch and the Lead worktree as before.
+/// It asks no PR status, runs no Gate and pushes nothing.
+fn abort(args: Args) -> Result<Output, CpdError> {
+    let id = args.plan.require()?.clone();
+    let mut env = Env::open()?;
+    let plan = env.plan(&id)?;
+    let pr = plan.select(&args.pr)?.clone();
+    let lead = pr.lead(&id)?.clone();
+    let branch = pr.lead_branch.as_str();
+
+    if !in_progress(&lead)? {
+        return Err(no_rebase_error(&id, &pr.key));
+    }
+    git::run::ok(&lead, &["rebase", "--abort"])?;
+    let tip = git::run::rev_parse(Path::new(&pr.repo), &format!("refs/heads/{branch}"))?;
+    if let Err(stale) = git::sync_lead(&lead, branch) {
+        report_stale(&mut env, &id, &pr.key, &lead, "aborted", &stale)?;
+    }
+    Ok(Output::success(json!({"plan": id, "pr": pr.key, "aborted": true, "tip": tip})))
+}
+
+/// The conflict stop (contract §7.6): `git rebase <onto>` in the Lead worktree, left in progress
+/// at the first conflicting commit, which is the `rebase_conflict` returned. `listed` is
+/// `merge-tree`'s list, for a stop with no unmerged path of its own. A rebase that finishes
+/// without stopping (a race: a merge landed after the snapshot) goes on as `--continue` does
+/// from guard U, then the Gate and the push.
+fn rebase_in_lead(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, policy: &Policy, listed: Vec<String>) -> Result<Output, CpdError> {
+    let lead = pr.lead(id)?;
+    let repo = Path::new(&pr.repo);
+    let branch = pr.lead_branch.as_str();
+    let onto = format!("origin/{}", pr.base);
+
+    // `git rebase` refuses tracked local changes.
+    let dirty = git::run::ok(lead, &["status", "--porcelain", "--untracked-files=no"])?;
+    if !dirty.trim().is_empty() {
+        let files: Vec<&str> = dirty.lines().filter_map(|l| l.get(3..)).collect();
+        return Err(CpdError::new(
+            ErrorCode::LeadWorktreeDirty,
+            format!("The Lead worktree {} has local changes to tracked files, which a rebase would refuse: nothing was changed. Commit or discard them.", lead.display()),
+        )
+        .with("plan", id.as_str())
+        .with("pr", pr.key.as_str())
+        .with("files", files));
+    }
+
+    let old = git::run::rev_parse(lead, "HEAD")?;
+    let out = git::run::run(lead, &[NO_EDITOR.as_slice(), &["rebase", &onto]].concat())?;
+    if out.code != 0 {
+        let mut files = unmerged(lead)?;
+        if files.is_empty() && in_progress(lead)? {
+            files = listed;
+        }
+        if files.is_empty() {
+            return Err(CpdError::new(ErrorCode::GitFailed, "git rebase failed without a conflict.")
+                .with("exit", out.code)
+                .with("stderr", tail(&out.stderr, TAIL_LINES)));
+        }
+        return Err(stopped(id, &pr.key, lead, branch, files));
+    }
+    let new = git::run::rev_parse(lead, "HEAD")?;
+    guard_u(env, id, &pr.key, repo, &old)?;
+    let lease = last_seen(repo, branch)?;
+    gate(env, policy, id, pr, &new, &format!("pr rebase --pr {}", pr.key))?;
+    push_rebased(env, args, id, pr, &old, &new, &lease)
+}
+
+/// Step 9 (and C6): the PR re-read after the Gate, R' pushed with the lease X0, then the merges that
+/// landed during the Gate, by rule P.
+fn push_rebased(env: &mut Env, args: &Args, id: &PlanId, pr: &PrRow, old: &str, new: &str, lease: &str) -> Result<Output, CpdError> {
+    let key = &pr.key;
+    let lead = pr.lead(id)?;
+    let repo = Path::new(&pr.repo);
+    let branch = pr.lead_branch.as_str();
+    let lead_ref = format!("refs/heads/{branch}");
+
+    // The PR is read again: merged during the Gate, nothing is pushed.
+    let plan = env.plan(id)?;
+    require_open(&plan, args)?;
+
+    // R' with the lease X0, then the merges that landed during the Gate, by rule P.
     // A rejection whose remote tip already contains R' is a success that pushed nothing:
     // two `pr rebase` of the PR at once push the same R', and the second can lose the
     // race inside the remote (Escalation nl-pr-a1-q2).
     let lease_arg = format!("--force-with-lease={lead_ref}:{lease}");
     let refspec = format!("{new}:{lead_ref}");
-    let args = ["push", "--porcelain", lease_arg.as_str(), "origin", refspec.as_str()];
-    let out = git::run::run(&lead, &args)?;
-    if out.code != 0 && !remote_contains(&lead, &lead_ref, &new)? {
-        let argv: Vec<String> = ["git", "-C", &lead.to_string_lossy()].into_iter().chain(args).map(str::to_owned).collect();
+    let push = ["push", "--porcelain", lease_arg.as_str(), "origin", refspec.as_str()];
+    let out = git::run::run(lead, &push)?;
+    if out.code != 0 && !remote_contains(lead, &lead_ref, new)? {
+        let argv: Vec<String> = ["git", "-C", &lead.to_string_lossy()].into_iter().chain(push).map(str::to_owned).collect();
         return Err(CpdError::new(ErrorCode::GitFailed, format!("git push exited {}.", out.code))
             .with("argv", argv)
             .with("exit", out.code)
             .with("stderr", tail(&out.stderr, TAIL_LINES)));
     }
     let tip = git::run::rev_parse(repo, &lead_ref)?;
-    if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", &new, &tip])?.code == 0 {
-        if let Push::Rejected { stderr } = git::push_commit(&lead, branch, &tip)? {
+    if tip != new && git::run::run(repo, &["merge-base", "--is-ancestor", new, &tip])?.code == 0 {
+        if let Push::Rejected { stderr } = git::push_commit(lead, branch, &tip)? {
             return Err(CpdError::new(
                 ErrorCode::GitFailed,
-                format!("{} was pushed, but the merges after it ({}) were rejected: run cpd pr push --pr {key}.", short(&new), short(&tip)),
+                format!("{} was pushed, but the merges after it ({}) were rejected: run cpd pr push --pr {key}.", short(new), short(&tip)),
             )
             .with("plan", id.as_str())
             .with("pr", key.as_str())
@@ -147,6 +304,111 @@ pub(super) fn rebase(args: Args) -> Result<Output, CpdError> {
     }
 
     Ok(Output::success(json!({"plan": id, "pr": key, "rebased": old != new, "old": old, "new": new, "pushed": true})))
+}
+
+/// Whether a rebase is in progress in the Lead worktree (rule S step 0): `rebase-merge` or
+/// `rebase-apply` in its git dir.
+fn in_progress(lead: &Path) -> Result<bool, CpdError> {
+    for name in ["rebase-merge", "rebase-apply"] {
+        if git_path(lead, name)?.exists() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn git_path(lead: &Path, name: &str) -> Result<std::path::PathBuf, CpdError> {
+    let path = git::run::ok(lead, &["rev-parse", "--path-format=absolute", "--git-path", name])?;
+    Ok(std::path::PathBuf::from(path.trim()))
+}
+
+/// The tip the stopped rebase started from, S (`rebase-merge/orig-head`, `rebase-apply/orig-head`).
+fn orig_head(lead: &Path) -> Result<String, CpdError> {
+    for name in ["rebase-merge/orig-head", "rebase-apply/orig-head"] {
+        if let Ok(sha) = std::fs::read_to_string(git_path(lead, name)?) {
+            return Ok(sha.trim().to_owned());
+        }
+    }
+    Err(CpdError::new(ErrorCode::GitFailed, format!("The rebase in {} has no orig-head: its starting tip is unknown.", lead.display())))
+}
+
+/// The paths git has not merged (`git diff --name-only --diff-filter=U`).
+fn unmerged(lead: &Path) -> Result<Vec<String>, CpdError> {
+    let out = git::run::ok(lead, &["diff", "--name-only", "--diff-filter=U"])?;
+    Ok(out.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect())
+}
+
+/// What keeps `--continue` from going on (C2): the unmerged paths, and the changed files
+/// (`git diff --name-only HEAD`) with a conflict marker line at column 0. `=======` alone is
+/// not one (a Markdown underline); it counts with a `<<<<<<<` line, which counts by itself.
+fn unresolved(lead: &Path) -> Result<Vec<String>, CpdError> {
+    let mut files: BTreeSet<String> = unmerged(lead)?.into_iter().collect();
+    let changed = git::run::ok(lead, &["diff", "--name-only", "-z", "HEAD"])?;
+    for name in changed.split('\0').filter(|n| !n.is_empty()) {
+        // A deleted file has no markers.
+        let Ok(bytes) = std::fs::read(lead.join(name)) else { continue };
+        if bytes.split(|b| *b == b'\n').any(|line| line.starts_with(b"<<<<<<< ") || line.starts_with(b">>>>>>> ")) {
+            files.insert(name.to_owned());
+        }
+    }
+    Ok(files.into_iter().collect())
+}
+
+/// `cpd pr rebase --pr <key> [--plan <id>] <flag>`: `--plan` unless `CPD_PLAN` already names the Plan.
+fn command(plan: &PlanId, key: &PrKey, flag: &str) -> String {
+    let selected = std::env::var("CPD_PLAN").is_ok_and(|p| p == plan.as_str());
+    if selected { format!("cpd pr rebase --pr {key} {flag}") } else { format!("cpd pr rebase --pr {key} --plan {plan} {flag}") }
+}
+
+/// The rebase stopped at a conflict in the Lead worktree (the stop's `rebase_conflict`).
+fn stopped(plan: &PlanId, key: &PrKey, lead: &Path, branch: &str, files: Vec<String>) -> CpdError {
+    let message = format!(
+        "{branch} conflicts in {} files: the rebase is stopped in {}. Resolve them and `git add` them (no commit, no push), then run `{}`; or give it up with `{}`.",
+        files.len(),
+        lead.display(),
+        command(plan, key, "--continue"),
+        command(plan, key, "--abort")
+    );
+    conflict(plan, key, lead, message, files)
+}
+
+fn conflict(plan: &PlanId, key: &PrKey, lead: &Path, message: String, files: Vec<String>) -> CpdError {
+    CpdError::new(ErrorCode::RebaseConflict, message)
+        .with("plan", plan.as_str())
+        .with("pr", key.as_str())
+        .with("files", files)
+        .with("worktree", lead.display().to_string())
+        .with("next", command(plan, key, "--continue"))
+        .with("abort", command(plan, key, "--abort"))
+}
+
+fn in_progress_error(plan: &PlanId, key: &PrKey) -> CpdError {
+    CpdError::new(
+        ErrorCode::RebaseInProgress,
+        format!("A rebase of PR {key} is already in progress in its Lead worktree: run `{}` or `{}`.", command(plan, key, "--continue"), command(plan, key, "--abort")),
+    )
+    .with("plan", plan.as_str())
+    .with("pr", key.as_str())
+    .with("next", command(plan, key, "--continue"))
+    .with("abort", command(plan, key, "--abort"))
+}
+
+fn no_rebase_error(plan: &PlanId, key: &PrKey) -> CpdError {
+    CpdError::new(ErrorCode::NoRebaseInProgress, format!("No rebase of PR {key} is in progress in its Lead worktree."))
+        .with("plan", plan.as_str())
+        .with("pr", key.as_str())
+}
+
+/// The Lead Branch is not where the stopped rebase started: a merge landed during the stop.
+fn moved(plan: &PlanId, key: &PrKey, tip: &str) -> CpdError {
+    CpdError::new(
+        ErrorCode::CasLost,
+        format!("The Lead Branch of PR {key} moved during the stop (a merge landed): run `{}`, then `cpd pr rebase --pr {key}`.", command(plan, key, "--abort")),
+    )
+    .with("plan", plan.as_str())
+    .with("pr", key.as_str())
+    .with("reason", "lead_branch_moved")
+    .with("tip", tip)
 }
 
 /// The lease X0 (§7.6 step 2, Escalation nl-pr-a1-q1): `refs/remotes/origin/<branch>`,
@@ -267,12 +529,12 @@ fn settle(env: &mut Env, catalog: &mut Option<Catalog>, plan: &PlanId, key: &PrK
     }
 }
 
-/// Rule S stopped after the compare-and-swap (§7.6 step 7): one `error` Event
-/// `lead_worktree_stale` for the Plan; the command goes on.
-fn report_stale(env: &mut Env, plan: &PlanId, key: &PrKey, lead: &Path, stale: &CpdError) -> Result<(), CpdError> {
+/// Rule S stopped after the Lead Branch moved (§7.6 step 7, and `--abort`; `what` is
+/// "rebased" or "aborted"): one `error` Event `lead_worktree_stale` for the Plan; the command goes on.
+fn report_stale(env: &mut Env, plan: &PlanId, key: &PrKey, lead: &Path, what: &str, stale: &CpdError) -> Result<(), CpdError> {
     let fix = stale.details().get("fix").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
     let text = format!(
-        "PR {key} of Plan {plan} was rebased, but its Lead worktree {} still holds the previous tree. {fix}. Then: cpd plan show --plan {plan}",
+        "PR {key} of Plan {plan} was {what}, but its Lead worktree {} still holds the previous tree. {fix}. Then: cpd plan show --plan {plan}",
         lead.display()
     );
     let mut details = stale.details().clone();
@@ -294,16 +556,6 @@ fn require_open<'a>(plan: &'a PlanPrs, args: &Args) -> Result<&'a PrRow, CpdErro
         return Err(pr.refuse(&plan.plan.id, COMMAND, "open"));
     }
     Ok(pr)
-}
-
-fn conflict(plan: &PlanId, key: &PrKey, branch: &str, onto: &str, files: Vec<String>) -> CpdError {
-    CpdError::new(
-        ErrorCode::RebaseConflict,
-        format!("{branch} conflicts with {onto} in {} files: nothing was changed. Decide, for example by appending a Job that resolves it.", files.len()),
-    )
-    .with("plan", plan.as_str())
-    .with("pr", key.as_str())
-    .with("files", files)
 }
 
 /// `git rebase <onto>` in `worktree`. `Some(files)` on a conflict, after

@@ -21,6 +21,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::git::{TAIL_LINES, tail};
 use crate::host::deadline::{self, Failed};
 use crate::host::exe::started_as;
+use crate::host::limit::limit;
 
 /// Below this many requests remaining, E5 stops polling until the limit resets (D9).
 const RATE_FLOOR: u64 = 100;
@@ -28,10 +29,11 @@ const RATE_FLOOR: u64 = 100;
 /// per `gh` call (§7.6), so a hung child cannot stop the one-thread tick.
 const POLL_DEADLINE: Duration = Duration::from_secs(120);
 
-/// When the next poll is due: `pr_poll_seconds` after the last one ended, and not before the rate limit resets;
-/// `now` when none has run. The engine wakes at this time instead of at the next tick (contract §3.7).
+/// When the next poll is due: `pr_poll_seconds` after the last one ended (tests: `CPD_TEST_PR_POLL`, [`limit`]), and
+/// not before the rate limit resets; `now` when none has run. The engine wakes at this time instead of at the next
+/// tick (contract §3.7).
 pub(super) fn due(engine: &Engine, now: Instant) -> Instant {
-    let every = Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds));
+    let every = limit("PR_POLL", Duration::from_secs(u64::from(engine.config.watch.pr_poll_seconds)));
     let after_last = engine.last_poll_end.map_or(now, |end| end + every);
     engine.paused_until.map_or(after_last, |until| until.max(after_last))
 }
@@ -43,10 +45,20 @@ pub(super) fn run(engine: &mut Engine) {
     }
     engine.paused_until = None;
     let polled = poll(engine);
-    engine.last_poll_end = Some(Instant::now());
     let out = match polled {
-        Ok(out) => out,
-        Err(failure) => return engine.fail(Step::E5, About::Machine, failure),
+        // A busy store is not a failure (contract §3.7): the poll did not happen, so it is not counted as one; it runs again at the next tick.
+        Err(failure) if is_store_busy(&failure) => {
+            engine.log.line(&format!("E5: the store is busy, the poll is tried again at the next tick: {}: {}", failure.code, failure.message));
+            return;
+        }
+        Ok(out) => {
+            engine.last_poll_end = Some(Instant::now());
+            out
+        }
+        Err(failure) => {
+            engine.last_poll_end = Some(Instant::now());
+            return engine.fail(Step::E5, About::Machine, failure);
+        }
     };
     let listed = |key: &str| out[key].as_array().map_or(0, Vec::len);
     let (changed, feedback, merged, done) = (listed("changed"), listed("feedback"), listed("merged"), listed("done"));
@@ -63,6 +75,18 @@ pub(super) fn run(engine: &mut Engine) {
             engine.fail(Step::E5, About::Machine, failure);
         }
         Err(failure) => engine.fail(Step::E5, About::Machine, failure),
+    }
+}
+
+/// Whether `cpd pr poll` failed on the store being busy: a transient store error, or the wait for the store's setup lock
+/// (`lock_timeout` naming `store.lock`, not `pr-poll.lock`), the same errors every other step waits out (§3.7).
+fn is_store_busy(failure: &Failure) -> bool {
+    let sqlite_busy = failure.details["sqlite_code"].as_i64().is_some_and(|c| matches!(c & 0xff, 5 | 6));
+    match failure.code.as_str() {
+        c if c == ErrorCode::StoreBusy.as_str() => true,
+        c if c == ErrorCode::StoreFailed.as_str() => sqlite_busy,
+        c if c == ErrorCode::LockTimeout.as_str() => failure.details["lock"].as_str().is_some_and(|l| l.ends_with("store.lock")),
+        _ => false,
     }
 }
 
@@ -128,5 +152,28 @@ fn poll(engine: &Engine) -> Result<Value, Failure> {
                 .with("stdout", tail(&stdout, TAIL_LINES))
                 .with("stderr", tail(&String::from_utf8_lossy(&out.stderr), TAIL_LINES)),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failure(code: ErrorCode, details: Value) -> Failure {
+        Failure { code: code.as_str().to_owned(), message: String::new(), details }
+    }
+
+    #[test]
+    fn a_busy_store_is_not_a_failed_poll() {
+        assert!(is_store_busy(&failure(ErrorCode::StoreBusy, json!({}))));
+        assert!(is_store_busy(&failure(ErrorCode::StoreFailed, json!({"sqlite_code": 5}))));
+        assert!(is_store_busy(&failure(ErrorCode::LockTimeout, json!({"lock": "/h/locks/store.lock"}))));
+    }
+
+    #[test]
+    fn other_failures_stay_failures() {
+        assert!(!is_store_busy(&failure(ErrorCode::LockTimeout, json!({"lock": "/h/locks/pr-poll.lock"}))));
+        assert!(!is_store_busy(&failure(ErrorCode::StoreFailed, json!({"sqlite_code": 1}))));
+        assert!(!is_store_busy(&failure(ErrorCode::SpawnFailed, json!({}))));
     }
 }

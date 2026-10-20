@@ -12,6 +12,10 @@ use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::{ask, attempt, config, context, doctor, events, inbox, job, plan, policy, pr, session, watch};
 
+/// The build's version string: `<Cargo.toml version>-<short commit hash>` (or `-unknown`).
+pub fn version() -> &'static str {
+    env!("CPD_VERSION")
+}
 
 /// cpd 2: every command prints exactly one JSON value on stdout. Without a
 /// command, in a terminal, it opens the cockpit (commands.md §13.3).
@@ -132,7 +136,7 @@ pub fn clap_result(err: clap::Error) -> Result<Output, CpdError> {
         ErrorKind::DisplayVersion => {
             let store = store_verdict(&CpdHome::from_env()?)?;
             Ok(Output::success(serde_json::json!({
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": version(),
                 "protocol": cpd_core::events::PROTOCOL,
                 "store": store,
             })))
@@ -220,12 +224,20 @@ mod tests {
             assert!(fields.contains_key("help") && !fields.contains_key("tree"));
         }
         let Ok(Output::Success(fields)) = run(argv(&["--version"])) else { panic!("version is a success") };
-        assert_eq!(fields["version"], env!("CARGO_PKG_VERSION"));
+        let version = fields["version"].as_str().expect("version is a string");
+        let hash = version
+            .strip_prefix(env!("CARGO_PKG_VERSION"))
+            .and_then(|rest| rest.strip_prefix('-'))
+            .expect("version is <Cargo version>-<hash>");
+        assert!(
+            hash == "unknown" || (hash.len() >= 7 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))),
+            "bad hash {hash}"
+        );
         let mut keys: Vec<_> = fields.keys().map(String::as_str).collect();
         keys.sort();
         assert_eq!(keys, ["protocol", "store", "version"]);
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 4);
+        assert_eq!(fields["protocol"], 6);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors

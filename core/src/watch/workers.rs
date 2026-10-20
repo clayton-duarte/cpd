@@ -8,8 +8,11 @@
 //! `widgets` view), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
 //! `Q` the `queued` Jobs; the four options are set in one `tmux set` call only
 //! when one of them differs from what was last set (the first tick always
-//! sets them). No row, no Event, except an `error` when tmux fails while a
-//! server runs: with no server there is no status line to feed, and the step
+//! sets them, and so does the first tick after a tmux failure or a missing
+//! server: a new server starts without them). No row, no Event, except an `error` when tmux
+//! fails while a server runs and no tmux restart is pending (a pending restart
+//! takes the server away under the step: that failure is expected and not
+//! reported): with no server there is no status line to feed, and the step
 //! waits.
 
 use time::OffsetDateTime;
@@ -17,6 +20,7 @@ use time::OffsetDateTime;
 use super::engine::Engine;
 use crate::clock::timestamp;
 use super::report::{About, Step};
+use super::restart;
 use super::schedule::READY;
 use crate::error::CpdError;
 use crate::inbox::model::{self, Filter, State, Urgency};
@@ -146,8 +150,11 @@ pub(super) fn run(engine: &mut Engine) {
     // No server, no status line: nothing is set or remembered, and it is set once a server appears.
     match engine.tmux.server_running() {
         Ok(true) => {}
-        Ok(false) => return engine.clear(Step::Workers, &About::Machine),
-        Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
+        Ok(false) => {
+            engine.workers = None;
+            return engine.clear(Step::Workers, &About::Machine);
+        }
+        Err(e) => return failed(engine, &e),
     }
     // One call, so a status line never draws a width that belongs to another text.
     let args = ["set", "-g", INBOX, &styled, ";", "set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width]
@@ -158,9 +165,19 @@ pub(super) fn run(engine: &mut Engine) {
             engine.workers = Some(state);
             engine.clear(Step::Workers, &About::Machine);
         }
-        // Not remembered: the next tick tries again.
-        Err(e) => engine.fail(Step::Workers, About::Machine, &e),
+        Err(e) => failed(engine, &e),
     }
+}
+
+/// A tmux call of the step failed: nothing is remembered (a restarted server starts without the
+/// options), and the next tick tries again. While a tmux restart is pending and has not failed, the
+/// failure is expected, the restart takes the server away under the step, and is not reported.
+fn failed(engine: &mut Engine, error: &CpdError) {
+    engine.workers = None;
+    if restart::holding(&engine.home).unwrap_or(false) {
+        return;
+    }
+    engine.fail(Step::Workers, About::Machine, error);
 }
 
 #[cfg(test)]
