@@ -138,14 +138,16 @@ Common refusals, which apply to every command and are not repeated in the sectio
 
 ### 1.4 Files written by commands
 
-The `$CPD_HOME` layout is §1.4. Commands in this file write five files the contract's layout does not list (amendment 4, §19); each is beside its peers and named so it cannot collide:
+The `$CPD_HOME` layout is §1.4. Commands in this file write files the contract's layout does not list (amendment 4, §19); each is beside its peers and named so it cannot collide:
 
 | File | Written by | Read by |
 |---|---|---|
 | `run/<plan>/lead-message.md` | `plan new` | the Plan's Lead `session run` (its first message) |
 | `run/<context>/manager-message.md` | `context manager` (B3-A2) | the Manager's `session run` (its first message) |
-| `run/<plan>/plan-<review>.md` | `plan review` | the pi adapter, which opens it in plannotator (§15.5) |
-| `run/<plan>/feedback-<review>.md` | the pi adapter: plannotator's feedback on a Plan review (§15.5), overwritten on a retry | `plan decide --feedback-file` |
+| `run/<plan>/summary.md` | `plan render` (§4.5, hs-d502): the Plan summary of the Plan as it is, without a review | the User, the Lead |
+| `run/<plan>/plan-<review>.md` | `plan review`: the full render | the pi adapter, which opens it in plannotator only when the User chooses "Open full plan" (§15.5) |
+| `run/<plan>/summary-<review>.md` | `plan review` (§4.6, hs-d502): a copy of the summary that a later render cannot change, as `plan-<review>.md` | the pi adapter, which shows it in the Lead's chat (§15.5) |
+| `run/<plan>/feedback-<review>.md` | the pi adapter: the User's note from the chat dialog's Change, or plannotator's feedback (§15.5), overwritten on a retry | `plan decide --feedback-file` |
 | `run/<plan>/messages/<session>.md` | `session fork --message-file` copies the file here | that Session's `session run` |
 | `run/<plan>/reviews/<job>.md` | a review Job's Worker (B2, contract §1.4) | the Lead (and the User) |
 | `run/titles/<session>.log` | engine E10: the output of the `session retitle` runs it starts (hs-d257, contract §1.4); `locks/title-<session>.lock` is the run's own lock (§10.14) | the User |
@@ -172,6 +174,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context owner` (§3.13) | Manager, Lead | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
+| `cpd plan outline` (§4.13) | Lead | no | no |
 
 `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged.
 
@@ -596,11 +599,11 @@ cpd plan show [--plan <id>]
 
 Effects: none; one read transaction, so the result is one consistent snapshot. It is the TUI's snapshot of a Plan (§17).
 
-Output: every field of the Plan (§2.2); `prs` (R34, A14), every PR of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 PR: `key`, `repo`, `base`, `base_pr` (the base PR as `<plan>/<key>`, derived from `base`, or null: hs-d324), `needs` (PR references: a bare key of this Plan, `<plan>/<key>` of another), `status`, `lead_branch`, `lead_worktree`, `pr`, `pull_request` (the row, as in §4.2, `mergeable` and `merge_state` included, or null), `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `pr`, `review` and `urgent` among them), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
+Output: every field of the Plan (§2.2), `outline` included (hs-d502: the outline object of §4.13, parsed from `plans.outline`, or `null`); `prs` (R34, A14), every PR of the Plan in key order, `cancelled` ones included, each with its fields (§2.2 PR: `key`, `repo`, `base`, `base_pr` (the base PR as `<plan>/<key>`, derived from `base`, or null: hs-d324), `needs` (PR references: a bare key of this Plan, `<plan>/<key>` of another), `status`, `lead_branch`, `lead_worktree`, `pr`, `pull_request` (the row, as in §4.2, `mergeable` and `merge_state` included, or null), `all_merged_at`, `start_failed_at`, `created_at`, `started_at`, `merged_at`) and `jobs`, the keys of its Jobs in `seq` order; `jobs` with each Job's fields (Spec included, `pr`, `review` and `urgent` among them), `needs`, and its Attempts (`id`, `number`, `tier`, `origin`, `status`, `outcome`, `cause`, `worker_session`, `started_at`, `ended_at`); `escalations` that are `open`; the latest Plan review; `counts`; `tamper` (the tamper report of §4.3: `{kind: "schema" | "fingerprint" | "history", …}`); `events_cursor`.
 
 ```json
 {"ok": true,
- "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "phase": "dispatch", "lead_session": "596d007f-…", "created_at": "…", "locked_at": "…", "done_at": null, "archived_at": null},
+ "plan": {"id": "cpd2", "context": "building-cpd", "title": "cpd in Rust", "jira": null, "phase": "dispatch", "lead_session": "596d007f-…", "created_at": "…", "locked_at": "…", "done_at": null, "archived_at": null, "outline": null},
  "prs": [{"key": "cpd", "repo": "/home/clayton/projects/cpd", "base": "main", "base_pr": null, "needs": [], "status": "dispatch", "lead_branch": "cpd/cpd2/cpd", "lead_worktree": "/home/clayton/projects/cpd.cpd2.cpd",
           "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
           "created_at": "…", "started_at": "…", "merged_at": null, "jobs": ["contract-core", "contract-commands"]},
@@ -644,7 +647,7 @@ Idempotent: yes; in phase `plan` it returns `"already": true` and writes nothing
 cpd plan render [--plan <id>]
 ```
 
-Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then the section `## Overlaps` (below); then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. A **stub draft** (no Tier or no Spec, §5.1) is shown as it is, visibly incomplete: `Tier: —` in its table row and section when it has no Tier, and `Spec: not written yet` in place of its Spec subsection's goal, context, touches, acceptance and out of scope when it has none. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs, the number of PRs that are not `cancelled` and the overlaps.
+Effects: writes `run/<plan>/plan.md` and `run/<plan>/summary.md` (§1.4), nothing else. Content of `plan.md`, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then the section `## Overlaps` (below); then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. A **stub draft** (no Tier or no Spec, §5.1) is shown as it is, visibly incomplete: `Tier: —` in its table row and section when it has no Tier, and `Spec: not written yet` in place of its Spec subsection's goal, context, touches, acceptance and out of scope when it has none. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). It also writes the **Plan summary**, `run/<plan>/summary.md` (below, hs-d502). Output: the path, `summary` (the path of the summary), the plan fingerprint (§2.3: Jobs, PRs and the outline when set), the number of `draft` Jobs, the number of PRs that are not `cancelled` and the overlaps.
 
 **Overlaps** (B4-A3, hs-d78, hs-d172, hs-n201): the warning that another Plan is working on the same files. It is made here and so in the Plan review (§4.6), and nowhere else: `job add` does not warn. It looks at **open work** only, on both sides: the Jobs that are not `cancelled` (`draft`, `queued`, `running`, `failed`, or `merged` on its Lead Branch) of PRs that are not `merged` and not `cancelled`. A Job of a `merged` PR is on its base already and cannot clash with anyone's work any more, so the Jobs of this Plan's `merged` PRs are not checked. For each PR of this Plan that is not `merged` and not `cancelled`, every **other** active Plan (any Context; its phase is not `done` and it is not archived) is looked at when it has a PR in the same repo (the same `prs.repo` realpath as stored) that is not `merged` and not `cancelled`. A Job of that PR overlaps a Job of this PR when a path in the `touches` of the one overlaps a path in the `touches` of the other. Two paths overlap when they are equal, or when one is a directory (ends with `/`) that contains the other. Nothing else is compared (no globs, no normalisation). A Plan's own Jobs are never listed. The warning is only that: nothing is refused and no state changes.
 
@@ -663,11 +666,76 @@ The overlaps are grouped: **one overlap per (this Job, other Plan, other PR)**. 
 The columns are this Plan's Job, the other Plan, its PR, the Jobs of that PR that overlap this Job with their status (in the order they were created), and the paths of this Job that overlap them. `Paths` shows at most five paths and then `+N` for the N more, as in `` `a`, `b`, `c`, `d`, `e`, +2 ``. In the JSON output, `overlaps` lists the same rows, in the same order, as `{job, plan, pr, other_jobs: [{key, status}], paths}`: `other_jobs` are the Jobs of the other PR that overlap `job`, and `paths` are all the paths of `job` that overlap them, deduplicated (only the table is capped); `[]` when there is none.
 
 ```json
-{"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "prs": 2,
+{"ok": true, "path": "/home/clayton/.cpd/run/pay-4521/plan.md", "summary": "/home/clayton/.cpd/run/pay-4521/summary.md", "fingerprint": "9f86d081…", "draft_jobs": 6, "prs": 2,
  "overlaps": [{"job": "x", "plan": "pay-4522", "pr": "api", "other_jobs": [{"key": "y", "status": "queued"}, {"key": "z", "status": "draft"}], "paths": ["core/src/x.rs", "core/src/lib.rs"]}]}
 ```
 
-Idempotent: yes (the same PRs and Jobs, and the same other Plans, render the same file). Change: cpd 1's `--out` is dropped; the file has one place.
+Idempotent: yes (the same PRs and Jobs, the same outline and the same other Plans, render the same two files). Change: cpd 1's `--out` is dropped; the file has one place.
+
+**The Plan summary** (hs-d502, D4; User, 2026-10-20, hs-d502 supersedes hs-d468). A short text cpd generates from the Plan and its outline (§4.13), so the User approves a Plan from a screenful in the Lead's chat instead of reading the render (§15.5). `plan render` writes it to `run/<plan>/summary.md` and `plan review` (§4.6) writes the same text, with the review's heading, to `run/<plan>/summary-<review>.md`. It is derived and holds no information the Plan lacks: it carries no Spec, no Mermaid and no row for a Locked Job. GitHub-flavoured Markdown only (§4.5 above). Deterministic: the same Plan, outline, overlaps, review and path give the same bytes.
+
+**Vocabulary.** A Job **under review** is a `draft` Job that has a Tier and a Spec; a **stub draft** is a `draft` Job without one of them (§5.1). A Job is **locked** when it is neither `draft` nor `cancelled`. A PR **counts** when it is not `cancelled`. Keys sort bytewise.
+
+**Layout.** The file is a sequence of **blocks**, in the order below, separated by exactly one blank line, and ends with one newline. A block that has nothing to say is left out, except the first, the Goal, the Jobs block and the last. A block is one or more consecutive lines.
+
+| # | Block | Lines |
+|---|---|---|
+| 1 | heading | `# <review title>`, then `Plan <plan id>: <Plan title> · review <review id>`. In `summary.md` (no review): `# Plan: <Plan title>`, then `Plan <plan id> · phase <phase>` |
+| 2 | goal | `Goal: <goal>` from the outline; `Goal: —` when the Plan has no outline |
+| 3 | PRs | `## PRs`, then for each PR that counts and has a Job under review, in key order, `- <key> (<repo name>, base <base>): <PR title>` and under it one line `  Done when: <line>` (two leading spaces) per line of the outline's `done_when[<key>]`, in order, none when the outline is null or has no entry for it. `<repo name>` is the PR's `name` (§2.2 PR), else the last path segment of its `repo`; `<base>` the PR's `base`; `<PR title>` the PR's `title`, else `—` |
+| 4 | decisions | `## Decisions`, then `D<n> <question> → <answer>` per outline decision, `n` from 1 in the outline's order |
+| 5 | assumptions | `## Assumptions`, then `A<n> <text>` per outline assumption, `n` from 1 |
+| 6 | Jobs | `## Jobs (<n> under review, <m> locked)`, `n` the number of Jobs under review and `m` the number of locked Jobs, then a table with the columns `Job`, `Title`, `Tier`, `Needs`, one row per Job under review in PR key order, then Job key order: its key, its title, its Tier, and its `needs` joined by `, ` (`—` when none). The table has its header and separator rows even with no Job under review. No locked Job has a row |
+| 7 | order | `Order: <items>`, the items joined by `, `: one `<need> → <key>` for every need of a PR that counts, whose need is a PR that counts too (a need of another Plan is written `<plan>/<key>`), in key order of the PR and then of the need; then, as the last item, the PRs that count and neither need nor are needed by any other, joined by ` · ` (no such item when there is none). Then the line `Stacked on: <entries>`, one `<key> on <base PR>` per PR that counts and has a base PR (`base_pr` of `plan show`, §4.3: `<plan>/<key>`), in key order, joined by `, `; `none` when none is stacked. Both lines are left out when no PR counts |
+| 8 | overlaps | `Overlaps: none` when §4.5's overlaps are none; else `Overlaps: <n>`, `n` the number of overlaps (the rows of §4.5's table), then one row per overlap, in §4.5's order and at most 5: `- <path>: <other plan>/<other pr>/<other job> (<status>)`, the first of the overlap's paths and the first of its other Jobs with its status, followed by ` +<k>` when the overlap has more (`k` = the other paths plus the other Jobs); when `n` is over 5, a last row `- +<n-5> more overlaps` |
+| 9 | decided | `Decided: <ids>`, the outline's `decided` record ids joined by `, `; left out when there are none |
+| 10 | later | `Later: <items>`, the work this review does not cover, joined by `, `: the keys of the stub drafts in key order, then `PR <key>` for each PR that counts and has no Job under review, in key order; left out when there are none |
+| 11 | risks | `## Risks`, then `R<n> <text>` per outline risk, `n` from 1 |
+| 12 | out of scope | `## Out of scope`, then `- <text>` per outline entry |
+| 13 | last line | for a review: `Approve \| Change \| Open full plan (<path>)` (the pipes literal), `<path>` the absolute path of `plan-<review>.md`; for `summary.md`: `Full plan (<path>)`, the absolute path of `plan.md` |
+
+Blocks 4, 5, 9, 11 and 12 come from the outline and are left out when it is null or the list is empty. The sizes are bounded by the outline's own limits (§4.13: at most 3 risks, 5 out-of-scope entries, 3 done-when lines per PR) and by the overlap rows above; the decisions, assumptions and Jobs are as many as the Plan has. A `done_when` key of a PR that was cancelled after `plan outline` is not shown (the block lists PRs that count).
+
+```
+# Plan review in chat
+Plan plan-ux: Plan UX · review r2
+
+Goal: Show a Plan review as a short summary in the Lead's chat, approved in one dialog
+
+## PRs
+- cpd (cpd, base main): Summary, review in chat and outline
+  Done when: plan review writes summary-<review>.md from the outline
+  Done when: the adapter shows it in chat with Approve, Change and Open full plan
+
+## Decisions
+D1 Where is the review shown? → In the Lead's chat; plannotator only on request
+
+## Assumptions
+A1 The outline is written by the Lead, not inferred
+
+## Jobs (2 under review, 1 locked)
+| Job | Title | Tier | Needs |
+|---|---|---|---|
+| ux-docs | Docs for the review in chat | S3 | — |
+| ux-summary | Summary and outline | O3 | ux-docs |
+
+Order: cpd
+Stacked on: none
+
+Overlaps: none
+
+Decided: hs-d502, hs-d503
+
+Later: ux-remeasure
+
+## Risks
+R1 pi's dialog API differs between modes
+
+## Out of scope
+- Changing plannotator
+
+Approve | Change | Open full plan (/home/clayton/.cpd/run/plan-ux/plan-r2.md)
+```
 
 ### 4.6 `plan review`
 
@@ -675,28 +743,31 @@ Idempotent: yes (the same PRs and Jobs, and the same other Plans, render the sam
 cpd plan review [--plan <id>] --title <text>
 ```
 
-`--title` is **required** (hs-d291): it names what the drafts under review do, so the User sees it as the heading of the review in plannotator. It has the rule of a PR's title: 1–72 characters, one line, no control characters; a bad or missing one is `usage` (exit 2). It is stored as `plan_reviews.title` (contract §2.2).
+`--title` is **required** (hs-d291): it names what the drafts under review do, so the User sees it as the heading of the review, in the summary in the Lead's chat and in the full render. It has the rule of a PR's title: 1–72 characters, one line, no control characters; a bad or missing one is `usage` (exit 2). It is stored as `plan_reviews.title` (contract §2.2).
 
-Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `plan` the review covers the whole plan, as before; in every phase after `plan` it covers **exactly the draft Jobs**: its fingerprint is over the drafts only (§2.3), and the rendered plan marks them under review and shows the Locked Jobs as context (§4.5). A Lead that planned several batches adds the later ones as drafts (`job add --draft`, §5.1) and asks for one review per batch. The Lead runs it through its tool `cpd_plan_review` or directly; either way the pi adapter opens plannotator when the `plan-review` Event arrives (§15.5), so the review opens from any caller, in whatever phase the Plan is.
+Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `plan` the review covers the whole plan, as before; in every phase after `plan` it covers **exactly the draft Jobs**: its fingerprint is over the drafts only (§2.3), and the rendered plan marks them under review and shows the Locked Jobs as context (§4.5). A Lead that planned several batches adds the later ones as drafts (`job add --draft`, §5.1) and asks for one review per batch. The Lead runs it through its tool `cpd_plan_review` or directly; either way the pi adapter shows the summary in the Lead's chat, with the approval dialog, when the `plan-review` Event arrives (§15.5), so the review opens from any caller, in whatever phase the Plan is. The User approves, asks for a change, or opens the full render in plannotator (hs-d502).
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed) | `no_draft_jobs` | 3 |
 | every `draft` Job has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
+| the Plan has an outline (§4.13; hs-d502, D3); `details.next` = `cpd plan outline --file <outline.json>` | `outline_missing` | 3 |
+| every PR that has a `draft` Job (under review, since the previous row passed) has an entry in the outline's `done_when`; `details.prs` lists the PR keys without one, in key order | `outline_incomplete` | 3 |
 
 Effects:
-- **Files:** renders the plan to `run/<plan>/plan.md` and copies it to `run/<plan>/plan-<review>.md`, so a later render cannot change what the User reviews. The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other PR that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
-- **Rows**, one transaction: `plan_reviews` (`id = r<k>`, `k` = 1 + the highest, `fingerprint` = the plan fingerprint, `title` = `--title`, `status = pending`). **Event** `plan-review` `{review, fingerprint, status: "pending"}`.
+- **Files:** renders the plan to `run/<plan>/plan.md` and `run/<plan>/summary.md` (§4.5) and copies them to `run/<plan>/plan-<review>.md` and `run/<plan>/summary-<review>.md`, so a later render cannot change what the User reviews. The summary copy is the Plan summary of §4.5 with the review's heading (block 1) and its last line (block 13), and no other difference; it is what the User reviews (§15.5), and the full copy is shown only when the User asks for it. The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other PR that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
+- The refusals `outline_missing` and `outline_incomplete` come **before anything is written** (D3): no render, no file, no row, no Event.
+- **Rows**, one transaction: `plan_reviews` (`id = r<k>`, `k` = 1 + the highest, `fingerprint` = the plan fingerprint (§2.3: it includes the outline), `title` = `--title`, `status = pending`). **Event** `plan-review` `{review, fingerprint, status: "pending"}`.
 
 ```json
-{"ok": true, "review": {"id": "r3", "fingerprint": "9f86d081…", "status": "pending", "requested_at": "…"}, "path": "/home/clayton/.cpd/run/pay-4521/plan-r3.md",
- "next": "The User reviews the plan in plannotator. Stop and wait for the decision message."}
+{"ok": true, "review": {"id": "r3", "fingerprint": "9f86d081…", "status": "pending", "requested_at": "…"}, "path": "/home/clayton/.cpd/run/pay-4521/plan-r3.md", "summary": "/home/clayton/.cpd/run/pay-4521/summary-r3.md",
+ "next": "The User reviews the plan summary in your chat and decides there. Stop and wait for the decision message."}
 ```
 
 **Stubs** (hs-d241, R1). A draft without its Tier or its Spec (a stub, §5.1) cannot be approved, so the review is **not requested**: it is refused `draft_incomplete` (exit 3) with `details.jobs` = `[{"key": "api-1", "missing": ["spec"]}, …]`, in key order, `missing` holding `"tier"` and/or `"spec"`. The same refusal applies through the tool `cpd_plan_review`. Nothing is rendered or written. The Lead completes each stub with `job edit --tier --spec` (§5.2) or cancels it, then asks again. The plan fingerprint covers a stub as it is (contract §2.3), so completing one changes it.
 
-Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` and writes nothing. When the Jobs or PRs changed since, it requests a new review; the older one stays `pending` and no longer matters, because `plan lock` reads only the latest (§2.3).
+Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` (its `path` and `summary` too) and writes nothing; the two refusals above are still checked first, so a Plan with no outline is refused even when a review made before the outline existed is pending. When the Jobs or PRs changed since, it requests a new review; the older one stays `pending` and no longer matters, because `plan lock` reads only the latest (§2.3).
 
 ### 4.7 `plan decide` (internal)
 
@@ -704,7 +775,7 @@ Idempotent: yes. When the latest review is `pending` for the current fingerprint
 cpd plan decide <review> (--approve | --reject) [--feedback-file <file>] [--plan <id>]
 ```
 
-Records the User's decision. Called by the pi adapter with plannotator's result (§15.5); replaces cpd 1's `plan decision` (cpd 1 §11), whose `--pending` step is now `plan review`. The cpd-lead skill forbids the Lead to run it. Internal (§1.1): hidden in clap, run only by the pi adapter.
+Records the User's decision. Called by the pi adapter with the result of the chat dialog or of plannotator (§15.5); replaces cpd 1's `plan decision` (cpd 1 §11), whose `--pending` step is now `plan review`. The cpd-lead skill forbids the Lead to run it. Internal (§1.1): hidden in clap, run only by the pi adapter.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -859,6 +930,57 @@ No new Event kind and no schema change. The command's own Events are the existin
 ```
 
 Idempotent: yes. An archived Plan with nothing left to cancel: `"already": true`, nothing written. A rerun after a failure repeats steps 2 to 6 on what is left; Jobs already `cancelled` and pull requests already closed are skipped.
+
+### 4.13 `plan outline`
+
+```
+cpd plan outline --file <outline.json> [--plan <id>]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--file <outline.json>` | required; the outline, JSON (below); readable UTF-8, else `file_unreadable` (§1.5) |
+| `--plan <id>` | the Plan (§1.3) |
+
+Sets the Plan's **outline** (hs-d502, D1; contract §2.2 Plan `outline`): what the Lead has settled with the User and says in a Plan review's summary (§4.5), which cpd cannot derive from Jobs. It **replaces** the outline whole; there is no partial edit and no way to clear it. It works in **every phase**, so a Lead that plans a later batch writes the outline of that batch before it asks for its review (§4.6).
+
+**The outline file**, JSON, parsed once at the boundary (§1.5). A JSON object; unknown fields are refused. Every value is a string, array or object as written here; every "line" is a string of 1–200 characters on one line, with no control character (so no line break and no tab):
+
+| Field | Value | Rule |
+|---|---|---|
+| `goal` | line | required |
+| `decisions` | `[{question, answer}]` | each `question` and `answer` a line; may be empty |
+| `assumptions` | `[line]` | may be empty |
+| `risks` | `[line]` | 0 to 3 |
+| `done_when` | `{<PR key>: [line]}` | each value 1 to 3 lines; every key is a PR of the Plan that is **not `cancelled`** (checked against the Plan) |
+| `out_of_scope` | `[line]` | 0 to 5 |
+| `decided` | `[record id]` | Context record ids (§2.1) of the Plan's Context; each must exist there (any kind, superseded included), else `outline_invalid` |
+
+Every field but `goal` may be absent; an absent one is stored as `[]` (`{}` for `done_when`). The stored form, `plans.outline`, is the **canonical JSON** of the object with all seven fields: keys sorted, no whitespace, strings as parsed. So an outline that says the same stores the same text, whatever its key order or spacing.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the file is readable UTF-8 | `file_unreadable` | 2 |
+| the file is a JSON object with no unknown field, and every field has the shape and limits above. Checked in this order, the first failure being the result: not JSON, or not an object (`details.field` `$`); an unknown field (its name, the first in byte order); then `goal`, `decisions`, `assumptions`, `risks`, `done_when`, `out_of_scope`, `decided`, each element in order; `details.field` is the path of the failure, as `goal`, `decisions[1].answer`, `risks[3]`, `done_when.api[0]`, `decided[0]` | `outline_invalid` | 2 |
+| the Plan exists | `plan_not_found` | 4 |
+| the Plan is not archived (§1.3) | `archived` | 3 |
+| every key of `done_when` is a PR of the Plan that is not `cancelled`; `details.field` = `done_when.<key>`, `details.key` = the key | `outline_invalid` | 2 |
+| every id of `decided` is a record of the Plan's Context; `details.field` = `decided[<i>]`, `details.record` = the id | `outline_invalid` | 2 |
+
+Effects:
+- The same canonical JSON as stored: `"already": true` and **nothing written**, no row, no Event.
+- Otherwise **rows**, one transaction: `plans.outline` = the canonical JSON. **Event** `plan-outlined` `{replaced}` (contract §5.2), `replaced` true when the Plan had an outline. Nothing else is written: no file, no tmux. The plan fingerprint changes (§2.3: it includes the outline), so a Plan review made before this write is no longer current, and the Lead asks for a new one (§4.6).
+- The outline is checked when it is written only: a PR cancelled afterwards leaves its `done_when` entry in it, which the summary does not show (§4.5) and `plan review` does not need (§4.6).
+
+```json
+{"ok": true, "plan": "pay-4521", "replaced": false,
+ "outline": {"assumptions": ["The outline is written by the Lead"], "decided": ["hs-d502"],
+             "decisions": [{"answer": "In the Lead's chat", "question": "Where is the review shown?"}],
+             "done_when": {"api": ["plan review writes summary-<review>.md"]},
+             "goal": "Show a Plan review as a short summary in chat", "out_of_scope": ["Changing plannotator"], "risks": []}}
+```
+
+`outline` is the stored object. Idempotent: yes. The same file twice changes nothing and writes one Event only the first time (`"already": true` the second time, `replaced` absent).
 
 ## 5. `job`
 
