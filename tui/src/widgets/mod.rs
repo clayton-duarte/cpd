@@ -39,7 +39,7 @@ use cpd_core::output::Output;
 use cpd_core::store::Store;
 
 pub use column::{Drawn, Hit, Machine, MergeIcon, draw};
-pub(crate) use column::{Window, dim, max_scroll, section_header, window};
+pub(crate) use column::{Window, dim, max_scroll, window};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);

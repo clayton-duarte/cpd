@@ -291,6 +291,16 @@ impl NewEvent {
         make(Kind::SessionMessage, text, json!({"from": from, "text": message, "wake": wake}))
     }
 
+    /// E4's escalation to a Context's Manager (§3.7): a PR still unopened `minutes` after its `all-merged`; `from` is the Plan's Lead.
+    pub fn session_message_pr_unopened(text: impl Into<String>, from: &str, plan: &str, pr: &str, minutes: i64) -> NewEvent {
+        let text = text.into();
+        make(
+            Kind::SessionMessage,
+            text.clone(),
+            json!({"from": from, "text": text, "wake": true, "escalation": "pr_unopened", "plan": plan, "pr": pr, "minutes": minutes}),
+        )
+    }
+
     pub fn inbox_opened(text: impl Into<String>, item: i64, kind: &str, urgency: &str, label: &str) -> NewEvent {
         make(Kind::InboxOpened, text, json!({"item": item, "kind": kind, "urgency": urgency, "label": label}))
     }
@@ -381,7 +391,7 @@ mod tests {
             Kind::ContextArchived => vec![NewEvent::context_archived(T, b)],
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],
             Kind::SessionArchived => vec![NewEvent::session_archived(T, b)],
-            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b)],
+            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b), NewEvent::session_message_pr_unopened(T, s, s, s, n)],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],
             Kind::InboxClosed => vec![NewEvent::inbox_closed(T, 1, s)],
             Kind::InboxSnoozed => vec![NewEvent::inbox_snoozed(T, 1, s)],

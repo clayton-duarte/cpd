@@ -233,6 +233,11 @@ impl Report {
         }
     }
 
+    /// What `step` reported with `code` and has not cleared.
+    pub(super) fn open(&self, step: Step, code: &str) -> Vec<About> {
+        self.open.iter().filter(|((s, _), (c, _))| *s == step && c == code).map(|((_, about), _)| about.clone()).collect()
+    }
+
     /// `step` succeeded for `about`: a later failure is reported again.
     pub(super) fn clear(&mut self, step: Step, about: &About) {
         self.open.remove(&(step, about.clone()));

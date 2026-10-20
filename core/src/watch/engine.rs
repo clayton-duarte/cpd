@@ -75,6 +75,11 @@ impl Engine {
         self.report.clear(step, about);
     }
 
+    /// What `step` reported with `code` and has not cleared.
+    pub(super) fn open_failures(&self, step: Step, code: &str) -> Vec<About> {
+        self.report.open(step, code)
+    }
+
     /// pi's catalog (§9), for the ladder and E3.
     pub(super) fn catalog(&mut self) -> Result<Catalog, CpdError> {
         if let Some(catalog) = &self.catalog {

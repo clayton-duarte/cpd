@@ -8,36 +8,29 @@
 //! reason (the widget owns the indent). Context rows are not selectable: the cursor moves between Sessions
 //! only, and is inverted over its row's whole width, only while the pane has keyboard focus.
 //!
-//! **Folds** (decision hs-d309; `crate::fold`, the one widget). A Context and a `…` group are collapsible blocks: the
-//! title row (the Context's row, the `…`), its content rows each led by a muted `├` (the tree's own branch), and a
-//! muted `└ collapse` row; folded, the title row and a muted `└ expand` row. Only the `└ expand` / `└ collapse` row
-//! folds ([`Row::Toggle`], [`click_toggle`]); a click on the title row keeps the row's own action. A Context's
-//! toggle row is drawn as the Context's next sibling at the Context's indent (`tui-tree-widget` hides the children of a
-//! folded item, and the toggle must stay), a group's as its last row. The archived Contexts of the top-level `…`
-//! group keep their top-level rows, with no branch.
+//! **Folds** (decisions hs-d337, hs-d339; `crate::fold`, the one widget). A Context is a collapsible block: the title
+//! row `╭` + the Context's dot + its id, each content row `├─` + the row's dot + its name, straight against the branch
+//! (the widget indents a child by two columns; `draw` takes it back), and **one** muted `╰─ collapse` row; folded, the
+//! title row and a muted `╰─ expand` row. Only that row folds ([`Row::Toggle`], [`click_toggle`]); a click on the title
+//! row keeps the row's own action. A Context's toggle row is drawn as the Context's next sibling (`tui-tree-widget`
+//! hides the children of a folded item, and the toggle must stay).
 //!
-//! Labels (commands.md §13.2): a Context row shows its title, a Plan row its Plan's title, a fork its
-//! Session's name.
+//! Labels (commands.md §13.2): a Context row shows its id, a Plan row its Plan's id, a fork its Session's id.
 //!
 //! **Forks** (B1, contract §6.8): a forked Session is a sibling of the Plans directly under its Context, after
 //! them, never under a Plan or under its source.
 //!
-//! **Archived rows** (hs-d53, F1). Archived Contexts are behind one `…` row at the end of the live Context list;
-//! the archived Plans, and the forks that are archived or of an archived Plan, of a live Context are behind one
-//! `…` row at the end of that Context's live rows. The `…` row is a leaf that stays where it is; expanded, the
-//! archived rows follow it at the depth they would have if live, with the normal guides, the whole row drawn in
-//! the darker grey. Whether a Context or a `…` row is expanded is the tree state's open set, so view state only. The
-//! cursor never rests on them.
+//! **Archived rows** (hs-d339). An expanded Context's block lists its archived Plans, and the forks that are archived
+//! or of an archived Plan, after the live rows, muted, with the same `├─` rows. There is no `…` row and no separate
+//! toggle. Archived Contexts follow the live ones, each its own block, muted; they start folded. Whether a Context is
+//! expanded is the tree state's open set, so view state only. The cursor never rests on archived rows.
 //!
-//! Rows (identifiers are paths; `…` is [`MORE`]):
+//! Rows (identifiers are paths):
 //!
 //! | Path | Row |
 //! |---|---|
-//! | `[context]`, `[context, plan]`, `[context, session]` | a live Context, a Plan (its row is its Lead's), a forked Session |
-//! | `[…]` | the `…` row of the archived Contexts |
-//! | `[context]`, `[context, plan]`, `[context, session]` | the same, for an archived Context, Plan or fork |
-//! | `[context, …]` | the `…` row of the Context's archived Plans and forks |
-//! | `[└ context]`, `[└ …]`, `[context, └ …]` | the `└ expand` / `└ collapse` row of that Context, of the archived Contexts, of that Context's archived rows |
+//! | `[context]`, `[context, plan]`, `[context, session]` | a Context, a Plan (its row is its Lead's), a forked Session; archived or not |
+//! | `[╰─ context]` | the `╰─ expand` / `╰─ collapse` row of that Context |
 //!
 //! Everything here is pure except `draw`, which only writes to the frame's buffer.
 
@@ -45,6 +38,7 @@ use std::collections::HashSet;
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
+use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -58,26 +52,23 @@ use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, PlanNode, SessionNode, Tree};
 use cpd_core::inbox::model::Kind;
 
-/// Tree identifiers: a Context's id, a Plan's id, a Session's id, or [`MORE`].
+/// Tree identifiers: a Context's id, a Plan's id, a Session's id.
 pub type Id = String;
 
-/// One tree level is indented by two columns (`tui-tree-widget`'s own indentation).
+/// One tree level is indented by two columns (`tui-tree-widget`'s own indentation, which [`draw`] takes back).
 const INDENT: usize = 2;
 
 /// The mark of the Session in the chat slot, in column 0 of its row.
 pub const ACTIVE_MARK: &str = "\u{F040A}"; // md-play
 
-/// The identifier of a `…` row. No id has this shape.
-pub const MORE: &str = "\u{F01D8}"; // md-dots_horizontal
-
 /// What a toggle row's identifier starts with: the identifier of the fold it toggles, last element, behind this.
-const TOGGLE: &str = "└ ";
+const TOGGLE: &str = "╰─ ";
 
-/// The columns a content row's branch takes: the glyph and a space (`fold::content`).
+/// The columns a content row's branch takes (`fold::TREE_BRANCH`).
 const BRANCH_WIDTH: usize = 2;
 
-/// The identifier of the toggle row of the fold whose own identifier is `id` (a Context, or a `…` group); it is a
-/// sibling of it, so the rest of the path is the same.
+/// The identifier of the toggle row of the Context whose own identifier is `id`; it is a sibling of it, so the rest of
+/// the path is the same.
 fn toggle_id(id: &str) -> Id {
     format!("{TOGGLE}{id}")
 }
@@ -96,30 +87,21 @@ pub enum Row<'a> {
     Plan(&'a ContextNode, &'a PlanNode),
     /// A Session forked by `session fork`, with the Plan it belongs to.
     Fork(&'a ContextNode, &'a PlanNode, &'a SessionNode),
-    /// A `…` row: the archived Contexts at the end of the list, or the archived Plans and forks at the end of a Context.
-    More,
-    /// The `└ expand` / `└ collapse` row of a Context or a `…`: the only row that folds it.
+    /// The `╰─ expand` / `╰─ collapse` row of a Context: the only row that folds it.
     Toggle,
 }
 
-/// What a Context shows directly, and what its `…` row holds.
+/// What a Context lists: the live rows, then the archived ones.
 struct Kids<'a> {
     /// The Plans listed under the Context: its live Plans, or every Plan when the Context is archived.
     direct: Vec<&'a PlanNode>,
     /// The forks listed under the Context after its Plans (B1): those of `direct` that are not archived, or
     /// every fork when the Context is archived.
     forks: Vec<(&'a PlanNode, &'a SessionNode)>,
-    /// The archived Plans of a live Context.
+    /// The archived Plans of a live Context, listed after the live rows.
     archived: Vec<&'a PlanNode>,
-    /// The forks of a live Context that are archived or of an archived Plan.
+    /// The forks of a live Context that are archived or of an archived Plan, listed last.
     strays: Vec<(&'a PlanNode, &'a SessionNode)>,
-}
-
-impl Kids<'_> {
-    /// The Context has a `…` row.
-    fn has_group(&self) -> bool {
-        !self.archived.is_empty() || !self.strays.is_empty()
-    }
 }
 
 fn kids(c: &ContextNode) -> Kids<'_> {
@@ -134,21 +116,15 @@ fn kids(c: &ContextNode) -> Kids<'_> {
 /// The row at `path`, `None` when the tree has none.
 pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
     if let Some(owner) = toggle_owner(path) {
-        return matches!(row(tree, &owner), Some(Row::Context(_) | Row::More)).then_some(Row::Toggle);
+        return matches!(row(tree, &owner), Some(Row::Context(_))).then_some(Row::Toggle);
     }
     let (context, path) = path.split_first()?;
-    if context == MORE {
-        return (path.is_empty() && tree.contexts.iter().any(ContextNode::is_archived)).then_some(Row::More);
-    }
     let context = tree.contexts.iter().find(|c| c.id.as_str() == context)?;
     let Some((next, path)) = path.split_first() else { return Some(Row::Context(context)) };
     if !path.is_empty() {
         return None;
     }
     let k = kids(context);
-    if next == MORE {
-        return k.has_group().then_some(Row::More);
-    }
     if let Some(plan) = k.direct.iter().chain(&k.archived).copied().find(|p| p.head.id.as_str() == next) {
         return Some(Row::Plan(context, plan));
     }
@@ -156,19 +132,19 @@ pub fn row<'a>(tree: &'a Tree, path: &[Id]) -> Option<Row<'a>> {
 }
 
 impl<'a> Row<'a> {
-    /// The Session the row opens and closes: a Plan's Lead, or the fork; none for a Context, a `…` or a toggle.
+    /// The Session the row opens and closes: a Plan's Lead, or the fork; none for a Context or a toggle.
     pub fn session(&self) -> Option<&'a SessionNode> {
         match *self {
-            Row::Context(_) | Row::More | Row::Toggle => None,
+            Row::Context(_) | Row::Toggle => None,
             Row::Plan(_, p) => p.lead(),
             Row::Fork(_, _, s) => Some(s),
         }
     }
 
-    /// The Plan of the row; none for a Context, a `…` or a toggle.
+    /// The Plan of the row; none for a Context or a toggle.
     pub fn plan(&self) -> Option<&'a PlanNode> {
         match *self {
-            Row::Context(_) | Row::More | Row::Toggle => None,
+            Row::Context(_) | Row::Toggle => None,
             Row::Plan(_, p) | Row::Fork(_, p, _) => Some(p),
         }
     }
@@ -180,7 +156,7 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.is_archived(),
             Row::Plan(c, p) => c.is_archived() || p.head.is_archived(),
             Row::Fork(c, p, s) => c.is_archived() || p.head.is_archived() || s.is_archived(),
-            Row::More | Row::Toggle => false,
+            Row::Toggle => false,
         }
     }
 
@@ -190,13 +166,13 @@ impl<'a> Row<'a> {
     }
 
     /// The id the row shows in the tree: a Context's id, a Plan's id, a fork's `<plan id>·<first 4 characters of its
-    /// Session id>` (the first 8 characters of its id when it has no Plan); none for a `…` row.
+    /// Session id>` (the first 8 characters of its id when it has no Plan); none for a toggle row.
     pub fn shown_id(&self) -> Option<String> {
         match *self {
             Row::Context(c) => Some(c.id.to_string()),
             Row::Plan(_, p) => Some(p.head.id.to_string()),
             Row::Fork(_, _, s) => Some(fork_id(s)),
-            Row::More | Row::Toggle => None,
+            Row::Toggle => None,
         }
     }
 
@@ -207,7 +183,6 @@ impl<'a> Row<'a> {
             Row::Context(c) => c.title.clone(),
             Row::Plan(_, p) => p.head.title.clone(),
             Row::Fork(_, _, s) => session_label(s),
-            Row::More => MORE.to_owned(),
             Row::Toggle => String::new(),
         }
     }
@@ -311,8 +286,8 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// A Context's title row: its dot (the most urgent of its live Sessions, grey when the Context is archived), id,
-/// and the number of Plans listed inside when folded. The fold makes it bold.
+/// A Context's title (after the `╭`): its dot (the most urgent of its live Sessions, grey when the Context is
+/// archived), id, and the number of Plans listed inside when folded. The fold makes it bold.
 fn context_text(c: &ContextNode, folded: bool, frame: usize) -> Line<'static> {
     let k = kids(c);
     let mut spans = vec![palette::dot_span(c.dot, frame, c.is_archived()), " ".into(), c.id.to_string().into()];
@@ -320,13 +295,6 @@ fn context_text(c: &ContextNode, folded: bool, frame: usize) -> Line<'static> {
         spans.push(Span::styled(format!(" {}", k.direct.len()), palette::fg(Meaning::Nothing)));
     }
     Line::from(spans)
-}
-
-/// A line indented `depth` levels.
-fn indented(depth: usize, line: Line<'static>) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ".repeat(depth * INDENT))];
-    spans.extend(line.spans);
-    Line { spans, ..line }
 }
 
 /// A Plan's row text, one level under its Context.
@@ -347,7 +315,7 @@ fn fork_row(s: &SessionNode, width: u16, frame: usize, muted: bool) -> (Id, Line
 
 /// The items of the rows of a fold, as the fold widget draws them: the title row, then, only if `expanded`, the
 /// content rows behind the muted `branch`, then the toggle row. The toggle row is left to the caller, which knows where
-/// it goes.
+/// it goes (a sibling of the title row: the widget hides the children of a folded item, and the toggle must stay).
 fn folded<'a>(
     title: Line<'static>,
     rows: Vec<(Id, Line<'static>)>,
@@ -363,20 +331,7 @@ fn folded<'a>(
     (title, items, toggle)
 }
 
-/// The `…` group of a Context: its title row, its archived rows when expanded, its toggle row; the rows are the
-/// children of the Context, at the depth they would have if live.
-fn group_items(c: &ContextNode, k: &Kids<'_>, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
-    let expanded = opened.contains(&[vec![c.id.to_string()], vec![MORE.to_owned()]].concat());
-    let mut rows: Vec<(Id, Line<'static>)> = k.archived.iter().map(|p| plan_row(c, p, width, frame)).collect();
-    rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
-    let (title, content, toggle) = folded(fold::title(MORE, ""), rows, expanded, fold::TREE_BRANCH);
-    let mut items = vec![TreeItem::new_leaf(MORE.to_owned(), title)];
-    items.extend(content);
-    items.push(TreeItem::new_leaf(toggle_id(MORE), toggle));
-    items
-}
-
-/// A Context's items: its item (title row, its live Plans and forks and its `…` group as the children) and, right
+/// A Context's items: its item (title row, its live Plans and forks, then its archived ones, as the children) and, right
 /// after it, its toggle row. `opened` is the tree state's open set.
 fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
     let id = c.id.to_string();
@@ -384,32 +339,20 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     let k = kids(c);
     let mut rows: Vec<(Id, Line<'static>)> = k.direct.iter().map(|p| plan_row(c, p, width, frame)).collect();
     rows.extend(k.forks.iter().map(|(_, s)| fork_row(s, width, frame, c.is_archived())));
-    let (title, mut children, toggle) = folded(context_text(c, !expanded, frame), rows, expanded, fold::TREE_BRANCH);
-    if k.has_group() {
-        children.extend(group_items(c, &k, opened, width, frame));
-    }
+    rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
+    rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
+    let (title, children, toggle) = folded(context_text(c, !expanded, frame), rows, expanded, fold::TREE_BRANCH);
     vec![
         TreeItem::new(id.clone(), title, children).expect("Plan and Session ids are unique"),
-        TreeItem::new_leaf(toggle_id(&id), indented(1, toggle)),
+        TreeItem::new_leaf(toggle_id(&id), toggle),
     ]
 }
 
-/// The tree's items for a column `width` wide. `opened` is the tree state's open set: a Context not in it is
-/// folded, and so is a `…` row. `frame` is the animation frame of the working dots.
+/// The tree's items for a column `width` wide: the live Contexts, then the archived ones. `opened` is the tree state's
+/// open set: a Context not in it is folded. `frame` is the animation frame of the working dots.
 pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
     let (archived, live): (Vec<&ContextNode>, Vec<&ContextNode>) = tree.contexts.iter().partition(|c| c.is_archived());
-    let mut items: Vec<TreeItem<'static, Id>> = live.into_iter().flat_map(|c| context_items(c, opened, width, frame)).collect();
-    if !archived.is_empty() {
-        // the group's content is whole Contexts, which keep their own rows: the fold gives the title and the toggle
-        let expanded = opened.contains(&vec![MORE.to_owned()]);
-        let (title, _, toggle) = folded(fold::title(MORE, ""), Vec::new(), expanded, fold::TREE_BRANCH);
-        items.push(TreeItem::new_leaf(MORE.to_owned(), title));
-        if expanded {
-            items.extend(archived.into_iter().flat_map(|c| context_items(c, opened, width, frame)));
-        }
-        items.push(TreeItem::new_leaf(toggle_id(MORE), toggle));
-    }
-    items
+    live.into_iter().chain(archived).flat_map(|c| context_items(c, opened, width, frame)).collect()
 }
 
 /// The tree's scroll (commands.md §13.2, hs-d307): the first row drawn, which the wheel and the cursor move. View state
@@ -501,7 +444,13 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         let rect = Rect::new(area.x, y, area.width, 1);
         let path = &flat_row.identifier;
         let Some(row) = row(tree, path) else { continue };
-        let muted = row.archived() || matches!(row, Row::More);
+        // the widget indents a child by two columns per level; the fold's branch is straight against the edge
+        let shift = u16::try_from(path.len().saturating_sub(1) * INDENT).unwrap_or(0).min(rect.width);
+        for x in rect.x..rect.right() {
+            let cell = if x + shift < rect.right() { buf[(x + shift, y)].clone() } else { Cell::EMPTY };
+            buf[(x, y)] = cell;
+        }
+        let muted = row.archived();
         match row {
             Row::Plan(_, plan) => {
                 counters(plan, has_stuck_job(tree, plan)).right_aligned().render(rect, buf);
@@ -514,7 +463,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
                     Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
                 }
             }
-            Row::Context(_) | Row::More | Row::Toggle => {}
+            Row::Context(_) | Row::Toggle => {}
         }
         if muted {
             buf.set_style(rect, palette::fg(Meaning::Nothing));
@@ -525,12 +474,12 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
     }
 }
 
-/// Open each Context the first time it is seen (Contexts start expanded; a collapse by the User is kept across
-/// refreshes). The `…` rows are not opened: they start collapsed.
+/// Open each live Context the first time it is seen (Contexts start expanded; a collapse by the User is kept across
+/// refreshes). The archived Contexts are not opened: they start folded.
 pub fn open_new(state: &mut TreeState<Id>, known: &mut HashSet<Vec<Id>>, tree: &Tree) {
     for c in &tree.contexts {
         let context = vec![c.id.to_string()];
-        if known.insert(context.clone()) {
+        if known.insert(context.clone()) && !c.is_archived() {
             state.open(context);
         }
     }
@@ -562,7 +511,7 @@ pub fn selected_index(state: &TreeState<Id>, tree: &Tree) -> Option<usize> {
     visible(state, tree).iter().position(|id| id.as_slice() == state.selected())
 }
 
-/// Move the cursor `delta` Sessions (clamped), skipping Context, archived and `…` rows; with no cursor, down goes
+/// Move the cursor `delta` Sessions (clamped), skipping Context, archived and toggle rows; with no cursor, down goes
 /// to the first, up to the last.
 pub fn move_cursor(state: &mut TreeState<Id>, tree: &Tree, delta: isize) {
     let visible = visible(state, tree);
@@ -575,7 +524,7 @@ pub fn move_cursor(state: &mut TreeState<Id>, tree: &Tree, delta: isize) {
     state.select(visible[next].clone());
 }
 
-/// A click on a toggle row (`└ expand`, `└ collapse`) folds or unfolds its Context or `…` group; it selects nothing.
+/// A click on a toggle row (`╰─ expand`, `╰─ collapse`) folds or unfolds its Context; it selects nothing.
 /// Returns whether `path` was a toggle row: the only row that folds.
 pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
     let owner = toggle_owner(path).filter(|_| matches!(row(tree, path), Some(Row::Toggle)));
@@ -590,7 +539,7 @@ pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool
 mod tests {
     #[test]
     fn the_glyphs_are_one_cell_wide() {
-        for glyph in [ACTIVE_MARK, MORE] {
+        for glyph in [ACTIVE_MARK] {
             assert_eq!(ratatui::text::Span::raw(glyph).width(), 1, "{glyph:?}");
         }
     }
@@ -690,17 +639,17 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                format!("{NEEDS_YOU} cpd"),
-                format!("  ├ {IDLE} v1             36⋅0⋅0⋅1⋅5"),
-                format!("{ACTIVE_MARK} ├ {NEEDS_YOU} rust            0⋅1⋅0⋅0⋅1"),
-                format!("  ├ {IDLE} ui              1⋅0⋅2⋅0⋅3"),
-                "  └ collapse".to_owned(),
+                format!("╭{NEEDS_YOU} cpd"),
+                row_of(&format!("├─{IDLE} v1"), "36⋅0⋅0⋅1⋅5", 31),
+                row_of(&format!("{ACTIVE_MARK}─{NEEDS_YOU} rust"), "0⋅1⋅0⋅0⋅1", 31),
+                row_of(&format!("├─{IDLE} ui"), "1⋅0⋅2⋅0⋅3", 31),
+                "╰─ collapse".to_owned(),
             ]
         );
-        assert!(buf[(6, 2)].modifier.contains(Modifier::BOLD), "the name of the centre row is bold");
+        assert!(buf[(4, 2)].modifier.contains(Modifier::BOLD), "the name of the centre row is bold");
         assert!(buf[(0, 2)].modifier.contains(Modifier::BOLD), "so is its {ACTIVE_MARK}");
         assert!(buf[(2, 0)].modifier.contains(Modifier::BOLD), "and a Context's title");
-        assert!(!buf[(6, 1)].modifier.contains(Modifier::BOLD));
+        assert!(!buf[(4, 1)].modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -710,18 +659,18 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                format!("{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
-                row_of(&format!("  ├ {IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
-                row_of(&format!("  ├ {STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
-                format!("  ├ {IDLE} ship·f-id").to_owned(),
-                format!("  ├ {NEEDS_YOU} ship·f-bl").to_owned(),
-                "  └ collapse".to_owned(),
-                format!("{NEEDS_YOU} beta").to_owned(),
-                row_of(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
-                "  └ collapse".to_owned(),
-                format!("{STOPPED} gamma").to_owned(),
-                "  └ collapse".to_owned(),
+                format!("╭{NEEDS_YOU} alpha").to_owned(),
+                row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
+                row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
+                row_of(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
+                format!("├─{IDLE} ship·f-id").to_owned(),
+                format!("├─{NEEDS_YOU} ship·f-bl").to_owned(),
+                "╰─ collapse".to_owned(),
+                format!("╭{NEEDS_YOU} beta").to_owned(),
+                row_of(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
+                "╰─ collapse".to_owned(),
+                format!("╭{STOPPED} gamma").to_owned(),
+                "╰─ collapse".to_owned(),
             ],
             "no state text after a name; the toggle row closes each Context, even one with no row inside"
         );
@@ -732,16 +681,20 @@ mod tests {
         let tree = sample();
         let mut state = state_for(&tree, &[], &[]);
         let buf = render(&tree, &mut state, 44, 12, false);
-        for x in 0..44 {
+        assert_eq!((buf[(0, 0)].symbol(), fg(&buf, 0, 0), buf[(0, 0)].modifier.contains(Modifier::BOLD)), ("╭", color(Meaning::Nothing), false), "a muted `╭`");
+        for x in 1..44 {
             if !buf[(x, 0)].symbol().trim().is_empty() {
                 assert!(buf[(x, 0)].modifier.contains(Modifier::BOLD), "the title is bold: column {x}");
             }
         }
         for y in [1, 2, 3, 4, 5] {
-            assert_eq!((buf[(2, y)].symbol(), fg(&buf, 2, y)), ("├", color(Meaning::Nothing)), "a muted branch at row {y}");
+            assert_eq!((buf[(1, y)].symbol(), fg(&buf, 1, y)), ("─", color(Meaning::Nothing)), "a muted branch at row {y}");
+        }
+        for y in [2, 3, 4, 5] {
+            assert_eq!((buf[(0, y)].symbol(), fg(&buf, 0, y)), ("├", color(Meaning::Nothing)), "a muted branch at row {y}");
         }
         for y in [6, 9, 11] {
-            for x in 2..12 {
+            for x in 0..12 {
                 if buf[(x, y)].symbol() != " " {
                     assert_eq!(fg(&buf, x, y), color(Meaning::Nothing), "the toggle row is muted: ({x}, {y})");
                     assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD));
@@ -749,7 +702,7 @@ mod tests {
             }
         }
         assert_ne!(fg(&buf, 4, 2), color(Meaning::Nothing), "a content row is not muted");
-        assert_ne!(fg(&buf, 6, 2), color(Meaning::Nothing));
+        assert_ne!(fg(&buf, 2, 2), color(Meaning::Nothing));
         // only the toggle row folds
         for context in [["alpha"], ["beta"]] {
             assert!(!click_toggle(&mut state, &tree, &path(&context)), "the title row does not toggle");
@@ -758,10 +711,10 @@ mod tests {
         assert!(click_toggle(&mut state, &tree, &toggle_of(&["alpha"])));
         assert!(!state.opened().contains(&path(&["alpha"])));
         let folded = render(&tree, &mut state, 44, 6, false);
-        assert_eq!(lines(&folded)[..2], [format!("{NEEDS_YOU} alpha 3"), "  └ expand".to_owned()]);
+        assert_eq!(lines(&folded)[..2], [format!("╭{NEEDS_YOU} alpha 3"), "╰─ expand".to_owned()]);
         assert!(!click_toggle(&mut state, &tree, &toggle_of(&["nope"])), "no Context, no toggle row");
         assert!(click_toggle(&mut state, &tree, &toggle_of(&["alpha"])));
-        assert!(state.opened().contains(&path(&["alpha"])), "`└ expand` unfolds it");
+        assert!(state.opened().contains(&path(&["alpha"])), "`╰─ expand` unfolds it");
     }
 
     #[test]
@@ -778,12 +731,12 @@ mod tests {
         assert_eq!(
             lines(&buf),
             [
-                format!("{NEEDS_YOU} alpha 3").to_owned(),
-                "  └ expand".to_owned(),
-                format!("{NEEDS_YOU} beta").to_owned(),
-                row_of(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
-                "  └ collapse".to_owned(),
-                format!("{STOPPED} gamma").to_owned(),
+                format!("╭{NEEDS_YOU} alpha 3").to_owned(),
+                "╰─ expand".to_owned(),
+                format!("╭{NEEDS_YOU} beta").to_owned(),
+                row_of(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
+                "╰─ collapse".to_owned(),
+                format!("╭{STOPPED} gamma").to_owned(),
             ]
         );
     }
@@ -792,13 +745,13 @@ mod tests {
     fn a_context_has_the_dot_of_its_manager_and_not_of_any_session_inside() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 9, false);
-        assert_eq!(text(&buf, 0), format!("{NEEDS_YOU} alpha 3"), "its Manager's, not its working Lead's");
+        assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha 3"), "its Manager's, not its working Lead's");
         let calm = super::super::fixture::tree(vec![managed(context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])]), Dot::Idle)]);
-        assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), format!("{IDLE} cc"));
+        assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), format!("╭{IDLE} cc"));
         let blocked = super::super::fixture::tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Red)]), Dot::Idle)]);
-        assert_eq!(text(&render(&blocked, &mut state_for(&blocked, &[], &[]), 20, 1, false), 0), format!("{IDLE} cc"), "a blocked Lead does not show");
+        assert_eq!(text(&render(&blocked, &mut state_for(&blocked, &[], &[]), 20, 1, false), 0), format!("╭{IDLE} cc"), "a blocked Lead does not show");
         let none = super::super::fixture::tree(vec![context("cc", vec![with_dot("pp", Dot::Red)])]);
-        assert_eq!(text(&render(&none, &mut state_for(&none, &[], &[]), 20, 1, false), 0), format!("{STOPPED} cc"), "no Manager: stopped");
+        assert_eq!(text(&render(&none, &mut state_for(&none, &[], &[]), 20, 1, false), 0), format!("╭{STOPPED} cc"), "no Manager: stopped");
     }
 
     #[test]
@@ -807,17 +760,17 @@ mod tests {
         let mut p = lone("pp", "lead", Phase::Dispatch, [0; 6]);
         p.head.open_escalations = 1;
         let t = tree(vec![managed(context("cc", vec![p]), Dot::Idle)]);
-        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), [format!("{IDLE} cc").to_owned(), row_of(&format!("  ├ {IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30)]);
+        assert_eq!(lines(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false)), [format!("╭{IDLE} cc").to_owned(), row_of(&format!("├─{IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30)]);
         let mut t = t;
         t.contexts[0].plans[0].sessions[0].dot = Dot::Red;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of(&format!("  ├ {NEEDS_YOU} pp"), "0⋅0⋅0⋅0⋅0", 30));
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 2, false), 1), row_of(&format!("├─{NEEDS_YOU} pp"), "0⋅0⋅0⋅0⋅0", 30));
     }
 
     #[test]
     fn drafts_are_counted_and_dark_grey_in_phase_plan() {
         let t = tree(vec![context("cc", vec![lone("pp", "p", Phase::Plan, [4, 0, 0, 0, 0, 0])])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        assert_eq!(text(&buf, 1), row_of(&format!("  ├ {IDLE} pp"), "4⋅0⋅0⋅0⋅0", 20));
+        assert_eq!(text(&buf, 1), row_of(&format!("├─{IDLE} pp"), "4⋅0⋅0⋅0⋅0", 20));
         assert_eq!(fg(&buf, 11, 1), color(Meaning::Nothing));
     }
 
@@ -826,7 +779,7 @@ mod tests {
         let long = lone("a-very-long-plan-id", "lead", Phase::Dispatch, [0, 36, 0, 0, 1, 5]);
         let t = tree(vec![context("cc", vec![long])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 2, false);
-        assert_eq!(text(&buf, 1), row_of(&format!("  ├ {IDLE} a-very-long-…"), "36⋅0⋅0⋅1⋅5", 30));
+        assert_eq!(text(&buf, 1), row_of(&format!("├─{IDLE} a-very-long-…"), "36⋅0⋅0⋅1⋅5", 30));
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcd", 3), "ab…");
         assert_eq!(truncate("abcd", 0), "");
@@ -867,8 +820,8 @@ mod tests {
                 p.head.phase = phase;
                 let t = tree(vec![managed(context("cc", vec![p]), dot)]);
                 let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-                assert_eq!(cell(&buf, 4, 1), drawn_dot(dot), "{dot:?} in {phase:?}");
-                assert_eq!(cell(&buf, 0, 0), drawn_dot(dot), "its Context row too: {dot:?} in {phase:?}");
+                assert_eq!(cell(&buf, 2, 1), drawn_dot(dot), "{dot:?} in {phase:?}");
+                assert_eq!(cell(&buf, 1, 0), drawn_dot(dot), "its Context row too: {dot:?} in {phase:?}");
             }
         }
         assert_eq!(drawn_dot(Dot::Red).0, format!("{NEEDS_YOU}"));
@@ -879,11 +832,11 @@ mod tests {
     fn a_stopped_dot_is_dim() {
         let t = tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Stopped)]), Dot::Stopped)]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        assert_eq!((buf[(4, 1)].symbol(), buf[(0, 0)].symbol()), (STOPPED, STOPPED));
-        assert!(buf[(4, 1)].modifier.contains(Modifier::DIM) && buf[(0, 0)].modifier.contains(Modifier::DIM));
+        assert_eq!((buf[(2, 1)].symbol(), buf[(1, 0)].symbol()), (STOPPED, STOPPED));
+        assert!(buf[(2, 1)].modifier.contains(Modifier::DIM) && buf[(1, 0)].modifier.contains(Modifier::DIM));
         let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Idle)])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        assert!(!buf[(4, 1)].modifier.contains(Modifier::DIM));
+        assert!(!buf[(2, 1)].modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -892,7 +845,7 @@ mod tests {
         let glyphs: Vec<(String, String)> = (0..9)
             .map(|frame| {
                 let buf = render_at(&t, &mut state_for(&t, &[], &[]), 20, 2, false, frame);
-                (buf[(0, 0)].symbol().to_owned(), buf[(4, 1)].symbol().to_owned())
+                (buf[(1, 0)].symbol().to_owned(), buf[(2, 1)].symbol().to_owned())
             })
             .collect();
         let want: Vec<(String, String)> =
@@ -908,15 +861,14 @@ mod tests {
         gone.archived_at = Some(WHEN.into());
         let t = tree(vec![managed(context("cc", vec![p]), Dot::Working), gone]);
         let mut state = state_for(&t, &[], &[]);
-        expand(&mut state, &t, &["cc", MORE]);
-        expand(&mut state, &t, &[MORE]);
+        unfold(&mut state, &t, "zz");
         for frame in 0..SPINNER.len() {
             let buf = render_at(&t, &mut state, 24, 12, false, frame);
             let grey = (String::from(format!("{WORKING}")), color(Meaning::Nothing));
-            assert_eq!(cell(&buf, 4, 2), grey, "frame {frame}: an archived Plan row, always the first frame {:?}", lines(&buf));
-            assert_eq!(cell(&buf, 0, 6), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
-            assert_eq!(cell(&buf, 4, 7), grey, "frame {frame}: its Plan row");
-            assert_eq!(buf[(0, 0)].symbol(), SPINNER[frame], "while the live Context row turns");
+            assert_eq!(cell(&buf, 2, 1), grey, "frame {frame}: an archived Plan row, always the first frame {:?}", lines(&buf));
+            assert_eq!(cell(&buf, 1, 3), grey, "frame {frame}: an archived Context row {:?}", lines(&buf));
+            assert_eq!(cell(&buf, 2, 4), grey, "frame {frame}: its Plan row");
+            assert_eq!(buf[(1, 0)].symbol(), SPINNER[frame], "while the live Context row turns");
         }
     }
 
@@ -926,19 +878,18 @@ mod tests {
         p.head.archived_at = Some(WHEN.into());
         let t = tree(vec![context("cc", vec![p])]);
         let mut state = state_for(&t, &[], &[]);
-        expand(&mut state, &t, &["cc", MORE]);
         let buf = render(&t, &mut state, 24, 4, false);
-        assert_eq!(cell(&buf, 4, 2), (format!("{NEEDS_YOU}").to_owned(), color(Meaning::Nothing)), "{:?}", lines(&buf));
+        assert_eq!(cell(&buf, 2, 1), (format!("{NEEDS_YOU}").to_owned(), color(Meaning::Nothing)), "{:?}", lines(&buf));
     }
 
     #[test]
     fn a_context_row_shows_its_managers_dot_whatever_the_sessions_inside() {
         let t = tree(vec![managed(context("cc", vec![with_dot("aa", Dot::Yellow), with_dot("bb", Dot::Red), with_dot("dd", Dot::White)]), Dot::Working)]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 4, false);
-        assert_eq!(cell(&buf, 0, 0), drawn_dot(Dot::Working));
+        assert_eq!(cell(&buf, 1, 0), drawn_dot(Dot::Working));
         let collapsed = render(&t, &mut state_for(&t, &["cc"], &[]), 20, 1, false);
-        assert_eq!(cell(&collapsed, 0, 0), drawn_dot(Dot::Working), "collapsed too");
-        assert_eq!((cell(&buf, 4, 1), cell(&buf, 4, 2), cell(&buf, 4, 3)), (drawn_dot(Dot::Yellow), drawn_dot(Dot::Red), drawn_dot(Dot::White)), "while each Session row keeps its own");
+        assert_eq!(cell(&collapsed, 1, 0), drawn_dot(Dot::Working), "collapsed too");
+        assert_eq!((cell(&buf, 2, 1), cell(&buf, 2, 2), cell(&buf, 2, 3)), (drawn_dot(Dot::Yellow), drawn_dot(Dot::Red), drawn_dot(Dot::White)), "while each Session row keeps its own");
     }
 
     #[test]
@@ -981,7 +932,7 @@ mod tests {
     fn the_guides_are_dark_grey() {
         let tree = sample();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
-        for (x, y, glyph) in [(2, 1, '├'), (2, 2, '├'), (2, 3, '├'), (2, 4, '├'), (2, 5, '├'), (2, 6, '└')] {
+        for (x, y, glyph) in [(1, 1, '─'), (0, 2, '├'), (0, 3, '├'), (0, 4, '├'), (0, 5, '├'), (1, 5, '─'), (0, 6, '╰'), (1, 6, '─')] {
             assert_eq!((text(&buf, y).chars().nth(x), fg(&buf, x as u16, y)), (Some(glyph), color(Meaning::Nothing)), "({x}, {y})");
         }
     }
@@ -993,7 +944,7 @@ mod tests {
             vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("f", "fork", State::Idle, None, Place::None)])],
         )]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 4, false);
-        assert_eq!(lines(&buf)[1..], [row_of(&format!("  ├ {IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30), format!("  ├ {IDLE} pp·f").to_owned(), "  └ collapse".to_owned()]);
+        assert_eq!(lines(&buf)[1..], [row_of(&format!("├─{IDLE} pp"), "0⋅0⋅0⋅0⋅0", 30), format!("├─{IDLE} pp·f").to_owned(), "╰─ collapse".to_owned()]);
     }
 
     #[test]
@@ -1035,7 +986,7 @@ mod tests {
         tree.contexts[0].plans[0].sessions[0].place = Place::Parked;
         tree.contexts[0].plans[0].sessions[1].place = Place::Chat;
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 8, false);
-        assert_eq!(text(&buf, 4), format!("{ACTIVE_MARK} ├ {IDLE} ship·f-id"));
+        assert_eq!(text(&buf, 4), format!("{ACTIVE_MARK}─{IDLE} ship·f-id"));
         for y in [0, 1, 2, 3, 5, 6, 7] {
             assert!(!text(&buf, y).contains(ACTIVE_MARK), "row {y}");
         }
@@ -1134,9 +1085,9 @@ mod tests {
         tree.contexts[0].title = "Payments".into();
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
         let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 9, false);
-        assert_eq!(text(&buf, 0), format!("{NEEDS_YOU} alpha"), "not its title `Payments`");
-        assert_eq!(text(&buf, 1), row_of(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
-        assert_eq!(text(&buf, 5), format!("  ├ {NEEDS_YOU} ship·f-bl"), "the Plan id, `·`, the first 4 characters of the Session id; not its name");
+        assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha"), "not its title `Payments`");
+        assert_eq!(text(&buf, 1), row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
+        assert_eq!(text(&buf, 5), format!("├─{NEEDS_YOU} ship·f-bl"), "the Plan id, `·`, the first 4 characters of the Session id; not its name");
         // the prompts word a row by its title or name: Rename… edits those, not the id
         assert_eq!(row(&tree, &path(&["alpha"])).unwrap().label(), "Payments");
         assert_eq!(row(&tree, &path(&["alpha", "ship"])).unwrap().label(), "Pay by card");
@@ -1154,14 +1105,14 @@ mod tests {
             vec![plan("pp", "cc", Phase::Plan, [0; 6], session("l", "lead", State::Idle, None, Place::None), vec![session("0123456789abcdef", "named", State::Idle, None, Place::None)])],
         )]);
         let mut t = t;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), format!("  ├ {IDLE} pp·0123"));
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), format!("├─{IDLE} pp·0123"));
         t.contexts[0].plans[0].sessions[1].plan = None;
-        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), format!("  ├ {IDLE} 01234567"));
+        assert_eq!(text(&render(&t, &mut state_for(&t, &[], &[]), 30, 3, false), 2), format!("├─{IDLE} 01234567"));
         assert_eq!(row(&t, &path(&["cc", "0123456789abcdef"])).unwrap().shown_id().as_deref(), Some("01234567"));
     }
 
     #[test]
-    fn shown_id_is_the_id_each_row_shows_and_a_more_row_has_none() {
+    fn shown_id_is_the_id_each_row_shows_and_a_toggle_row_has_none() {
         let t = archived();
         let shown = |parts: &[&str]| row(&t, &path(parts)).unwrap().shown_id();
         assert_eq!(shown(&["alpha"]).as_deref(), Some("alpha"), "a Context: its id");
@@ -1171,19 +1122,12 @@ mod tests {
         assert_eq!(shown(&["alpha", "f-blocked"]).as_deref(), Some("ship·f-bl"), "an archived fork");
         assert_eq!(shown(&["zeta"]).as_deref(), Some("zeta"), "an archived Context");
         assert_eq!(shown(&["zeta", "f-zp"]).as_deref(), Some("zp·f-zp"), "a fork of an archived Context");
-        assert_eq!(shown(&["alpha", MORE]), None);
-        assert_eq!(shown(&[MORE]), None);
         assert_eq!(shown(&toggle_of(&["alpha"]).iter().map(String::as_str).collect::<Vec<_>>()), None, "nor has a toggle row");
     }
 
-    // ---------- archived rows (hs-d53) ----------
+    // ---------- archived rows (hs-d339) ----------
 
-    /// `state` with the group whose `…` row is at `head` expanded.
-    fn expand(state: &mut TreeState<Id>, t: &Tree, head: &[&str]) {
-        assert!(click_toggle(state, t, &toggle_of(head)));
-    }
-
-    /// The identifier of the toggle row of the fold whose own row is at `head`.
+    /// The identifier of the toggle row of the Context whose own row is at `head`.
     fn toggle_of(head: &[&str]) -> Vec<Id> {
         let (last, parents) = head.split_last().unwrap();
         let mut id = path(parents);
@@ -1191,50 +1135,60 @@ mod tests {
         id
     }
 
-    #[test]
-    fn archived_contexts_collapse_into_one_more_row_at_the_end_of_the_list() {
-        let t = archived();
-        let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 14, false);
-        assert_eq!(
-            lines(&buf),
-            [
-                format!("{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
-                row_of(&format!("  ├ {IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
-                format!("  ├ {IDLE} ship·f-id").to_owned(),
-                format!("  {MORE}"),
-                "  └ expand".to_owned(),
-                "  └ collapse".to_owned(),
-                format!("{NEEDS_YOU} beta").to_owned(),
-                row_of(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
-                "  └ collapse".to_owned(),
-                format!("{STOPPED} gamma").to_owned(),
-                "  └ collapse".to_owned(),
-                MORE.to_owned(),
-                "└ expand".to_owned(),
-            ],
-            "zeta is only in the `…` group at the end; `alpha`'s archived Plan and fork are in its own, and its dot is its Manager's whatever happens to its Sessions"
-        );
-        for (x, y) in [(0, 12), (2, 4), (2, 5), (2, 13)] {
-            assert_eq!(fg(&buf, x, y), color(Meaning::Nothing), "muted ({x}, {y})");
-        }
-        assert!(buf[(2, 4)].modifier.contains(Modifier::BOLD) && buf[(0, 12)].modifier.contains(Modifier::BOLD), "the title row of a group is bold");
-        assert!(!buf[(2, 5)].modifier.contains(Modifier::BOLD), "its toggle row is not");
+    /// `state` with the Context `id` unfolded, by a click on its toggle row.
+    fn unfold(state: &mut TreeState<Id>, t: &Tree, id: &str) {
+        assert!(click_toggle(state, t, &toggle_of(&[id])));
     }
 
     #[test]
-    fn a_context_with_nothing_archived_has_no_more_row_and_an_archived_fork_of_a_live_plan_makes_one() {
+    fn archived_plans_and_forks_are_inside_the_expanded_block_after_the_live_rows_muted_with_no_group_row_and_one_toggle() {
+        let t = archived();
+        let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 14, false);
+        assert_eq!(
+            lines(&buf)[..12],
+            [
+                format!("╭{NEEDS_YOU} alpha").to_owned(),
+                row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
+                row_of(&format!("├─{IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
+                format!("├─{IDLE} ship·f-id").to_owned(),
+                row_of(&format!("├─{STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
+                format!("├─{NEEDS_YOU} ship·f-bl").to_owned(),
+                "╰─ collapse".to_owned(),
+                format!("╭{NEEDS_YOU} beta").to_owned(),
+                row_of(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
+                "╰─ collapse".to_owned(),
+                format!("╭{STOPPED} gamma").to_owned(),
+                "╰─ collapse".to_owned(),
+            ],
+            "the archived Plan and fork follow the live rows, no empty row and no `󰇘`; one toggle row per Context"
+        );
+        let all = lines(&buf).join("\n");
+        assert!(!all.contains('\u{F01D8}'), "no `󰇘` row anywhere");
+        assert_eq!(all.matches("╰─ collapse").count() + all.matches("╰─ expand").count(), 4, "one toggle row per Context, never two");
+        // the live rows keep their colours; the archived ones are all dark grey, branch, counters and dots included
+        assert_eq!(cell(&buf, 2, 2), drawn_dot(Dot::Idle), "a live dot is not greyed");
+        for (y, columns) in [(4, 0..44), (5, 0..24)] {
+            for x in columns {
+                if buf[(x, y)].symbol() != " " {
+                    assert_eq!(fg(&buf, x, y), color(Meaning::Nothing), "({x}, {y}) {}", buf[(x, y)].symbol());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_context_with_nothing_archived_lists_only_live_rows_and_an_archived_fork_of_a_live_plan_is_listed_last_muted() {
         let mut t = sample();
-        assert!(!lines(&render(&t, &mut state_for(&t, &[], &[]), 44, 12, false)).iter().any(|l| l.contains(MORE)));
         let mut fork = session("f-rel", "rel fork", State::Idle, None, Place::None);
         fork.plan = Some(t.contexts[1].plans[0].head.id.clone());
         fork.archived_at = Some(WHEN.into());
         t.contexts[1].plans[0].sessions.push(fork);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 14, false);
         assert_eq!(
-            lines(&buf)[7..12],
-            [format!("{NEEDS_YOU} beta"), row_of(&format!("  ├ {NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), format!("  {MORE}"), "  └ expand".to_owned(), "  └ collapse".to_owned()]
+            lines(&buf)[7..11],
+            [format!("╭{NEEDS_YOU} beta"), row_of(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), format!("├─{IDLE} rel·f-re"), "╰─ collapse".to_owned()]
         );
+        assert_eq!(fg(&buf, 3, 9), color(Meaning::Nothing), "the archived fork is muted");
         let mut t = sample();
         t.contexts[1].plans[0].head.archived_at = Some(WHEN.into());
         let mut fork = session("f-rel", "rel fork", State::Idle, None, Place::None);
@@ -1246,99 +1200,62 @@ mod tests {
         let buf = render(&t, &mut state_for(&t, &[], &[]), 44, 14, false);
         assert_eq!(
             lines(&buf)[7..11],
-            [format!("{NEEDS_YOU} beta"), format!("  {MORE}"), "  └ expand".to_owned(), "  └ collapse".to_owned()],
-            "a fork of an archived Plan is in the `…` group too"
+            [format!("╭{NEEDS_YOU} beta"), row_of(&format!("├─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44), format!("├─{IDLE} rel·f-re"), "╰─ collapse".to_owned()],
+            "an archived Plan and the fork of an archived Plan are inside the block too"
         );
     }
 
     #[test]
-    fn the_toggle_row_shows_the_archived_rows_at_their_live_depth_with_normal_dark_grey_guides_and_toggles_them_again() {
+    fn folded_a_context_hides_its_archived_rows_too_and_its_toggle_row_unfolds_them_again() {
         let t = archived();
         let mut state = state_for(&t, &[], &[]);
-        expand(&mut state, &t, &["alpha", MORE]);
-        let buf = render(&t, &mut state, 44, 16, false);
-        assert_eq!(
-            lines(&buf)[..10],
-            [
-                format!("{NEEDS_YOU} alpha").to_owned(),
-                row_of(&format!("{ACTIVE_MARK} ├ {WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44),
-                row_of(&format!("  ├ {IDLE} sketch"), "4⋅0⋅0⋅0⋅0", 44),
-                format!("  ├ {IDLE} ship·f-id").to_owned(),
-                format!("  {MORE}"),
-                row_of(&format!("  ├ {STOPPED} old"), "0⋅0⋅0⋅1⋅36", 44),
-                format!("  ├ {NEEDS_YOU} ship·f-bl").to_owned(),
-                "  └ collapse".to_owned(),
-                "  └ collapse".to_owned(),
-                format!("{NEEDS_YOU} beta").to_owned(),
-            ],
-            "no empty row; the archived Plan and fork are as deep as the live ones; the group's toggle row, then the Context's"
-        );
-        // the live rows keep their colours; the archived ones are all dark grey, guides, counters and dots included
-        assert_eq!(cell(&buf, 4, 2), drawn_dot(Dot::Idle), "a live dot is not greyed");
-        for (y, columns) in [(4, 2..5), (5, 2..44), (6, 2..24), (7, 2..14)] {
-            for x in columns {
-                if buf[(x, y)].symbol() != " " {
-                    assert_eq!(fg(&buf, x, y), color(Meaning::Nothing), "({x}, {y}) {}", buf[(x, y)].symbol());
-                }
-            }
-        }
-        assert_eq!((buf[(2, 5)].symbol(), buf[(2, 6)].symbol(), buf[(2, 7)].symbol()), ("├", "├", "└"), "the normal guides");
-        // only the toggle row folds: not the `…` title row, an archived row, a live one or the Context
-        assert!(!click_toggle(&mut state, &t, &path(&["alpha", MORE])), "the `…` title row does nothing");
+        assert!(!click_toggle(&mut state, &t, &path(&["alpha"])), "the title row does not toggle");
         assert!(!click_toggle(&mut state, &t, &path(&["alpha", "old"])), "an archived row is no toggle row");
         assert!(!click_toggle(&mut state, &t, &path(&["alpha", "ship"])), "nor is a live one");
-        assert!(!click_toggle(&mut state, &t, &path(&["alpha"])), "nor a Context");
-        assert!(state.opened().contains(&path(&["alpha", MORE])));
-        assert!(click_toggle(&mut state, &t, &toggle_of(&["alpha", MORE])));
-        assert!(!state.opened().contains(&path(&["alpha", MORE])));
-        let rows = lines(&render(&t, &mut state, 44, 10, false));
-        assert_eq!((rows[4].as_str(), rows[5].as_str()), (format!("  {MORE}").as_str(), "  └ expand"));
-        expand(&mut state, &t, &["alpha", MORE]);
-        assert_eq!(text(&render(&t, &mut state, 44, 10, false), 7), "  └ collapse");
+        assert!(click_toggle(&mut state, &t, &toggle_of(&["alpha"])));
+        let rows = lines(&render(&t, &mut state, 44, 6, false));
+        assert_eq!(rows[..3], [format!("╭{NEEDS_YOU} alpha 2"), "╰─ expand".to_owned(), format!("╭{NEEDS_YOU} beta")], "{rows:?}");
+        unfold(&mut state, &t, "alpha");
+        assert_eq!(text(&render(&t, &mut state, 44, 10, false), 6), "╰─ collapse");
     }
 
     #[test]
-    fn expanded_archived_contexts_are_drawn_like_live_ones_in_dark_grey_and_the_toggle_row_collapses_them() {
+    fn archived_contexts_follow_the_live_ones_muted_start_folded_and_unfold_at_their_own_toggle_row() {
         let t = archived();
         let mut state = state_for(&t, &[], &[]);
-        expand(&mut state, &t, &[MORE]);
-        let buf = render(&t, &mut state, 44, 20, false);
+        assert!(!state.opened().contains(&path(&["zeta"])), "an archived Context starts folded");
+        let buf = render(&t, &mut state, 44, 14, false);
+        let rows = lines(&buf);
+        assert_eq!(rows[10..], [format!("╭{STOPPED} gamma"), "╰─ collapse".to_owned(), format!("╭{STOPPED} zeta 1"), "╰─ expand".to_owned()], "{rows:#?}");
+        unfold(&mut state, &t, "zeta");
+        let buf = render(&t, &mut state, 44, 16, false);
         let rows = lines(&buf);
         assert_eq!(
-            rows[12..18],
+            rows[12..],
             [
-                MORE.to_owned(),
-                format!("{STOPPED} zeta"),
-                row_of(&format!("  ├ {STOPPED} zp"), "0⋅0⋅0⋅0⋅2", 44),
-                format!("  ├ {STOPPED} zp·f-zp"),
-                "  └ collapse".to_owned(),
-                "└ collapse".to_owned(),
+                format!("╭{STOPPED} zeta"),
+                row_of(&format!("├─{STOPPED} zp"), "0⋅0⋅0⋅0⋅2", 44),
+                format!("├─{STOPPED} zp·f-zp"),
+                "╰─ collapse".to_owned()
             ],
             "{rows:#?}"
         );
-        for y in 13..18 {
+        for y in 12..16 {
             for x in 0..44 {
                 if buf[(x, y)].symbol() != " " {
                     assert_eq!(fg(&buf, x, y), color(Meaning::Nothing), "({x}, {y})");
                 }
             }
         }
-        assert!(!click_toggle(&mut state, &t, &path(&[MORE])), "the title row does nothing");
-        assert!(click_toggle(&mut state, &t, &toggle_of(&[MORE])));
-        assert_eq!(lines(&render(&t, &mut state, 44, 20, false))[12..15], [MORE, "└ expand", ""]);
-        // an archived Context folds like any other
-        expand(&mut state, &t, &[MORE]);
         assert!(click_toggle(&mut state, &t, &toggle_of(&["zeta"])));
-        let rows = lines(&render(&t, &mut state, 44, 20, false));
-        assert_eq!((rows[13].as_str(), rows[14].as_str()), (format!("{STOPPED} zeta 1").as_str(), "  └ expand"));
+        assert_eq!(lines(&render(&t, &mut state, 44, 16, false))[12..14], [format!("╭{STOPPED} zeta 1"), "╰─ expand".to_owned()]);
     }
 
     #[test]
-    fn the_cursor_never_stops_on_an_archived_or_more_row() {
+    fn the_cursor_never_stops_on_an_archived_row() {
         let t = archived();
         let mut state = state_for(&t, &[], &[]);
-        expand(&mut state, &t, &["alpha", MORE]);
-        expand(&mut state, &t, &[MORE]);
+        unfold(&mut state, &t, "zeta");
         let mut seen = vec![];
         for _ in 0..8 {
             move_cursor(&mut state, &t, 1);
@@ -1371,12 +1288,10 @@ mod tests {
         let archived_of = |parts: &[&str]| row(&t, &path(parts)).map(|r| r.archived());
         assert_eq!(archived_of(&["alpha"]), Some(false));
         assert_eq!(archived_of(&["alpha", "f-idle"]), Some(false));
-        assert_eq!(archived_of(&["alpha", MORE]), Some(false), "a `…` row is no object");
-        assert!(matches!(row(&t, &path(&[MORE])), Some(Row::More)));
-        for fold in [&["alpha"][..], &["alpha", MORE], &[MORE], &["zeta"]] {
+        for fold in [&["alpha"][..], &["beta"], &["zeta"]] {
             assert!(matches!(row(&t, &toggle_of(fold)), Some(Row::Toggle)), "the toggle row of {fold:?}");
         }
-        for none in [&["beta", MORE][..], &["nope"], &["alpha", "ship"], &["alpha", "old"]] {
+        for none in [&["beta", "rel"][..], &["nope"], &["alpha", "ship"], &["alpha", "old"]] {
             assert!(row(&t, &toggle_of(none)).is_none(), "{none:?} has no toggle row");
         }
         assert_eq!(archived_of_path(&t, &toggle_of(&["zeta"])), Some(false), "a toggle row is no object");
@@ -1388,15 +1303,8 @@ mod tests {
         assert_eq!((fork.session().unwrap().id.as_str(), fork.plan().unwrap().head.id.as_str()), ("f-blocked", "ship"));
         assert_eq!(row(&t, &path(&["zeta"])).unwrap().label(), "Zeta");
         for missing in [
-            &[MORE, "zeta"][..],
-            &[MORE, "alpha"],
-            &["alpha", "ship", "f-blocked"],
-            &["alpha", MORE, "ship"],
-            &["alpha", MORE, "old"],
+            &["alpha", "ship", "f-blocked"][..],
             &["zeta", "zp", "f-zp"],
-            &["beta", MORE],
-            &["zeta", MORE],
-            &[MORE, MORE],
             &["nope"],
             &[],
         ] {
@@ -1409,6 +1317,6 @@ mod tests {
         let mut t = archived();
         t.contexts[0].plans[2].head.phase = Phase::Done;
         let buf = render(&t, &mut state_for(&t, &["alpha"], &[]), 44, 3, false);
-        assert_eq!(text(&buf, 0), format!("{NEEDS_YOU} alpha 2"), "ship and sketch; the archived Plan is behind `…`; the dot is the Manager's");
+        assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha 2"), "ship and sketch; the archived Plan is not counted; the dot is the Manager's");
     }
 }
