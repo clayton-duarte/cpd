@@ -408,6 +408,20 @@ fn now_ms() -> i64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
+/// Starts `ui` from the offsets file: an unreadable or invalid file starts empty and is replaced at the next write. Returns
+/// the lines for the view's log (`run/tui/plan.log`).
+///
+/// Red stub (Job `nn-red`): the reset should be a log line and no note (commands.md §17 "No notes"); it is still the note.
+fn begin(ui: &mut Ui, offsets: &mut Offsets, plan: Option<&PlanId>) -> Vec<String> {
+    let loaded = offsets.load();
+    ui.remembered = loaded.clone().unwrap_or_default();
+    ui.switch(None, plan);
+    if let Err(reason) = loaded {
+        ui.note = format!("scroll positions reset: {reason}");
+    }
+    Vec::new()
+}
+
 /// Draws, follows Events and takes input until the terminal fails.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
@@ -420,13 +434,7 @@ fn show(
 ) -> Result<(), ViewError> {
     let mut ui = Ui::default();
     let mut offsets = Offsets::at(home);
-    let loaded = offsets.load();
-    // an unreadable or invalid file starts empty; it is replaced at the next write
-    ui.remembered = loaded.clone().unwrap_or_default();
-    ui.switch(None, snap.centre.as_ref().map(|c| &c.plan.plan));
-    if let Err(reason) = loaded {
-        ui.note = format!("scroll positions reset: {reason}");
-    }
+    let _log_lines = begin(&mut ui, &mut offsets, snap.centre.as_ref().map(|c| &c.plan.plan));
     // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
     // (runner::kept), the snapshot's error first
     let (mut snapshot_error, mut follow_error) = (None, None);

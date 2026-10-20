@@ -234,6 +234,7 @@ fn event_loop(
                 let runner = Arc::clone(runner);
                 actions.submit(move || runner.run(&action));
             }
+            Effect::Text(_) => {} // red stub: nothing returns it yet
             Effect::Steps(steps) => {
                 said(&mut view, &log, runner.run_all(&steps));
                 dirty = true;

@@ -105,6 +105,10 @@ pub enum Effect {
     Steps(Vec<Action>),
     /// Open the merge popup of this pull request: a click on a `pr-ready` item. A failure is the note.
     Merge(Pull),
+    /// Open a `text` dialog popup with this body: a failure the User must see (commands.md §17 "No notes"). Red stub:
+    /// nothing returns it yet (Job `nn-impl`).
+    #[allow(dead_code)]
+    Text(String),
 }
 
 pub struct View {
@@ -265,7 +269,9 @@ impl View {
 
     /// Starts from the folds in `file` and keeps them there from now on (commands.md §13.2, hs-d260). A file that cannot
     /// be read or is not valid leaves the defaults and is the note `fold state reset: <reason>`; the next write replaces it.
-    pub fn keep_folds(&mut self, mut file: FoldsFile) {
+    ///
+    /// Red stub (Job `nn-red`): it should return the line for the view's log, and set no note (commands.md §17 "No notes").
+    pub fn keep_folds(&mut self, mut file: FoldsFile) -> Vec<String> {
         match file.load() {
             Ok(stored) => stored.merge(&mut self.state, &mut self.known),
             Err(reason) => self.note = format!("fold state reset: {reason}"),
@@ -273,6 +279,7 @@ impl View {
         // the file is as it was until a fold changes
         file.assume(Folds::of(&self.state, &self.tree));
         self.folds = Some(file);
+        Vec::new()
     }
 
     /// Writes the folds when they have changed (at most once a second); a failure is the note and is retried.
@@ -348,6 +355,16 @@ impl View {
     /// The result of an [`Effect::Run`] or [`Effect::Legend`].
     pub fn done(&mut self, result: Result<String, String>) {
         self.note = result.unwrap_or_else(|e| e);
+    }
+
+    /// What the view does with the `result` of `action` (commands.md §17 "No notes"): a success says nothing; a failure
+    /// is a `text` dialog, [`Effect::Text`], with `<what failed>: <code>: <message>`.
+    ///
+    /// Red stub (Job `nn-red`): it still sets the note and opens no dialog.
+    #[allow(dead_code)]
+    pub fn finished(&mut self, _action: &Action, result: Result<String, String>) -> Effect {
+        self.done(result);
+        Effect::None
     }
 
     /// The cursor's row, while the cursor shows: Enter, `n` and `x` act on it.
@@ -2787,5 +2804,184 @@ mod tests {
         let lines = view.watch_engine(secs(t0, 60), &mut refuse, &mut || Ok(vec![SessionId::parse("m-alpha").unwrap()]));
         assert_eq!(view.note, "engine down 60 s+: telling m-alpha failed: no tmux");
         assert!(lines.iter().any(|l| l.contains("no tmux")), "{lines:?}");
+    }
+
+    // ---------- no notes (commands.md §17 "No notes", hs-d469) ----------
+    //
+    // The view draws no transient note line: what the User must see is a `text` dialog (`Effect::Text`), the rest is
+    // nothing on the screen and a line in `run/tui/tree.log`. Every test below compares frames, so none names how the
+    // implementation keeps its state.
+
+    /// The Inbox's item `id` of `kind` for the Session `session`, at [`now`].
+    fn session_item(id: i64, kind: InboxKind, session: &str) -> Item {
+        let mut it = item(id, kind, Urgency::White, "ship lead has a reply", "2026-01-02T23:50:00.000Z");
+        it.session = Some(sid(session));
+        it
+    }
+
+    /// The frame of `view` at 43 × 18, as text.
+    fn frame(view: &mut View) -> Vec<String> {
+        text_rows(&draw_now(view, 43, 18))
+    }
+
+    #[test]
+    fn a_click_on_an_inbox_item_already_in_focus_does_nothing_and_says_nothing() {
+        // `l-ship` is in the chat slot (`Place::Chat` in the sample), so its item is already in focus
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![session_item(5, InboxKind::Unread, "l-ship")];
+        let before = frame(&mut view);
+        let row = inbox_row(&view, 0);
+        assert_eq!(click(&mut view, 10, row), Effect::None, "no `session open` for the Session that is in focus");
+        assert_eq!(frame(&mut view), before, "and nothing is drawn");
+    }
+
+    #[test]
+    fn enter_on_an_inbox_item_already_in_focus_does_nothing_too() {
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![session_item(5, InboxKind::Unread, "l-ship")];
+        into_the_inbox(&mut view);
+        let before = frame(&mut view);
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(frame(&mut view), before);
+    }
+
+    #[test]
+    fn a_click_on_an_inbox_item_that_is_not_in_focus_still_opens_its_session() {
+        // the other side of the rule above: `f-blocked` is parked
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![session_item(1, InboxKind::Dialog, "f-blocked")];
+        draw_now(&mut view, 43, 18);
+        let row = inbox_row(&view, 0);
+        assert_eq!(click(&mut view, 10, row), Effect::Run(Action::Open(sid("f-blocked"))));
+    }
+
+    #[test]
+    fn a_copy_click_draws_no_note_when_the_copy_is_done() {
+        let url = "https://github.com/acme/api/pull/12";
+        let mut failing = item(2, InboxKind::PrFailing, Urgency::Red, "acme/api#12 checks failed", "2026-01-02T23:55:00.000Z");
+        failing.url = Some(url.into());
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = vec![failing];
+        let before = frame(&mut view);
+        let row = inbox_row(&view, 0);
+        let action = Action::CopyUrl(url.into());
+        assert_eq!(click(&mut view, 10, row), Effect::Run(action.clone()), "the click still copies");
+        // what the command's success used to say
+        let done = view.finished(&action, Ok(format!("copied {url}: Cmd-click the row to open it")));
+        assert_eq!(done, Effect::None, "a success opens nothing");
+        let after = frame(&mut view);
+        assert!(after.iter().all(|r| !r.contains("copied")), "no `copied <url>: …` line: {after:?}");
+        assert_eq!(after, before, "the frame is the one before the click");
+    }
+
+    #[test]
+    fn a_success_of_any_action_draws_nothing_and_opens_nothing() {
+        for (action, said) in [
+            (Action::Open(sid("l-sketch")), ""),
+            (Action::Dismiss(2), "dismissed"),
+            (Action::EnsureWatch, "already running"),
+            (Action::CopyId("l-sketch".into()), "copied l-sketch"),
+        ] {
+            let mut view = on(&["alpha", "sketch"]);
+            let before = frame(&mut view);
+            assert_eq!(view.finished(&action, Ok(said.into())), Effect::None, "{action:?}");
+            assert_eq!(frame(&mut view), before, "{action:?}");
+        }
+    }
+
+    #[test]
+    fn a_click_on_a_plan_review_item_with_no_review_page_yet_opens_the_lead_and_says_nothing_else() {
+        // a step with no command was the note `no review page yet`
+        let mut review = item(6, InboxKind::PlanReview, Urgency::Yellow, "ship: Plan review r1", "2026-01-02T23:50:00.000Z");
+        review.plan = Some(PlanId::parse("ship").unwrap());
+        review.url = None;
+        let tree = sample();
+        let steps = match super::super::inbox::jump(&tree, &review) {
+            Some(super::super::inbox::Jump::Run(action)) => vec![action],
+            Some(super::super::inbox::Jump::Steps(steps)) => steps,
+            other => panic!("the Lead opens: {other:?}"),
+        };
+        assert_eq!(steps.first(), Some(&Action::Open(sid("l-ship"))));
+        assert!(steps.iter().all(|a| !a.argv().is_empty()), "every step is a command, none is only a line to say: {steps:?}");
+    }
+
+    #[test]
+    fn a_failed_action_is_a_text_dialog_with_what_failed_its_code_and_its_message_and_draws_no_note() {
+        for (action, why) in [
+            (Action::Open(sid("l-sketch")), "no_cockpit: No cockpit."),
+            (Action::EnsureWatch, "watch_start_failed: no tmux"),
+            (Action::Dismiss(2), "item_closed: Item 2 is closed."),
+        ] {
+            let mut view = on(&["alpha", "sketch"]);
+            let before = frame(&mut view);
+            let Effect::Text(body) = view.finished(&action, Err(why.into())) else { panic!("{action:?}: a text dialog") };
+            assert!(body.ends_with(&format!(": {why}")), "`<what failed>: <code>: <message>`: {body:?}");
+            assert!(body.contains(&action.argv().join(" ")), "it says what failed, the command: {body:?}");
+            assert_eq!(frame(&mut view), before, "{action:?}: no note behind the dialog");
+        }
+    }
+
+    #[test]
+    fn a_refusal_of_a_key_or_an_item_is_a_text_dialog_not_a_note() {
+        // `x` on the Session in the chat slot
+        let mut view = on(&["alpha", "ship"]);
+        let before = frame(&mut view);
+        let Effect::Text(body) = press(&mut view, KeyCode::Char('x')) else { panic!("a text dialog") };
+        assert!(body.contains("switch to another session first"), "{body:?}");
+        assert_eq!(frame(&mut view), before);
+        // New Context… with no owner policy
+        let (mut view, _dir) = owned(sample(), &["notes.md"]);
+        let before = frame(&mut view);
+        let Effect::Text(body) = pick_at(&mut view, 8, 17, 0) else { panic!("a text dialog") };
+        assert!(body.contains("No owner policy"), "{body:?}");
+        assert_eq!(frame(&mut view), before);
+    }
+
+    #[test]
+    fn an_engine_down_for_60_seconds_tells_the_managers_and_draws_no_note() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha", "m-beta"]), Instant::now());
+        fake.tick(&mut view, t0, false);
+        let before = frame(&mut view);
+        for s in 1..=60 {
+            fake.tick(&mut view, secs(t0, s), false);
+        }
+        assert_eq!(fake.calls, sends(&["m-alpha", "m-beta"], TOLD), "the Managers are told");
+        assert_eq!(frame(&mut view), before, "and the view says nothing: no `engine down 60 s+: Managers told`");
+    }
+
+    #[test]
+    fn a_failure_to_tell_or_list_the_managers_is_logged_and_draws_no_note() {
+        let t0 = Instant::now();
+        let mut run = |_: &Action| Ok(serde_json::json!({"ok": true}));
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        let before = frame(&mut view);
+        view.watch_engine(t0, &mut run, &mut || Ok(Vec::new()));
+        let lines = view.watch_engine(secs(t0, 60), &mut run, &mut || Err("store busy".to_owned()));
+        assert!(lines.iter().any(|l| l.contains("store busy")), "logged: {lines:?}");
+        assert_eq!(frame(&mut view), before, "listing failed");
+
+        let mut view = View::new(sample(), true);
+        view.tree.engine_running = false;
+        let mut refuse = |_: &Action| Err(Failure::Broken("no tmux".to_owned()));
+        let manager = || -> Result<Vec<SessionId>, String> { Ok(vec![SessionId::parse("m-alpha").unwrap()]) };
+        view.watch_engine(t0, &mut refuse, &mut manager.clone());
+        let lines = view.watch_engine(secs(t0, 60), &mut refuse, &mut manager.clone());
+        assert!(lines.iter().any(|l| l.contains("no tmux")), "logged: {lines:?}");
+        assert_eq!(frame(&mut view), before, "telling failed");
+    }
+
+    #[test]
+    fn a_fold_file_that_is_reset_draws_nothing_and_logs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/tree-folds.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{not json").unwrap();
+        let mut clean = View::new(archived(), true);
+        let plain = drawn(&mut clean, 44, 30);
+        let mut view = View::new(archived(), true);
+        let lines = view.keep_folds(file_in(&dir));
+        assert_eq!(drawn(&mut view, 44, 30), plain, "no `fold state reset: …` line");
+        assert!(lines.iter().any(|l| l.starts_with("fold state reset: ") && l.contains("tree-folds.json")), "logged: {lines:?}");
     }
 }
