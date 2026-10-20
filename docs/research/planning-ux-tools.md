@@ -209,7 +209,7 @@ Measured with `wc` on files that `cpd plan review` wrote (`plan-<review>.md`):
 | `~/.cpd/run/bacon/plan-r1.md` | 19,020 | 19,010 | 217 | 3 / 5 | 1 |
 | `~/.cpd/run/dev-speed/plan-r1.md` | 28,401 | 28,357 | 355 | 5 / 14 | 5 |
 | `~/.cpd/run/mac-pro-debug/plan-r2.md` | 45,737 | 45,669 | 393 | 4 / 14 | 3 |
-| `~/.cpd/run/plan-ux/plan-r1.md` (this Plan) | 18,382 | not measured | not measured | not measured | not measured |
+| `~/.cpd/run/plan-ux/plan-r1.md` (this Plan) | 18,382 | 18,372 | 174 | 3 / 5 | 1 |
 | `~/.cpd/run/cross-repo/plan-r5.md` (largest of 14 reviews of that Plan) | 1,001,544 | 1,000,742 | 10,777 | 14 / 99 | 13 |
 
 Where the characters sit: in `bacon/plan-r1.md` the single `## PR bacon` section is 18,675 of 19,020 bytes, so the three Job Specs (about 6 KB each) are almost all of it. In `cross-repo/plan-r5.md` the `## Overlaps` section alone is 499,832 characters (measured with `awk` by section; `## PR cpd` is 264,248, `## PR plumbing` 94,893). I did not read why the Overlaps section is that large; the other 13 reviews of `cross-repo` range from 531,640 to 1,001,544 bytes (`ls -la`).
