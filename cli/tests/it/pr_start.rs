@@ -111,28 +111,37 @@ impl Fx {
         self.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';");
     }
 
-    /// PR `key` `open`, one allowed step at a time.
-    fn open(&self, key: &str) {
-        self.env.sql(&format!(
-            "UPDATE prs SET status = 'dispatch', lead_worktree = '/x/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';
-             INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+    /// PR `key` started (`dispatch`), as `fx.start` leaves it without a worktree.
+    fn dispatch_sql(key: &str) -> String {
+        format!("UPDATE prs SET status = 'dispatch', lead_worktree = '/x/{key}', started_at = 't' WHERE plan = 'pay' AND key = '{key}';")
+    }
+
+    /// A `dispatch` PR `key` `open`, with its pull request.
+    fn opened_sql(key: &str) -> String {
+        format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                VALUES ('acme/{key}', 1, 'https://github.com/acme/{key}/pull/1', 'T', 0, 'open', 'none', 'none', 't', 't');
              UPDATE prs SET status = 'open', pr_number = 1, pr_url = 'https://github.com/acme/{key}/pull/1', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{key}') WHERE plan = 'pay' AND key = '{key}';"
-        ));
+        )
     }
 
     /// An `open` PR `key` merged.
-    fn merge(&self, key: &str) {
-        self.env.sql(&format!(
+    fn merge_sql(key: &str) -> String {
+        format!(
             "UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = 'pay' AND key = '{key}';
              UPDATE pull_requests SET state = 'merged', merged_at = 't' WHERE repo = 'acme/{key}';"
-        ));
+        )
     }
 
+    /// PR `key` `open`, one allowed step at a time.
+    fn open(&self, key: &str) {
+        self.env.sql(&(Self::dispatch_sql(key) + &Self::opened_sql(key)));
+    }
+
+    /// PR `key` `merged`, in one write: the engine never sees it `open`.
     fn merged(&self, key: &str) {
-        self.open(key);
-        self.merge(key);
+        self.env.sql(&(Self::dispatch_sql(key) + &Self::opened_sql(key) + &Self::merge_sql(key)));
     }
 
     /// Plan `pay` in `dispatch` with `a1` merged and `a2` (needing it) waiting, both in `repo`.
@@ -145,6 +154,42 @@ impl Fx {
 
     fn start(&self, key: &str) -> Run {
         self.env.cpd(&["pr", "start", key, "--plan", "pay"])
+    }
+
+    /// Plan `ship` of Context `ctx`, in phase `plan`, with its Lead: the second Plan of the repo the stacked PRs share.
+    fn ship(&self) {
+        self.env.sql(
+            "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+               VALUES ('lead2', 'lead', 'ctx', 'ship', 'Lead', '/', 'O3', 'stopped', 't', 't');
+             INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+               VALUES ('ship', 'ctx', 'Ship it', 'plan', 'lead2', 't');",
+        );
+    }
+
+    /// `pr add <key> --repo <repo> <extra…> --plan ship`.
+    fn ship_add(&self, key: &str, repo: &Path, extra: &[&str]) {
+        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR"];
+        args.extend(extra);
+        args.extend(["--plan", "ship"]);
+        self.env.cpd(&args).ok();
+    }
+
+    fn ship_dispatch(&self) {
+        self.env.sql("UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'ship';");
+    }
+
+    fn start_ship(&self, key: &str) -> Run {
+        self.env.cpd(&["pr", "start", key, "--plan", "ship"])
+    }
+
+    fn ship_status(&self, key: &str) -> String {
+        self.query(&format!("SELECT status FROM prs WHERE plan = 'ship' AND key = '{key}'"))
+    }
+
+    /// Where PR `key` of Plan `ship` has its Lead worktree in `repo`.
+    fn ship_path(&self, repo: &Path, key: &str) -> PathBuf {
+        let name = repo.file_name().unwrap().to_str().unwrap();
+        repo.parent().unwrap().join(format!("{name}.ship.{key}"))
     }
 
     fn pr_status(&self, key: &str) -> String {
@@ -627,5 +672,198 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     let started = fx.events("pr-started");
     assert_eq!((started.len(), &started[0]["data"]["by"]), (1, &json!("pr start")));
     assert_eq!(fx.events("error").len(), 1);
+    drop(engine);
+}
+
+// ---------- stacked PRs (contract §3.7 E7, §3.8 "Stacked PRs", §7.2) ----------
+
+/// Plan `pay` in `dispatch` with `a1` started (its Lead worktree, its Lead Branch pushed), then `ship`, also in
+/// `dispatch`, with `b1` stacked on `pay/a1`; the Lead Branch of `a1` then has a commit that is neither on the remote
+/// nor on `main`. Returns that commit.
+fn stacked_on_a1(fx: &Fx, repo: &Repo) -> String {
+    fx.add("a1", &repo.path, &[]);
+    fx.dispatch();
+    fx.start("a1").ok();
+    let a1 = fx.lead_path(&repo.path, "a1");
+    fx.env.git(&a1, &["commit", "-q", "--allow-empty", "-m", "a1 work"]);
+    fx.ship();
+    fx.ship_add("b1", &repo.path, &["--base", "pay/a1"]);
+    fx.ship_dispatch();
+    head(fx, &a1, "HEAD")
+}
+
+#[test]
+fn pr_start_cuts_a_stacked_pr_from_the_base_prs_lead_branch_head() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let tip = stacked_on_a1(&fx, &repo);
+    // `main` moves on, so cutting from `origin/main` would show.
+    fx.land_on_origin(&repo, "main moves on");
+
+    let out = fx.start_ship("b1").ok();
+
+    let worktree = fx.ship_path(&repo.path, "b1");
+    assert_eq!(
+        out,
+        json!({"ok": true, "pr": {"key": "b1", "status": "dispatch", "lead_branch": "cpd/ship/b1",
+                                  "lead_worktree": worktree.display().to_string(), "base_sha": tip, "reused": false, "pushed": true}})
+    );
+    // The head of a1's local Lead Branch, which origin does not have yet: not a fresh origin/main.
+    assert_eq!(fx.env.git(&worktree, &["rev-parse", "HEAD"]), tip);
+    assert_ne!(remote_branch(&fx, &repo.path, "cpd/pay/a1"), format!("{tip}\trefs/heads/cpd/pay/a1"), "a1's commit is not pushed");
+    assert_eq!(remote_branch(&fx, &repo.path, "cpd/ship/b1"), format!("{tip}\trefs/heads/cpd/ship/b1"));
+    assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
+    assert_eq!(fx.ship_status("b1"), "dispatch");
+    let started: Vec<Value> = fx.events("pr-started").into_iter().filter(|e| e["plan"] == "ship").collect();
+    assert_eq!(started.len(), 1, "{started:?}");
+    assert_eq!(
+        started[0]["data"],
+        json!({"pr": "b1", "repo": repo.path.display().to_string(), "base": "cpd/pay/a1", "lead_branch": "cpd/ship/b1",
+               "lead_worktree": worktree.display().to_string(), "base_sha": tip, "reused": false, "pushed": true, "by": "pr start"})
+    );
+}
+
+#[test]
+fn a_stacked_pr_starts_from_the_local_base_branch_when_the_base_prs_branch_is_not_on_origin() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let tip = stacked_on_a1(&fx, &repo);
+    // a1's push failed at its start, say: origin has no such branch.
+    fx.env.git(&repo.path, &["push", "-q", "origin", "--delete", "cpd/pay/a1"]);
+
+    let out = fx.start_ship("b1").ok();
+
+    assert_eq!((&out["pr"]["base_sha"], &out["pr"]["reused"], &out["pr"]["pushed"]), (&json!(tip), &json!(false), &json!(true)));
+    assert_eq!(fx.env.git(&fx.ship_path(&repo.path, "b1"), &["rev-parse", "HEAD"]), tip);
+    assert_eq!(remote_branch(&fx, &repo.path, "cpd/pay/a1"), "", "nothing pushes the base PR's branch but its own Lead");
+}
+
+#[test]
+fn a_stacked_pr_starts_from_origin_when_the_base_prs_local_branch_is_gone_and_fails_when_both_are() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    stacked_on_a1(&fx, &repo);
+    let a1 = fx.lead_path(&repo.path, "a1");
+    let on_origin = remote_branch(&fx, &repo.path, "cpd/pay/a1").split('\t').next().unwrap().to_owned();
+    fx.env.git(&repo.path, &["worktree", "remove", "--force", a1.to_str().unwrap()]);
+    fx.env.git(&repo.path, &["branch", "-D", "cpd/pay/a1"]);
+    // Neither the local branch nor origin's: nothing to start from.
+    fx.env.git(&repo.path, &["push", "-q", "origin", "--delete", "cpd/pay/a1"]);
+
+    let error = refused(&fx.start_ship("b1"), "setup_failed", 1);
+
+    assert_eq!((&error["details"]["pr"], &error["details"]["step"], &error["details"]["base"]), (&json!("b1"), &json!("base_pr_branch"), &json!("cpd/pay/a1")));
+    assert_eq!(fx.ship_status("b1"), "waiting");
+    assert!(!fx.ship_path(&repo.path, "b1").exists());
+    assert_eq!(fx.env.git(&repo.path, &["branch", "--list", "cpd/ship/*"]), "");
+
+    // origin has it again: that is the start point.
+    fx.env.git(&repo.path, &["push", "-q", "origin", &format!("{on_origin}:refs/heads/cpd/pay/a1")]);
+    let out = fx.start_ship("b1").ok();
+    assert_eq!(out["pr"]["base_sha"], on_origin);
+    assert_eq!(fx.env.git(&fx.ship_path(&repo.path, "b1"), &["rev-parse", "HEAD"]), on_origin);
+}
+
+#[test]
+fn pr_start_refuses_a_stacked_pr_whose_base_pr_has_not_started() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    fx.add("a0", &repo.path, &[]);
+    fx.add("a1", &repo.path, &["a0"]);
+    fx.dispatch();
+    fx.ship();
+    fx.ship_add("b1", &repo.path, &["--base", "pay/a1"]);
+    fx.ship_dispatch();
+
+    let error = refused(&fx.start_ship("b1"), "pr_not_ready", 3);
+
+    assert_eq!((&error["details"]["pr"], &error["details"]["base_pr"], &error["details"]["needs"]), (&json!("b1"), &json!("pay/a1"), &json!([])));
+    assert_eq!(fx.ship_status("b1"), "waiting");
+    assert!(!fx.ship_path(&repo.path, "b1").exists());
+    assert_eq!(fx.env.git(&repo.path, &["branch", "--list", "cpd/ship/*"]), "");
+    assert!(fx.events("pr-started").is_empty());
+    // a1 starts (a0 merged): b1 may.
+    fx.merged("a0");
+    fx.start("a1").ok();
+    assert_eq!(fx.start_ship("b1").ok()["pr"]["status"], "dispatch");
+}
+
+#[test]
+fn pr_start_refuses_a_pr_whose_need_of_another_plan_is_not_merged() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    fx.add("a1", &repo.path, &[]);
+    fx.dispatch();
+    fx.env.sql(&Fx::dispatch_sql("a1"));
+    fx.ship();
+    fx.ship_add("c1", &repo.path, &["--needs", "pay/a1"]);
+    fx.ship_dispatch();
+
+    let error = refused(&fx.start_ship("c1"), "pr_not_ready", 3);
+
+    assert_eq!((&error["details"]["needs"], &error["details"]["base_pr"]), (&json!(["pay/a1"]), &Value::Null));
+    assert!(error["message"].as_str().unwrap().contains("pay/a1"), "{error}");
+    assert_eq!(fx.ship_status("c1"), "waiting");
+    fx.env.sql(&(Fx::opened_sql("a1") + &Fx::merge_sql("a1")));
+    assert_eq!(fx.start_ship("c1").ok()["pr"]["status"], "dispatch");
+}
+
+#[test]
+fn e7_holds_a_pr_for_a_need_of_another_plan_until_it_is_merged() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    fx.add("a1", &repo.path, &[]);
+    fx.dispatch();
+    fx.env.sql(&Fx::dispatch_sql("a1"));
+    fx.ship();
+    fx.ship_add("c1", &repo.path, &["--needs", "pay/a1"]);
+    fx.ship_dispatch();
+    let engine = fx.engine();
+
+    fx.env.wait_whole_ticks(2);
+    assert_eq!(fx.ship_status("c1"), "waiting", "pay/a1 is not merged");
+    assert!(fx.events("pr-started").is_empty());
+
+    fx.env.sql(&(Fx::opened_sql("a1") + &Fx::merge_sql("a1")));
+    wait_until("E7 to start c1", || fx.ship_status("c1") == "dispatch");
+
+    let started = fx.events("pr-started");
+    assert_eq!((started.len(), &started[0]["plan"], &started[0]["data"]["pr"], &started[0]["data"]["by"]), (1, &json!("ship"), &json!("c1"), &json!("engine")));
+    assert!(fx.events("error").is_empty());
+    drop(engine);
+}
+
+#[test]
+fn e7_starts_a_stacked_pr_in_the_tick_after_its_base_pr_started_and_not_before() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    fx.add("a0", &repo.path, &[]);
+    fx.add("a1", &repo.path, &["a0"]);
+    fx.dispatch();
+    fx.env.sql(&Fx::dispatch_sql("a0"));
+    fx.ship();
+    fx.ship_add("b1", &repo.path, &["--base", "pay/a1"]);
+    fx.ship_dispatch();
+    let engine = fx.engine();
+
+    // a1 waits for a0, and b1 for a1 to start: nothing starts.
+    fx.env.wait_whole_ticks(2);
+    assert_eq!((fx.pr_status("a1"), fx.ship_status("b1")), ("waiting".to_owned(), "waiting".to_owned()));
+    assert!(fx.events("pr-started").is_empty());
+
+    // a0 merges: E7 starts a1, and b1 from a1's Lead Branch.
+    let tip = fx.land_on_origin(&repo, "what a0 merged");
+    fx.env.sql(&(Fx::opened_sql("a0") + &Fx::merge_sql("a0")));
+    wait_until("E7 to start a1 and b1", || fx.pr_status("a1") == "dispatch" && fx.ship_status("b1") == "dispatch");
+
+    let a1 = fx.lead_path(&repo.path, "a1");
+    assert_eq!(fx.env.git(&a1, &["rev-parse", "HEAD"]), tip);
+    let b1 = fx.ship_path(&repo.path, "b1");
+    assert_eq!(fx.env.git(&b1, &["rev-parse", "HEAD"]), tip);
+    assert_eq!(fx.env.git(&b1, &["symbolic-ref", "--short", "HEAD"]), "cpd/ship/b1");
+    let started = fx.events("pr-started");
+    let by: Vec<(&Value, &Value)> = started.iter().map(|e| (&e["data"]["pr"], &e["data"]["by"])).collect();
+    assert_eq!(by, vec![(&json!("a1"), &json!("engine")), (&json!("b1"), &json!("engine"))], "a1 first");
+    assert!(fx.events("error").is_empty());
     drop(engine);
 }

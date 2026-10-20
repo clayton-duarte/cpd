@@ -128,16 +128,18 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
         // 3. Removed by hs-d243: the merge never works in the Lead worktree, and rule S
         // (step 9) neither overwrites local changes nor fails the Job for them.
         // 4. Tamper check of old...<attempt branch>.
-        let pr_base: String = store.read(|conn| {
-            Ok(conn.query_row(
-                "SELECT r.base FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+        // A stacked PR's base is its base PR's Lead Branch, and its check reads the root base too (§7.5).
+        let base_refs: Vec<String> = store.read(|conn| {
+            let (pr_repo, pr_base): (String, String) = conn.query_row(
+                "SELECT r.repo, r.base FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
                    JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE a.plan = ?1 AND a.id = ?2",
                 [target.plan.as_str(), target.id.to_string().as_str()],
-                |r| r.get(0),
-            )?)
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            crate::pr::start::tamper_bases(conn, repo, &pr_repo, &pr_base)
         })?;
-        let base_ref = git::tamper::base_ref(repo, &pr_base)?;
-        let touched = git::touched_protected(repo, &old, &base_ref, &old, &target.branch)?;
+        let base_refs: Vec<&str> = base_refs.iter().map(String::as_str).collect();
+        let touched = git::tamper::touched_protected_over(repo, &old, &base_refs, &old, &target.branch)?;
         if !touched.is_empty() {
             let detail = format!("The diff touches protected paths: {}.", touched.join(", "));
             return Ok((End::Failed { cause: Failure::Tampered, detail }, None, None));
