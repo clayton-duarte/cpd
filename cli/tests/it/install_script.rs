@@ -232,10 +232,12 @@ fn lock_held(env: &TestEnv) -> bool {
     !Command::new("flock").arg("-n").arg(lock_path(env)).arg("true").status().unwrap().success()
 }
 
-/// An old engine: a process holding the lock for `secs` seconds.
+/// An old engine: a process holding the lock for `secs` seconds. `--no-fork`: flock execs the
+/// command instead of forking it, so the `Child` is the `sleep` itself; with the fork, killing
+/// the `Child` killed only flock and the `sleep` lived on, holding the test's pipes (LEAK).
 fn old_engine(env: &TestEnv, secs: &str) -> Child {
     fs::create_dir_all(lock_path(env).parent().unwrap()).unwrap();
-    let child = spawn(Command::new("flock").arg(lock_path(env)).args(["sleep", secs])).unwrap();
+    let child = spawn(Command::new("flock").arg("--no-fork").arg(lock_path(env)).args(["sleep", secs])).unwrap();
     wait_until("the old engine holds the lock", || lock_held(env));
     child
 }

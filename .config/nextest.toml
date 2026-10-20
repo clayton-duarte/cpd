@@ -16,6 +16,11 @@
 [profile.default]
 fail-fast = false
 
+# A test that leaves a process holding its stdout/stderr pipes is marked LEAK by
+# nextest and, by default, still passes. Fail it, so no leak comes back
+# (ms-leak: the fake old engine's `sleep` outlived an `install_script` test).
+leak-timeout = { period = "100ms", result = "fail" }
+
 # The per-test limit: a test is reported slow after 30 s and killed, and so
 # failed, after 3 periods (90 s). Measured on hs with `scripts/test-time.sh`, 7
 # full runs at load 82-144 (1,899 tests; hs was never calm): the slowest test
