@@ -29,8 +29,9 @@ pub(super) fn reviews_prs(phase: Option<&str>) -> bool {
 /// `sha256` of `{jobs, prs}` (§2.3): `jobs` is the Locked fields of every
 /// `draft` Job (title, Tier, Spec, needs and PR, with the key, as cpd 1 §11
 /// `plan render`), ordered by key, a stub with its missing fields as JSON
-/// `null` (hs-d241); `prs` is `{key, repo, base, needs}` of
-/// every PR in `prs` that is not `cancelled`, ordered by key, `needs` sorted.
+/// `null` (hs-d241), with `kind` only when it is not `work` and `tests` and `test_files` only when set (hs-d341);
+/// `prs` is `{key, repo, base, needs}` of every PR in `prs` that is not `cancelled`, with `shape` only when it is
+/// not `free` (hs-d497), ordered by key, `needs` sorted.
 pub fn of(jobs: &[Job], prs: &[PrRow]) -> String {
     let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_draft()).collect();
     drafts.sort_by(|a, b| a.key.cmp(&b.key));
@@ -41,6 +42,7 @@ pub fn of(jobs: &[Job], prs: &[PrRow]) -> String {
             needs.sort();
             let mut fields = j.locked_fields();
             fields.extend([("key".into(), json!(j.key)), ("pr".into(), json!(j.pr)), ("title".into(), json!(j.title)), ("needs".into(), json!(needs))]);
+            fields.extend(j.kind_fields());
             Value::Object(fields)
         })
         .collect();
@@ -51,7 +53,11 @@ pub fn of(jobs: &[Job], prs: &[PrRow]) -> String {
         .map(|p| {
             let mut needs = p.needs.clone();
             needs.sort();
-            json!({"key": p.key, "repo": p.repo, "base": p.base, "needs": needs})
+            let mut fields = json!({"key": p.key, "repo": p.repo, "base": p.base, "needs": needs});
+            if p.shape != "free" {
+                fields["shape"] = json!(p.shape);
+            }
+            fields
         })
         .collect();
     sha256_of(&json!({"jobs": jobs, "prs": prs}))
@@ -75,6 +81,10 @@ mod tests {
             status: status.into(),
             appended: false,
             review: false,
+            kind: "work".into(),
+            tests: None,
+            test_files: None,
+            test_approved: None,
             urgent: false,
             fingerprint: None,
             retry_tier: None,

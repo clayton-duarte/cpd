@@ -101,6 +101,7 @@ impl NewEvent {
     pub fn job_added(
         text: impl Into<String>,
         pr: impl Serialize,
+        kind: &str,
         status: &str,
         appended: bool,
         tier: Option<&str>,
@@ -111,7 +112,7 @@ impl NewEvent {
         make(
             Kind::JobAdded,
             text,
-            json!({"pr": pr, "status": status, "appended": appended, "tier": tier, "needs": needs, "review": review, "urgent": urgent}),
+            json!({"pr": pr, "kind": kind, "status": status, "appended": appended, "tier": tier, "needs": needs, "review": review, "urgent": urgent}),
         )
     }
 
@@ -396,7 +397,7 @@ mod tests {
                 NewEvent::plan_review_decided(T, s, s, s, s, Some([s])),
             ],
             Kind::PlanDone => vec![NewEvent::plan_done(T, [s])],
-            Kind::JobAdded => vec![NewEvent::job_added(T, s, s, b, Some(s), [s], b, b), NewEvent::job_added(T, s, s, b, None, [s], b, b)],
+            Kind::JobAdded => vec![NewEvent::job_added(T, s, s, s, b, Some(s), [s], b, b), NewEvent::job_added(T, s, s, s, b, None, [s], b, b)],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
             Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, false), NewEvent::job_merged(T, s, s, true)],
             Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],

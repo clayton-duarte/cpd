@@ -22,7 +22,7 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
             .filter(|j| args.statuses.is_empty() || args.statuses.contains(&j.status))
             .map(|j| {
                 let attempts = counts.iter().find(|(job, _)| *job == j.key).map_or(0, |(_, n)| *n);
-                json!({"key": j.key, "title": j.title, "status": j.status, "tier": j.tier, "appended": j.appended, "review": j.review, "urgent": j.urgent,
+                json!({"key": j.key, "title": j.title, "kind": j.kind, "status": j.status, "tier": j.tier, "appended": j.appended, "review": j.review, "urgent": j.urgent,
                        "needs": j.needs, "attempts": attempts, "merged_sha": j.merged_sha})
             })
             .collect::<Vec<_>>())

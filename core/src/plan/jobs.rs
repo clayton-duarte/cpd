@@ -13,6 +13,9 @@ use crate::ids::PlanId;
 /// The Job statuses of §3.2, in the order `counts` lists them.
 pub const STATUSES: [&str; 6] = ["draft", "queued", "running", "merged", "failed", "cancelled"];
 
+/// The kinds of Job (`jobs.kind`, §2.2 "Job kinds"): `open` and `update` are cpd's, the others the Lead's.
+pub const KINDS: [&str; 6] = ["work", "docs", "test", "impl", "open", "update"];
+
 /// The Spec of a Job (§2.2): all five fields, or none (a stub, below). The
 /// arrays are kept as the JSON values stored, so a fingerprint hashes exactly
 /// what the database holds.
@@ -40,6 +43,14 @@ pub struct Job {
     pub appended: bool,
     /// A review Job (`jobs.review`, B2).
     pub review: bool,
+    /// The Job's kind (`jobs.kind`, §2.2 "Job kinds"): one of [`KINDS`]; `work` for every Job before migration `job-kinds`.
+    pub kind: String,
+    /// A `test` Job's named tests (`jobs.tests`, a JSON array): set only with a Spec, and only for kind `test`.
+    pub tests: Option<Value>,
+    /// The files that hold them (`jobs.test_files`, a JSON array): set exactly when `tests` is.
+    pub test_files: Option<Value>,
+    /// An `impl` Job's approved red-test paths (`jobs.test_approved`): not a Locked field, in no fingerprint.
+    pub test_approved: Option<Value>,
     /// The urgent flag (`jobs.urgent`, §2.2): not a Locked field, in no fingerprint.
     pub urgent: bool,
     pub fingerprint: Option<String>,
@@ -89,18 +100,43 @@ impl Job {
         fields
     }
 
-    /// The fields `plan show` prints for a Job (commands.md §4.3), without its Attempts.
+    /// The Spec fields a kind adds to the Locked fields of the plan fingerprint (§2.3): `kind` only when it is not
+    /// `work`, `tests` and `test_files` only when set, so the fingerprint of a Job of no new kind is what it was.
+    pub fn kind_fields(&self) -> Map<String, Value> {
+        let mut fields = Map::new();
+        if self.kind != "work" {
+            fields.insert("kind".into(), json!(self.kind));
+        }
+        for (name, value) in [("tests", &self.tests), ("test_files", &self.test_files)] {
+            if let Some(value) = value {
+                fields.insert(name.into(), value.clone());
+            }
+        }
+        fields
+    }
+
+    /// The fields `plan show` prints for a Job (commands.md §4.3), without its Attempts: `tests` and `test_files`
+    /// of a `test` Job and `test_approved` of an `impl` Job only (§5.7, "where the kind has them").
     pub fn to_json(&self) -> Value {
         let spec = |f: fn(&JobSpec) -> Value| self.spec.as_ref().map_or(Value::Null, f);
-        json!({
-            "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "status": self.status, "tier": self.tier,
+        let mut value = json!({
+            "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "kind": self.kind, "status": self.status, "tier": self.tier,
             "appended": self.appended, "review": self.review, "urgent": self.urgent, "needs": self.needs,
             "goal": spec(|s| json!(s.goal)), "context": spec(|s| json!(s.context)), "touches": spec(|s| s.touches.clone()),
             "acceptance": spec(|s| s.acceptance.clone()), "out_of_scope": spec(|s| s.out_of_scope.clone()),
             "fingerprint": self.fingerprint, "retry_tier": self.retry_tier,
             "cancel_reason": self.cancel_reason, "cancel_requested_at": self.cancel_requested_at,
             "failed_cause": self.failed_cause, "merged_sha": self.merged_sha, "created_at": self.created_at,
-        })
+        });
+        match self.kind.as_str() {
+            "test" => {
+                value["tests"] = self.tests.clone().unwrap_or(Value::Null);
+                value["test_files"] = self.test_files.clone().unwrap_or(Value::Null);
+            }
+            "impl" => value["test_approved"] = self.test_approved.clone().unwrap_or(Value::Null),
+            _ => {}
+        }
+        value
     }
 }
 
@@ -114,7 +150,8 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     }
     let mut stmt = conn.prepare(
         "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review, urgent
+                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review, urgent,
+                kind, tests, test_files, test_approved
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
@@ -126,11 +163,12 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
                 (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?, r.get::<_, bool>(20)?),
+                (r.get::<_, String>(21)?, r.get::<_, Option<String>>(22)?, r.get::<_, Option<String>>(23)?, r.get::<_, Option<String>>(24)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review, urgent))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review, urgent), (kind, tests, test_files, test_approved))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
@@ -149,7 +187,12 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (None, None, None, None, None) => None,
                 _ => return Err(CpdError::bad_row(format!("Job {plan}/{key} has some of its Spec fields and not all"))),
             };
+            let optional = |name: &str, text: Option<String>| text.map(|t| array(name, &t)).transpose();
             Ok(Job {
+                tests: optional("tests", tests)?,
+                test_files: optional("test_files", test_files)?,
+                test_approved: optional("test_approved", test_approved)?,
+                kind,
                 spec,
                 needs: needs.remove(&key).unwrap_or_default(),
                 seq,
@@ -267,6 +310,10 @@ mod tests {
             status: status.into(),
             appended: false,
             review: false,
+            kind: "work".into(),
+            tests: None,
+            test_files: None,
+            test_approved: None,
             urgent: false,
             fingerprint: None,
             retry_tier: None,

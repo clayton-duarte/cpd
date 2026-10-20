@@ -35,7 +35,7 @@ use crate::home::CpdHome;
 use crate::ids::{JobKey, PlanId, PrKey};
 use crate::output::Output;
 use crate::plan::PrRow;
-use crate::plan::jobs::{Job, STATUSES};
+use crate::plan::jobs::{Job, KINDS, STATUSES};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -87,6 +87,9 @@ pub struct AddArgs {
     /// concurrency. Only when the User explicitly asks
     #[arg(long)]
     urgent: bool,
+    /// The Job's kind (§2.2 "Job kinds"): docs, test or impl; default work. open and update are cpd's
+    #[arg(long, value_name = "kind", value_parser = PossibleValuesParser::new(KINDS))]
+    kind: Option<String>,
     #[command(flatten)]
     pr: PrArg,
     #[command(flatten)]
@@ -116,6 +119,9 @@ pub struct EditArgs {
     /// Move the Job to this PR (it keeps no old Dependency)
     #[arg(long = "pr", value_name = "key")]
     pr: Option<PrKey>,
+    /// The new kind (§2.2 "Job kinds"): work, docs, test or impl. open and update are cpd's
+    #[arg(long, value_name = "kind", value_parser = PossibleValuesParser::new(KINDS))]
+    kind: Option<String>,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -234,8 +240,73 @@ fn check_needs_known(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<()
     Ok(())
 }
 
-/// No key of `needs` is a `cancelled` or `failed` Job (`needs_unavailable`) (§5.1).
+/// `open` and `update` are cpd's: the Lead adds neither (`kind_reserved`, §5.1).
+fn check_kind_not_reserved(kind: &str) -> Result<(), CpdError> {
+    if matches!(kind, "open" | "update") {
+        return Err(CpdError::new(
+            ErrorCode::KindReserved,
+            format!("The kind {kind} is cpd's: it adds the open Job when a PR starts and the update Job for a PR that needs one. Use docs, test, impl or work."),
+        )
+        .with("kind", kind));
+    }
+    Ok(())
+}
+
+/// The kinds a PR of `shape` may have while it is `waiting` or `dispatch` (§2.2 "Job kinds"): `tdd` the steps of the
+/// template, `docs` and `config` their one, `free` (a PR before migration `job-kinds`) every kind the Lead adds.
+fn kinds_allowed(shape: &str) -> &'static [&'static str] {
+    match shape {
+        "tdd" => &["docs", "test", "impl"],
+        "docs" => &["docs"],
+        "config" => &["work"],
+        _ => &["work", "docs", "test", "impl"],
+    }
+}
+
+/// The PR's stored shape allows a Job of `kind` while the PR is `waiting` or `dispatch`, else `shape_violation`
+/// (§5.1). A review Job (kind `work`) is allowed in every shape; an `open` PR is not checked: a feedback fix is
+/// whatever it is.
+fn check_shape_allows(prs: &[PrRow], plan: &PlanId, pr: &str, kind: &str, review: bool) -> Result<(), CpdError> {
+    let Some(row) = prs.iter().find(|p| p.key.as_str() == pr) else { return Ok(()) };
+    let allowed = kinds_allowed(&row.shape);
+    if review || !matches!(row.status.as_str(), "waiting" | "dispatch") || allowed.contains(&kind) {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::ShapeViolation,
+        format!("PR {pr} has the shape {}: it allows the kinds {}, not {kind}. The shape is fixed; cancel the PR and add another to change it.", row.shape, allowed.join(", ")),
+    )
+    .with("plan", plan.as_str())
+    .with("pr", pr)
+    .with("shape", row.shape.as_str())
+    .with("kind", kind)
+    .with("allowed", allowed))
+}
+
+/// An `impl` Job that is not a draft needs at least one `test` Job of its PR (`test_job_required`, §5.1).
+fn check_test_job_required(jobs: &[Job], plan: &PlanId, job: &Job) -> Result<(), CpdError> {
+    let tests: Vec<&str> = jobs.iter().filter(|j| j.pr == job.pr && j.kind == "test" && j.status != "cancelled").map(|j| j.key.as_str()).collect();
+    if job.kind != "impl" || job.needs.iter().any(|n| tests.contains(&n.as_str())) {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::TestJobRequired,
+        format!("The impl Job {} must need a test Job of its PR {}: its tests are the ones its test Jobs name.", job.key, job.pr),
+    )
+    .with("plan", plan.as_str())
+    .with("job", job.key.as_str())
+    .with("jobs", tests))
+}
+
+/// No key of `needs` is a `cancelled` or `failed` Job, nor an `open` or `update` Job, which nothing waits for
+/// (`needs_unavailable`) (§5.1).
 fn check_needs_available(jobs: &[Job], plan: &PlanId, needs: &[String]) -> Result<(), CpdError> {
+    let reserved: Vec<&str> = jobs.iter().filter(|j| needs.contains(&j.key) && matches!(j.kind.as_str(), "open" | "update")).map(|j| j.key.as_str()).collect();
+    if !reserved.is_empty() {
+        return Err(CpdError::new(ErrorCode::NeedsUnavailable, "A Job cannot need an open or update Job: nothing waits for them.")
+            .with("plan", plan.as_str())
+            .with("jobs", reserved));
+    }
     let unavailable: Vec<serde_json::Value> = jobs
         .iter()
         .filter(|j| needs.contains(&j.key) && matches!(j.status.as_str(), "cancelled" | "failed"))

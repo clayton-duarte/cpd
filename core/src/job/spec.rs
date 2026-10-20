@@ -10,6 +10,8 @@ use crate::error::{CpdError, ErrorCode};
 use crate::plan::jobs::JobSpec;
 
 const FIELDS: [&str; 5] = ["goal", "context", "touches", "acceptance", "out_of_scope"];
+/// The two more of a `test` Job's Spec (contract §2.2 "Job kinds"), refused for every other kind.
+const TEST_FIELDS: [&str; 2] = ["tests", "test_files"];
 
 /// A Spec as the file gives it, valid.
 #[derive(Clone, Debug, PartialEq)]
@@ -19,9 +21,26 @@ pub struct Spec {
     pub touches: Vec<String>,
     pub acceptance: Vec<String>,
     pub out_of_scope: Vec<String>,
+    /// `tests` of a `test` Job: the named tests (one or more distinct one-line strings).
+    pub tests: Option<Vec<String>>,
+    /// `test_files` of a `test` Job: the files that hold them (repo-relative paths or `dir/` prefixes).
+    pub test_files: Option<Vec<String>>,
 }
 
 impl Spec {
+    /// The Spec fits `kind` (commands.md §5): a `test` Job's Spec has `tests` and `test_files`, every other kind's
+    /// neither, else `spec_invalid` with the JSON path of the field.
+    pub fn check_kind(&self, kind: &str) -> Result<(), CpdError> {
+        for (name, given) in [("tests", self.tests.is_some()), ("test_files", self.test_files.is_some())] {
+            match (kind == "test", given) {
+                (true, false) => return Err(invalid(&format!("$.{name}"), format!("missing field: a `test` Job's Spec names its {name}"))),
+                (false, true) => return Err(invalid(&format!("$.{name}"), format!("unknown field: only a `test` Job's Spec has {name}, and this Job is `{kind}`"))),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// The Spec as a Job holds it.
     pub fn stored(&self) -> JobSpec {
         JobSpec {
@@ -52,16 +71,49 @@ pub fn parse(text: &str) -> Result<Spec, CpdError> {
     let Value::Object(mut fields) = value else {
         return Err(invalid("$", "expected an object"));
     };
-    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str())) {
+    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str()) && !TEST_FIELDS.contains(&k.as_str())) {
         return Err(invalid(&format!("$.{unknown}"), "unknown field"));
     }
+    let tests = fields.contains_key("tests").then(|| tests_field(&mut fields)).transpose()?;
+    let test_files = fields.contains_key("test_files").then(|| test_files_field(&mut fields)).transpose()?;
     Ok(Spec {
+        tests,
+        test_files,
         goal: text_field(&mut fields, "goal", true)?,
         context: text_field(&mut fields, "context", false)?,
         touches: list_field(&mut fields, "touches", true)?,
         acceptance: list_field(&mut fields, "acceptance", true)?,
         out_of_scope: list_field(&mut fields, "out_of_scope", false)?,
     })
+}
+
+/// `tests`: one or more distinct one-line strings.
+fn tests_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError> {
+    let tests = list_field(fields, "tests", true)?;
+    for (i, test) in tests.iter().enumerate() {
+        if test.contains(['\n', '\r']) {
+            return Err(invalid(&format!("$.tests[{i}]"), "must be one line"));
+        }
+        if tests[..i].contains(test) {
+            return Err(invalid(&format!("$.tests[{i}]"), "repeats an earlier test"));
+        }
+    }
+    Ok(tests)
+}
+
+/// `test_files`: one or more repo-relative paths or, ending in `/`, directory prefixes: no `..`, no leading `/`
+/// (the rule of the `protected` list, contract §7.5).
+fn test_files_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError> {
+    let files = list_field(fields, "test_files", true)?;
+    for (i, file) in files.iter().enumerate() {
+        if file.starts_with('/') {
+            return Err(invalid(&format!("$.test_files[{i}]"), "must be a path relative to the repo, not absolute"));
+        }
+        if file.split('/').any(|part| part == "..") {
+            return Err(invalid(&format!("$.test_files[{i}]"), "must not contain .."));
+        }
+    }
+    Ok(files)
 }
 
 fn take(fields: &mut Map<String, Value>, name: &str) -> Result<Value, CpdError> {

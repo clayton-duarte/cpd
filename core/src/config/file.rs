@@ -46,6 +46,8 @@ pub struct Config {
     pub manager_tier: Tier,
     /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
     pub context_distill_tier: Tier,
+    /// The Tier of the `open` and `update` Jobs cpd adds (§2.2 "Job kinds", §8.2, hs-d340, hs-d497).
+    pub open_tier: Tier,
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
@@ -275,6 +277,9 @@ impl Config {
         let context_distill_tier = r.get("context_distill_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
             Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
         })?;
+        let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
+            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
             DEFAULT_LEAD_PI_PACKAGES.map(str::to_owned).to_vec(),
@@ -367,6 +372,7 @@ impl Config {
             lead_tier,
             manager_tier,
             context_distill_tier,
+            open_tier,
             lead_pi_packages,
             pi_adapter,
             pr_open_escalate_minutes,

@@ -223,6 +223,9 @@ error_codes! {
     PrNotClosed = "pr_not_closed" => Refused,
     BaseConflict = "base_conflict" => Refused,
     NeedsOtherPr = "needs_other_pr" => Refused,
+    KindReserved = "kind_reserved" => Refused,
+    TestJobRequired = "test_job_required" => Refused,
+    ShapeViolation = "shape_violation" => Refused,
     PrNotFound = "pr_not_found" => NotFound,
 }
 
@@ -412,6 +415,9 @@ mod tests {
             (ErrorCode::PrNotClosed, 3),
             (ErrorCode::BaseConflict, 3),
             (ErrorCode::NeedsOtherPr, 3),
+            (ErrorCode::KindReserved, 3),
+            (ErrorCode::TestJobRequired, 3),
+            (ErrorCode::ShapeViolation, 3),
             (ErrorCode::PrNotFound, 4),
             (ErrorCode::TitleFailed, 1),
             (ErrorCode::PolicyInvalid, 1),
