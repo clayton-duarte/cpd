@@ -50,6 +50,8 @@ pub struct MergeIcon {
 pub enum PrItem {
     /// The `merge` popup: only on a row that shows the merge icon.
     Merge,
+    /// A merge of this pull request is running (hs-d495): the `Merge` entry, shown with the spinner and not selectable.
+    Merging,
     /// `tmux set-buffer -w -- <url>`.
     CopyLink,
     /// `session open` of the owner's Lead, then the focus on the chat: only on a PR a Plan owns.
@@ -59,7 +61,7 @@ pub enum PrItem {
 impl crate::menu::Entry for PrItem {
     fn label(self) -> &'static str {
         match self {
-            PrItem::Merge => "Merge",
+            PrItem::Merge | PrItem::Merging => "Merge",
             PrItem::CopyLink => "Copy Link",
             PrItem::GoToLead => "Go to Lead",
         }
@@ -76,6 +78,8 @@ pub struct PrRow {
     pub url: String,
     /// The row shows the merge icon.
     pub clean: bool,
+    /// A merge of the pull request is running (hs-d495): the menu's Merge entry is [`PrItem::Merging`].
+    pub merging: bool,
     pub lead: Option<SessionId>,
 }
 
@@ -283,6 +287,7 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
             pull: format!("{}#{}", pr.repo, pr.number),
             url: pr.url.clone(),
             clean: pr.clean,
+            merging: false,
             lead: pr.lead.clone(),
         });
         let icon = arrow_x.filter(|_| pr.clean).map(|x| Position::new(x, y + 1));
@@ -370,6 +375,7 @@ mod tests {
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
             lead_working: false,
+            merging: false,
         }
     }
 

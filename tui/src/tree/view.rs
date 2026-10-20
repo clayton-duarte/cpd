@@ -10,7 +10,7 @@
 //! dismisses. No other key does anything. A right click opens the menu
 //! ([`super::menu`]), which then takes every key and click.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -233,6 +233,14 @@ impl View {
         };
         view.refresh(tree);
         view
+    }
+
+    /// The pull requests (`<owner>/<repo>#<n>`) whose merge is running, from the live merge markers
+    /// (`crate::merge::marker::live`) as of this snapshot (hs-d495): their `pr-ready` items show the spinner in the glyph
+    /// cell and a click on them does nothing.
+    #[cfg_attr(not(test), allow(dead_code))] // no caller until Job ms-impl
+    pub fn set_merging(&mut self, pulls: BTreeSet<String>) {
+        let _ = pulls; // Job ms-impl
     }
 
     /// A working dot is in the snapshot: the spinner turns, so the pane is redrawn with the clock. (A dot of an archived

@@ -106,6 +106,7 @@ struct PrMenu {
 fn pick(item: PrItem, row: &PrRow, opener: &Opener) -> (&'static str, Result<(), CpdError>) {
     match item {
         PrItem::Merge => ("Merge Pull Request", crate::merge::open(opener.tmux, &row.pull)),
+        PrItem::Merging => ("Merge Pull Request", Ok(())),
         PrItem::CopyLink => {
             ("Copy Link", opener.tmux.run(&["set-buffer", "-w", "--", row.url.as_str()].map(str::to_owned)).map(drop))
         }
@@ -420,6 +421,7 @@ mod tests {
             active: false,
             lead: Some(SessionId::parse("l-a").unwrap()),
             lead_working: working,
+            merging: false,
         }
     }
 

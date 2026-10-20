@@ -13,6 +13,11 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 /// An entry of a menu: what the box shows. The view's own type says what it does.
 pub trait Entry: Copy {
     fn label(self) -> &'static str;
+
+    /// A busy entry (hs-d495) is shown with the spinner and cannot be selected: no key and no click picks it.
+    fn busy(self) -> bool {
+        false
+    }
 }
 
 /// What a key or a click did to the menu.
@@ -115,7 +120,14 @@ impl<E: Entry> Menu<E> {
         }
     }
 
+    /// [`Menu::draw_at`] at the shared clock's frame now.
     pub fn draw(&self, f: &mut Frame, pane: Rect) {
+        self.draw_at(f, pane, crate::palette::frame(std::time::SystemTime::now()));
+    }
+
+    /// Draws the menu; a busy entry ([`Entry::busy`]) shows `palette::SPINNER[frame % 9]` (hs-d495).
+    pub fn draw_at(&self, f: &mut Frame, pane: Rect, frame: usize) {
+        let _ = frame; // Job ms-impl
         let rect = self.rect(pane);
         let lines: Vec<Line> = self
             .items

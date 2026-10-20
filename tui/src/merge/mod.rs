@@ -9,6 +9,8 @@
 //! - [`action`]: the merge the confirm starts, in the background: `pr merge`, then `pr poll`; a failed merge opens
 //!   the cockpit's one failure dialog ([`dialog::show_error_on`]), a failed poll is a line of the log.
 
+pub mod marker;
+
 use std::ffi::OsString;
 use std::fmt;
 
