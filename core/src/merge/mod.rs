@@ -167,6 +167,21 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
             let detail = format!("The diff touches protected paths: {}.", touched.join(", "));
             return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
         }
+        // The red tests (§7.5, §7.7): an `impl` Job's diff does not change a file a `test` Job it needs guards, unless the Lead approved
+        // the path (read now, so an approval reaches an Attempt already merging).
+        if target.kind == "impl" {
+            let (all, job) = store.read(|conn| {
+                let all = crate::plan::jobs::load(conn, &target.plan)?;
+                let job = crate::job::find(&all, &target.plan, &target.job)?.clone();
+                Ok((all, job))
+            })?;
+            let guard = crate::job::guard::of(&all, &job);
+            let changed = git::tamper::touched_guarded(repo, &old, &old, &target.branch, &guard.files, &guard.approved)?;
+            if !changed.is_empty() {
+                let detail = format!("The diff changes red tests of {}: {}.", guard.jobs.join(", "), changed.join(", "));
+                return Ok(Stepped::ends(End::Failed { cause: Failure::Tampered, detail }));
+            }
+        }
         // An `open` Job whose pull request was merged on GitHub and never recorded adopts it (§7.7 submit step 1, §7.4 step 8b): it has no
         // new commits to push, so steps 5 and 8 are skipped and step 10 writes the rows of `pr open` step 0.
         if target.kind == "open" && pull_request_is_merged(store, target)? {

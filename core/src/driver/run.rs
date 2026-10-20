@@ -553,7 +553,9 @@ impl Driver {
             let Some(file) = file.clone() else { continue };
             // The stall rule (§3.4 A4): pi is the pane's process, alive here. tmux
             // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
-            if let Some(line) = pi.and_then(|pi| stall.check(&file, pi)) {
+            // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
+            let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
+            if let Some(line) = pi.and_then(|pi| stall.check(&file, pi, span_open)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).
