@@ -184,9 +184,14 @@ impl Fx {
     /// Job `key` of Plan `pay`, `queued` with its Locked-Job fingerprint, then
     /// moved to `status` by `then` (SQL run after the fingerprint is set).
     fn add_job(&self, key: &str, needs: &[&str], then: &str) {
+        self.add_job_in("repo", key, needs, then);
+    }
+
+    /// `add_job` in PR `pr` of Plan `pay`.
+    fn add_job_in(&self, pr: &str, key: &str, needs: &[&str], then: &str) {
         let mut sql = format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
-             VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
         );
         for need in needs {
             sql += &format!("INSERT INTO dependencies (plan, job, needs) VALUES ('pay', '{key}', '{need}');");
@@ -1661,6 +1666,171 @@ fn e4_without_a_manager_gives_the_lead_one_error_instead() {
     assert_eq!((&data["source"], &data["code"], &data["details"]), (&json!("watch"), &json!("pr_unopened"), &json!({"pr": "repo", "minutes": 11})));
 }
 
+// ---------- E4: a stacked PR's 10 minutes start when its base PR is open or merged (hs-d301) ----------
+
+/// What the fake `gh` answers while PR 7 (`base_open`) is open: the search lists nothing, the lookup says "still open".
+fn gh_pr7_open(fx: &Fx) {
+    fx.env.fake_gh(&format!(
+        "case \"$4\" in *'search(type'*) echo '{EMPTY_SEARCH}' ;; *) echo '{LOOKUP_OPEN}' ;; esac"
+    ));
+}
+
+impl Fx {
+    /// PR `top` of Plan `pay` in `dispatch` on `base` (a stacked PR when `base` is `cpd/pay`, the Lead Branch of PR
+    /// `repo`), its one Job `web` merged: the engine sends `all-merged`.
+    fn add_top(&self, base: &str) {
+        self.fixture(&format!(
+            "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+               VALUES ('pay', 'top', '{}', '{base}', 'dispatch', 'cpd/pay/top', '/x/top', cpd_txn(), 't', 't');",
+            self.repo.display()
+        ));
+        self.add_job_in("top", "web", &[], "UPDATE jobs SET status = 'running' WHERE key = 'web'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'web';");
+    }
+
+    /// Makes `top`'s `all-merged` `minutes` old.
+    fn age_all_merged_top(&self, minutes: i64) {
+        self.fixture(&format!("UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'top';", ago(minutes)));
+    }
+
+    /// The base PR `repo` `open` since `minutes` ago (its pull request is PR 7, so use [`gh_pr7_open`]).
+    fn base_open(&self, minutes: i64) {
+        self.fixture(&format!("{} UPDATE prs SET pr_opened_at = '{}' WHERE plan = 'pay' AND key = 'repo';", opened("open"), ago(minutes)));
+    }
+
+    /// The base PR `repo` `merged`, `pr_opened_at` `minutes` ago when given, `merged_at` `merged` minutes ago.
+    fn base_merged(&self, opened_ago: Option<i64>, merged_ago: i64) {
+        let opened_at = opened_ago.map_or("NULL".to_owned(), |m| format!("'{}'", ago(m)));
+        self.fixture(&format!(
+            "{} UPDATE prs SET pr_opened_at = {opened_at}, merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';",
+            opened("merged"),
+            ago(merged_ago)
+        ));
+    }
+
+    /// The base PR `repo` not open: `waiting` (never started), `dispatch` (as it is) or `cancelled`.
+    fn base_not_ready(&self, status: &str) {
+        match status {
+            "dispatch" => {}
+            "waiting" => self.fixture("UPDATE prs SET status = 'waiting', lead_worktree = NULL, started_at = NULL, start_failed_at = 't' WHERE plan = 'pay' AND key = 'repo';"),
+            _ => self.fixture(&opened(status)),
+        }
+    }
+
+    /// The escalations of E4 (`pr_unopened`) and the `pr_unopened` errors.
+    fn unopened(&self) -> (Vec<Value>, usize) {
+        let messages = self.escalations().into_iter().map(|e| e.3).filter(|d| d["escalation"] == "pr_unopened").collect();
+        (messages, self.events("error").iter().filter(|e| e.3["code"] == "pr_unopened").count())
+    }
+}
+
+/// `top` (on `base`) is all merged, `all_merged_ago` minutes ago, with a Manager and the base PR as `setup` leaves
+/// it; the engine runs for a few whole ticks. Returns what E4 told the Manager.
+fn stacked_run(base: &str, setup: impl Fn(&Fx), all_merged_ago: i64) -> Vec<Value> {
+    let fx = fx("");
+    fx.add_manager();
+    fx.add_top(base);
+    gh_pr7_open(&fx);
+    setup(&fx);
+
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    fx.age_all_merged_top(all_merged_ago);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    let (messages, errors) = fx.unopened();
+    assert_eq!(errors, 0);
+    messages
+}
+
+/// `stacked_run` must say nothing for a base PR ready `before` minutes ago, and one message of `after` minutes for one ready `after` minutes ago.
+fn the_window_starts_at_the_base_pr(setup: impl Fn(&Fx, i64)) {
+    let text = "Plan pay (Pay): PR top has had all its Jobs merged for 11 minutes and its pull request is not opened. The Lead was told to run cpd pr open --pr top and has not. Look at the Lead: cpd session show lead1, and tell it or the User.";
+    // Everything merged an hour ago: only the base PR's moment can say it is too early.
+    let early = stacked_run("cpd/pay", |fx| setup(fx, 9), 60);
+    assert!(early.is_empty(), "the base PR opened 9 minutes ago: {early:?}");
+    let late = stacked_run("cpd/pay", |fx| setup(fx, 11), 60);
+    assert_eq!(late.len(), 1, "{late:?}");
+    // `minutes` is the age of the clock start (the base PR's moment), not of `all_merged_at` (60).
+    assert_eq!(late[0], json!({"from": "lead1", "text": text, "wake": true, "escalation": "pr_unopened", "plan": "pay", "pr": "top", "minutes": 11}));
+}
+
+#[test]
+fn e4_a_stacked_pr_is_escalated_ten_minutes_after_its_base_pr_opened_not_after_all_merged() {
+    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_open(minutes));
+}
+
+#[test]
+fn e4_a_stacked_pr_counts_from_the_merge_of_a_merged_base_pr_and_from_its_pr_opened_at_when_it_has_one() {
+    // `pr_opened_at` wins when there is one (the merge was long after).
+    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_merged(Some(minutes), 1));
+    // No `pr_opened_at` (an adopted merged pull request): `merged_at`.
+    the_window_starts_at_the_base_pr(|fx, minutes| fx.base_merged(None, minutes));
+}
+
+#[test]
+fn e4_a_stacked_pr_whose_all_merged_is_later_than_its_base_prs_opening_counts_from_all_merged() {
+    // The base PR opened an hour ago: `all_merged_at` is the later moment.
+    let early = stacked_run("cpd/pay", |fx| fx.base_open(60), 9);
+    assert!(early.is_empty(), "{early:?}");
+    let late = stacked_run("cpd/pay", |fx| fx.base_open(60), 11);
+    assert_eq!(late.len(), 1, "{late:?}");
+    assert_eq!(late[0]["minutes"], 11);
+}
+
+#[test]
+fn e4_a_stacked_pr_whose_base_pr_is_not_open_raises_no_alarm_however_late() {
+    for status in ["waiting", "dispatch", "cancelled"] {
+        let sent = stacked_run("cpd/pay", |fx| fx.base_not_ready(status), 60);
+        assert!(sent.is_empty(), "base PR {status}: {sent:?}");
+    }
+}
+
+#[test]
+fn e4_a_stacked_pr_with_no_manager_gives_the_lead_no_error_while_its_base_pr_is_not_open() {
+    let fx = fx("");
+    fx.add_top("cpd/pay");
+    gh_pr7_open(&fx);
+
+    let engine = fx.start();
+    wait_until("all-merged", || fx.count("all-merged") == 1);
+    fx.age_all_merged_top(60);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert_eq!(fx.unopened(), (vec![], 0));
+}
+
+/// SQL for a `pr-base-changed` Event of PR `top` `minutes` ago, `from_pr` the base PR before.
+fn base_changed(minutes: i64, from_pr: Option<&str>) -> String {
+    let data = json!({"pr": "top", "from": "cpd/pay", "to": "main", "from_pr": from_pr, "to_pr": null, "by": "engine"});
+    format!(
+        "INSERT INTO events (txn, at, kind, context, plan, text, data)
+           VALUES (cpd_txn(), '{}', 'pr-base-changed', 'ctx', 'pay', 'PR top of Plan pay now targets main (was cpd/pay).', '{data}');",
+        ago(minutes)
+    )
+}
+
+#[test]
+fn e4_a_pr_unstacked_after_its_base_pr_merged_counts_from_its_latest_pr_base_changed_with_from_pr() {
+    for (minutes, told) in [(9, false), (11, true)] {
+        // The PR now targets `main`; its base PR merged long ago and the repoint was `minutes` ago.
+        let sent = stacked_run("main", |fx| fx.fixture(&format!("{}{}", base_changed(60, Some("pay/repo")), base_changed(minutes, Some("pay/repo")))), 60);
+        assert_eq!(sent.len(), usize::from(told), "the base changed {minutes} minutes ago: {sent:?}");
+        if told {
+            assert_eq!(sent[0]["minutes"], 11);
+        }
+    }
+}
+
+#[test]
+fn e4_a_pr_that_was_never_stacked_counts_from_all_merged_alone_whatever_its_base_changed() {
+    // On `develop`, no PR's Lead Branch; a repoint with no base PR (`from_pr` null) is no candidate.
+    let sent = stacked_run("develop", |fx| fx.fixture(&base_changed(1, None)), 11);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0]["minutes"], 11);
+    let sent = stacked_run("develop", |_| {}, 9);
+    assert!(sent.is_empty(), "{sent:?}");
+}
+
 // ---------- E5 ----------
 
 /// Plan `pay` in phase `deploy`.
@@ -1803,6 +1973,171 @@ fn e5_reports_a_failing_poll_once() {
     let (plan, job, attempt, data) = &errors[0];
     assert_eq!((plan, job, attempt), (&None, &None, &None));
     assert_eq!((&data["source"], &data["code"], &data["details"]["exit"]), (&json!("watch"), &json!("gh_failed"), &json!(1)));
+}
+
+// ---------- E5: a gh HTTP 5xx or timeout is transient (hs-d354) ----------
+
+/// What GitHub's 502 looks like through `gh api graphql`: nginx's HTML page on stdout and `gh`'s message on stderr, exit 1.
+const GH_502: &str = "echo '<!DOCTYPE html><html><head><title>502 Bad Gateway</title></head><body><center><h1>502 Bad Gateway</h1></center><hr><center>nginx</center></body></html>'; echo 'gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)' >&2; exit 1";
+
+/// The last line of [`GH_502`]'s stderr.
+const GH_502_LINE: &str = "gh: HTTP 502: Bad Gateway (https://api.github.com/graphql)";
+
+fn failing_file(fx: &Fx) -> PathBuf {
+    fx.env.cpd_home().join("run/pr-poll-failing.json")
+}
+
+/// `run/pr-poll-failing.json` as the engine keeps it: the `call` that failed and `since` when it first did, `minutes` ago.
+fn fail_since(fx: &Fx, call: &str, minutes: i64) {
+    fs::create_dir_all(failing_file(fx).parent().unwrap()).unwrap();
+    fs::write(failing_file(fx), json!({"call": call, "since": ago(minutes)}).to_string()).unwrap();
+}
+
+fn failing(fx: &Fx) -> Option<Value> {
+    fs::read_to_string(failing_file(fx)).ok().map(|t| serde_json::from_str(&t).unwrap())
+}
+
+/// Sets `watch.pr_poll_transient_minutes`.
+fn transient_minutes(fx: &Fx, minutes: u32) {
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text.replace("[watch]\n", &format!("[watch]\npr_poll_transient_minutes = {minutes}\n"))).unwrap();
+}
+
+/// What the Manager was sent that is not E4's: `data.text` of every `session-message`.
+fn messages(fx: &Fx) -> Vec<String> {
+    fx.events("session-message").into_iter().map(|e| e.3["text"].as_str().unwrap().to_owned()).collect()
+}
+
+#[test]
+fn e5_a_gh_502_raises_no_error_and_no_message_logs_a_line_and_the_next_poll_heals() {
+    let fx = fx("");
+    fx.add_manager();
+    let healed = fx.env.root().join("healed");
+    fx.env.fake_gh(&format!("if [ -e '{}' ]; then echo '{EMPTY_SEARCH}'; else {GH_502}; fi", healed.display()));
+
+    let engine = fx.start();
+    wait_until("three failing polls", || fx.env.calls("gh").len() >= 3);
+    wait_until("the engine's record of the failure", || failing(&fx).is_some());
+    let record = failing(&fx).unwrap();
+    assert_eq!(record["call"], "search");
+    let since = parse_time(record["since"].as_str().unwrap());
+    assert!((OffsetDateTime::now_utc() - since).whole_seconds() < 60, "the first failure was just now: {record}");
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+
+    // The next poll heals it: the record is gone, and nothing was ever raised.
+    fs::write(&healed, "").unwrap();
+    wait_until("the record to be deleted by a poll that succeeded", || failing(&fx).is_none());
+    fx.env.wait_whole_ticks(2);
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    let log = watch_log(&fx);
+    assert!(log.contains("pr poll: gh search failed transiently (HTTP 502), failing since "), "{log}");
+    assert!(log.contains("): retrying at the next poll"), "{log}");
+}
+
+#[test]
+fn e5_a_gh_timeout_is_transient_too() {
+    let fx = fx("");
+    fx.add_manager();
+    // `gh` hangs; the poll's 15 s kill is shortened (contract §1.2, `CPD_TEST_DEADLINE_GH`).
+    fx.env.fake_gh(&format!("exec sleep {SLEEP_SECONDS}"));
+    let mut vars = common::PLAN_POLLS.to_vec();
+    vars.push(("CPD_TEST_DEADLINE_GH", "0.3"));
+
+    let engine = fx.start_with(Path::new(CPD), &vars);
+    wait_until("the first failure to be handled", || fx.count("error") >= 1 || watch_log(&fx).contains("failed transiently"));
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    assert!(watch_log(&fx).contains("pr poll: gh search failed transiently (timeout), failing since "), "{}", watch_log(&fx));
+    assert_eq!(failing(&fx).unwrap()["call"], "search");
+}
+
+#[test]
+fn e5_raises_one_error_after_ten_minutes_of_the_same_call_failing_and_none_before() {
+    // Nine minutes of failing (the record the engine kept, as if it had polled that long): still nothing.
+    let fx = fx("");
+    fx.add_manager();
+    fx.env.fake_gh(GH_502);
+    fail_since(&fx, "search", 9);
+    let engine = fx.start();
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    assert_eq!((fx.count("error"), messages(&fx)), (0, Vec::<String>::new()));
+    assert_eq!(failing(&fx).unwrap()["call"], "search");
+
+    // Eleven: one error Event for the machine, and one message to the Manager, not one per tick.
+    let fx = fx_with_manager_failing(11);
+    let since = failing(&fx).unwrap()["since"].clone();
+    let engine = fx.start();
+    wait_until("the error", || fx.count("error") >= 1);
+    fx.env.wait_whole_ticks(4);
+    engine.stop();
+
+    let errors = fx.events("error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let (plan, job, attempt, data) = &errors[0];
+    assert_eq!((plan, job, attempt), (&None, &None, &None));
+    assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("gh_failed")));
+    let details = &data["details"];
+    assert_eq!((&details["call"], &details["since"], &details["minutes"], &details["reason"], &details["exit"]), (&json!("search"), &since, &json!(11), &json!("HTTP 502"), &json!(1)));
+    assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"]);
+    assert!(details["stderr"].as_str().unwrap().contains(GH_502_LINE), "{details}");
+
+    let sent = messages(&fx);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0].starts_with("Engine error at "), "{}", sent[0]);
+    assert!(sent[0].contains(&format!("pr poll: gh search has failed for 11 minutes (HTTP 502): {GH_502_LINE}")), "{}", sent[0]);
+    // The failure stays: the record keeps its first time, the polls (and their log lines) go on.
+    assert_eq!(failing(&fx).unwrap()["since"], since);
+    assert!(watch_log(&fx).matches("failed transiently (HTTP 502)").count() >= 2, "{}", watch_log(&fx));
+}
+
+/// A `fx` with a Manager, a `gh` that always answers 502 and `run/pr-poll-failing.json` for `minutes` minutes of failing.
+fn fx_with_manager_failing(minutes: i64) -> Fx {
+    let fx = fx("");
+    fx.add_manager();
+    fx.env.fake_gh(GH_502);
+    fail_since(&fx, "search", minutes);
+    fx
+}
+
+#[test]
+fn e5_counts_the_failing_window_from_pr_poll_transient_minutes() {
+    for (minutes, raised) in [(4, 0), (6, 1)] {
+        let fx = fx_with_manager_failing(minutes);
+        transient_minutes(&fx, 5);
+        let engine = fx.start();
+        fx.env.wait_whole_ticks(3);
+        engine.stop();
+        assert_eq!(fx.count("error"), raised, "failing for {minutes} minutes, limit 5");
+    }
+}
+
+#[test]
+fn e5_a_failure_that_is_not_transient_is_an_error_at_once_and_clears_the_record() {
+    for (name, script, line) in [
+        ("a 401", "echo 'gh: HTTP 401: Bad credentials' >&2; exit 1", "gh: HTTP 401: Bad credentials"),
+        ("an HTML page with no 5xx status", "echo '<html><body>nginx</body></html>'; echo 'gh: exit status 1' >&2; exit 1", "gh: exit status 1"),
+    ] {
+        let fx = fx("");
+        fx.add_manager();
+        fx.env.fake_gh(script);
+        // A transient failure was recorded a minute ago; this one is not that.
+        fail_since(&fx, "search", 1);
+        let engine = fx.start();
+        wait_until("the error", || fx.count("error") >= 1);
+        fx.env.wait_whole_ticks(3);
+        engine.stop();
+
+        let errors = fx.events("error");
+        assert_eq!(errors.len(), 1, "{name}: {errors:?}");
+        let data = &errors[0].3;
+        assert_eq!((&data["source"], &data["code"], &data["details"]["transient"], &data["details"]["call"]), (&json!("watch"), &json!("gh_failed"), &json!(false), &json!("search")), "{name}");
+        assert!(data["details"]["stderr"].as_str().unwrap().contains(line), "{name}: {data}");
+        assert_eq!(failing(&fx), None, "{name}: a failure that is not transient deletes the record");
+        assert!(!watch_log(&fx).contains("failed transiently"), "{name}");
+    }
 }
 
 /// Whether process `pid` is running (a zombie is not).
