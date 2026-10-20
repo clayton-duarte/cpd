@@ -40,6 +40,7 @@ fn config_with_only_the_required_keys_has_every_default() {
             "version": 1,
             "machine": "hs",
             "concurrency": 3,
+            "test_concurrency": 2,
             "retry_cap": 2,
             "lead_tier": "O3",
             "manager_tier": "O5",
@@ -67,12 +68,32 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "stall_seconds": 1200,
                 "pi_stop_seconds": 10
             },
-            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "error_repeat_seconds": 600},
-            "inbox": {"stuck_job_minutes": 10},
+            "watch": {"tick_seconds": 5, "pr_poll_seconds": 5, "team_review_seconds": 1800, "error_repeat_seconds": 600},
+            "inbox": {
+                "stuck_job_minutes": 10,
+                "team_channel": "",
+                "slack_user_id": "",
+                "bot_reviewers": ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"]
+            },
             "events": {"poll_ms": 200},
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+/// Context decision 'Team review Inbox' (contract §8.2): the channel and the User's Slack id are set together.
+#[test]
+fn config_takes_the_team_review_keys() {
+    let env = TestEnv::new();
+    let shown = config_with(
+        &env,
+        &format!("{MINIMAL}[watch]\nteam_review_seconds = 900\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\nslack_user_id = \"U04DB4MTUMR\"\nbot_reviewers = [\"ci-bot\"]\n"),
+    )
+    .ok();
+    assert_eq!(shown["config"]["watch"]["team_review_seconds"], 900);
+    assert_eq!(shown["config"]["inbox"], json!({"stuck_job_minutes": 10, "team_channel": "C02JU6C2Z1D", "slack_user_id": "U04DB4MTUMR", "bot_reviewers": ["ci-bot"]}));
+    assert_eq!(shown["sources"]["inbox.team_channel"], "file");
+    assert_eq!(shown["sources"]["watch.team_review_seconds"], "file");
 }
 
 /// engine-W9, tests-build-F4: the tick is a decimal (minimum 0.1) and pi's stop grace is a key.
@@ -123,7 +144,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "lead_pi_packages", "pi_adapter", "pr_open_escalate_minutes", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["test_concurrency", "retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "lead_pi_packages", "pi_adapter", "pr_open_escalate_minutes", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -142,6 +163,7 @@ fn config_accepts_every_key_with_a_value_at_its_boundary() {
 version = 1
 machine = "a1234567"
 concurrency = 1
+test_concurrency = 64
 retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"
@@ -167,9 +189,13 @@ pi_stop_seconds = 1
 [watch]
 tick_seconds = 1
 pr_poll_seconds = 1
+team_review_seconds = 1
 error_repeat_seconds = 1
 [inbox]
 stuck_job_minutes = 1
+team_channel = "C1"
+slack_user_id = "U1"
+bot_reviewers = ["a"]
 [events]
 poll_ms = 20
 [tmux]
@@ -182,6 +208,7 @@ work_session = "w"
     );
     let out = config_with(&env, &text).ok();
     assert_eq!(out["config"]["machine"], "a1234567");
+    assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "H0");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
@@ -232,6 +259,8 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = 7\n", "machine"),
         ("version = 1\nmachine = \"hs\"\nconcurrency = \"3\"\n", "concurrency"),
         ("version = 1\nmachine = \"hs\"\nconcurrency = 2.5\n", "concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = \"2\"\n", "test_concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = 1.5\n", "test_concurrency"),
         ("version = 1\nmachine = \"hs\"\nlead_pi_packages = \"npm:x\"\n", "lead_pi_packages"),
         ("version = 1\nmachine = \"hs\"\nlead_pi_packages = [1]\n", "lead_pi_packages"),
         ("version = 1\nmachine = \"hs\"\ntiers = 3\n", "tiers"),
@@ -242,6 +271,9 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nconcurrency = 0\n", "concurrency"),
         ("version = 1\nmachine = \"hs\"\nconcurrency = -1\n", "concurrency"),
         ("version = 1\nmachine = \"hs\"\nconcurrency = 99999999999\n", "concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = 0\n", "test_concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = 65\n", "test_concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = -1\n", "test_concurrency"),
         ("version = 1\nmachine = \"hs\"\nretry_cap = -1\n", "retry_cap"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nattempt_minutes = 0\n", "timeouts.attempt_minutes"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstore_busy_ms = 0\n", "timeouts.store_busy_ms"),
@@ -255,6 +287,14 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[timeouts]\npi_stop_seconds = 0.5\n", "timeouts.pi_stop_seconds"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = 0\n", "inbox.stuck_job_minutes"),
         ("version = 1\nmachine = \"hs\"\n[inbox]\nstuck_job_minutes = \"10\"\n", "inbox.stuck_job_minutes"),
+        ("version = 1\nmachine = \"hs\"\n[watch]\nteam_review_seconds = 0\n", "watch.team_review_seconds"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nteam_channel = \"c02ju\"\nslack_user_id = \"U1\"\n", "inbox.team_channel"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\nslack_user_id = \"clayton\"\n", "inbox.slack_user_id"),
+        // both or neither: the claim and mention rules need the User's id, and the id is useless without the channel
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nteam_channel = \"C02JU6C2Z1D\"\n", "inbox.slack_user_id"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nslack_user_id = \"U04DB4MTUMR\"\n", "inbox.team_channel"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nbot_reviewers = [\"\"]\n", "inbox.bot_reviewers"),
+        ("version = 1\nmachine = \"hs\"\n[inbox]\nbot_reviewers = \"github-actions\"\n", "inbox.bot_reviewers"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 19\n", "events.poll_ms"),
         ("version = 1\nmachine = \"hs\"\n[events]\npoll_ms = 10001\n", "events.poll_ms"),
         // text constraints

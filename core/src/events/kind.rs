@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 7;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -214,7 +214,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (6, "c96ee1a3bc1b33daa186960cbea25f5b23a02c56cc06e932f7aba1e0dd990d04");
+    const PINNED: (u32, &str) = (7, "c96ee1a3bc1b33daa186960cbea25f5b23a02c56cc06e932f7aba1e0dd990d04");
 
     fn kinds_hash() -> String {
         let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();

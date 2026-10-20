@@ -37,17 +37,20 @@
 use std::collections::HashSet;
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 
 use crate::fold;
 use crate::palette::{self, Meaning};
+use crate::widgets::{Window, dim, max_scroll, window};
 use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, PlanNode, SessionNode, Tree};
+use cpd_core::inbox::model::Kind;
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
 pub type Id = String;
@@ -200,28 +203,35 @@ pub fn session_label(s: &SessionNode) -> String {
     if name.is_empty() { s.id.as_str().chars().take(8).collect() } else { name.to_owned() }
 }
 
+/// Whether a Plan has a Job with an open `job-stuck` item among the tree's visible items: its failed Jobs need the User.
+fn has_stuck_job(tree: &Tree, plan: &PlanNode) -> bool {
+    tree.inbox.iter().any(|i| i.kind == Kind::JobStuck && i.plan.as_ref() == Some(&plan.head.id))
+}
+
 /// `36⋅0⋅0⋅1⋅5`: each count in its status colour (nothing when zero; the drafts of phase `plan` always), `⋅` between.
-pub fn counters(plan: &PlanNode) -> Line<'static> {
+/// The failed count is in the waiting colour while the Lead handles the failed Jobs, red when `stuck`: one of them has an
+/// open `job-stuck` item (audit Q3).
+pub fn counters(plan: &PlanNode, stuck: bool) -> Line<'static> {
     let phase = plan.head.phase;
     let mut spans = Vec::new();
     for (i, n) in plan.head.counts.counters(phase).into_iter().enumerate() {
         if i > 0 {
             spans.push(palette::separator());
         }
-        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n)));
+        spans.push(Span::styled(n.to_string(), counter_style(i, phase, n, stuck)));
     }
     Line::from(spans)
 }
 
 /// Style of the `index`th counter of `JobCounts::counters`: its status colour, or nothing when the count is zero. The
-/// first counter is the queued Jobs, in phase `plan` the drafts.
-fn counter_style(index: usize, phase: Phase, n: usize) -> Style {
+/// first counter is the queued Jobs, in phase `plan` the drafts. The failed one is red only when `stuck`.
+fn counter_style(index: usize, phase: Phase, n: usize, stuck: bool) -> Style {
     let (status, merging) = match index {
         0 if phase == Phase::Plan => (JobStatus::Draft, false),
         0 => (JobStatus::Queued, false),
         1 => (JobStatus::Running, false),
         2 => (JobStatus::Running, true),
-        3 => (JobStatus::Failed, false),
+        3 => return palette::failed_count_style(n, stuck),
         _ => (JobStatus::Merged, false),
     };
     palette::count_style(status, merging, n)
@@ -291,7 +301,7 @@ fn context_text(c: &ContextNode, folded: bool, frame: usize) -> Line<'static> {
 fn plan_row(c: &ContextNode, p: &PlanNode, width: u16, frame: usize) -> (Id, Line<'static>) {
     let muted = c.is_archived() || p.head.is_archived();
     let text = row_text(
-        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width: counters(p).width(), muted },
+        RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width: counters(p, false).width() /* the width is the same in any colour */, muted },
         width,
     );
     (p.head.id.to_string(), text)
@@ -345,20 +355,92 @@ pub fn items(tree: &Tree, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -
     live.into_iter().chain(archived).flat_map(|c| context_items(c, opened, width, frame)).collect()
 }
 
-/// Draw the column into `area`: the tree, then the counters, the guides and the active mark of each visible
+/// The tree's scroll (commands.md §13.2, hs-d307): the first row drawn, which the wheel and the cursor move. View state
+/// only. The rows scroll in their area with a dim ` ▲ <n> more` / ` ▼ <n> more` cue row where some are hidden (the Deploy
+/// column's PR list and the Inbox section scroll with the same code, one row a row).
+#[derive(Debug, Default)]
+pub struct Scroll {
+    offset: usize,
+    /// The largest offset, as the last frame had it.
+    max: usize,
+    /// The cursor's path, the number of rows and the rows of the area when the cursor was last brought into view: the
+    /// cursor is followed when one of them changed (it moved, a fold or a snapshot changed the rows, the section
+    /// below grew), never because of the wheel.
+    followed: Option<(Vec<Id>, usize, u16)>,
+}
+
+impl Scroll {
+    /// A wheel notch: `rows` down or up, clamped to the rows as the last frame had them.
+    pub fn wheel(&mut self, down: bool, rows: usize) {
+        let offset = self.offset.min(self.max);
+        self.offset = if down { (offset + rows).min(self.max) } else { offset.saturating_sub(rows) };
+    }
+}
+
+/// The number of rows the tree draws: one for every visible row, or the one `no Contexts` row.
+pub fn row_count(state: &TreeState<Id>, tree: &Tree) -> usize {
+    if tree.contexts.is_empty() { 1 } else { state.flatten(&items(tree, state.opened(), 0, 0)).len() }
+}
+
+/// The rows drawn from the row `scroll` of `n` in `height` rows, with their cues. One row has no room for a cue: it draws
+/// its row, as every row of a pane that short does.
+fn view(n: usize, height: usize, scroll: usize) -> Window {
+    if height > 1 {
+        return window(n, height, 1, scroll);
+    }
+    Window { first: scroll.min(n.saturating_sub(1)), shown: height.min(n), cue_above: false, below: 0 }
+}
+
+/// The scroll offset nearest `scroll` at which the row `i` of `n` is drawn in `height` rows.
+fn scroll_to(i: usize, n: usize, height: usize, scroll: usize) -> usize {
+    let max = max_scroll(n, height, 1);
+    let mut scroll = scroll.min(max).min(i);
+    while scroll < max && i >= scroll + view(n, height, scroll).shown.max(1) {
+        scroll += 1;
+    }
+    scroll
+}
+
+/// Draw the column into `area`: the tree from the row `scroll` says (the cursor's Session is brought into view when it
+/// moved), with the cue rows, then the counters, the guides and the active mark of each visible
 /// row, the archived rows muted, then the cursor's Session row inverted when
 /// `cursor` says it is shown (a Context row never is). `frame` is the animation frame of the working dots.
-pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize) {
+pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize, scroll: &mut Scroll) {
     if tree.contexts.is_empty() {
+        scroll.max = 0;
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", Style::new().add_modifier(Modifier::DIM)))), area);
         return;
     }
     let items = items(tree, state.opened(), area.width, frame);
-    let widget = TreeWidget::new(&items).expect("Context ids are unique").node_closed_symbol("").node_open_symbol("").node_no_children_symbol("");
-    f.render_stateful_widget(widget, area, state);
     let flat = state.flatten(&items);
+    let height = usize::from(area.height);
+    scroll.max = max_scroll(flat.len(), height, 1);
+    let key = (state.selected().to_vec(), flat.len(), area.height);
+    if scroll.followed.as_ref() != Some(&key) {
+        if let Some(i) = flat.iter().position(|r| r.identifier == key.0) {
+            scroll.offset = scroll_to(i, flat.len(), height, scroll.offset);
+        }
+        scroll.followed = Some(key);
+    }
+    let win = view(flat.len(), height, scroll.offset);
+    scroll.offset = win.first;
+    let above = u16::from(win.cue_above);
+    let rows = Rect::new(area.x, area.y + above, area.width, area.height.saturating_sub(above + u16::from(win.below > 0)));
+    let widget = || TreeWidget::new(&items).expect("Context ids are unique").node_closed_symbol("").node_open_symbol("").node_no_children_symbol("");
+    // The widget scrolls by its own offset, which it clamps to what the last render saw: a render into one cell (off the
+    // frame) lets it see these rows, then the offset is ours.
+    StatefulWidget::render(widget(), Rect::new(0, 0, 1, 1), &mut Buffer::empty(Rect::new(0, 0, 1, 1)), state);
+    state.scroll_up(usize::MAX);
+    state.scroll_down(win.first);
+    f.render_stateful_widget(widget(), rows, state);
+    if win.cue_above {
+        f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), Rect::new(area.x, area.y, area.width, 1));
+    }
+    if win.below > 0 {
+        f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), Rect::new(area.x, area.bottom() - 1, area.width, 1));
+    }
     let buf = f.buffer_mut();
-    for (y, flat_row) in (area.y..area.bottom()).zip(flat.iter().skip(state.get_offset())) {
+    for (y, flat_row) in (rows.y..rows.bottom()).zip(flat.iter().skip(win.first)) {
         let rect = Rect::new(area.x, y, area.width, 1);
         let path = &flat_row.identifier;
         let Some(row) = row(tree, path) else { continue };
@@ -371,7 +453,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         let muted = row.archived();
         match row {
             Row::Plan(_, plan) => {
-                counters(plan).right_aligned().render(rect, buf);
+                counters(plan, has_stuck_job(tree, plan)).right_aligned().render(rect, buf);
                 if plan.lead().is_some_and(SessionNode::is_active) && !muted {
                     Span::styled(ACTIVE_MARK, Style::new().add_modifier(Modifier::BOLD)).render(rect, buf);
                 }
@@ -494,10 +576,19 @@ mod tests {
         render_at(tree, state, width, height, cursor, 0)
     }
 
+    /// The first `height` rows of the column drawn in a pane tall enough for every row: these tests are about the rows,
+    /// not the scroll (`view::tests` test the scroll and its cues), so no cue row replaces a row they read.
     fn render_at(tree: &Tree, state: &mut TreeState<Id>, width: u16, height: u16, cursor: bool, frame: usize) -> Buffer {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame)).unwrap();
-        terminal.backend().buffer().clone()
+        let mut terminal = Terminal::new(TestBackend::new(width, height + 40)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), tree, state, cursor, frame, &mut Scroll::default())).unwrap();
+        let full = terminal.backend().buffer();
+        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+        for y in 0..height {
+            for x in 0..width {
+                buf[(x, y)] = full[(x, y)].clone();
+            }
+        }
+        buf
     }
 
     fn text(buf: &Buffer, y: u16) -> String {
@@ -653,7 +744,7 @@ mod tests {
     #[test]
     fn a_context_has_the_dot_of_its_manager_and_not_of_any_session_inside() {
         let tree = sample();
-        let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 1, false);
+        let buf = render(&tree, &mut state_for(&tree, &["alpha"], &[]), 44, 9, false);
         assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha 3"), "its Manager's, not its working Lead's");
         let calm = super::super::fixture::tree(vec![managed(context("cc", vec![lone("pp", "s", Phase::Plan, [0; 6])]), Dot::Idle)]);
         assert_eq!(text(&render(&calm, &mut state_for(&calm, &[], &[]), 20, 1, false), 0), format!("╭{IDLE} cc"));
@@ -810,10 +901,31 @@ mod tests {
         let colours: Vec<Color> = (0..5).map(|i| fg(&buf, at(i), 1)).collect();
         assert_eq!(
             colours,
-            [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Failed), color(Meaning::Done)]
+            [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Waiting), color(Meaning::Done)]
         );
         assert!((0..4).all(|i| fg(&buf, at(i) + 1, 1) == color(Meaning::Nothing)));
         assert!((0..5).all(|i| fg(&buf, at(i), 2) == color(Meaning::Nothing)));
+    }
+
+    #[test]
+    fn the_failed_counter_is_waiting_and_red_only_while_the_plan_has_a_stuck_job() {
+        use super::super::inbox::item;
+        use cpd_core::ids::PlanId;
+        use cpd_core::inbox::model::Urgency;
+        let counters = || vec![context("cc", vec![lone("aa", "x", Phase::Dispatch, [0, 1, 0, 2, 2, 5]), lone("bb", "y", Phase::Dispatch, [0, 1, 0, 2, 2, 5])])];
+        // counters "1⋅0⋅2⋅2⋅5": the failed one is the 4th, in column 11 + 2 * 3
+        let failed = |t: &Tree, row: u16| fg(&render(t, &mut state_for(t, &[], &[]), 20, 3, false), 17, row);
+        let handled = tree(counters());
+        assert_eq!((failed(&handled, 1), failed(&handled, 2)), (color(Meaning::Waiting), color(Meaning::Waiting)), "its Lead handles it");
+        let stuck_for = |plan: &str, kind: Kind| {
+            let mut t = tree(counters());
+            t.inbox = vec![cpd_core::inbox::model::Item { plan: Some(PlanId::parse(plan).unwrap()), ..item(1, kind, Urgency::Red, "x", WHEN) }];
+            t
+        };
+        let stuck = stuck_for("aa", Kind::JobStuck);
+        assert_eq!((failed(&stuck, 1), failed(&stuck, 2)), (color(Meaning::Failed), color(Meaning::Waiting)), "red for the Plan with the open job-stuck only");
+        let other = stuck_for("aa", Kind::Dialog);
+        assert_eq!(failed(&other, 1), color(Meaning::Waiting), "another item is not job-stuck");
     }
 
     #[test]
@@ -972,7 +1084,7 @@ mod tests {
         let mut tree = sample();
         tree.contexts[0].title = "Payments".into();
         tree.contexts[0].plans[0].head.title = "Pay by card".into();
-        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 6, false);
+        let buf = render(&tree, &mut state_for(&tree, &[], &[]), 44, 9, false);
         assert_eq!(text(&buf, 0), format!("╭{NEEDS_YOU} alpha"), "not its title `Payments`");
         assert_eq!(text(&buf, 1), row_of(&format!("{ACTIVE_MARK}─{WORKING} ship"), "2⋅1⋅1⋅0⋅5", 44), "not its title `Pay by card`, nor its Lead's name");
         assert_eq!(text(&buf, 5), format!("├─{NEEDS_YOU} ship·f-bl"), "the Plan id, `·`, the first 4 characters of the Session id; not its name");

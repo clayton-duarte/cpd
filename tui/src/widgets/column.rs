@@ -11,9 +11,9 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use super::host::Usage;
 use crate::link;
-use crate::palette::{self, Meaning};
+use crate::palette;
 use crate::section;
-use crate::read::{OpenPr, PrState, ReviewDecision};
+use crate::read::{Dot, OpenPr, PrState, ReviewDecision};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
@@ -134,9 +134,11 @@ fn truncate(text: &str, max: usize) -> String {
 /// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󰏌` in the last column, then
 /// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󰏌`.
 /// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
-/// A conflicting one adds ` conflict` in red after the review (kept red under the active and dim styles).
+/// A conflicting one adds ` conflict` after the review (the colour is kept under the active and dim styles). A pull request
+/// a Plan owns draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them, hs-d302); one no Plan owns, in red.
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
-fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
+/// One whose Lead is working shows the Lead's dot, `palette::SPINNER[frame]` (the tree's), after the state word: `  open 󰝦 …`.
+fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
     let gap = " ".repeat(width.saturating_sub(name.chars().count() + 1));
     let state_text = if pr.draft { "draft" } else { "open" };
@@ -145,19 +147,27 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
         ReviewDecision::ChangesRequested => "changes requested",
         ReviewDecision::None => "no review",
     };
-    let (icon, checks) = palette::checks(pr.checks);
+    let owned = pr.lead.is_some();
+    let (icon, checks) = palette::checks_of(pr.checks, owned);
     let conflict = " conflict";
-    let used = 2 + state_text.chars().count() + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
+    let dot = pr.lead_working.then(|| palette::dot_span(Dot::Working, frame, false));
+    let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
     let mut spans = vec![
         "  ".into(),
         Span::styled(state_text, palette::fg(palette::pr_state(PrState::Open))),
+    ];
+    if let Some(dot) = dot {
+        spans.extend([" ".into(), dot]);
+    }
+    spans.extend([
         " ".into(),
         Span::styled(icon, palette::fg(checks)),
         " ".into(),
         review.into(),
-    ];
+    ]);
     if pr.conflicting {
-        spans.push(Span::styled(conflict, palette::fg(Meaning::Failed)));
+        let (_, meaning) = if owned { palette::PR_CONFLICT_OWNED } else { palette::PR_CONFLICT };
+        spans.push(Span::styled(conflict, palette::fg(meaning)));
     }
     let reserved = if pr.clean { 2 } else { 0 };
     let room = width.saturating_sub(used + 2 + reserved);
@@ -240,8 +250,9 @@ pub struct Drawn {
 
 /// Draws the column in `area`: a blank row, the machine, then the PRs under their header. The PRs section
 /// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. A non-empty `note`
-/// replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR or a merge icon.
-pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note: &str, scroll: usize) -> Drawn {
+/// replaces the column's last row, in `palette::note()`. `frame` is the spinner's frame (`palette::frame`) for the rows whose
+/// Lead is working. Returns where a click reaches an owned PR or a merge icon.
+pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note: &str, scroll: usize, frame: usize) -> Drawn {
     let [_top, home, _above_prs, prs_header, _below_prs, prs] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(2),
@@ -265,7 +276,7 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
     // The `󰏌` is the last column of the section's first line of each PR, the merge icon that of its second.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
-        text.extend(pr_lines(pr, usize::from(prs.width)));
+        text.extend(pr_lines(pr, usize::from(prs.width), frame));
         rows.push(PrRow {
             area: Rect::new(prs.x, *y, prs.width, 2),
             pull: format!("{}#{}", pr.repo, pr.number),
@@ -310,6 +321,8 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
 
+    use crate::palette::Meaning;
+
     use super::*;
     fn drawn(width: u16, height: u16, open: &[OpenPr], note: &str) -> (Buffer, Vec<Hit>) {
         let (buf, d) = scrolled(width, height, open, note, 0);
@@ -317,10 +330,14 @@ mod tests {
     }
 
     fn scrolled(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize) -> (Buffer, Drawn) {
+        at_frame(width, height, open, note, scroll, 0)
+    }
+
+    fn at_frame(width: u16, height: u16, open: &[OpenPr], note: &str, scroll: usize, frame: usize) -> (Buffer, Drawn) {
         let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let mut out = None;
-        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, note, scroll))).unwrap();
+        terminal.draw(|f| out = Some(draw(f, f.area(), open, &machine, note, scroll, frame))).unwrap();
         (terminal.backend().buffer().clone(), out.unwrap())
     }
 
@@ -345,6 +362,7 @@ mod tests {
             clean: false,
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
+            lead_working: false,
         }
     }
 
@@ -456,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn a_conflicting_pr_shows_conflict_in_red_after_its_review_and_others_do_not() {
+    fn an_owned_conflicting_pr_shows_conflict_in_the_waiting_colour_after_its_review_and_others_do_not() {
         let mut p = pr(7, Some("l-a"));
         assert_eq!(second_line(&p, 40).0, format!("  open {} no review  A title", palette::CHECKS_PASSED));
         p.conflicting = true;
@@ -464,20 +482,44 @@ mod tests {
         assert_eq!(line, format!("  open {} no review conflict  A title", palette::CHECKS_PASSED));
         let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
         for dx in 0..8 {
-            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed));
+            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Waiting), "its Lead fixes it: waiting, not red");
         }
-        assert_ne!(buf[(x - 2, 7)].fg, palette::color(Meaning::Failed), "the review is not red");
+        assert_ne!(buf[(x - 2, 7)].fg, palette::color(Meaning::Waiting), "the review is not waiting");
     }
 
     #[test]
-    fn conflict_keeps_its_red_under_the_active_and_dim_styles() {
-        for (active, lead, modifier) in [(true, Some("l-a"), Modifier::REVERSED | Modifier::BOLD), (false, None, Modifier::DIM)] {
+    fn an_unowned_conflicting_pr_keeps_conflict_red() {
+        let mut p = pr(7, None);
+        p.conflicting = true;
+        let (line, buf) = second_line(&p, 40);
+        let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
+        for dx in 0..8 {
+            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Failed), "no Plan owns it: the User's to fix");
+        }
+    }
+
+    #[test]
+    fn failed_checks_are_waiting_on_an_owned_pr_and_red_on_an_unowned_one() {
+        for (lead, meaning) in [(Some("l-a"), Meaning::Waiting), (None, Meaning::Failed)] {
+            let mut p = pr(7, lead);
+            p.checks = crate::read::Checks::Failed;
+            let (line, buf) = second_line(&p, 40);
+            let x = line.find(palette::CHECKS_FAILED).map(|b| line[..b].chars().count() as u16).unwrap();
+            assert_eq!(buf[(x, 7)].fg, palette::color(meaning), "{lead:?}");
+        }
+    }
+
+    #[test]
+    fn conflict_keeps_its_colour_under_the_active_and_dim_styles() {
+        for (active, lead, modifier, meaning) in
+            [(true, Some("l-a"), Modifier::REVERSED | Modifier::BOLD, Meaning::Waiting), (false, None, Modifier::DIM, Meaning::Failed)]
+        {
             let mut p = pr(7, lead);
             p.conflicting = true;
             p.active = active;
             let (line, buf) = second_line(&p, 40);
             let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
-            assert_eq!(buf[(x, 7)].fg, palette::color(Meaning::Failed));
+            assert_eq!(buf[(x, 7)].fg, palette::color(meaning));
             assert!(buf[(x, 7)].modifier.contains(modifier));
         }
     }
@@ -490,6 +532,46 @@ mod tests {
         assert_eq!(second_line(&p, 28).0, open);
         assert_eq!(second_line(&p, 32).0, open);
         assert_eq!(second_line(&p, 33).0, format!("{open}  A t…"));
+    }
+
+    fn second_at(pr: &OpenPr, width: u16, frame: usize) -> (String, Buffer) {
+        let (buf, _) = at_frame(width, 20, &[pr.clone()], "", 0, frame);
+        (row(&buf, 7), buf)
+    }
+
+    #[test]
+    fn an_owned_pr_whose_lead_works_shows_the_spinner_frame_after_its_state_and_it_turns_with_the_frame() {
+        let mut p = pr(7, Some("l-a"));
+        p.lead_working = true;
+        for frame in 0..palette::SPINNER.len() {
+            let (line, buf) = second_at(&p, 40, frame);
+            assert_eq!(line, format!("  open {} {} no review  A title", palette::SPINNER[frame], palette::CHECKS_PASSED), "frame {frame}");
+            assert_eq!(buf[(2, 7)].fg, palette::color(palette::pr_state(PrState::Open)), "the state keeps its colour");
+        }
+        // the frame is the only change between two draws
+        assert_ne!(second_at(&p, 40, 1).1, second_at(&p, 40, 2).1);
+    }
+
+    #[test]
+    fn an_idle_lead_or_an_unowned_pr_shows_no_spinner() {
+        let owned = pr(7, Some("l-a"));
+        let unowned = pr(8, None);
+        for p in [&owned, &unowned] {
+            for frame in 0..palette::SPINNER.len() {
+                let (line, _) = second_at(p, 40, frame);
+                assert_eq!(line, format!("  open {} no review  A title", palette::CHECKS_PASSED), "frame {frame}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_spinner_keeps_the_conflict_flag_and_the_title_cut_to_the_width() {
+        let mut p = pr(7, Some("l-a"));
+        p.lead_working = true;
+        p.conflicting = true;
+        let open = |frame: usize| format!("  open {} {} no review conflict", palette::SPINNER[frame], palette::CHECKS_PASSED);
+        assert_eq!(second_at(&p, 30, 2).0, open(2), "the title is cut first");
+        assert_eq!(second_at(&p, 35, 2).0, format!("{}  A t…", open(2)));
     }
 
     #[test]

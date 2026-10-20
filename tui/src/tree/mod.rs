@@ -11,10 +11,13 @@
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
 //! - [`folds`]: the folds (collapsed Contexts, expanded `…` rows) kept in `run/tui/tree-folds.json` across restarts;
 //! - [`inbox`]: the Inbox section at the column's bottom (header, up to 3 items, the fold widget's `╰─ expand` / `╰─ collapse` row) and what a click on an item does:
-//!   `session open`, the logs popup at the item's Event, or nothing (the label is an OSC 8 link);
+//!   `session open`, or nothing (the label is an OSC 8 link);
 //! - [`super::background`]: a command or the legend popup runs on a thread, one command at a time; the footer says
 //!   `running: <command>` meanwhile and then its result, and the loop keeps drawing and reading keys (tui-W7);
 //! - [`kinds`]: the Events it follows, in process ([`read::Follow`]), which tell it when to take a new snapshot.
+//!
+//! It is also the one view that restarts a stopped engine (`cpd watch --ensure`, at most once a minute) and tells the
+//! live Managers when that fails ([`view::View::restart_engine`], hs-d318).
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
@@ -83,7 +86,8 @@ pub(super) fn run() -> Result<Output, CpdError> {
             view.keep_folds(FoldsFile::at(&home));
             let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
-            Ok((store, home, view, (follow, snooze_end), poll, Arc::new(Runner::new(&config))))
+            let runner = Arc::new(Runner::new(home.clone(), &config));
+            Ok((store, home, view, (follow, snooze_end), poll, runner))
         },
         |terminal, (mut store, home, view, follow, poll, runner)| {
             Ok(event_loop(terminal, &mut store, &home, view, follow, poll, &runner)?)
@@ -152,6 +156,12 @@ fn event_loop(
             last_snapshot = Instant::now();
             view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone());
         }
+        // A stopped engine restarts itself, at most once a minute (commands.md §13.2, hs-d318): this view only, not every pane.
+        if let Some(line) = view.restart_engine(Instant::now(), &mut |action| actions::call(action), &mut || runner.live_managers()) {
+            eprintln!("{line}");
+            terminal.clear()?; // the line was written over the screen this view owns
+            redraw = true;
+        }
         // the folds file follows every change of the folds (a write only when they changed)
         view.save_folds();
         let (frame, second) = (palette::frame(SystemTime::now()), unix_second());
@@ -203,14 +213,21 @@ fn event_loop(
                 let runner = Arc::clone(runner);
                 popups.submit(move || runner.legend());
             }
-            Effect::Logs(event) => {
+            Effect::Merge(pull) => {
+                // the merge popup returns when it closes; only a failure is said, and a merge shows on the next snapshot
                 let runner = Arc::clone(runner);
-                popups.submit(move || runner.logs(event));
+                popups.submit(move || runner.merge(&pull));
+                dirty = true;
             }
             Effect::Run(action) => {
                 view.done(Ok(format!("running: {}", action.argv().join(" "))));
                 let runner = Arc::clone(runner);
                 actions.submit(move || runner.run(&action));
+            }
+            Effect::Steps(steps) => {
+                view.done(runner.run_all(&steps));
+                dirty = true;
+                last_snapshot = Instant::now() - SNAPSHOT_EVERY;
             }
         }
     }
