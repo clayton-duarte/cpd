@@ -2979,74 +2979,104 @@ fn install_puts_the_adapter_at_share_cpd_pi_without_its_tests() {
     assert_eq!(names(&share), ["pi".to_string(), target]);
 }
 
-/// Counts, until `stop` is set, the polls that find `manifest` missing, and all polls: `(missing, polls)`.
-fn watch_missing(manifest: PathBuf) -> (std::sync::Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<(u32, u64)>) {
-    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let handle = {
-        let stop = stop.clone();
-        std::thread::spawn(move || {
-            let (mut missing, mut polls) = (0u32, 0u64);
-            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                polls += 1;
-                if !manifest.exists() {
-                    missing += 1;
-                }
-            }
-            (missing, polls)
-        })
+/// Puts a `python3` first on the install's `PATH` that runs the real one with an audit hook recording each
+/// rename(2) it makes (`os.rename` and `os.replace` both raise the `os.rename` audit event) as
+/// `<pid>\t<src>\t<dst>` in `<root>/renames`. Returns that log.
+fn record_renames(env: &TestEnv) -> PathBuf {
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("python3"))
+        .find(|p| p.is_file())
+        .expect("python3 on PATH (the install requires it)");
+    let log = env.root().join("renames");
+    let site = env.root().join("python-site");
+    fs::create_dir_all(&site).unwrap();
+    fs::write(
+        site.join("sitecustomize.py"),
+        format!(
+            r#"import os, sys
+def _record(event, args):
+    if event == "os.rename":
+        with open({log:?}, "a") as f:
+            f.write(f"{{os.getpid()}}\t{{os.fsdecode(args[0])}}\t{{os.fsdecode(args[1])}}\n")
+sys.addaudithook(_record)
+"#,
+            log = log.display().to_string()
+        ),
+    )
+    .unwrap();
+    env.fake("python3", &format!("PYTHONPATH='{}' exec '{}' \"$@\"", site.display(), real.display()));
+    log
+}
+
+/// The renames `log` ([`record_renames`]) holds, in order, as `(pid, src, dst)` with the paths relative to
+/// `share` and the scratch link `pi.link.<pid of the script>` as `pi.link.$$`.
+fn renames(log: &Path, share: &Path) -> Vec<(u32, String, String)> {
+    let name = |path: &str| {
+        let name = Path::new(path).strip_prefix(share).unwrap_or_else(|_| panic!("{path} is not under {}", share.display())).display().to_string();
+        match name.strip_prefix("pi.link.") {
+            Some(pid) if pid.parse::<u32>().is_ok() => "pi.link.$$".to_string(),
+            _ => name,
+        }
     };
-    (stop, handle)
+    fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            let [pid, src, dst] = line.split('\t').collect::<Vec<_>>()[..] else { panic!("a rename record `{line}`") };
+            (pid.parse().unwrap(), name(src), name(dst))
+        })
+        .collect()
 }
 
 #[test]
-fn install_replaces_an_installed_adapter_as_a_whole_and_it_is_never_missing() {
+fn install_replaces_an_installed_adapter_as_a_whole_by_one_rename() {
     let env = TestEnv::new();
     let share = env.home().join(".local/share/cpd");
     let adapter = share.join("pi");
     // An installed adapter as an earlier install left it: `pi` -> `pi.<id>`. (One `Checkout` per `TestEnv`, so the
-    // first version is laid out by hand; the install under watch swaps the link over it.)
+    // first version is laid out by hand; the install swaps the link over it.)
     let first = "pi.20200101T000000-1";
     fs::create_dir_all(share.join(first)).unwrap();
     fs::write(share.join(first).join("package.json"), "{}").unwrap();
     fs::write(share.join(first).join("stale.ts"), "").unwrap();
     std::os::unix::fs::symlink(first, &adapter).unwrap();
-    let (stop, watcher) = watch_missing(adapter.join("package.json"));
+    let log = record_renames(&env);
+
     let (out, _) = install_with(&env, OPENS);
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let (missing, _polls) = watcher.join().unwrap();
 
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert_eq!(missing, 0, "the adapter's package.json was missing {missing} times during the swap of a symlink");
+    // `pi` is never missing: the only rename that touches it is one rename(2) of the new link over it
+    // (docs/implementing.md "The adapter swap"), which the kernel does atomically.
+    let renames: Vec<(String, String)> = renames(&log, &share).into_iter().map(|(_, src, dst)| (src, dst)).collect();
+    assert_eq!(renames, [("pi.link.$$".to_string(), "pi".to_string())]);
     assert_ne!(fs::read_link(&adapter).unwrap().to_string_lossy(), first, "pi points to the new version");
     assert!(!adapter.join("stale.ts").exists(), "the old adapter was not replaced as a whole");
     assert!(adapter.join("package.json").exists());
 }
 
 #[test]
-fn install_over_a_real_adapter_directory_misses_it_for_a_tiny_fraction_of_polls_at_most() {
+fn install_over_a_real_adapter_directory_moves_it_aside_and_links_in_one_process() {
     let env = TestEnv::new();
     let share = env.home().join(".local/share/cpd");
     let adapter = share.join("pi");
     fs::create_dir_all(adapter.join("old")).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
     fs::write(adapter.join("stale.ts"), "").unwrap();
-    // A big old adapter: the migration renames it, so its size does not widen the window.
-    for i in 0..5000 {
-        fs::write(adapter.join("old").join(format!("f{i}.ts")), "").unwrap();
-    }
+    fs::write(adapter.join("old/f.ts"), "").unwrap();
+    let log = record_renames(&env);
 
-    let (stop, watcher) = watch_missing(adapter.join("package.json"));
     let (out, _) = install_with(&env, OPENS);
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    let (missing, polls) = watcher.join().unwrap();
 
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    // The migration is two renames of one process, back to back (docs/implementing.md "The adapter swap"):
-    // the window holds no process start-up, so a poller finds `pi` missing in a tiny fraction of its polls (at most 1%;
-    // with the renames in two processes it is the start-up of python3, a tenth of the install), once per machine.
-    assert!(u64::from(missing) * 100 <= polls, "the adapter's package.json was missing in {missing} of {polls} polls during the migration");
+    // The migration is two renames of one process, back to back (docs/implementing.md "The adapter swap"): the
+    // directory aside as a whole, then the link over it, so the one window `pi` is missing holds no process start-up.
+    let renames = renames(&log, &share);
+    let pids: Vec<u32> = renames.iter().map(|(pid, _, _)| *pid).collect();
+    let moves: Vec<(&str, &str)> = renames.iter().map(|(_, src, dst)| (src.as_str(), dst.as_str())).collect();
+    assert_eq!(moves, [("pi", "pi.legacy"), ("pi.link.$$", "pi")]);
+    assert_eq!(pids[0], pids[1], "the two renames run in two processes: {renames:?}");
     assert!(fs::symlink_metadata(&adapter).unwrap().file_type().is_symlink(), "pi is a symlink afterwards");
     assert!(!adapter.join("stale.ts").exists() && !adapter.join("old").exists(), "the old adapter was not replaced as a whole");
-    assert!(share.join("pi.legacy/stale.ts").exists(), "pi.legacy holds the old files");
+    assert!(share.join("pi.legacy/stale.ts").exists() && share.join("pi.legacy/old/f.ts").exists(), "pi.legacy holds the old files");
     assert!(adapter.join("package.json").exists());
 }
