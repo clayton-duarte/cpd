@@ -369,13 +369,13 @@ fn the_title_is_set_as_cpd_title_on_the_sessions_live_pane() {
     let out = retitle(&env, LEAD).ok();
     assert_eq!(out["pane"], json!(pane));
     let title = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
-    assert_eq!(String::from_utf8(title.stdout).unwrap().trim_end_matches('\n'), "Dynamic session titles");
+    assert_eq!(String::from_utf8(title.stdout).unwrap().trim_end_matches('\n'), "Dynamic Session Titles");
 
     // Another Session's pane is not touched.
     let out = retitle(&env, MANAGER).ok();
     assert_eq!(out["pane"], Value::Null);
     let title = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
-    assert_eq!(String::from_utf8(title.stdout).unwrap().trim_end_matches('\n'), "Dynamic session titles");
+    assert_eq!(String::from_utf8(title.stdout).unwrap().trim_end_matches('\n'), "Dynamic Session Titles");
 }
 
 // ---------- refusals and skips ----------

@@ -1370,17 +1370,17 @@ fn the_leads_pane_carries_the_plans_title_and_plan_rename_keeps_it_current() {
     setup(&env);
     let out = env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "Retry payouts"]).ok();
     let (lead, pane) = (out["lead"]["session"].as_str().unwrap().to_owned(), out["lead"]["pane"].as_str().unwrap().to_owned());
-    assert_eq!(pane_title(&env, &pane), "Retry payouts");
+    assert_eq!(pane_title(&env, &pane), "Retry Payouts");
 
     env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
-    assert_eq!(pane_title(&env, &pane), "Retry the payouts");
+    assert_eq!(pane_title(&env, &pane), "Retry The Payouts");
 
     // A side fork shows its own name; renaming the Plan leaves it alone.
     let fork = env.cpd(&["session", "fork", &lead, "--name", "side"]).ok()["session"].clone();
     let fork_pane = fork["pane"].as_str().unwrap();
-    assert_eq!(pane_title(&env, fork_pane), "side");
+    assert_eq!(pane_title(&env, fork_pane), "Side");
     env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Third"]).ok();
-    assert_eq!((pane_title(&env, &pane), pane_title(&env, fork_pane)), ("Third".to_owned(), "side".to_owned()));
+    assert_eq!((pane_title(&env, &pane), pane_title(&env, fork_pane)), ("Third".to_owned(), "Side".to_owned()));
 
     // Renaming the Plan's Lead Session never replaces the Plan's title.
     env.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
@@ -1411,18 +1411,18 @@ fn a_leads_dynamic_title_survives_plan_rename_and_session_rename() {
     env.tmux(&["set", "-p", "-t", &pane, "@cpd_title", "Dynamic subject"]);
 
     env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
-    assert_eq!(pane_title(&env, &pane), "Dynamic subject");
+    assert_eq!(pane_title(&env, &pane), "Dynamic Subject");
     assert_eq!(env.query::<String>("SELECT title FROM plans WHERE id = 'pay'"), "Retry the payouts");
     assert_eq!(events(&env, "plan-renamed").len(), 1);
 
     env.cpd(&["session", "rename", "lead name", "--session", &lead]).ok();
-    assert_eq!(pane_title(&env, &pane), "Dynamic subject");
+    assert_eq!(pane_title(&env, &pane), "Dynamic Subject");
 
     // A rerun with the same title repairs a cleared header to the dynamic title.
     env.tmux(&["set", "-p", "-u", "-t", &pane, "@cpd_title"]);
     let again = env.cpd(&["plan", "rename", "--plan", "pay", "--title", "Retry the payouts"]).ok();
     assert_eq!(again["already"], true);
-    assert_eq!(pane_title(&env, &pane), "Dynamic subject");
+    assert_eq!(pane_title(&env, &pane), "Dynamic Subject");
 }
 
 #[test]
