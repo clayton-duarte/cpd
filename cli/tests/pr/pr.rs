@@ -3119,7 +3119,7 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
     assert_eq!(fx.events("plan-done").len(), 1);
 
     // `pr add` moves the legacy branch and reopens the Plan.
-    fx.env.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
+    fx.env.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
     assert_eq!(fx.phase(), "dispatch");
     // The engine would start the PR and the Lead open it: written straight, as the other tests do,
     // with the pull request's row `pr open` writes.
@@ -3216,7 +3216,7 @@ fn needs_of(fx: &Fx, key: &str) -> Vec<String> {
 }
 
 fn add_fix(fx: &Fx, extra: &[&str]) -> Run {
-    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"];
+    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
     args.extend(extra);
     fx.env.cpd(&args)
 }
@@ -3239,7 +3239,7 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
     assert!(needs_of(&a, "fix").is_empty());
 
     let b = fx("done");
-    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay", "--no-needs"]).ok();
+    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay", "--no-needs"]).ok();
     // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
     assert_eq!(add_fix(&b, &["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
     assert_eq!(needs_of(&b, "fix"), ["x"]);
@@ -3254,7 +3254,7 @@ fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     let f = fx("dispatch");
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
     let other = f.env.keyed_repo("other").canonicalize().unwrap();
-    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
+    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(needs_of(&f, "fix").is_empty());
 }
