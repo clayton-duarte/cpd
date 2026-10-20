@@ -79,10 +79,10 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-/// Starts `cpd tui view plan` alone in a 260 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
+/// Starts `cpd tui view plan` alone in a 300 × 40 window of the private server, with `PLANNOTATOR_URL_HOST=review.test`
 /// (the review host's override, contract §6.5); returns its pane.
 fn start_view(env: &TestEnv) -> String {
-    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "260", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", CPD, "tui", "view", "plan"])
+    tmux_out(env, &["new-session", "-d", "-s", "view", "-x", "300", "-y", "40", "-P", "-F", "#{pane_id}", "-e", "PLANNOTATOR_URL_HOST=review.test", CPD, "tui", "view", "plan"])
         .trim()
         .to_owned()
 }
