@@ -924,7 +924,8 @@ fn pulse_rows_have_no_icon_and_bars_take_the_colour_of_their_kind_with_a_grey_lo
     assert!(!row.contains('󰗠') && !row.contains('󰪥') && !row.contains('󰝦'), "no icon: {row:?}");
     let age = row.chars().rev().take(9).collect::<String>();
     assert!(age.trim().chars().next().is_some(), "the age cell stays: {row:?}");
-    let n = 260 - 4 - ("p1".len() + 2 + 2 + 9);
+    // the pane is 300 wide (start_view); 2 columns of margin on each side
+    let n = 300 - 4 - ("p1".len() + 2 + 2 + 9);
     assert_eq!(row.chars().filter(|c| ('▁'..='█').contains(c)).count(), n, "the sparkline takes the width the icons freed: {row:?}");
 
     let styled = styled_screen(&env, &pane);

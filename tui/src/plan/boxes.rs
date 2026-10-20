@@ -581,7 +581,8 @@ mod tests {
         let bg = |needs: &NeedsUser, i: usize| {
             let b = layout(&[pr("api", &[])], &jobs, needs, 0);
             let pill = &b.chart.pills[i];
-            b.chart.buf[(pill.rect.x, pill.rect.y)].bg
+            // the body, after the left cap
+            b.chart.buf[(pill.rect.x + 1, pill.rect.y)].bg
         };
         let none = NeedsUser::default();
         let one = NeedsUser { stuck_jobs: vec![stuck.key.clone()], ..NeedsUser::default() };
@@ -590,7 +591,7 @@ mod tests {
         // a queued Job is never stuck, whatever the list says
         let queued = job("api", "stuck", &[]);
         let c = layout(&[pr("api", &[])], &[queued], &one, 0);
-        assert_eq!(c.chart.buf[(c.chart.pills[0].rect.x, c.chart.pills[0].rect.y)].bg, palette::color(Meaning::NotStarted));
+        assert_eq!(c.chart.buf[(c.chart.pills[0].rect.x + 1, c.chart.pills[0].rect.y)].bg, palette::color(Meaning::NotStarted));
     }
 
     #[test]

@@ -562,7 +562,6 @@ impl Chart {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::Color;
 
     fn job(key: &str, needs: &[&str]) -> FlowJob {
         FlowJob {
@@ -600,7 +599,7 @@ mod tests {
             // a rounded cap on each end: the status colour on the default background
             for (x, glyph) in [(p.rect.x, "\u{e0b6}"), (p.rect.right() - 1, "\u{e0b4}")] {
                 let cap = &c.buf[(x, p.rect.y)];
-                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, palette::pill(meaning).bg, Color::Reset), "{status:?} cap at {x}");
+                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, palette::pill(meaning).bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
             }
         }
     }
@@ -611,7 +610,8 @@ mod tests {
         assert_eq!(Live::Stuck.icon(0).1, Meaning::Failed, "job-stuck: it needs the User");
         assert_eq!(Live::Stuck.icon(0).0, Live::Failed.icon(0).0, "the same glyph");
         let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
-        let bg = |i: usize| c.buf[(c.pills[i].rect.x, c.pills[i].rect.y)].bg;
+        // the body, after the left cap
+        let bg = |i: usize| c.buf[(c.pills[i].rect.x + 1, c.pills[i].rect.y)].bg;
         assert_eq!((bg(0), bg(1)), (palette::color(Meaning::Waiting), palette::color(Meaning::Failed)));
     }
 

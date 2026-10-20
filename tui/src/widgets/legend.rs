@@ -29,6 +29,14 @@ use crate::{Capture, run_view};
 /// private to its module).
 const CAP_L: &str = "\u{e0b6}";
 const CAP_R: &str = "\u{e0b4}";
+
+/// A sample pill with its rounded caps: the caps in the pill's colour on the default background, as the Plan view draws
+/// a Job pill (`plan/flow.rs`).
+fn capped(body: String, pill: Style) -> Line<'static> {
+    let cap = Style::new().fg(pill.bg.expect("a pill has a colour"));
+    Line::from(vec![Span::styled(CAP_L, cap), Span::styled(body, pill), Span::styled(CAP_R, cap)])
+}
+
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
 const POPUP_BORDER: u16 = 2;
@@ -119,15 +127,7 @@ fn sections() -> Vec<Section> {
             let (icon, meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                {
-                    let pill = palette::pill(meaning);
-                    let cap = Style::new().fg(pill.bg.expect("a pill has a colour"));
-                    Line::from(vec![
-                        Span::styled(CAP_L, cap),
-                        Span::styled(format!(" {icon} key │S1 "), pill),
-                        Span::styled(CAP_R, cap),
-                    ])
-                },
+                capped(format!(" {icon} key │S1 "), palette::pill(meaning)),
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })
@@ -139,7 +139,7 @@ fn sections() -> Vec<Section> {
         failed + 1,
         vec![
             plain("failed, stuck"),
-            Line::from(Span::styled(format!(" {stuck_icon} key │S1 "), palette::pill(stuck))),
+            capped(format!(" {stuck_icon} key │S1 "), palette::pill(stuck)),
             Line::from(Span::styled("3", palette::fg(stuck))),
         ],
     );
@@ -441,7 +441,8 @@ mod tests {
         let jobs = &sections()[1];
         let (failed, stuck) = (&jobs.rows[4], &jobs.rows[5]);
         assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
-        let bg = |row: &Vec<Line>| row[1].spans[0].style.bg;
+        // the pill's body, after its left cap
+        let bg = |row: &Vec<Line>| row[1].spans[1].style.bg;
         assert_eq!((bg(failed), bg(stuck)), (palette::pill(Meaning::Waiting).bg, palette::pill(Meaning::Failed).bg));
         let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
         assert_eq!((fg(failed), fg(stuck)), (palette::fg(Meaning::Waiting).fg, palette::fg(Meaning::Failed).fg));
