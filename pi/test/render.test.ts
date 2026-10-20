@@ -178,6 +178,18 @@ test("a customType the adapter starts to display later: the first line of its co
   assert.equal(show(m, false)[0], HEAD("first"));
 });
 
+// ---- cpd-plan-summary ----
+
+test("cpd-plan-summary: `Plan review <id> summary`, always open with its Markdown content in full, no closing row and no toggle", () => {
+  const content = "# Review title\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change | Open full plan (/x/plan-r1.md)";
+  const m: Message = { customType: "cpd-plan-summary", content, display: true, details: { plan: "p1", review: "r1" } };
+  const expected = [HEAD("Plan review r1 summary"), rail("# Review title"), rail("Plan p1: Plan · review r1"), rail(""), rail("Goal: Show a review in chat"), rail(""), rail("Approve | Change | Open full plan (/x/plan-r1.md)")];
+  assert.deepEqual(show(m, false), expected);
+  assert.deepEqual(show(m, true), expected);
+  const component = rendering().render(m, { expanded: false, outputPad: 1 }, theme) as Component & { handleMouse?: unknown };
+  assert.equal(component.handleMouse, undefined, "no toggle");
+});
+
 // ---- display only ----
 
 test("the message handed to the model is unchanged, whatever the display", () => {
@@ -313,7 +325,7 @@ test("the adapter registers one renderer per displayed customType once at load, 
   const f = new Fixture();
   try {
     f.load();
-    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision"]);
+    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision", "cpd-plan-summary"]);
     assert.deepEqual([...f.pi.renderers.keys()], [...RENDERED_TYPES]);
     mkdirSync(f.agentDir);
     f.file("agent/compact-tools.json", '{"style": "codex"}');
