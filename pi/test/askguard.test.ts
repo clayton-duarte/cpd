@@ -18,8 +18,8 @@ const withJobs = (...statuses: string[]) => {
   return planShow({ jobs, counts: { draft: statuses.filter((s) => s === "draft").length, queued: 0, running: 0, merged: 0, failed: 0, cancelled: 0 } });
 };
 
-/** A question whose text is `question`, `header`, and one option of `label`, `description` and `preview` characters long (a missing preview is none). */
-const ask = (question: number, header: number, option: [number, number, number?] = [1, 1]): Question => ({
+/** A question whose text is `question`, `header`, and one option of `label`, `description` and `preview` characters long (a missing preview is none) and an empty one; so the total is their sum. */
+const ask = (question: number, header: number, option: [number, number, number?] = [0, 0]): Question => ({
   question: "q".repeat(question),
   header: "h".repeat(header),
   options: [{ label: "l".repeat(option[0]), description: "d".repeat(option[1]), ...(option[2] === undefined ? {} : { preview: "p".repeat(option[2]) }) }, { label: "", description: "" }],
@@ -127,22 +127,22 @@ test("G2: the count sums every question's `question` and `header` and every opti
 test("G2: a long preview alone counts", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  assert.equal(await call(f, [ask(10, 5, [1, 1, LIMIT - 17 - 1])]), undefined, "1500 with the preview");
-  assert.deepEqual(await call(f, [ask(10, 5, [1, 1, LIMIT - 17])]), { block: true, reason: G2(LIMIT + 1) });
+  assert.equal(await call(f, [ask(10, 5, [1, 1, LIMIT - 17])]), undefined, "1500 with the preview");
+  assert.deepEqual(await call(f, [ask(10, 5, [1, 1, LIMIT - 16])]), { block: true, reason: G2(LIMIT + 1) });
   assert.deepEqual(await call(f, [ask(1, 1, [1, 1, 5000])]), { block: true, reason: G2(5004) });
 });
 
 test("G2: a long description alone counts", async (t) => {
   const f = await started("manager");
   t.after(() => f.close());
-  assert.deepEqual(await call(f, [ask(1, 1, [1, 3000])]), { block: true, reason: G2(3004) });
+  assert.deepEqual(await call(f, [ask(1, 1, [1, 3000])]), { block: true, reason: G2(3003) });
 });
 
 test("G2: a long label and a long header count", async (t) => {
   const f = await started("manager");
   t.after(() => f.close());
-  assert.deepEqual(await call(f, [ask(1, 1, [2000, 1])]), { block: true, reason: G2(2004) });
-  assert.deepEqual(await call(f, [ask(1, 2000)]), { block: true, reason: G2(2003) });
+  assert.deepEqual(await call(f, [ask(1, 1, [2000, 1])]), { block: true, reason: G2(2003) });
+  assert.deepEqual(await call(f, [ask(1, 2000)]), { block: true, reason: G2(2001) });
 });
 
 test("G2: a Lead with no draft Job over the limit is refused with G2's reason, not G1's", async (t) => {
