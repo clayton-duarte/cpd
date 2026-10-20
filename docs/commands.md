@@ -2364,7 +2364,9 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 
 | Kind | Plan Lead | Worker, side fork |
 |---|---|---|
-| `job-merged`, `job-failed`, `all-merged`, `plan-done`, `error` | message, **turn**, `followUp`. `all-merged` carries the PR's key in `data.pr`; the Lead answers `all-merged` with `cpd pr open --pr <key>`, and an `error` with code `pr_start_failed` with `cpd pr start <key>` once the cause is fixed (R34, A9) | |
+| `job-merged`, `job-failed`, `plan-done`, `error` | message, **turn**, `followUp` (an `error` with code `pr_unopened`, §3.7 E4: a PR unopened 10 minutes after `all-merged` and the Context has no Manager; the Lead runs `cpd pr open --pr <key>`) | |
+| `all-merged` | message, **turn**, **`steer`** (hs-d334). Carries the PR's key in `data.pr`; the Lead answers `all-merged` with `cpd pr open --pr <key>` (R34, A9) | |
+| `error` with code `pr_start_failed` | the Lead answers with `cpd pr start <key>` once the cause is fixed | |
 | `pr-feedback` (every `reason`: checks failed, changes requested, closed, conflict) | message, **turn**, **`steer`**. Carries the PR's key in `data.pr` | |
 | `attempt-retry`, `job-cancelled` | message, no turn, `followUp` | |
 | `pr-started`, `pr-merged` | message, no turn, `followUp` (R34: a started PR's Jobs are now scheduled; a merged PR may start the PRs that need it, §5.3) | |
