@@ -1,6 +1,6 @@
 //! A temporary checkout of cpd's install files with an `origin/main` of its own, for tests of
 //! `scripts/install-cpd.sh`: whether a migration file is on `origin/main` is decided by the test,
-//! never by the real repository. Include it with `#[path = "common/checkout.rs"] mod checkout;`.
+//! never by the real repository. Include it with `#[path = "../common/checkout.rs"] mod checkout;`.
 #![allow(dead_code)] // Each test file that includes it uses a subset of it.
 
 use std::fs;

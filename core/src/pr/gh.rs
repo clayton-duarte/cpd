@@ -513,10 +513,16 @@ impl Reply<'_> {
         failed(self.args, message, self.out.exit, &self.out.stderr).with("stdout", tail(&self.out.stdout, TAIL_LINES))
     }
 
-    /// [`Reply::fail`] of a call that is transient (`transient` true, `reason` `HTTP 5xx`) when `gh` exited non-zero with an
-    /// HTTP 5xx in its message and printed no GraphQL `errors` (contract §7.6 step 4, hs-d354).
-    fn fail_unless_5xx(&self, message: String, graphql_errors: bool) -> CpdError {
-        let status = if graphql_errors || self.out.exit == Some(0) { None } else { http_5xx(&self.out) };
+    /// [`Reply::fail`] of a call that is transient (`transient` true) when `gh` exited non-zero with an HTTP 5xx in its
+    /// message (`reason` `HTTP 5xx`) and printed no GraphQL `errors`, or, when its stdout holds no complete JSON
+    /// (`unparsable`), with its own failure to parse a response that ended early (`reason` [`CUT_RESPONSE`]; contract
+    /// §7.6 step 4, hs-d354).
+    fn fail_unless_transient(&self, message: String, graphql_errors: bool, unparsable: bool) -> CpdError {
+        let status = if graphql_errors || self.out.exit == Some(0) {
+            None
+        } else {
+            http_5xx(&self.out).or_else(|| (unparsable && self.out.stderr.contains(CUT_RESPONSE)).then(|| CUT_RESPONSE.to_owned()))
+        };
         let e = self.fail(message);
         match status {
             Some(status) => e.with("transient", true).with("reason", status),
@@ -525,20 +531,21 @@ impl Reply<'_> {
     }
 
     /// The body, whatever the exit code (`gh` exits 1 on a partial result); no
-    /// JSON, or no `data`, is `gh_failed`: transient when it is an HTTP 5xx.
+    /// JSON, or no `data`, is `gh_failed`: transient when it is an HTTP 5xx, or a cut response with no JSON.
     fn envelope<T: for<'de> Deserialize<'de>>(&self) -> Result<(T, Vec<GqlError>), CpdError> {
         let envelope: Envelope<T> = serde_json::from_str(&self.out.stdout)
-            .map_err(|e| self.fail_unless_5xx(format!("gh {} printed no usable JSON: {e}.", self.args[0]), false))?;
+            .map_err(|e| self.fail_unless_transient(format!("gh {} printed no usable JSON: {e}.", self.args[0]), false, true))?;
         let errors = envelope.errors.unwrap_or_default();
         match envelope.data {
             Some(data) => Ok((data, errors)),
-            None => Err(self.fail_unless_5xx(
+            None => Err(self.fail_unless_transient(
                 format!(
                     "gh {} answered without data: {}",
                     self.args[0],
                     errors.iter().filter_map(|e| e.message.as_deref()).collect::<Vec<_>>().join("; ")
                 ),
                 !errors.is_empty(),
+                false,
             )),
         }
     }
@@ -564,6 +571,9 @@ impl Reply<'_> {
         })
     }
 }
+
+/// What `gh` prints when it cannot parse a response that ended early (hs-d354): the cut response, transient.
+const CUT_RESPONSE: &str = "unexpected end of JSON input";
 
 /// `HTTP 5xx` as `gh` prints it (`gh: HTTP 502: Bad Gateway`, `... (HTTP 503)`), in its stderr, or in its stdout when
 /// stderr is empty: the status, `HTTP 502`. Matches `HTTP 5\d\d`.
