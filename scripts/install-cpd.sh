@@ -8,7 +8,7 @@
 # refuses Linux-only calls in this file, and the Gate runs it). The adapter
 # directory is a symlink, ~/.local/share/cpd/pi -> pi.<id>, swapped by one
 # rename(2) (python3 os.replace); a first install after hs-d355 migrates an
-# existing real directory to pi.legacy (two renames, not atomic, once). Layout,
+# existing real directory to pi.legacy (two renames in one process, not atomic, once). Layout,
 # migration, cleanup and what pi sees: contract §3.7 "The adapter swap";
 # algorithm and tests: docs/implementing.md "The adapter swap".
 set -eu
@@ -99,8 +99,8 @@ trap - EXIT
 # (python3 os.replace, never renameat2, mv or ln -sfn) puts the link over
 # $adapter_dir, so the path is always the old or the new version, whole. A real
 # directory there (installs before hs-d355) is first renamed to pi.legacy: that
-# one time $adapter_dir is missing for microseconds, and a failed second rename
-# puts it back. Afterwards $adapter_dir/package.json is checked, and versions
+# one time $adapter_dir is missing between two renames in one python3 process
+# (microseconds), and a failed second rename puts it back in that process. Afterwards $adapter_dir/package.json is checked, and versions
 # that are neither current, nor the displaced one, nor younger than 60 minutes
 # are removed, with the tmp directories and links of dead pids.
 mkdir -p "$share"
@@ -121,23 +121,26 @@ elif [ -d "$adapter_dir" ]; then
   displaced=pi.legacy
 fi
 
-swap() {
-  python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$adapter_link" "$adapter_dir"
-}
+# One python3 process does the renames, so the migration's window is two system calls apart, not a process start-up.
 if [ -L "$adapter_dir" ] || [ ! -e "$adapter_dir" ]; then
-  if ! swap; then
-    echo "cpd install failed: cannot swap the adapter link over $adapter_dir" >&2
-    exit 1
-  fi
+  swap_py='import os, sys; os.replace(sys.argv[1], sys.argv[2])'
+  swap_failed="cannot swap the adapter link over $adapter_dir"
 else
   # The migration: a rename of a symlink over a directory fails, and no portable call exchanges the two.
   rm -rf "$share/pi.legacy"
-  mv "$adapter_dir" "$share/pi.legacy"
-  if ! swap; then
-    mv "$share/pi.legacy" "$adapter_dir"
-    echo "cpd install failed: cannot swap the adapter link over $adapter_dir; the old directory is back" >&2
-    exit 1
-  fi
+  swap_py='import os, sys
+link, adapter, legacy = sys.argv[1:4]
+os.rename(adapter, legacy)
+try:
+    os.replace(link, adapter)
+except BaseException:
+    os.rename(legacy, adapter)
+    raise'
+  swap_failed="cannot swap the adapter link over $adapter_dir; the old directory is back"
+fi
+if ! python3 -c "$swap_py" "$adapter_link" "$adapter_dir" "$share/pi.legacy"; then
+  echo "cpd install failed: $swap_failed" >&2
+  exit 1
 fi
 trap - EXIT
 
