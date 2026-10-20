@@ -1897,9 +1897,9 @@ mod tests {
         format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}{n}", "─".repeat(41 - 2 - 7 - n.to_string().len()))
     }
 
-    /// An item row at 43 columns: the margin, the fold's `│`, a space, the icon, a space, the label, the age ending at the last column of the inner area.
-    fn item_row(label: &str, age: &str) -> String {
-        format!(" │ {NEEDS_YOU} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
+    /// An item row at 43 columns: the margin, the fold's `│`, two spaces, the tier glyph, a space, the label, the age ending at the last column of the inner area.
+    fn item_row(glyph: &str, label: &str, age: &str) -> String {
+        format!(" │  {glyph} {label}{}{age}", " ".repeat(41 - 5 - label.chars().count() - age.chars().count()))
     }
 
     /// A scroll cue row at 43 columns: the margin, the fold's `│`, the cue right-aligned.
@@ -1925,9 +1925,9 @@ mod tests {
         let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 16));
         assert_eq!(rows[10], "", "the empty row above the title");
         assert_eq!(rows[11], header(3));
-        assert_eq!(rows[12], item_row("f-blocked: Worker question", "42s"));
-        assert_eq!(rows[13], item_row("acme/api#12 checks failed", "5m"));
-        assert_eq!(rows[14], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[12], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
+        assert_eq!(rows[13], item_row(palette::TIER_RED, "acme/api#12 checks failed", "5m"));
+        assert_eq!(rows[14], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[15], " ╰─", "nothing to fold");
         assert_eq!(rows[12].chars().count(), 42, "the age ends in column 41, the last of the inner area");
     }
@@ -1939,14 +1939,14 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 21));
         assert_eq!(rows[15], "", "the empty row above the title");
         assert_eq!(rows[16], header(5));
-        assert_eq!(rows[19], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[19], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[20], EXPAND);
         assert_eq!(click(&mut view, 20, 20), Effect::None, "a view-state change: no command");
         let rows = text_rows(&draw_now(&mut view, 43, 21));
         assert_eq!(rows[13], "", "the empty row above the title");
         assert_eq!(rows[14], header(5));
-        assert_eq!(rows[18], item_row("engine: store busy", "2d"));
-        assert_eq!(rows[19], item_row("ship lead has a reply", "10m"));
+        assert_eq!(rows[18], item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"));
+        assert_eq!(rows[19], item_row(palette::TIER_WHITE, "ship lead has a reply", "10m"));
         assert_eq!(rows[20], COLLAPSE);
         assert_eq!(click(&mut view, 3, 20), Effect::None);
         let rows = text_rows(&draw_now(&mut view, 43, 21));
@@ -1998,12 +1998,12 @@ mod tests {
         let mut view = with_inbox(1);
         view.tree.inbox[0].label = "f-blocked: a very long question that cannot fit the row".into();
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        let label = "f-blocked: a very long question …"; // 41 - 4 (`│`, a space, the icon, a space) - 1 (space) - 3 (age) = 33 columns
-        assert_eq!(label.chars().count(), 33);
-        assert_eq!(rows[14], format!(" │ {NEEDS_YOU} {label} 42s"));
-        view.tree.inbox[0].label = "x".repeat(33);
+        let label = "f-blocked: a very long question…"; // 41 - 5 (`│`, two spaces, the glyph, a space) - 1 (space) - 3 (age) = 32 columns
+        assert_eq!(label.chars().count(), 32);
+        assert_eq!(rows[14], format!(" │  {} {label} 42s", palette::TIER_RED));
+        view.tree.inbox[0].label = "x".repeat(32);
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[14], format!(" │ {NEEDS_YOU} {} 42s", "x".repeat(33)), "a label that fits is not cut");
+        assert_eq!(rows[14], format!(" │  {} {} 42s", palette::TIER_RED, "x".repeat(32)), "a label that fits is not cut");
     }
 
     #[test]
@@ -2023,15 +2023,15 @@ mod tests {
     }
 
     #[test]
-    fn the_item_rows_keep_their_icon_in_its_colour_a_muted_branch_and_a_grey_age() {
+    fn the_item_rows_keep_their_tier_glyph_in_its_colour_a_muted_branch_and_a_grey_age() {
         let buf = draw_now(&mut with_inbox(5), 43, 16);
         let rows = text_rows(&buf);
         let muted = palette::color(palette::Meaning::Nothing);
-        for (y, colour) in [(12, palette::Meaning::Failed), (13, palette::Meaning::Failed), (14, palette::Meaning::Review)].map(|(y, m)| (y, palette::color(m))) {
-            assert!(rows[y].starts_with(&format!(" │ {NEEDS_YOU} ")), "the icon in row {y}: {rows:?}");
+        for (y, glyph, colour) in [(12, palette::TIER_RED, palette::Meaning::Failed), (13, palette::TIER_RED, palette::Meaning::Failed), (14, palette::TIER_YELLOW, palette::Meaning::Review)].map(|(y, g, m)| (y, g, palette::color(m))) {
+            assert!(rows[y].starts_with(&format!(" │  {glyph} ")), "the glyph in row {y}: {rows:?}");
             assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted), "the branch of row {y}");
-            assert_eq!((buf[(3, y as u16)].symbol(), buf[(3, y as u16)].fg), (NEEDS_YOU, colour), "the icon of row {y}");
-            assert_ne!(buf[(5, y as u16)].fg, muted, "the label of row {y} is not muted");
+            assert_eq!((buf[(4, y as u16)].symbol(), buf[(4, y as u16)].fg), (glyph, colour), "the glyph of row {y}");
+            assert_ne!(buf[(6, y as u16)].fg, muted, "the label of row {y} is not muted");
         }
         assert_eq!(buf[(40, 12)].fg, muted, "the age");
     }
@@ -2853,8 +2853,8 @@ mod tests {
         let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 22));
         assert_eq!(rows[15], "", "the empty row above the title");
         assert_eq!(rows[16], header(3));
-        assert_eq!(rows[17], item_row("f-blocked: Worker question", "42s"));
-        assert_eq!(rows[19], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[17], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
+        assert_eq!(rows[19], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[20], " ╰─", "nothing to fold");
         assert_eq!(rows[21], "", "the empty row below the section");
     }
@@ -2867,8 +2867,8 @@ mod tests {
         assert_eq!(rows[12], " ╰─");
         assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
         assert_eq!(rows[14], header(5));
-        assert_eq!(rows[15], item_row("f-blocked: Worker question", "42s"));
-        assert_eq!(rows[17], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[15], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
+        assert_eq!(rows[17], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[18], EXPAND);
         assert_eq!(rows[19], "", "the empty row below the section");
     }
@@ -2882,7 +2882,7 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 22));
         assert_eq!(rows[13], "");
         assert_eq!(rows[14], header(5));
-        assert_eq!(rows[19], item_row("ship lead has a reply", "10m"));
+        assert_eq!(rows[19], item_row(palette::TIER_WHITE, "ship lead has a reply", "10m"));
         assert_eq!(rows[20], COLLAPSE);
         assert_eq!(rows[21], "");
     }

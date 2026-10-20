@@ -1,6 +1,6 @@
 //! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): one empty
-//! row, the pill title `╭─Inbox────…────<n>` (`crate::section`), up to [`SHOWN`] item rows `│ <icon> <label>` (each keeps
-//! its icon and colour) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
+//! row, the pill title `╭─Inbox────…────<n>` (`crate::section`), up to [`SHOWN`] item rows `│  <glyph> <label>` (each with its tier's
+//! glyph and colour) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
 //! the muted `╰󰁋 expand` that expands the list inline and becomes `╰󰁣 collapse`, with fewer a plain `╰─`, with none no
 //! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
 //! column's split gives it (the tree has two thirds, hs-d307; `View::draw_at`) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
@@ -27,7 +27,6 @@ use crate::palette::{self, Meaning};
 use crate::read::Tree;
 use crate::section;
 use crate::dialog::scroll::{Cue, cue};
-use crate::read::Dot;
 use crate::widgets::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
@@ -35,8 +34,8 @@ use cpd_core::inbox::model::{Item, Kind};
 /// How many item rows the section shows before the `╰󰁋 expand` row.
 pub const SHOWN: usize = 3;
 
-/// The columns before the label: the fold's `│`, a space, the item's icon and a space.
-const LEAD_WIDTH: usize = 4;
+/// The columns before the label: the fold's `│`, two spaces, the item's tier glyph and a space.
+const LEAD_WIDTH: usize = 5;
 
 /// The rows above the items: the empty row (hs-d346) and the title.
 const TOP: usize = 2;
@@ -233,7 +232,7 @@ fn is_link(kind: Kind) -> bool {
     matches!(kind, Kind::PlanReview | Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested)
 }
 
-/// An item's row: the fold's muted `│`, a space, the item's icon in its urgency's colour, a space, the label cut with
+/// An item's row: the fold's muted `│`, two spaces, the item's tier glyph in its urgency's colour, a space, the label cut with
 /// `…` so that it never reaches the age, and the age. Returns the line and the number of cells of the label.
 fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
     let room = width.saturating_sub(LEAD_WIDTH + 1 + age.chars().count());
@@ -241,8 +240,8 @@ fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
     let label_width = label.chars().count();
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
     let line = fold::content(fold::BRANCH, Line::from(vec![
-        " ".into(),
-        palette::dot_span(Dot::from(item.urgency), 0, false),
+        "  ".into(),
+        palette::tier_span(item.urgency),
         " ".into(),
         label.into(),
         " ".repeat(gap).into(),
@@ -551,7 +550,7 @@ mod tests {
             .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
             .collect();
         let text = printed(&bytes);
-        assert!(text.contains(&format!("│{}{pieces}3m", palette::NEEDS_YOU)), "the branch, the icon (the spaces around it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
+        assert!(text.contains(&format!("│{}{pieces}3m", palette::TIER_RED)), "the branch, the icon (the spaces around it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
         assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead (branch and icon) or the age");
         // an item with no url, or of a kind that jumps, has no link
         let sink = Sink::default();

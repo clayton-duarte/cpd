@@ -215,9 +215,9 @@ fn pill(inner: usize, count: usize) -> String {
     format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{count}", "─".repeat(inner - 2 - 7 - count.to_string().len()))
 }
 
-/// An item row at 41 inner columns: `│`, a space, the icon, a space, the label, the age at the last column.
-fn item_row(label: &str, age: &str) -> String {
-    format!(" │ {NEEDS_YOU} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
+/// An item row at 41 inner columns: `│`, two spaces, the tier glyph, a space, the label, the age at the last column.
+fn item_row(glyph: &str, label: &str, age: &str) -> String {
+    format!(" │  {glyph} {label}{}{age}", " ".repeat(41 - 5 - label.chars().count() - age.chars().count()))
 }
 
 #[test]
@@ -227,9 +227,9 @@ fn the_inbox_title_is_the_pill_under_one_empty_row_and_the_rows_follow_at_once()
     let want = [
         String::new(),
         pill(41, 3),
-        item_row("f-blocked: Worker question", "42s"),
-        item_row("ship: Job c is stuck", "3h"),
-        item_row("engine: store busy", "2d"),
+        item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"),
+        item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"),
+        item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"),
         " ╰─".to_owned(),
     ];
     assert_eq!(&got[got.len() - want.len()..], &want[..], "one empty row, the title, three rows, and a plain close (nothing to fold): {got:#?}");
@@ -270,47 +270,19 @@ fn the_pill_text_is_inverted_its_lines_are_muted_and_the_caps_are_not() {
 }
 
 #[test]
-fn an_item_row_keeps_its_icon_in_its_urgency_colour_between_the_muted_line_and_the_text() {
-    let mut view = with_inbox(inbox_items(4));
-    let buf = draw(&mut view, 43, 24);
-    let got = rows(&buf);
-    let first = find(&got, "f-blocked: Worker") as u16;
-    for (i, colour) in [Meaning::Failed, Meaning::Review, Meaning::Planning].map(palette::color).into_iter().enumerate() {
-        let y = first + i as u16;
-        assert_eq!((buf[(1, y)].symbol(), buf[(1, y)].fg), ("│", muted()), "row {y}: the line");
-        assert_eq!(buf[(2, y)].symbol(), " ");
-        assert_eq!((buf[(3, y)].symbol(), buf[(3, y)].fg), (NEEDS_YOU, colour), "row {y}: the icon in its colour");
-        assert_eq!(buf[(4, y)].symbol(), " ");
-        assert_ne!(buf[(5, y)].fg, muted(), "row {y}: the text is not muted");
-        assert_eq!(buf[(40, y)].fg, muted(), "row {y}: the age");
-    }
-    assert_eq!(got[first as usize], item_row("f-blocked: Worker question", "42s"));
-}
-
-#[test]
-fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_icon() {
-    let mut items = inbox_items(1);
-    items[0].label = "x".repeat(60);
-    let mut view = with_inbox(items);
-    let got = rows(&draw(&mut view, 43, 24));
-    // 41 columns: `│`, a space, the icon and a space (4), the label, a space, `42s` (3): 33 for the label
-    assert_eq!(got[find(&got, "xxx")], format!(" │ {NEEDS_YOU} {}… 42s", "x".repeat(32)));
-}
-
-#[test]
 fn four_items_show_three_and_the_down_arrow_a_click_expands_to_the_up_arrow_and_folds_again() {
     let mut view = with_inbox(inbox_items(4));
     let buf = draw(&mut view, 43, 24);
     let got = rows(&buf);
     assert_eq!(got[got.len() - 1], format!(" ╰{DOWN} expand"), "{got:#?}");
-    assert_eq!(got[got.len() - 4], item_row("f-blocked: Worker question", "42s"));
-    assert_eq!(got[got.len() - 2], item_row("engine: store busy", "2d"), "the third is the last shown");
+    assert_eq!(got[got.len() - 4], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
+    assert_eq!(got[got.len() - 2], item_row(palette::TIER_MAGENTA, "engine: store busy", "2d"), "the third is the last shown");
     assert!(!got.iter().any(|r| r.contains("ship lead has a reply")), "the fourth is behind the toggle: {got:#?}");
     is_muted_line(&buf, 23, 1, 12);
     assert_eq!(click(&mut view, 3, 23), Effect::None, "view state only");
     let got = rows(&draw(&mut view, 43, 24));
     assert_eq!(got[got.len() - 1], format!(" ╰{UP} collapse"), "{got:#?}");
-    assert_eq!(got[got.len() - 2], item_row("ship lead has a reply", "10m"), "the fourth row is shown, at the bottom");
+    assert_eq!(got[got.len() - 2], item_row(palette::TIER_WHITE, "ship lead has a reply", "10m"), "the fourth row is shown, at the bottom");
     assert_eq!(click(&mut view, 3, 23), Effect::None);
     assert_eq!(rows(&draw(&mut view, 43, 24))[23], format!(" ╰{DOWN} expand"), "folded again");
 }

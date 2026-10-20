@@ -14,7 +14,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::inbox::model::{Condition, Kind, Urgency, reconcile};
 use cpd_core::store::Store;
-use cpd_tui::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED, WAITING};
+use cpd_tui::palette::{self, IDLE, NEEDS_YOU, SPINNER, STOPPED, WAITING};
 use nix::fcntl::{Flock, FlockArg};
 
 const WORKING: &str = SPINNER[0];
@@ -42,9 +42,9 @@ fn pill(inner: usize, count: usize) -> String {
     format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{count}", "─".repeat(inner - 2 - "Inbox".len() - 2 - count.to_string().len()))
 }
 
-/// An Inbox item row in `inner` columns: the muted `│`, the icon, the label and the age (`5m`) at the last column.
-fn item_row_of(inner: usize, label: &str) -> String {
-    format!(" │ {NEEDS_YOU} {label}{}5m", " ".repeat(inner - 4 - label.len() - 2))
+/// An Inbox item row in `inner` columns: the muted `│`, two spaces, the tier `glyph`, the label and the age (`5m`) at the last column.
+fn item_row_of(inner: usize, glyph: &str, label: &str) -> String {
+    format!(" │  {glyph} {label}{}5m", " ".repeat(inner - 5 - label.len() - 2))
 }
 
 // ---------- the prepared store ----------
@@ -243,9 +243,9 @@ fn inbox_section(width: usize) -> Vec<String> {
     vec![
         String::new(),
         pill(inner, 4),
-        item_row_of(inner, "f-blocked label"),
-        item_row_of(inner, "l-rel label"),
-        item_row_of(inner, "m-beta label"),
+        item_row_of(inner, palette::TIER_RED, "f-blocked label"),
+        item_row_of(inner, palette::TIER_RED, "l-rel label"),
+        item_row_of(inner, palette::TIER_MAGENTA, "m-beta label"),
         expand(),
     ]
 }
@@ -555,8 +555,8 @@ fn an_inbox_of_two_items_is_the_pill_title_and_two_rows_with_no_toggle_and_a_pla
     let expected = [
         String::new(),
         pill(44, 2),
-        item_row_of(44, "f-blocked label"),
-        item_row_of(44, "l-rel label"),
+        item_row_of(44, palette::TIER_RED, "f-blocked label"),
+        item_row_of(44, palette::TIER_RED, "l-rel label"),
         " ╰─".to_owned(),
     ];
     let screen = pane.wait("the two items", |s| s.len() == 18 && s[13..] == expected);
@@ -1563,7 +1563,7 @@ fn the_inbox_sections_toggle_row_expands_the_list_inline_and_folds_it_and_the_ti
     // the section is pinned to the bottom, the Session rows above it
     assert_eq!(pane.rows_are(14, &inbox_section(46))[14..], inbox_section(46));
     pane.click(10, 19); // `╰󰁋 expand`
-    let expanded = [inbox_section(46)[..5].to_vec(), vec![item_row_of(44, "m-alpha label"), collapse()]].concat();
+    let expanded = [inbox_section(46)[..5].to_vec(), vec![item_row_of(44, palette::TIER_WHITE, "m-alpha label"), collapse()]].concat();
     assert_eq!(pane.rows_are(13, &expanded)[13..], expanded);
     pane.click(3, 19); // `╰󰁣 collapse`
     assert_eq!(pane.rows_are(14, &inbox_section(46))[14..], inbox_section(46));
@@ -1831,7 +1831,7 @@ fn a_link_kinds_label_reads_whole_on_the_screen_through_tmux() {
     pane.wait("the more row", |s| s.last().is_some_and(|r| *r == expand()));
     pane.click(10, pane.screen().len() as u16 - 1);
     let screen = pane.wait("the link's row", |s| s.iter().any(|r| r.contains("acme/api#12")));
-    let expected = item_row_of(44, "acme/api#12 failing");
+    let expected = item_row_of(44, palette::TIER_YELLOW, "acme/api#12 failing");
     let row = screen.iter().find(|r| r.contains("acme/api#12")).unwrap();
     assert_eq!(row, &expected, "the OSC 8 pieces leave no stray cell on the row");
 }

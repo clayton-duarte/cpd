@@ -16,6 +16,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, Widget};
 
 use cpd_core::error::CpdError;
+use cpd_core::inbox::model::Urgency;
 use cpd_core::output::Output;
 use cpd_core::plan::Phase;
 use cpd_core::session::PROGRAM;
@@ -203,6 +204,17 @@ fn sections() -> Vec<Section> {
                 .collect(),
         ],
     };
+    let tier = |urgency, meaning: &'static str| vec![Line::from(palette::tier_span(urgency)), plain(meaning)];
+    let inbox = Section {
+        title: "Inbox",
+        header: None,
+        rows: vec![
+            tier(Urgency::Red, "a blocker only you can clear"),
+            tier(Urgency::Yellow, "pull-request work"),
+            tier(Urgency::Magenta, "a decision before the work runs"),
+            tier(Urgency::White, "an unread reply"),
+        ],
+    };
     let pulse = Section {
         title: "Pulse",
         header: None,
@@ -212,7 +224,7 @@ fn sections() -> Vec<Section> {
             .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
             .collect(),
     };
-    vec![meanings, jobs, dots, prs, pulse, checks]
+    vec![meanings, jobs, dots, prs, inbox, pulse, checks]
 }
 
 /// The vertical constraints of the body: each section after a gap.
@@ -334,6 +346,7 @@ mod tests {
                 "Jobs: Plan pills and Context counters",
                 "Session dots",
                 "PRs (Dispatch)",
+                "Inbox",
                 "Pulse",
                 "PR checks",
             ]
@@ -342,7 +355,7 @@ mod tests {
 
     #[test]
     fn the_pulse_section_lists_the_kind_colours_in_precedence_order_the_grey_zero_and_quiet() {
-        let pulse = &sections()[4];
+        let pulse = &sections()[5];
         let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();
         assert_eq!(
             cells,
