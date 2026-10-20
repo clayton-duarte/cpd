@@ -574,3 +574,12 @@ test("cpd-manager never blocks and says the adapter refuses waits over 30 second
   assert.match(text, /\*\*Never block\.\*\*/);
   assert.match(text, /waits longer than 30 seconds/);
 });
+
+test("open at once: cpd-lead opens a PR at its last Job's merge without waiting; cpd-manager oversees all-merged PRs", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /Open a PR as soon as its last Job merges; never wait for a slot, a turn or another PR\./);
+  assert.match(lead, /never wait for `all-merged`, a slot, a turn or another PR/);
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(manager, /Oversee all-merged PRs/);
+  assert.match(manager, /stack those that would conflict/);
+});
