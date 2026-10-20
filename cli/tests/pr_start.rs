@@ -44,7 +44,7 @@ fn fx() -> Fx {
     env.fake_gh(&format!("echo '{EMPTY_SEARCH}'"));
     let fx = Fx { env };
     fx.env.sql(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'stopped', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at)
@@ -68,11 +68,11 @@ impl Fx {
 
     /// A repo `name` on `main` with a bare `origin` holding `main`.
     fn repo(&self, name: &str) -> Repo {
-        let path = self.env.git_repo(name).canonicalize().unwrap();
+        let path = self.env.keyed_repo(name).canonicalize().unwrap();
         let origin = self.env.root().join("origins").join(format!("{name}.git"));
         fs::create_dir_all(&origin).unwrap();
         self.env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-        self.env.git(&path, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        self.env.local_origin(&path, &origin);
         self.env.git(&path, &["push", "-q", "origin", "main"]);
         Repo { path, origin }
     }
@@ -80,7 +80,7 @@ impl Fx {
     /// `pr add <key> --repo <repo> [--needs <needs>]`.
     fn add(&self, key: &str, repo: &Path, needs: &[&str]) {
         let needs = needs.join(",");
-        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--plan", "pay"];
+        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"];
         if !needs.is_empty() {
             args.extend(["--needs", &needs]);
         }
@@ -97,7 +97,7 @@ impl Fx {
 
     /// Reviews and approves the Plan as it is.
     fn approve(&self) {
-        let review = self.env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+        let review = self.env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
         let id = review["review"]["id"].as_str().unwrap().to_owned();
         self.env.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay"]).ok();
     }
@@ -210,6 +210,12 @@ fn remote_branch(fx: &Fx, repo: &Path, branch: &str) -> String {
     fx.env.git(repo, &["ls-remote", "--heads", "origin", branch])
 }
 
+/// The `branch.*` entries of `repo`'s `.git/config` (upstreams), one per line.
+fn branch_config(fx: &Fx, repo: &Path) -> String {
+    let out = common::output(fx.env.command("git").args(["-C", repo.to_str().unwrap(), "config", "--get-regexp", r"^branch\."])).unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
 // ---------- plan lock ----------
 
 #[test]
@@ -239,7 +245,7 @@ fn lock_starts_only_the_prs_without_needs() {
     // The started PR: branch, worktree, remote and row.
     assert_eq!(fx.env.git(&worktree, &["symbolic-ref", "--short", "HEAD"]), "cpd/pay/api");
     assert_eq!(remote_branch(&fx, &api.path, "cpd/pay/api"), format!("{base}\trefs/heads/cpd/pay/api"));
-    assert_eq!(fx.env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/api");
+    assert_eq!(branch_config(&fx, &api.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("api"), "dispatch");
     assert_eq!(fx.query::<String>("SELECT lead_worktree FROM prs WHERE key = 'api'"), worktree.display().to_string());
     // The waiting one: nothing created anywhere.
@@ -390,7 +396,7 @@ fn pr_start_creates_pushes_and_records_the_start() {
     );
     assert_eq!(fx.env.git(&worktree, &["rev-parse", "HEAD"]), tip, "cut from a fresh fetch of origin/main");
     assert_eq!(remote_branch(&fx, &repo.path, "cpd/pay/a2"), format!("{tip}\trefs/heads/cpd/pay/a2"));
-    assert_eq!(fx.env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/a2");
+    assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("a2"), "dispatch");
     assert!(fx.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
     let started = fx.events("pr-started");
@@ -401,6 +407,33 @@ fn pr_start_creates_pushes_and_records_the_start() {
     let again = fx.start("a2").ok();
     assert_eq!((&again["already"], &again["pr"]["status"]), (&json!(true), &json!("dispatch")));
     assert_eq!(fx.events("pr-started").len(), 1);
+}
+
+#[test]
+fn eight_pr_starts_in_one_repo_at_once_all_succeed_and_write_no_upstream() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let keys: Vec<String> = (1..=8).map(|i| format!("p{i}")).collect();
+    for key in &keys {
+        fx.add(key, &repo.path, &[]);
+    }
+    fx.dispatch();
+
+    let runs: Vec<Run> = std::thread::scope(|s| {
+        let started: Vec<_> = keys.iter().map(|key| s.spawn(|| fx.start(key))).collect();
+        started.into_iter().map(|t| t.join().unwrap()).collect()
+    });
+
+    for (key, run) in keys.iter().zip(&runs) {
+        let out = run.ok();
+        assert_eq!((&out["pr"]["status"], &out["pr"]["pushed"]), (&json!("dispatch"), &json!(true)), "{key}");
+        let branch = format!("cpd/pay/{key}");
+        assert_eq!(fx.env.git(&fx.lead_path(&repo.path, key), &["symbolic-ref", "--short", "HEAD"]), branch);
+        assert_ne!(remote_branch(&fx, &repo.path, &branch), "", "{key} pushed");
+    }
+    assert_eq!(branch_config(&fx, &repo.path), "", "no branch.* entry in .git/config");
+    assert_eq!(fx.events("pr-started").len(), 8);
+    assert!(fx.events("error").is_empty());
 }
 
 #[test]
@@ -465,8 +498,9 @@ fn a_push_failure_at_pr_start_still_starts_it_and_appends_one_push_failed_error(
 #[test]
 fn a_repo_without_origin_starts_a_pr_as_before() {
     let fx = fx();
-    let repo = fx.env.git_repo("pay").canonicalize().unwrap();
+    let repo = fx.env.keyed_repo("pay").canonicalize().unwrap();
     fx.a2_ready(&repo);
+    fx.env.drop_unreachable_origin(&repo);
     let base = head(&fx, &repo, "HEAD");
 
     let out = fx.start("a2").ok();

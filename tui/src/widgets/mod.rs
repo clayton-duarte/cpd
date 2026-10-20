@@ -8,7 +8,7 @@
 //!
 //! - [`column`]: the drawing of the machine, the PRs, git and Jira;
 //! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
-//!   the StatusBar's button open in a tmux popup (the columns are narrower than the legend);
+//!   the StatusBar's button (`cpd tui action legend`) open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::palette`]'s.
 
 mod column;

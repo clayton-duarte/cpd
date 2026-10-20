@@ -5,7 +5,7 @@
 //! (`select-pane`), and `?` opens the legend popup.
 //! A click on a Context row runs `context manager` (§3.10), then the Open of the Manager it returns.
 //! The menu's Open, Close, Archive, Unarchive, Rename…, Fork…, New session…, New Plan… and New Context… are
-//! the same commands; Copy id is the one that runs `tmux set-buffer -w` instead (OSC 52). After New Plan…, Fork… and
+//! the same commands (all but Open and Unarchive after a dialog popup, [`super::ask`]); Copy id is the one that runs `tmux set-buffer -w` instead (OSC 52). After New Plan…, Fork… and
 //! New session… succeed, the new Lead is opened in the chat slot (`session open`, then the focus, as Open does). Two flows run more than one: an Archive of the chat slot's Lead frees the slot first
 //! ([`Free`], F3), and a click on an archived Session runs `session history` and focuses the chat (F5).
 //!
@@ -26,7 +26,10 @@ use cpd_core::ids::{ContextId, PlanId, SessionId};
 use cpd_core::session::PROGRAM;
 use cpd_core::store::Store;
 use crate::merge::Pull;
+use super::ask::{Dialogs, Question};
+use crate::dialog::{self, validate::Validator};
 use crate::widgets::open_legend;
+use cpd_core::error::CpdError;
 
 /// The object an archive or unarchive is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,8 +94,8 @@ pub enum Action {
     /// `plan new <id> --context=<c> --title=<title>` (§4.1): `n` (the title is the id) and New Plan….
     /// The Lead forks the Context's grounded Lead (R15).
     NewPlan { context: ContextId, id: PlanId, title: String },
-    /// `context new <id> --title=<title>` (§3.1): New Context….
-    NewContext { id: ContextId, title: String },
+    /// `context new <id> --title=<title> --owner=<login>` (§3.1): New Context….
+    NewContext { id: ContextId, title: String, owner: String },
     /// `context rename <id> --title=<title>` (§3.7).
     RenameContext { id: ContextId, title: String },
     /// `plan rename --plan=<id> --title=<title>` (§4.9).
@@ -101,10 +104,10 @@ pub enum Action {
     RenameSession { id: SessionId, name: String },
     /// `session fork <source> --name=<name>` (§10.3): Fork… and New session….
     Fork { source: SessionId, name: String },
-    /// `session close <id>` (§10.9): `x`.
+    /// `session close <id>` (§10.9): `x` and the menu's Close, after their `confirm` popup.
     Close(SessionId),
-    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, at once, after `free` when the
-    /// archived Lead holds the chat slot.
+    /// `context|plan|session archive` (§3.8, §4.10, §10.10): the menu's Archive, after its `confirm` popup and after
+    /// `free` when the archived Lead holds the chat slot.
     Archive { subject: Subject, free: Option<Free> },
     /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
     Unarchive(Subject),
@@ -128,7 +131,7 @@ pub enum Action {
 }
 
 /// The refusal of `x` on the Session in the chat slot (the reference's), also when `session close` refuses it
-/// because it moved there while the prompt was open.
+/// because it moved there while the popup was open.
 pub const IN_CHAT_SLOT: &str = "switch to another session first";
 
 impl Action {
@@ -145,7 +148,9 @@ impl Action {
                 argv.extend([format!("--context={context}"), format!("--title={title}")]);
                 argv
             }
-            Action::NewContext { id, title } => vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}")],
+            Action::NewContext { id, title, owner } => {
+                vec!["context".into(), "new".into(), id.to_string(), format!("--title={title}"), format!("--owner={owner}")]
+            }
             Action::RenameContext { id, title } => vec!["context".into(), "rename".into(), id.to_string(), format!("--title={title}")],
             Action::RenamePlan { id, title } => vec!["plan".into(), "rename".into(), format!("--plan={id}"), format!("--title={title}")],
             Action::RenameSession { id, name } => {
@@ -305,9 +310,25 @@ impl Runner {
         crate::merge::open(&self.tmux, &pull.to_string()).map_err(|e| e.message().to_owned())
     }
 
+    /// Opens the dialog popup of `question` and returns when it closes: the command its answer makes, none when the
+    /// User cancelled.
+    pub fn ask(&self, question: Question) -> Result<Option<Action>, String> {
+        question.ask(self)
+    }
+
     /// `?`: the legend popup; returns when it closes.
     pub fn legend(&self) -> Result<(), String> {
         open_legend(&self.tmux).map_err(|e| e.message().to_owned())
+    }
+}
+
+impl Dialogs for Runner {
+    fn input(&self, title: &str, prompt: &str, initial: &str, validator: Validator) -> Result<Option<String>, CpdError> {
+        dialog::input(&self.tmux, title, prompt, initial, validator)
+    }
+
+    fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError> {
+        dialog::confirm(&self.tmux, title, text, yes_label)
     }
 }
 
@@ -418,8 +439,12 @@ mod tests {
                 vec!["plan", "new", "pay-4521", "--context=alpha", "--title=Pay 4521"],
             ),
             (
-                Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into() },
-                vec!["context", "new", "building-cpd", "--title=Building cpd!"],
+                Action::NewContext {
+                    id: ContextId::parse("building-cpd").unwrap(),
+                    title: "Building cpd!".into(),
+                    owner: "clayton-duarte".into(),
+                },
+                vec!["context", "new", "building-cpd", "--title=Building cpd!", "--owner=clayton-duarte"],
             ),
             (
                 Action::RenameContext { id: ContextId::parse("alpha").unwrap(), title: "-Dash".into() },
@@ -514,7 +539,7 @@ mod tests {
         assert_eq!(close.done(&json!({"ok": true, "already": true})), "session is already gone");
         let new = Action::NewPlan { context: ContextId::parse("alpha").unwrap(), id: PlanId::parse("pay").unwrap(), title: "Pay".into() };
         assert_eq!(new.done(&json!({"ok": true})), "forking pay in window park-pay");
-        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into() };
+        let context = Action::NewContext { id: ContextId::parse("alpha").unwrap(), title: "Alpha".into(), owner: "o".into() };
         assert_eq!(context.done(&json!({"ok": true})), "created alpha");
         let rename = Action::RenameSession { id: sid("f-idle"), name: "x".into() };
         assert_eq!(rename.done(&json!({"ok": true, "name": "x"})), "renamed");

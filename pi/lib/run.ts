@@ -1,0 +1,75 @@
+import { CpdError, isObject } from "./cpd.ts";
+import { Follower, type FollowerHooks, type Schedule, type Spawn, type Timing } from "./follower.ts";
+import type { ReviewEntry } from "./plan-review.ts";
+import type { Poll } from "./reload.ts";
+import type { Facts, Reporter } from "./state.ts";
+
+export type SessionInfo = { role: string; context: string; plan: string | null; planLead: boolean; registeredEvent: number; name: string | null };
+
+/** `cpd session show` at the boundary (§15.2 step 1): the fields the adapter reads, checked once. */
+export function parseSession(show: Record<string, unknown>): SessionInfo {
+  const s = show.session;
+  const lacks = () => new CpdError("bad_output", "cpd session show: the session object lacks role, context, plan, plan_lead, registered_event or name");
+  if (!isObject(s) || typeof s.role !== "string" || typeof s.context !== "string" || typeof s.plan_lead !== "boolean" || (s.plan !== null && typeof s.plan !== "string") || (s.name !== null && typeof s.name !== "string")) {
+    throw lacks();
+  }
+  const registered = s.registered_event;
+  if (typeof registered !== "number" || !Number.isSafeInteger(registered)) throw lacks();
+  if (s.plan_lead && typeof s.plan !== "string") throw new CpdError("bad_output", "cpd session show: a Plan Lead without a plan");
+  return { role: s.role, context: s.context, plan: s.plan, planLead: s.plan_lead, registeredEvent: registered, name: s.name };
+}
+
+/** One activation of the adapter: from `session_start` to `session_shutdown`. */
+export class Run {
+  /** Highest Event id handled; the next `--since`. */
+  cursor = 0;
+  reviews = new Map<string, ReviewEntry>();
+  opening = new Set<string>();
+  deciding = new Set<string>();
+  /** Error codes already delivered since the last valid Event (commands.md §15.2, "The follower ends"). */
+  followerReported = new Set<string>();
+  failureLineThisRun = false;
+  /** Events are handled one after the other, in id order, though a handler may wait for `cpd`. */
+  tail: Promise<void> = Promise.resolve();
+  /** True while a failed read of Context updates is reported and no read has succeeded since (§15.7 "Failure"). */
+  contextFailed = false;
+  /** The name last known to be the Session's, so `session_info_changed` can tell a User's rename from ours. */
+  knownName: string | null;
+  /** False until the start-up's `session state idle` is done: facts are kept, nothing is reported before. */
+  reporting = false;
+  /** Watches the adapter directory for an install (§15 "Reload after an install"). */
+  reload: Poll | undefined;
+  /** §15.8: the last run ended on a message that spoke of further work and named no registered key; the next `before_agent_start` adds the reminder once. */
+  reminderDue = false;
+  /** The text of the `cpd-policy` section (§15.10), or undefined: none, or `cpd policy show` failed. */
+  policy: string | undefined = undefined;
+  /** True once the missing-`sections` failure is reported, so it is reported once per run (§8.3 "Delivery to agents"). */
+  sectionsReported = false;
+  unsubscribe: (() => void)[] = [];
+  readonly id: string;
+  readonly info: SessionInfo;
+  readonly facts: Facts;
+  readonly reporter: Reporter;
+  readonly abort: AbortController;
+  /** One line of `run/adapter/<session>.log` (§15.6 "Log"); a failed write is notified once per run. */
+  readonly log: (line: string) => void;
+  readonly follower: Follower;
+
+  constructor(init: { id: string; info: SessionInfo; facts: Facts; reporter: Reporter; abort: AbortController; log: (line: string) => void; follow: { hooks: (run: Run) => FollowerHooks; timing: Timing; spawn?: Spawn; schedule?: Schedule } }) {
+    this.id = init.id;
+    this.info = init.info;
+    this.facts = init.facts;
+    this.reporter = init.reporter;
+    this.abort = init.abort;
+    this.log = init.log;
+    this.knownName = init.info.name;
+    const { hooks, timing, spawn, schedule } = init.follow;
+    this.follower = new Follower(init.id, hooks(this), timing, spawn, schedule);
+  }
+
+  /** The Plan of a Plan Lead's run. */
+  get plan(): string {
+    if (this.info.plan === null) throw new CpdError("not_a_lead", "this session has no Plan");
+    return this.info.plan;
+  }
+}

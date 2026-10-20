@@ -2,21 +2,28 @@
 //! Events and keys, and [`draw`] only writes to the frame.
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::crossterm::event::{KeyEvent, MouseEvent};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use cpd_core::events::Event;
+use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
+use crate::widgets::section_header;
 
-/// The Events and where the view is: `up` lines above the bottom (0: it shows the bottom, so it follows).
-#[derive(Clone, Debug, Default)]
+/// The rows above the Events: the title, drawn as a section header (hs-d124, hs-d297).
+const HEADER_ROWS: u16 = 1;
+
+/// The Events and where the view is. The kit's [`Scroll`] holds the position (an offset from the first Event); `follow`
+/// says the view shows the bottom, so a new Event scrolls in. Scrolling decides it again: at the bottom it follows,
+/// anywhere else it does not and a new Event leaves the lines on screen as they are.
+#[derive(Clone, Debug)]
 pub struct Log {
     events: Vec<Event>,
-    up: usize,
-    /// The rows the last [`Log::fit`] gave.
-    height: usize,
+    scroll: Scroll,
+    follow: bool,
     /// The Event the view was opened at (`--event`): its line is reversed. Kept after the User scrolls.
     selected: Option<i64>,
     /// The selected Event is to be scrolled into view by the next [`Log::fit`], which knows the height.
@@ -25,7 +32,7 @@ pub struct Log {
 
 impl Log {
     pub fn new(events: Vec<Event>) -> Log {
-        Log { events, ..Log::default() }
+        Log { events, scroll: Scroll::default(), follow: true, selected: None, reveal: false }
     }
 
     /// The view opened at the Event `id`: its line is selected and, at the first [`Log::fit`], scrolled to the middle of
@@ -33,59 +40,85 @@ impl Log {
     /// `events` selects nothing and the view opens at the bottom.
     pub fn at(events: Vec<Event>, id: i64) -> Log {
         let found = events.iter().any(|e| e.id == id);
-        Log { events, selected: found.then_some(id), reveal: found, ..Log::default() }
+        Log { selected: found.then_some(id), reveal: found, ..Log::new(events) }
     }
 
     /// Whether the view shows the bottom, and so follows new Events.
     pub fn follows(&self) -> bool {
-        self.up == 0
+        self.follow
+    }
+
+    fn to_bottom(&mut self) {
+        self.scroll.by(isize::try_from(self.scroll.max_offset()).unwrap_or(isize::MAX));
     }
 
     /// Appends Events (newest last). A view that was scrolled up stays on the same lines; one at the bottom follows.
     pub fn push(&mut self, events: Vec<Event>) {
-        if self.up > 0 {
-            self.up += events.len();
-        }
         self.events.extend(events);
-        self.clamp();
+        self.scroll.resize(self.events.len(), self.scroll.page());
+        if self.follow {
+            self.to_bottom();
+        }
     }
 
-    /// The view is `height` rows tall.
+    /// The area is `height` rows tall, the title's row included.
     pub fn fit(&mut self, height: u16) {
-        self.height = usize::from(height);
+        let page = usize::from(height.saturating_sub(HEADER_ROWS));
+        self.scroll.resize(self.events.len(), page);
         if let (true, Some(id)) = (std::mem::take(&mut self.reveal), self.selected) {
             if let Some(i) = self.events.iter().position(|e| e.id == id) {
                 // the line goes to the middle of the view, which is full when it can be: `end` is one past the last
                 // line shown
-                let end = (i + 1 + self.height.saturating_sub(1) / 2).max(self.height);
-                self.up = self.events.len().saturating_sub(end);
+                let end = (i + 1 + page.saturating_sub(1) / 2).max(page);
+                let top = isize::try_from(end - page).unwrap_or(isize::MAX);
+                self.scroll.by(top - isize::try_from(self.scroll.offset()).unwrap_or(isize::MAX));
+                self.follow = false;
             }
         }
-        self.clamp();
+        if self.follow {
+            self.to_bottom();
+        }
+        self.settle();
     }
 
-    fn clamp(&mut self) {
-        self.up = self.up.min(self.events.len().saturating_sub(self.height));
+    /// Scrolling decides whether the view follows: it does at the bottom.
+    fn settle(&mut self) {
+        self.follow = self.scroll.offset() == self.scroll.max_offset();
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
-        self.up = self.up.saturating_add(lines);
-        self.clamp();
+        self.scroll.by(-isize::try_from(lines).unwrap_or(isize::MAX));
+        self.settle();
     }
 
     pub fn scroll_down(&mut self, lines: usize) {
-        self.up = self.up.saturating_sub(lines);
+        self.scroll.by(isize::try_from(lines).unwrap_or(isize::MAX));
+        self.settle();
+    }
+
+    /// A key press: ↑ or k, ↓ or j, PgUp, PgDn scroll (the kit's keys). Whether the key was one of these.
+    pub fn key(&mut self, key: KeyEvent) -> bool {
+        let scrolled = self.scroll.key(key);
+        self.settle();
+        scrolled
+    }
+
+    /// The mouse wheel scrolls (the kit's notch). Whether the event was a wheel notch.
+    pub fn mouse(&mut self, mouse: MouseEvent) -> bool {
+        let scrolled = self.scroll.mouse(mouse);
+        self.settle();
+        scrolled
     }
 
     /// A page: the rows of the view.
     pub fn page(&self) -> usize {
-        self.height.max(1)
+        self.scroll.page().max(1)
     }
 
     /// The Events on screen, oldest first.
     pub fn visible(&self) -> &[Event] {
-        let end = self.events.len() - self.up.min(self.events.len());
-        &self.events[end.saturating_sub(self.height)..end]
+        let first = self.scroll.offset().min(self.events.len());
+        &self.events[first..(first + self.scroll.page()).min(self.events.len())]
     }
 }
 
@@ -129,8 +162,10 @@ fn line(e: &Event, width: usize) -> Line<'static> {
     Line::from(vec![" ".into(), dim(clock(&e.at)), " ".into(), Span::styled(text, style)])
 }
 
-/// Draws the visible Events in `area`. Call [`Log::fit`] with its height first.
+/// Draws the title, then the visible Events, in `area`. Call [`Log::fit`] with its height first.
 pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
+    let [head, area] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
+    f.render_widget(Paragraph::new(section_header("logs", usize::from(head.width))), head);
     let lines: Vec<Line<'static>> = if log.events.is_empty() {
         vec![Line::from(dim(" none yet"))]
     } else {
@@ -146,6 +181,121 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
 
 #[cfg(test)]
 mod tests {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseEventKind};
+
+    use super::*;
+    use crate::dialog::scroll::WHEEL_ROWS;
+
+    fn events(n: i64) -> Vec<Event> {
+        (0..n)
+            .map(|id| Event {
+                id: id + 1,
+                at: format!("2026-01-03T00:00:{id:02}.000Z"),
+                kind: "plan-phase".into(),
+                context: None,
+                plan: None,
+                session: None,
+                job: None,
+                attempt: None,
+                text: format!("event {id}"),
+                data: serde_json::json!({}),
+            })
+            .collect()
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn wheel(kind: MouseEventKind) -> MouseEvent {
+        MouseEvent { kind, column: 2, row: 2, modifiers: KeyModifiers::NONE }
+    }
+
+    /// The texts on screen, `height` rows of the area (the title's included).
+    fn shown(log: &mut Log, height: u16) -> Vec<String> {
+        log.fit(height);
+        log.visible().iter().map(|e| e.text.clone()).collect()
+    }
+
+    #[test]
+    fn keys_and_the_wheel_scroll_and_scrolling_to_the_bottom_follows_again() {
+        let mut log = Log::new(events(20));
+        // 5 rows: the title and 4 Events
+        assert_eq!(shown(&mut log, 5), ["event 16", "event 17", "event 18", "event 19"]);
+        assert!(log.follows());
+        assert!(log.key(key(KeyCode::Up)) && !log.follows());
+        assert_eq!(shown(&mut log, 5)[0], "event 15");
+        assert!(log.key(key(KeyCode::Char('k'))));
+        assert!(log.key(key(KeyCode::PageUp)));
+        assert_eq!(shown(&mut log, 5)[0], "event 10");
+        assert!(log.mouse(wheel(MouseEventKind::ScrollUp)));
+        assert_eq!(shown(&mut log, 5)[0], format!("event {}", 10 - WHEEL_ROWS));
+        assert!(log.mouse(wheel(MouseEventKind::ScrollDown)) && log.mouse(wheel(MouseEventKind::ScrollDown)));
+        assert!(!log.follows(), "{:?}", shown(&mut log, 5));
+        assert!(log.key(key(KeyCode::PageDown)) && log.key(key(KeyCode::Char('j'))));
+        assert!(log.follows());
+        assert_eq!(shown(&mut log, 5)[3], "event 19");
+        // keys that do not scroll are left to the view
+        for code in [KeyCode::Char('q'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char('J')] {
+            assert!(!log.key(key(code)), "{code:?}");
+        }
+        assert!(!log.mouse(wheel(MouseEventKind::Moved)));
+    }
+
+    #[test]
+    fn the_view_follows_at_the_bottom_and_stays_put_when_scrolled_up() {
+        let mut log = Log::new(events(10));
+        shown(&mut log, 5);
+        log.push(events(12)[10..].to_vec());
+        assert_eq!(shown(&mut log, 5), ["event 8", "event 9", "event 10", "event 11"]);
+        log.mouse(wheel(MouseEventKind::ScrollUp));
+        let before = shown(&mut log, 5);
+        log.push(events(15)[12..].to_vec());
+        assert_eq!(shown(&mut log, 5), before);
+        assert!(!log.follows());
+        // the wheel back to the bottom (the 3 Events that came are 3 rows more), and it follows again
+        log.mouse(wheel(MouseEventKind::ScrollDown));
+        assert!(!log.follows());
+        log.mouse(wheel(MouseEventKind::ScrollDown));
+        assert!(log.follows());
+        log.push(events(16)[15..].to_vec());
+        assert_eq!(shown(&mut log, 5)[3], "event 15");
+    }
+
+    #[test]
+    fn a_taller_area_that_shows_everything_follows_and_cannot_scroll() {
+        let mut log = Log::new(events(3));
+        assert_eq!(shown(&mut log, 10).len(), 3);
+        assert!(log.follows());
+        log.scroll_up(5);
+        assert!(log.follows() && log.visible().len() == 3);
+    }
+
+    #[test]
+    fn the_title_is_the_section_header_and_the_events_start_under_it() {
+        let mut log = Log::at(events(30), 11);
+        log.fit(6);
+        let mut terminal = Terminal::new(TestBackend::new(24, 6)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
+        let mut expected = Terminal::new(TestBackend::new(24, 1)).unwrap();
+        expected.draw(|f| f.render_widget(Paragraph::new(section_header("logs", 24)), f.area())).unwrap();
+        let (got, want) = (terminal.backend().buffer(), expected.backend().buffer());
+        assert!((0..24).all(|x| got[(x, 0)] == want[(x, 0)]), "{got:?}");
+        assert_eq!(got[(3, 0)].symbol(), "l");
+        let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
+        assert!(row(1).starts_with(" 00:00:08 event 8"), "{}", row(1));
+        // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows
+        assert!(row(3).contains("event 10") && got[(0, 3)].modifier.contains(Modifier::REVERSED));
+        assert!(!got[(0, 2)].modifier.contains(Modifier::REVERSED));
+    }
+}
+
+/// The colour of an `error` line: red when the engine reported it for itself, the waiting colour when it is a Lead's
+/// (hs-d303, audit Q5).
+#[cfg(test)]
+mod error_colour {
     use ratatui::style::Color;
     use serde_json::{Value, json};
 

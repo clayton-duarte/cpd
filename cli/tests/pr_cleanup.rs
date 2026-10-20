@@ -6,13 +6,13 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::Stdio;
+use std::time::{Duration, Instant};
 
-use common::TestEnv;
-use cpd_core::git::{Setup, create_attempt_worktree, prepare_lead_worktree, pr_lead_worktree_path};
+use common::{CPD, TestEnv};
+use cpd_core::git::{Setup, create_attempt_worktree, gate_worktree_path, prepare_lead_worktree, pr_lead_worktree_path};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
-use cpd_core::merge::RepoLock;
 use cpd_core::store::Store;
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -77,7 +77,7 @@ fn fx(keys: &[&'static str]) -> Fx {
     let repo = env.git_repo("pay").canonicalize().unwrap();
     let origin = env.root().join("repos/origin.git");
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
 
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -113,7 +113,7 @@ fn fx(keys: &[&'static str]) -> Fx {
     }
 
     let mut sql = String::from(
-        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 't');
+        "INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 't');
          INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
            VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
@@ -200,6 +200,39 @@ impl Fx {
             !pr.attempt.exists() && !self.branch_exists(&pr.attempt_branch),
             !pr.lead.exists() && !self.branch_exists(&pr.lead_branch),
         )
+    }
+
+    /// `UPDATE attempts SET <set>` for one Attempt of the Plan.
+    fn set_attempt(&self, id: &str, set: &str) {
+        self.store().write("fixture", |tx| Ok(tx.execute(&format!("UPDATE attempts SET {set} WHERE plan = 'pay' AND id = ?1"), [id])?)).unwrap();
+    }
+
+    /// A gate worktree of PR `key` for process `pid`, as `pr push` adds it: detached and locked.
+    fn gate_worktree(&self, key: &str, pid: u32) -> PathBuf {
+        let path = gate_worktree_path(&self.repo, &plan(), &PrKey::parse(key).unwrap(), pid).unwrap();
+        let reason = format!("cpd gate {pid}");
+        self.git(&self.repo, &["worktree", "add", "-q", "--detach", "--lock", "--reason", &reason, path.to_str().unwrap(), "main"]);
+        path
+    }
+
+    /// The paths of the repo's worktrees.
+    fn worktrees(&self) -> Vec<PathBuf> {
+        let list = self.git(&self.repo, &["worktree", "list", "--porcelain"]);
+        list.lines().filter_map(|l| l.strip_prefix("worktree ")).map(PathBuf::from).collect()
+    }
+
+    /// Commits `.config/wt.toml` on PR `key`'s Lead Branch and pushes it.
+    fn hooks(&self, key: &str, toml: &str) {
+        let pr = self.pr(key);
+        fs::create_dir_all(pr.lead.join(".config")).unwrap();
+        fs::write(pr.lead.join(".config/wt.toml"), toml).unwrap();
+        self.git(&pr.lead, &["add", "-A"]);
+        self.git(&pr.lead, &["commit", "-q", "-m", "hooks"]);
+        self.git(&pr.lead, &["push", "-q", "origin", &pr.lead_branch]);
+    }
+
+    fn remote_sha(&self, branch: &str) -> String {
+        self.git(&self.repo, &["ls-remote", "origin", &format!("refs/heads/{branch}")])
     }
 
     /// The `data` of the Plan's `error` Events, in order.
@@ -310,27 +343,210 @@ fn a_locked_attempt_worktree_survives_until_it_is_unlocked() {
 }
 
 #[test]
-fn a_held_repo_lock_defers_the_clean_up_to_a_later_poll_with_no_event() {
-    // hs-n124: a Gate holds the repo lock in the Lead worktree while the PR merges on GitHub.
+fn an_attempt_that_has_not_ended_defers_the_clean_up_to_a_later_poll_with_no_event() {
     let fx = fx(&["api"]);
     let api = fx.pr("api");
+    // A second Job of the PR, whose Attempt still runs.
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, created_txn, created_at)
+                 VALUES ('pay', 'api', 'late', 'L', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 1, ?1, ?2, 't')",
+                params!["f".repeat(64), tx.id()],
+            )?;
+            tx.execute(
+                "INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, base_sha, started_at)
+                 VALUES ('pay', 'late-a1', 'late', 1, 'S2', 'ladder', 'running', 'cpd/pay--late-a1', '/nowhere/late-a1', 'sha', 't')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
     fx.github(&[], &["api"]);
 
-    let lock = RepoLock::wait(&fx.home, &fx.repo).unwrap();
     let out = fx.poll();
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "api"}]));
-    assert!(api.lead.exists() && fx.branch_exists(&api.lead_branch), "the Lead worktree stays under a held lock");
+    assert!(api.lead.exists() && fx.branch_exists(&api.lead_branch), "the Lead worktree waits for the Attempt");
+    assert!(api.attempt.exists() && fx.branch_exists(&api.attempt_branch), "so does the Attempt's");
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+
+    fx.set_attempt("late-a1", "status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't'");
+    fx.poll();
+
+    assert_eq!(fx.gone("api"), (true, true));
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+}
+
+#[test]
+fn a_held_driver_lock_defers_the_clean_up_to_a_later_poll_with_no_event() {
+    // A driver that ended its Attempt may still be in A9, removing its worktree (contract §7.2).
+    let fx = fx(&["api"]);
+    let api = fx.pr("api");
+    fx.github(&[], &["api"]);
+    let path = fx.home.attempt_lock(&plan(), &AttemptId::parse("api-a1").unwrap());
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let held = fs::File::create(&path).unwrap();
+    held.lock().unwrap();
+
+    fx.poll();
+
+    assert!(api.lead.exists() && fx.branch_exists(&api.lead_branch), "the Lead worktree stays under a held driver lock");
     assert!(api.attempt.exists() && fx.branch_exists(&api.attempt_branch));
     assert_eq!(fx.errors(), Vec::<Value>::new());
 
     fx.poll();
     assert!(api.lead.exists(), "still held");
-    assert_eq!(fx.errors(), Vec::<Value>::new());
 
-    drop(lock);
+    drop(held);
     fx.poll();
 
     assert_eq!(fx.gone("api"), (true, true));
     assert_eq!(fx.errors(), Vec::<Value>::new());
+    assert!(path.exists(), "the probe neither creates nor removes the lock file");
+}
+
+#[test]
+fn a_gate_worktree_whose_pid_is_dead_is_removed_and_one_whose_pid_lives_is_kept() {
+    let fx = fx(&["api"]);
+    let dead = fx.gate_worktree("api", dead_pid());
+    let live = fx.gate_worktree("api", std::process::id());
+    fx.github(&[], &["api"]);
+
+    fx.poll();
+
+    assert!(!dead.exists(), "the leftover of a killed Gate goes");
+    assert!(!fx.worktrees().contains(&dead), "and its registration");
+    assert!(live.exists() && fx.worktrees().contains(&live), "a running Gate keeps its worktree");
+    assert_eq!(fx.gone("api"), (true, true));
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+
+    // A gate worktree left on disk keeps the PR in the later polls' retries, silently.
+    fx.poll();
+    assert!(live.exists());
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+}
+
+#[test]
+fn a_dead_gate_worktree_of_a_pr_cleaned_up_earlier_is_swept_by_a_later_poll() {
+    let fx = fx(&["api"]);
+    fx.github(&[], &["api"]);
+    fx.poll();
+    assert_eq!(fx.gone("api"), (true, true));
+
+    // A Gate that was running at the merge was killed since.
+    let dead = fx.gate_worktree("api", dead_pid());
+    fx.poll();
+
+    assert!(!dead.exists() && !fx.worktrees().contains(&dead));
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+}
+
+#[test]
+fn a_lead_worktree_a_merge_left_stale_is_brought_up_to_date_and_removed() {
+    let fx = fx(&["api"]);
+    let api = fx.pr("api");
+    // A merge moved the Lead Branch and pushed it, but its rule S did not run.
+    let attempt = &api.attempt;
+    fs::write(attempt.join("merged.txt"), "merged\n").unwrap();
+    fx.git(attempt, &["add", "-A"]);
+    fx.git(attempt, &["commit", "-q", "-m", "merged"]);
+    let new = fx.git(attempt, &["rev-parse", "HEAD"]);
+    let old = fx.git(&fx.repo, &["rev-parse", &api.lead_branch]);
+    fx.git(&fx.repo, &["update-ref", &format!("refs/heads/{}", api.lead_branch), &new, &old]);
+    fx.git(&fx.repo, &["push", "-q", "origin", &api.lead_branch]);
+    assert!(!fx.git(&api.lead, &["status", "--porcelain"]).is_empty(), "the stale tree looks like local changes");
+    fx.github(&[], &["api"]);
+
+    fx.poll();
+
+    assert_eq!(fx.gone("api"), (true, true));
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+}
+
+#[test]
+fn a_pr_merged_during_its_gate_loses_its_lead_worktree_but_not_the_gate_worktree() {
+    // hs-n124: the clean-up once removed the Lead worktree under a running Gate. The Gate now runs
+    // in a gate worktree of its own, which the clean-up leaves alone while its pid lives.
+    let fx = fx(&["api"]);
+    // The Gate runs only under `pr.gate = "local"` (contract §8.3).
+    fx.env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
+    let api = fx.pr("api");
+    fx.hooks("api", &paused_gate(fx.env.root()));
+    let before = fx.remote_sha(&api.lead_branch);
+
+    let child = Child(Some(
+        fx.env.command(CPD).args(["pr", "push", "--plan", "pay", "--pr", "api"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap(),
+    ));
+    let gate = gate_worktree_path(&fx.repo, &plan(), &PrKey::parse("api").unwrap(), child.0.as_ref().unwrap().id()).unwrap();
+    await_gate(fx.env.root());
+    fx.github(&[], &["api"]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "api"}]));
+    assert_eq!(fx.gone("api"), (true, true), "the Lead worktree goes: no Gate runs there");
+    assert!(gate.exists(), "the running Gate's worktree stays");
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+
+    release_gate(fx.env.root());
+    let out = child.finish();
+
+    assert_eq!((out["error"]["code"].as_str(), out["error"]["details"]["from"].as_str()), (Some("illegal_transition"), Some("merged")), "{out}");
+    assert_eq!(fx.remote_sha(&api.lead_branch), before, "nothing pushed");
+    assert!(!gate.exists(), "pr push removes its own gate worktree");
+}
+
+/// A pid that is not alive: that of a child that has exited and been reaped.
+fn dead_pid() -> u32 {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+/// A child process, killed when dropped: a test that panics leaves none behind.
+struct Child(Option<std::process::Child>);
+
+impl Child {
+    /// Its stdout as JSON, once it has exited.
+    fn finish(mut self) -> Value {
+        let out = self.0.take().unwrap().wait_with_output().unwrap();
+        serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&out.stderr)))
+    }
+}
+
+impl Drop for Child {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// A `pre-merge` paused mid-run: it creates `<root>/gate-started`, then waits for
+/// `<root>/gate-go` (at most 60 s).
+fn paused_gate(root: &Path) -> String {
+    let (started, go) = (root.join("gate-started"), root.join("gate-go"));
+    format!(
+        "pre-merge = \"touch {}; i=0; while [ ! -e {} ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done\"\n",
+        started.display(),
+        go.display()
+    )
+}
+
+/// Waits until the [`paused_gate`] has started.
+fn await_gate(root: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while !root.join("gate-started").exists() {
+        assert!(Instant::now() < deadline, "the Gate never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Lets the [`paused_gate`] finish.
+fn release_gate(root: &Path) {
+    fs::write(root.join("gate-go"), "").unwrap();
 }

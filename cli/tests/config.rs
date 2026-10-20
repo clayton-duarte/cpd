@@ -59,7 +59,6 @@ fn config_with_only_the_required_keys_has_every_default() {
                 "ask_minutes": 60,
                 "setup_minutes": 15,
                 "gate_minutes": 30,
-                "lock_wait_seconds": 900,
                 "store_busy_ms": 5000,
                 "fork_quiet_seconds": 5,
                 "distill_minutes": 15,
@@ -157,7 +156,6 @@ attempt_minutes = 1
 ask_minutes = 1
 setup_minutes = 1
 gate_minutes = 1
-lock_wait_seconds = 1
 store_busy_ms = 1
 fork_quiet_seconds = 1
 distill_minutes = 1
@@ -206,7 +204,8 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[events]\nsurprise = 1\n", "events.surprise"),
         ("version = 1\nmachine = \"hs\"\n[tmux]\nsurprise = 1\n", "tmux.surprise"),
         ("version = 1\nmachine = \"hs\"\n[surprise]\nx = 1\n", "surprise"),
-        // keys removed by R19, by Plan manager B1 (hs-a1: no Context sync) and from cpd 1
+        // keys removed by R19, by Plan manager B1 (hs-a1: no Context sync), by hs-d243 (no per-repo lock) and from cpd 1
+        ("version = 1\nmachine = \"hs\"\n[timeouts]\nlock_wait_seconds = 900\n", "timeouts.lock_wait_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ncontext_sync_seconds = 300\n", "watch.context_sync_seconds"),
         ("version = 1\nmachine = \"hs\"\nreview_mode = \"none\"\n", "review_mode"),
         ("version = 1\nmachine = \"hs\"\ndefault_review_tier = \"S3\"\n", "default_review_tier"),
@@ -243,7 +242,6 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nattempt_minutes = 0\n", "timeouts.attempt_minutes"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstore_busy_ms = 0\n", "timeouts.store_busy_ms"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstall_seconds = -1\n", "timeouts.stall_seconds"),
-        ("version = 1\nmachine = \"hs\"\n[timeouts]\nlock_wait_seconds = 0\n", "timeouts.lock_wait_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0\n", "watch.tick_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0.05\n", "watch.tick_seconds"),
         ("version = 1\nmachine = \"hs\"\n[watch]\ntick_seconds = 0.2501\n", "watch.tick_seconds"),
@@ -353,7 +351,9 @@ fn config_is_read_only_and_idempotent() {
     let second = env.cpd(&["config"]);
     assert_eq!(first.stdout, second.stdout);
     first.ok();
-    let names: Vec<_> = fs::read_dir(env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    // `policy/` is the test env's own owner file (`TestEnv::new`), not something `cpd config` wrote.
+    let names: Vec<_> =
+        fs::read_dir(env.cpd_home()).unwrap().map(|e| e.unwrap().file_name()).filter(|n| n != "policy").collect();
     assert_eq!(names, ["config.toml"]);
     assert_eq!(fs::read_to_string(env.cpd_home().join("config.toml")).unwrap(), MINIMAL);
 }

@@ -91,6 +91,9 @@ pub(super) struct Row {
     pub registered_event: Option<i64>,
     /// When it was archived (contract §2.2 "Archived"), else none.
     pub archived_at: Option<String>,
+    /// Its dynamic title (contract §2.2, hs-d257), written by `session retitle`, and when.
+    pub dynamic_title: Option<String>,
+    pub titled_at: Option<String>,
 }
 
 const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.cwd, s.tier,
@@ -99,7 +102,7 @@ const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name,
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        l.lead_session IS NOT NULL,
        (SELECT min(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-registered'),
-       s.archived_at
+       s.archived_at, s.title, s.titled_at
   FROM sessions s
   LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
@@ -124,6 +127,8 @@ struct Raw {
     plan_lead: bool,
     registered_event: Option<i64>,
     archived_at: Option<String>,
+    title: Option<String>,
+    titled_at: Option<String>,
 }
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
@@ -147,12 +152,18 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         plan_lead: r.get(16)?,
         registered_event: r.get(17)?,
         archived_at: r.get(18)?,
+        title: r.get(19)?,
+        titled_at: r.get(20)?,
     })
 }
 
 impl Row {
-    /// The header of its pane: its Plan's title when it is the Plan's Lead, else its name.
+    /// The header of its pane (contract §6.1): its dynamic title when it has one, else its
+    /// Plan's title when it is the Plan's Lead, else its name.
     pub fn title(&self, conn: &Connection) -> Result<String, CpdError> {
+        if let Some(dynamic) = &self.dynamic_title {
+            return Ok(dynamic.clone());
+        }
         match (&self.plan, self.plan_lead) {
             (Some(plan), true) => Ok(conn.query_row("SELECT title FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?),
             _ => Ok(self.name.clone()),
@@ -184,6 +195,8 @@ impl Row {
             plan_lead: raw.plan_lead,
             registered_event: raw.registered_event,
             archived_at: raw.archived_at,
+            dynamic_title: raw.title,
+            titled_at: raw.titled_at,
             id,
         })
     }
@@ -208,6 +221,8 @@ impl Row {
             "plan_lead": self.plan_lead,
             "tier": self.tier,
             "cwd": self.cwd,
+            "title": self.dynamic_title,
+            "titled_at": self.titled_at,
         })
     }
 }

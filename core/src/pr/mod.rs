@@ -10,8 +10,9 @@
 //! - `merge`: a clean pull request squash-merged on GitHub (`pr merge`);
 //! - `gh`: the one gateway to `gh`; `status`: the PR status enums; `row`: the Plan as these commands read it.
 //!
-//! `pr open`, `pr rebase` and `pr push` run under the per-repo lock, after R (§7.4); each
-//! works on one PR of the Plan, `poll` on every open one (§7.6).
+//! `pr open`, `pr rebase` and `pr push` take no lock (hs-d243): each runs its Gate on one
+//! commit in a gate worktree of its own and pushes by rule P (§7.4, §7.6); each works on
+//! one PR of the Plan, `poll` on every open one.
 
 mod add;
 mod cancel;
@@ -29,17 +30,16 @@ pub mod start;
 mod status;
 mod view;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::args::{PlanArg, PrArg};
-use crate::config;
+use crate::args::{PlanArg, PrArg, PrTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::git::{self, HookOutcome, Operation, run_hook};
+use crate::git::{self, GateHooks, HookOutcome, Refused, Setup};
 use crate::home::{CpdHome, Hook};
-use crate::ids::{AttemptId, PlanId, PrKey};
-use crate::merge::{self as attempt_merge, RepoLock};
+use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName};
+use crate::policy::{Gate, Policy, PolicyKey, owner_unset, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
 use crate::plan::PrRow;
@@ -93,6 +93,9 @@ pub struct AddArgs {
     /// The PR's repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: PathBuf,
+    /// The PR's own title: names its change; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: PrTitle,
     /// The branch the pull request targets [default: origin's HEAD branch, else main]
     #[arg(long, value_name = "branch")]
     base: Option<String>,
@@ -123,6 +126,9 @@ pub struct EditArgs {
     /// Remove every need
     #[arg(long = "no-needs")]
     no_needs: bool,
+    /// The new title, in any phase while the PR is not merged or cancelled; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: Option<PrTitle>,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -166,15 +172,45 @@ impl Env {
     }
 }
 
+/// The resolved policy of PR `key` of `plan` (contract §8.3 "Keys and resolution"): `Repo(<owner>, <name>)`,
+/// `Owner` when the PR has no name. An unset owner is `owner_unset`; a resolve error is returned as it is.
+fn pr_policy(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Policy, CpdError> {
+    pr_policy_resolved(env, plan, key)?
+}
+
+/// [`pr_policy`] with the two kinds of failure apart: the outer error is the store's (it cannot be read, or holds
+/// a value that does not parse), the inner one the resolve's (`owner_unset`, `owner_unknown`, `policy_invalid`),
+/// which a consumer of many rows (the poll) reports for its row and goes on.
+fn pr_policy_resolved(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<Result<Policy, CpdError>, CpdError> {
+    let (context, owner, name): (String, Option<String>, Option<String>) = env.store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT c.id, c.owner, r.name FROM prs r JOIN plans p ON p.id = r.plan JOIN contexts c ON c.id = p.context
+              WHERE r.plan = ?1 AND r.key = ?2",
+            [plan.as_str(), key.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?)
+    })?;
+    let Some(owner) = owner else {
+        return Ok(Err(owner_unset(&ContextId::parse(&context)?)));
+    };
+    let owner = OwnerLogin::parse(&owner)?;
+    let policy_key = match name {
+        Some(name) => PolicyKey::Repo(owner, RepoName::parse(&name)?),
+        None => PolicyKey::Owner(owner),
+    };
+    Ok(resolve(&env.home, &policy_key).map(|resolved| resolved.policy))
+}
+
 /// `illegal_phase` (exit 3): `command` needs a Plan in phase `needs`.
 fn illegal_phase(plan: &PlanPrs, command: &str, needs: &str) -> CpdError {
     wrong_phase(&plan.plan.id, plan.plan.phase, command, needs)
 }
 
-/// The per-PR Gate log, `run/<plan>/logs/pr-<key>.pre-merge.log` (§7.6). The
-/// contract's layout (§1.4) names this file; `CpdHome` has no method for it.
-fn gate_log(home: &CpdHome, plan: &PlanId, key: &PrKey) -> PathBuf {
-    home.plan_dir(plan).join("logs").join(format!("pr-{key}.pre-merge.log"))
+/// A per-PR Gate log, `run/<plan>/logs/pr-<key>.<hook>.log` (§7.6): `pre-start`
+/// and `pre-merge` of the gate worktree. The contract's layout (§1.4) names these
+/// files; `CpdHome` has no method for them.
+fn pr_log(home: &CpdHome, plan: &PlanId, key: &PrKey, hook: Hook) -> PathBuf {
+    home.plan_dir(plan).join("logs").join(format!("pr-{key}.{}.log", hook.as_str()))
 }
 
 fn wrong_phase(plan: &PlanId, phase: Phase, command: &str, needs: &str) -> CpdError {
@@ -243,87 +279,63 @@ fn check_needs(prs: &[PrRow], plan: &PlanId, own: Option<&PrKey>, needs: &[Strin
     Ok(())
 }
 
-/// Takes the per-repo lock of the PR's repo, waiting at most `lock_wait_seconds`
-/// (`lock_timeout`), then runs R for the repo's orphaned merges (§7.4), so that
-/// nothing is gated or pushed that holds a merge the Ledger has not recorded.
-/// `source` is the command, for what R writes.
-fn lock(env: &mut Env, pr: &PrRow, source: &str) -> Result<RepoLock, CpdError> {
-    let limit = Duration::from_secs(u64::from(env.config.timeouts.lock_wait_seconds));
-    let lock = RepoLock::wait_for(&env.home, Path::new(&pr.repo), limit)?;
-    let repo = pr.repo.clone();
-    let merging = env.store.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
-               JOIN prs r ON r.plan = j.plan AND r.key = j.pr
-              WHERE a.status = 'merging' AND r.repo = ?1",
-        )?;
-        let rows = stmt.query_map([repo], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
-    })?;
-    // An Attempt whose driver is alive is that driver's to finish; only a free driver lock is an orphan.
-    let mut orphans = false;
-    for (plan, attempt) in merging {
-        let (plan, attempt) = (PlanId::parse(&plan)?, AttemptId::parse(&attempt)?);
-        orphans |= crate::driver::lock::probe(&env.home, &plan, &attempt)?.is_some();
+/// How the Gate runs for PR `pr` (contract §7.3, §7.6): `pre-start` with
+/// `setup_minutes`, `pre-merge` with `gate_minutes`, `branch` the Lead Branch.
+fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
+    let minutes = |m: u32| Duration::from_secs(u64::from(m) * 60);
+    GateHooks {
+        lead_branch: &pr.lead_branch,
+        base: &pr.base,
+        pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreStart) },
+        pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
     }
-    // R needs pi's catalog only to pick the next Tier of an Attempt it ends `crashed`.
-    if orphans {
-        let catalog = config::load_catalog(&env.config)?;
-        let ctx = attempt_merge::Ctx { home: &env.home, config: &env.config, catalog: &catalog, source, metrics: &|_| None };
-        attempt_merge::recover(&mut env.store, &ctx, &lock)?;
-    }
-    Ok(lock)
 }
 
-/// The Lead worktree must be clean (`dirty_target`, exit 3).
-fn require_clean(plan: &PlanId, pr: &PrRow, lead: &Path) -> Result<(), CpdError> {
-    let status = git::run::ok(lead, &["status", "--porcelain"])?;
-    if status.trim().is_empty() {
+/// The Gate on a snapshot (contract §7.6 steps 1–4) on `sha`: the PR's dead gate
+/// worktrees swept, a gate worktree detached at `sha`, `pre-start` and `pre-merge`
+/// in it, the gate worktree removed. `again` is the command the Lead runs after fixing it.
+/// Nothing runs when the PR's policy says `pr.gate` is not `local` (§8.3).
+fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, again: &str) -> Result<(), CpdError> {
+    if policy.pr.gate != Gate::Local {
         return Ok(());
     }
-    Err(CpdError::new(
-        ErrorCode::DirtyTarget,
-        format!("The Lead worktree {} has uncommitted changes: commit or discard them first.", lead.display()),
-    )
-    .with("plan", plan.as_str())
-    .with("pr", pr.key.as_str())
-    .with("lead_worktree", lead.display().to_string())
-    .with("files", status.lines().map(|l| l.trim().to_owned()).collect::<Vec<_>>()))
+    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, again))
 }
 
-/// The Gate (§7.3, §7.6): `pre-merge` from the PR's Lead worktree's `.config/wt.toml`,
-/// run there on the Lead Branch. `again` is the command the Lead runs after fixing it.
-/// A failure is `gate_failed` (exit 3), an error `gate_error` (exit 1), both with
-/// the last 60 lines in `details.tail` and the full log in `details.log`.
-fn gate(env: &Env, plan: &PlanId, pr: &PrRow, lead: &Path, again: &str) -> Result<(), CpdError> {
-    let log = gate_log(&env.home, plan, &pr.key);
-    let timeout = Duration::from_secs(u64::from(env.config.timeouts.gate_minutes) * 60);
-    let operation = Operation { branch: &pr.base };
-    let result = run_hook(Hook::PreMerge, lead, Some(&operation), timeout, &log)?;
-    let tail = result.tail.unwrap_or_default();
-    let log = log.display().to_string();
-    match result.outcome {
-        HookOutcome::Passed => Ok(()),
-        HookOutcome::Failed { exit } => Err(CpdError::new(
+/// A Gate that did not pass (contract §7.3, §7.6 step 3): a `pre-merge` that failed
+/// is `gate_failed` (exit 3); a `pre-merge` that could not be judged, or a
+/// `pre-start` that did not pass in any way, is `gate_error` (exit 1). Both carry
+/// the hook's last 60 lines in `details.tail` and its log in `details.log`.
+fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, again: &str) -> CpdError {
+    let tail = refused.tail.unwrap_or_default();
+    let log = refused.log.display().to_string();
+    let hook = refused.hook.as_str();
+    let error = match (refused.hook, &refused.outcome) {
+        (Hook::PreMerge, HookOutcome::Failed { exit }) => CpdError::new(
             ErrorCode::GateFailed,
             format!(
-                "The Gate failed on {} (exit {exit}): nothing was pushed. Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.",
-                pr.lead_branch
+                "The Gate failed on {} at {} (exit {exit}): nothing was pushed. Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.",
+                pr.lead_branch,
+                short(sha)
             ),
         )
-        .with("plan", plan.as_str())
-        .with("pr", pr.key.as_str())
-        .with("exit", exit)
-        .with("tail", tail)
-        .with("log", log)),
-        HookOutcome::Error(why) => Err(CpdError::new(
-            ErrorCode::GateError,
-            format!("The Gate could not be judged on {}: {why}. Nothing was pushed.", pr.lead_branch),
-        )
-        .with("plan", plan.as_str())
-        .with("pr", pr.key.as_str())
-        .with("reason", why.to_string())
-        .with("tail", tail)
-        .with("log", log)),
-    }
+        .with("exit", *exit),
+        (_, outcome) => {
+            let error = CpdError::new(
+                ErrorCode::GateError,
+                format!("The Gate could not be judged on {} at {}: {hook} {outcome}. Nothing was pushed.", pr.lead_branch, short(sha)),
+            )
+            .with("reason", outcome.to_string());
+            match outcome {
+                HookOutcome::Failed { exit } => error.with("exit", *exit),
+                _ => error,
+            }
+        }
+    };
+    error.with("plan", plan.as_str()).with("pr", pr.key.as_str()).with("hook", hook).with("sha", sha).with("tail", tail).with("log", log)
+}
+
+/// The first 12 characters of a SHA, for messages.
+fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(12)]
 }
