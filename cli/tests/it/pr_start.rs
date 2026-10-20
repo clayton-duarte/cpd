@@ -70,7 +70,7 @@ impl Fx {
     /// `pr add <key> --repo <repo> [--needs <needs>]`.
     fn add(&self, key: &str, repo: &Path, needs: &[&str]) {
         let needs = needs.join(",");
-        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--plan", "pay"];
+        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"];
         if !needs.is_empty() {
             args.extend(["--needs", &needs]);
         }
@@ -87,7 +87,7 @@ impl Fx {
 
     /// Reviews and approves the Plan as it is.
     fn approve(&self) {
-        let review = self.env.cpd(&["plan", "review", "--plan", "pay"]).ok();
+        let review = self.env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
         let id = review["review"]["id"].as_str().unwrap().to_owned();
         self.env.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay"]).ok();
     }
