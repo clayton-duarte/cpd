@@ -582,7 +582,8 @@ fn an_empty_store_says_so() {
     drop(open(&env));
     let pane = Pane::start(&env, 30, 5);
     let header = pill(28, 0);
-    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", "", header.as_str()], "the section is there with no item");
+    let close = " ╰\u{F005A} up to date, drink some water"; // hs-d487: the empty Inbox's one closing row, below its title
+    assert_eq!(pane.wait("the empty tree", |s| !s.is_empty()), ["", "  no Contexts", "", header.as_str(), close], "the section is there with no item: the title (count 0), then the one closing row");
 }
 
 #[test]

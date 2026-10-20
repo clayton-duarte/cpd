@@ -1902,6 +1902,9 @@ mod tests {
         format!(" │  {glyph} {label}{}{age}", " ".repeat(41 - 5 - label.chars().count() - age.chars().count()))
     }
 
+    /// The empty Inbox's one closing row (hs-d487): the margin, `╰`, U+F005A, the words.
+    const EMPTY_CLOSE: &str = " ╰\u{F005A} up to date, drink some water";
+
     /// A scroll cue row at 43 columns: the margin, the fold's `│`, the cue right-aligned.
     fn cue_row(arrow: char, n: usize) -> String {
         format!(" │{:>40}", format!("{arrow} {n} more"))
@@ -1915,8 +1918,10 @@ mod tests {
     #[test]
     fn with_no_item_the_section_is_its_header_pinned_to_the_bottom() {
         let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
-        assert_eq!(rows[15], header(0));
-        assert_eq!(rows[14], "", "no rows");
+        let title = rows.iter().position(|r| *r == header(0)).expect("the title row with count 0");
+        assert_eq!(rows.get(title + 1).map(String::as_str), Some(EMPTY_CLOSE), "hs-d487: the one closing row follows the title");
+        assert_eq!(rows[title - 1], "", "the empty row above the title");
+        assert_eq!(rows.len(), title + 2, "the closing row is the last: no row below it");
         assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"), "the tree above is where it was");
     }
 
@@ -2843,9 +2848,11 @@ mod tests {
     #[test]
     fn with_no_item_the_section_is_an_empty_row_the_title_and_an_empty_row_pinned_to_the_bottom() {
         let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
-        assert_eq!(rows[13], "", "the empty row above the title");
-        assert_eq!(rows[14], header(0));
-        assert_eq!(rows[15], "", "the empty row below it");
+        let title = rows.iter().position(|r| *r == header(0)).expect("the title row with count 0");
+        assert_eq!(rows[title - 1], "", "the empty row above the title");
+        assert_eq!(rows.get(title + 1).map(String::as_str), Some(EMPTY_CLOSE), "hs-d487: the one closing row follows the title");
+        assert_eq!(rows.get(title + 2).map(String::as_str), Some(""), "the empty row below it");
+        assert_eq!(rows.len(), title + 3, "pinned to the bottom");
     }
 
     #[test]

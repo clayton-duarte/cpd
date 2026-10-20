@@ -594,4 +594,27 @@ mod tests {
         assert_eq!(bottom.hit(18), Some(Hit::Toggle), "the closing row is the last but one");
         assert_eq!(bottom.hit(19), None, "and the last is the empty row");
     }
+
+    // ---- the empty Inbox (hs-d487): the title with count 0, then one muted closing row, no toggle ----
+
+    #[test]
+    fn with_no_item_the_section_is_the_title_with_count_0_then_the_one_closing_row_and_it_is_no_click() {
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(41, 6)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"))).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row = |y: u16| (0..41).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
+        let title = format!("╭─\u{E0B6}Inbox\u{E0B4}{}0", "─".repeat(41 - 2 - 2 - "Inbox".len() - 1));
+        let close = "╰\u{F005A} up to date, drink some water";
+        let rows: Vec<String> = (0..6).map(row).collect();
+        assert_eq!(rows[..3], ["".to_owned(), title, close.to_owned()], "the empty row, the title with count 0, the closing row: {rows:?}");
+        assert!(rows[3..].iter().all(String::is_empty), "no other row: {rows:?}");
+        let muted = palette::fg(Meaning::Nothing).fg.unwrap();
+        for x in 0..close.chars().count() as u16 {
+            assert_eq!(buffer[(x, 2)].fg, muted, "cell {x} of the closing row is muted");
+        }
+        for y in 0..4 {
+            assert_eq!(Shape::new(0, false).hit(y), if y == 1 { Some(Hit::Header) } else { None }, "row {y}: only the title is a hit, the closing row is no toggle");
+        }
+    }
 }
