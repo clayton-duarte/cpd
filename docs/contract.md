@@ -1319,17 +1319,17 @@ CREATE INDEX inbox_items_closed ON inbox_items(closed_at);
 
 -- ---------- Plannotator sessions (hs-d496) ----------
 CREATE TABLE plannotator_reviews (
-  session       TEXT NOT NULL REFERENCES sessions(id),
-  pn_id         TEXT NOT NULL CHECK (pn_id GLOB 'pn-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'),
-  kind          TEXT NOT NULL CHECK (kind IN ('annotate', 'review', 'last', 'plan')),
-  subject       TEXT NOT NULL CHECK (length(subject) BETWEEN 1 AND 200),
-  port          INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
-  opened_at     TEXT NOT NULL,
-  closed_at     TEXT,
-  ended         TEXT CHECK (ended IS NULL OR ended IN ('decided', 'lost')),
-  UNIQUE (session, pn_id),
+  session   TEXT    NOT NULL REFERENCES sessions(id),
+  pn_id     TEXT    NOT NULL CHECK (pn_id GLOB 'pn-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]' AND length(pn_id) = 9),
+  kind      TEXT    NOT NULL CHECK (kind IN ('annotate', 'review', 'last', 'plan')),
+  subject   TEXT    NOT NULL CHECK (length(subject) BETWEEN 1 AND 200),
+  port      INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+  opened_at TEXT    NOT NULL,
+  closed_at TEXT,
+  ended     TEXT    CHECK (ended IN ('decided', 'lost')),
+  PRIMARY KEY (session, pn_id),
   CHECK ((closed_at IS NULL) = (ended IS NULL))
-) STRICT;
+) STRICT, WITHOUT ROWID;
 
 -- ---------- Tier catalog cache (section 9) ----------
 CREATE TABLE tier_catalog (
