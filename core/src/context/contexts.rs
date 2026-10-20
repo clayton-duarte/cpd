@@ -3,7 +3,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::record::{Draft, Record};
+use super::record::{Draft, Record, superseding};
 use super::Jira;
 use crate::clock::now;
 use crate::args::Text;
@@ -213,8 +213,8 @@ impl<'a> Contexts<'a> {
     }
 }
 
-/// §4.6 "A write": `supersedes` names an existing decision, `question` an
-/// existing question; and an answer's question has no answer yet (§3.5).
+/// §4.6 "A write": `supersedes` names an existing record of a kind the writing
+/// record may supersede (`supersedes_invalid` otherwise), `question` an existing question; and an answer's question has no answer yet (§3.5).
 fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<(), CpdError> {
     let exists = |id: &RecordId, kind: RecordKind| -> rusqlite::Result<bool> {
         conn.query_row(
@@ -234,10 +234,32 @@ fn check_links(conn: &Connection, context: &ContextId, draft: &Draft) -> Result<
         .with("record", id.to_string())
         .with("kind", kind.as_str())
     };
-    match draft {
-        Draft::Decision { supersedes: Some(id) } if !exists(id, RecordKind::Decision)? => {
-            Err(not_found(id, RecordKind::Decision))
+    if let Some(id) = draft.supersedes() {
+        let found: Option<String> = conn
+            .query_row(
+                "SELECT kind FROM context_records WHERE context = ?1 AND id = ?2",
+                params![context.as_str(), id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(found) = found else {
+            return Err(CpdError::new(ErrorCode::RecordNotFound, format!("Context {context} has no record {id}."))
+                .with("context", context.as_str())
+                .with("record", id.to_string()));
+        };
+        let writer = draft.kind();
+        if !superseding(writer).iter().any(|k| k.as_str() == found) {
+            let allowed: Vec<&str> = superseding(writer).iter().map(|k| k.as_str()).collect();
+            return Err(CpdError::new(
+                ErrorCode::SupersedesInvalid,
+                format!("A {} cannot supersede {id}, a {found}: it may supersede a {}.", writer.as_str(), allowed.join(" or a ")),
+            )
+            .with("record", id.to_string())
+            .with("kind", found)
+            .with("allowed", allowed));
         }
+    }
+    match draft {
         Draft::Answer { question } => {
             if !exists(question, RecordKind::Question)? {
                 return Err(not_found(question, RecordKind::Question));

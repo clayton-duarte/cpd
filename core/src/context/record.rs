@@ -36,6 +36,8 @@ pub struct PlanRef {
 pub enum Draft {
     Decision { supersedes: Option<RecordId> },
     Note,
+    /// A note that replaces an earlier note (recency wins, §2.2).
+    NoteSupersedes { supersedes: RecordId },
     Question,
     Answer { question: RecordId },
     Plan(PlanRef),
@@ -44,10 +46,18 @@ pub enum Draft {
 }
 
 impl Draft {
+    pub fn supersedes(&self) -> Option<&RecordId> {
+        match self {
+            Draft::Decision { supersedes } => supersedes.as_ref(),
+            Draft::NoteSupersedes { supersedes } => Some(supersedes),
+            _ => None,
+        }
+    }
+
     pub fn kind(&self) -> RecordKind {
         match self {
             Draft::Decision { .. } => RecordKind::Decision,
-            Draft::Note => RecordKind::Note,
+            Draft::Note | Draft::NoteSupersedes { .. } => RecordKind::Note,
             Draft::Question => RecordKind::Question,
             Draft::Answer { .. } => RecordKind::Answer,
             Draft::Plan(_) => RecordKind::Plan,
@@ -76,10 +86,7 @@ impl Record {
     }
 
     pub fn supersedes(&self) -> Option<&RecordId> {
-        match &self.draft {
-            Draft::Decision { supersedes } => supersedes.as_ref(),
-            _ => None,
-        }
+        self.draft.supersedes()
     }
 
     pub fn question(&self) -> Option<&RecordId> {
@@ -263,8 +270,8 @@ impl Record {
 }
 
 impl Draft {
-    /// The links a kind may have (§2.2): `supersedes` for a decision only
-    /// (naming a decision), `question` for an answer only and required
+    /// The links a kind may have (§2.2): `supersedes` for a decision (naming a
+    /// decision or a note) or a note (naming a note), `question` for an answer only and required
     /// (naming a question), `plan` for a plan or a brief only and required.
     fn from_parts(
         kind: RecordKind,
@@ -273,7 +280,7 @@ impl Draft {
         plan: Option<PlanRef>,
     ) -> Result<Draft, String> {
         let extra = |name: &str, kind: RecordKind| format!("a {} record has no {name}", kind.as_str());
-        if supersedes.is_some() && kind != RecordKind::Decision {
+        if supersedes.is_some() && !matches!(kind, RecordKind::Decision | RecordKind::Note) {
             return Err(extra("supersedes", kind));
         }
         if question.is_some() && kind != RecordKind::Answer {
@@ -283,9 +290,9 @@ impl Draft {
             return Err(extra("plan", kind));
         }
         if let Some(s) = &supersedes
-            && s.kind() != RecordKind::Decision
+            && !may_supersede(kind, s.kind())
         {
-            return Err(format!("supersedes {s}, which is not a decision"));
+            return Err(format!("a {} record cannot supersede {s}, a {}", kind.as_str(), s.kind().as_str()));
         }
         if let Some(q) = &question
             && q.kind() != RecordKind::Question
@@ -294,12 +301,30 @@ impl Draft {
         }
         Ok(match kind {
             RecordKind::Decision => Draft::Decision { supersedes },
-            RecordKind::Note => Draft::Note,
+            RecordKind::Note => match supersedes {
+                Some(supersedes) => Draft::NoteSupersedes { supersedes },
+                None => Draft::Note,
+            },
             RecordKind::Question => Draft::Question,
             RecordKind::Answer => Draft::Answer { question: question.ok_or("an answer needs its question")? },
             RecordKind::Plan => Draft::Plan(plan.ok_or("a plan record needs its plan")?),
             RecordKind::Brief => Draft::Brief(plan.ok_or("a brief record needs its plan")?),
         })
+    }
+}
+
+/// Recency wins (§2.2): a decision may supersede a decision or a note, a note only a note (a fact never overrules a
+/// decision).
+pub fn may_supersede(writer: RecordKind, target: RecordKind) -> bool {
+    superseding(writer).contains(&target)
+}
+
+/// The kinds a record of kind `writer` may supersede, in the order `supersedes_invalid` lists them.
+pub fn superseding(writer: RecordKind) -> &'static [RecordKind] {
+    match writer {
+        RecordKind::Decision => &[RecordKind::Decision, RecordKind::Note],
+        RecordKind::Note => &[RecordKind::Note],
+        _ => &[],
     }
 }
 
@@ -351,7 +376,7 @@ mod tests {
         for (bad, why) in [
             (line(r#","extra":1"#), "unknown field"),
             (line(r#","question":"hs-q1""#), "question on a decision"),
-            (line(r#","supersedes":"hs-n1""#), "supersedes a note"),
+            (line(r#","supersedes":"hs-q1""#), "supersedes a question"),
             (line("").replace(r#""v":1"#, r#""v":2"#), "version"),
             (line("").replace("hs-d1", "hs-n1"), "id letter against kind"),
             (line("").replace(r#""machine":"hs""#, r#""machine":"zz""#), "machine"),
