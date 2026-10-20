@@ -71,7 +71,7 @@ fn onto_base(args: Args) -> Result<Output, CpdError> {
         // 2. The snapshot S.
         let old = git::run::rev_parse(repo, &format!("refs/heads/{branch}"))?;
         // 3. A conflict stops the rebase in the Lead worktree, before anything else changes.
-        if let Some(files) = conflicts(repo, &onto, &old)? {
+        if let Some(files) = git::merge_conflicts(repo, &onto, &old)? {
             return rebase_in_lead(&mut env, &args, &id, &pr, &policy, files);
         }
         // 4. A gate worktree at S, rebased there: R'.
@@ -438,19 +438,6 @@ fn remote_contains(lead: &Path, reference: &str, sha: &str) -> Result<bool, CpdE
     let Some(tip) = tip else { return Ok(false) };
     let known = git::run::run(lead, &["cat-file", "-e", &format!("{tip}^{{commit}}")])?.code == 0;
     Ok(known && git::run::run(lead, &["merge-base", "--is-ancestor", sha, tip])?.code == 0)
-}
-
-/// `git merge-tree --write-tree --name-only <onto> <sha>`: `Some(files)` on a conflict.
-fn conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
-    let merge = git::run::run(repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
-    match merge.code {
-        0 => Ok(None),
-        // The tree's id, the conflicted files, a blank line, then git's messages.
-        1 => Ok(Some(merge.stdout.lines().skip(1).take_while(|l| !l.is_empty()).map(str::to_owned).collect())),
-        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-tree exited {code}."))
-            .with("exit", code)
-            .with("stderr", tail(&merge.stderr, TAIL_LINES))),
-    }
 }
 
 /// `error`, after removing the gate worktree; the removal's own failure is

@@ -1205,25 +1205,58 @@ fn lock_reuses_a_remote_lead_branch_that_contains_the_base() {
     assert!(events(&env, "error").is_empty());
 }
 
+/// `cpd/pay/pay` is on the remote one commit past the old `main`, writing `clash.txt`; then `main` moves on, writing
+/// `clash.txt` differently (`conflicting`, so the branch conflicts with it) or `moved.txt` (so it only lacks it).
+/// Returns the branch's tip.
+fn remote_lead_branch_then_main_moves(env: &TestEnv, repo: &Path, conflicting: bool) -> String {
+    let write = |path: &str, content: &str, message: &str| {
+        std::fs::write(repo.join(path), content).unwrap();
+        env.git(repo, &["add", "-A"]);
+        env.git(repo, &["commit", "-q", "-m", message]);
+    };
+    write("clash.txt", "the branch's\n", "the branch");
+    let tip = env.git(repo, &["rev-parse", "HEAD"]);
+    env.git(repo, &["push", "-q", "origin", "HEAD:refs/heads/cpd/pay/pay"]);
+    env.git(repo, &["reset", "-q", "--hard", "HEAD~1"]);
+    let (path, content) = if conflicting { ("clash.txt", "main's\n") } else { ("moved.txt", "main moved\n") };
+    write(path, content, "main moves on");
+    env.git(repo, &["push", "-q", "origin", "main"]);
+    tip
+}
+
 #[test]
-fn lock_refuses_a_remote_lead_branch_that_does_not_contain_the_base() {
+fn lock_refuses_a_remote_lead_branch_that_conflicts_with_its_base_and_reuses_one_merely_behind_it() {
+    // hs-d490: only a conflict refuses; a base that merely moved ahead of the branch does not.
     let env = TestEnv::new();
     let repo = setup(&env);
     with_origin(&env, &repo);
     approved(&env, &repo);
-    // cpd/pay/pay at the old main; then main moves on, so origin/main is not its ancestor.
-    env.git(&repo, &["push", "-q", "origin", "main:refs/heads/cpd/pay/pay"]);
-    let remote_branch = env.git(&repo, &["rev-parse", "HEAD"]);
-    push_main_commit(&env, &repo, "main moves on");
+    let remote_branch = remote_lead_branch_then_main_moves(&env, &repo, true);
 
     let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "branch_exists", 3);
 
     assert_eq!((&error["details"]["branch"], &error["details"]["pr"]), (&json!("cpd/pay/pay"), &json!("pay")));
+    assert_eq!(error["details"]["files"], json!(["clash.txt"]));
     assert_eq!(env.git(&repo, &["branch", "--list", "cpd/pay/pay"]), "");
     assert!(!repo.parent().unwrap().join("pay.pay.pay").exists());
     assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
     assert_eq!(show(&env, "pay")["plan"]["phase"], "plan");
     assert!(watch_calls(&env).is_empty());
+}
+
+#[test]
+fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    with_origin(&env, &repo);
+    approved(&env, &repo);
+    let remote_branch = remote_lead_branch_then_main_moves(&env, &repo, false);
+
+    let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    assert_eq!((&out["prs"][0]["reused"], &out["prs"][0]["pushed"]), (&json!(true), &json!(false)));
+    assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{remote_branch}\trefs/heads/cpd/pay/pay"));
+    assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch");
 }
 
 #[test]

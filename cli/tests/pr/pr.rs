@@ -734,6 +734,35 @@ fn open_with_an_open_pull_request_of_the_branch_still_gates_pushes_and_adopts_it
 }
 
 #[test]
+fn open_adopts_an_open_pull_request_of_a_lead_branch_that_is_behind_its_base() {
+    let (fx, marker) = fx_with_marked_hook();
+    fx.gh("list.json", r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "OPEN"}]"#);
+    fx.advance_base("base.txt", "base\n");
+
+    let out = fx.pr("open").ok();
+
+    assert!(marker.exists(), "the Gate ran");
+    assert_eq!((out["phase"].as_str(), out["pr"]["status"].as_str()), (Some("deploy"), Some("open")));
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
+}
+
+#[test]
+fn open_refuses_to_adopt_an_open_pull_request_of_a_lead_branch_that_conflicts_with_its_base() {
+    let (fx, marker) = fx_with_marked_hook();
+    fx.gh("list.json", r#"[{"number": 812, "url": "https://github.com/acme/pay/pull/812", "state": "OPEN"}]"#);
+    let base = conflicting(&fx);
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run), ("base_conflict".into(), 3));
+    assert_eq!(run.error()["details"]["base_sha"], base.as_str());
+    assert_eq!(run.error()["details"]["files"], json!(["api.txt"]));
+    assert!(!marker.exists(), "no Gate");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "nothing was pushed");
+    assert_eq!(fx.plan_row().0, "dispatch");
+}
+
+#[test]
 fn open_again_is_already_and_touches_nothing() {
     let fx = fx("dispatch");
     let first = fx.pr("open").ok();
@@ -973,18 +1002,25 @@ fn rebase_with_gate_ci_runs_no_gate_and_pushes() {
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()), "the rebased branch was pushed");
 }
 
-/// The Lead Branch of `fx` is behind its base: `main` moved on `origin` after the Lead Branch was cut.
+/// The Lead Branch of `fx` is behind its base, with no conflict: `main` moved on `origin` after the Lead Branch was cut,
+/// in a file the Lead Branch does not touch.
 fn behind(fx: &Fx) -> String {
     fx.advance_base("base.txt", "base\n")
 }
 
-/// The refusal `base_behind`: its `details`, nothing pushed, no `gh pr create`, no Gate, nothing written.
-fn assert_base_behind(fx: &Fx, run: &Run, base_sha: &str) {
-    assert_eq!(code(run), ("base_behind".into(), 3));
+/// The Lead Branch of `fx` conflicts with its base: `main` moved on `origin` with a different `api.txt`, which the Lead
+/// Branch added too.
+fn conflicting(fx: &Fx) -> String {
+    fx.advance_base("api.txt", "other api\n")
+}
+
+/// The refusal `base_conflict` (hs-d490): its `details`, nothing pushed, no `gh pr create`, nothing written.
+fn assert_base_conflict(fx: &Fx, run: &Run, base_sha: &str) {
+    assert_eq!(code(run), ("base_conflict".into(), 3));
     let details = &run.error()["details"];
     assert_eq!(
         *details,
-        json!({"pr": "repo", "base": "main", "base_sha": base_sha, "sha": fx.lead_sha(),
+        json!({"pr": "repo", "base": "main", "base_sha": base_sha, "sha": fx.lead_sha(), "files": ["api.txt"],
                "next": [format!("git -C {} merge --no-edit origin/main", fx.lead.display()), "cpd pr open --pr repo"]})
     );
     assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "pr open pushed nothing");
@@ -994,19 +1030,38 @@ fn assert_base_behind(fx: &Fx, run: &Run, base_sha: &str) {
 }
 
 #[test]
-fn open_refuses_a_lead_branch_behind_its_base_then_opens_after_the_merge() {
+fn open_opens_a_lead_branch_behind_its_base_as_it_is_with_no_merge() {
     let fx = fx("dispatch");
     let marker = fx.env.root().join("hook-ran");
     fx.hooks(&format!("pre-merge = \"touch {}\"\n", marker.display()));
     let base = behind(&fx);
+    let head = fx.lead_sha();
+
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["phase"], "deploy");
+    assert!(marker.exists(), "the Gate ran on the head as it is");
+    assert_eq!(fx.lead_sha(), head, "no merge of the base into the Lead Branch");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(head.clone()), "the head as it is was pushed");
+    assert_ne!(fx.git(&fx.repo, &["rev-list", "--count", &format!("{head}..{base}")]), "0", "the base is still ahead");
+    assert!(fx.gh_calls().iter().any(|c| c[..2] == ["pr", "create"]), "{:?}", fx.gh_calls());
+    assert_eq!(fx.events("pr-opened").len(), 1);
+}
+
+#[test]
+fn open_refuses_a_lead_branch_that_conflicts_with_its_base_then_opens_after_the_merge() {
+    let fx = fx("dispatch");
+    let marker = fx.env.root().join("hook-ran");
+    fx.hooks(&format!("pre-merge = \"touch {}\"\n", marker.display()));
+    let base = conflicting(&fx);
 
     let run = fx.pr("open");
 
-    assert_base_behind(&fx, &run, &base);
-    assert!(!marker.exists(), "the Gate ran before the base check refused");
+    assert_base_conflict(&fx, &run, &base);
+    assert!(!marker.exists(), "the Gate ran before the conflict check refused");
 
-    // The Lead runs `next`: the merge in the Lead worktree, then `pr open` again.
-    fx.git(&fx.lead, &["merge", "-q", "--no-edit", "origin/main"]);
+    // The Lead runs `next`: the merge in the Lead worktree (resolved, here with the Lead's side), then `pr open` again.
+    fx.git(&fx.lead, &["merge", "-q", "--no-edit", "-X", "ours", "origin/main"]);
     let out = fx.pr("open").ok();
 
     assert_eq!(out["phase"], "deploy");
@@ -1016,17 +1071,46 @@ fn open_refuses_a_lead_branch_behind_its_base_then_opens_after_the_merge() {
 }
 
 #[test]
-fn open_under_gate_ci_applies_the_same_base_check_and_runs_no_gate() {
+fn open_under_gate_ci_opens_a_lead_branch_behind_its_base() {
     let (fx, marker) = ci_fx_with_failing_hook("dispatch");
-    let base = behind(&fx);
+    behind(&fx);
+    let head = fx.lead_sha();
+
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["phase"], "deploy");
+    assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+    assert_eq!((fx.lead_sha(), fx.remote_branch("cpd/pay")), (head.clone(), Some(head)));
+}
+
+#[test]
+fn open_under_gate_ci_applies_the_same_conflict_check_and_runs_no_gate() {
+    let (fx, marker) = ci_fx_with_failing_hook("dispatch");
+    let base = conflicting(&fx);
 
     let run = fx.pr("open");
 
-    assert_base_behind(&fx, &run, &base);
+    assert_base_conflict(&fx, &run, &base);
     assert!(!marker.exists());
-    fx.git(&fx.lead, &["merge", "-q", "--no-edit", "origin/main"]);
+    fx.git(&fx.lead, &["merge", "-q", "--no-edit", "-X", "ours", "origin/main"]);
     assert_eq!(fx.pr("open").ok()["phase"], "deploy");
     assert!(!marker.exists(), "the pre-merge hook ran under pr.gate ci");
+}
+
+#[test]
+fn open_does_not_fetch_the_base_again_after_the_gate_so_a_base_that_moves_then_refuses_nothing() {
+    let fx = fx("dispatch");
+    // The base moves, in a conflicting way, while the Gate runs: B was read once, before it (hs-d326).
+    let main = fx.repo.clone();
+    fx.hooks(&format!(
+        "pre-merge = \"cd {main} && echo late > api.txt && git add -A && git commit -q -m late && git push -q origin main\"\n",
+        main = main.display()
+    ));
+
+    let out = fx.pr("open").ok();
+
+    assert_eq!(out["phase"], "deploy");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lead_sha()));
 }
 
 #[test]
@@ -3353,30 +3437,51 @@ fn open_of_a_stacked_pr_is_refused_while_its_base_prs_branch_is_not_on_origin() 
     assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
 }
 
-#[test]
-fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_it_is_behind() {
-    let fx = fx("dispatch");
-    let web = stacked_pr(&fx);
-    // A merge into the base PR's Lead Branch, pushed: the stacked head lacks it.
-    fs::write(fx.lead.join("more.txt"), "more\n").unwrap();
+/// The base PR's Lead Branch (`cpd/pay`, worktree `fx.lead`) goes on with a commit writing `path`, pushed.
+fn base_pr_moves_on(fx: &Fx, path: &str, content: &str) -> String {
+    fs::write(fx.lead.join(path), content).unwrap();
     fx.git(&fx.lead, &["add", "-A"]);
     fx.git(&fx.lead, &["commit", "-q", "-m", "more"]);
     fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
-    let base_sha = fx.lead_sha();
+    fx.lead_sha()
+}
+
+#[test]
+fn open_of_a_stacked_pr_opens_as_it_is_when_its_base_pr_moved_on_without_a_conflict() {
+    let fx = fx("dispatch");
+    let web = stacked_pr(&fx);
+    base_pr_moves_on(&fx, "more.txt", "more\n");
+    let head = fx.git(&web.lead, &["rev-parse", "HEAD"]);
+
+    let out = fx.open_web().ok();
+
+    assert_eq!(out["pr"]["status"], "open");
+    assert_eq!(fx.git(&web.lead, &["rev-parse", "HEAD"]), head, "no merge of the base PR's new commits");
+    assert_eq!(fx.remote_branch("cpd/ship/web"), Some(head));
+}
+
+#[test]
+fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_they_conflict() {
+    let fx = fx("dispatch");
+    let web = stacked_pr(&fx);
+    // The base PR's Lead Branch writes `web.txt` too, differently.
+    let base_sha = base_pr_moves_on(&fx, "web.txt", "base pr web\n");
+    let pushed = fx.remote_branch("cpd/ship/web");
 
     let run = fx.open_web();
 
-    assert_eq!(code(&run), ("base_behind".into(), 3));
+    assert_eq!(code(&run), ("base_conflict".into(), 3));
     let details = &run.error()["details"];
-    assert_eq!((&details["base"], &details["base_sha"]), (&json!("cpd/pay"), &json!(base_sha)));
+    assert_eq!((&details["base"], &details["base_sha"], &details["files"]), (&json!("cpd/pay"), &json!(base_sha), &json!(["web.txt"])));
     assert_eq!(
         details["next"],
         json!([format!("git -C {} merge --no-edit origin/cpd/pay", web.lead.display()), "cpd pr open --pr web"])
     );
     assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
+    assert_eq!(fx.remote_branch("cpd/ship/web"), pushed, "nothing was pushed");
 
     // The stacked Lead takes the new commits by merge, as `next` says, and opens.
-    fx.git(&web.lead, &["merge", "-q", "--no-edit", "origin/cpd/pay"]);
+    fx.git(&web.lead, &["merge", "-q", "--no-edit", "-X", "ours", "origin/cpd/pay"]);
     assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
 }
 

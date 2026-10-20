@@ -17,7 +17,8 @@ use cpd_core::store::Store;
 use rusqlite::params;
 use serde_json::{Value, json};
 
-/// The fake `gh`: the search and the lookup are answered from files in `gh/`.
+/// The fake `gh`: the search, the lookup and `gh pr view` (the pull request's `headRefOid`, contract §7.2 "The recorded
+/// head") are answered from files in `gh/`; without a `view.json`, `gh pr view` fails.
 const GH: &str = r#"
 dir="$(dirname "$0")/../gh"
 case "$1 $2" in
@@ -27,6 +28,7 @@ case "$1 $2" in
       *"p0: repository"*) cat "$dir/lookup.json" ;;
       *) echo "unexpected graphql query: $4" >&2; exit 9 ;;
     esac ;;
+  "pr view") cat "$dir/view.json" ;;
   *) echo "unexpected gh call: $*" >&2; exit 9 ;;
 esac
 "#;
@@ -312,6 +314,76 @@ fn a_lead_worktree_with_a_commit_not_on_origin_is_kept() {
     assert_eq!(errors[0]["code"], "cleanup_failed");
     assert_eq!(errors[0]["details"]["reason"], "unpushed");
     assert_eq!(errors[0]["details"]["path"], api.lead.to_str().unwrap());
+}
+
+impl Fx {
+    /// What `gh pr view --json headRefOid` prints: GitHub keeps the pull request's head commit after the merge.
+    fn recorded_head(&self, oid: &str) {
+        self.gh("view.json", &json!({"headRefOid": oid}).to_string());
+    }
+
+    /// The head branch is gone from `origin`, as after a squash merge with "Automatically delete head branches" and a
+    /// pruning fetch: no `origin/<branch>` either, so the PR's own commits are outside every `origin/*` ref.
+    fn delete_remote_branch(&self, key: &str) {
+        let branch = self.pr(key).lead_branch.clone();
+        self.git(&self.repo, &["push", "-q", "origin", "--delete", &branch]);
+        assert_eq!(self.git(&self.repo, &["branch", "-r", "--list", &format!("origin/{branch}")]), "", "origin/{branch} is gone");
+        let unpushed = self.git(&self.pr(key).lead, &["rev-list", "HEAD", "--not", "--remotes=origin"]);
+        assert!(!unpushed.is_empty(), "the Lead worktree's commits look unpushed now");
+    }
+}
+
+#[test]
+fn a_squash_merged_pr_whose_lead_worktree_holds_the_recorded_head_is_removed() {
+    let fx = fx(&["api"]);
+    let api = fx.pr("api");
+    fx.recorded_head(&fx.git(&api.lead, &["rev-parse", "HEAD"]));
+    fx.delete_remote_branch("api");
+    fx.github(&[], &["api"]);
+
+    fx.poll();
+
+    assert_eq!(fx.gone("api"), (true, true), "the worktree holds exactly what was merged");
+    assert_eq!(fx.errors(), Vec::<Value>::new(), "no cleanup_failed `unpushed`");
+}
+
+#[test]
+fn a_squash_merged_pr_whose_lead_worktree_is_behind_the_recorded_head_is_removed() {
+    let fx = fx(&["api"]);
+    let api = fx.pr("api");
+    // The pull request's head is one commit past the worktree's HEAD, and the object is local.
+    fs::write(api.lead.join("more.txt"), "more\n").unwrap();
+    fx.git(&api.lead, &["add", "-A"]);
+    fx.git(&api.lead, &["commit", "-q", "-m", "more"]);
+    fx.recorded_head(&fx.git(&api.lead, &["rev-parse", "HEAD"]));
+    fx.git(&api.lead, &["reset", "-q", "--hard", "HEAD~1"]);
+    fx.delete_remote_branch("api");
+    fx.github(&[], &["api"]);
+
+    fx.poll();
+
+    assert_eq!(fx.gone("api"), (true, true), "HEAD is contained in the recorded head");
+    assert_eq!(fx.errors(), Vec::<Value>::new());
+}
+
+#[test]
+fn a_squash_merged_pr_whose_lead_worktree_holds_a_commit_beyond_the_recorded_head_is_kept_unpushed() {
+    let fx = fx(&["api"]);
+    let api = fx.pr("api");
+    fx.recorded_head(&fx.git(&api.lead, &["rev-parse", "HEAD"]));
+    fs::write(api.lead.join("more.txt"), "more\n").unwrap();
+    fx.git(&api.lead, &["add", "-A"]);
+    fx.git(&api.lead, &["commit", "-q", "-m", "after the merged head"]);
+    fx.delete_remote_branch("api");
+    fx.github(&[], &["api"]);
+
+    fx.poll();
+
+    assert!(api.lead.exists() && fx.branch_exists(&api.lead_branch), "unpushed work is never removed");
+    let errors = fx.errors();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0]["code"], "cleanup_failed");
+    assert_eq!(errors[0]["details"]["reason"], "unpushed");
 }
 
 #[test]

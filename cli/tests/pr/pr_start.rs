@@ -215,6 +215,32 @@ impl Fx {
         self.env.git(&other, &["rev-parse", "HEAD"])
     }
 
+    /// Lands a commit writing `path` on the remote `main` through a second clone, so `repo` has not fetched it.
+    fn land_file_on_origin(&self, repo: &Repo, path: &str, content: &str) -> String {
+        let other = self.env.root().join("other-clone");
+        let _ = fs::remove_dir_all(&other);
+        self.env.git(self.env.root(), &["clone", "-q", repo.origin.to_str().unwrap(), other.to_str().unwrap()]);
+        fs::write(other.join(path), content).unwrap();
+        self.env.git(&other, &["add", "-A"]);
+        self.env.git(&other, &["commit", "-q", "-m", &format!("main writes {path}")]);
+        self.env.git(&other, &["push", "-q", "origin", "main"]);
+        self.env.git(&other, &["rev-parse", "HEAD"])
+    }
+
+    /// `branch` is on the remote at one commit past the old `main` that writes `path`; then `main` moves on, writing
+    /// `path` differently (so the branch conflicts with it) or another file (so it only lacks it). Returns the branch's tip.
+    fn remote_branch_then_main_moves(&self, repo: &Repo, branch: &str, conflicting: bool) -> String {
+        fs::write(repo.path.join("clash.txt"), "the branch's\n").unwrap();
+        self.env.git(&repo.path, &["add", "-A"]);
+        self.env.git(&repo.path, &["commit", "-q", "-m", "the branch"]);
+        let tip = head(self, &repo.path, "HEAD");
+        self.env.git(&repo.path, &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")]);
+        self.env.git(&repo.path, &["reset", "-q", "--hard", "HEAD~1"]);
+        let (path, content) = if conflicting { ("clash.txt", "main's\n") } else { ("moved.txt", "main moved\n") };
+        self.land_file_on_origin(repo, path, content);
+        tip
+    }
+
     /// A running `cpd watch`, polling every tick (`common::PR_POLL_EVERY_TICK`), killed when dropped.
     fn engine(&self) -> Engine {
         let child = self.env.command(CPD).arg("watch").envs([common::PR_POLL_EVERY_TICK]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
@@ -357,8 +383,8 @@ fn lock_refuses_a_pr_without_a_draft_job() {
     assert!(!fx.lead_path(&web.path, "web").exists());
 }
 
-#[test]
-fn lock_refuses_a_remote_lead_branch_of_a_pr_that_lacks_the_base() {
+/// Plans `api` and `web` locked: `web`'s Lead Branch is on the remote already.
+fn lock_fx_with_remote_web_branch(conflicting: bool) -> (Fx, Repo, Repo, String) {
     let fx = fx();
     let (api, web) = (fx.repo("api"), fx.repo("web"));
     fx.add("api", &api.path, &[]);
@@ -366,16 +392,33 @@ fn lock_refuses_a_remote_lead_branch_of_a_pr_that_lacks_the_base() {
     fx.job("schema", "api");
     fx.job("ui", "web");
     fx.approve();
-    // web's Lead Branch is on the remote at the old main; then main moves on.
-    fx.env.git(&web.path, &["push", "-q", "origin", "main:refs/heads/cpd/pay/web"]);
-    let old = head(&fx, &web.path, "HEAD");
-    fx.land_on_origin(&web, "main moves on");
+    let tip = fx.remote_branch_then_main_moves(&web, "cpd/pay/web", conflicting);
+    (fx, api, web, tip)
+}
+
+#[test]
+fn lock_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() {
+    let (fx, _api, web, tip) = lock_fx_with_remote_web_branch(false);
+
+    let out = fx.lock().ok();
+
+    let started = out["prs"].as_array().unwrap().iter().find(|p| p["key"] == "web").unwrap();
+    assert_eq!(started["reused"], true, "{out}");
+    assert_eq!(fx.env.git(&fx.lead_path(&web.path, "web"), &["rev-parse", "HEAD"]), tip);
+    assert_eq!(remote_branch(&fx, &web.path, "cpd/pay/web"), format!("{tip}\trefs/heads/cpd/pay/web"), "not reset, not pushed over");
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
+}
+
+#[test]
+fn lock_refuses_a_remote_lead_branch_of_a_pr_that_conflicts_with_its_base() {
+    let (fx, api, web, tip) = lock_fx_with_remote_web_branch(true);
 
     let error = refused(&fx.lock(), "branch_exists", 3);
 
     assert_eq!(error["details"]["pr"], "web");
     assert_eq!(error["details"]["branch"], "cpd/pay/web");
-    assert_eq!(remote_branch(&fx, &web.path, "cpd/pay/web"), format!("{old}\trefs/heads/cpd/pay/web"));
+    assert_eq!(error["details"]["files"], json!(["clash.txt"]));
+    assert_eq!(remote_branch(&fx, &web.path, "cpd/pay/web"), format!("{tip}\trefs/heads/cpd/pay/web"));
     // All or nothing: api, started first, is not left behind or pushed.
     assert!(!fx.lead_path(&api.path, "api").exists());
     assert_eq!(remote_branch(&fx, &api.path, "cpd/pay/api"), "");
@@ -492,17 +535,31 @@ fn pr_start_reuses_a_remote_lead_branch_that_contains_the_base() {
 }
 
 #[test]
-fn pr_start_refuses_a_remote_lead_branch_that_lacks_the_base() {
+fn pr_start_reuses_a_remote_lead_branch_that_lacks_a_base_that_merely_moved_ahead() {
     let fx = fx();
     let repo = fx.repo("pay");
     fx.a2_ready(&repo.path);
-    fx.env.git(&repo.path, &["push", "-q", "origin", "main:refs/heads/cpd/pay/a2"]);
-    let old = head(&fx, &repo.path, "HEAD");
-    fx.land_on_origin(&repo, "main moves on");
+    let tip = fx.remote_branch_then_main_moves(&repo, "cpd/pay/a2", false);
+
+    let out = fx.start("a2").ok();
+
+    assert_eq!((&out["pr"]["base_sha"], &out["pr"]["reused"], &out["pr"]["pushed"]), (&json!(tip), &json!(true), &json!(false)));
+    assert_eq!(fx.env.git(&fx.lead_path(&repo.path, "a2"), &["rev-parse", "HEAD"]), tip);
+    assert_eq!(remote_branch(&fx, &repo.path, "cpd/pay/a2"), format!("{tip}\trefs/heads/cpd/pay/a2"));
+    assert_eq!(fx.pr_status("a2"), "dispatch");
+}
+
+#[test]
+fn pr_start_refuses_a_remote_lead_branch_that_conflicts_with_its_base() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    fx.a2_ready(&repo.path);
+    let old = fx.remote_branch_then_main_moves(&repo, "cpd/pay/a2", true);
 
     let error = refused(&fx.start("a2"), "branch_exists", 3);
 
     assert_eq!((&error["details"]["pr"], &error["details"]["branch"]), (&json!("a2"), &json!("cpd/pay/a2")));
+    assert_eq!(error["details"]["files"], json!(["clash.txt"]));
     assert_eq!(fx.env.git(&repo.path, &["branch", "--list", "cpd/pay/*"]), "");
     assert!(!fx.lead_path(&repo.path, "a2").exists());
     assert_eq!(remote_branch(&fx, &repo.path, "cpd/pay/a2"), format!("{old}\trefs/heads/cpd/pay/a2"));
