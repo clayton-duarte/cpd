@@ -3012,7 +3012,7 @@ Effects:
 
 **Exit status** (one more exception to §1.2's one JSON value: `slot` prints no JSON of its own on success, the command's output is the output): the command's exit status; `128 + n` when the command was ended by signal `n`; `127` when the command is not found and `126` when it cannot be executed, each with one line on stderr naming the command (the shell's convention). The refusals above print the usual error envelope on stderr and exit as listed; they happen only before the command starts, so a command's own exit 1, 2 or 3 cannot be told from them by status alone (accepted: the refusals are config or disk faults, not a normal path).
 
-**Use in this repo** (contract §7.6): `scripts/cargo.sh` runs `cargo test` and `cargo nextest` through `cpd slot --`, and `package.json`'s `test` script does too; `cargo build`, `check` and every other subcommand take no slot. When `cpd` is not on `PATH` the scripts run the command directly. So `npm run typecheck` and `scripts/cargo.sh build` (the quick check) wait for nothing, and a full test run does.
+**Use in this repo** (contract §7.6): `scripts/cargo.sh` runs `cargo test` and `cargo nextest` through `cpd slot --`, and `package.json`'s `test` script does too; `cargo build`, `check` and every other subcommand take no slot. When `cpd` is not on `PATH` or has no `slot` the scripts run the command directly. So `npm run typecheck` and `scripts/cargo.sh build` (the quick check) wait for nothing, and a full test run does.
 
 Idempotent: yes; it holds nothing after it exits. Example:
 

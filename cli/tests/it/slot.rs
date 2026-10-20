@@ -160,17 +160,39 @@ fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
-/// A directory of fakes for `scripts/cargo.sh`: a `cargo` that records `cargo <args>` in `calls`, and, when `with_cpd`, a
-/// `cpd` that records `cpd <args>` and then runs the command after `slot --`.
-fn fakes(dir: &Path, with_cpd: bool) -> (PathBuf, PathBuf) {
+/// The `cpd` a fake `PATH` holds.
+#[derive(Clone, Copy, PartialEq)]
+enum FakeCpd {
+    /// No `cpd` on `PATH`.
+    Absent,
+    /// A `cpd` with `slot`: `slot --help` exits 0, `slot -- <cmd>` records the call and runs `<cmd>`.
+    WithSlot,
+    /// A `cpd` installed before `slot` existed: every `slot …` records the call, `slot --help` exits 2, and `slot -- <cmd>` prints
+    /// the usage envelope and exits 0 without running `<cmd>` (the silent skip the probe prevents).
+    WithoutSlot,
+}
+
+/// A directory of fakes for `scripts/cargo.sh`: a `cargo` that records `cargo <args>` in `calls`, and the `cpd` of `cpd`.
+/// The probe `cpd slot --help` is recorded by none of them.
+fn fakes(dir: &Path, cpd: FakeCpd) -> (PathBuf, PathBuf) {
     let (bin, calls) = (dir.join("bin"), dir.join("calls"));
     fs::create_dir_all(&bin).unwrap();
     write_executable(&bin.join("cargo"), &format!("#!/bin/sh\necho cargo \"$@\" >> {}\n", calls.display()));
-    if with_cpd {
-        write_executable(
+    let probe = |status: u8| format!("[ \"$1\" = slot ] && [ \"$2\" = --help ] && exit {status}\n");
+    match cpd {
+        FakeCpd::Absent => {}
+        FakeCpd::WithSlot => write_executable(
             &bin.join("cpd"),
-            &format!("#!/bin/sh\necho cpd \"$@\" >> {}\n[ \"$1\" = slot ] && [ \"$2\" = -- ] || exit 99\nshift 2\nexec \"$@\"\n", calls.display()),
-        );
+            &format!("#!/bin/sh\n{}echo cpd \"$@\" >> {}\n[ \"$1\" = slot ] && [ \"$2\" = -- ] || exit 99\nshift 2\nexec \"$@\"\n", probe(0), calls.display()),
+        ),
+        FakeCpd::WithoutSlot => write_executable(
+            &bin.join("cpd"),
+            &format!(
+                "#!/bin/sh\n{}echo cpd \"$@\" >> {}\necho '{{\"ok\":false,\"error\":{{\"code\":\"usage\"}}}}'\nexit 0\n",
+                probe(2),
+                calls.display()
+            ),
+        ),
     }
     (bin, calls)
 }
@@ -185,7 +207,7 @@ fn run_sh(bin: &Path, args: &[&str], cwd: &Path) -> std::process::Output {
 #[test]
 fn cargo_script_runs_test_and_nextest_through_the_slot_and_nothing_else() {
     let tmp = tempfile::tempdir().unwrap();
-    let (bin, calls) = fakes(tmp.path(), true);
+    let (bin, calls) = fakes(tmp.path(), FakeCpd::WithSlot);
     let script = repo_root().join("scripts/cargo.sh");
     let script = script.to_str().unwrap();
     for args in [["nextest", "run", "--workspace"], ["test", "--workspace", "-q"], ["build", "--workspace", "-q"], ["check", "-q", "-p"]] {
@@ -207,17 +229,28 @@ fn cargo_script_runs_test_and_nextest_through_the_slot_and_nothing_else() {
 #[test]
 fn cargo_script_runs_without_cpd_on_the_path() {
     let tmp = tempfile::tempdir().unwrap();
-    let (bin, calls) = fakes(tmp.path(), false);
+    let (bin, calls) = fakes(tmp.path(), FakeCpd::Absent);
     let script = repo_root().join("scripts/cargo.sh");
     let out = run_sh(&bin, &[script.to_str().unwrap(), "nextest", "run"], tmp.path());
     assert!(out.status.success(), "{out:?}");
     assert_eq!(text(&calls), "cargo nextest run\n");
 }
 
-/// `package.json`'s `test` script, run by `sh -c` as npm does, with a fake `node` that records its arguments.
-fn npm_test(with_cpd: bool) -> String {
+#[test]
+fn cargo_script_runs_the_command_directly_when_cpd_has_no_slot() {
     let tmp = tempfile::tempdir().unwrap();
-    let (bin, calls) = fakes(tmp.path(), with_cpd);
+    let (bin, calls) = fakes(tmp.path(), FakeCpd::WithoutSlot);
+    write_executable(&bin.join("cargo"), &format!("#!/bin/sh\necho cargo \"$@\" >> {}\nexit 5\n", calls.display()));
+    let script = repo_root().join("scripts/cargo.sh");
+    let out = run_sh(&bin, &[script.to_str().unwrap(), "nextest", "run"], tmp.path());
+    assert_eq!(out.status.code(), Some(5), "the command's own status: {out:?}");
+    assert_eq!(text(&calls), "cargo nextest run\n");
+}
+
+/// `package.json`'s `test` script, run by `sh -c` as npm does, with a fake `node` that records its arguments.
+fn npm_test(cpd: FakeCpd) -> String {
+    let tmp = tempfile::tempdir().unwrap();
+    let (bin, calls) = fakes(tmp.path(), cpd);
     write_executable(&bin.join("node"), &format!("#!/bin/sh\necho node \"$@\" >> {}\n", calls.display()));
     let package: serde_json::Value = serde_json::from_str(&fs::read_to_string(repo_root().join("package.json")).unwrap()).unwrap();
     let script = package["scripts"]["test"].as_str().unwrap();
@@ -229,8 +262,14 @@ fn npm_test(with_cpd: bool) -> String {
 #[test]
 fn npm_test_goes_through_the_slot_and_runs_without_cpd() {
     let files = "--test pi/test/";
-    let through = npm_test(true);
+    let through = npm_test(FakeCpd::WithSlot);
     assert!(through.starts_with("cpd slot -- node --test pi/test/") && through.contains(&format!("\nnode {files}")), "{through}");
-    let direct = npm_test(false);
+    let direct = npm_test(FakeCpd::Absent);
+    assert!(direct.starts_with("node --test pi/test/") && !direct.contains("cpd"), "{direct}");
+}
+
+#[test]
+fn npm_test_runs_directly_when_cpd_has_no_slot() {
+    let direct = npm_test(FakeCpd::WithoutSlot);
     assert!(direct.starts_with("node --test pi/test/") && !direct.contains("cpd"), "{direct}");
 }

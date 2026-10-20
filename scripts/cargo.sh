@@ -8,7 +8,8 @@
 # opts out.
 # A full test run, `test` or `nextest` as the first argument, runs inside one of the machine's test
 # slots (`cpd slot --`, contract §7.6); every other subcommand, `build` included, takes none. When
-# `cpd` is not on PATH (a checkout without cpd) it runs the command directly.
+# `cpd` is not on PATH or has no `slot` (`cpd slot --help` does not exit 0: a cpd installed before the
+# subcommand existed) it runs the command directly.
 set -eu
 
 if [ -n "${CARGO:-}" ]; then
@@ -31,7 +32,7 @@ fi
 
 case "${1:-}" in
   test | nextest)
-    if command -v cpd >/dev/null 2>&1; then
+    if command -v cpd >/dev/null 2>&1 && cpd slot --help >/dev/null 2>&1; then
       exec cpd slot -- "$cargo" "$@"
     fi
     ;;
