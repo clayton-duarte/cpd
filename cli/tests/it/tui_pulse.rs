@@ -7,7 +7,7 @@ use common::{TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
 use cpd_core::store::Store;
-use cpd_tui::read::{self, Bucket, Dot, PulseRow};
+use cpd_tui::read::{self, Bucket, Dot, Kind, PulseRow};
 
 /// 2026-10-18T15:07:30.000Z; with 12 buckets the window is 14:10:00 .. 15:10:00, the current bucket (index 11) from 15:05:00.
 const NOW: i64 = 1_792_336_050_000;
@@ -260,8 +260,8 @@ fn merges_set_their_flags_and_are_counted_in_the_window() {
     let p = read(&mut store, 12);
     let r = row(&p, "p1");
     assert_eq!(r.merges, 3);
-    assert_eq!(r.buckets[10], Bucket { count: 2, job_merged: true, pr_merged: false, worker_ran: false });
-    assert_eq!(r.buckets[11], Bucket { count: 1, job_merged: false, pr_merged: true, worker_ran: false });
+    assert_eq!(r.buckets[10], Bucket { count: 2, kind: Some(Kind::Merged), job_merged: true, pr_merged: false, worker_ran: false });
+    assert_eq!(r.buckets[11], Bucket { count: 1, kind: Some(Kind::Merged), job_merged: false, pr_merged: true, worker_ran: false });
 }
 
 #[test]

@@ -25,6 +25,18 @@ use crate::read::{Dot, JobCounts, JobStatus, PrState};
 use crate::section;
 use crate::{Capture, run_view};
 
+/// The rounded caps of a Plan pill (powerline, U+E0B6 and U+E0B4), as the Plan view draws them (`plan/flow.rs`, which is
+/// private to its module).
+const CAP_L: &str = "\u{e0b6}";
+const CAP_R: &str = "\u{e0b4}";
+
+/// A sample pill with its rounded caps: the caps in the pill's colour on the default background, as the Plan view draws
+/// a Job pill (`plan/flow.rs`).
+fn capped(body: String, pill: Style) -> Line<'static> {
+    let cap = Style::new().fg(pill.bg.expect("a pill has a colour"));
+    Line::from(vec![Span::styled(CAP_L, cap), Span::styled(body, pill), Span::styled(CAP_R, cap)])
+}
+
 const COLUMN_SPACING: u16 = 2;
 /// A tmux popup draws a border of one cell on each side.
 const POPUP_BORDER: u16 = 2;
@@ -115,7 +127,7 @@ fn sections() -> Vec<Section> {
             let (icon, meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                Line::from(Span::styled(format!(" {icon} key │S1 "), palette::pill(meaning))),
+                capped(format!(" {icon} key │S1 "), palette::pill(meaning)),
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })
@@ -127,7 +139,7 @@ fn sections() -> Vec<Section> {
         failed + 1,
         vec![
             plain("failed, stuck"),
-            Line::from(Span::styled(format!(" {stuck_icon} key │S1 "), palette::pill(stuck))),
+            capped(format!(" {stuck_icon} key │S1 "), palette::pill(stuck)),
             Line::from(Span::styled("3", palette::fg(stuck))),
         ],
     );
@@ -194,9 +206,9 @@ fn sections() -> Vec<Section> {
     let pulse = Section {
         title: "Pulse",
         header: None,
-        // two entries a row: the popup is at most 80 % of the client tall (one row an entry would not fit)
+        // three entries a row: the popup is at most 80 % of the client tall (fewer an entry would not fit)
         rows: crate::plan::pulse::legend()
-            .chunks(2)
+            .chunks(3)
             .map(|pair| pair.iter().flat_map(|(sample, meaning)| [Line::from(sample.clone()), plain(meaning)]).collect())
             .collect(),
     };
@@ -306,6 +318,7 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::read::Kind;
 
     fn text(line: &Line) -> String {
         line.spans.iter().map(|s| s.content.as_ref()).collect()
@@ -328,20 +341,39 @@ mod tests {
     }
 
     #[test]
-    fn the_pulse_section_lists_its_five_glyphs_in_their_colours() {
+    fn the_pulse_section_lists_the_kind_colours_in_precedence_order_the_grey_zero_and_quiet() {
         let pulse = &sections()[4];
         let cells: Vec<String> = pulse.rows.iter().flatten().map(text).collect();
         assert_eq!(
             cells,
             [
-                "▄", "activity per 5 minutes", "▄", "a Job merged",
-                crate::plan::pulse::merged_icon(), "a PR merged", "▁", "a Worker running",
+                "▂▄▆", "activity per 5 min, first colour wins",
+                "▄", "an error, or a Job failed",
+                "▄", "a Plan or ask Event",
+                "▄", "a PR opened",
+                "▄", "an escalation",
+                "▄", "a Job or a PR merged",
+                "▄", "any other activity",
+                "▁", "no activity",
                 "quiet 41m", "queued or running work with no activity for 30 min",
             ]
         );
         let colours: Vec<_> = pulse.rows.iter().flatten().step_by(2).map(|l| l.spans[0].style.fg).collect();
-        let fg = |m| palette::fg(m).fg;
-        assert_eq!(colours, [None, fg(Meaning::Done), fg(Meaning::Done), fg(Meaning::Nothing), fg(Meaning::Review)]);
+        let c = |k| Some(palette::pulse_kind(k));
+        assert_eq!(
+            colours,
+            [
+                None,
+                c(Kind::Error),
+                c(Kind::Plan),
+                c(Kind::PrOpened),
+                c(Kind::Escalation),
+                c(Kind::Merged),
+                c(Kind::Other),
+                palette::fg(Meaning::Nothing).fg,
+                palette::fg(Meaning::Review).fg
+            ]
+        );
     }
 
     #[test]
@@ -409,7 +441,8 @@ mod tests {
         let jobs = &sections()[1];
         let (failed, stuck) = (&jobs.rows[4], &jobs.rows[5]);
         assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
-        let bg = |row: &Vec<Line>| row[1].spans[0].style.bg;
+        // the pill's body, after its left cap
+        let bg = |row: &Vec<Line>| row[1].spans[1].style.bg;
         assert_eq!((bg(failed), bg(stuck)), (palette::pill(Meaning::Waiting).bg, palette::pill(Meaning::Failed).bg));
         let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
         assert_eq!((fg(failed), fg(stuck)), (palette::fg(Meaning::Waiting).fg, palette::fg(Meaning::Failed).fg));
