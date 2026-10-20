@@ -857,3 +857,76 @@ fn e7_starts_a_stacked_pr_in_the_tick_after_its_base_pr_started_and_not_before()
     assert!(fx.events("error").is_empty());
     drop(engine);
 }
+
+// ---------- a merged base PR, its branch gone (contract §3.8 "Stacked PRs" step 7, hs-d301) ----------
+
+/// `stacked_on_a1`, then `pay/a1` merges and GitHub deletes its branch (no Lead worktree, no local branch, none on origin), and
+/// `main` moves on. Returns the new head of `origin/main`: where `b1` now starts from.
+fn a1_merged_and_deleted(fx: &Fx, repo: &Repo) -> String {
+    stacked_on_a1(fx, repo);
+    let a1 = fx.lead_path(&repo.path, "a1");
+    fx.env.git(&repo.path, &["worktree", "remove", "--force", a1.to_str().unwrap()]);
+    fx.env.git(&repo.path, &["branch", "-D", "cpd/pay/a1"]);
+    fx.env.git(&repo.path, &["push", "-q", "origin", "--delete", "cpd/pay/a1"]);
+    assert_eq!((fx.env.git(&repo.path, &["branch", "--list", "cpd/pay/*"]), remote_branch(fx, &repo.path, "cpd/pay/a1")), (String::new(), String::new()));
+    fx.env.sql(&(Fx::opened_sql("a1") + &Fx::merge_sql("a1")));
+    fx.land_on_origin(repo, "what a1 merged")
+}
+
+/// The Events of Plan `ship` of `kind`, as `events list` prints them.
+fn ship_events(fx: &Fx, kind: &str) -> Vec<Value> {
+    fx.events(kind).into_iter().filter(|e| e["plan"] == "ship").collect()
+}
+
+/// `pr-base-changed`'s `text` and `data` for `b1`, unstacked by `by`.
+fn b1_unstacked(by: &str) -> (Value, Value) {
+    (
+        json!("PR b1 of Plan ship now targets main (was cpd/pay/a1): its base PR pay/a1 merged before its pull request existed. \
+               Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan ship."),
+        json!({"pr": "b1", "from": "cpd/pay/a1", "to": "main", "from_pr": "pay/a1", "to_pr": null, "by": by}),
+    )
+}
+
+#[test]
+fn pr_start_unstacks_a_pr_whose_base_pr_merged_and_starts_it_from_the_new_base() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let tip = a1_merged_and_deleted(&fx, &repo);
+
+    let out = fx.start_ship("b1").ok();
+
+    let worktree = fx.ship_path(&repo.path, "b1");
+    assert_eq!(
+        out,
+        json!({"ok": true, "pr": {"key": "b1", "status": "dispatch", "lead_branch": "cpd/ship/b1",
+                                  "lead_worktree": worktree.display().to_string(), "base_sha": tip, "reused": false, "pushed": true}})
+    );
+    assert_eq!(fx.env.git(&worktree, &["rev-parse", "HEAD"]), tip, "cut from origin/main, the merged PR's branch is gone");
+    assert_eq!(fx.env.query::<String>("SELECT base FROM prs WHERE plan = 'ship' AND key = 'b1'"), "main");
+    let changed: Vec<(Value, Value)> = ship_events(&fx, "pr-base-changed").iter().map(|e| (e["text"].clone(), e["data"].clone())).collect();
+    assert_eq!(changed, vec![b1_unstacked("pr start")]);
+    let started = ship_events(&fx, "pr-started");
+    assert_eq!((started.len(), &started[0]["data"]["base"], &started[0]["data"]["by"]), (1, &json!("main"), &json!("pr start")));
+    assert!(fx.events("error").is_empty());
+}
+
+#[test]
+fn e7_unstacks_a_waiting_pr_whose_base_pr_merged_and_starts_it_from_the_new_base() {
+    let fx = fx();
+    let repo = fx.repo("pay");
+    let tip = a1_merged_and_deleted(&fx, &repo);
+    assert_eq!(fx.ship_status("b1"), "waiting");
+    let engine = fx.engine();
+
+    wait_until("E7 to start b1", || fx.ship_status("b1") == "dispatch");
+
+    let worktree = fx.ship_path(&repo.path, "b1");
+    assert_eq!(fx.env.git(&worktree, &["rev-parse", "HEAD"]), tip, "cut from origin/main, the merged PR's branch is gone");
+    assert_eq!(fx.env.query::<String>("SELECT base FROM prs WHERE plan = 'ship' AND key = 'b1'"), "main");
+    let changed: Vec<(Value, Value)> = ship_events(&fx, "pr-base-changed").iter().map(|e| (e["text"].clone(), e["data"].clone())).collect();
+    assert_eq!(changed, vec![b1_unstacked("engine")], "one Event, whatever the number of ticks");
+    let started = ship_events(&fx, "pr-started");
+    assert_eq!((started.len(), &started[0]["data"]["base"], &started[0]["data"]["by"]), (1, &json!("main"), &json!("engine")));
+    assert!(fx.events("error").is_empty(), "{:?}", fx.events("error"));
+    drop(engine);
+}
