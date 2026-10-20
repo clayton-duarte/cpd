@@ -806,4 +806,16 @@ mod tests {
         assert!((0..22).all(|x| buf[(x, y)].symbol() == " "), "nothing on the left of the cue");
         assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "`▼ 3 more` is dim and ends at the last column");
     }
+
+    #[test]
+    fn the_last_row_is_never_a_note() {
+        // commands.md §17 "No notes": what the column was given to say (`copied <url>`, a refusal) is not drawn
+        for open in [vec![], vec![pr(7, Some("l-a"))]] {
+            let (plain, _) = drawn(30, 15, &open, "");
+            for note in ["copied https://github.com/acme/api/pull/12", "no_cockpit: nothing here"] {
+                let (buf, _) = drawn(30, 15, &open, note);
+                assert_eq!(buf, plain, "{note:?} with {} PRs", open.len());
+            }
+        }
+    }
 }

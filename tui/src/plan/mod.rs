@@ -1155,4 +1155,34 @@ mod tests {
         assert!(snap.pulse.is_none());
         assert_eq!(snap.centre.expect("the Lead is in the slot").plan.plan.as_str(), "p1");
     }
+
+    /// The pane `ui` draws for `centre`, as the buffer.
+    fn frame_of(ui: &mut Ui, centre: &Centre) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(PANE.0, PANE.1)).unwrap();
+        terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn a_scroll_file_that_is_reset_draws_nothing_and_logs() {
+        // commands.md §17 "No notes": no `scroll positions reset: …` line; the reason goes to run/tui/plan.log
+        let centre = scroll_centre("plan-a", 3);
+        let plan_id = plan("plan-a");
+        let clean = tempfile::tempdir().unwrap();
+        let mut plain = Ui::default();
+        begin(&mut plain, &mut offsets_in(&clean), Some(&plan_id));
+        let plain = frame_of(&mut plain, &centre);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{not json").unwrap();
+        let mut ui = Ui::default();
+        let lines = begin(&mut ui, &mut offsets_in(&dir), Some(&plan_id));
+        assert_eq!(frame_of(&mut ui, &centre), plain, "the frame is the one of a start with no file");
+        assert!(
+            lines.iter().any(|l| l.starts_with("scroll positions reset: ") && l.contains("plan-scroll.json")),
+            "logged: {lines:?}"
+        );
+    }
 }
