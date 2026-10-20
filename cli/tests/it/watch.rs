@@ -719,7 +719,8 @@ fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
     let engine = fx.start();
     wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
     assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·0#[default]");
-    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
+    assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
 
     // Unchanged, it is not set again: a value put there by hand survives the next ticks.
     assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
@@ -750,7 +751,8 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 2 queued#[default]";
     wait_until("@cpd_workers", || fx.workers() == long);
     assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·2#[default]");
-    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
+    assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
     engine.stop();
     drop(lock);
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
@@ -779,7 +781,7 @@ fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
     }
     wait_until("@cpd_inbox red 2", || fx.option("@cpd_inbox") == "#[fg=red]inbox 2#[default]");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'job-stuck'"), 2);
-    assert_eq!(fx.option("@cpd_workers_width"), "42");
+    assert_eq!(fx.option("@cpd_workers_width"), "46");
     engine.stop();
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }

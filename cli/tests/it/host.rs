@@ -96,9 +96,9 @@ fn assert_server_options(s: &Server) {
         ("pane-border-lines", "heavy"),
         (
             "pane-border-format",
-            "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-             #[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}",
+            "#{?#{@cpd_session},#{?#{@cpd_title},\u{e0b6}#[reverse] #{@cpd_title} #[noreverse]\u{e0b4},},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
+             \u{e0b6}#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
+             #{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]\u{e0b4}}}}",
         ),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
@@ -404,7 +404,7 @@ fn set_pane_title_runs_set_p_on_cpd_title_and_a_missing_pane_fails_with_its_argv
 }
 
 #[test]
-fn a_leads_border_shows_its_title_reversed_and_a_titleless_lead_shows_nothing() {
+fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_shows_nothing() {
     let s = server();
     let t = &s.tmux;
     let (_, pane_id) = t.create_session("cpd", layout::MAIN_WINDOW, &sleeper(s.env.root())).unwrap().unwrap();
@@ -415,7 +415,37 @@ fn a_leads_border_shows_its_title_reversed_and_a_titleless_lead_shows_nothing() 
     t.set_pane_session(&pane_id, &SessionId::new_v4()).unwrap();
     assert_eq!(border(), "");
     t.set_pane_title(&pane_id, "Retry payouts").unwrap();
-    assert_eq!(border(), "#[reverse] Retry payouts #[noreverse]");
+    assert_eq!(border(), "\u{e0b6}#[reverse] Retry payouts #[noreverse]\u{e0b4}");
+}
+
+/// The status line's format, exactly: three button pills each in its own range and one space apart, the grey fill
+/// line, then the Inbox counter's pill, one space, the workers' pill (long form from `@cpd_workers_width` + 13).
+#[test]
+fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
+    assert_eq!(
+        cpd_core::host::tmux::STATUS_FORMAT,
+        format!(
+            "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange] \
+             #[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange] \
+             #[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
+            cpd_core::host::tmux::RESET_GLYPH,
+            cpd_core::host::tmux::LEGEND_GLYPH,
+            cpd_core::host::tmux::LOGS_GLYPH
+        ) + "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{client_width},11},\
+         #{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers_width},#{@cpd_workers_short_width}}}}\
+         #[default]#[align=right]\
+         #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default] \
+         #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]\
+         #{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]"
+    );
+}
+
+/// The buttons' glyphs are the hs-d235 Material Design code points (width 1 is not asserted: no `unicode-width` dependency here).
+#[test]
+fn the_button_glyphs_are_the_hs_d235_code_points() {
+    use cpd_core::host::tmux::{LEGEND_GLYPH, LOGS_GLYPH, RESET_GLYPH};
+    assert_eq!([RESET_GLYPH, LEGEND_GLYPH, LOGS_GLYPH], ["\u{F0A1D}", "\u{F0A01}", "\u{F09ED}"]);
 }
 
 #[test]

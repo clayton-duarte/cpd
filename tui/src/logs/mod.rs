@@ -1,5 +1,5 @@
 //! The `logs` view (commands.md §13.2, §17; R36): the Event log, in a tmux popup opened by the StatusBar's
-//! `▤` button (`cpd tui action logs`). It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
+//! `󰧭` (U+F09ED) button (`cpd tui action logs`). It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
 //! `events.poll_ms` and appends what is new. ↑↓, j/k, PgUp/PgDn and the mouse wheel scroll (the dialog kit's
 //! scrolling, mouse capture on); its title is a section header; `q` or Esc closes it. It makes no
 //! write of its own. With `--event <id>` it opens at that Event (a click on an `engine-error` or `engine-down` Inbox
