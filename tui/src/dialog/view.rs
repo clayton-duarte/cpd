@@ -379,13 +379,13 @@ mod tests {
             assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "{}", d.title);
         }
         let rows = rows(&render(&mut confirm(), 20, 8));
-        assert_eq!(rows[1], format!("━━ Archive {}", "━".repeat(9)));
+        assert_eq!(rows[1], format!("╭─{}Archive{}{}", "\u{E0B6}", "\u{E0B4}", "─".repeat(9)));
     }
 
     #[test]
     fn confirm_draws_the_question_and_both_buttons() {
         let buf = rows(&render(&mut confirm(), 40, 7));
-        assert_eq!(buf[1..], [format!("━━ Archive {}", "━".repeat(29)).as_str(), "", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
+        assert_eq!(buf[1..], [format!("╭─\u{E0B6}Archive\u{E0B4}{}", "─".repeat(29)).as_str(), "", " Archive cpd-ui?", "", "", "  [Archive]   [Cancel]"]);
     }
 
     #[test]

@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use super::host::Usage;
+use crate::dialog::scroll::{self, Cue};
 use crate::link;
 use crate::palette;
 use crate::section;
@@ -205,9 +206,9 @@ pub(crate) struct Window {
     pub first: usize,
     /// How many are drawn.
     pub shown: usize,
-    /// A ` ▲ <first> more` row opens the list.
+    /// A `▲ <first> more` row (right-aligned, `scroll::cue`) opens the list.
     pub cue_above: bool,
-    /// How many are hidden below: a ` ▼ <n> more` row ends the list when not 0.
+    /// How many are hidden below: a `▼ <n> more` row ends the list when not 0.
     pub below: usize,
 }
 
@@ -297,10 +298,12 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
     }
     f.render_widget(Paragraph::new(text), list);
     if win.cue_above {
-        f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), Rect::new(prs.x, prs.y, prs.width, 1));
+        let cue = scroll::cue(Cue::Above, win.first, usize::from(prs.width));
+        f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.y, prs.width, 1));
     }
     if win.below > 0 && prs.height > 0 {
-        f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
+        let cue = scroll::cue(Cue::Below, win.below, usize::from(prs.width));
+        f.render_widget(Paragraph::new(cue), Rect::new(prs.x, prs.bottom() - 1, prs.width, 1));
     }
     for (y, pr) in &shown {
         if let Some(x) = arrow_x {
@@ -377,13 +380,13 @@ mod tests {
             terminal.draw(|f| render_header(f, f.area(), "PRs", count)).unwrap();
             row(terminal.backend().buffer(), 0)
         };
-        assert_eq!(header(20, Some(3)), "━━ PRs ━━━━━━━━ 3 ━━");
-        assert_eq!(header(30, Some(12)), "━━ PRs ━━━━━━━━━━━━━━━━━ 12 ━━");
-        assert_eq!(header(20, None), "━━ PRs ━━━━━━━━━━━━━");
+        assert_eq!(header(20, Some(3)), format!("╭─\u{E0B6}PRs\u{E0B4}{}3", "─".repeat(12)));
+        assert_eq!(header(30, Some(12)), format!("╭─\u{E0B6}PRs\u{E0B4}{}12", "─".repeat(30 - 9)));
+        assert_eq!(header(20, None), format!("╭─\u{E0B6}PRs\u{E0B4}{}", "─".repeat(13)));
         let buf = buffer(20, 15);
-        assert_eq!(row(&buf, 4), "━━ PRs ━━━━━━━━ 0 ━━");
+        assert_eq!(row(&buf, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)));
         let two = [pr(1, Some("l-a")), pr(2, None)];
-        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), "━━ PRs ━━━━━━━━ 2 ━━");
+        assert_eq!(row(&drawn(20, 15, &two, "").0, 4), format!("╭─\u{E0B6}PRs\u{E0B4}{}2", "─".repeat(12)));
     }
 
     #[test]
@@ -395,7 +398,7 @@ mod tests {
             " homeserver".to_owned(),
             " \u{F4BC} 23%  \u{EFC5} 41%".to_owned(),
             "".to_owned(),
-            "━━ PRs ━━━━━━━━ 0 ━━".to_owned(),
+            format!("╭─\u{E0B6}PRs\u{E0B4}{}0", "─".repeat(12)),
             "".to_owned(),
             " no open PRs".to_owned(),
             "".to_owned(),
@@ -686,10 +689,10 @@ mod tests {
         let (buf, d) = scrolled(30, height(5), &many(5), "", 0);
         let got = section(&buf);
         assert_eq!(names(&got), ["acme/repo#1", "acme/repo#2"]);
-        assert_eq!(got.last().unwrap(), " ▼ 3 more", "{got:#?}");
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"), "{got:#?}");
         assert!(!got.iter().any(|r| r.contains('▲')));
         let y = 6 + 4;
-        assert!((0..9).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "the cue is dim");
+        assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "the cue is dim");
         assert_eq!(d.prs, Rect::new(0, 6, 30, 5));
         assert_eq!(d.max_scroll, 3);
     }
@@ -698,11 +701,11 @@ mod tests {
     fn a_cue_above_appears_after_a_scroll_and_each_cue_takes_a_row_of_the_list() {
         let (buf, _) = scrolled(30, height(5), &many(5), "", 1);
         let got = section(&buf);
-        assert_eq!(got[0], " ▲ 1 more", "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 1 more"), "{got:#?}");
         // 5 rows less both cues leave 3: one pull request, and a spare row
         assert_eq!(names(&got), ["acme/repo#2"]);
-        assert_eq!(got.last().unwrap(), " ▼ 3 more");
-        assert!(buf[(1, 6)].modifier.contains(Modifier::DIM));
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"));
+        assert!(buf[(29, 6)].modifier.contains(Modifier::DIM));
     }
 
     #[test]
@@ -711,7 +714,7 @@ mod tests {
         let (buf, d) = scrolled(30, height(5), &many(5), "", 99);
         let got = section(&buf);
         assert_eq!(d.max_scroll, 3);
-        assert_eq!(got[0], " ▲ 3 more", "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 3 more"), "{got:#?}");
         assert_eq!(names(&got), ["acme/repo#4", "acme/repo#5"]);
         assert!(!got.iter().any(|r| r.contains('▼')), "{got:#?}");
         assert_eq!(scrolled(30, height(5), &many(5), "", 3).0, buf);
@@ -724,8 +727,8 @@ mod tests {
     fn a_hit_area_is_that_of_the_row_drawn_after_a_scroll() {
         let (buf, d) = scrolled(30, height(7), &many(6), "", 2);
         let got = section(&buf);
-        assert_eq!(got[0], " ▲ 2 more", "{got:#?}");
-        assert_eq!(got.last().unwrap(), " ▼ 2 more", "{got:#?}");
+        assert_eq!(got[0], format!("{:>30}", "▲ 2 more"), "{got:#?}");
+        assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 2 more"), "{got:#?}");
         let leads: Vec<(&str, Rect)> = d.hits.iter().map(|h| (h.lead.as_str(), h.area)).collect();
         assert_eq!(leads, [("l-3", Rect::new(0, 7, 30, 2)), ("l-4", Rect::new(0, 9, 30, 2))]);
         for hit in &d.hits {
@@ -733,5 +736,74 @@ mod tests {
             assert!(row(&buf, hit.area.y).contains(&format!("acme/repo#{n}")), "{hit:?}");
         }
         assert!(!d.hits.iter().any(|h| h.contains(Position::new(0, 6))), "the cue row is no hit");
+    }
+
+    // ---- section look v3 (commands.md §13.2 `widgets`, §17; hs-d348, hs-d349): red until the column draws them ----
+
+    /// The pill's caps, U+E0B6 and U+E0B4.
+    const CAPS: (&str, &str) = ("\u{E0B6}", "\u{E0B4}");
+
+    fn all_rows(buf: &Buffer) -> Vec<String> {
+        (0..buf.area.height).map(|y| row(buf, y)).collect()
+    }
+
+    /// The rows that are a section title: they start with the pill's `╭─`.
+    fn titles(buf: &Buffer) -> Vec<(u16, String)> {
+        all_rows(buf).into_iter().enumerate().filter(|(_, r)| r.starts_with('╭')).map(|(y, r)| (y as u16, r)).collect()
+    }
+
+    #[test]
+    fn the_prs_title_is_the_pill_with_the_count_one_empty_row_above_it() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let (open, close) = CAPS;
+        let (y, title) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
+        assert_eq!(title, format!("╭─{open}PRs{close}{}5", "─".repeat(30 - 2 - 5 - 1)));
+        assert_eq!(title.chars().count(), 30, "full width, no margin");
+        assert_eq!(row(&buf, y - 1), "", "one empty row above the title");
+    }
+
+    #[test]
+    fn the_prs_pill_text_is_inverted_and_its_lines_are_muted() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let muted = palette::color(palette::Meaning::Nothing);
+        let (y, _) = titles(&buf).into_iter().next().expect("a pill title row: none starts with `╭`");
+        let at = |x: u16| &buf[(x, y)];
+        assert_eq!((at(0).symbol(), at(0).fg), ("╭", muted), "the corner");
+        assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "its line");
+        for x in 3..6 {
+            assert!(at(x).modifier.contains(Modifier::REVERSED), "the title text is inverted: column {x} {:?}", at(x));
+        }
+        assert_eq!((at(10).symbol(), at(10).fg), ("─", muted), "the line to the edge");
+    }
+
+    #[test]
+    fn the_prs_title_is_the_pill_with_its_count_and_there_is_no_other_title() {
+        let (buf, _) = scrolled(30, height(5), &many(2), "", 0);
+        let (open, close) = CAPS;
+        let got: Vec<String> = titles(&buf).into_iter().map(|(_, t)| t).collect();
+        assert_eq!(got, [format!("╭─{open}PRs{close}{}2", "─".repeat(30 - 2 - 5 - 1))]);
+    }
+
+    /// The cue rows of the section, top to bottom.
+    fn cue_rows(buf: &Buffer) -> Vec<String> {
+        all_rows(buf).into_iter().filter(|r| r.contains('▲') || r.contains('▼')).collect()
+    }
+
+    #[test]
+    fn the_cues_are_right_aligned_at_the_end_of_their_rows() {
+        let (buf, _) = scrolled(30, height(7), &many(6), "", 2);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▲ 2 more"), format!("{:>30}", "▼ 2 more")]);
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▼ 3 more")]);
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 99);
+        assert_eq!(cue_rows(&buf), [format!("{:>30}", "▲ 3 more")]);
+    }
+
+    #[test]
+    fn a_right_aligned_cue_is_dim_and_leaves_the_left_of_its_row_blank() {
+        let (buf, _) = scrolled(30, height(5), &many(5), "", 0);
+        let y = all_rows(&buf).iter().position(|r| r.contains('▼')).expect("a ▼ cue row") as u16;
+        assert!((0..22).all(|x| buf[(x, y)].symbol() == " "), "nothing on the left of the cue");
+        assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "`▼ 3 more` is dim and ends at the last column");
     }
 }
