@@ -118,6 +118,9 @@ pub struct AddArgs {
     /// No needs, even on a reopened Plan (default there: every merged PR of the Plan)
     #[arg(long = "no-needs")]
     no_needs: bool,
+    /// The template of stub drafts the PR starts with, and the kinds its Jobs may have: tdd (docs, red tests, implementation), docs or config (§9.4)
+    #[arg(long, value_name = "shape", value_parser = clap::builder::PossibleValuesParser::new(add::SHAPES), default_value = "tdd")]
+    shape: String,
     #[command(flatten)]
     plan: PlanArg,
 }

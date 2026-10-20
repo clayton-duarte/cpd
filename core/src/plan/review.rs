@@ -67,6 +67,8 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
 
 /// What `plan render` and `plan review` read, in one read transaction.
 struct Snapshot {
+    /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a PR that has not started will get.
+    open_tier: String,
     plan: PlanRow,
     prs: Vec<PrRow>,
     jobs: Vec<Job>,
@@ -76,10 +78,12 @@ struct Snapshot {
 }
 
 fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
+    let open_tier = env.config.open_tier.to_string();
     env.store.read(|conn| {
         let (prs, jobs) = (load_prs(conn, id)?, jobs::load(conn, id)?);
         let overlaps = overlap::find(&prs, &jobs, &overlap::load_others(conn, id)?);
         Ok(Snapshot {
+            open_tier,
             plan: row::load(conn, id)?,
             review: latest(conn, id)?,
             fingerprint: plan_fingerprint(conn, id)?,
@@ -91,7 +95,7 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
 }
 
 fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
-    render::markdown(heading, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps)
+    render::markdown(heading, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps, &s.open_tier)
 }
 
 /// `plan render` (§4.5).
