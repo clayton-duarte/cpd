@@ -1403,7 +1403,7 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
                "changed": [
                    {"repo": "acme/pay", "number": 901, "state": "open", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"},
                    {"repo": "acme/web", "number": 902, "state": "open", "draft": false, "checks": "none", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown"}],
-               "removed": 0, "feedback": [], "merged": [], "done": [],
+               "base_changed": [], "removed": 0, "feedback": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}})
     );
     assert_eq!(fx.pull_requests(), [("acme/pay".to_owned(), 901), ("acme/web".to_owned(), 902)]);
@@ -1507,12 +1507,164 @@ fn a_second_identical_poll_writes_nothing() {
 
     assert_eq!(
         again,
-        json!({"ok": true, "polled": 2, "changed": [], "removed": 0, "feedback": [], "merged": [], "done": [],
+        json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "removed": 0, "feedback": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "prs": again["prs"]})
     );
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
     assert_eq!(fx.gh_calls().iter().filter(|c| is_search(c)).count(), 2);
     assert!(fx.gh_calls().iter().all(|c| !is_lookup(c)), "812 is in the search: no lookup");
+}
+
+// ------------------------------------------------------------------ pr poll: the base follow (hs-d325, hs-d326)
+
+/// `node`, with the base branch GitHub reports for the pull request (`baseRefName`).
+fn based(node: String, base: &str) -> String {
+    assert_eq!(node.matches(r#""mergedAt":"#).count(), 1);
+    node.replace(r#""mergedAt":"#, &format!(r#""baseRefName":"{base}","mergedAt":"#))
+}
+
+/// 814, the pull request of PR `up`.
+fn up(state: &str) -> String {
+    node("acme/pay", 814, state, None, None)
+}
+
+impl Fx {
+    /// Adds PR `up` of Plan `pay`, `open` with its pull request 814, stacked on PR `repo` (its base is `cpd/pay`).
+    fn stack_up(&self) {
+        let sql = format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+               VALUES ('acme/pay', 814, 'https://github.com/acme/pay/pull/814', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                              pr_number, pr_url, pr_opened_at, pull_request)
+               VALUES ('pay', 'up', '{}', 'cpd/pay', 'open', 'cpd/pay/up', '/nonexistent/up', cpd_txn(), 't', 't',
+                       814, 'https://github.com/acme/pay/pull/814', 'opened', (SELECT id FROM pull_requests WHERE number = 814));",
+            self.repo.display()
+        );
+        self.store().write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
+    }
+
+    /// `(status, base)` of PR `key` of Plan `pay`.
+    fn base_of(&self, key: &str) -> (String, String) {
+        self.store()
+            .read(|c| Ok(c.query_row("SELECT status, base FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .unwrap()
+    }
+
+    /// `(draft, state)` of the pull request `number`, as the poll stored it.
+    fn stored_pull_request(&self, number: i64) -> (bool, String) {
+        self.store()
+            .read(|c| Ok(c.query_row("SELECT draft, state FROM pull_requests WHERE number = ?1", [number], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .unwrap()
+    }
+}
+
+/// Plan `pay`: PR `repo` (812, base `main`) and PR `up` (814) stacked on it, both open, as a poll stored them.
+fn stacked() -> Fx {
+    let fx = fx("deploy");
+    fx.stack_up();
+    fx.search(&[based(pay("OPEN", None, None), "main"), based(up("OPEN"), "cpd/pay")]);
+    let out = fx.poll();
+    assert_eq!(out["base_changed"], json!([]), "GitHub agrees with cpd: nothing to follow");
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
+    fx
+}
+
+#[test]
+fn poll_follows_github_repointing_a_stacked_pr_when_its_base_pr_merges_and_keeps_it_ready() {
+    let fx = stacked();
+    let events = fx.event_count();
+    // The base PR merged: GitHub deleted its branch and repointed 814 to `main`. 812 left the open search.
+    fx.search(&[based(up("OPEN"), "main")]);
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "up", "from": "cpd/pay", "to": "main"}]));
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!(out["feedback"], json!([]));
+    assert_eq!(out["done"], json!([]), "up is still open");
+    // The PR's base is `main` and nothing else about it moved: still open, its pull request still ready.
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "main".to_owned()));
+    assert_eq!(fx.stored_pull_request(814), (false, "open".to_owned()));
+    assert_eq!(fx.plan_row().0, "deploy");
+    // One informational Event for the Plan, once; no `pr-feedback`.
+    let told = fx.events("pr-base-changed");
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        told[0].0,
+        "PR up of Plan pay now targets main (was cpd/pay): its base PR pay/repo merged and GitHub repointed the pull request. \
+         Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan pay."
+    );
+    assert_eq!(
+        told[0].1,
+        json!({"pr": "up", "from": "cpd/pay", "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": "poll",
+               "number": 814, "url": "https://github.com/acme/pay/pull/814"})
+    );
+    assert!(fx.events("pr-feedback").is_empty());
+    assert_eq!(fx.event_count() - events, 2, "pr-merged and pr-base-changed, nothing else");
+    // cpd changes no base on GitHub, runs no Gate and opens nothing: it only asked GitHub (graphql).
+    assert!(fx.gh_calls().iter().all(|c| c[0] == "api"), "{:?}", fx.gh_calls());
+    assert!(!fx.home.plan_dir(&plan()).join("logs/pr-up.pre-merge.log").exists(), "no Gate ran for up");
+    assert_eq!(fx.gate_log(), "", "no Gate ran for repo");
+
+    // A second poll changes nothing.
+    let (txns, events) = (fx.txns(), fx.event_count());
+    let again = fx.poll();
+    assert_eq!(again["base_changed"], json!([]));
+    assert_eq!(again["changed"], json!([]));
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "main".to_owned()));
+}
+
+#[test]
+fn poll_follows_a_base_retargeted_by_hand_on_any_open_pr() {
+    let fx = stacked();
+    fx.search(&[based(pay("OPEN", None, None), "develop"), based(up("OPEN"), "cpd/pay")]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "repo", "from": "main", "to": "develop"}]));
+    assert_eq!(fx.base_of("repo"), ("open".to_owned(), "develop".to_owned()));
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()), "814 still targets 812's branch, as GitHub says");
+    let told = fx.events("pr-base-changed");
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        told[0].0,
+        "PR repo of Plan pay now targets develop (was main): the base changed on GitHub. \
+         Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan pay."
+    );
+    assert_eq!(told[0].1["from_pr"], Value::Null);
+    assert_eq!(told[0].1["to_pr"], Value::Null);
+
+    let events = fx.event_count();
+    assert_eq!(fx.poll()["base_changed"], json!([]));
+    assert_eq!(fx.event_count(), events);
+}
+
+#[test]
+fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
+    let fx = stacked();
+    // GitHub deletes the branch of a merged pull request only: 812 is closed, 814 still targets `cpd/pay`.
+    fx.search(&[based(up("OPEN"), "cpd/pay")]);
+    fx.lookup(&[Some(pay("CLOSED", None, None))]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["base_changed"], json!([]));
+    assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]), "the closed pull request is the poll's usual pr-feedback");
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
+    assert_eq!(fx.stored_pull_request(814), (false, "open".to_owned()));
+    assert!(fx.events("pr-base-changed").is_empty());
+
+    // The same answers again: still nothing, and the base PR is not cancelled out from under the stacked PR.
+    let (txns, events) = (fx.txns(), fx.event_count());
+    assert_eq!(fx.poll()["base_changed"], json!([]));
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events));
+    let run = fx.env.cpd(&["pr", "cancel", "repo", "--plan", "pay"]);
+    let error = common::refused(&run, "pr_in_use", 3);
+    assert_eq!(error["details"]["prs"], json!(["up"]), "{error}");
+    assert_eq!(fx.base_of("repo").0, "open");
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
 }
 
 #[test]

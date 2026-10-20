@@ -145,12 +145,14 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<Decision, Cpd
     let pr = find_pr(&prs, plan, key)?;
     let phase = plan_phase(conn, plan)?;
     let locked = !matches!(phase, Phase::Grounding | Phase::Plan);
-    let needing: Vec<String> =
+    let mut needing: Vec<String> =
         prs.iter().filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str())).map(|p| p.key.to_string()).collect();
+    // A base PR cannot be cancelled while a PR is stacked on it (contract §3.8 "Stacked PRs" step 9).
+    needing.extend(stacked_on(conn, plan, pr)?);
     let in_use = |jobs: Vec<String>| {
         CpdError::new(
             ErrorCode::PrInUse,
-            format!("PR {key} is in use: cancel its Jobs (cpd job cancel) and edit away the needs on it (cpd pr edit) first."),
+            format!("PR {key} is in use: cancel its Jobs (cpd job cancel) and edit away the needs and the PRs stacked on it (cpd pr edit) first."),
         )
         .with("plan", plan.as_str())
         .with("pr", key.as_str())
@@ -183,6 +185,18 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<Decision, Cpd
     Ok(Decision::Cancel { from, released: None })
 }
 
+/// The PRs that are not `cancelled` and stacked on `pr`, of any Plan: those of its repo whose `base` is its Lead Branch
+/// (§2.2 "The base PR"), as a bare key in its own Plan and `<plan>/<key>` in another.
+fn stacked_on(conn: &Connection, plan: &PlanId, pr: &PrRow) -> Result<Vec<String>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT plan, key FROM prs WHERE repo = ?1 AND base = ?2 AND status <> 'cancelled' AND NOT (plan = ?3 AND key = ?4) ORDER BY plan, key",
+    )?;
+    let found = stmt
+        .query_map([pr.repo.as_str(), pr.lead_branch.as_str(), plan.as_str(), pr.key.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(found.into_iter().map(|(p, k)| if p == plan.as_str() { k } else { format!("{p}/{k}") }).collect())
+}
+
 /// An `open` PR: its pull request must be stored `closed` (`pr_not_closed`, no `gh` call: the row is what the last poll
 /// wrote) and no PR that is not `cancelled` may need it (`pr_in_use`). Its Jobs are not checked.
 fn decide_open(conn: &Connection, plan: &PlanId, key: &PrKey, pr: &PrRow, needing: &[String]) -> Result<Decision, CpdError> {
@@ -204,7 +218,7 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &PrKey, pr: &PrRow, needin
     if !needing.is_empty() {
         return Err(CpdError::new(
             ErrorCode::PrInUse,
-            format!("PR {key} is in use: PRs that need it would wait for a merge that cannot come; edit away the needs on it (cpd pr edit) first."),
+            format!("PR {key} is in use: PRs that need it, or are stacked on it, would wait for a merge that cannot come; edit away the needs and the stacked PRs on it (cpd pr edit) first."),
         )
         .with("plan", plan.as_str())
         .with("pr", key.as_str())

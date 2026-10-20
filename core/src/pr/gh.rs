@@ -692,6 +692,20 @@ mod tests {
     }
 
     #[test]
+    fn a_search_reports_each_pull_requests_base_branch_once_and_none_when_the_reply_has_none() {
+        let based = |node: String, base: &str| node.replace(r#""mergedAt":null"#, &format!(r#""baseRefName":"{base}","mergedAt":null"#));
+        let body = format!(
+            r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},"reviewRequests":{{"issueCount":1,"nodes":[{}]}},"rateLimit":{{"cost":1,"remaining":9,"resetAt":"r"}}}}}}"#,
+            based(pr("o/a", 1, false, "OPEN", "null"), "main"),
+            pr("o/a", 2, false, "OPEN", "null"),
+            based(pr("o/a", 1, false, "OPEN", "null"), "main"),
+        );
+        let found = search(&reply(&body, 0)).unwrap();
+        assert_eq!(found.prs.len(), 2);
+        assert_eq!(found.bases, [(("o/a".to_owned(), 1), "main".to_owned())]);
+    }
+
+    #[test]
     fn the_two_searches_are_merged_into_one_list_with_their_memberships() {
         let body = format!(
             r#"{{"data":{{"search":{{"issueCount":2,"nodes":[{},{}]}},
