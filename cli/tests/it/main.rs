@@ -45,6 +45,7 @@ mod pr;
 mod pr_start;
 mod prune_script;
 mod pr_view;
+mod release_script;
 mod review_job;
 mod review;
 mod session_reload;
