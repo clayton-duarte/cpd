@@ -1316,7 +1316,7 @@ fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reac
     assert_eq!(out["phase"], "done");
     assert_eq!((fx.pr_status("busyfix"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
     // The merged Job stays as it is.
-    assert_eq!(fx.query::<String>("SELECT status FROM jobs WHERE key = 'done'"), "merged");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM jobs WHERE key = 'done'"), "merged");
 
     let cancelled = fx.events("pr-cancelled");
     assert_eq!(cancelled.len(), 1);
@@ -1388,5 +1388,5 @@ fn superseding_a_waiting_pr_before_the_lock_is_refused() {
     fx.add("web", &fx.web, &[]).ok();
     let writes = fx.writes();
     fx.refused(&fx.pr(&["cancel", "web", "--superseded-by", "api"]), "illegal_transition", 3, writes);
-    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "waiting");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "waiting");
 }
