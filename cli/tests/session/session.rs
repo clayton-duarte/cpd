@@ -22,7 +22,7 @@ const LEAD2: &str = "lead2";
 const MANAGER: &str = "manager1";
 const WORKER: &str = "worker1";
 
-fn home(env: &TestEnv) -> CpdHome {
+pub(crate) fn home(env: &TestEnv) -> CpdHome {
     CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap()
 }
 
@@ -42,7 +42,7 @@ fn sid(id: &str) -> SessionId {
 /// Context `ctx` with its Manager `manager1`; Plans `pay` (Lead `lead1`, idle;
 /// Job `api` with Attempt `api-a1`, Worker `worker1` and an open Escalation)
 /// and `other` (Lead `lead2`, stopped). Every Session's cwd is the env's root.
-fn setup(env: &TestEnv) {
+pub(crate) fn setup(env: &TestEnv) {
     env.write_tmux_config("[timeouts]\nfork_quiet_seconds = 1\n"); // a 1 s quiet time for forks
     let cwd = env.root().display().to_string();
     let mut store = store(env);
@@ -112,11 +112,11 @@ fn exec_sql(env: &TestEnv, sql: &str) {
     store(env).write("test", |tx| exec(tx, sql)).unwrap();
 }
 
-fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
+pub(crate) fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
 
-fn show(env: &TestEnv, id: &str) -> Value {
+pub(crate) fn show(env: &TestEnv, id: &str) -> Value {
     env.cpd(&["session", "show", id]).ok()["session"].clone()
 }
 
@@ -124,7 +124,7 @@ fn show(env: &TestEnv, id: &str) -> Value {
 
 /// A fake `pi` that creates its session file (when given `--session-id`) and
 /// then runs `then`.
-fn fake_pi(env: &TestEnv, then: &str) {
+pub(crate) fn fake_pi(env: &TestEnv, then: &str) {
     env.fake_pi(&format!(
         "id=''; prev=''\nfor a in \"$@\"; do [ \"$prev\" = --session-id ] && id=$a; prev=$a; done\n\
          if [ -n \"$id\" ]; then mkdir -p \"$HOME/.pi/agent/sessions/g\"; \
@@ -148,7 +148,7 @@ fn fast_wrapper(env: &TestEnv) {
 /// [`SERVER_OPTIONS`] (contract §6.1), as cpd starts it: with `remain-on-exit`,
 /// a pane whose program exits stays, dead, instead of taking the chat slot with it.
 /// Every pane started later waits for a fork's source every [`POLL`].
-fn cockpit(env: &TestEnv) {
+pub(crate) fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
         let out = env.tmux(args);
         assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -241,7 +241,7 @@ fn ok_with_panes(env: &TestEnv, args: &[&str]) -> Value {
     run.ok()
 }
 
-fn pi_calls_with(env: &TestEnv, flag: &str) -> Vec<Vec<String>> {
+pub(crate) fn pi_calls_with(env: &TestEnv, flag: &str) -> Vec<Vec<String>> {
     env.calls("pi").into_iter().filter(|c| c.iter().any(|a| a == flag)).collect()
 }
 
