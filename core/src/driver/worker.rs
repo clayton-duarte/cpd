@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
-use super::ledger::{self, Target};
+use crate::attempt::ledger::{self, Attempt as Target};
 use crate::config::{Catalog, Config, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::git;
@@ -386,7 +386,7 @@ pub fn metrics(dirs: &PiDirs, session: Option<&SessionId>) -> Option<Value> {
     match metrics::parse_file(&file) {
         Ok(m) => Some(m.to_json()),
         Err(e) => {
-            eprintln!("cpd attempt run: no metrics from {}: {}", file.display(), e.message());
+            super::run::log(&format!("no metrics from {}: {}", file.display(), e.message()));
             None
         }
     }

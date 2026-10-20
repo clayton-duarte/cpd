@@ -13,6 +13,9 @@ use crate::link;
 use crate::palette::{self, Meaning};
 use crate::read::{OpenPr, PrState, ReviewDecision, Widgets};
 
+/// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
+const MERGE: &str = "\u{F062D}";
+
 /// What a click on an owned PR reaches: its two lines, except the `󰏌` cell (the terminal opens that link).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hit {
@@ -20,14 +23,23 @@ pub struct Hit {
     pub area: Rect,
     /// The `󰏌` cell, inside `area`.
     pub arrow: Position,
+    /// The merge icon's cell, inside `area`, when the PR shows one.
+    pub icon: Option<Position>,
     /// The Lead of the owner: `cpd session open <lead>`.
     pub lead: SessionId,
 }
 
 impl Hit {
     pub fn contains(&self, at: Position) -> bool {
-        self.area.contains(at) && at != self.arrow
+        self.area.contains(at) && at != self.arrow && Some(at) != self.icon
     }
+}
+
+/// A merge icon on the screen: a click on `area` (one cell) opens the merge popup for `pull`, `<owner>/<repo>#<n>`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MergeIcon {
+    pub area: Rect,
+    pub pull: String,
 }
 
 /// The machine the column names: its hostname and the first three fields of its load average.
@@ -41,7 +53,7 @@ fn bold(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), Style::new().add_modifier(Modifier::BOLD))
 }
 
-fn dim(text: impl Into<String>) -> Span<'static> {
+pub(crate) fn dim(text: impl Into<String>) -> Span<'static> {
     Span::styled(text.into(), Style::new().add_modifier(Modifier::DIM))
 }
 
@@ -59,6 +71,7 @@ fn truncate(text: &str, max: usize) -> String {
 
 /// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󰏌` in the last column, then
 /// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󰏌`.
+/// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
 /// A conflicting one adds ` conflict` in red after the review (kept red under the active and dim styles).
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
 fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
@@ -84,10 +97,17 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
     if pr.conflicting {
         spans.push(Span::styled(conflict, palette::fg(Meaning::Failed)));
     }
-    let room = width.saturating_sub(used + 2);
+    let reserved = if pr.clean { 2 } else { 0 };
+    let room = width.saturating_sub(used + 2 + reserved);
+    let mut shown = used;
     if room >= 4 {
         let title = format!("  {}", truncate(&pr.title, room));
+        shown += title.chars().count();
         spans.push(if pr.active { Span::raw(title) } else { dim(title) });
+    }
+    if pr.clean {
+        spans.push(" ".repeat(width.saturating_sub(shown + 1)).into());
+        spans.push(MERGE.into());
     }
     let first = Line::from(vec![bold(name), gap.into(), link::CUE.into()]);
     let second = Line::from(spans);
@@ -119,38 +139,39 @@ fn render_header(f: &mut Frame, area: Rect, title: &str) {
     f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
 }
 
-/// Which pull requests the PRs section draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section").
+/// Which items a scrolling list draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section"; the
+/// tree's Inbox section scrolls with the same code, one row an item).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Window {
-    /// The first pull request drawn, after clamping.
-    first: usize,
+pub(crate) struct Window {
+    /// The first item drawn, after clamping.
+    pub first: usize,
     /// How many are drawn.
-    shown: usize,
-    /// A ` ▲ <first> more` row opens the section.
-    cue_above: bool,
-    /// How many are hidden below: a ` ▼ <n> more` row ends the section when not 0.
-    below: usize,
+    pub shown: usize,
+    /// A ` ▲ <first> more` row opens the list.
+    pub cue_above: bool,
+    /// How many are hidden below: a ` ▼ <n> more` row ends the list when not 0.
+    pub below: usize,
 }
 
-/// The largest offset for `count` pull requests in a section of `height` rows: the last one reaches the bottom (under the
-/// `▲` cue, which takes a row). 0 when every one fits.
-fn max_scroll(count: usize, height: usize) -> usize {
-    if count * 2 <= height {
+/// The largest offset for `count` items of `item_rows` rows each in a list of `height` rows: the last one reaches the
+/// bottom (under the `▲` cue, which takes a row). 0 when every one fits.
+pub(crate) fn max_scroll(count: usize, height: usize, item_rows: usize) -> usize {
+    if count * item_rows <= height {
         return 0;
     }
-    count.saturating_sub((height.saturating_sub(1)) / 2).min(count.saturating_sub(1))
+    count.saturating_sub((height.saturating_sub(1)) / item_rows).min(count.saturating_sub(1))
 }
 
-/// The window at offset `scroll` (clamped to [`max_scroll`]). A cue takes one row of the section, and a pull request is whole.
-fn window(count: usize, height: usize, scroll: usize) -> Window {
-    let first = scroll.min(max_scroll(count, height));
+/// The window at offset `scroll` (clamped to [`max_scroll`]). A cue takes one row of the list, and an item is whole.
+pub(crate) fn window(count: usize, height: usize, item_rows: usize, scroll: usize) -> Window {
+    let first = scroll.min(max_scroll(count, height, item_rows));
     let cue_above = first > 0 && height > 0;
     let room = height - usize::from(cue_above);
     let left = count - first;
-    if left * 2 <= room {
+    if left * item_rows <= room {
         return Window { first, shown: left, cue_above, below: 0 };
     }
-    let shown = room.saturating_sub(1) / 2;
+    let shown = room.saturating_sub(1) / item_rows;
     Window { first, shown, cue_above, below: left - shown }
 }
 
@@ -163,11 +184,13 @@ pub struct Drawn {
     pub prs: Rect,
     /// The largest scroll offset (in pull requests) of the section as drawn.
     pub max_scroll: usize,
+    /// Where a click reaches a merge icon: the pull requests on screen that show one.
+    pub icons: Vec<MergeIcon>,
 }
 
 /// Draws the column in `area`: a blank row, the machine, then the PRs, git and Jira, each under its header. The PRs section
 /// starts at the pull request `scroll` (clamped), with a dim `▲`/`▼` cue row where some are hidden. A non-empty `note`
-/// replaces the column's last row, in `palette::note()`.
+/// replaces the column's last row, in `palette::note()`. Returns where a click reaches an owned PR or a merge icon.
 pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &str, scroll: usize) -> Drawn {
     let [_top, home, _above_prs, prs_header, _below_prs, prs, _above_git, git_header, _below_git, git, _above_jira, jira_header, _below_jira, jira] =
         Layout::vertical([
@@ -195,18 +218,23 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
         home,
     );
     let height = usize::from(prs.height);
-    let win = window(w.prs.len(), height, scroll);
+    let win = window(w.prs.len(), height, 2, scroll);
     // The list sits under the `▲` row, if any; whole pull requests only.
     let list = Rect::new(prs.x, prs.y + u16::from(win.cue_above), prs.width, prs.height - u16::from(win.cue_above));
     let shown: Vec<(u16, &OpenPr)> = (list.y..).step_by(2).zip(w.prs.iter().skip(win.first).take(win.shown)).collect();
     let mut text = vec![];
     let mut hits = vec![];
-    // The `󰏌` is the last column of the section's first line of each PR.
+    let mut icons = vec![];
+    // The `󰏌` is the last column of the section's first line of each PR, the merge icon that of its second.
     let arrow_x = prs.right().checked_sub(1);
     for (y, pr) in &shown {
         text.extend(pr_lines(pr, usize::from(prs.width)));
+        let icon = arrow_x.filter(|_| pr.clean).map(|x| Position::new(x, y + 1));
+        if let Some(at) = icon {
+            icons.push(MergeIcon { area: Rect::new(at.x, at.y, 1, 1), pull: format!("{}#{}", pr.repo, pr.number) });
+        }
         if let (Some(lead), Some(x)) = (&pr.lead, arrow_x) {
-            hits.push(Hit { area: Rect::new(prs.x, *y, prs.width, 2), arrow: Position::new(x, *y), lead: lead.clone() });
+            hits.push(Hit { area: Rect::new(prs.x, *y, prs.width, 2), arrow: Position::new(x, *y), icon, lead: lead.clone() });
         }
     }
     if w.prs.is_empty() {
@@ -231,7 +259,7 @@ pub fn draw(f: &mut Frame, area: Rect, w: &Widgets, machine: &Machine, note: &st
         f.render_widget(Clear, last);
         f.render_widget(Paragraph::new(Span::styled(note.to_owned(), palette::note())), last);
     }
-    Drawn { hits, prs, max_scroll: max_scroll(w.prs.len(), height) }
+    Drawn { hits, prs, max_scroll: max_scroll(w.prs.len(), height, 2), icons }
 }
 
 #[cfg(test)]
@@ -269,6 +297,10 @@ mod tests {
         (terminal.backend().buffer().clone(), out.unwrap())
     }
 
+    fn icons(width: u16, w: &Widgets) -> Vec<MergeIcon> {
+        scrolled(width, 20, w, "", 0).1.icons
+    }
+
     fn buffer(width: u16, height: u16) -> Buffer {
         drawn(width, height, &widgets(vec![]), "").0
     }
@@ -283,6 +315,7 @@ mod tests {
             checks: crate::read::Checks::Passed,
             review_decision: ReviewDecision::None,
             conflicting: false,
+            clean: false,
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),
         }
@@ -363,7 +396,7 @@ mod tests {
         assert!(buf[(29, 6)].modifier.contains(Modifier::DIM) && buf[(29, 6)].symbol().contains(link::CUE), "the arrow stays");
         let [hit] = &hits[..] else { panic!("{hits:?}") };
         assert_eq!(hit.lead.as_str(), "l-a");
-        assert_eq!((hit.area, hit.arrow), (Rect::new(0, 8, 30, 2), Position::new(29, 8)));
+        assert_eq!((hit.area, hit.arrow, hit.icon), (Rect::new(0, 8, 30, 2), Position::new(29, 8), None));
     }
 
     #[test]
@@ -423,6 +456,52 @@ mod tests {
         assert_eq!(second_line(&p, 28).0, open);
         assert_eq!(second_line(&p, 32).0, open);
         assert_eq!(second_line(&p, 33).0, format!("{open}  A t…"));
+    }
+
+    #[test]
+    fn a_clean_pr_ends_its_second_line_in_the_merge_icon_and_others_have_none() {
+        let mut p = pr(7, Some("l-a"));
+        assert_eq!(second_line(&p, 40).0, "  open \u{F05E0} no review  A title");
+        p.clean = true;
+        let (line, _) = second_line(&p, 40);
+        assert_eq!(line, format!("  open \u{F05E0} no review  A title{}{MERGE}", " ".repeat(40 - 27 - 1)));
+        assert_eq!(line.chars().count(), 40, "the icon is the last column");
+        assert!(!row(&drawn(40, 20, &widgets(vec![p]), "").0, 6).contains(MERGE), "never on the first line");
+    }
+
+    #[test]
+    fn the_title_is_cut_so_it_never_reaches_the_merge_icon() {
+        let mut p = pr(7, Some("l-a"));
+        p.clean = true;
+        p.title = "A very long title indeed".to_owned();
+        let (line, _) = second_line(&p, 32);
+        assert_eq!(line, format!("  open \u{F05E0} no review  A very lo… {MERGE}"));
+        assert_eq!(line.chars().count(), 32);
+    }
+
+    #[test]
+    fn a_merge_icon_has_a_one_cell_area_and_the_row_hit_area_excludes_it() {
+        let mut clean = pr(7, Some("l-a"));
+        clean.clean = true;
+        let mut unowned = pr(8, None);
+        unowned.clean = true;
+        let blocked = pr(9, Some("l-a"));
+        let w = widgets(vec![clean, unowned, blocked]);
+        assert_eq!(
+            icons(30, &w),
+            [
+                MergeIcon { area: Rect::new(29, 7, 1, 1), pull: "acme/repo#7".to_owned() },
+                MergeIcon { area: Rect::new(29, 9, 1, 1), pull: "acme/repo#8".to_owned() },
+            ],
+            "every clean row, owned or not; none for the other"
+        );
+        let (_, hits) = drawn(30, 20, &w, "");
+        let [first, second] = &hits[..] else { panic!("{hits:?}") };
+        assert_eq!(first.icon, Some(Position::new(29, 7)));
+        assert_eq!(second.icon, None);
+        for (x, y, inside) in [(28, 7, true), (29, 7, false), (29, 6, false), (0, 7, true)] {
+            assert_eq!(first.contains(Position::new(x, y)), inside, "({x}, {y})");
+        }
     }
 
     /// `count` owned pull requests, numbers 1.., each with its own Lead `l-<n>`.

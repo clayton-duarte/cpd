@@ -9,9 +9,10 @@ use clap::Args;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
-use super::{ContextRow, Select, digest, open};
+use super::{ContextRow, Select, digest};
+use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::host::layout::context_window;
 use crate::host::Tmux;
 use crate::ids::{ContextId, SessionId};
@@ -73,7 +74,7 @@ fn write_file(path: &Path, text: &str) -> Result<(), CpdError> {
 
 /// `context manager` (§3.10).
 pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
-    let (home, config, mut store) = open()?;
+    let Env { home, config, mut store } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     let (row, found) = store.read(|conn| Ok((ContextRow::require(conn, &context)?, live(conn, &context)?)))?;
     if row.archived_at.is_some() {
@@ -105,8 +106,8 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
         store.write("context manager", |tx| {
             tx.execute("UPDATE sessions SET tmux_pane = ?1 WHERE id = ?2", [new_pane.as_str(), manager.id.as_str()])?;
             let text = format!("Manager {} is parked in window {}.", manager.name, new_window.as_str());
-            let data = json!({"pane": new_pane.as_str(), "window": new_window.as_str(), "place": "parked"});
-            append(tx, NewEvent::new(Kind::SessionMoved, text, data).session(manager.id.clone()).context(context.clone()))?;
+            let event = NewEvent::session_moved(text, Some(new_pane.as_str()), Some(new_window.as_str()), "parked");
+            append(tx, event.session(manager.id.clone()).context(context.clone()))?;
             Ok(())
         })?;
         started = true;
@@ -160,8 +161,8 @@ fn register(
             rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier],
         )?;
         let text = format!("Manager {name} of Context {context} registered. Next: cpd session open {id}");
-        let data = json!({"role": "manager", "name": name, "forked_from": Value::Null, "tier": tier});
-        append(tx, NewEvent::new(Kind::SessionRegistered, text, data).session(id.clone()).context(context.clone()))?;
+        let event = NewEvent::session_registered(text, "manager", &name, Value::Null, &tier);
+        append(tx, event.session(id.clone()).context(context.clone()))?;
         Ok(())
     })?;
     Ok(Live { id, name, cwd, state: "stopped".to_owned(), pane: None })

@@ -11,7 +11,7 @@ type Open = { key: string; label: string };
  */
 export class Facts {
   active = false;
-  /** hs-d278: the run that is under way, or just ended, answered the User. Cleared at the next run start and once an `idle` that carries it is sent. */
+  /** The run that is under way, or just ended, answered the User. Cleared at the next run start and once an `idle` that carries it is sent. */
   reply = false;
   private opened: Open[] = [];
   private prompts = 0;
@@ -104,7 +104,10 @@ export class Reporter {
     if (wantedKey(w) === this.lastKey) return;
     this.lastKey = wantedKey(w);
     this.inflight = this.send(w)
-      .catch(this.onError)
+      .catch((e) => {
+        this.lastKey = undefined; // refused: the same state is tried again when wanted again
+        this.onError(e);
+      })
       .finally(() => {
         this.inflight = undefined;
         this.pump();

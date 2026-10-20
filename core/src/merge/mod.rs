@@ -1,17 +1,16 @@
-//! The merge (contract §7.4): driver step A8 under the per-repo lock, and the
-//! recovery R of an interrupted merge. No command of its own: the driver
-//! calls [`merge`] at A8; engine E2, `pr open` and `pr rebase` take the
-//! per-repo lock ([`RepoLock`]) and call [`recover`].
+//! The merge (contract §7.4): driver step A8, and the recovery R of an
+//! interrupted merge, both without a repo lock (hs-d243). No command of its
+//! own: the driver calls [`merge`] at A8; engine E2 calls [`recover_attempt`]
+//! for each orphaned Attempt.
 //!
 //! No Gate runs here (R19): a merge is checked by the quick check at submit,
 //! the tamper check (step 4) and a clean rebase (step 5).
 
-mod ledger;
-mod lock;
 mod recover;
 
 use serde_json::Value;
 
+use crate::attempt::ledger::{self, Stage};
 use crate::config::{Catalog, Config};
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, run::run};
@@ -19,9 +18,10 @@ use crate::home::CpdHome;
 use crate::ids::{AttemptId, PlanId};
 use crate::store::Store;
 
-pub use ledger::{Attempt, End, Failure, Ladder, end_merging, load};
-pub use lock::{DriverLock, RepoLock, take_free_driver_lock};
-pub use recover::{Recovered, recover};
+// The merge's causes are the shared `Cause`; `Failure` is the name its callers know.
+pub use crate::attempt::ledger::{Attempt, Cause as Failure, End, Ladder, load};
+pub use crate::driver::lock::{Free as DriverLock, take_free_driver_lock};
+pub use recover::{Recovered, recover_attempt};
 
 /// How many times step 8 goes back to step 2 when the Lead Branch moved,
 /// before the merge ends `cas_lost` (§7.4 step 8).
@@ -46,14 +46,12 @@ pub struct Ctx<'a> {
 pub struct Merge {
     /// How the Attempt ended; recorded in the Ledger.
     pub end: End,
-    /// What R did for other Attempts first.
-    pub recovered: Vec<Recovered>,
 }
 
 /// Driver step A8 (§7.4) for Attempt `attempt` of `plan`, which must be
-/// `merging`: takes the per-repo lock (waiting without a limit), runs R for
-/// the repo's orphaned merges, then steps 1–10, and ends the Attempt in one
-/// transaction (§3.4) before releasing the lock.
+/// `merging`: steps 1–10, ending the Attempt in one transaction (§3.4). It
+/// takes no lock and runs no R first (hs-d243): the compare-and-swap of step
+/// 8, rule P and rule S keep concurrent merges of one PR apart.
 ///
 /// An `Err` is an unexpected failure (git, the store) and leaves the Attempt
 /// `merging`; the driver then ends it as commands.md §6.4 says. After an
@@ -68,15 +66,13 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         .with("attempt", attempt.to_string())
         .with("status", target.status));
     }
-    let lock = RepoLock::wait(ctx.home, &target.repo)?;
-    let recovered = recover::recover_except(store, ctx, &lock, Some((plan, attempt)))?;
     let review = store.read(|conn| crate::job::find(&crate::plan::jobs::load(conn, plan)?, plan, &target.job).map(|j| j.review))?;
     let (end, stale, push) = if review { review_steps(store, &target)? } else { steps(store, &target)? };
     let metrics = (ctx.metrics)(&target);
     let ladder = Ladder { catalog: ctx.catalog, retry_cap: ctx.config.retry_cap };
-    // Step 10, and every other end, while the lock is held.
+    // Step 10, and every other end.
     store.write(ctx.source, |tx| {
-        ledger::end_merging(tx, &target, &end, metrics.as_ref(), &ladder)?;
+        ledger::end(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Merge)?;
         if let Some(e) = &stale {
             ledger::append_error(tx, &target, ctx.source, e, recover::stale_text(&target, e))?;
         }
@@ -85,8 +81,7 @@ pub fn merge(store: &mut Store, ctx: &Ctx<'_>, plan: &PlanId, attempt: &AttemptI
         }
         Ok(())
     })?;
-    drop(lock);
-    Ok(Merge { end, recovered })
+    Ok(Merge { end })
 }
 
 /// What [`steps`] returns: how the Attempt ends, step 9's `lead_worktree_stale`
@@ -98,11 +93,11 @@ type Stepped = (End, Option<CpdError>, Option<CpdError>);
 /// or worktree sync, because the Attempt has no commits and the Lead Branch does
 /// not move; then the Attempt ends `merged` with `merged_sha = old`.
 fn review_steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
-    if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+    if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
         return Ok((End::Cancelled, None, None));
     }
     let old = git::run::rev_parse(&target.repo, &format!("refs/heads/{}", target.lead_branch))?;
-    if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+    if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
         return Ok((End::Cancelled, None, None));
     }
     Ok((End::Merged { sha: old }, None, None))
@@ -125,21 +120,13 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
     let mut retries = 0;
     loop {
         // 1. Cancel check.
-        if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             return Ok((End::Cancelled, None, None));
         }
         // 2. Snapshot.
         let old = git::run::rev_parse(repo, &lead_ref)?;
-        // 3. Lead worktree clean, before any work in the Attempt worktree.
-        let status = git::run::ok(lead, &["status", "--porcelain"])?;
-        if !status.trim().is_empty() {
-            let detail = format!(
-                "The Lead worktree {} has uncommitted changes: {}",
-                lead.display(),
-                status.lines().take(10).map(str::trim).collect::<Vec<_>>().join(", ")
-            );
-            return Ok((End::Failed { cause: Failure::DirtyTarget, detail }, None, None));
-        }
+        // 3. Removed by hs-d243: the merge never works in the Lead worktree, and rule S
+        // (step 9) neither overwrites local changes nor fails the Job for them.
         // 4. Tamper check of old...<attempt branch>.
         let pr_base: String = store.read(|conn| {
             Ok(conn.query_row(
@@ -165,7 +152,7 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
         }
         // 6. Removed by R19: no Gate at the merge.
         // 7. Cancel check again: the last safe point.
-        if store.read(|conn| ledger::cancel_request(conn, target))?.is_some() {
+        if store.read(|conn| ledger::cancel_request(conn, &target.plan, &target.job))?.is_some() {
             return Ok((End::Cancelled, None, None));
         }
         // 8. Fast-forward with a compare-and-swap.
@@ -174,17 +161,10 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
         let message = format!("cpd: merge {}/{}", target.plan, target.id);
         let out = run(repo, &["update-ref", "-m", &message, &lead_ref, &new, &old])?;
         if out.code == 0 {
-            // Push (R35): the merge stands whatever happens here.
-            let push = git::push_lead_branch(lead, &target.lead_branch, false).err();
-            // 9. Sync the Lead worktree; the merge stands whatever happens here.
-            let sync = run(lead, &["read-tree", "-m", "-u", &old, &new])?;
-            let stale = (sync.code != 0).then(|| {
-                let fix = format!(
-                    "Move away the files in the way, then run: git -C {} read-tree -m -u {old} {new}",
-                    lead.display()
-                );
-                recover::stale_error(lead, &sync.stderr, fix)
-            });
+            // Push (R35) by rule P: the merge stands whatever happens here.
+            let push = push(lead, &target.lead_branch, &new);
+            // 9. Rule S on the Lead worktree; the merge stands whatever happens here.
+            let stale = git::sync_lead(lead, &target.lead_branch).err();
             return Ok((End::Merged { sha: new }, stale, push));
         }
         if git::run::rev_parse(repo, &lead_ref)? == old {
@@ -196,11 +176,38 @@ fn steps(store: &mut Store, target: &Attempt) -> Result<Stepped, CpdError> {
         retries += 1;
         if retries > CAS_RETRIES {
             let detail = format!(
-                "{} kept moving outside cpd during the merge; the fast-forward lost {} times.",
+                "{} kept moving during the merge (other merges, a pr rebase, or someone outside cpd); the fast-forward lost {} times.",
                 target.lead_branch,
                 CAS_RETRIES + 1
             );
             return Ok((End::Failed { cause: Failure::CasLost, detail }, None, None));
+        }
+    }
+}
+
+/// Rule P (§7.4) for `sha` on the Lead Branch `branch`, from the Lead worktree
+/// `lead`, as step 8 and R2 push: `None` when it pushed, when the remote
+/// already contains `sha`, or when the repo has no `origin` (A3); else the
+/// `push_failed` error to append. A push never fails the merge (R35).
+pub(super) fn push(lead: &std::path::Path, branch: &str, sha: &str) -> Option<CpdError> {
+    let failed = |stderr: &str, exit: Option<i64>, why: String| {
+        let e = CpdError::new(ErrorCode::PushFailed, format!("git push of {branch} to origin {why}"))
+            .with("branch", branch)
+            .with("sha", sha)
+            .with("stderr", git::tail(stderr, git::TAIL_LINES));
+        match exit {
+            Some(code) => e.with("exit", code),
+            None => e,
+        }
+    };
+    match git::run::has_origin(lead).and_then(|origin| if origin { git::push_commit(lead, branch, sha).map(Some) } else { Ok(None) }) {
+        Ok(None | Some(git::Push::Pushed { .. } | git::Push::Contained { .. })) => None,
+        Ok(Some(git::Push::Rejected { stderr })) => Some(failed(&stderr, None, "was rejected: not a fast-forward.".to_owned())),
+        Err(e) => {
+            let detail = |key: &str| e.details().get(key).cloned();
+            let stderr = detail("stderr").and_then(|v| v.as_str().map(str::to_owned)).unwrap_or_default();
+            let exit = detail("exit").and_then(|v| v.as_i64());
+            Some(failed(&stderr, exit, format!("failed: {}", e.message())).with("git", e.to_json()))
         }
     }
 }

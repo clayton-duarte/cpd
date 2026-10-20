@@ -7,7 +7,6 @@ use rusqlite::Connection;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use super::bad_row;
 use crate::error::CpdError;
 use crate::ids::PlanId;
 
@@ -41,6 +40,8 @@ pub struct Job {
     pub appended: bool,
     /// A review Job (`jobs.review`, B2).
     pub review: bool,
+    /// The urgent flag (`jobs.urgent`, §2.2): not a Locked field, in no fingerprint.
+    pub urgent: bool,
     pub fingerprint: Option<String>,
     pub retry_tier: Option<String>,
     pub cancel_reason: Option<String>,
@@ -65,12 +66,12 @@ impl Job {
 
     /// The Tier, for what runs a Job: a Job that is not a draft always has it (§4.4 CHECK), so its absence is a bad row.
     pub fn require_tier(&self) -> Result<&str, CpdError> {
-        self.tier.as_deref().ok_or_else(|| bad_row(format!("Job {} has no tier", self.key)))
+        self.tier.as_deref().ok_or_else(|| CpdError::bad_row(format!("Job {} has no tier", self.key)))
     }
 
     /// The Spec, for what runs a Job, as [`Job::require_tier`].
     pub fn require_spec(&self) -> Result<&JobSpec, CpdError> {
-        self.spec.as_ref().ok_or_else(|| bad_row(format!("Job {} has no Spec", self.key)))
+        self.spec.as_ref().ok_or_else(|| CpdError::bad_row(format!("Job {} has no Spec", self.key)))
     }
 
     /// `{goal, tier, context, touches, acceptance, out_of_scope}`: what the fingerprints of §2.3
@@ -93,7 +94,7 @@ impl Job {
         let spec = |f: fn(&JobSpec) -> Value| self.spec.as_ref().map_or(Value::Null, f);
         json!({
             "key": self.key, "seq": self.seq, "pr": self.pr, "title": self.title, "status": self.status, "tier": self.tier,
-            "appended": self.appended, "review": self.review, "needs": self.needs,
+            "appended": self.appended, "review": self.review, "urgent": self.urgent, "needs": self.needs,
             "goal": spec(|s| json!(s.goal)), "context": spec(|s| json!(s.context)), "touches": spec(|s| s.touches.clone()),
             "acceptance": spec(|s| s.acceptance.clone()), "out_of_scope": spec(|s| s.out_of_scope.clone()),
             "fingerprint": self.fingerprint, "retry_tier": self.retry_tier,
@@ -113,7 +114,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
     }
     let mut stmt = conn.prepare(
         "SELECT seq, key, pr, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review
+                fingerprint, retry_tier, cancel_reason, cancel_requested_at, failed_cause, merged_sha, created_at, review, urgent
            FROM jobs WHERE plan = ?1 ORDER BY seq",
     )?;
     let rows = stmt
@@ -124,17 +125,17 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 (r.get::<_, Option<String>>(7)?, r.get::<_, Option<String>>(8)?, r.get::<_, Option<String>>(9)?),
                 (r.get::<_, String>(10)?, r.get::<_, bool>(11)?, r.get::<_, Option<String>>(12)?, r.get::<_, Option<String>>(13)?),
                 (r.get::<_, Option<String>>(14)?, r.get::<_, Option<String>>(15)?, r.get::<_, Option<String>>(16)?),
-                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?),
+                (r.get::<_, Option<String>>(17)?, r.get::<_, String>(18)?, r.get::<_, bool>(19)?, r.get::<_, bool>(20)?),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
-        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review))| {
+        .map(|((seq, key, pr, title, tier), (goal, context), (touches, acceptance, out_of_scope), (status, appended, fingerprint, retry_tier), (cancel_reason, cancel_requested_at, failed_cause), (merged_sha, created_at, review, urgent))| {
             let array = |name: &str, text: &str| -> Result<Value, CpdError> {
                 serde_json::from_str::<Value>(text)
                     .ok()
                     .filter(Value::is_array)
-                    .ok_or_else(|| bad_row(format!("Job {plan}/{key} has {name} {text:?}")))
+                    .ok_or_else(|| CpdError::bad_row(format!("Job {plan}/{key} has {name} {text:?}")))
             };
             // The Spec is all or nothing (§4.4 CHECK).
             let spec = match (goal, context, touches, acceptance, out_of_scope) {
@@ -146,7 +147,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                     out_of_scope: array("out_of_scope", &out_of_scope)?,
                 }),
                 (None, None, None, None, None) => None,
-                _ => return Err(bad_row(format!("Job {plan}/{key} has some of its Spec fields and not all"))),
+                _ => return Err(CpdError::bad_row(format!("Job {plan}/{key} has some of its Spec fields and not all"))),
             };
             Ok(Job {
                 spec,
@@ -159,6 +160,7 @@ pub fn load(conn: &Connection, plan: &PlanId) -> Result<Vec<Job>, CpdError> {
                 status,
                 appended,
                 review,
+                urgent,
                 fingerprint,
                 retry_tier,
                 cancel_reason,
@@ -265,6 +267,7 @@ mod tests {
             status: status.into(),
             appended: false,
             review: false,
+            urgent: false,
             fingerprint: None,
             retry_tier: None,
             cancel_reason: None,

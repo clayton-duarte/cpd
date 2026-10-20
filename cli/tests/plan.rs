@@ -6,11 +6,9 @@
 mod common;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId, ReviewId};
@@ -32,43 +30,20 @@ fn pid(id: &str) -> PlanId {
     PlanId::parse(id).unwrap()
 }
 
-/// `config.toml` on this env's private tmux server.
-fn write_config(env: &TestEnv) {
-    let config = format!("version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[tmux]\nsocket = \"{}\"\n", env.tmux_socket());
-    fs::write(env.cpd_home().join("config.toml"), config).unwrap();
-}
-
 /// Where the fake `cpd session run <id>` writes its environment.
 fn pane_env_file(env: &TestEnv, session: &str) -> PathBuf {
     env.root().join(format!("pane-{session}.env"))
 }
 
-/// A fake `cpd` on `PATH`: `session run <id>` records its environment and
-/// sleeps (the pane's program); `watch --ensure` runs `watch`; everything
-/// else is the built binary.
-fn fake_cpd(env: &TestEnv, watch: &str) {
-    env.fake(
-        "cpd",
-        &format!(
-            "case \"$1 $2\" in\n\
-             \"session run\") env > '{root}/pane-'\"$3\".env; exec sleep {SLEEP_SECONDS};;\n\
-             \"watch --ensure\") {watch};;\n\
-             esac\nexec '{CPD}' \"$@\"",
-            root = env.root().display()
-        ),
-    );
-}
-
-const WATCH_OK: &str = "echo '{\"ok\": true, \"started\": true, \"pane\": \"%9\"}'; exit 0";
 const WATCH_FAILS: &str =
     "echo '{\"ok\": false, \"error\": {\"code\": \"watch_start_failed\", \"message\": \"No lock.\", \"details\": {}}}'; exit 1";
 
 /// The env with its config, a fake `cpd`, Context `ctx` and the repo `pay`.
 fn setup(env: &TestEnv) -> PathBuf {
-    write_config(env);
-    fake_cpd(env, WATCH_OK);
-    env.cpd(&["context", "new", "ctx", "--title", "Payments"]).ok();
-    env.git_repo("pay")
+    env.write_tmux_config("");
+    env.fake_cpd_panes(WATCH_OK);
+    env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
+    env.keyed_repo("pay")
 }
 
 fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
@@ -82,13 +57,6 @@ fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
         stdout: String::from_utf8(out.stdout).unwrap(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     }
-}
-
-fn refused(run: &Run, code: &str, exit: i32) -> Value {
-    let error = run.error();
-    assert_eq!(error["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-    error
 }
 
 fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
@@ -107,20 +75,14 @@ fn new_plan_only(env: &TestEnv, id: &str) -> Value {
 /// `plan new` and the Plan's one PR, keyed `pay` (R34 A12: a Plan has no repo of its own).
 fn new_plan(env: &TestEnv, id: &str, repo: &Path) -> Value {
     let out = new_plan_only(env, id);
+    env.github_origin(repo);
     env.cpd(&["pr", "add", "pay", "--repo", repo.to_str().unwrap(), "--plan", id]).ok();
+    env.drop_unreachable_origin(repo);
     out
 }
 
 fn show(env: &TestEnv, plan: &str) -> Value {
     env.cpd(&["plan", "show", "--plan", plan]).ok()
-}
-
-fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !ready() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 /// The environment the fake `session run` of `session` was started with.
@@ -268,11 +230,11 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     assert!(!record.to_string().contains("\"repo\""), "{record}");
     assert!(!env.cpd_home().join("contexts").exists(), "the record is in the database only");
     let real = repo.canonicalize().unwrap().display().to_string();
-    let other = env.git_repo("web");
+    let other = env.keyed_repo("web");
     env.cpd(&["pr", "add", "api", "--repo", &real, "--plan", "pay"]).ok();
     env.cpd(&["pr", "add", "api2", "--repo", &real, "--plan", "pay"]).ok();
     env.cpd(&["pr", "add", "web", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
-    env.cpd(&["pr", "add", "gone", "--repo", env.git_repo("old").to_str().unwrap(), "--plan", "pay"]).ok();
+    env.cpd(&["pr", "add", "gone", "--repo", env.keyed_repo("old").to_str().unwrap(), "--plan", "pay"]).ok();
     env.cpd(&["pr", "cancel", "gone", "--plan", "pay"]).ok();
     let shown = env.cpd(&["context", "show", "--context", "ctx"]).ok();
     let record = shown["records"].as_array().unwrap().iter().find(|r| r["kind"] == "plan").unwrap().clone();
@@ -640,6 +602,24 @@ fn new_refusals_write_nothing() {
 }
 
 #[test]
+fn new_in_a_context_with_no_owner_is_owner_unset_and_writes_nothing() {
+    let env = TestEnv::new();
+    setup(&env);
+    // A Context made before the policy keys has no owner.
+    store(&env).write("test", |tx| Ok(tx.execute("UPDATE contexts SET owner = NULL", []).map(|_| ())?)).unwrap();
+    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let error = refused(&env.cpd(&["plan", "new", "pay", "--context", "ctx", "--title", "T"]), "owner_unset", 3);
+    assert_eq!(error["details"]["context"], "ctx");
+    assert!(error["details"].get("next").is_none() && error["message"].as_str().unwrap().contains("cpd context owner <login> --context ctx"), "{error}");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 0);
+    // After `context owner` the Plan is created.
+    env.cpd(&["context", "owner", "acme", "--context", "ctx"]).ok();
+    new_plan_only(&env, "pay");
+    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM plans"), 1);
+}
+
+#[test]
 fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     let env = TestEnv::new();
     let origin = setup(&env);
@@ -647,6 +627,9 @@ fn pr_add_defaults_the_base_to_origin_head_and_needs_it_on_origin() {
     env.git(&origin, &["symbolic-ref", "HEAD", "refs/heads/trunk"]);
     let clone = env.root().join("repos").join("clone");
     env.git(env.root(), &["clone", "-q", origin.to_str().unwrap(), clone.to_str().unwrap()]);
+    // Keyed by its GitHub URL; git still reaches the local repo.
+    env.git(&clone, &["remote", "set-url", "origin", "https://github.com/acme/clone.git"]);
+    env.git(&clone, &["config", &format!("url.{}.insteadOf", origin.display()), "https://github.com/acme/clone.git"]);
     // From a subdirectory of a linked worktree: the repo is the main worktree.
     let linked = env.root().join("repos").join("clone-linked");
     env.git(&clone, &["worktree", "add", "-q", linked.to_str().unwrap(), "-b", "side"]);
@@ -794,7 +777,7 @@ fn list_and_show_are_snapshots_with_an_events_cursor() {
     let repo = setup(&env);
     planned(&env, &repo, "pay");
     new_plan(&env, "refund", &repo);
-    env.cpd(&["context", "new", "other", "--title", "Other"]).ok();
+    env.cpd(&["context", "new", "other", "--title", "Other", "--owner", "acme"]).ok();
 
     let list = env.cpd(&["plan", "list"]).ok();
     let cursor = list["events_cursor"].as_i64().unwrap();
@@ -1038,7 +1021,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 2);
 
     // A PR appended after the lock is not reviewed: the review stays current.
-    let web = env.git_repo("web");
+    let web = env.keyed_repo("web");
     env.cpd(&["pr", "add", "web", "--repo", web.to_str().unwrap(), "--base", "main", "--plan", "pay"]).ok();
     assert_eq!(show(&env, "pay")["review"]["current"], true);
 
@@ -1149,7 +1132,7 @@ fn with_origin(env: &TestEnv, repo: &Path) -> PathBuf {
     let origin = env.root().join("origins").join("pay.git");
     fs::create_dir_all(&origin).unwrap();
     env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    env.git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(repo, &origin);
     env.git(repo, &["push", "-q", "origin", "main"]);
     origin
 }
@@ -1173,8 +1156,9 @@ fn lock_creates_and_pushes_the_lead_branch_when_the_remote_has_none() {
 
     assert_eq!((&out["prs"][0]["base_sha"], &out["prs"][0]["pushed"], &out["prs"][0]["reused"]), (&json!(head), &json!(true), &json!(false)));
     assert_eq!(env.git(&repo, &["ls-remote", "--heads", "origin", "cpd/pay/pay"]), format!("{head}\trefs/heads/cpd/pay/pay"));
-    let worktree = repo.parent().unwrap().canonicalize().unwrap().join("pay.pay.pay");
-    assert_eq!(env.git(&worktree, &["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/cpd/pay/pay");
+    // No upstream: nothing in the shared .git/config (hs-d243 G1).
+    let config = common::output(env.command("git").args(["-C", repo.to_str().unwrap(), "config", "--get-regexp", r"^branch\."])).unwrap();
+    assert_eq!(String::from_utf8(config.stdout).unwrap(), "");
     assert_eq!(env.git(&origin, &["rev-parse", "cpd/pay/pay"]), head);
     assert!(events(&env, "error").is_empty());
 }
@@ -1240,8 +1224,7 @@ fn a_push_failure_at_lock_still_locks_and_appends_one_push_failed_error() {
     let repo = setup(&env);
     let origin = with_origin(&env, &repo);
     let hook = origin.join("hooks").join("pre-receive");
-    fs::write(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&hook, "#!/bin/sh\necho refused by hook >&2\nexit 1\n");
     approved(&env, &repo);
 
     let out = env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
@@ -1261,14 +1244,14 @@ fn lock_stays_locked_when_the_engine_cannot_start() {
     let env = TestEnv::new();
     let repo = setup(&env);
     approved(&env, &repo);
-    fake_cpd(&env, WATCH_FAILS);
+    env.fake_cpd_panes(WATCH_FAILS);
     let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
     assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert_eq!(error["details"]["error"]["message"], "No lock.");
     assert_eq!(show(&env, "pay")["plan"]["phase"], "dispatch", "the Plan stays locked");
 
     // An engine that prints nothing usable fails the same way.
-    fake_cpd(&env, "echo nonsense; exit 0");
+    env.fake_cpd_panes("echo nonsense; exit 0");
     let error = refused(&env.cpd(&["plan", "lock", "--plan", "pay"]), "watch_start_failed", 1);
     assert_eq!(error["details"]["error"]["stdout"], "nonsense");
 }

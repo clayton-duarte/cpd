@@ -10,6 +10,7 @@
 //! ([`super::menu`]), which then takes every key and click.
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
@@ -24,12 +25,15 @@ use super::inbox::{self, Hit, Jump, Shape};
 use super::menu::{self, Item, Kind, Menu};
 use super::prompt::{Ask, Outcome, Prompt, Target};
 use super::rows::{self, Id, Row};
+use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::Kind as InboxKind;
 use cpd_core::session::State;
 use crate::palette;
 use crate::read::{ContextNode, SessionNode, Tree};
 
 /// The longest name of a Session (commands.md §1.4).
+/// Rows a wheel notch scrolls the Inbox section by.
+const WHEEL_ROWS: usize = 3;
 const NAME_MAX: usize = 80;
 const FORK_SUFFIX: &str = " (fork)";
 
@@ -98,8 +102,16 @@ pub struct View {
     /// The inner area of the last frame (the pane less a blank column on each side, below the blank top row): the
     /// menu is clamped inside it and hit-tested against it, and its `x` is the column of the tree's first cell.
     pane: Rect,
-    /// The Inbox section's rows (header, items, `+<n> more`) are all shown, not only the first three. View state only.
+    /// The Inbox section's rows (header, items, `+<n> more`) are shown, not only the first three, in at most half the
+    /// column ([`View::inbox_cap`]). View state only.
     inbox_expanded: bool,
+    /// The first item row the expanded section shows (the wheel and the cursor move it; the drawing clamps it).
+    /// View state only.
+    inbox_scroll: usize,
+    /// The most rows the expanded section may take, as the last frame had it: half the column.
+    inbox_cap: u16,
+    /// The cursor moved (or the list changed): the next frame scrolls the section to show the cursor's item.
+    follow_inbox_cursor: bool,
     /// Where the last frame drew the Inbox section (empty when it drew none): clicks there are the section's.
     inbox_area: Rect,
     /// The item row of the Inbox section the keyboard cursor is on (an index of the snapshot's Inbox, a shown one):
@@ -107,7 +119,29 @@ pub struct View {
     inbox_cursor: Option<usize>,
     /// The one-line result or refusal of the last action, until the next `n`, `x` or click.
     pub note: String,
+    /// `$CPD_HOME/policy/owners`: the owner policies New Context… chooses the owner from (none when the home is unresolved).
+    owners_dir: Option<PathBuf>,
 }
+
+/// The owners of the owner policy files (`<owner>.toml`) in `dir`, sorted; anything else,
+/// a stem that is not a valid owner login included, is ignored.
+fn owners_in(dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut owners: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| {
+            let path = e.path();
+            let stem = path.file_name()?.to_str()?.strip_suffix(".toml")?;
+            cpd_core::ids::OwnerLogin::parse(stem).ok().filter(|o| o.as_str() == stem).map(|_| stem.to_owned())
+        })
+        .collect();
+    owners.sort();
+    owners
+}
+
+/// The refusal of New Context… when the instance has no owner policy.
+const NO_OWNER_POLICY: &str = "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml";
 
 impl View {
     pub fn new(tree: Tree, focused: bool) -> View {
@@ -121,9 +155,13 @@ impl View {
             menu: None,
             pane: Rect::default(),
             inbox_expanded: false,
+            inbox_scroll: 0,
+            inbox_cap: u16::MAX,
+            follow_inbox_cursor: false,
             inbox_area: Rect::default(),
             inbox_cursor: None,
             note: String::new(),
+            owners_dir: CpdHome::from_env().ok().map(|h| h.root().join("policy").join("owners")),
         };
         view.refresh(tree);
         view
@@ -141,12 +179,18 @@ impl View {
             let moved = item.and_then(|id| self.tree.inbox.iter().position(|it| it.id == id));
             self.inbox_cursor = Some(moved.unwrap_or(i));
             self.clamp_inbox_cursor();
+            self.follow_inbox_cursor = true;
         }
+    }
+
+    /// The Inbox section as the last frame had it.
+    fn shape(&self) -> Shape {
+        Shape::new(self.tree.inbox.len(), self.inbox_expanded).capped(self.inbox_cap).scrolled(self.inbox_scroll)
     }
 
     /// The Inbox cursor stays on a shown item row; with none, it goes.
     fn clamp_inbox_cursor(&mut self) {
-        let shown = Shape::new(self.tree.inbox.len(), self.inbox_expanded).shown();
+        let shown = self.shape().shown();
         self.inbox_cursor = self.inbox_cursor.and_then(|i| shown.checked_sub(1).map(|last| i.min(last)));
     }
 
@@ -230,7 +274,8 @@ impl View {
             KeyCode::Char('s') => {
                 self.note.clear();
                 if let Some(item) = self.cursor_item().filter(|i| i.kind != InboxKind::EngineDown) {
-                    let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + 1 + self.inbox_cursor.unwrap_or(0) as u16);
+                    let row = self.inbox_cursor.and_then(|i| self.shape().row_of(i)).unwrap_or(1);
+                    let at = Position::new(self.inbox_area.x + 2, self.inbox_area.y + row);
                     self.menu = Some(Menu::for_item(Kind::Snooze, item.id, at));
                 }
             }
@@ -245,6 +290,7 @@ impl View {
             KeyCode::Down | KeyCode::Char('j') | KeyCode::Up | KeyCode::Char('k') => {
                 let delta = if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) { 1 } else { -1 };
                 self.arrow(delta);
+                self.follow_inbox_cursor = true;
                 self.last_input = Input::Arrow;
             }
             KeyCode::Enter => {
@@ -264,7 +310,7 @@ impl View {
     /// into the Inbox's shown items and back up from the first to the last Session; when it does not show, the key
     /// only shows it again where it was (on the first Session when it has none).
     fn arrow(&mut self, delta: isize) {
-        let shown = Shape::new(self.tree.inbox.len(), self.inbox_expanded).shown();
+        let shown = self.shape().shown();
         if let Some(i) = self.inbox_cursor {
             if self.cursor_shown() {
                 self.inbox_cursor = match (delta, i) {
@@ -297,7 +343,7 @@ impl View {
         // a right click on the Inbox section: the menu of an item row; the header and `+<n> more` have none
         if self.menu.is_none() && m.kind == MouseEventKind::Down(MouseButton::Right) && self.inbox_area.contains(at) {
             self.note.clear();
-            if let Some(Hit::Item(i)) = Shape::new(self.tree.inbox.len(), self.inbox_expanded).hit(at.y - self.inbox_area.y) {
+            if let Some(Hit::Item(i)) = self.shape().hit(at.y - self.inbox_area.y) {
                 let item = &self.tree.inbox[i];
                 if item.kind != InboxKind::EngineDown {
                     self.menu = Some(Menu::for_item(Kind::Inbox, item.id, at));
@@ -319,6 +365,14 @@ impl View {
             };
         }
         match m.kind {
+            // the wheel over the Inbox section scrolls its items, three rows a notch, as the Plan view; elsewhere it does nothing
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp if self.inbox_area.contains(at) => {
+                let max = self.shape().max_scroll();
+                let scroll = self.inbox_scroll.min(max);
+                self.inbox_scroll =
+                    if m.kind == MouseEventKind::ScrollDown { (scroll + WHEEL_ROWS).min(max) } else { scroll.saturating_sub(WHEEL_ROWS) };
+                Effect::None
+            }
             MouseEventKind::Down(MouseButton::Left) => self.click(m),
             MouseEventKind::Down(MouseButton::Right) => {
                 self.open_menu(at);
@@ -350,8 +404,13 @@ impl View {
             };
         }
         if item == Item::NewContext {
+            let owners = self.owners_dir.as_deref().map(owners_in).unwrap_or_default();
+            if owners.is_empty() {
+                self.note = NO_OWNER_POLICY.into();
+                return Effect::None;
+            }
             let taken = self.tree.contexts.iter().map(|c| c.id.to_string()).collect();
-            self.prompt = Some(Prompt::typed(Ask::NewContext { taken }, String::new()));
+            self.prompt = Some(Prompt::typed(Ask::NewContext { taken, owners }, String::new()));
             return Effect::None;
         }
         // the row may be gone, with a snapshot taken while the menu was open
@@ -473,10 +532,12 @@ impl View {
     /// A left click on the Inbox section, `row` rows below its header: `+<n> more` and `− less` toggle the inline
     /// expansion; an item jumps to its cause ([`inbox::jump`]); the header does nothing.
     fn click_inbox(&mut self, row: u16) -> Effect {
-        match Shape::new(self.tree.inbox.len(), self.inbox_expanded).hit(row) {
+        match self.shape().hit(row) {
             Some(Hit::Toggle) => {
                 self.inbox_expanded = !self.inbox_expanded;
+                self.inbox_scroll = 0;
                 self.clamp_inbox_cursor();
+                self.follow_inbox_cursor = true;
                 Effect::None
             }
             Some(Hit::Item(i)) => self.jump(i),
@@ -523,7 +584,15 @@ impl View {
             if footer.is_empty() { 0 } else { (wrapped + usize::from(wrapped > 1)).max(1).min(inner.height as usize) as u16 };
         // the section leaves the tree at least one row, when there is one to leave
         let room = inner.height.saturating_sub(1 + footer_height).saturating_sub(1);
-        let inbox_height = Shape::new(self.tree.inbox.len(), self.inbox_expanded).height().min(room);
+        // expanded, the section takes at most half the column
+        self.inbox_cap = inner.height / 2;
+        self.inbox_scroll = self.inbox_scroll.min(self.shape().max_scroll());
+        if std::mem::take(&mut self.follow_inbox_cursor) {
+            if let Some(i) = self.inbox_cursor {
+                self.inbox_scroll = self.shape().scroll_to(i);
+            }
+        }
+        let inbox_height = self.shape().height().min(room);
         let [_, list, inbox_area, footer_area] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Min(0),
@@ -539,7 +608,7 @@ impl View {
         }
         self.inbox_area = inbox_area;
         let inbox_cursor = self.inbox_cursor.filter(|_| self.cursor_shown());
-        inbox::draw(f, inbox_area, &self.tree.inbox, self.inbox_expanded, inbox_cursor, now, frame);
+        inbox::draw(f, inbox_area, &self.tree.inbox, self.shape(), inbox_cursor, now, frame);
         if footer_height > 0 {
             let style = if self.prompt.is_some() { palette::note().bold() } else { palette::note() };
             f.render_widget(Paragraph::new(footer).style(style).wrap(Wrap { trim: false }), footer_area);
@@ -1417,9 +1486,56 @@ mod tests {
         assert!(input.ends_with("x (fork)"));
     }
 
+    /// A view whose New Context… reads the owner policies of a temp home with `owners` as files.
+    fn owned(tree: Tree, files: &[&str]) -> (View, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        for f in files {
+            std::fs::write(dir.path().join(f), "").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("sub.toml")).unwrap();
+        let mut view = View::new(tree, true);
+        view.owners_dir = Some(dir.path().to_path_buf());
+        (view, dir)
+    }
+
+    #[test]
+    fn owners_are_the_toml_file_stems_sorted() {
+        let (_view, dir) = owned(sample(), &["b.toml", "a.toml", "notes.md", ".toml", "Clayton-Duarte.toml", "clayton_duarte.toml", "-x.toml"]);
+        assert_eq!(owners_in(dir.path()), ["a", "b"]);
+        assert!(owners_in(&dir.path().join("missing")).is_empty());
+    }
+
+    #[test]
+    fn new_context_with_no_owner_policy_is_refused_and_runs_nothing() {
+        let (mut view, _dir) = owned(sample(), &["notes.md"]);
+        assert_eq!(pick_at(&mut view, 8, 14, 0), Effect::None);
+        assert!(view.prompt.is_none());
+        assert_eq!(view.footer(), "No owner policy: add $CPD_HOME/policy/owners/<owner>.toml");
+    }
+
+    #[test]
+    fn new_context_with_several_owners_asks_which_after_the_title() {
+        let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml", "other.toml"]);
+        pick_at(&mut view, 8, 14, 0);
+        typed(&mut view, "Building cpd!");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
+        assert_eq!(view.footer(), "Owner (clayton-duarte, other): █ (Enter confirms, Esc cancels)");
+        typed(&mut view, "other");
+        let run = press(&mut view, KeyCode::Enter);
+        assert_eq!(
+            run,
+            Effect::Run(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "other".into() })
+        );
+        let Effect::Run(action) = run else { unreachable!() };
+        assert_eq!(
+            action.argv(),
+            ["context", "new", "building-cpd", "--title=Building cpd!", "--owner=other"]
+        );
+    }
+
     #[test]
     fn new_context_asks_a_title_and_derives_the_id() {
-        let mut view = View::new(sample(), true);
+        let (mut view, _dir) = owned(sample(), &["clayton-duarte.toml"]);
         assert_eq!(pick_at(&mut view, 8, 14, 0), Effect::None);
         assert_eq!(view.footer(), "Title: █ (Enter confirms, Esc cancels)");
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::None);
@@ -1427,22 +1543,22 @@ mod tests {
         typed(&mut view, "Building cpd!");
         assert_eq!(
             press(&mut view, KeyCode::Enter),
-            Effect::Run(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into() })
+            Effect::Run(Action::NewContext { id: ContextId::parse("building-cpd").unwrap(), title: "Building cpd!".into(), owner: "clayton-duarte".into() })
         );
         assert!(view.prompt.is_none());
         // a taken id (also of an archived Context) gets `-2`, then `-3`
-        let mut view = View::new(archived(), true);
+        view.refresh(archived());
         pick_at(&mut view, 8, 14, 0);
         typed(&mut view, "Alpha");
         assert_eq!(
             press(&mut view, KeyCode::Enter),
-            Effect::Run(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into() })
+            Effect::Run(Action::NewContext { id: ContextId::parse("alpha-2").unwrap(), title: "Alpha".into(), owner: "clayton-duarte".into() })
         );
         pick_at(&mut view, 8, 14, 0);
         typed(&mut view, "zeta");
         assert_eq!(
             press(&mut view, KeyCode::Enter),
-            Effect::Run(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into() })
+            Effect::Run(Action::NewContext { id: ContextId::parse("zeta-2").unwrap(), title: "zeta".into(), owner: "clayton-duarte".into() })
         );
         // a title that no id is made of is refused in the prompt
         pick_at(&mut view, 8, 14, 0);
@@ -1746,7 +1862,7 @@ mod tests {
         draw_now(&mut view, 43, 16);
         // rows 10.. are the five items: dialog, pr-failing, job-stuck, engine-error, unread
         assert_eq!(click(&mut view, 10, 10), Effect::Run(Action::Open(sid("f-blocked"))), "dialog: session open");
-        assert_eq!(click(&mut view, 10, 11), Effect::None, "pr-failing: the label is a link, the view runs nothing");
+        assert_eq!(click(&mut view, 10, 11), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing no Plan owns: copies its url");
         assert_eq!(click(&mut view, 10, 12), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead of the Plan");
         assert_eq!(click(&mut view, 10, 13), Effect::Logs(Some(9)), "engine-error: the logs at its Event");
         assert_eq!(click(&mut view, 41, 14), Effect::Run(Action::Open(sid("l-ship"))), "unread: anywhere on the row, the age too");
@@ -1756,12 +1872,12 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_a_link_kind_or_the_header_changes_nothing_and_a_question_opens_the_manager() {
+    fn a_click_on_a_link_kind_copies_its_url_the_header_changes_nothing_and_a_question_opens_the_manager() {
         let mut view = with_inbox(2);
         draw_now(&mut view, 43, 16);
         let before = view.inbox_expanded;
         assert_eq!(click(&mut view, 10, 14), Effect::Run(Action::Open(sid("f-blocked"))));
-        assert_eq!(click(&mut view, 10, 15), Effect::None, "a pr-failing's label is a link");
+        assert_eq!(click(&mut view, 10, 15), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "a pr-failing's click copies its url");
         assert_eq!(click(&mut view, 10, 13), Effect::None, "the header");
         assert_eq!(view.inbox_expanded, before);
         let mut question = item(6, InboxKind::Question, Urgency::Magenta, "alpha: a question", "2026-01-02T23:00:00.000Z");
@@ -1992,7 +2108,7 @@ mod tests {
         }
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("f-blocked"))), "dialog");
         press(&mut view, KeyCode::Down);
-        assert_eq!(press(&mut view, KeyCode::Enter), Effect::None, "pr-failing: a link, Enter does nothing");
+        assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyUrl("https://github.com/acme/api/pull/12".into())), "pr-failing: Enter copies its url");
         press(&mut view, KeyCode::Down);
         assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::Open(sid("l-ship"))), "job-stuck: the Lead");
         view.tree.inbox[2].kind = InboxKind::EngineError;
@@ -2047,5 +2163,131 @@ mod tests {
         let rows = text_rows(&draw_now(&mut view, 43, 8));
         assert_eq!(rows[7], " closed");
         assert_eq!(rows[2], header(5), "the section is above the note: {rows:?}");
+    }
+
+    // ---------- the expanded section: capped at half the column, scrolling (hs-n265) ----------
+
+    /// `n` open items `item 00`, `item 01`, … (ages `1d`), a view of them expanded and drawn at 43x40.
+    fn fifty(n: usize) -> (View, Vec<String>) {
+        let mut view = View::new(sample(), true);
+        view.tree.inbox = (0..n)
+            .map(|i| {
+                let mut it = item(i as i64 + 1, InboxKind::Unread, Urgency::White, &format!("item {i:02}"), "2026-01-02T00:00:00.000Z");
+                it.session = Some(sid("m-alpha"));
+                it
+            })
+            .collect();
+        draw_now(&mut view, 43, 40);
+        assert_eq!(click(&mut view, 20, 39), Effect::None, "`+47 more` expands");
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        (view, rows)
+    }
+
+    fn wheel(view: &mut View, kind: MouseEventKind, column: u16, row: u16) {
+        assert_eq!(view.mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE }), Effect::None);
+    }
+
+    fn label(row: &str) -> &str {
+        row.trim_start_matches(|c: char| c != 'i').split("  ").next().unwrap()
+    }
+
+    #[test]
+    fn expanded_with_fifty_items_in_forty_rows_the_section_is_twenty_rows_and_the_tree_keeps_the_rest() {
+        let (view, rows) = fifty(50);
+        assert_eq!(view.inbox_area, Rect::new(1, 20, 41, 20), "half the column, pinned to the bottom");
+        assert_eq!(rows[20], header(50));
+        assert_eq!(rows[1], format!(" {OPEN} {NEEDS_YOU} alpha"), "the tree is above it");
+        assert_eq!(rows[19], "", "the tree's rows are the rest: 19 below the blank one");
+        assert_eq!((label(&rows[21]), label(&rows[37])), ("item 00", "item 16"));
+        assert_eq!(rows[38], "  ▼ 33 more", "the last row of the list is the cue");
+        assert_eq!(rows[39], " − less", "the toggle stays in view");
+        assert!(!rows.iter().any(|r| r.contains("▲")), "nothing is hidden above: no cue");
+    }
+
+    #[test]
+    fn the_wheel_scrolls_the_section_three_rows_a_notch_and_clamps() {
+        let (mut view, _) = fifty(50);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!(rows[21], "  ▲ 3 more");
+        assert_eq!((label(&rows[22]), label(&rows[37])), ("item 03", "item 18"));
+        assert_eq!(rows[38], "  ▼ 31 more");
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[21], "  ▲ 6 more");
+        for _ in 0..30 {
+            wheel(&mut view, MouseEventKind::ScrollDown, 10, 39);
+        }
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!(rows[21], "  ▲ 33 more", "clamped: the last item reaches the bottom");
+        assert_eq!((label(&rows[22]), label(&rows[38])), ("item 33", "item 49"));
+        assert!(!rows.iter().any(|r| r.contains("▼")), "nothing is hidden below: no cue");
+        wheel(&mut view, MouseEventKind::ScrollUp, 10, 22);
+        assert_eq!(text_rows(&draw_now(&mut view, 43, 40))[21], "  ▲ 30 more");
+        for _ in 0..30 {
+            wheel(&mut view, MouseEventKind::ScrollUp, 10, 22);
+        }
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!((label(&rows[21]), rows[38].as_str()), ("item 00", "  ▼ 33 more"));
+    }
+
+    #[test]
+    fn the_wheel_elsewhere_does_nothing_and_a_cue_row_is_no_hit() {
+        let (mut view, _) = fifty(50);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 5);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 0);
+        assert_eq!(view.inbox_scroll, 0);
+        assert_eq!(click(&mut view, 10, 38), Effect::None, "the ▼ cue");
+        assert_eq!(view.inbox_scroll, 0);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        draw_now(&mut view, 43, 40);
+        assert_eq!(click(&mut view, 10, 21), Effect::None, "the ▲ cue");
+        assert!(view.inbox_expanded);
+        assert_eq!(click(&mut view, 10, 22), Effect::Run(Action::Open(sid("m-alpha"))), "an item row jumps");
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_scroll_and_folding_goes_back_to_the_top() {
+        let (mut view, _) = fifty(50);
+        wheel(&mut view, MouseEventKind::ScrollDown, 10, 25);
+        let mut tree = sample();
+        tree.inbox = view.tree.inbox[..49].to_vec();
+        view.refresh(tree);
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!((rows[21].as_str(), label(&rows[22])), ("  ▲ 3 more", "item 03"));
+        click(&mut view, 3, 39);
+        let rows = text_rows(&draw_now(&mut view, 43, 40));
+        assert_eq!((rows[35].clone(), rows[39].clone()), (header(49), " +46 more".to_owned()));
+        assert_eq!(view.inbox_scroll, 0);
+    }
+
+    #[test]
+    fn the_keyboard_cursor_scrolls_the_section_to_stay_visible() {
+        let (mut view, _) = fifty(50);
+        // from the tree into the Inbox, then down 30 items
+        for _ in 0..40 {
+            press(&mut view, KeyCode::Down);
+        }
+        assert!(view.inbox_cursor.is_some());
+        let at = view.inbox_cursor.unwrap();
+        let buf = draw_now(&mut view, 43, 40);
+        let rows = text_rows(&buf);
+        let shown = rows.iter().position(|r| r.contains(&format!("item {at:02}"))).expect("the cursor's item is drawn");
+        assert!((22..38).contains(&shown), "between the cues: {rows:?}");
+        assert!(buf[(5, shown as u16)].modifier.contains(Modifier::REVERSED));
+        // down to the last item, then back up to the first
+        for _ in 0..60 {
+            press(&mut view, KeyCode::Down);
+        }
+        let buf = draw_now(&mut view, 43, 40);
+        let rows = text_rows(&buf);
+        assert_eq!(label(&rows[38]), "item 49", "{rows:?}");
+        assert!(buf[(5, 38)].modifier.contains(Modifier::REVERSED));
+        for _ in 0..49 {
+            press(&mut view, KeyCode::Up);
+        }
+        let buf = draw_now(&mut view, 43, 40);
+        let rows = text_rows(&buf);
+        assert_eq!((label(&rows[21]), rows[38].as_str()), ("item 00", "  ▼ 33 more"));
+        assert!(buf[(5, 21)].modifier.contains(Modifier::REVERSED));
     }
 }

@@ -318,12 +318,12 @@ mod tests {
         asks_to_open_store(sh(script), Duration::from_secs(10))
     }
 
-    const OPENS: &str = r#"{"ok":true,"version":"x","schema":1000,"store_schema":1000,"store":{"opens":true,"refusal":null,"unknown":["29991231T2359-later"],"pending":[]}}"#;
-    const REFUSES: &str = r#"{"ok":true,"version":"x","schema":1000,"store_schema":1001,"store":{"opens":false,"refusal":{"code":"store_too_new","message":"too new"},"unknown":[],"pending":[]}}"#;
+    const OPENS: &str = r#"{"ok":true,"version":"x","store":{"opens":true,"refusal":null,"unknown":["29991231T2359-later"],"pending":[]}}"#;
+    const REFUSES: &str = r#"{"ok":true,"version":"x","store":{"opens":false,"refusal":{"code":"store_too_new","message":"too new"},"unknown":[],"pending":[]}}"#;
 
     #[test]
     fn a_missing_database_or_a_store_that_opens_can_be_opened() {
-        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","schema":1000,"store_schema":null,"store":null}'"#), Ok(()));
+        assert_eq!(ask(r#"echo '{"ok":true,"version":"x","store":null}'"#), Ok(()));
         assert_eq!(ask(&format!("echo '{OPENS}'")), Ok(()));
     }
 
@@ -333,20 +333,13 @@ mod tests {
     }
 
     #[test]
-    fn only_the_verdict_decides_not_the_legacy_numbers() {
-        // `store_schema` above `schema` and `opens` true: the verdict wins.
-        assert_eq!(ask(r#"echo '{"schema":5,"store_schema":6,"store":{"opens":true,"refusal":null}}'"#), Ok(()));
-        assert!(ask(r#"echo '{"schema":6,"store_schema":6,"store":{"opens":false,"refusal":{"code":"c","message":"m"}}}'"#).is_err());
-    }
-
-    #[test]
     fn malformed_output_is_a_refusal() {
         for script in [
             "echo not json",
             "true",
             r#"echo '{"ok":true,"version":"x"}'"#,
             // An integer-era cpd: no verdict.
-            r#"echo '{"ok":true,"version":"x","schema":6,"store_schema":6}'"#,
+            r#"echo '{"ok":true,"version":"x"}'"#,
             r#"echo '{"store":{}}'"#,
             r#"echo '{"store":{"opens":"true"}}'"#,
             r#"echo '{"store":{"opens":false}}'"#,

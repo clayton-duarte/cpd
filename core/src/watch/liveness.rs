@@ -1,6 +1,7 @@
 //! E2, liveness (contract §3.4, §3.6, §3.7, §7.4):
 //! - an Attempt not `ended` whose driver lock is free (its driver died): in
-//!   `merging`, the merge recovery R under the per-repo lock; in any other
+//!   `merging`, the merge recovery R for that Attempt, with no repo lock
+//!   (hs-d243); in any other
 //!   status, ended `cancelled` if a cancel was requested, else `crashed`;
 //! - an Attempt with a live driver: `stop_request = cancelled` when its Job
 //!   has a cancel request, `timed_out` when its active time is over
@@ -10,8 +11,6 @@
 //!   and a Lead's dead pane is cleaned up (G2): its park or ctx window is
 //!   killed, or, in the chat slot, the pane becomes the placeholder (§3.6).
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use rusqlite::{OptionalExtension, params};
@@ -21,14 +20,14 @@ use time::format_description::well_known::Rfc3339;
 use super::SOURCE;
 use super::engine::{Engine, metrics};
 use super::report::{About, Step};
-use crate::driver::ledger::{self, Cause, End, Ladder};
+use crate::attempt::ledger::{self, Cause, End, Ladder, Stage};
 use crate::driver::lock::{self, Free};
 use crate::driver::worker;
 use crate::error::{CpdError, ErrorCode};
 use crate::host::layout::{MAIN_WINDOW, View};
 use crate::host::tmux::{OPT_SESSION, Pane, Spawn};
 use crate::ids::{AttemptId, PlanId, SessionId};
-use crate::merge::{self, RepoLock};
+use crate::merge;
 
 /// An Attempt not `ended`, as E2 reads it.
 struct Active {
@@ -37,7 +36,6 @@ struct Active {
     status: String,
     stop_request: Option<String>,
     cancel_requested: bool,
-    repo: PathBuf,
 }
 
 impl Active {
@@ -54,8 +52,8 @@ pub(super) fn run(engine: &mut Engine) {
 fn attempts(engine: &mut Engine) {
     let active = engine.store.read(|conn| {
         let mut stmt = conn.prepare(
-            "SELECT a.plan, a.id, a.status, a.stop_request, j.cancel_requested_at IS NOT NULL, r.repo
-               FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+            "SELECT a.plan, a.id, a.status, a.stop_request, j.cancel_requested_at IS NOT NULL
+               FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
               WHERE a.status <> 'ended' ORDER BY a.plan, a.id",
         )?;
         let rows = stmt
@@ -66,19 +64,17 @@ fn attempts(engine: &mut Engine) {
                     r.get::<_, String>(2)?,
                     r.get::<_, Option<String>>(3)?,
                     r.get::<_, bool>(4)?,
-                    r.get::<_, String>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows.into_iter()
-            .map(|(plan, id, status, stop_request, cancel_requested, repo)| {
+            .map(|(plan, id, status, stop_request, cancel_requested)| {
                 Ok(Active {
                     plan: PlanId::parse(&plan)?,
                     id: AttemptId::parse(&id)?,
                     status,
                     stop_request,
                     cancel_requested,
-                    repo: PathBuf::from(repo),
                 })
             })
             .collect::<Result<Vec<_>, CpdError>>()
@@ -91,15 +87,13 @@ fn attempts(engine: &mut Engine) {
         Err(e) => return engine.fail(Step::E2, About::Machine, &e),
     };
 
-    // The repos with a `merging` Attempt whose driver died, and a Plan to report against.
-    let mut orphaned: BTreeMap<PathBuf, PlanId> = BTreeMap::new();
     for attempt in &active {
         let probe = lock::probe(&engine.home, &attempt.plan, &attempt.id);
         let result = match probe {
             // Released at once: R takes it again itself.
-            Ok(Some(_free)) if attempt.status == "merging" => {
-                orphaned.entry(attempt.repo.clone()).or_insert_with(|| attempt.plan.clone());
-                Ok(())
+            Ok(Some(free)) if attempt.status == "merging" => {
+                drop(free);
+                recover(engine, attempt)
             }
             Ok(Some(lock)) => end_dead(engine, attempt, lock),
             Ok(None) => stop_request(engine, attempt),
@@ -108,13 +102,6 @@ fn attempts(engine: &mut Engine) {
         match result {
             Ok(()) => engine.clear(Step::E2, &attempt.about()),
             Err(e) => engine.fail(Step::E2, attempt.about(), &e),
-        }
-    }
-    for (repo, plan) in orphaned {
-        let about = About::Plan(plan);
-        match recover(engine, &repo) {
-            Ok(()) => engine.clear(Step::E2, &about),
-            Err(e) => engine.fail(Step::E2, about, &e),
         }
     }
 }
@@ -137,7 +124,7 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     let catalog = engine.catalog()?;
     let ladder = Ladder { catalog: &catalog, retry_cap: engine.config.retry_cap };
     let metrics = metrics(target.worker_session.as_ref());
-    engine.store.write(SOURCE, |tx| ledger::end(tx, &target, &end, metrics.as_ref(), &ladder))?;
+    engine.store.write(SOURCE, |tx| ledger::end(tx, &target, &end, metrics.as_ref(), &ladder, Stage::Driver))?;
     // A9: after the end is committed, while the lock is still held.
     lock::remove(&engine.home, plan, id)?;
     drop(lock);
@@ -145,16 +132,15 @@ fn end_dead(engine: &mut Engine, active: &Active, lock: Free) -> Result<(), CpdE
     worker::kill_attempt_window(&engine.config, &engine.tmux, plan, id)
 }
 
-/// R (§7.4) for the orphaned merges of `repo`, when its per-repo lock is free
-/// now; otherwise at a later tick, or by the next holder of the lock.
-fn recover(engine: &mut Engine, repo: &std::path::Path) -> Result<(), CpdError> {
-    let Some(lock) = RepoLock::try_take(&engine.home, repo)? else { return Ok(()) };
+/// R (§7.4) for the orphaned merge `active`, with no repo lock (hs-d243): R
+/// takes the Attempt's driver lock itself; held again meanwhile, it does
+/// nothing and a later tick looks again.
+fn recover(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
     let catalog = engine.catalog()?;
     let metrics = |a: &merge::Attempt| metrics(a.worker_session.as_ref());
     let ctx = merge::Ctx { home: &engine.home, config: &engine.config, catalog: &catalog, source: SOURCE, metrics: &metrics };
-    let recovered = merge::recover(&mut engine.store, &ctx, &lock)?;
-    drop(lock);
-    for r in recovered {
+    let recovered = merge::recover_attempt(&mut engine.store, &ctx, &active.plan, &active.id)?;
+    if let Some(r) = recovered {
         let how = r.end.map_or_else(|| "nothing changed: git failed".to_owned(), |e| format!("ended {} / {}", e.outcome(), e.cause()));
         engine.log.line(&format!("E2: recovered the merge of {} (Plan {}): {how}", r.attempt, r.plan));
     }
@@ -266,6 +252,13 @@ fn parse_time(text: &str) -> Result<OffsetDateTime, CpdError> {
     })
 }
 
+/// The Sessions E2 can still see as live. The `WHERE` is the `WHERE` of the partial index `sessions_live`
+/// (migration `read-indexes`, engine-F2), written the same: SQLite reads the index only for a query whose
+/// `WHERE` it can prove implies the index's, so the read costs the live Sessions, not every Session ever made
+/// (`sessions` only grows). A test pins the plan.
+const LIVE_SESSIONS: &str =
+    "SELECT id, role, state, tmux_pane, name FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
+
 /// A Session not `stopped`, or with a pane, as read before the panes are listed.
 struct Live {
     id: SessionId,
@@ -284,9 +277,7 @@ struct Live {
 /// read, so a Session that got a new pane meanwhile is left alone.
 fn sessions(engine: &mut Engine) {
     let live = engine.store.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, role, state, tmux_pane, name FROM sessions WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id",
-        )?;
+        let mut stmt = conn.prepare(LIVE_SESSIONS)?;
         let rows = stmt
             .query_map([], |r| {
                 Ok((
@@ -373,6 +364,22 @@ fn stop(engine: &mut Engine, session: &Live, why: &str) -> Result<bool, CpdError
 mod tests {
     use super::*;
     use time::macros::datetime;
+
+    /// engine-F2: E2's read of the Sessions goes through `sessions_live`, which lists the live Sessions only.
+    #[test]
+    fn the_live_sessions_are_read_through_the_partial_index_not_by_scanning_every_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::home::CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = crate::store::Store::open(&home, 5000).unwrap();
+        let plan: Vec<String> = store
+            .read(|conn| {
+                let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {LIVE_SESSIONS}"))?;
+                Ok(stmt.query_map([], |r| r.get::<_, String>(3))?.collect::<rusqlite::Result<_>>()?)
+            })
+            .unwrap();
+        assert!(plan.iter().any(|step| step.contains("USING INDEX sessions_live")), "{plan:?}");
+        assert!(!plan.iter().any(|step| step.contains("sqlite_autoindex_sessions_1")), "{plan:?}");
+    }
 
     #[test]
     fn overlapping_escalations_pause_the_clock_once() {

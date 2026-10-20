@@ -1,13 +1,14 @@
 //! `context archive` and `context unarchive` (commands.md §3.8, §3.9): the
 //! cascade of the `plan` area over the Context's Plans, Sessions and Manager.
 
-use super::{ArchiveArgs, ContextRow, UnarchiveArgs, open};
+use super::{ArchiveArgs, ContextRow, UnarchiveArgs};
+use crate::env::Env;
 use crate::error::CpdError;
 use crate::output::Output;
 use crate::plan::archive::{self, Objects};
 
 pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
-    let (_, config, mut store) = open()?;
+    let Env { config, mut store, .. } = Env::open()?;
     let objects = store.read(|conn| {
         ContextRow::require(conn, &args.id)?;
         Objects::of_context(conn, &args.id)
@@ -16,7 +17,7 @@ pub(super) fn archive(args: ArchiveArgs) -> Result<Output, CpdError> {
 }
 
 pub(super) fn unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
-    let (_, _, mut store) = open()?;
+    let Env { mut store, .. } = Env::open()?;
     let objects = store.read(|conn| {
         ContextRow::require(conn, &args.id)?;
         Objects::of_context(conn, &args.id)

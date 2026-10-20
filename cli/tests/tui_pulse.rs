@@ -3,8 +3,7 @@
 
 mod common;
 
-use common::TestEnv;
-use cpd_core::error::CpdError;
+use common::{TestEnv, sql};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
 use cpd_core::store::Store;
@@ -16,15 +15,6 @@ const FP: &str = "00000000000000000000000000000000000000000000000000000000000000
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn ctx(id: &str) -> ContextId {
@@ -205,7 +195,7 @@ fn every_activity_kind_counts_and_the_others_do_not() {
     ];
     let ignored = [
         "session-moved", "session-registered", "session-renamed", "session-archived", "session-message", "context-created",
-        "context-record", "context-grounded", "context-renamed", "context-archived", "plan-created", "plan-renamed",
+        "context-record", "context-grounded", "context-renamed", "context-owner", "context-archived", "plan-created", "plan-renamed",
         "plan-archived", "watch-started", "watch-stopped",
     ];
     let mut s = String::new();

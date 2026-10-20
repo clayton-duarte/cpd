@@ -8,11 +8,10 @@
 mod common;
 
 use std::fs::{self, File, OpenOptions};
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
+use common::{CPD, Run, SLEEP_SECONDS, TestEnv, refused, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::git::{Setup, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
@@ -202,15 +201,10 @@ impl Fx {
 
     /// Waits until Attempt `id` is `status` (at most 60 s); returns it.
     fn wait_status(&self, id: &str, status: &str) -> Value {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
+        common::wait_some(&format!("Attempt {id} to become {status}"), Duration::from_secs(60), || {
             let attempt = self.attempt(id);
-            if attempt["status"] == status {
-                return attempt;
-            }
-            assert!(Instant::now() < deadline, "Attempt {id} never became {status}: {attempt}\nlog: {}", self.log(id));
-            std::thread::sleep(Duration::from_millis(200));
-        }
+            if attempt["status"] == status { Ok(attempt) } else { Err(format!("{attempt}\nlog: {}", self.log(id))) }
+        })
     }
 
     /// Waits until the Attempt has ended and its driver has exited; returns
@@ -218,11 +212,9 @@ impl Fx {
     fn wait_end(&self, id: &str, pid: &Value) -> (Value, Value) {
         let attempt = self.wait_status(id, "ended");
         let pid = nix::unistd::Pid::from_raw(pid.as_i64().unwrap() as i32);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while nix::sys::signal::kill(pid, None).is_ok() {
-            assert!(Instant::now() < deadline, "the driver of {id} did not exit\nlog: {}", self.log(id));
-            std::thread::sleep(Duration::from_millis(100));
-        }
+        common::wait_some(&format!("the driver of {id} to exit"), Duration::from_secs(30), || {
+            if nix::sys::signal::kill(pid, None).is_ok() { Err(format!("log: {}", self.log(id))) } else { Ok(()) }
+        });
         let log = self.log(id);
         let last = log.lines().last().unwrap_or_else(|| panic!("empty log of {id}"));
         let out: Value = serde_json::from_str(last).unwrap_or_else(|e| panic!("{e}: {log}"));
@@ -349,12 +341,71 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
 }
 
+/// Puts a `git` first on the env's `PATH` that runs the real git, except that a merge's
+/// compare-and-swap (`update-ref -m "cpd: merge …"`) waits until `release` exists (at most
+/// 60 s). There is no per-repo lock to hold any more (hs-d243), so a test that must see the
+/// driver in `merging` before the merge lands holds the merge itself.
+fn hold_merges_until(env: &TestEnv, release: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path)
+        .filter(|dir| *dir != env.bin())
+        .map(|dir| dir.join("git"))
+        .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
+        .expect("git on PATH");
+    let script = format!(
+        r#"#!/bin/sh
+real='{real}'
+cas= merge=
+for a in "$@"; do
+  case "$a" in
+    update-ref) cas=1 ;;
+    "cpd: merge "*) merge=1 ;;
+  esac
+done
+if [ -n "$cas" ] && [ -n "$merge" ]; then
+  i=0
+  while [ ! -e '{release}' ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done
+fi
+exec "$real" "$@"
+"#,
+        real = real.display(),
+        release = release.display(),
+    );
+    let wrapper = env.bin().join("git");
+    write_executable(&wrapper, &script);
+}
+
+/// engine-G3: a driver log line starts with a time, as `watch.log`'s do (RFC 3339 UTC, milliseconds).
+#[test]
+fn driver_log_lines_start_with_a_time() {
+    let fx = fx();
+    fx.pi(WORKER);
+    let out = fx.dispatch(JOB).ok();
+    fx.wait_end(ATTEMPT, &out["pid"]);
+
+    let log = fx.log(ATTEMPT);
+    // The last line is the command's JSON output (stdout), not a log line.
+    let lines: Vec<&str> = log.lines().filter(|l| !l.starts_with('{')).collect();
+    assert!(lines.len() >= 3, "{log}");
+    for line in lines {
+        let (time, rest) = line.split_once(' ').unwrap_or_else(|| panic!("no time in {line:?}\n{log}"));
+        let b = time.as_bytes();
+        let shaped = time.len() == 24
+            && b[4] == b'-' && b[7] == b'-' && b[10] == b'T' && b[13] == b':' && b[16] == b':' && b[19] == b'.' && b[23] == b'Z'
+            && time.bytes().enumerate().all(|(i, c)| matches!(i, 4 | 7 | 10 | 13 | 16 | 19 | 23) || c.is_ascii_digit());
+        assert!(shaped, "no time at the start of {line:?}\n{log}");
+        assert!(rest.starts_with("cpd attempt run: "), "{line:?}");
+    }
+}
+
 #[test]
 fn the_workers_window_is_killed_when_the_driver_sees_merging() {
     let fx = fx();
     fx.pi(WORKER);
-    // The merge waits for the per-repo lock, so A9's kill (after the merge) cannot be what is seen.
-    let lock = cpd_core::merge::RepoLock::wait(&fx.home(), &fx.repo).unwrap();
+    // The merge's compare-and-swap waits for `release`, so A9's kill (after the merge) cannot be what is seen.
+    let release = fx.env.root().join("release");
+    hold_merges_until(&fx.env, &release);
 
     let out = fx.dispatch(JOB).ok();
     fx.wait_status(ATTEMPT, "merging");
@@ -365,7 +416,7 @@ fn the_workers_window_is_killed_when_the_driver_sees_merging() {
     }
     assert_eq!(fx.attempt(ATTEMPT)["status"], "merging");
 
-    drop(lock);
+    fs::write(&release, "").unwrap();
     let (attempt, _) = fx.wait_end(ATTEMPT, &out["pid"]);
     assert_eq!(attempt["outcome"], "merged");
 }
@@ -425,6 +476,34 @@ fn dispatch_refuses_a_job_of_a_pr_that_has_not_started() {
     assert_eq!(fx.job_status("ui"), "queued");
     // The first PR's Job is unaffected.
     assert_eq!(fx.job_status(JOB), "queued");
+}
+
+// ---------- a busy store (contract §3.4, §4.2) ----------
+
+/// A step of the driver that meets the write lock held for longer than `store_busy_ms` (here 200 ms)
+/// waits and completes: the Attempt runs to its end, it is not `crashed`.
+#[test]
+fn a_driver_step_that_meets_a_held_write_lock_waits_and_the_attempt_is_not_crashed() {
+    let fx = fx_with("[timeouts]\nstore_busy_ms = 200\n");
+    // A2's pre-start takes a second, so the driver's first write comes while the lock is held.
+    fx.wt_toml("[pre-start]\nwait = \"sleep 1\"\n");
+    fx.pi(WORKER);
+
+    let out = fx.dispatch(JOB).ok();
+    let holder = rusqlite::Connection::open(fx.home().db()).unwrap();
+    holder.busy_timeout(Duration::from_secs(10)).unwrap();
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    // The driver logs its first `store_busy` once the lock outlasted `store_busy_ms`: it met the lock and waits.
+    common::wait_until("the driver to meet the lock", || fx.log(ATTEMPT).contains("store_busy: "));
+    holder.execute_batch("ROLLBACK").unwrap();
+
+    let (attempt, driver) = fx.wait_end(ATTEMPT, &out["pid"]);
+
+    assert_eq!(driver, json!({"ok": true, "attempt": ATTEMPT, "outcome": "merged", "cause": "merged"}), "{}", fx.log(ATTEMPT));
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")));
+    let log = fx.log(ATTEMPT);
+    assert!(log.contains("store_busy: "), "{log}");
+    assert!(log.contains("the store is clear again after "), "{log}");
 }
 
 // ---------- failures ----------
@@ -549,8 +628,11 @@ fn one_failed_list_panes_does_not_end_a_running_attempt_crashed() {
         assert!(Instant::now() < deadline, "the hiccup never happened\nlog: {}", fx.log(ATTEMPT));
         std::thread::sleep(Duration::from_millis(100));
     }
-    // Two polls after the hiccup.
-    std::thread::sleep(Duration::from_millis(1500));
+    // The poll after the hiccup lists the panes again: the failed one judged nothing.
+    common::wait_until("the driver to list the panes again", || list_panes_calls(&fx) >= 2);
+    // time-claim: the Worker is still running a poll after the retried listing; no per-poll signal from the driver
+    // once it has the pane's pid (it forks nothing).
+    std::thread::sleep(Duration::from_millis(1000));
     let attempt = fx.attempt(ATTEMPT);
     assert_eq!(attempt["status"], "running", "{attempt}\nlog: {}", fx.log(ATTEMPT));
 
@@ -569,9 +651,11 @@ fn a_running_worker_is_watched_without_listing_panes_at_every_poll() {
 
     let out = fx.dispatch(JOB).ok();
     fx.wait_status(ATTEMPT, "running");
-    // The pid is recorded at the first poll.
-    std::thread::sleep(Duration::from_millis(1500));
+    // The pid is recorded at the first poll, A4's first `list-panes` (the driver lists no panes before A4).
+    common::wait_until("A4's first poll to list the panes", || list_panes_calls(&fx) >= 1);
     let before = list_panes_calls(&fx);
+    // time-claim: no `list-panes` over six 0.5 s polls of a running Worker; no per-poll signal from the driver (that
+    // it forks nothing at a poll is the claim).
     std::thread::sleep(Duration::from_secs(3));
     let during = list_panes_calls(&fx) - before;
     assert_eq!(during, 0, "list-panes calls in 3 s of a running Worker\nlog: {}", fx.log(ATTEMPT));
@@ -692,8 +776,7 @@ fn a_cancel_before_the_compare_and_swap_ends_it_without_merging() {
     let fx = fx();
     // The request arrives during the rebase, after the first safe point.
     let hook = fx.repo.join(".git/hooks/post-rewrite");
-    fs::write(&hook, format!("#!/bin/sh\n{} > /dev/null\n", fx.cpd_line("job cancel api --reason late --plan pay"))).unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&hook, &format!("#!/bin/sh\n{} > /dev/null\n", fx.cpd_line("job cancel api --reason late --plan pay")));
     // Another Job merges first, so the rebase rewrites the Worker's commit.
     fx.pi(
         "git -C \"$LEAD\" commit -q --allow-empty -m other\n\
@@ -787,11 +870,6 @@ fn a_driver_refuses_an_attempt_that_is_not_starting() {
 }
 
 // ---------- job dispatch refusals ----------
-
-fn refused(run: &Run, code: &str, exit: i32) {
-    assert_eq!(run.error()["code"], code, "{run:?}");
-    assert_eq!(run.exit, exit, "{run:?}");
-}
 
 #[test]
 fn dispatch_refuses_a_job_that_is_not_ready() {

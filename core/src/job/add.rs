@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::spec::{self, Spec};
 use super::{AddArgs, Env, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, plan_phase, sorted_needs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{Kind, NewEvent, append};
+use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
 use crate::output::Output;
 use crate::args::PrArg;
@@ -32,6 +32,8 @@ struct Wanted {
     review: bool,
     /// `--draft`: a draft in a phase after `plan` too.
     draft: bool,
+    /// `--urgent` (§2.2): not a Locked field, so a rerun without it is `already`.
+    urgent: bool,
 }
 
 enum Decision {
@@ -58,6 +60,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         needs,
         review: args.review,
         draft: args.draft,
+        urgent: args.urgent,
     };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &wanted))?;
@@ -70,10 +73,15 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                 let text = format!("Job {} added to Plan {plan} as {}. Next: cpd job show {} --plan {plan}", job.key, job.status, job.key);
                 append(
                     tx,
-                    NewEvent::new(
-                        Kind::JobAdded,
+                    NewEvent::job_added(
                         text,
-                        json!({"pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review}),
+                        &job.pr,
+                        &job.status,
+                        job.appended,
+                        job.tier.as_deref(),
+                        &job.needs,
+                        wanted.review,
+                        job.urgent,
                     )
                     .plan(plan.clone())
                     .job(wanted.key.clone()),
@@ -82,7 +90,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
             }
         })?,
     };
-    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review}});
+    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review, "urgent": job.urgent}});
     if already {
         out["already"] = json!(true);
     }
@@ -114,7 +122,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         .with("phase", phase));
     }
     let prs = load_prs(conn, plan)?;
-    let pr = wanted.pr.select(plan, &prs)?.key.clone();
+    let pr = wanted.pr.select(plan, &prs)?.key.to_string();
     check_pr_live(&prs, plan, &pr)?;
     let all = jobs::load(conn, plan)?;
     let needs = if wanted.review { review_needs(&all, plan, &pr, wanted.key.as_str())? } else { wanted.needs.clone() };
@@ -131,6 +139,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended,
         review: wanted.review,
+        urgent: wanted.urgent,
         fingerprint: None,
         retry_tier: None,
         cancel_reason: None,
@@ -212,8 +221,8 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
     let spec = job.spec.as_ref();
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                           status, appended, fingerprint, review, created_txn, created_at)
-         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, cpd_txn(),
+                           status, appended, fingerprint, review, urgent, created_txn, created_at)
+         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",
         rusqlite::params![
             plan.as_str(),
@@ -230,6 +239,7 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
             job.fingerprint,
             job.pr,
             review,
+            job.urgent,
         ],
     )?;
     // An appended Job reopens its PR for E4: `all-merged` is sent again once the Jobs are all merged or cancelled.

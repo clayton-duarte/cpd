@@ -5,10 +5,8 @@
 
 mod common;
 
-use std::time::{Duration, Instant};
 
-use common::{CPD, SLEEP_SECONDS, TestEnv};
-use cpd_core::error::CpdError;
+use common::{CPD, SLEEP_SECONDS, TestEnv, sql, wait_until};
 use cpd_core::home::CpdHome;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
@@ -23,15 +21,6 @@ use ratatui::style::{Color, Modifier};
 
 fn open(env: &TestEnv) -> Store {
     Store::open(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-}
-
-fn sql(store: &mut Store, text: &str) {
-    store
-        .write("fixture", |tx| {
-            tx.execute_batch(text)?;
-            Ok::<(), CpdError>(())
-        })
-        .unwrap();
 }
 
 fn context(id: &str) -> String {
@@ -609,14 +598,6 @@ fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
-fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !done() {
-        assert!(Instant::now() < deadline, "timed out waiting for {what}");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
 /// `cpd tui view widgets` in session `name`, window `main`, 120 columns by 40 rows; returns its pane.
 fn start(env: &TestEnv, name: &str) -> String {
     tmux_out(env, &["new-session", "-d", "-s", name, "-n", "main", "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", &format!("{CPD} tui view widgets")])
@@ -644,12 +625,7 @@ fn screen(env: &TestEnv, pane: &str) -> Vec<String> {
 }
 
 fn wait_for_screen(env: &TestEnv, pane: &str, what: &str, ok: impl Fn(&[String]) -> bool) -> Vec<String> {
-    let mut last = vec![];
-    wait_until(what, || {
-        last = screen(env, pane);
-        ok(&last)
-    });
-    last
+    common::wait_screen(what, || screen(env, pane), ok)
 }
 
 /// A left click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, 1-based).
@@ -796,7 +772,9 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
     // The unowned rows and the arrow run nothing, so no note appears.
     click(&env, &pane, 3, 6);
     click(&env, &pane, width - 1, 10);
-    std::thread::sleep(Duration::from_millis(600));
+    // time-claim: the clicks on the unowned rows and the arrow leave no note, over a few redraws of the view; a click
+    // that runs nothing leaves no signal (the view opens sessions in its own process, not through a recorded `cpd`).
+    std::thread::sleep(std::time::Duration::from_millis(600));
     assert_eq!(last_row(&screen(&env, &pane)), " (future)", "nothing was refused: Jira's row is still the last");
 
     click(&env, &pane, 3, 10);
@@ -809,6 +787,90 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
 
     click(&env, &pane, 3, 6);
     wait_for_screen(&env, &pane, "the note gone", |s| last_row(s) == " (future)");
+}
+
+#[test]
+fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    sql(&mut store, "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20); UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;");
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
+    let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
+    let mut drawn = None;
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w, &machine(), "", 0))).unwrap();
+    let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
+    let buf = terminal.backend().buffer().clone();
+    for (y, icon) in [(7, false), (9, true), (11, true)] {
+        assert_eq!(buf[(45, y)].symbol(), if icon { "\u{F062D}" } else { " " }, "row {y}");
+    }
+    assert_eq!(
+        icons.iter().map(|i| (i.area, i.pull.as_str())).collect::<Vec<_>>(),
+        [(ratatui::layout::Rect::new(45, 9, 1, 1), "acme/repo#9"), (ratatui::layout::Rect::new(45, 11, 1, 1), "acme/repo#20")]
+    );
+    let [hit] = &hits[..] else { panic!("{hits:?}") };
+    assert!(!hit.contains(ratatui::layout::Position::new(45, 11)), "the owned row's session open excludes the icon");
+    assert!(hit.contains(ratatui::layout::Position::new(44, 11)));
+}
+
+/// The Deploy column in the cockpit with a fake `tmux` on `PATH`: `list-clients` says one client of 200x60, `display-popup`
+/// does nothing (the call is recorded), and the rest is the real tmux.
+fn fake_tmux(env: &TestEnv) {
+    let real = String::from_utf8(env.command("sh").args(["-c", "command -v tmux"]).output().unwrap().stdout).unwrap();
+    env.fake(
+        "tmux",
+        &format!("case \"$*\" in\n *list-clients*) echo '100 200 60';;\n *display-popup*) ;;\n *) exec {} \"$@\";;\nesac", real.trim()),
+    );
+}
+
+fn popups(env: &TestEnv) -> Vec<Vec<String>> {
+    env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "display-popup")).collect()
+}
+
+#[test]
+fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lead() {
+    const ICON: char = '\u{F062D}';
+    let env = pane_env();
+    let mut store = prs_store(&env);
+    // `acme/repo#20` (owned by `mine`) and `acme/repo#9` (no owner) are clean, `acme/web#4` is blocked.
+    sql(
+        &mut store,
+        "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20);
+         UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;",
+    );
+    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
+    drop(store);
+    let view = cockpit(&env);
+    let shown = wait_for_screen(&env, &view, "the merge icons", |s| s.iter().any(|r| r.contains(ICON)));
+    let width = tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<usize>().unwrap();
+    // The icon is the last column of the second line, under the arrow; only the clean ones have it.
+    for (name, icon) in [(" acme/web#4", false), (" acme/repo#9", true), (" acme/repo#20", true)] {
+        let first = shown.iter().position(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {shown:#?}"));
+        let second = &shown[first + 1];
+        assert_eq!(second.ends_with(ICON), icon, "{name}: {second:?}");
+        if icon {
+            assert_eq!(second.chars().count(), width, "the icon is the last column: {second:?}");
+        }
+    }
+    assert_eq!(shown.iter().filter(|r| r.contains(ICON)).count(), 2, "{shown:#?}");
+
+    fake_tmux(&env);
+    let before = moved_events(&env);
+    let second_line = |name: &str| u16::try_from(shown.iter().position(|r| r.starts_with(name)).unwrap() + 1).unwrap();
+    // The unowned row's icon, then the owned row's: each opens its popup and neither runs `session open`.
+    for (n, (name, pull)) in [(" acme/repo#9", "acme/repo#9"), (" acme/repo#20", "acme/repo#20")].into_iter().enumerate() {
+        click(&env, &view, u16::try_from(width).unwrap() - 1, second_line(name));
+        wait_until("the popup", || popups(&env).len() == n + 1);
+        let popup = &popups(&env)[n];
+        let at = popup.iter().position(|a| a == "display-popup").unwrap();
+        assert_eq!(popup.last().unwrap(), &format!("cpd tui view merge '{pull}'"), "{popup:?}");
+        assert_eq!(popup[at + 1], "-E", "{popup:?}");
+    }
+    // time-claim: over the next redraws after both clicks, no third popup opens and no `session open` runs.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(popups(&env).len(), 2);
+    assert_eq!(moved_events(&env), before, "no `session open` ran");
+    assert_eq!(focused_session(&env), "1||widgets", "the focus did not move");
 }
 
 // ---------- the legend ----------

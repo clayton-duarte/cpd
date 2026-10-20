@@ -4,14 +4,13 @@
 use std::fs::File;
 use std::path::Path;
 
-use nix::errno::Errno;
-use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
 
 use super::check::{Check, Severity};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::PlanId;
+use crate::lock;
 use crate::plan::jobs;
 use crate::store::Store;
 
@@ -108,9 +107,5 @@ fn engine_runs(lock: &Path) -> Result<bool, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(format!("cannot open {}: {e}.", lock.display())),
     };
-    match Flock::lock(file, FlockArg::LockSharedNonblock) {
-        Ok(_free) => Ok(false),
-        Err((_, Errno::EWOULDBLOCK)) => Ok(true),
-        Err((_, e)) => Err(format!("cannot probe {}: {e}.", lock.display())),
-    }
+    lock::shared(&file).map(|free| !free).map_err(|e| format!("cannot probe {}: {e}.", lock.display()))
 }

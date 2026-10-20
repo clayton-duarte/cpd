@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use common::TestEnv;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
-use cpd_core::store::{APPLICATION_ID, ORPHAN_HISTORY_SQL, SCHEMA_HASH, Store, VERSION, WriteTxn, canonical_hash};
+use cpd_core::store::{APPLICATION_ID, ORPHAN_HISTORY_SQL, Persist, SCHEMA_HASH, Store, VERSION, WriteTxn, canonical_hash, is_transient};
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
 use serde_json::{Value, json};
@@ -116,6 +116,23 @@ fn a_new_database_is_wal_with_cpds_application_id() {
     assert_eq!(version, VERSION);
 }
 
+/// §4.1: every connection cpd opens syncs with NORMAL (1) in WAL mode; synchronous is per connection.
+#[test]
+fn every_connection_is_synchronous_normal_in_wal_mode() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let (sync, mode): (i64, String) = store
+        .read(|conn| {
+            Ok((
+                conn.pragma_query_value(None, "synchronous", |r| r.get(0)).unwrap(),
+                conn.pragma_query_value(None, "journal_mode", |r| r.get(0)).unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(sync, 1);
+    assert_eq!(mode, "wal");
+}
+
 #[test]
 fn cpd_home_is_created_on_first_use() {
     let env = TestEnv::new();
@@ -178,7 +195,8 @@ fn contract_ddl_blocks() -> Vec<String> {
 /// documentation, not schema (a migration cannot change one without rebuilding the table).
 fn normalized(sql: &str) -> String {
     let code: Vec<&str> = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect();
-    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    // `ALTER TABLE … ADD COLUMN` splices its column in as `, <column>)`: the spaces before `,` and `)` are layout too.
+    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")")
 }
 
 /// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
@@ -275,8 +293,22 @@ fn generated_history_triggers_match_the_contracts_example() {
             continue;
         }
         let name = statement.split_whitespace().nth(2).unwrap();
-        let sql: String =
+        let mut sql: String =
             conn.query_row("SELECT sql FROM sqlite_schema WHERE name = ?1", [name], |r| r.get(0)).unwrap();
+        if name == "escalations_hist_upd" {
+            // The example abbreviates the changed-column lines of the columns its comments name.
+            let columns = names(&conn, "SELECT name FROM pragma_table_info('escalations')");
+            let omitted: Vec<&String> = columns.iter().filter(|c| !normalized(statement).contains(&format!("'{c}'"))).collect();
+            assert!(!omitted.is_empty(), "the example abbreviates");
+            for column in &omitted {
+                assert!(statement.contains(&format!(" {column},")) || statement.contains(&format!(" {column}\n")), "the comment names {column}");
+            }
+            sql = sql
+                .lines()
+                .filter(|line| !omitted.iter().any(|c| line.trim_start().starts_with(&format!("UNION ALL SELECT '{c}',"))))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
         assert_eq!(normalized(&format!("{sql};")), normalized(statement), "{name}");
     }
 }
@@ -296,10 +328,23 @@ fn every_column_of_every_table_appears_in_its_history_triggers() {
         assert!(!columns.is_empty(), "{table}");
         let ins = sql_of(&format!("{table}_hist_ins"));
         let upd = sql_of(&format!("{table}_hist_upd"));
+        let key = names(&conn, &format!("SELECT name FROM pragma_table_info('{table}') WHERE pk > 0"));
         for column in &columns {
             assert!(ins.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_ins lacks {column}");
-            assert!(upd.contains(&format!("'{column}', OLD.{column}")), "{table}_hist_upd lacks OLD.{column}");
-            assert!(upd.contains(&format!("'{column}', NEW.{column}")), "{table}_hist_upd lacks NEW.{column}");
+            // §4.4 "History row shape": the key always, every other column when it changed.
+            for row in ["OLD", "NEW"] {
+                if key.contains(column) {
+                    let forms = [
+                        format!("SELECT '{column}' AS k, {row}.{column} AS v"),
+                        format!("SELECT '{column}', {row}.{column}\n"),
+                        format!("SELECT '{column}', {row}.{column} UNION ALL"),
+                    ];
+                    assert!(forms.iter().any(|f| upd.contains(f)), "{table}_hist_upd lacks the key {row}.{column}");
+                } else {
+                    let line = format!("UNION ALL SELECT '{column}', {row}.{column} WHERE OLD.{column} IS NOT NEW.{column}\n");
+                    assert!(upd.contains(&line), "{table}_hist_upd lacks {line:?}");
+                }
+            }
         }
         if ["dependencies", "pr_needs", "pull_requests"].contains(&table) {
             let del = sql_of(&format!("{table}_hist_del"));
@@ -337,10 +382,64 @@ fn writes_are_copied_into_history_with_their_txn() {
     assert_eq!((rows[1].0, rows[1].2.as_str()), (txn + 1, "update"));
     let before: Value = serde_json::from_str(rows[1].3.as_deref().unwrap()).unwrap();
     let after: Value = serde_json::from_str(rows[1].4.as_deref().unwrap()).unwrap();
-    assert_eq!(before["status"], "open");
-    assert_eq!(after["status"], "answered");
-    assert_eq!(after["answer"], "Because.");
-    assert_eq!(after["asker_pid"], 1);
+    // §4.4 "History row shape": the key and the changed columns, a change from NULL included.
+    assert_eq!(before, json!({"plan": "pay", "id": "api-a1-q1", "status": "open", "answer": null, "answered_at": null}));
+    assert_eq!(after, json!({"plan": "pay", "id": "api-a1-q1", "status": "answered", "answer": "Because.", "answered_at": "t"}));
+}
+
+/// sql-F2 (hs-d234): a Job status flip used to store the whole row twice, its long text included.
+#[test]
+fn a_job_status_change_writes_only_the_key_and_the_changed_columns_to_history() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    // A Job with the size of a real one (7 KB of text on average, quality-sql-perf.md).
+    let long = "x".repeat(3500);
+    let seq: i64 = store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, fingerprint, created_txn, created_at)
+                       VALUES ('pay', 'pay', 'big', 'Big', 'S2', '{long}', '{long}', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, '{FP}', cpd_txn(), 't')"
+                ),
+            )?;
+            Ok(tx.query_row("SELECT seq FROM jobs WHERE key = 'big'", [], |r| r.get(0))?)
+        })
+        .unwrap();
+    let last = |store: &mut Store| -> (Value, Value, i64) {
+        store
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT before, after, length(before) + length(after) FROM history WHERE tbl = 'jobs' AND op = 'update' ORDER BY id DESC LIMIT 1",
+                    [],
+                    |r| {
+                        let text = |i| r.get::<_, String>(i).map(|s| serde_json::from_str::<Value>(&s).unwrap());
+                        Ok((text(0)?, text(1)?, r.get(2)?))
+                    },
+                )?)
+            })
+            .unwrap()
+    };
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = 'running' WHERE key = 'big'")).unwrap();
+    let (before, after, bytes) = last(&mut store);
+    assert_eq!((before, after), (json!({"seq": seq, "status": "queued"}), json!({"seq": seq, "status": "running"})), "{bytes} B");
+    eprintln!("history bytes of a Job status change (before + after): {bytes}");
+    assert!(bytes < 100, "{bytes} B");
+    // A change to a value from NULL is a change.
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'big'")).unwrap();
+    let (before, after, _) = last(&mut store);
+    assert_eq!(before, json!({"seq": seq, "status": "running", "failed_cause": null}));
+    assert_eq!(after, json!({"seq": seq, "status": "failed", "failed_cause": "crashed"}));
+    // An UPDATE that changes nothing still writes one row, the key only.
+    let count = |store: &mut Store| -> i64 {
+        store.read(|c| Ok(c.query_row("SELECT count(*) FROM history WHERE tbl = 'jobs'", [], |r| r.get(0))?)).unwrap()
+    };
+    let rows = count(&mut store);
+    store.write("test", |tx| exec(tx, "UPDATE jobs SET status = status WHERE key = 'big'")).unwrap();
+    assert_eq!(count(&mut store), rows + 1);
+    assert_eq!(last(&mut store), (json!({"seq": seq}), json!({"seq": seq}), 2 * json!({"seq": seq}).to_string().len() as i64));
 }
 
 #[test]
@@ -600,7 +699,27 @@ fn a_read_transaction_cannot_write() {
         })
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::StoreFailed);
-    assert!(sqlite_message(&err).contains("outside a cpd write transaction"), "{err:?}");
+    assert!(sqlite_message(&err).contains("readonly"), "{err:?}");
+}
+
+/// store-G3: the statements that fire no trigger are stopped too.
+#[test]
+fn a_read_transaction_cannot_run_ddl_or_make_a_temp_table() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    fixture(&mut store);
+    for sql in ["CREATE TEMP TABLE scratch (x)", "CREATE TABLE scratch (x)", "DROP TABLE tier_catalog"] {
+        let err = store.read(|c| Ok(c.execute_batch(sql)?)).expect_err(sql);
+        assert_eq!(err.code(), ErrorCode::StoreFailed, "{sql}: {err:?}");
+        assert!(sqlite_message(&err).contains("readonly"), "{sql}: {err:?}");
+    }
+    // The guard is off again for the next write, and the schema is untouched.
+    store.write("test", |tx| exec(tx, "UPDATE contexts SET title = 'Changed'")).unwrap();
+    assert!(store.schema_mismatch().is_none());
+    let tables: i64 = store
+        .read(|c| Ok(c.query_row("SELECT count(*) FROM sqlite_temp_schema", [], |r| r.get(0))?))
+        .unwrap();
+    assert_eq!(tables, 0);
 }
 
 #[test]
@@ -715,6 +834,85 @@ fn the_tamper_query_reads_history_through_the_history_txn_index_not_the_table() 
         "history must be scanned through history_txn: {details:?}"
     );
     assert!(!details.iter().any(|d| d == "SCAN h"), "history must not be scanned as a table: {details:?}");
+}
+
+// ---------- §4.4 the read indexes (migration `read-indexes`: sql-F4, tui-F3, engine-F2; sql-F6 refused) ----------
+
+/// The detail column of `EXPLAIN QUERY PLAN <sql>` on a fresh store, one line per step.
+fn query_plan(sql: &str) -> Vec<String> {
+    let env = TestEnv::new();
+    let _store = open(&env);
+    let conn = raw(&env);
+    let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(3)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+}
+
+/// The statement under test is read by `index`, not by a table scan.
+#[track_caller]
+fn assert_uses(sql: &str, index: &str) {
+    let plan = query_plan(sql);
+    assert!(plan.iter().any(|step| step.contains(&format!("USING INDEX {index}"))), "{index} unused by {sql}: {plan:?}");
+}
+
+/// sql-F4, tui-F3: the job counts of `plan_heads` (`tui/src/read/shared.rs`), run by every cockpit
+/// refresh (tree, widgets, statusbar, plan flow), scanned `jobs` with its overflow pages.
+#[test]
+fn the_cockpits_job_counts_are_read_through_jobs_plan_status() {
+    assert_uses(
+        "SELECT j.plan, j.status, count(*),
+                j.status = 'running' AND EXISTS (SELECT 1 FROM attempts a
+                  WHERE a.plan = j.plan AND a.job = j.key AND a.status = 'merging')
+           FROM jobs j WHERE NULL IS NULL OR j.plan = NULL GROUP BY j.plan, j.status, 4",
+        "jobs_plan_status",
+    );
+}
+
+/// sql-F6 asked for `events(kind, id)`. It is not in the schema, because SQLite (no statistics) then reads
+/// every Event of the kind for the statements that test a kind and a Session or a Plan, instead of
+/// `events_session` or `events_plan`: the Session SELECT of `session list` and the tree went from 6.7 to 797 ms
+/// on a copy of the live store, the inbox rules and E2's active time got 4 to 9 times slower. So these
+/// statements must keep the selective indexes.
+#[test]
+fn the_lookups_of_events_by_kind_and_session_or_plan_keep_their_selective_index() {
+    // `core/src/session/row.rs`, `tui/src/read/shared.rs`, `core/src/inbox/rules.rs` (per Session).
+    assert_uses(
+        "SELECT json_extract(e.data, '$.place') FROM events e WHERE e.session = 'x' AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1",
+        "events_session",
+    );
+    assert_uses("SELECT max(e.id) FROM events e WHERE e.session = 'x' AND e.kind = 'session-state'", "events_session");
+    // `core/src/watch/liveness.rs` (E2, per Attempt per tick), `core/src/job/retry.rs`.
+    assert_uses(
+        "SELECT at FROM events WHERE plan = 'p' AND attempt = 'a' AND kind = 'attempt-status' AND json_extract(data, '$.to') = 'running' ORDER BY id LIMIT 1",
+        "events_plan",
+    );
+    assert_uses("SELECT max(id) FROM events WHERE plan = 'p' AND job = 'j' AND kind = 'job-retried'", "events_plan");
+    // `events follow --session --kind` (`core/src/events/select.rs`).
+    assert_uses("SELECT id FROM events WHERE id > 0 AND session = 'x' AND kind IN ('session-state') ORDER BY id LIMIT 500", "events_session");
+}
+
+/// engine-F2: E2's Session read (`core/src/watch/liveness.rs`, unit-tested there against its own
+/// statement) must not read every Session ever made. The index lists only the Sessions E2 can
+/// still see as live, so a `stopped` Session with no pane costs nothing.
+#[test]
+fn only_the_live_sessions_are_in_sessions_live() {
+    let env = TestEnv::new();
+    let mut store = fixture_store(&env);
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, tmux_pane)
+                   VALUES ('gone', 'lead', 'ctx', 'Gone', '/', 'O3', 'stopped', 't', 't', NULL),
+                          ('parked', 'lead', 'ctx', 'Parked', '/', 'O3', 'stopped', 't', 't', '%7');",
+            )
+        })
+        .unwrap();
+    let conn = raw(&env);
+    let sql = "SELECT id FROM sessions INDEXED BY sessions_live WHERE state <> 'stopped' OR tmux_pane IS NOT NULL ORDER BY id";
+    let mut stmt = conn.prepare(sql).unwrap();
+    let listed: Vec<String> = stmt.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    // `lead1` is `idle`, `parked` is `stopped` with a pane; `gone` is `stopped` with none.
+    assert_eq!(listed, vec!["lead1".to_owned(), "parked".to_owned()]);
 }
 
 // ---------- §4.5 versions and migrations ----------
@@ -913,7 +1111,7 @@ fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
     let out = env
         .command("sh")
         .args(["-c", "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"", "sh", common::CPD])
-        .args(["context", "new", "ctx", "--title", "Ctx"])
+        .args(["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1003,7 +1201,17 @@ fn child_writer() {
             if let Some(started) = &started {
                 fs::write(started, "").unwrap();
             }
-            std::thread::sleep(hold);
+            match std::env::var_os("STORE_CHILD_RELEASE").map(PathBuf::from) {
+                // Holds the lock until the test says so, not for a time.
+                Some(release) => {
+                    let deadline = Instant::now() + Duration::from_secs(60);
+                    while !release.exists() {
+                        assert!(Instant::now() < deadline, "{} never appeared", release.display());
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                None => std::thread::sleep(hold),
+            }
             Ok(json!({"txn": tx.id(), "entered": entered, "left": now_ms()}))
         })
     });
@@ -1069,6 +1277,15 @@ struct Writer {
 
 impl Writer {
     fn spawn(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>) -> Writer {
+        Writer::spawn_with(env, name, busy_ms, hold_ms, started, None)
+    }
+
+    /// A writer that holds the write lock until the file `release` exists.
+    fn spawn_holding(env: &TestEnv, name: &str, busy_ms: u64, started: &Path, release: &Path) -> Writer {
+        Writer::spawn_with(env, name, busy_ms, 0, Some(started), Some(release))
+    }
+
+    fn spawn_with(env: &TestEnv, name: &str, busy_ms: u64, hold_ms: u64, started: Option<&Path>, release: Option<&Path>) -> Writer {
         let out = env.root().join(format!("{name}.json"));
         let mut cmd = env.command(std::env::current_exe().unwrap());
         cmd.args(["child_writer", "--exact", "--test-threads=1", "--quiet"])
@@ -1079,6 +1296,9 @@ impl Writer {
             .stdout(std::process::Stdio::null());
         if let Some(started) = started {
             cmd.env("STORE_CHILD_STARTED", started);
+        }
+        if let Some(release) = release {
+            cmd.env("STORE_CHILD_RELEASE", release);
         }
         Writer { child: KillOnDrop::new(cmd.spawn().unwrap()), out }
     }
@@ -1108,15 +1328,16 @@ fn a_second_writer_waits_for_the_first_and_reads_do_not() {
     let env = TestEnv::new();
     drop(open(&env));
     let started = env.root().join("a.started");
-    let mut a = Writer::spawn(&env, "a", 5000, 1500, Some(&started));
+    let release = env.root().join("a.release");
+    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
     a.wait_started(&started);
     let b = Writer::spawn(&env, "b", 20_000, 0, None);
-    // While A holds the write lock, a reader opens and reads at once.
-    let t = Instant::now();
+    // While A holds the write lock (until this test lets go of it), a reader opens and reads: had it to wait for A,
+    // it would wait for ever.
     let mut reader = open(&env);
     let txns: i64 = reader.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
     assert_eq!(txns, 1, "A has not committed yet");
-    assert!(t.elapsed() < Duration::from_millis(1000), "the reader waited {:?}", t.elapsed());
+    fs::write(&release, "").unwrap();
     let (a, b) = (a.wait(), b.wait());
     assert_eq!(a["ok"], true, "{a}");
     assert_eq!(b["ok"], true, "{b}");
@@ -1130,18 +1351,158 @@ fn a_writer_that_cannot_get_the_lock_in_time_is_store_busy() {
     let env = TestEnv::new();
     drop(open(&env));
     let started = env.root().join("a.started");
-    let mut a = Writer::spawn(&env, "a", 5000, 3000, Some(&started));
+    let release = env.root().join("a.release");
+    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
     a.wait_started(&started);
+    let a_pid = a.child.id();
     let b = Writer::spawn(&env, "b", 200, 0, None).wait();
     assert_eq!(b["ok"], false, "{b}");
     assert_eq!(b["error"]["code"], "store_busy", "{b}");
     assert_eq!(b["error"]["details"]["busy_ms"], 200);
+    // §4.2: the error names the holder, A: its pid, its command and for how long.
+    let holder = &b["error"]["details"]["holder"];
+    assert_eq!(holder["pid"], a_pid, "{b}");
+    assert_eq!(holder["command"], "test writer", "{b}");
+    assert!(holder["since_ms"].as_u64().unwrap() >= 200, "{b}");
+    assert!(holder["argv"].as_str().unwrap().contains("child_writer"), "{b}");
+    let message = b["error"]["message"].as_str().unwrap();
+    assert!(message.contains(&format!("pid {a_pid} (`test writer`")), "{message}");
     let waited = b["ended"].as_u64().unwrap() - b["begun"].as_u64().unwrap();
     assert!(waited >= 200, "gave up after {waited} ms");
+    fs::write(&release, "").unwrap();
     assert_eq!(a.wait()["ok"], true);
     let mut store = open(&env);
     let txns: i64 = store.read(|c| Ok(c.query_row("SELECT count(*) FROM txns", [], |r| r.get(0))?)).unwrap();
     assert_eq!(txns, 2, "B wrote nothing");
+}
+
+/// The holder's record is removed when its transaction ends, by a commit or a rollback.
+#[test]
+fn the_holders_record_is_gone_after_a_commit_and_after_a_rollback() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let records = || -> Vec<String> {
+        let names = fs::read_dir(home(&env).locks_dir()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned());
+        names.filter(|n| n.starts_with("store-writer-")).collect()
+    };
+    let during = store.write("test", |_| Ok(records())).unwrap();
+    assert_eq!(during, [format!("store-writer-{}.json", std::process::id())]);
+    assert!(records().is_empty(), "{:?}", records());
+    store.write("test", |_| Err::<(), _>(CpdError::new(ErrorCode::StoreFailed, "no"))).unwrap_err();
+    assert!(records().is_empty(), "{:?}", records());
+}
+
+/// A transaction that holds the lock for a second or more says where the time went, in `run/store-slow.log`.
+#[test]
+fn a_slow_write_is_logged_with_where_its_time_went() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    // time-claim: a write that holds the lock 1.1 s, past the 1 s threshold, is logged with a closure at least that
+    // long; the sleep is the slow work itself, not a wait for a signal.
+    store.write("slow", |_| Ok(std::thread::sleep(Duration::from_millis(1100)))).unwrap();
+    let text = fs::read_to_string(env.cpd_home().join("run/store-slow.log")).unwrap();
+    // Other writes of a loaded machine may be in it too: find this one.
+    let line = text
+        .lines()
+        .map(|l| serde_json::from_str::<Value>(l).unwrap())
+        .find(|l| l["command"] == "slow")
+        .unwrap_or_else(|| panic!("no line for the slow write: {text}"));
+    assert_eq!(line["pid"].as_u64(), Some(u64::from(std::process::id())));
+    let phases = &line["phases"];
+    assert!(phases["closure_ms"].as_u64().unwrap() >= 1100, "{line}");
+    assert!(phases["held_ms"].as_u64().unwrap() >= phases["closure_ms"].as_u64().unwrap(), "{line}");
+    assert!(phases["commit_ms"].is_u64() && phases["begin_ms"].is_u64() && phases["waited_ms"].is_u64(), "{line}");
+}
+
+/// A lock held by a connection that is not cpd's has no record: `store_busy` says the holder is unknown.
+#[test]
+fn a_store_busy_with_no_recorded_holder_says_so() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let other = raw(&env);
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let mut store = Store::open(&home(&env), 100).unwrap();
+    let e = store.write("test", |_| Ok(())).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::StoreBusy, "{e:?}");
+    assert!(e.details()["holder"].is_null(), "{e:?}");
+    assert!(e.message().ends_with("Its holder is unknown: no process has recorded that it holds the lock."), "{e:?}");
+}
+
+#[test]
+fn a_record_of_a_dead_process_is_not_the_holder() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let mut dead = std::process::Command::new("true").spawn().unwrap();
+    dead.wait().unwrap();
+    let record = json!({"pid": dead.id(), "command": "gone", "argv": "gone", "session": null, "attempt": null, "since_unix_ms": now_ms()});
+    fs::write(home(&env).locks_dir().join(format!("store-writer-{}.json", dead.id())), record.to_string()).unwrap();
+    let other = raw(&env);
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let e = Store::open(&home(&env), 100).unwrap().write("test", |_| Ok(())).unwrap_err();
+    assert!(e.details()["holder"].is_null(), "{e:?}");
+}
+
+type Lines = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+
+fn persisting(lines: &Lines, give_up: fn() -> bool) -> Persist {
+    let lines = lines.clone();
+    Persist::new(move |line| lines.lock().unwrap().push(line.to_owned()), give_up)
+}
+
+/// §4.2: a persisting store waits out a lock held for longer than `store_busy_ms`, logs one line for
+/// the error and one when it clears, and the write then completes; a plain store gives up.
+#[test]
+fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let started = env.root().join("a.started");
+    let mut a = Writer::spawn(&env, "a", 5000, 2500, Some(&started));
+    a.wait_started(&started);
+    let a_pid = a.child.id();
+
+    let mut plain = Store::open(&home(&env), 100).unwrap();
+    assert_eq!(plain.write("test", |_| Ok(())).unwrap_err().code(), ErrorCode::StoreBusy);
+
+    let lines = Lines::default();
+    let mut store = Store::open_persistent(&home(&env), 100, persisting(&lines, || false)).unwrap();
+    let t = Instant::now();
+    let txn = store.write("persisted", |tx| Ok(tx.id())).unwrap();
+    assert!(t.elapsed() >= Duration::from_millis(500), "it did not wait: {:?}", t.elapsed());
+    assert_eq!(a.wait()["ok"], true);
+    let lines = lines.lock().unwrap().clone();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].starts_with("store_busy: "), "{lines:?}");
+    assert!(lines[0].contains(&format!("pid {a_pid} (`test writer`")), "the line names the holder: {lines:?}");
+    assert!(lines[1].starts_with("the store is clear again after "), "{lines:?}");
+    let command: String = store.read(|c| Ok(c.query_row("SELECT command FROM txns WHERE id = ?1", [txn], |r| r.get(0))?)).unwrap();
+    assert_eq!(command, "persisted");
+}
+
+#[test]
+fn a_persisting_store_gives_up_when_told_to_and_its_reads_never_wait() {
+    let env = TestEnv::new();
+    drop(open(&env));
+    let other = raw(&env);
+    other.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let lines = Lines::default();
+    // Told to give up at once: the error is returned and nothing is logged.
+    let mut store = Store::open_persistent(&home(&env), 100, persisting(&lines, || true)).unwrap();
+    assert_eq!(store.write("test", |_| Ok(())).unwrap_err().code(), ErrorCode::StoreBusy);
+    assert!(lines.lock().unwrap().is_empty());
+    // A reader never waits for a writer: it reads, persisting or not.
+    assert_eq!(store.read(|c| Ok(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)).unwrap(), 1);
+}
+
+#[test]
+fn only_busy_and_locked_are_transient() {
+    let busy = CpdError::new(ErrorCode::StoreBusy, "busy");
+    let locked = CpdError::new(ErrorCode::StoreFailed, "locked").with("sqlite_code", 6);
+    let busy_snapshot = CpdError::new(ErrorCode::StoreFailed, "snapshot").with("sqlite_code", 517);
+    let constraint = CpdError::new(ErrorCode::StoreFailed, "constraint").with("sqlite_code", 275);
+    let other = CpdError::new(ErrorCode::StoreFailed, "other");
+    let tampered = CpdError::new(ErrorCode::StoreTampered, "tampered");
+    let flags = [&busy, &locked, &busy_snapshot, &constraint, &other, &tampered].map(is_transient);
+    assert_eq!(flags, [true, true, true, false, false, false]);
 }
 
 #[test]
@@ -1170,8 +1531,6 @@ fn processes_opening_a_new_database_at_once_migrate_it_once() {
 fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     let env = TestEnv::new();
     let out = env.cpd(&["--version"]).ok();
-    assert_eq!(out["schema"], VERSION);
-    assert!(out["store_schema"].is_null(), "{out}");
     assert!(out["store"].is_null(), "{out}");
     assert_eq!(out["protocol"], 4, "{out}");
     assert!(!home(&env).db().exists());
@@ -1179,24 +1538,21 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
 }
 
 #[test]
-fn version_on_a_migrated_home_reports_the_verdict_and_the_legacy_projection() {
+fn version_on_a_migrated_home_reports_the_verdict_only() {
     let env = TestEnv::new();
     drop(open(&env));
     let out = env.cpd(&["--version"]).ok();
-    assert_eq!(out["schema"], 1000);
-    assert_eq!(out["store_schema"], 1000);
+    assert_eq!(out.as_object().unwrap().len(), 4, "only ok, version, protocol and store: {out}");
     assert_eq!(out["store"], json!({"opens": true, "refusal": null, "unknown": [], "pending": []}), "{out}");
 }
 
 #[test]
-fn version_on_a_store_that_does_not_open_reports_the_refusal_and_store_schema_above_schema() {
+fn version_on_a_store_that_does_not_open_reports_the_refusal() {
     let env = TestEnv::new();
     drop(open(&env));
     raw(&env).pragma_update(None, "user_version", VERSION + 1).unwrap();
     let before = fs::read(home(&env).db()).unwrap();
     let out = env.cpd(&["--version"]).ok();
-    assert_eq!(out["schema"], VERSION);
-    assert_eq!(out["store_schema"], VERSION + 1, "integer-era guards refuse: store_schema above schema");
     assert_eq!(out["store"]["opens"], false, "{out}");
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
     assert!(out["store"]["refusal"]["message"].as_str().unwrap().contains("newer cpd"), "{out}");
@@ -1220,7 +1576,6 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
         let out = env.cpd(&["--version"]).ok();
         let pending: Vec<String> = legacy_pending.iter().map(|n| n.to_string()).chain(named.iter().cloned()).collect();
         assert_eq!(out["store"], json!({"opens": true, "refusal": null, "unknown": [], "pending": pending}), "version {version}: {out}");
-        assert_eq!((&out["schema"], &out["store_schema"]), (&json!(1000), &json!(1000)), "version {version}: {out}");
         assert_eq!(fs::read(home(&env).db()).unwrap(), before, "version {version}");
     }
     // 15 is no legacy version: a numbered migration this binary lacks.
@@ -1228,7 +1583,6 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
     raw(&env).pragma_update(None, "user_version", 15).unwrap();
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
-    assert_eq!(out["store_schema"], 1001, "{out}");
 }
 
 /// A migration this binary lacks, recorded as a newer cpd would (`cpd_txn()` is stood in by the
@@ -1254,7 +1608,6 @@ fn version_lists_the_additive_migrations_it_lacks_and_still_opens() {
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["opens"], true, "{out}");
     assert_eq!(out["store"]["unknown"], json!(["29991231T2358-first", "29991231T2359-second"]), "{out}");
-    assert_eq!(out["store_schema"], 1000);
 }
 
 #[test]
@@ -1265,7 +1618,6 @@ fn version_refuses_a_store_whose_floor_it_lacks() {
     assert_eq!(out["store"]["opens"], false, "{out}");
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
     assert_eq!(out["store"]["unknown"], json!(["29991231T2359-breaking"]), "{out}");
-    assert_eq!(out["store_schema"], 1001);
 }
 
 /// store-W8: a held `locks/store.lock` is waited for at most `busy_ms`.

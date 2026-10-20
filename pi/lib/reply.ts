@@ -1,7 +1,7 @@
 import { isObject } from "./cpd.ts";
 
 /**
- * hs-d278: a run is a reply run when it answered a message the User wrote to this Session. Only then does the run's end
+ * A run is a reply run when it answered a message the User wrote to this Session. Only then does the run's end
  * report `session state idle --reply`.
  */
 
