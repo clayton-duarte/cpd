@@ -431,7 +431,7 @@ fn a_tree_taller_than_its_share_scrolls_with_the_wheel_between_its_cues() {
     let cue = |r: &String, glyph: char| r.trim_start().starts_with(glyph) && r.ends_with(" more");
     let screen = pane.wait("the tree's ▼ cue above the Inbox", |s| {
         let inbox = s.iter().position(|r| r.contains("Inbox"));
-        inbox.is_some_and(|i| i > 1 && cue(&s[i - 1], '▼'))
+        inbox.is_some_and(|i| i > 2 && s[i - 1].trim().is_empty() && cue(&s[i - 2], '▼'))
     });
     assert!(!screen.iter().any(|r| cue(r, '▲')), "nothing is hidden above yet: {screen:?}");
     pane.wheel_down(10, 3);
