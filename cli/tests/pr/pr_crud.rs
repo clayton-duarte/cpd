@@ -47,18 +47,41 @@ impl Fx {
         Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
     }
 
-    /// `cpd pr <args> --plan pay-1`.
+    /// `cpd pr <args> --plan pay-1`; see [`Fx::pr_in`].
     fn pr(&self, args: &[&str]) -> Run {
+        self.pr_in("pay-1", args)
+    }
+
+    /// `cpd pr <args> --plan <plan>`. A `pr add` that added a PR is followed by the cancelling of the stub drafts of its
+    /// shape (`job cancel`): these tests are about PRs, and a PR with a live Job is not one `pr cancel` ends and no
+    /// Plan review takes. The template itself is tested with [`Fx::add_with_stubs`].
+    fn pr_in(&self, plan: &str, args: &[&str]) -> Run {
+        let run = self.add_with_stubs(plan, args);
+        if args.first() == Some(&"add") && run.exit == 0 {
+            let out = run.json();
+            if out.get("already").is_none() {
+                for job in out["pr"]["jobs"].as_array().unwrap() {
+                    let job = job.as_str().unwrap();
+                    self.env.cpd(&["job", "cancel", job, "--reason", "a stub of the template", "--plan", plan]).ok();
+                }
+            }
+        }
+        run
+    }
+
+    /// `cpd pr <args> --plan <plan>`, as it is: a `pr add` leaves its stub drafts.
+    fn add_with_stubs(&self, plan: &str, args: &[&str]) -> Run {
         let mut all = vec!["pr"];
         all.extend(args);
-        all.extend(["--plan", "pay-1"]);
+        all.extend(["--plan", plan]);
         self.env.cpd(&all)
     }
 
     /// `pr add <key> --repo <repo> --title "Change <key>" <extra…>`.
     fn add(&self, key: &str, repo: &PathBuf, extra: &[&str]) -> Run {
         let title = format!("Change {key}");
-        let mut args = vec!["add", key, "--repo", repo.to_str().unwrap(), "--title", &title];
+        // `--shape config`: one stub draft, `<key>-config`, beside the Jobs these tests add by hand.
+        let mut args = vec!["add", key, "--repo", repo.to_str().unwrap(), "--title", &title, "--shape", "config"];
         args.extend(extra);
         self.pr(&args)
     }
@@ -89,14 +112,6 @@ impl Fx {
 
     fn needs(&self, pr: &str) -> String {
         self.env.query(&format!("SELECT coalesce(group_concat(needs), '') FROM (SELECT needs FROM pr_needs WHERE pr = '{pr}' ORDER BY needs)"))
-    }
-
-    /// `cpd pr <args> --plan <plan>`.
-    fn pr_in(&self, plan: &str, args: &[&str]) -> Run {
-        let mut all = vec!["pr"];
-        all.extend(args);
-        all.extend(["--plan", plan]);
-        self.env.cpd(&all)
     }
 
     /// A Plan `id` in Context `context` (made when new, owned by `acme`), in `phase`, with its Lead.
@@ -149,7 +164,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
     assert_eq!(
         out["pr"],
         json!({"key": "api", "repo": fx.pay.display().to_string(), "name": "pay", "base": "main", "base_pr": null, "title": "Change api", "needs": [], "status": "waiting",
-               "lead_branch": "cpd/pay-1/api", "appended": false})
+               "lead_branch": "cpd/pay-1/api", "appended": false, "shape": "config", "jobs": ["api-config"]})
     );
     assert!(out.get("already").is_none());
     let out = fx.add("web", &fx.web, &["--base", "main", "--needs", "api"]).ok();
@@ -187,7 +202,7 @@ fn add_creates_a_waiting_pr_with_its_event_and_no_git_write() {
 fn add_accepts_a_title_of_72_characters() {
     let fx = fx("grounding");
     let title = "é".repeat(72);
-    let out = fx.pr(&["add", "api", "--repo", fx.pay.to_str().unwrap(), "--title", &title]).ok();
+    let out = fx.pr(&["add", "api", "--repo", fx.pay.to_str().unwrap(), "--title", &title, "--shape", "config"]).ok();
     assert_eq!(out["pr"]["title"], title.as_str());
     assert_eq!(fx.env.query::<String>("SELECT title FROM prs WHERE key = 'api'"), title);
 }
@@ -212,6 +227,119 @@ fn add_in_dispatch_appends_the_pr() {
     assert_eq!(fx.add("late", &fx.pay, &[]).ok()["pr"]["appended"], true);
 }
 
+// ---------- pr add --shape: the template of stub drafts, and the stored shape (commands.md §9.4, contract §2.2 "Job kinds") ----------
+
+impl Fx {
+    /// `[key, kind, title, status, appended, has tier, has goal, needs]` of every Job of PR `pr`, in creation order.
+    fn stubs(&self, pr: &str) -> Value {
+        let shown = self.env.cpd(&["plan", "show", "--plan", "pay-1"]).ok();
+        let jobs: Vec<Value> = shown["jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|j| j["pr"] == pr)
+            .map(|j| json!([j["key"], j["kind"], j["title"], j["status"], j["appended"], !j["tier"].is_null(), !j["goal"].is_null(), j["needs"]]))
+            .collect();
+        json!(jobs)
+    }
+
+    fn add_shape(&self, key: &str, shape: Option<&str>) -> Run {
+        let mut args = vec!["add", key, "--repo", self.pay.to_str().unwrap(), "--title", "Add retries"];
+        args.extend(shape.into_iter().flat_map(|s| ["--shape", s]));
+        self.add_with_stubs("pay-1", &args)
+    }
+}
+
+#[test]
+fn add_lays_out_the_tdd_template_by_default_as_stub_drafts() {
+    let fx = fx("plan");
+    let out = fx.add_shape("api", None).ok();
+    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("tdd"), json!(["api-docs", "api-tests", "api-impl"])));
+    assert_eq!(
+        fx.stubs("api"),
+        json!([
+            ["api-docs", "docs", "Docs: Add retries", "draft", false, false, false, []],
+            ["api-tests", "test", "Red tests: Add retries", "draft", false, false, false, ["api-docs"]],
+            ["api-impl", "impl", "Implement: Add retries", "draft", false, false, false, ["api-tests"]],
+        ])
+    );
+    assert_eq!(fx.env.query::<String>("SELECT shape FROM prs WHERE key = 'api'"), "tdd");
+    // No fingerprint, no `tests`: a stub, completed later by `job edit`.
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE fingerprint IS NOT NULL OR tests IS NOT NULL OR test_files IS NOT NULL"), 0);
+    // One `job-added` per stub, after `pr-added`, with the kind.
+    let added = fx.events("job-added");
+    let kinds: Vec<(Value, Value)> = added.iter().map(|e| (e["job"].clone(), e["data"]["kind"].clone())).collect();
+    assert_eq!(kinds, [(json!("api-docs"), json!("docs")), (json!("api-tests"), json!("test")), (json!("api-impl"), json!("impl"))]);
+    assert_eq!(
+        added[1]["data"],
+        json!({"pr": "api", "kind": "test", "status": "draft", "appended": false, "tier": null, "needs": ["api-docs"], "review": false, "urgent": false})
+    );
+    let order: Vec<i64> = [fx.events("pr-added")[0]["id"].as_i64().unwrap(), added[0]["id"].as_i64().unwrap()].to_vec();
+    assert!(order[0] < order[1], "pr-added comes first: {order:?}");
+}
+
+#[test]
+fn add_lays_out_one_stub_for_docs_and_for_config() {
+    let fx = fx("plan");
+    let out = fx.add_shape("api", Some("docs")).ok();
+    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("docs"), json!(["api-docs"])));
+    assert_eq!(fx.stubs("api"), json!([["api-docs", "docs", "Docs: Add retries", "draft", false, false, false, []]]));
+    let out = fx.add_shape("web", Some("config")).ok();
+    assert_eq!((out["pr"]["shape"].clone(), out["pr"]["jobs"].clone()), (json!("config"), json!(["web-config"])));
+    assert_eq!(fx.stubs("web"), json!([["web-config", "work", "Config: Add retries", "draft", false, false, false, []]]));
+    assert_eq!(fx.env.query::<String>("SELECT group_concat(key || '=' || shape) FROM (SELECT key, shape FROM prs ORDER BY key)"), "api=docs,web=config");
+}
+
+#[test]
+fn the_stubs_of_a_pr_added_after_the_lock_are_appended_and_a_reopened_plan_goes_back_to_dispatch() {
+    for phase in ["dispatch", "deploy"] {
+        let fx = fx(phase);
+        fx.add_shape("late", Some("docs")).ok();
+        assert_eq!(fx.stubs("late"), json!([["late-docs", "docs", "Docs: Add retries", "draft", true, false, false, []]]), "{phase}");
+        assert_eq!(fx.events("job-added")[0]["data"]["appended"], true, "{phase}");
+        assert_eq!(fx.env.query::<String>("SELECT phase FROM plans"), "dispatch", "{phase}");
+    }
+}
+
+#[test]
+fn a_shape_is_one_of_tdd_docs_and_config() {
+    let fx = fx("plan");
+    let writes = fx.writes();
+    for shape in ["free", "other", ""] {
+        let run = fx.add_shape("api", Some(shape));
+        assert_eq!(run.error()["code"], "usage", "{shape:?}");
+    }
+    assert_eq!(fx.writes(), writes);
+}
+
+#[test]
+fn add_refuses_a_template_whose_job_keys_the_plan_has_and_writes_nothing() {
+    let fx = fx("plan");
+    fx.add_shape("api", Some("config")).ok();
+    // A Job `web-impl` of another PR is in the way of the tdd template of `web`.
+    fx.env.sql(
+        "INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at) VALUES ('pay-1', 'api', 'web-impl', 'T', 'draft', 0, cpd_txn(), 't')",
+    );
+    let writes = fx.writes();
+    let error = fx.refused(&fx.add_shape("web", None), "job_key_exists", 3, writes);
+    assert_eq!((error["details"]["pr"].clone(), error["details"]["jobs"].clone()), (json!("web"), json!(["web-impl"])));
+    // The docs template of `web` does not lay out that key.
+    fx.add_shape("web", Some("docs")).ok();
+}
+
+#[test]
+fn the_shape_is_part_of_what_add_compares() {
+    let fx = fx("plan");
+    fx.add_shape("api", Some("docs")).ok();
+    let writes = fx.writes();
+    // The same flags, the shape included, are `already`: the default, `tdd`, is another shape.
+    assert_eq!(fx.add_shape("api", Some("docs")).ok()["already"], true);
+    assert_eq!(fx.writes(), writes);
+    let error = fx.refused(&fx.add_shape("api", None), "pr_exists", 3, writes);
+    assert_eq!(error["details"]["shape"], "docs");
+    fx.refused(&fx.add_shape("api", Some("config")), "pr_exists", 3, writes);
+}
+
 #[test]
 fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
     let fx = fx("plan");
@@ -228,7 +356,7 @@ fn add_again_with_the_resolved_flags_is_already_and_writes_nothing() {
     let error = fx.refused(&fx.add("web", &fx.web, &[]), "pr_exists", 3, writes);
     assert_eq!(error["details"]["needs"], json!(["api"]));
     // So is another title.
-    let other = fx.pr(&["add", "web", "--repo", fx.web.to_str().unwrap(), "--title", "Another", "--needs", "api"]);
+    let other = fx.pr(&["add", "web", "--repo", fx.web.to_str().unwrap(), "--title", "Another", "--needs", "api", "--shape", "config"]);
     let error = fx.refused(&other, "pr_exists", 3, writes);
     assert_eq!(error["details"]["title"], "Change web");
     fx.refused(&fx.add("web", &fx.pay, &["--needs", "api"]), "pr_exists", 3, writes);
@@ -1089,13 +1217,14 @@ fn a_plan_review_goes_stale_when_a_pr_changes() {
 fn add_stacks_on_a_pr_of_another_plan_and_needs_a_third() {
     let fx = fx("grounding");
     fx.plan("ledger-9", "ctx", "grounding");
-    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap()]).ok();
-    fx.pr_in("ledger-9", &["add", "schema", "--title", "Change schema", "--repo", fx.web.to_str().unwrap()]).ok();
+    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
+    fx.pr_in("ledger-9", &["add", "schema", "--title", "Change schema", "--repo", fx.web.to_str().unwrap(), "--shape", "config"]).ok();
     let out = fx.add("web", &fx.pay, &["--base", "ledger-9/api", "--needs", "ledger-9/schema"]).ok();
     assert_eq!(
         out["pr"],
         json!({"key": "web", "repo": fx.pay.display().to_string(), "name": "pay", "base": "cpd/ledger-9/api", "base_pr": "ledger-9/api",
-               "title": "Change web", "needs": ["ledger-9/schema"], "status": "waiting", "lead_branch": "cpd/pay-1/web", "appended": false})
+               "title": "Change web", "needs": ["ledger-9/schema"], "status": "waiting", "lead_branch": "cpd/pay-1/web", "appended": false,
+               "shape": "config", "jobs": ["web-config"]})
     );
     // Stored as a base branch and a need with its Plan; shown as references.
     let stored: (String, String) = fx
@@ -1164,11 +1293,11 @@ fn add_refuses_a_bad_reference_and_writes_nothing() {
     let fx = fx("grounding");
     fx.plan("ledger-9", "ctx", "grounding");
     fx.plan("billing-2", "ctx2", "grounding");
-    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap()]).ok();
-    fx.pr_in("ledger-9", &["add", "web", "--title", "Change web", "--repo", fx.web.to_str().unwrap()]).ok();
-    fx.pr_in("ledger-9", &["add", "gone", "--title", "Change gone", "--repo", fx.pay.to_str().unwrap()]).ok();
+    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
+    fx.pr_in("ledger-9", &["add", "web", "--title", "Change web", "--repo", fx.web.to_str().unwrap(), "--shape", "config"]).ok();
+    fx.pr_in("ledger-9", &["add", "gone", "--title", "Change gone", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
     fx.pr_in("ledger-9", &["cancel", "gone"]).ok();
-    fx.pr_in("billing-2", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap()]).ok();
+    fx.pr_in("billing-2", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
     fx.merged_pr("ledger-9", "old", &fx.pay, 21);
     let writes = fx.writes();
 
@@ -1209,7 +1338,7 @@ fn add_refuses_a_bad_reference_and_writes_nothing() {
 fn an_archived_plans_pr_is_a_need_only_when_merged() {
     let fx = fx("grounding");
     fx.plan("ledger-9", "ctx", "grounding");
-    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap()]).ok();
+    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
     fx.merged_pr("ledger-9", "old", &fx.pay, 21);
     fx.env.sql("UPDATE plans SET archived_at = 't' WHERE id = 'ledger-9'");
     let writes = fx.writes();
@@ -1229,12 +1358,12 @@ fn a_cycle_of_needs_and_base_prs_across_plans_is_refused() {
     fx.plan("ledger-9", "ctx", "grounding");
     fx.add("x", &fx.pay, &[]).ok();
     // y is stacked on x: x only has to start before y; so x may not need y, which would wait for x to merge.
-    fx.pr_in("ledger-9", &["add", "y", "--title", "Change y", "--repo", fx.pay.to_str().unwrap(), "--base", "pay-1/x"]).ok();
+    fx.pr_in("ledger-9", &["add", "y", "--title", "Change y", "--repo", fx.pay.to_str().unwrap(), "--base", "pay-1/x", "--shape", "config"]).ok();
     let writes = fx.writes();
     let error = fx.refused(&fx.pr(&["edit", "x", "--needs", "ledger-9/y"]), "dependency_cycle", 3, writes);
     assert_eq!(error["details"]["cycle"], json!(["x", "ledger-9/y", "x"]));
     // Directly or not.
-    fx.pr_in("ledger-9", &["add", "z", "--title", "Change z", "--repo", fx.pay.to_str().unwrap(), "--needs", "y"]).ok();
+    fx.pr_in("ledger-9", &["add", "z", "--title", "Change z", "--repo", fx.pay.to_str().unwrap(), "--needs", "y", "--shape", "config"]).ok();
     let error = fx.refused(&fx.pr(&["edit", "x", "--needs", "ledger-9/z"]), "dependency_cycle", 3, fx.writes());
     assert_eq!(error["details"]["cycle"], json!(["x", "ledger-9/z", "ledger-9/y", "x"]));
     // A PR cannot be stacked on itself.
@@ -1249,8 +1378,8 @@ fn a_cycle_of_needs_and_base_prs_across_plans_is_refused() {
 fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
     let fx = fx("plan");
     fx.plan("ledger-9", "ctx", "grounding");
-    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap()]).ok();
-    fx.pr_in("ledger-9", &["add", "schema", "--title", "Change schema", "--repo", fx.web.to_str().unwrap()]).ok();
+    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
+    fx.pr_in("ledger-9", &["add", "schema", "--title", "Change schema", "--repo", fx.web.to_str().unwrap(), "--shape", "config"]).ok();
     fx.add("web", &fx.pay, &[]).ok();
 
     let out = fx.pr(&["edit", "web", "--base", "ledger-9/api", "--needs", "ledger-9/schema"]).ok();

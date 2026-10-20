@@ -182,4 +182,49 @@ mod tests {
         assert_eq!(path_of(r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"], "out_of_scope": "x"}"#), "$.out_of_scope");
         assert_eq!(path_of(r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"]}"#), "$.out_of_scope");
     }
+
+    const TEST_SPEC: &str = r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"], "out_of_scope": [],
+                                "tests": ["pr_open_job::merges_the_base", "pr_open_job::opens"], "test_files": ["cli/tests/pr_open_job.rs", "core/src/pr/"]}"#;
+
+    #[test]
+    fn a_test_spec_has_named_tests_and_the_files_that_hold_them() {
+        let spec = parse(TEST_SPEC).unwrap();
+        assert_eq!(spec.tests.as_deref(), Some(&["pr_open_job::merges_the_base".to_owned(), "pr_open_job::opens".to_owned()][..]));
+        assert_eq!(spec.test_files.as_deref(), Some(&["cli/tests/pr_open_job.rs".to_owned(), "core/src/pr/".to_owned()][..]));
+        spec.check_kind("test").unwrap();
+        assert_eq!(parse(GOOD).unwrap().tests, None);
+    }
+
+    #[test]
+    fn the_spec_fits_its_kind_and_the_fault_names_its_json_path() {
+        let plain = parse(GOOD).unwrap();
+        for kind in ["work", "docs", "impl"] {
+            plain.check_kind(kind).unwrap();
+        }
+        let err = plain.check_kind("test").unwrap_err();
+        assert_eq!((err.code(), err.details()["path"].as_str()), (ErrorCode::SpecInvalid, Some("$.tests")));
+        let test = parse(TEST_SPEC).unwrap();
+        for kind in ["work", "docs", "impl"] {
+            let err = test.check_kind(kind).unwrap_err();
+            assert_eq!((err.code(), err.details()["path"].as_str()), (ErrorCode::SpecInvalid, Some("$.tests")), "{kind}");
+        }
+        let only_tests = parse(r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"], "out_of_scope": [], "tests": ["t"]}"#).unwrap();
+        assert_eq!(only_tests.check_kind("test").unwrap_err().details()["path"], "$.test_files");
+    }
+
+    #[test]
+    fn the_named_tests_and_files_are_checked_where_they_are_read() {
+        let with = |tests: &str, files: &str| {
+            format!(r#"{{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"], "out_of_scope": [], "tests": {tests}, "test_files": {files}}}"#)
+        };
+        assert_eq!(path_of(&with("[]", r#"["f"]"#)), "$.tests");
+        assert_eq!(path_of(&with(r#"["a", "a"]"#, r#"["f"]"#)), "$.tests[1]");
+        assert_eq!(path_of(&with(r#"["a\nb"]"#, r#"["f"]"#)), "$.tests[0]");
+        assert_eq!(path_of(&with(r#"[1]"#, r#"["f"]"#)), "$.tests[0]");
+        assert_eq!(path_of(&with(r#"["a"]"#, "[]")), "$.test_files");
+        assert_eq!(path_of(&with(r#"["a"]"#, r#"["f", "/abs"]"#)), "$.test_files[1]");
+        assert_eq!(path_of(&with(r#"["a"]"#, r#"["../f"]"#)), "$.test_files[0]");
+        assert_eq!(path_of(&with(r#"["a"]"#, r#"["d/../f"]"#)), "$.test_files[0]");
+        parse(&with(r#"["a"]"#, r#"["d/", "f..g"]"#)).unwrap();
+    }
 }

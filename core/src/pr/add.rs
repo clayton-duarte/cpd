@@ -567,6 +567,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
             .with("base", existing.base.as_str())
             .with("title", title)
             .with("needs", existing.needs.clone())
+            .with("shape", existing.shape.as_str())
             .with("status", existing.status.as_str()));
     }
     let needs = match &wanted.needs {

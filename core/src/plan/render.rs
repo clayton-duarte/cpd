@@ -426,4 +426,68 @@ mod tests {
         let keys: Vec<&str> = ordered(&refs).iter().map(|p| p.key.as_str()).collect();
         assert_eq!(keys, ["a-contract", "b", "a-integration", "c", "z"]);
     }
+
+    fn job(key: &str, pr: &str, kind: &str) -> Job {
+        Job {
+            seq: 1,
+            key: key.into(),
+            pr: pr.into(),
+            title: format!("Title {key}"),
+            tier: Some("S2".into()),
+            spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: serde_json::json!(["a"]), acceptance: serde_json::json!(["b"]), out_of_scope: serde_json::json!([]) }),
+            status: "draft".into(),
+            appended: false,
+            review: false,
+            kind: kind.into(),
+            tests: None,
+            test_files: None,
+            test_approved: None,
+            urgent: false,
+            fingerprint: None,
+            retry_tier: None,
+            cancel_reason: None,
+            cancel_requested_at: None,
+            failed_cause: None,
+            merged_sha: None,
+            created_at: "t".into(),
+            needs: Vec::new(),
+        }
+    }
+
+    fn titled_pr(key: &str, status: &str) -> PrRow {
+        let mut pr = PrRow::fixture(key, "/r", "main", &[], status);
+        pr.title = Some(format!("Change {key}"));
+        pr
+    }
+
+    #[test]
+    fn a_pr_that_has_not_started_shows_the_open_job_as_its_last_row_and_section_at_open_tier() {
+        let mut test = job("web-tests", "web", "test");
+        test.tests = Some(serde_json::json!(["t::one"]));
+        test.test_files = Some(serde_json::json!(["tests/t.rs"]));
+        let md = markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[titled_pr("web", "waiting")], &[job("web-docs", "web", "docs"), test], &[], "S3");
+        assert!(md.contains("| Key | Title | Kind | Tier | Status | Needs | Touches |"), "{md}");
+        assert!(md.contains("| `web-docs` | Title web-docs | docs | S2 | draft | none | `a` |"), "{md}");
+        // The last row of the table: key, title, kind, `open_tier`, no status, the Ready rule in place of needs.
+        let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| `")).collect();
+        assert_eq!(rows.last().unwrap(), &"| `open-web` | Open the pull request: Change web | open | S3 | — | every other Job of the PR | — |");
+        // The last section, with the text in place of a Spec; a `test` Job lists its tests and files.
+        assert!(md.trim_end().ends_with(&format!("### `open-web`: Open the pull request: Change web\n\nStatus: — · Kind: `open` · Tier: `S3` · Needs: every other Job of the PR\n\n{OPEN_PLACEHOLDER}")), "{md}");
+        assert!(md.contains("Status: `draft` · Kind: `test` · Tier: `S2` · Needs: none"), "{md}");
+        assert!(md.contains("#### Tests\n\n- `t::one`\n\n#### Test files\n\n- `tests/t.rs`"), "{md}");
+        // It is no Job: no node in the graph.
+        assert!(!md.contains("open-web[") && !md.contains("[\"open-web\"]"), "{md}");
+    }
+
+    #[test]
+    fn the_open_job_placeholder_is_for_a_pr_that_has_not_started_only_and_in_every_phase_until_then() {
+        let started = markdown(&Heading::Plan { title: "T" }, "ctx", "dispatch", &[titled_pr("web", "dispatch")], &[job("web-docs", "web", "docs")], &[], "S2");
+        assert!(!started.contains("open-web"), "{started}");
+        let waiting = markdown(&Heading::Plan { title: "T" }, "ctx", "dispatch", &[titled_pr("web", "waiting")], &[], &[], "S2");
+        assert!(waiting.contains("| `open-web` | Open the pull request: Change web | open | S2 | — | every other Job of the PR | — | — |"), "{waiting}");
+        // A PR with no Jobs yet is not "No Jobs yet": it has the Job cpd adds.
+        assert!(!waiting.contains("No Jobs yet."), "{waiting}");
+        let cancelled = markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[titled_pr("web", "cancelled")], &[], &[], "S2");
+        assert!(!cancelled.contains("open-web"), "{cancelled}");
+    }
 }

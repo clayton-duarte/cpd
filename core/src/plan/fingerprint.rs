@@ -160,4 +160,66 @@ mod tests {
             assert_ne!(of(&jobs, &changed), base);
         }
     }
+
+    #[test]
+    fn kind_and_tests_are_in_the_plan_fingerprint_only_when_not_default_and_shape_only_when_not_free() {
+        // A `work` Job with no tests and a `free` PR hash as they did before migration `job-kinds` (no stored review is voided).
+        let before = format!(
+            "{:x}",
+            Sha256::digest(
+                br#"{"jobs":[{"acceptance":["b"],"context":"c","goal":"g","key":"a","needs":[],"out_of_scope":[],"pr":"web","tier":"S2","title":"Title a","touches":["a"]}],"prs":[{"base":"main","key":"web","needs":[],"repo":"/r/web"}]}"#
+            )
+        );
+        assert_eq!(of(&[job("a", "draft", &[])], &[pr("web", &[])]), before);
+
+        let mut docs = job("a", "draft", &[]);
+        docs.kind = "docs".into();
+        let docs_fp = of(&[docs.clone()], &[pr("web", &[])]);
+        assert_ne!(docs_fp, before, "a kind that is not work counts");
+        let expected = format!(
+            "{:x}",
+            Sha256::digest(
+                br#"{"jobs":[{"acceptance":["b"],"context":"c","goal":"g","key":"a","kind":"docs","needs":[],"out_of_scope":[],"pr":"web","tier":"S2","title":"Title a","touches":["a"]}],"prs":[{"base":"main","key":"web","needs":[],"repo":"/r/web"}]}"#
+            )
+        );
+        assert_eq!(docs_fp, expected);
+
+        let mut test = job("a", "draft", &[]);
+        test.kind = "test".into();
+        test.tests = Some(json!(["t::one"]));
+        test.test_files = Some(json!(["tests/t.rs"]));
+        let with_tests = of(&[test.clone()], &[pr("web", &[])]);
+        test.tests = Some(json!(["t::two"]));
+        assert_ne!(of(&[test.clone()], &[pr("web", &[])]), with_tests, "the named tests count");
+        test.tests = Some(json!(["t::one"]));
+        test.test_files = Some(json!(["tests/u.rs"]));
+        assert_ne!(of(&[test], &[pr("web", &[])]), with_tests, "so do the files that hold them");
+        let mut approved = job("a", "draft", &[]);
+        approved.kind = "impl".into();
+        let without = of(&[approved.clone()], &[]);
+        approved.test_approved = Some(json!(["tests/t.rs"]));
+        assert_eq!(of(&[approved], &[]), without, "test_approved is in no fingerprint");
+
+        let mut tdd = pr("web", &[]);
+        tdd.shape = "tdd".into();
+        let expected = format!(
+            "{:x}",
+            Sha256::digest(br#"{"jobs":[],"prs":[{"base":"main","key":"web","needs":[],"repo":"/r/web","shape":"tdd"}]}"#)
+        );
+        assert_eq!(of(&[], &[tdd.clone()]), expected);
+        assert_ne!(of(&[], &[tdd.clone()]), of(&[], &[pr("web", &[])]));
+        let mut docs_pr = tdd;
+        docs_pr.shape = "docs".into();
+        assert_ne!(of(&[], &[docs_pr]), expected, "the shape counts");
+    }
+
+    #[test]
+    fn the_locked_job_fingerprint_has_no_kind_tests_or_test_files() {
+        let mut plain = job("a", "queued", &["x"]);
+        let base = jobs::locked_fingerprint(&plain);
+        plain.kind = "test".into();
+        plain.tests = Some(json!(["t"]));
+        plain.test_files = Some(json!(["f"]));
+        assert_eq!(jobs::locked_fingerprint(&plain), base, "they are guarded by jobs_locked, not hashed (contract §2.3)");
+    }
 }
