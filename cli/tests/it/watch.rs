@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
-use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable, wait_until};
+use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
@@ -138,7 +138,7 @@ fn fx_bare(config_extra: &str) -> Fx {
         env.cpd_home().join("config.toml"),
         format!(
             "version = 1\nmachine = \"m1\"\n{config_extra}\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n\
-             [watch]\ntick_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+             [watch]\ntick_seconds = {TICK_SECONDS}\n[tmux]\nsocket = \"{}\"\n",
             env.tmux_socket()
         ),
     )
@@ -179,10 +179,6 @@ impl Fx {
 
     fn fixture(&self, sql: &str) {
         self.store().write("fixture", |tx| exec(tx, sql)).unwrap();
-    }
-
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
     }
 
     /// Job `key` of Plan `pay`, `queued` with its Locked-Job fingerprint, then
@@ -257,9 +253,10 @@ impl Fx {
         self.start_from(Path::new(CPD))
     }
 
-    /// `start` with the engine run from the binary at `exe`.
+    /// `start` with the engine run from the binary at `exe`; E5 polls every tick and the engine and its drivers look
+    /// every 50 ms ([`common::PLAN_POLLS`]).
     fn start_from(&self, exe: &Path) -> Engine {
-        self.start_with(exe, &[])
+        self.start_with(exe, &common::PLAN_POLLS)
     }
 
     /// `start_from` with the variables `vars` added to the engine's environment.
@@ -270,7 +267,7 @@ impl Fx {
         let engine = Engine { child: Some(child) };
         let pid = engine.pid();
         wait_until("watch-started", || {
-            self.query::<i64>(&format!(
+            self.env.query::<i64>(&format!(
                 "SELECT count(*) FROM events WHERE kind = 'watch-started' AND json_extract(data, '$.pid') = {pid}"
             )) == 1
         });
@@ -279,15 +276,13 @@ impl Fx {
 
     /// Every Event of `kind`, in order: `(plan, job, attempt, data)`.
     fn events(&self, kind: &str) -> Vec<(Option<String>, Option<String>, Option<String>, Value)> {
-        self.store()
-            .read(|conn| {
-                let mut stmt = conn.prepare("SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id")?;
-                let rows = stmt
-                    .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows.into_iter().map(|(p, j, a, d)| (p, j, a, serde_json::from_str(&d).unwrap())).collect())
-            })
-            .unwrap()
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT plan, job, attempt, data FROM events WHERE kind = ?1 ORDER BY id")?;
+            let rows = stmt
+                .query_map([kind], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, String>(3)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows.into_iter().map(|(p, j, a, d)| (p, j, a, serde_json::from_str(&d).unwrap())).collect())
+        })
     }
 
     fn count(&self, kind: &str) -> usize {
@@ -295,28 +290,24 @@ impl Fx {
     }
 
     fn texts(&self, kind: &str) -> Vec<String> {
-        self.store()
-            .read(|conn| {
-                let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
-                Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
-            })
-            .unwrap()
+        self.env.read(|conn| {
+            let mut stmt = conn.prepare("SELECT text FROM events WHERE kind = ?1 ORDER BY id")?;
+            Ok(stmt.query_map([kind], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
     }
 
     fn attempt(&self, id: &str) -> (String, Option<String>, Option<String>, Option<String>) {
-        self.store()
-            .read(|conn| {
-                Ok(conn.query_row(
-                    "SELECT status, outcome, cause, stop_request FROM attempts WHERE plan = 'pay' AND id = ?1",
-                    [id],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-                )?)
-            })
-            .unwrap()
+        self.env.read(|conn| {
+            Ok(conn.query_row(
+                "SELECT status, outcome, cause, stop_request FROM attempts WHERE plan = 'pay' AND id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?)
+        })
     }
 
     fn job_status(&self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
+        self.env.query(&format!("SELECT status FROM jobs WHERE plan = 'pay' AND key = '{key}'"))
     }
 }
 
@@ -569,7 +560,7 @@ fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
         ));
     }
     wait_until("@cpd_inbox red 2", || fx.option("@cpd_inbox") == "#[fg=red]inbox 2#[default]");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'job-stuck'"), 2);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'job-stuck'"), 2);
     assert_eq!(fx.option("@cpd_workers_width"), "46");
     engine.stop();
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
@@ -661,9 +652,9 @@ fn e1_expires_open_escalations_whose_asker_is_dead() {
         fx.events("escalation-expired"),
         [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"escalation": "api-a1-q1", "reason": "asker_dead"}))]
     );
-    let status = |id: &str| fx.query::<String>(&format!("SELECT status FROM escalations WHERE id = '{id}'"));
+    let status = |id: &str| fx.env.query::<String>(&format!("SELECT status FROM escalations WHERE id = '{id}'"));
     assert_eq!((status("api-a1-q1"), status("api-a1-q2")), ("expired".into(), "open".into()));
-    assert!(fx.query::<Option<String>>("SELECT expired_at FROM escalations WHERE id = 'api-a1-q1'").is_some());
+    assert!(fx.env.query::<Option<String>>("SELECT expired_at FROM escalations WHERE id = 'api-a1-q1'").is_some());
 }
 
 // ---------- E2 ----------
@@ -702,7 +693,6 @@ fn e2_removes_the_lock_of_a_dead_driver_it_ends_and_does_not_recreate_it() {
     let lock = |attempt: &str| fx.home().attempt_lock(&PlanId::parse(PLAN).unwrap(), &AttemptId::parse(attempt).unwrap());
     assert!(lock("api-a1").exists() && !lock("web-a1").exists());
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("both ended", || fx.attempt("api-a1").0 == "ended" && fx.attempt("web-a1").0 == "ended");
     // The lock goes with the end, and the next ticks do not bring it back.
@@ -730,7 +720,7 @@ fn e2_climbs_the_ladder_for_a_dead_driver() {
     let retry = fx.events("attempt-retry");
     assert_eq!(retry.len(), 1);
     assert_eq!((&retry[0].3["cause"], &retry[0].3["next_tier"]), (&json!("crashed"), &json!("S3")));
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE job = 'api'"), 1);
 }
 
 #[test]
@@ -756,7 +746,6 @@ fn e2_asks_live_drivers_to_stop_on_timeout_or_cancel_with_escalations_pausing_th
     fx.add_running_since("waited", "running", &ago(40), Some(&ago(1)));
     let _waited = fx.live_driver("waited-a1");
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("stop requests", || fx.attempt("late-a1").3.is_some() && fx.attempt("gone-a1").3.is_some());
     // One more tick, for the Attempts it must leave alone.
@@ -925,16 +914,13 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
                   ('s-shut', 'lead', 'ctx', 'pay', 'Shut', '/', 'O3', '%998', 'stopped', NULL, 't', 't');"
     ));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("three without a pane", || fx.count("session-moved") == 3);
     fx.env.wait_whole_ticks(1);
     engine.stop();
 
     let row = |id: &str| {
-        fx.store()
-            .read(|c| Ok(c.query_row("SELECT state, tmux_pane, state_at FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
-            .unwrap()
+        fx.env.read(|c| Ok(c.query_row("SELECT state, tmux_pane, state_at FROM sessions WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?))
     };
     let rows: Vec<(String, Option<String>, String)> = ["s-live", "s-dead", "s-gone", "s-waiting", "s-shut"].iter().map(|id| row(id)).collect();
     let (states, panes): (Vec<&str>, Vec<Option<&str>>) = rows.iter().map(|r| (r.0.as_str(), r.1.as_deref())).unzip();
@@ -942,7 +928,7 @@ fn e2_stops_sessions_whose_pane_is_dead_or_gone() {
     assert_eq!(panes, [Some(live.as_str()), None, None, Some(waiting.as_str()), None]);
     // Already stopped: its state did not change, so neither did state_at.
     assert_eq!(rows[4].2, "t");
-    assert_eq!(fx.query::<Option<String>>("SELECT state_label FROM sessions WHERE id = 's-dead'"), None);
+    assert_eq!(fx.env.query::<Option<String>>("SELECT state_label FROM sessions WHERE id = 's-dead'"), None);
     let events = fx.events("session-state");
     assert_eq!(events.len(), 2);
     assert!(events.contains(&(Some("pay".into()), None, None, json!({"from": "blocked", "to": "stopped", "label": null}))), "{events:?}");
@@ -977,14 +963,13 @@ fn e2_skips_a_pane_with_an_unknown_view_and_reports_no_error() {
            VALUES ('s-gone', 'lead', 'ctx', NULL, 'Gone', '/', 'O3', '%999', 'working', 't', 't');",
     );
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("the missing pane's Session stopped", || fx.count("session-moved") == 1);
     fx.env.wait_whole_ticks(2);
     let out = engine.stop();
 
     assert_eq!(fx.count("error"), 0, "{:?}", fx.events("error"));
-    assert_eq!(fx.query::<String>("SELECT state FROM sessions WHERE id = 's-gone'"), "stopped");
+    assert_eq!(fx.env.query::<String>("SELECT state FROM sessions WHERE id = 's-gone'"), "stopped");
     assert_eq!(out.stderr.matches("hologram").count(), 1, "logged once: {out:?}");
 }
 
@@ -1007,15 +992,11 @@ fn e3_one_tick_schedules_a_ready_job_within_the_concurrency() {
 
     let started = fx.events("attempt-started");
     assert_eq!(started, [(Some("pay".into()), Some("api".into()), Some("api-a1".into()), json!({"number": 1, "tier": "S2", "origin": "ladder"}))]);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 1);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 1);
     assert_eq!((fx.job_status("web"), fx.job_status("ui")), ("queued".into(), "queued".into()));
-    assert!(fx.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some());
+    assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some());
     // Its driver runs detached; the Worker exits at once, so it ends crashed.
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while fx.attempt("api-a1").0 != "ended" {
-        assert!(Instant::now() < deadline, "the driver never ended api-a1");
-        std::thread::sleep(Duration::from_millis(200));
-    }
+    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
 }
 
 /// SQL that marks Job `key` urgent, for `add_job`'s `then`.
@@ -1039,7 +1020,6 @@ fn e3_starts_an_urgent_job_before_an_older_one() {
     fx.add_job("old", &[], "");
     fx.add_job("hot", &[], &urgent("hot"));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("attempt-started", || fx.count("attempt-started") >= 1);
     // Two more ticks: the one slot is taken, so the older Job still waits.
@@ -1063,7 +1043,6 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     fx.add_job("hot1", &[], &urgent("hot1"));
     fx.add_job("hot2", &[], &urgent("hot2"));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("attempt-started", || fx.count("attempt-started") >= 1);
     // Two more ticks: the second urgent Job and the older one still wait.
@@ -1073,7 +1052,7 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     // The first urgent Job by `seq` started (running Attempts: 2 = concurrency + 1); the second urgent one and the older Job wait.
     let started: Vec<Option<String>> = fx.events("attempt-started").into_iter().map(|e| e.1).collect();
     assert_eq!(started, [Some("hot1".to_owned())]);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status <> 'ended'"), 2);
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
 }
 
@@ -1131,12 +1110,8 @@ fn e3_starts_the_driver_after_the_engines_binary_is_replaced() {
 
     wait_until("attempt-started", || fx.count("attempt-started") == 1);
     engine.stop();
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while fx.attempt("api-a1").0 != "ended" {
-        assert!(Instant::now() < deadline, "the driver never ended api-a1");
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    assert!(fx.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some(), "the driver was not started");
+    wait_until_for("the driver to end api-a1", Duration::from_secs(60), || fx.attempt("api-a1").0 == "ended");
+    assert!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'api-a1'").is_some(), "the driver was not started");
     let texts = fx.texts("attempt-ended");
     assert!(texts.iter().all(|t| !t.contains("cannot run") && !t.contains("deleted")), "{texts:?}");
     assert!(!fx.texts("error").iter().any(|t| t.contains("deleted")));
@@ -1162,7 +1137,6 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     let fx = fx("");
     fx.add_job("api", &[], &format!("UPDATE jobs SET fingerprint = '{}' WHERE key = 'api';", "0".repeat(64)));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("error", || fx.count("error") == 1);
     fx.env.wait_whole_ticks(2);
@@ -1174,36 +1148,35 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     assert_eq!((plan.as_deref(), job.as_deref(), attempt.as_deref()), (Some("pay"), Some("api"), None));
     assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("locked_job_tampered")));
     assert!(fx.texts("error")[0].ends_with("See: cpd job show api --plan pay"), "{:?}", fx.texts("error"));
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0);
     assert_eq!(fx.job_status("api"), "queued");
 }
 
 /// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt
 /// ends `failed` / `crashed` with `driver_pid` null. No Tier is climbed, no try is used up (`retry_cap = 0`
-/// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure.
+/// would fail the Job at the first), and E3 waits `2^k` seconds after the k-th failure: `2^k` units, the unit a
+/// tenth of a second here (`CPD_TEST_BACKOFF_UNIT`, contract §1.2 "Test overrides"), over 0.1 s ticks.
 #[test]
 fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() {
     let fx = fx("concurrency = 1\nretry_cap = 0");
+    let unit = Duration::from_millis(50);
     let installed = fx.env.root().join("cpd-installed");
     copy_executable(CPD, &installed);
-    let engine = fx.start_from(&installed);
+    let engine = fx.start_with(&installed, &[("CPD_TEST_BACKOFF_UNIT", "0.05")]);
     fs::remove_file(&installed).unwrap();
     fx.add_job("api", &[], "");
 
-    wait_until("three spawn failures", || fx.query::<i64>("SELECT count(*) FROM attempts WHERE status = 'ended'") >= 3);
+    wait_until("three spawn failures", || fx.env.query::<i64>("SELECT count(*) FROM attempts WHERE status = 'ended'") >= 3);
     engine.stop();
 
     assert_ne!(fx.job_status("api"), "failed");
     assert_eq!(fx.count("job-failed"), 0);
-    let attempts: Vec<(String, String, String, Option<i64>, String, String)> = fx
-        .store()
-        .read(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, tier, origin, driver_pid, started_at, ended_at FROM attempts WHERE job = 'api' AND status = 'ended' ORDER BY number",
-            )?;
-            Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?)
-        })
-        .unwrap();
+    let attempts: Vec<(String, String, String, Option<i64>, String, String)> = fx.env.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, tier, origin, driver_pid, started_at, ended_at FROM attempts WHERE job = 'api' AND status = 'ended' ORDER BY number",
+        )?;
+        Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?)
+        });
     assert!(attempts.len() >= 3, "{attempts:?}");
     for (id, tier, origin, pid, _, _) in &attempts {
         assert_eq!((tier.as_str(), origin.as_str(), *pid), ("S2", "ladder", None), "{id}");
@@ -1213,11 +1186,11 @@ fn e3_spawn_failures_requeue_at_the_same_tier_never_fail_the_job_and_back_off() 
         let retry = &fx.events("attempt-retry")[i];
         assert_eq!((&retry.3["cause"], &retry.3["next_tier"]), (&json!("crashed"), &json!("S2")));
     }
-    // After the k-th failure the next start waits 2^k seconds.
+    // After the k-th failure the next start waits 2^k units.
     for (k, pair) in attempts.windows(2).enumerate() {
         let waited = parse_time(&pair[1].4) - parse_time(&pair[0].5);
         let k = (k + 1) as u32;
-        assert!(waited >= time::Duration::seconds(2i64.pow(k)), "after failure {k}: waited {waited}");
+        assert!(waited >= unit * 2u32.pow(k), "after failure {k}: waited {waited}");
     }
 }
 
@@ -1229,12 +1202,11 @@ fn e3_does_not_start_a_job_in_its_backoff() {
     let attempts: String = (1..=9).map(|n| ended_attempt("api", n, "S2", None, &now)).collect();
     fx.add_job("api", &[], &attempts);
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     fx.env.wait_whole_ticks(3);
     engine.stop();
 
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 9);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 9);
     assert_eq!(fx.job_status("api"), "queued");
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
@@ -1248,10 +1220,10 @@ fn e2_counts_only_attempts_whose_driver_started() {
     fx.add_running("busy", "running", &ago(1));
     let running = |key: &str, number: u32, tier: &str| {
         format!(
-            "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';
-             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
-               VALUES ('pay', '{key}-a{number}', '{key}', {number}, '{tier}', 'ladder', 'running', 'cpd/pay--{key}-a{number}', '/w', '{}', 4242);",
-            ago(1)
+        "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+           VALUES ('pay', '{key}-a{number}', '{key}', {number}, '{tier}', 'ladder', 'running', 'cpd/pay--{key}-a{number}', '/w', '{}', 4242);",
+        ago(1)
         )
     };
     // `web`: spawn failure, then a started driver that died: one try used, the ladder climbs.
@@ -1304,7 +1276,7 @@ fn e2_ends_a_driver_ended_by_the_store_at_the_same_tier_uncounted_and_other_cras
     // `web-a3`: same Tier S2, not counted, and the marker went with the Attempt.
     assert_eq!(fx.job_status("web"), "queued");
     assert_eq!(fx.attempt("web-a3"), ("ended".into(), Some("failed".into()), Some("crashed".into()), None));
-    assert_eq!(fx.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'web-a3'"), None);
+    assert_eq!(fx.env.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'web-a3'"), None);
     assert!(!fx.home().attempt_infra(&plan, &AttemptId::parse("web-a3").unwrap()).exists());
     let retry: Vec<_> = fx.events("attempt-retry").into_iter().filter(|e| e.1.as_deref() == Some("web")).collect();
     assert_eq!((retry.len(), &retry[0].3["next_tier"]), (1, &json!("S2")), "{retry:?}");
@@ -1342,7 +1314,7 @@ const SHORT_BUSY: &str = "[timeouts]\nstore_busy_ms = 200\n";
 
 /// `cpd watch` started and not waited for.
 fn spawn_engine(fx: &Fx) -> Engine {
-    let child = fx.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    let child = fx.env.command(CPD).arg("watch").envs([PR_POLL_EVERY_TICK]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
     Engine { child: Some(child) }
 }
 
@@ -1351,9 +1323,13 @@ fn spawn_engine(fx: &Fx) -> Engine {
 #[test]
 fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_event() {
     let fx = fx(SHORT_BUSY);
-    // E5's poll is slow, and says when it runs: the engine is then in its first tick, past E4.
-    let marker = fx.env.root().join("gh-ran");
-    fx.env.fake_gh(&format!("touch '{}'; sleep 1.5; echo '{EMPTY_SEARCH}'", marker.display()));
+    // E5's poll says when it runs, and lasts until the test lets it end (`go`): the engine is then in its first tick, past E4.
+    let (marker, go) = (fx.env.root().join("gh-ran"), fx.env.root().join("gh-go"));
+    fx.env.fake_gh(&format!(
+        "touch '{}'; until [ -e '{go}' ]; do sleep 0.01; done; echo '{EMPTY_SEARCH}'",
+        marker.display(),
+        go = go.display()
+    ));
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api';");
 
     // The start: `watch-started` waits for the lock.
@@ -1371,6 +1347,7 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
     fx.fixture("UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     let busy = watch_log(&fx).matches("store_busy: ").count();
     let held = hold_write_lock(&fx);
+    fs::write(&go, "").unwrap();
     wait_until("the engine to meet the lock", || watch_log(&fx).matches("store_busy: ").count() > busy);
     assert_eq!(fx.count("all-merged"), 0);
     held.release();
@@ -1416,7 +1393,6 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
     fx.add_job("web", &[], "UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'web';");
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("all-merged", || fx.count("all-merged") == 1);
     fx.env.wait_whole_ticks(2);
@@ -1426,7 +1402,7 @@ fn e4_appends_all_merged_once_when_no_job_is_left_to_run() {
     // The text the Lead is steered with (hs-d334): open now, waiting for nothing.
     assert!(fx.texts("all-merged")[0].starts_with("No Job of PR repo of Plan pay is draft, queued or running. Open the pull request now: it waits for no slot and no other work."));
     assert!(fx.texts("all-merged")[0].ends_with("Next: cpd pr open --pr repo --plan pay"));
-    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_some());
+    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_some());
 }
 
 #[test]
@@ -1434,14 +1410,13 @@ fn e4_sends_all_merged_again_after_a_job_is_appended_and_merged() {
     let fx = fx("");
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     wait_until("all-merged", || fx.count("all-merged") == 1);
     let spec = fx.env.root().join("late-spec.json");
     fs::write(&spec, json!({"goal": "Do it.", "context": "Because.", "touches": ["late.txt"], "acceptance": ["ok"], "out_of_scope": []}).to_string()).unwrap();
     let added = fx.env.command(CPD).args(["job", "add", "late", "--title", "Late", "--tier", "S2", "--spec"]).arg(&spec).args(["--plan", "pay"]).output().unwrap();
     assert!(added.status.success(), "{}", String::from_utf8_lossy(&added.stdout));
-    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
+    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
     // The Job merges (set directly; no Worker runs here).
     fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'late'; UPDATE jobs SET status = 'merged', merged_sha = 'def' WHERE key = 'late';");
     wait_until("second all-merged", || fx.count("all-merged") == 2);
@@ -1459,7 +1434,6 @@ fn e4_waits_while_a_job_is_queued() {
     fx.add_running("busy", "running", &ago(1));
     fx.add_job("api", &[], "UPDATE jobs SET status = 'running' WHERE key = 'api'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'api';");
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     fx.env.wait_whole_ticks(2);
     engine.stop();
@@ -1483,14 +1457,13 @@ fn e3_never_starts_a_draft_and_e4_waits_while_one_remains() {
     let added = fx.env.cpd(&["job", "add", "later", "--title", "Later", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--draft", "--plan", "pay"]).ok();
     assert_eq!((&added["job"]["status"], &added["job"]["appended"]), (&json!("draft"), &json!(true)));
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     fx.env.wait_whole_ticks(3);
     engine.stop();
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0, "a draft never gets an Attempt");
     assert_eq!(fx.job_status("later"), "draft");
     assert_eq!(fx.count("all-merged"), 0, "the PR waits for its draft");
-    assert!(fx.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
+    assert!(fx.env.query::<Option<String>>("SELECT all_merged_at FROM prs WHERE plan = 'pay'").is_none());
 
     fx.env.cpd(&["job", "cancel", "later", "--reason", "Not needed.", "--plan", "pay"]).ok();
     let engine = fx.start();
@@ -1702,7 +1675,7 @@ fn in_pr(fx: &Fx) {
          INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
            VALUES ('acme/pay', 7, 'https://github.com/acme/pay/pull/7', 'Pay', 0, 'open', 'none', 'none', 't', 't');
          UPDATE prs SET status = 'open', pr_number = 7, pr_url = 'https://github.com/acme/pay/pull/7', pr_opened_at = 't',
-                pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay';",
+            pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay';",
     );
 }
 
@@ -1714,10 +1687,21 @@ fn search_reply(remaining: u32, reset_at: &str) -> String {
 /// The lookup of PR 7 (`in_pr`) that a poll makes when the search does not list it: still open, so nothing changes.
 const LOOKUP_OPEN: &str = r#"{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"acme/pay"},"number":7,"url":"https://github.com/acme/pay/pull/7","title":"Pay","isDraft":false,"state":"OPEN","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{"nodes":[]}}}}}"#;
 
-/// Sets `pr_poll_seconds` (`tick_seconds` is one second).
+/// Sets `tick_seconds` (else [`TICK_SECONDS`]).
+fn tick_every(fx: &Fx, seconds: &str) {
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    let tick = format!("tick_seconds = {TICK_SECONDS}\n");
+    assert!(text.contains(&tick), "{text}");
+    fs::write(&config, text.replace(&tick, &format!("tick_seconds = {seconds}\n"))).unwrap();
+}
+
+/// Sets `pr_poll_seconds`, which E5 waits after a poll ended when no test override replaces it (`start_with` without
+/// [`PR_POLL_EVERY_TICK`]).
 fn poll_every(fx: &Fx, seconds: u32) {
     let config = fx.env.cpd_home().join("config.toml");
-    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", &format!("tick_seconds = 1\npr_poll_seconds = {seconds}\n"))).unwrap();
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text.replace("[watch]\n", &format!("[watch]\npr_poll_seconds = {seconds}\n"))).unwrap();
 }
 
 /// Milliseconds since the epoch, as the fake `gh` writes them.
@@ -1725,27 +1709,20 @@ fn epoch_ms(at: &str) -> i128 {
     OffsetDateTime::parse(at, &time::format_description::well_known::Rfc3339).unwrap().unix_timestamp_nanos() / 1_000_000
 }
 
-/// `seconds` from now, as `rate_limit.reset_at` is written.
-fn in_seconds(seconds: i64) -> String {
-    (OffsetDateTime::now_utc() + time::Duration::seconds(seconds))
-        .format(format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"))
-        .unwrap()
-}
-
 #[test]
 fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_plans() {
     // No Plan at all: E5 polls anyway.
     let fx = fx_bare("");
-    poll_every(&fx, 2);
     let log = fx.env.root().join("poll.log");
-    // A poll that lasts a second, so that "after the end" differs from "after the start", and that notes both.
+    // A poll that lasts 0.2 s, so that "after the end" differs from "after the start", and that notes both.
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo "end $(date +%s%N)" >> '{log}'; echo '{}'; exit 0"#,
+        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.2; echo "end $(date +%s%N)" >> '{log}'; echo '{}'; exit 0"#,
         search_reply(4987, "2099-01-01T00:00:00Z"),
         log = log.display()
     ));
 
-    let engine = fx.start();
+    // The poll period, `pr_poll_seconds`, is 0.3 s here (its test override): longer than a poll and than a tick.
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_PR_POLL", "0.3")]);
     wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("end").count()) >= 3);
     engine.stop();
 
@@ -1754,64 +1731,65 @@ fn e5_polls_every_pr_poll_seconds_after_the_previous_poll_ended_whatever_the_pla
         .unwrap()
         .lines()
         .map(|l| {
-            let (what, ns) = l.split_once(' ').unwrap();
-            (what.to_owned(), ns.parse::<i128>().unwrap() / 1_000_000)
-        })
+        let (what, ns) = l.split_once(' ').unwrap();
+        (what.to_owned(), ns.parse::<i128>().unwrap() / 1_000_000)
+    })
         .collect();
     for (i, pair) in notes.windows(2).enumerate() {
         match (i % 2, pair[0].0.as_str(), pair[1].0.as_str()) {
-            (0, "start", "end") => assert!(pair[1].1 - pair[0].1 >= 1000, "{notes:?}"),
-            (1, "end", "start") => assert!(pair[1].1 - pair[0].1 >= 2000, "the next poll starts 2 s after the end of the last: {notes:?}"),
+            (0, "start", "end") => assert!(pair[1].1 - pair[0].1 >= 200, "{notes:?}"),
+            (1, "end", "start") => assert!(pair[1].1 - pair[0].1 >= 300, "the next poll starts 0.3 s after the end of the last: {notes:?}"),
             _ => panic!("polls overlap or are out of order: {notes:?}"),
         }
     }
     assert_eq!(fx.count("error"), 0);
 }
 
-/// engine-W9: a poll of 1 s with a tick of 5 s and `pr_poll_seconds = 2` runs every 3 s (end + 2 s), not at every other tick.
+/// engine-W9: a poll of 0.1 s with a tick of 5 s and a poll period (`pr_poll_seconds`, its test override) of 0.2 s runs
+/// every 0.3 s (end + 0.2 s), not at the next tick.
 #[test]
 fn e5_polls_at_its_due_time_not_at_the_next_tick() {
     let fx = fx_bare("");
-    poll_every(&fx, 2);
-    let config = fx.env.cpd_home().join("config.toml");
-    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 5\n")).unwrap();
+    tick_every(&fx, "5");
     let log = fx.env.root().join("poll.log");
     fx.env.fake_gh(&format!(
-        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 1; echo '{}'; exit 0"#,
+        r#"echo "start $(date +%s%N)" >> '{log}'; sleep 0.1; echo '{}'; exit 0"#,
         search_reply(4987, "2099-01-01T00:00:00Z"),
         log = log.display()
     ));
 
-    let engine = fx.start();
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_PR_POLL", "0.2")]);
     wait_until("three polls", || fs::read_to_string(&log).map_or(0, |t| t.matches("start").count()) >= 3);
     engine.stop();
 
     let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.split_once(' ').unwrap().1.parse::<i128>().unwrap() / 1_000_000).collect();
     for pair in starts.windows(2) {
         let gap = pair[1] - pair[0];
-        assert!((2900..4000).contains(&gap), "a poll every 3 s (1 s poll + 2 s), not every 5 s tick: {starts:?}");
+        assert!((300..4000).contains(&gap), "a poll every 0.3 s (0.1 s poll + 0.2 s), not every 5 s tick: {starts:?}");
     }
     assert_eq!(fx.count("error"), 0);
 }
 
+/// The one test of `pr_poll_seconds` itself, the config key (no test override): whole seconds, so it waits one.
 #[test]
 fn e5_polls_with_a_plan_in_pr_too_and_does_not_poll_more_often_than_every_pr_poll_seconds() {
     let fx = fx("");
     in_pr(&fx);
-    poll_every(&fx, 3);
+    poll_every(&fx, 1);
     fx.env.fake_gh(&format!(
         "case \"$4\" in *'search(type'*) echo '{}' ;; *) echo '{LOOKUP_OPEN}' ;; esac",
         search_reply(4987, "2099-01-01T00:00:00Z")
     ));
 
-    let engine = fx.start();
+    let engine = fx.start_with(Path::new(CPD), &[]);
     wait_until("the first poll", || fx.env.poll_searches() >= 1);
     let first = Instant::now();
     wait_until("the second poll", || fx.env.poll_searches() >= 2);
     let gap = first.elapsed();
     engine.stop();
 
-    assert!(gap >= Duration::from_millis(1500), "one poll per pr_poll_seconds, not one per tick: {gap:?}");
+    // Ten ticks of 0.1 s to a poll: a poll per tick would come within a few of them.
+    assert!(gap >= Duration::from_millis(500), "one poll per pr_poll_seconds (1 s), not one per tick: {gap:?}");
     assert_eq!(fx.count("error"), 0);
 }
 
@@ -1820,7 +1798,6 @@ fn e5_reports_a_failing_poll_once() {
     let fx = fx("");
     in_pr(&fx);
     fx.env.fake_gh("echo 'gh: boom' >&2; exit 1");
-    poll_every(&fx, 1);
 
     let engine = fx.start();
     wait_until("three polls", || fx.env.calls("gh").len() >= 3);
@@ -1840,15 +1817,15 @@ fn running(pid: i32) -> bool {
 
 /// engine-W4: a `cpd pr poll` child that hangs (its `gh` sleeps, and so does a child of
 /// that `gh`) is killed at its deadline with its whole process group, and E5 reports
-/// `tool_timeout`. The deadline is shortened to 2 s by `CPD_TEST_DEADLINE_CPD`, which a
-/// debug build reads.
+/// `tool_timeout`. The deadline is shortened to 0.5 s by `CPD_TEST_DEADLINE_CPD`, which a
+/// debug build reads (contract §1.2 "Test overrides").
 #[test]
 fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() {
     let fx = fx_bare("");
     let pids = fx.env.root().join("gh.pids");
     fx.env.fake_gh(&format!("sleep {SLEEP_SECONDS} & echo \"$$ $!\" >> '{}'; wait", pids.display()));
 
-    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "2")]);
+    let engine = fx.start_with(Path::new(CPD), &[("CPD_TEST_DEADLINE_CPD", "0.5")]);
     wait_until("E5's tool_timeout", || fx.count("error") >= 1);
     engine.stop();
 
@@ -1856,7 +1833,7 @@ fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() 
     let data = &errors[0].3;
     assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tool_timeout")), "{errors:?}");
     let details = &data["details"];
-    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(2)), "{details}");
+    assert_eq!((&details["tool"], &details["deadline_seconds"]), (&json!("cpd"), &json!(0.5)), "{details}");
     assert_eq!(details["argv"], json!([CPD, "pr", "poll"]));
     for pid in fs::read_to_string(&pids).unwrap().split_whitespace() {
         let pid: i32 = pid.parse().unwrap();
@@ -1867,23 +1844,29 @@ fn e5_kills_a_hung_poll_child_and_its_group_at_the_deadline_with_tool_timeout() 
 #[test]
 fn e5_pauses_below_100_requests_until_reset_and_reports_one_gh_rate_limited() {
     let fx = fx("");
-    poll_every(&fx, 1);
-    let reset_at = in_seconds(4);
     let log = fx.env.root().join("poll.log");
     let first = fx.env.root().join("first-poll-done");
-    // The first poll leaves 50 requests until `reset_at`; the next one, which E5 must not run before that, 4987.
+    // The first poll leaves 50 requests until `reset_at`, 0.5 s after it (written to `reset-at`); the next one, which
+    // E5 must not run before that (it polls every tick otherwise), 4987.
+    let reset_file = fx.env.root().join("reset-at");
     fx.env.fake_gh(&format!(
         r#"echo "start $(date +%s%N)" >> '{log}'
-if [ ! -e '{first}' ]; then touch '{first}'; echo '{low}'; else echo '{ok}'; fi; exit 0"#,
+if [ ! -e '{first}' ]; then
+  touch '{first}'; ms=$(( $(date +%s%N) / 1000000 + 500 ))
+  reset=$(date -u -d "@$((ms / 1000)).$(printf %03d $((ms % 1000)))" +%Y-%m-%dT%H:%M:%S.%3NZ); printf %s "$reset" > '{reset_file}'
+  echo '{low}' | sed "s/RESET_AT/$reset/"
+else echo '{ok}'; fi; exit 0"#,
         log = log.display(),
         first = first.display(),
-        low = search_reply(50, &reset_at),
+        reset_file = reset_file.display(),
+        low = search_reply(50, "RESET_AT"),
         ok = search_reply(4987, "2099-01-01T00:00:00Z"),
     ));
 
     let engine = fx.start();
     wait_until("the second poll", || fx.env.calls("gh").len() >= 2);
     engine.stop();
+    let reset_at = fs::read_to_string(&reset_file).unwrap();
 
     // The second poll started at or after `reset_at`: the ticks in between ran no poll.
     let starts: Vec<i128> = fs::read_to_string(&log).unwrap().lines().map(|l| l.strip_prefix("start ").unwrap().parse::<i128>().unwrap() / 1_000_000).collect();
@@ -1902,8 +1885,7 @@ if [ ! -e '{first}' ]; then touch '{first}'; echo '{low}'; else echo '{ok}'; fi;
 fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_same_tick() {
     let fx = fx("");
     // One tick only: whatever happens after the first poll happens in that tick.
-    let config = fx.env.cpd_home().join("config.toml");
-    fs::write(&config, fs::read_to_string(&config).unwrap().replace("tick_seconds = 1\n", "tick_seconds = 600\n")).unwrap();
+    tick_every(&fx, "600");
     // The clean-up of the merged `repo` keeps a Lead worktree with commits not on origin (and raises an `error`): give
     // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
     let origin = fx.env.root().join("repos/origin.git");
@@ -1930,9 +1912,9 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     wait_until("E7 to start web", || fx.count("pr-started") == 1);
     engine.stop();
 
-    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
-    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
-    assert!(fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'repo'"), "merged");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "dispatch");
+    assert!(fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.env.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
     assert!(!fx.lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
     assert_eq!(fx.count("error"), 0);
 }
@@ -2013,7 +1995,7 @@ impl Titles {
             ago(1)
         ));
         wait_until("the escalation expired", || {
-            self.fx.query::<String>(&format!("SELECT status FROM escalations WHERE id = 'api-a1-q{n}'")) == "expired"
+            self.fx.env.query::<String>(&format!("SELECT status FROM escalations WHERE id = 'api-a1-q{n}'")) == "expired"
         });
     }
 
@@ -2069,7 +2051,7 @@ fn e10_retitles_an_idle_session_whose_turn_ended_after_its_title_and_no_other() 
     assert_eq!(t.fx.env.calls("pi").len(), 2, "no Session is retitled twice: the new title is newer than its turn");
     let titles: Vec<String> = ["due-manager", "due-untitled", "throttled"]
         .iter()
-        .map(|id| t.fx.query(&format!("SELECT title FROM sessions WHERE id = '{id}'")))
+        .map(|id| t.fx.env.query(&format!("SELECT title FROM sessions WHERE id = '{id}'")))
         .collect();
     assert_eq!(titles, ["Auxiliary agent titles", "Auxiliary agent titles", "Old title"]);
     assert_eq!(t.fx.count("error"), 0);
@@ -2155,10 +2137,10 @@ fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
     assert_eq!(data["details"]["session"], "due");
     assert!(data["details"]["tail"].as_str().unwrap().contains("pi: boom"), "{data}");
     assert!(data["details"]["log"].as_str().unwrap().ends_with("run/titles/due.log"), "{data}");
-    assert_eq!(t.fx.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
-    assert_eq!(t.fx.query::<Option<String>>("SELECT context FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.fx.env.query::<Option<String>>("SELECT context FROM events WHERE kind = 'error'"), None);
     assert_eq!(t.retitled(), Vec::<String>::new());
-    assert_eq!(t.fx.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Old title");
+    assert_eq!(t.fx.env.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Old title");
 }
 
 // ---------- E6 (removed) ----------
@@ -2178,13 +2160,12 @@ fn the_engine_neither_imports_nor_syncs_a_context_store() {
     // Not a store at all: E6 used to log and skip it; nothing looks now.
     fs::create_dir_all(fx.env.cpd_home().join("contexts/not a context")).unwrap();
 
-    poll_every(&fx, 1);
     let engine = fx.start();
     fx.env.wait_whole_ticks(2);
     let run = engine.stop();
 
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM context_records"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM contexts WHERE id = 'demo'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM context_records"), 0);
     assert_eq!(fx.count("context-created") + fx.count("context-record"), 0);
     assert_eq!(fx.count("error"), 0);
     assert!(store.join("context.json").is_file(), "the folder is left alone");
