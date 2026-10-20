@@ -241,8 +241,11 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
     let old_lead = fx.env.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay"]);
     // A `tmux` that holds the driver's `list-panes` of a `running` Attempt (A4's first look at the Worker's pane)
     // while `hold` exists: the Attempt can be made `merging`, and the new cpd
-    // installed, before the driver's next tick looks at the Attempt. `hold` exists before the dispatch, so the
-    // first look is held however soon after `running` it comes.
+    // installed, before the driver's tick looks at the Attempt. Only A4's first
+    // tick lists the panes: later ticks test the pane's pid with no fork
+    // (engine-F1). So `hold` exists before the dispatch (A2 and A3 list no
+    // panes), not written once the Attempt runs, a race with that first tick
+    // 0.5 s later that a loaded machine loses.
     let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .map(|dir| dir.join("tmux"))
         .find(|p| p.is_file())
@@ -265,6 +268,7 @@ fn a_driver_reloads_at_the_merging_safe_point_and_completes_the_merge() {
     fs::write(fx.path("hold"), "").unwrap();
     let pid = fx.dispatch();
     wait_until_for("the driver to be held", LONG, || fx.path("blocked").exists());
+    assert_eq!(fx.status(), "running", "held at A4, not before: {}", fx.log());
     fs::write(fx.path("go"), "").unwrap();
     wait_until_for("the Worker to submit", LONG, || fx.status() == "merging");
     assert!(fx.runs().is_empty() && !fx.log().contains(RELOAD));
