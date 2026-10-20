@@ -926,9 +926,11 @@ fn tui_view_routes_by_name() {
 fn status_line(env: &TestEnv, width: u16, needle: &str) -> (String, String) {
     let outer = Outer::attach(env, width, 20);
     let mut line = String::new();
-    wait_until(&format!("{needle} on the status line"), || {
+    // The status line fills the row (hs-d479): wait for the whole of it, since a client can show a row mid-draw
+    // (frames arrive in pieces, hs-n206) with the needle already there and the fill not yet.
+    wait_until(&format!("{needle} on a whole status line"), || {
         line = outer.screen().lines().nth(19).unwrap_or("").trim_end().to_owned();
-        line.contains(needle)
+        line.contains(needle) && line.chars().count() == usize::from(width)
     });
     let styled = outer.run(&["capture-pane", "-p", "-e", "-t", "o"]).lines().nth(19).unwrap_or("").to_owned();
     (line, styled)
