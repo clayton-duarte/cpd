@@ -1043,11 +1043,14 @@ mod tests {
         assert_eq!((rows[11].as_str(), rows[14].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), COLLAPSE), "{rows:?}");
     }
 
+    const UP_COLLAPSE: &str = "╰\u{F0063} collapse";
+    const DOWN_EXPAND: &str = "╰\u{F004B} expand";
+
     fn file_in(dir: &tempfile::TempDir) -> FoldsFile {
         FoldsFile::at(&cpd_core::home::CpdHome::resolve(Some(dir.path().into()), None).unwrap())
     }
 
-    /// The first row at or after row `from` that reads `row` (trimmed): the fold widget's `╰─ collapse` / `╰─ expand`
+    /// The first row at or after row `from` that reads `row` (trimmed): the fold widget's `╰󰁣 collapse` / `╰󰁋 expand`
     /// rows are the only ones that fold (rows.rs).
     fn row_of(rows: &[String], from: usize, row: &str) -> u16 {
         (from + rows[from..].iter().position(|r| r.trim() == row).unwrap_or_else(|| panic!("{row:?} in {rows:#?}"))) as u16
@@ -1059,10 +1062,12 @@ mod tests {
         let mut view = View::new(archived(), true);
         view.keep_folds(file_in(&dir));
         let rows = drawn(&mut view, 44, 30);
-        click(&mut view, 4, row_of(&rows, 1, "╰─ collapse")); // folds alpha: its rows go, the rows below move up
+        assert!(rows.iter().any(|r| r.contains(" old")), "alpha starts expanded, its archived rows show: {rows:#?}");
+        click(&mut view, 4, row_of(&rows, 1, UP_COLLAPSE)); // folds alpha: its archived rows go, its live rows stay
         let rows = drawn(&mut view, 44, 30);
+        assert!(rows.iter().any(|r| r.contains("ship·f-id")) && !rows.iter().any(|r| r.contains(" old")), "{rows:#?}");
         let zeta = rows.iter().position(|r| r.contains("zeta")).expect("the archived Context zeta, folded");
-        click(&mut view, 4, row_of(&rows, zeta, "╰─ expand")); // expands it
+        click(&mut view, 4, row_of(&rows, zeta, DOWN_EXPAND)); // expands it
         view.state.select(vec!["beta".into(), "rel".into()]);
         view.save_folds();
         let shown = drawn(&mut view, 44, 30);
@@ -1079,12 +1084,12 @@ mod tests {
     fn a_fold_is_written_once_and_nothing_is_written_until_one_changes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("run/tui/tree-folds.json");
-        let mut view = View::new(sample(), true);
+        let mut view = View::new(archived(), true);
         view.keep_folds(file_in(&dir));
-        let rows = drawn(&mut view, 44, 12);
+        let rows = drawn(&mut view, 44, 30);
         view.save_folds();
         assert!(!path.exists(), "a start with no fold writes nothing");
-        click(&mut view, 4, row_of(&rows, 1, "╰─ collapse"));
+        click(&mut view, 4, row_of(&rows, 1, UP_COLLAPSE));
         view.save_folds();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"collapsed":["alpha"],"expanded":[]}"#);
     }
@@ -1095,14 +1100,14 @@ mod tests {
         let path = dir.path().join("run/tui/tree-folds.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "{not json").unwrap();
-        let mut view = View::new(sample(), true);
+        let mut view = View::new(archived(), true);
         view.keep_folds(file_in(&dir));
         assert!(view.note.starts_with("fold state reset: ") && view.note.contains("tree-folds.json"), "{}", view.note);
         assert!(view.state.opened().contains(&vec!["alpha".to_owned()]), "the defaults");
-        let rows = drawn(&mut view, 44, 20);
+        let rows = drawn(&mut view, 44, 30);
         view.save_folds();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{not json", "nothing is written until a fold changes");
-        click(&mut view, 4, row_of(&rows, 1, "╰─ collapse"));
+        click(&mut view, 4, row_of(&rows, 1, UP_COLLAPSE));
         assert_eq!(view.note, "", "a click clears the note: it is said once");
         view.save_folds();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"collapsed":["alpha"],"expanded":[]}"#);

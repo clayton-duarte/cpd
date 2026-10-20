@@ -68,7 +68,7 @@ const BRANCH_WIDTH: usize = 2;
 
 /// The identifier of the toggle row of the Context whose own identifier is `id`; it is a sibling of it, so the rest of
 /// the path is the same.
-fn toggle_id(id: &str) -> Id {
+pub(super) fn toggle_id(id: &str) -> Id {
     format!("{TOGGLE}{id}")
 }
 
