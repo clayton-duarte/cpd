@@ -253,8 +253,7 @@ mod tests {
         assert_eq!(Kind::of(None), Some(Kind::Empty));
         let tree = archived();
         let kind = |p: &[&str]| Kind::of(rows::row(&tree, &path(p)));
-        assert_eq!(kind(&["alpha", rows::MORE]), None, "a `…` row has no menu");
-        assert_eq!(kind(&[rows::MORE]), None);
+        assert_eq!(kind(&["╰─ alpha"]), None, "a toggle row has no menu");
         assert_eq!(kind(&["alpha", "old"]), Some(Kind::Archived), "an archived Plan");
         assert_eq!(kind(&["alpha", "f-blocked"]), Some(Kind::Archived), "an archived fork of a live Plan");
         assert_eq!(kind(&["zeta"]), Some(Kind::Archived), "an archived Context");
