@@ -324,7 +324,7 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     // the selection crosses from one box down into the one below it
     tmux_out(&env, &["send-keys", "-t", &pane, "Right", "Right", "Down", "Enter"]);
     wait_until("the log line", || plan_log(&env).contains("c has not started yet"));
-    // the view draws no note: it redraws in the loop that logged, so a moment later the screen is the final one
+    // time-claim: the screen shows no note 500 ms after the log line; the view redraws in the loop that logged, so by then the screen is the final one
     std::thread::sleep(std::time::Duration::from_millis(500));
     let after = screen_when(&env, &pane, "the chart", |s| s.len() > 8);
     assert!(!after.iter().any(|l| l.contains("has not started yet")), "{}", after.join("\n"));
