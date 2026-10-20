@@ -337,9 +337,7 @@ impl View {
         }
         if let Some(menu) = self.menu.as_mut() {
             // an open menu takes every click: a left click picks, any button outside closes
-            let MouseEventKind::Down(button) = m.kind else { return Effect::None };
-            return match menu.click(self.pane, at) {
-                menu::Outcome::Pick(_) if button != MouseButton::Left => Effect::None,
+            return match menu.mouse(self.pane, m) {
                 menu::Outcome::Pick(item) => self.pick(item),
                 menu::Outcome::Close => {
                     self.menu = None;
