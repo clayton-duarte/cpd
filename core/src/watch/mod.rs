@@ -1,5 +1,5 @@
 //! The engine, `cpd watch` (contract §3.7, §6.6; commands.md §12): one per
-//! machine, running E1–E5 and E7–E9 (E6 was removed) every `tick_seconds` under `locks/watch.lock`.
+//! machine, running E1–E5 and E7–E10 (E6 was removed) every `tick_seconds` under `locks/watch.lock`.
 //!
 //! - [`engine`]: the loop, its signals, `watch-started` and `watch-stopped`, and E7
 //!   (the PR start, which calls `pr::start`);
@@ -25,6 +25,7 @@ mod pr;
 mod report;
 pub mod restart;
 mod schedule;
+pub mod team;
 mod workers;
 
 use crate::error::CpdError;
