@@ -704,7 +704,8 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     env.tmux(&["send-keys", "-t", &pane, "Enter"]);
     wait_until("the resume", || !pi_calls_with(&env, "--session").is_empty());
     let resume = &pi_calls_with(&env, "--session")[0];
-    assert_eq!(resume[..2], ["--session".to_owned(), fork_file]);
+    // hs-d506: a resume names the row's Tier's model (`--model`) before the file.
+    assert_eq!(resume[..4], ["--model".to_owned(), "github-copilot/claude-opus-5.5:high".to_owned(), "--session".to_owned(), fork_file]);
     assert!(!resume.iter().any(|a| a == "--fork" || a == "--"), "{resume:?}");
 }
 
