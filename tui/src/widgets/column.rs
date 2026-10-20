@@ -11,6 +11,7 @@ use ratatui::widgets::{Clear, Paragraph};
 
 use crate::link;
 use crate::palette::{self, Meaning};
+use crate::section;
 use crate::read::{OpenPr, PrState, ReviewDecision};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
@@ -121,22 +122,8 @@ fn pr_lines(pr: &OpenPr, width: usize) -> [Line<'static>; 2] {
     [first.patch_style(style), second.patch_style(style)]
 }
 
-/// A section header, one line: `──`, then ` <title> ` as a grey reversed block (not bold), then `─` to the right edge, all in
-/// the Nothing colour. A title wider than `width` is cut; the line never wraps.
-pub(crate) fn section_header(title: &str, width: usize) -> Line<'static> {
-    let grey = palette::fg(Meaning::Nothing);
-    let lead = width.min(2);
-    let block: String = format!(" {title} ").chars().take(width - lead).collect();
-    let rest = width - lead - block.chars().count();
-    Line::from(vec![
-        Span::styled("─".repeat(lead), grey),
-        Span::styled(block, grey.add_modifier(Modifier::REVERSED)),
-        Span::styled("─".repeat(rest), grey),
-    ])
-}
-
-fn render_header(f: &mut Frame, area: Rect, title: &str) {
-    f.render_widget(Paragraph::new(section_header(title, usize::from(area.width))), area);
+fn render_header(f: &mut Frame, area: Rect, title: &str, count: Option<usize>) {
+    f.render_widget(Paragraph::new(section::title(title, count, usize::from(area.width))), area);
 }
 
 /// Which items a scrolling list draws, and the cues around them (commands.md §13.2, "Scrolling the PRs section"; the
@@ -210,9 +197,9 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, note:
             Constraint::Length(1),
         ])
     .areas(area);
-    render_header(f, prs_header, "PRs");
-    render_header(f, git_header, "git");
-    render_header(f, jira_header, "Jira");
+    render_header(f, prs_header, "PRs", Some(open.len()));
+    render_header(f, git_header, "git", None);
+    render_header(f, jira_header, "Jira", None);
     f.render_widget(
         Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(format!(" load {}", machine.load.join(" ")))]),
         home,

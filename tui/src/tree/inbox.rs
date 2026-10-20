@@ -1,5 +1,5 @@
-//! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a header
-//! ` Inbox <n> `, up to [`SHOWN`] item rows `<dot> <label>` with the age right-aligned, and, with more items, the fold
+//! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a title
+//! `┯━━ Inbox ━━━…━━ <n> ━━`, up to [`SHOWN`] item rows `<dot> <label>` with the age right-aligned, and, with more items, the fold
 //! widget's muted `└ expand` row (`crate::fold`) that expands the list inline and becomes `└ collapse`. Only that row
 //! toggles. Whether it is expanded is view state only. Expanded, it is
 //! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
@@ -22,7 +22,8 @@ use crate::fold;
 use crate::link::link;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, Tree};
-use crate::widgets::{Window, dim, max_scroll, section_header, window};
+use crate::section;
+use crate::widgets::{Window, dim, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 
@@ -234,8 +235,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
         let row = Rect::new(area.x, area.y + dy, area.width, 1);
         match shape.hit(dy) {
             Some(Hit::Header) => {
-                let title = format!("Inbox {}", items.len());
-                f.render_widget(Paragraph::new(section_header(&title, usize::from(row.width))), row);
+                f.render_widget(Paragraph::new(section::joined("Inbox", Some(items.len()), usize::from(row.width))), row);
             }
             Some(Hit::Item(i)) => {
                 let item = &items[i];

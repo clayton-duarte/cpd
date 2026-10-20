@@ -11,10 +11,11 @@ use ratatui::widgets::Paragraph;
 use cpd_core::events::Event;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
-use crate::widgets::section_header;
+use crate::section;
 
 /// The rows above the Events: the title, drawn as a section header (hs-d124, hs-d297).
-const HEADER_ROWS: u16 = 1;
+/// The title's rows: an empty row, the title and an empty row (hs-d308).
+const HEADER_ROWS: u16 = 3;
 
 /// The Events and where the view is. The kit's [`Scroll`] holds the position (an offset from the first Event); `follow`
 /// says the view shows the bottom, so a new Event scrolls in. Scrolling decides it again: at the bottom it follows,
@@ -152,7 +153,8 @@ fn line(e: &Event, width: usize) -> Line<'static> {
 /// height first.
 pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let [head, area] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
-    f.render_widget(Paragraph::new(section_header("logs", usize::from(head.width))), head);
+    let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
+    f.render_widget(Paragraph::new(section::title("logs", None, usize::from(title.width))), title);
     let area = match &log.error {
         Some(error) => {
             let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);

@@ -14,7 +14,7 @@ use super::Outcome;
 use super::scroll::Scroll;
 use super::validate::Validator;
 use crate::palette;
-use crate::widgets::section_header;
+use crate::section;
 
 /// The label of the second button of `confirm` and `input`.
 pub(crate) const CANCEL: &str = "Cancel";
@@ -126,8 +126,8 @@ struct Layout {
 fn layout(area: Rect) -> Layout {
     let row = |y: u16| Rect::new(area.x, area.y.saturating_add(y), area.width, 1).intersection(area);
     Layout {
-        header: row(0),
-        body: Rect::new(area.x, area.y.saturating_add(1), area.width, area.height.saturating_sub(3)).intersection(area),
+        header: row(1),
+        body: Rect::new(area.x, area.y.saturating_add(3), area.width, area.height.saturating_sub(5)).intersection(area),
         buttons: if area.height >= 2 { row(area.height - 1) } else { Rect::default() },
     }
 }
@@ -217,7 +217,7 @@ impl Dialog {
         let area = f.area();
         self.fit(area);
         let parts = layout(area);
-        f.render_widget(Paragraph::new(section_header(&self.title, usize::from(area.width))), parts.header);
+        f.render_widget(Paragraph::new(section::title(&self.title, None, usize::from(area.width))), parts.header);
         let rows = self.rows(parts.body);
         let row = |n: usize| Rect::new(parts.body.x, parts.body.y.saturating_add(u16::try_from(n).unwrap_or(u16::MAX)), parts.body.width, 1).intersection(parts.body);
         let width = usize::from(area.width).saturating_sub(2);

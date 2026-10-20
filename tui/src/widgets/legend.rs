@@ -22,7 +22,7 @@ use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, JobCounts};
-use crate::widgets::section_header;
+use crate::section;
 use crate::{Capture, run_view};
 
 const COLUMN_SPACING: u16 = 2;
@@ -30,7 +30,8 @@ const COLUMN_SPACING: u16 = 2;
 const POPUP_BORDER: u16 = 2;
 const DOTS_TITLE: &str = "Session dots";
 /// The rows above the body: the title, drawn as a section header (hs-d124, hs-d297).
-const HEADER_ROWS: u16 = 1;
+/// The title's rows: an empty row above it; the body's first row is the empty row below (hs-d308).
+const HEADER_ROWS: u16 = 2;
 const INTRO: &str = "Legend: what the cockpit's colours and icons mean   (any key closes)";
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
@@ -224,7 +225,8 @@ pub fn draw(f: &mut Frame, area: Rect) {
 /// and, when the body is taller than the rest of `area`, a dim `first-last/total` closes the title's line.
 fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
     let [head, window] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
-    f.render_widget(Paragraph::new(section_header(INTRO, usize::from(head.width))), head);
+    let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
+    f.render_widget(Paragraph::new(section::title(INTRO, None, usize::from(title.width))), title);
     let buf = body(&sections(), window.width);
     scroll.resize(usize::from(buf.area.height), usize::from(window.height));
     for y in 0..window.height.min(buf.area.height.saturating_sub(scroll.offset() as u16)) {
@@ -236,8 +238,8 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
         let last = (scroll.offset() + scroll.page()).min(scroll.total());
         let position = format!(" {}-{}/{} ", scroll.offset() + 1, last, scroll.total());
         let width = position.chars().count() as u16;
-        if width < head.width {
-            let at = Rect::new(head.x + head.width - width, head.y, width, 1);
+        if width < title.width {
+            let at = Rect::new(title.x + title.width - width, title.y, width, 1);
             f.render_widget(Paragraph::new(position).style(palette::fg(Meaning::Nothing)), at);
         }
     }

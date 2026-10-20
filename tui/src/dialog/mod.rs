@@ -234,11 +234,11 @@ const MIN_INNER: usize = 40;
 const MAX_INNER: usize = 76;
 
 /// The popup's size `(columns, rows)`, border included, for content `natural` columns wide whose body is
-/// `body_rows(width)` rows at `width` text columns; at most the client's size. The inside is the header, the body, a
-/// blank row and the buttons.
+/// `body_rows(width)` rows at `width` text columns; at most the client's size. The inside is an empty row, the title, an empty
+/// row, the body, a blank row and the buttons.
 fn popup_size(client: (u16, u16), title: &str, natural: usize, body_rows: impl Fn(usize) -> usize) -> (u16, u16) {
     let inner = (natural + 2).max(title.chars().count() + 6).clamp(MIN_INNER, MAX_INNER);
-    let rows = body_rows(inner - 2) + 3;
+    let rows = body_rows(inner - 2) + 5;
     let fit = |wanted: usize, cap: u16| u16::try_from(wanted + 2).unwrap_or(u16::MAX).min(cap);
     (fit(inner, client.0), fit(rows, client.1))
 }

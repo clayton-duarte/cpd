@@ -12,6 +12,7 @@
 //! - [`merge`]: the merge confirmation, a popup of the Deploy column's merge icon;
 //! - [`dialog`]: the dialog kit (confirm, input and scrollable text), the popups of the tree and the StatusBar;
 //! - [`fold`]: the one widget every block that folds is drawn by (the tree's Contexts and archived groups, the Inbox's toggle);
+//! - [`section`]: the one helper every in-pane section title is drawn by;
 //! - [`tree`], [`plan`], [`worker`]: the other views of §13.2.
 
 mod background;
@@ -28,6 +29,7 @@ mod plan;
 pub mod read;
 mod runner;
 mod scroll;
+pub mod section;
 mod tree;
 pub mod widgets;
 mod worker;
