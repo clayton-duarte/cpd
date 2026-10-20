@@ -150,13 +150,15 @@ fn calls_come_back_in_the_order_they_started() {
     assert_eq!(got, (0..30).map(|i| i.to_string()).collect::<Vec<_>>());
 }
 
-/// The `.rs` files of the test binary (`cli/tests/it/`, not its `common/`). The guards below scan these: a wrong
-/// directory would scan nothing and pass, so this asserts it found more than 50.
+/// The `.rs` files of the area test binaries (`cli/tests/<area>/`, not `common/`). The guards below scan these: a
+/// wrong directory would scan nothing and pass, so this asserts it found more than 50.
 fn test_files() -> Vec<std::path::PathBuf> {
-    let dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/tests/it";
+    let dir = env!("CARGO_MANIFEST_DIR").to_owned() + "/tests";
     let files: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
+        .filter(|area| area.is_dir() && area.file_name().is_some_and(|n| n != "common"))
+        .flat_map(|area| std::fs::read_dir(area).unwrap().map(|entry| entry.unwrap().path()))
         .filter(|path| path.extension().is_some_and(|e| e == "rs"))
         .collect();
     assert!(files.len() > 50, "the harness guards saw {} files in {dir}: they scan the wrong directory", files.len());
