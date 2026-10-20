@@ -117,6 +117,18 @@ const SET_TITLES_STRING: &str = "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_s
 /// mode (research `statusbar-no-row.md` 2c).
 pub const STATUS_CLICK: &str = "cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null";
 
+// The StatusBar's button glyphs (hs-d235, Material Design). Macros, because `concat!` takes literals only.
+macro_rules! reset_glyph { () => { "\u{F0A1D}" }; } // md-view_dashboard_outline
+macro_rules! legend_glyph { () => { "\u{F0A01}" }; } // md-map_legend
+macro_rules! logs_glyph { () => { "\u{F09ED}" }; } // md-text_box_outline
+
+/// The reset-layout button's glyph, U+F0A1D md-view_dashboard_outline.
+pub const RESET_GLYPH: &str = reset_glyph!();
+/// The legend button's glyph, U+F0A01 md-map_legend.
+pub const LEGEND_GLYPH: &str = legend_glyph!();
+/// The logs button's glyph, U+F09ED md-text_box_outline.
+pub const LOGS_GLYPH: &str = logs_glyph!();
+
 /// The StatusBar (contract §6.1): the cockpit session's `status-format[0]`, a
 /// full line (hs-d266, hs-d322). Three one-glyph buttons, each a pill (a cap
 /// `\u{e0b6}`, the glyph as a grey block, a cap `\u{e0b4}`, 3 cells) in its own click
@@ -134,9 +146,9 @@ pub const STATUS_CLICK: &str = "cpd tui action #{mouse_status_range} --client #{
 /// `push-default` makes `bg=colour236` the pill's default, so that the `#[default]`
 /// the engine's texts end their coloured parts with does not end the pill.
 pub const STATUS_FORMAT: &str = concat!(
-    "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]\u{29c9}#[noreverse]\u{e0b4}#[default]#[norange] ",
-    "#[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]?#[noreverse]\u{e0b4}#[default]#[norange] ",
-    "#[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]\u{25a4}#[noreverse]\u{e0b4}#[default]#[norange]",
+    "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]", reset_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange] ",
+    "#[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]", legend_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange] ",
+    "#[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]", logs_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
     "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{client_width},11},",
     "#{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers_width},#{@cpd_workers_short_width}}}}",
     "#[default]#[align=right]",
