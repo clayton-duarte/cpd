@@ -640,6 +640,7 @@ test("cpd-lead merges the base only on a conflict; ready is its own Gate and no 
   const lead = skillFiles("cpd-lead")[0]!.text;
   assert.match(lead, /only when the Lead Branch conflicts with it/);
   assert.match(lead, /its Gate passed on its own head and GitHub reports no conflict/);
-  assert.match(lead, /`base_behind` \(exit 3\)/);
+  // `base_behind` is retired (hs-d490): cpd refuses only a conflict, `base_conflict`.
+  assert.doesNotMatch(lead, /base_behind/);
   assert.doesNotMatch(lead, /contains (the|its) base|if it moved/i);
 });

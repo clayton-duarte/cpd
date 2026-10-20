@@ -301,6 +301,19 @@ pub fn view_for_merge(cwd: &Path, repo: &str, number: i64) -> Result<MergeView, 
     parse(&args, &run(cwd, &args)?)
 }
 
+/// `headRefOid` of the pull request `number` of `repo`: its head commit, which GitHub keeps after a merge and the
+/// deletion of the branch (contract §7.2 "The recorded head").
+pub fn head_ref_oid(cwd: &Path, repo: &str, number: i64) -> Result<String, CpdError> {
+    #[derive(Deserialize)]
+    struct Head {
+        #[serde(rename = "headRefOid")]
+        oid: String,
+    }
+    let n = number.to_string();
+    let args = ["pr", "view", &n, "--repo", repo, "--json", "headRefOid"];
+    parse::<Head>(&args, &run(cwd, &args)?).map(|h| h.oid)
+}
+
 /// `gh pr merge <number> --repo <repo> --squash --delete-branch --match-head-commit <head>`: GitHub
 /// refuses when the branch is no longer at `head`.
 pub fn merge_pr(cwd: &Path, repo: &str, number: i64, head: &str) -> Result<(), CpdError> {

@@ -429,6 +429,8 @@ struct Merged {
     repo: String,
     lead_branch: String,
     lead_worktree: Option<String>,
+    /// The PR's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
+    pull_request: Option<(String, i64)>,
     attempts: Vec<Attempt>,
 }
 
@@ -508,10 +510,13 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
 
 /// Every PR in status `merged`, with its Attempts.
 fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
-    let mut prs = conn.prepare("SELECT plan, key, repo, lead_branch, lead_worktree FROM prs WHERE status = 'merged' ORDER BY plan, key")?;
+    let mut prs = conn.prepare("SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number
+           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status = 'merged' ORDER BY p.plan, p.key",
+    )?;
     let rows = prs
         .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))
+            let pull_request = r.get::<_, Option<String>>(5)?.zip(r.get::<_, Option<i64>>(6)?);
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, pull_request))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
@@ -519,14 +524,14 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdEr
           WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
     )?;
     let mut found = Vec::new();
-    for (plan, pr, repo, lead_branch, lead_worktree) in rows {
+    for (plan, pr, repo, lead_branch, lead_worktree, pull_request) in rows {
         let list = attempts
             .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .map(|(id, branch, worktree, ended)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
             .collect::<Result<Vec<_>, CpdError>>()?;
-        found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, attempts: list });
+        found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, pull_request, attempts: list });
     }
     Ok(found)
 }
@@ -584,7 +589,13 @@ fn clean(merged: &Merged) -> Vec<Failure> {
                 }
             }
         }
-        match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch) {
+        // The pull request's head commit, asked of GitHub only when `HEAD` has commits outside every `origin/*` ref:
+        // a squash merge deletes the head branch, so the PR's own commits look unpushed (contract §7.2).
+        let recorded_head = || {
+            let (gh_repo, number) = merged.pull_request.as_ref()?;
+            super::gh::head_ref_oid(repo, gh_repo, *number).ok()
+        };
+        match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch, recorded_head) {
             Ok(git::LeadRemoval::Removed) => {}
             Ok(git::LeadRemoval::Kept(why)) => failures.push((lead.clone(), why.as_str().to_owned())),
             Err(e) => failures.push((lead.clone(), reason(&e))),

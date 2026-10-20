@@ -311,6 +311,38 @@ fn push_refuses_a_remote_that_moved_and_forces_nothing() {
     assert_eq!(fx.lead_sha(), tip);
 }
 
+/// `main` moves on `origin` through a second clone, writing `path`; the repo has not fetched it. Returns the new tip.
+fn move_base(fx: &Fx, path: &str, content: &str) -> String {
+    let clone = fx.env.root().join("base-clone");
+    fx.git(fx.env.root(), &["clone", "-q", fx.origin.to_str().unwrap(), clone.to_str().unwrap()]);
+    fx.git(&clone, &["config", "user.name", "someone"]);
+    fx.git(&clone, &["config", "user.email", "someone@cpd.invalid"]);
+    fs::write(clone.join(path), content).unwrap();
+    fx.git(&clone, &["add", "-A"]);
+    fx.git(&clone, &["commit", "-q", "-m", "base moved"]);
+    fx.git(&clone, &["push", "-q", "origin", "main"]);
+    fx.git(&clone, &["rev-parse", "HEAD"])
+}
+
+#[test]
+fn push_checks_nothing_about_the_base_whether_it_moved_ahead_or_conflicts() {
+    for (path, content) in [("base.txt", "base\n"), ("more.txt", "the base's more\n")] {
+        let fx = fx("open");
+        let seen = fx.git(&fx.repo, &["rev-parse", "origin/main"]);
+        let moved = move_base(&fx, path, content);
+        // The Lead Branch lacks the base, and in the second round conflicts with it.
+        let tip = fx.commit("more.txt");
+
+        let out = fx.push().ok();
+
+        assert_eq!((out["pushed"].as_bool(), out["sha"].as_str()), (Some(true), Some(tip.as_str())), "{path}");
+        assert_eq!(fx.remote_sha(), tip);
+        assert_eq!(fx.lead_sha(), tip, "no merge of the base");
+        assert_eq!(fx.git(&fx.repo, &["rev-parse", "origin/main"]), seen, "the base was not fetched");
+        assert_ne!(moved, seen);
+    }
+}
+
 #[test]
 fn push_refuses_a_pr_that_is_not_open() {
     for status in ["dispatch", "merged"] {
