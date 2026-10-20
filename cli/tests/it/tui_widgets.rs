@@ -144,7 +144,7 @@ fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
 fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut hits = vec![];
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), note, 0).hits).unwrap();
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), note, 0, 0).hits).unwrap();
     (terminal.backend().buffer().clone(), hits)
 }
 
@@ -259,7 +259,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, gpus: vec![], mem: Some(7) } };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0, 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let prs_head = pill(30, "PRs", Some(0));
     assert_eq!(lines[..3], ["", " homeserver", " \u{F4BC} –%  \u{EFC5} 7%"], "no CPU % until a second sample");
@@ -455,6 +455,15 @@ fn the_column_has_no_engine_slots_escalations_events_or_hint() {
     }
 }
 
+/// `acme/web#4` (failed checks) is owned by no Plan, `acme/repo#20` (pending) by `mine`: only the unowned one is red.
+#[test]
+fn failed_checks_are_red_on_an_unowned_pull_request() {
+    let env = TestEnv::new();
+    let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
+    let buf = render(46, 25, &w);
+    assert_eq!(buf[find(&buf, palette::CHECKS_FAILED)].fg, palette::color(Meaning::Failed));
+}
+
 #[test]
 fn the_column_takes_every_colour_from_the_palette() {
     let (_, buf) = column(29);
@@ -462,7 +471,7 @@ fn the_column_takes_every_colour_from_the_palette() {
     let c = palette::color;
     // The PRs: state and checks.
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
-    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Failed));
+    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Waiting), "`acme/repo#7` is a Plan's: its Lead fixes failed checks (hs-d302)");
     assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
     // The titles: the corner and the line grey, the title inverted inside its caps.
     for title in ["PRs"] {
@@ -559,6 +568,33 @@ fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
     assert_eq!(plain(buf[(45, 6)].symbol()), "󰏌", "the arrow stays on an unowned PR");
     // The owned one (here also the active one) is not dim.
     assert!([1, 2, 12, 45].iter().all(|x| !dim(*x, 10)) && [2, 20].iter().all(|x| !dim(*x, 11)));
+}
+
+/// The column drawn at spinner frame `frame`.
+fn render_at(width: u16, height: u16, w: &Widgets, frame: usize) -> Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0, frame))).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn a_pr_whose_lead_works_shows_the_spinner_beside_its_state_and_the_frame_advances_with_the_clock() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    // `mine` owns acme/repo#20 (third row pair); `acme/web#4` and `acme/repo#9` have no owner.
+    let second = |w: &Widgets, frame: usize| row(&render_at(46, 25, w, frame), 11).trim_end().to_owned();
+    let idle = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(second(&idle, 0), "  open 󰦖 no review  Mine to review", "an idle Lead: no dot");
+    sql(&mut store, "UPDATE sessions SET state = 'working' WHERE id = 'l-mine'");
+    let working = read::widgets(&mut store, 3, 0).unwrap();
+    for frame in 0..palette::SPINNER.len() {
+        assert_eq!(second(&working, frame), format!("  open {} 󰦖 no review  Mine to review", palette::SPINNER[frame]), "frame {frame}");
+    }
+    // the unowned rows show none, whatever works
+    let buf = render_at(46, 25, &working, 3);
+    for y in [7, 9] {
+        assert!(!palette::SPINNER.iter().any(|g| row(&buf, y).contains(g)), "row {y}: {}", row(&buf, y));
+    }
 }
 
 #[test]
@@ -856,7 +892,7 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     let mut drawn = None;
-    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0))).unwrap();
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0, 0))).unwrap();
     let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
     let buf = terminal.backend().buffer().clone();
     for (y, icon) in [(7, false), (9, true), (11, true)] {
@@ -1114,6 +1150,7 @@ fn the_session_dots_are_listed_in_their_colours() {
     let frames: String = (0..palette::SPINNER.len() as u16).map(|i| buf[(working.0 + i, working.1)].symbol().to_string()).collect();
     assert_eq!(frames, palette::SPINNER.concat());
     for (text, glyph, dot) in [
+        ("waiting:", palette::WAITING, Dot::Waiting),
         ("idle, nothing needed", palette::IDLE, Dot::Idle),
         ("pi stopped", palette::STOPPED, Dot::Stopped),
         ("red:", palette::NEEDS_YOU, Dot::Red),
@@ -1127,8 +1164,21 @@ fn the_session_dots_are_listed_in_their_colours() {
         assert_eq!(cell.symbol(), want.content, "{text}");
         assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
-    let precedence = format!("red > yellow > magenta > white > {} > {} > {}", palette::SPINNER[0], palette::IDLE, palette::STOPPED);
+    let precedence = format!(
+        "red > yellow > magenta > white > {} > {} > {} > {}",
+        palette::SPINNER[0],
+        palette::WAITING,
+        palette::IDLE,
+        palette::STOPPED
+    );
     find_after(&buf, dots, &precedence);
+    let red = row(&buf, find_after(&buf, dots, "red:").1);
+    assert!(red.contains("a dialog in dispatch or deploy, a stuck Job, an engine error, your own failing or changed pull request"), "{red}");
+    assert!(!red.contains("Escalation") && !red.contains("or pr"), "{red}");
+    let yellow = row(&buf, find_after(&buf, dots, "yellow:").1);
+    assert!(yellow.contains("yellow: ready to merge, review requested"), "{yellow}");
+    let waiting = row(&buf, find_after(&buf, dots, "waiting:").1);
+    assert!(waiting.contains("an agent waits for another agent"), "{waiting}");
 }
 
 #[test]

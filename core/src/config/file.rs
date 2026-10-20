@@ -36,6 +36,9 @@ pub struct Config {
     pub machine: MachineName,
     /// Attempts not ended, machine-wide (§3.4).
     pub concurrency: u32,
+    /// Full test runs at once (Gates and `cpd slot` commands), machine-wide: the number of `run/test-<i>.lock` slots
+    /// (§7.6 "The test slot", hs-d336, hs-d301).
+    pub test_concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
@@ -180,6 +183,8 @@ impl Serialize for TickSeconds {
 pub struct Watch {
     pub tick_seconds: TickSeconds,
     pub pr_poll_seconds: u32,
+    /// E11 reads the team channel this long after its previous read ended (§3.7, §8.2).
+    pub team_review_seconds: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
 }
@@ -188,7 +193,15 @@ pub struct Watch {
 pub struct Inbox {
     /// A failed Job becomes a `job-stuck` item after this (E8, §2.2).
     pub stuck_job_minutes: u32,
+    /// The Slack channel id of the team review channel; `""` switches E11 and the `review-requested` item off (§2.2, §8.2).
+    pub team_channel: String,
+    /// The User's Slack user id; set when `team_channel` is.
+    pub slack_user_id: String,
+    /// GitHub logins whose reviews do not count as a human's (hermes `BOT_REVIEWERS`).
+    pub bot_reviewers: Vec<String>,
 }
+
+const DEFAULT_BOT_REVIEWERS: [&str; 3] = ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Events {
@@ -249,6 +262,7 @@ impl Config {
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
+        let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         let lead_tier = r.get("lead_tier", Tier::parse("O3").expect("a valid Tier"), |v| {
             Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
@@ -300,9 +314,33 @@ impl Config {
         let watch = Watch {
             tick_seconds: r.get("watch.tick_seconds", TickSeconds(5000), TickSeconds::parse)?,
             pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
+            team_review_seconds: positive(&mut r, "watch.team_review_seconds", 1800)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
         };
-        let inbox = Inbox { stuck_job_minutes: positive(&mut r, "inbox.stuck_job_minutes", 10)? };
+        let slack_id = |first: char| move |v: Value| {
+            let id = text_of(&v)?;
+            let ok = id.is_empty()
+                || (id.starts_with(first) && id.len() > 1 && id.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+            if ok { Ok(id.to_owned()) } else { Err(format!("{id:?} is not \"\" or a Slack id starting with {first}")) }
+        };
+        let inbox = Inbox {
+            stuck_job_minutes: positive(&mut r, "inbox.stuck_job_minutes", 10)?,
+            team_channel: r.get("inbox.team_channel", String::new(), slack_id('C'))?,
+            slack_user_id: r.get("inbox.slack_user_id", String::new(), slack_id('U'))?,
+            bot_reviewers: r.get("inbox.bot_reviewers", DEFAULT_BOT_REVIEWERS.map(str::to_owned).to_vec(), |v| match v {
+                Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
+                other => Err(format!("must be an array of text, not {}", other.type_str())),
+            })?,
+        };
+        // The claim and mention rules cannot run without the User's id, nor without the channel.
+        if inbox.team_channel.is_empty() != inbox.slack_user_id.is_empty() {
+            let (key, other) = if inbox.team_channel.is_empty() {
+                ("inbox.team_channel", "inbox.slack_user_id")
+            } else {
+                ("inbox.slack_user_id", "inbox.team_channel")
+            };
+            return Err(r.invalid(key, format!("must be set together with {other}: both or neither")));
+        }
         let events = Events { poll_ms: r.get("events.poll_ms", 200, |v| int(v, 20, 10_000))? };
         let tmux = Tmux {
             socket: r.get("tmux.socket", "cpd".into(), |v| tmux_name(text_of(&v)?))?,
@@ -321,6 +359,7 @@ impl Config {
             version,
             machine,
             concurrency,
+            test_concurrency,
             retry_cap,
             lead_tier,
             manager_tier,

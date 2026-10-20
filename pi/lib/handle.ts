@@ -85,7 +85,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
   const rule = LEAD_MESSAGES[ev.kind];
   if (rule) {
     pi.sendMessage(eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
-    if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation}`, QUESTION_LABEL)) host.refresh(r);
+    if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation}`, QUESTION_LABEL, "agent")) host.refresh(r);
     return;
   }
   if (ev.kind === "escalation-answered" || ev.kind === "escalation-expired") {

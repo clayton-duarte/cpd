@@ -499,7 +499,8 @@ fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
     let engine = fx.start();
     wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
     assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·0#[default]");
-    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
+    assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
 
     // Unchanged, it is not set again: a value put there by hand survives the next ticks.
     assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
@@ -530,7 +531,8 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 2 queued#[default]";
     wait_until("@cpd_workers", || fx.workers() == long);
     assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·2#[default]");
-    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
+    assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
     engine.stop();
     drop(lock);
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
@@ -540,26 +542,19 @@ fn the_engine_counts_waiting_and_queued_jobs() {
 /// and the width the status line compares counts it.
 #[test]
 fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
-    let fx = fx("[inbox]\nstuck_job_minutes = 1");
+    let fx = fx("");
     fx.tmux_server();
     let engine = fx.start();
     wait_until("@cpd_inbox", || fx.option("@cpd_inbox") == "#[dim]inbox 0#[default]");
 
-    // Two failed Jobs whose `job-failed` Event is older than `stuck_job_minutes`: E8 opens two red `job-stuck` items.
-    for key in ["old", "older"] {
-        fx.fixture(&format!(
-            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended,
-                               fingerprint, failed_cause, created_txn, created_at)
-             VALUES ('pay', 'repo', '{key}', 'Title', 'S2', 'Goal.', 'Because.', '[\"a\"]', '[\"ok\"]', '[]', 'failed', 0,
-                     hex(zeroblob(32)), 'crashed', cpd_txn(), 't');
-             INSERT INTO events (txn, at, kind, context, plan, job, text, data)
-             VALUES (cpd_txn(), '{}', 'job-failed', 'ctx', 'pay', '{key}', 'x', '{{}}');",
-            ago(5)
-        ));
-    }
-    wait_until("@cpd_inbox red 2", || fx.option("@cpd_inbox") == "#[fg=red]inbox 2#[default]");
-    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'job-stuck'"), 2);
-    assert_eq!(fx.option("@cpd_workers_width"), "42");
+    // The Plan's Lead, in a live pane, asks the User in a dialog in Dispatch: E8 opens a red `dialog` item. (No pull
+    // request row: the engine's own `pr poll` prunes the rows its fake `gh` does not list.)
+    let pane = fx.env.tmux(&["display-message", "-p", "-t", "keepalive", "#{pane_id}"]);
+    let pane = String::from_utf8(pane.stdout).unwrap().trim().to_owned();
+    fx.fixture(&format!("UPDATE sessions SET state = 'blocked', state_label = 'dialog', state_at = 't2', tmux_pane = '{pane}' WHERE id = 'lead1';"));
+    wait_until("@cpd_inbox red 1", || fx.option("@cpd_inbox") == "#[fg=red]inbox 1#[default]");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'dialog'"), 1);
+    assert_eq!(fx.option("@cpd_workers_width"), "46");
     engine.stop();
     assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
@@ -1569,8 +1564,10 @@ fn e4_tells_no_one_of_a_pr_opened_after_all_merged_however_late() {
         fx.fixture(&format!("{} UPDATE prs SET all_merged_at = '{}' WHERE plan = 'pay' AND key = 'repo';", opened(status), ago(60)));
         fx.env.wait_whole_ticks(2);
         engine.stop();
-        assert_eq!(fx.count("session-message"), 0, "{status}");
-        // (E5 may report its own error for the pull request the fake `gh` does not know.)
+        // (E5 may report its own error for the pull request the fake `gh` does not know, and the Manager hears of that
+        // error, hs-d314: no message of E4's.)
+        let escalations: Vec<_> = fx.escalations().into_iter().filter(|e| e.3["escalation"] == "pr_unopened").collect();
+        assert!(escalations.is_empty(), "{status}: {escalations:?}");
         assert!(fx.events("error").iter().all(|e| e.3["code"] != "pr_unopened"), "{status}");
     }
 }
