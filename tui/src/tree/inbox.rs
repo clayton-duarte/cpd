@@ -219,6 +219,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
                 None => Jump::Run(open),
             })
         }
+        // stub (hs-d496): pnbox-corei makes it open the item's Session, then copy its url
+        Kind::ReviewWaiting => None,
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
@@ -553,6 +555,44 @@ mod tests {
         let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
         terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
+    }
+
+    // ---- review-waiting (hs-d496): the click opens the item's Session then copies its url; the label is an OSC 8 link ----
+
+    #[test]
+    fn a_review_waiting_click_opens_its_session_then_copies_its_url() {
+        let tree = sample();
+        let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "pn:m-alpha/pn-0a1b2c", OPENED);
+        waiting.session = Some(sid("m-alpha"));
+        waiting.url = Some("http://review.example:20000/".into());
+        assert_eq!(
+            jump(&tree, &waiting),
+            Some(Jump::Steps(vec![Action::Open(sid("m-alpha")), Action::CopyUrl("http://review.example:20000/".into())])),
+            "the Session first, then the page's url"
+        );
+        waiting.url = None;
+        assert_eq!(jump(&tree, &waiting), Some(Jump::Run(Action::Open(sid("m-alpha")))), "no url: the Session opens and nothing else happens");
+        waiting.session = None;
+        assert_eq!(jump(&tree, &waiting), None, "no Session: nowhere to go");
+        let mut archived_session = item(2, Kind::ReviewWaiting, Urgency::Magenta, "pn:f-blocked/pn-0a1b2c", OPENED);
+        archived_session.session = Some(sid("f-blocked"));
+        assert_eq!(jump(&archived(), &archived_session), Some(Jump::Run(Action::History(sid("f-blocked")))), "an archived Session shows its history");
+    }
+
+    #[test]
+    fn a_review_waiting_label_is_written_as_an_osc_8_link() {
+        let sink = Sink::default();
+        let mut terminal = Terminal::with_options(
+            CrosstermBackend::new(sink.clone()),
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
+        )
+        .unwrap();
+        let url = "http://review.example:20000/";
+        let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "ab", OPENED);
+        waiting.url = Some(url.into());
+        terminal.draw(|f| draw(f, f.area(), &[waiting], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        let text = printed(&sink.0.borrow());
+        assert!(text.contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "the label is a link to the review page: {text:?}");
     }
 
     // ---- spacing v2 (hs-d476): the section is a collapsible widget with an empty row above and one below; red until `Shape` has the row below ----

@@ -123,6 +123,8 @@ kinds! {
     WatchStarted = "watch-started",
     WatchStopped = "watch-stopped",
     Error = "error",
+    ReviewOpened = "review-opened",
+    ReviewClosed = "review-closed",
 }
 
 impl Kind {
@@ -185,6 +187,8 @@ impl Kind {
             InboxSnoozed => spec([M, M, M, N, M], &["item", "until"], &[]),
             InboxDismissed => spec([M, M, M, N, M], &["item"], &[]),
             WatchStarted | WatchStopped => spec([N, N, N, N, N], &["pid"], &[]),
+            ReviewOpened => spec([Y, M, N, N, Y], &["pn_id", "kind", "subject", "port"], &[]),
+            ReviewClosed => spec([Y, M, N, N, Y], &["pn_id", "ended"], &[]),
             Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
         }
     }

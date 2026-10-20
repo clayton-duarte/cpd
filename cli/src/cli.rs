@@ -12,7 +12,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, config, context, events, inbox, job, plan, policy, pr, session, slot};
+use cpd_core::{ask, attempt, config, context, events, inbox, job, plan, policy, pr, review, session, slot};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -51,6 +51,9 @@ pub enum Command {
     /// Pull requests (commands.md §9)
     #[command(subcommand)]
     Pr(pr::Command),
+    /// Plannotator sessions a Session has open (hs-d496)
+    #[command(subcommand)]
+    Review(review::Command),
     /// Policies (commands.md §22)
     #[command(subcommand)]
     Policy(policy::Command),
@@ -114,6 +117,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
         Command::Pr(c) => pr::run(c),
+        Command::Review(c) => review::run(c),
         Command::Policy(c) => policy::run(c),
         Command::Session(c) => session::run(c),
         Command::Events(c) => events::run(c),

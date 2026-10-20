@@ -442,6 +442,8 @@ mod tests {
             Kind::WatchStarted => vec![NewEvent::watch_started(T, 1)],
             Kind::WatchStopped => vec![NewEvent::watch_stopped(T, 1)],
             Kind::Error => vec![NewEvent::error(T, s, s, s, serde_json::Value::Null)],
+            // hs-d496: no constructor yet (pnbox-corei writes them); this stub keeps the test module compiling.
+            Kind::ReviewOpened | Kind::ReviewClosed => vec![],
         }
     }
 
