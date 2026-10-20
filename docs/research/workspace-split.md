@@ -18,7 +18,7 @@ Every number was measured on hs unless it says "computed" (arithmetic on measure
   The two halves contribute about equally (§3.3). The crate takes `cpd-core`'s ~4.5 s rebuild down to `cpd-engine`'s 0.5 s. The small test binary takes `it`'s 5-6 s compile down to about 1 s. Edits in areas that stayed put (store, tree) gained nothing. A store edit paid one more crate in the chain: quick check 6.7 → 7.9 s, slower in 5 of 8 pairs.
 - **Test execution is unchanged, and it dominates a scoped loop once the build is small.** Measured scoped runs: engine area 147 tests in **19.7 s** (the same on both trees), tree area 247 in 11.0 s, store area 203 in 16.3 s (§3.4).
 - **Conflicts barely shrink.** I replayed every merge on the `cpd/*` branches with `git merge-tree`: 154 of 268 conflict, with 511 file conflicts and 1,254 hunks.
-  - **Code:** the crate split removes **none** of the code conflicts. Each one is two PRs editing the same file of one area. 61 % of all hunks have both sides changing the same base line.
+  - **Code:** the crate split removes **none** of the code conflicts. It moves whole files, and two PRs that edit one file still conflict wherever it lives. 61 % of all hunks have both sides changing the same base line.
   - **Docs:** the per-area doc cut removes **49 hunks (3.9 %)** and makes **4 of the 154 merges** clean (§3.5).
 
   The hot spots of hs-n285 are same-area pairs (dialogs×views, #119×#107, views×scroll-persist). No split moves those apart. Sequencing does (hs-d324).
@@ -26,7 +26,7 @@ Every number was measured on hs unless it says "computed" (arithmetic on measure
 - **Decision (§5): approve a narrowed split, reject the rest.** Approve:
   1. per-area integration-test binaries (no product code moves);
   2. the `cpd-engine` crate, with `restart` passed into the cockpit the way `RunCommand` already is;
-  3. cutting `commands.md` §13.2 and §17 into one file per view.
+  3. cutting `commands.md` §13.2 and §17 into one file per view, and contract §4.5's migration entries into one file per migration.
 
   Reject, for now:
   - per-view `tui` crates: `cpd-tui` rebuilds in 1-3 s, which is all they could save;
