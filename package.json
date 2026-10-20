@@ -7,7 +7,7 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "test": "node --test pi/test/*.test.ts pi/skills/skill.test.ts",
+    "test": "slot=; if command -v cpd >/dev/null 2>&1; then slot='cpd slot --'; fi; $slot node --test pi/test/*.test.ts pi/skills/skill.test.ts",
     "pretypecheck": "scripts/npm-fresh.sh",
     "typecheck": "tsc --noEmit -p .",
     "preverify": "scripts/npm-fresh.sh",

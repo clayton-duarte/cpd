@@ -2944,6 +2944,25 @@ fn with_one_slot_a_second_gate_waits_until_the_first_lets_go_and_logs_the_wait()
 }
 
 #[test]
+fn both_hooks_see_the_slot_the_gate_holds_and_no_other_cpd_variable() {
+    let fx = fx("dispatch");
+    fx.test_concurrency(1);
+    let seen = fx.env.root().join("seen");
+    // `cpd` is run with CPD_HOME and more in its environment, and none of it reaches a hook.
+    fx.hooks(&format!(
+        "pre-start = \"env | grep '^CPD_' | sort > {seen}.start\"\npre-merge = \"env | grep '^CPD_' | sort > {seen}.merge\"\n",
+        seen = seen.display()
+    ));
+
+    fx.pr("open").ok();
+
+    for hook in ["start", "merge"] {
+        let path = fx.env.root().join(format!("seen.{hook}"));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "CPD_TEST_SLOT=0\n", "pre-{hook}");
+    }
+}
+
+#[test]
 fn a_gate_that_finds_a_free_slot_logs_it_in_the_log_only() {
     let fx = fx("dispatch");
     fx.hooks("pre-merge = \"echo gate ran\"\n");

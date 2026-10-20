@@ -91,6 +91,7 @@ pub const TABLE: &[Entry] = &[
     ("doctor", &[], false),
     ("config", &[], false),
     ("tiers", &[Lead], false),
+    ("slot", &[Manager, Lead, Worker], false),
 ];
 
 /// The tree of `cpd --help`: clap's commands depth-first in clap's order,
