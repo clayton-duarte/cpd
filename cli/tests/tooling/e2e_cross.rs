@@ -356,12 +356,20 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     });
 
     // ---------- 2. the PRs: a1 -> b -> a2, two of them in one repo (A4)
-    let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--title", "Change the PR", "--plan", PLAN]);
-    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "base_pr": null, "title": "Change the PR", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
-    let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--title", "Change the PR", "--needs", "a1", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--title", "Change the PR", "--shape", "config", "--plan", PLAN]);
+    assert_eq!(
+        out["pr"],
+        json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "base_pr": null, "title": "Change the PR", "needs": [], "status": "waiting",
+               "lead_branch": "cpd/chain/a1", "appended": false, "shape": "config", "jobs": ["a1-config"]})
+    );
+    let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--title", "Change the PR", "--needs", "a1", "--shape", "config", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/b"), &json!(["a1"])));
-    let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--title", "Change the PR", "--needs", "b", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--title", "Change the PR", "--needs", "b", "--shape", "config", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/a2"), &json!(["b"])));
+    // The stub drafts the shape lays out are not this flow's Jobs: a Lead cancels a stub it does not need.
+    for pr in ["a1", "b", "a2"] {
+        fx.ok(&["job", "cancel", &format!("{pr}-config"), "--reason", "a stub of the template", "--plan", PLAN]);
+    }
     assert_eq!(of_kind(&fx.events(), "pr-added").len(), 3);
     fx.ok(&["plan", "phase", "plan", "--plan", PLAN]);
 
@@ -382,7 +390,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     ]);
     assert_eq!(
         out["job"],
-        json!({"key": "audit", "pr": "a2", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true, "urgent": false})
+        json!({"key": "audit", "pr": "a2", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true, "urgent": false})
     );
 
     // ---------- 4. review and lock: only a1 starts (A8)
@@ -430,7 +438,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(fx.git(&fx.shared.origin, &["rev-parse", "refs/heads/cpd/chain/a1"]), a1_tip, "the merge pushes the Lead Branch");
     assert_eq!(fs::read_to_string(a1_lead.join("schema.txt")).unwrap(), "schema\n");
     let all = fx.wait_event("all-merged", |e| e["data"]["pr"] == "a1");
-    assert_eq!(all["data"], json!({"pr": "a1", "merged": ["schema"], "cancelled": []}));
+    assert_eq!(all["data"], json!({"pr": "a1", "merged": ["schema"], "cancelled": ["a1-config"]}));
     assert_eq!(fx.pr("a1")["status"], "dispatch");
 
     // ---------- 6. pr open --pr a1: the Plan stays in `dispatch`, b and a2 wait
@@ -523,7 +531,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
 
     // ---------- 11. a2: all-merged, pr open --pr a2 moves the Plan to `pr`
     let all = fx.wait_event("all-merged", |e| e["data"]["pr"] == "a2");
-    assert_eq!(all["data"], json!({"pr": "a2", "merged": ["audit", "wire"], "cancelled": []}));
+    assert_eq!(all["data"], json!({"pr": "a2", "merged": ["audit", "wire"], "cancelled": ["a2-config"]}));
     let out = fx.ok(&["pr", "open", "--pr", "a2", "--plan", PLAN]);
     assert_eq!((&out["phase"], &out["pr"]["pr"]["number"]), (&json!("deploy"), &json!(13)));
     assert_eq!(fx.git(&fx.shared.origin, &["rev-parse", "refs/heads/cpd/chain/a2"]), wire_tip);

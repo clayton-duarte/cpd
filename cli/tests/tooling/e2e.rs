@@ -328,10 +328,13 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(calls[0][calls[0].len() - 2..], ["--".to_owned(), format!("@{}", message_file.display())]);
     assert!(!calls[0].contains(&"--fork".to_owned()), "{calls:?}");
     cursor = fx.cursor();
-    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--title", "Change the PR", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--title", "Change the PR", "--shape", "config", "--plan", PLAN]);
     assert_eq!(out["pr"]["base"], "main");
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay/pay");
-    assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);
+    assert_eq!(out["pr"]["jobs"], json!(["pay-config"]));
+    assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added", "job-added"]);
+    // The stub draft the shape lays out is not one of this flow's Jobs: a Lead cancels a stub it does not need.
+    fx.ok(&["job", "cancel", "pay-config", "--reason", "a stub of the template", "--plan", PLAN]);
     cursor = fx.cursor();
 
     // ---------- 3. plan phase plan: the phase and its Event, no Session and no window
@@ -345,11 +348,11 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
 
     // ---------- 4. two Jobs, `ui` needing `api`; the Plan review, approved
     let out = fx.ok(&["job", "add", "api", "--title", "The API", "--tier", "S2", "--spec", &spec_file(&fx, "api"), "--plan", PLAN]);
-    assert_eq!(out["job"], json!({"key": "api", "pr": "pay", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "api", "pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
     let out = fx.ok(&[
         "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
-    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
     let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     assert_eq!(review["review"]["id"], "r1");
     let decided = fx.ok(&["plan", "decide", "r1", "--approve", "--plan", PLAN]);
@@ -357,7 +360,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["job-added", "job-added", "plan-review", "plan-review"]);
     assert_eq!(events[1]["job"], "ui");
-    assert_eq!(events[1]["data"], json!({"pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
+    assert_eq!(events[1]["data"], json!({"pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
     assert_eq!(events[2]["data"]["status"], "pending");
     assert_eq!(events[3]["data"]["status"], "approved");
     cursor = fx.cursor();
@@ -435,11 +438,11 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
 
     // ---------- 9. all-merged, once
     let all = fx.wait_event(cursor, "all-merged", 30, |_| true);
-    assert_eq!(all["data"], json!({"pr": "pay", "merged": ["api", "ui"], "cancelled": []}));
+    assert_eq!(all["data"], json!({"pr": "pay", "merged": ["api", "ui"], "cancelled": ["pay-config"]}));
     let shown = fx.plan();
     assert_eq!(shown["plan"]["phase"], "dispatch");
     assert!(shown["prs"][0]["all_merged_at"].is_string(), "{shown}");
-    assert_eq!(shown["counts"], json!({"draft": 0, "queued": 0, "running": 0, "merged": 2, "failed": 0, "cancelled": 0}));
+    assert_eq!(shown["counts"], json!({"draft": 0, "queued": 0, "running": 0, "merged": 2, "failed": 0, "cancelled": 1}));
     assert_eq!(shown["tamper"], json!([]));
 
     // The engine stops on SIGTERM, so the `pr poll` below is the only one that finds the PR. First,
