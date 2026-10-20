@@ -1203,7 +1203,7 @@ fn a_failing_pre_merge_refuses_the_gate_and_removes_the_worktree() {
     assert_eq!(refused.hook, Hook::PreMerge);
     assert_eq!(refused.outcome, HookOutcome::Failed { exit: 6 });
     assert_eq!(refused.tail.as_deref(), Some("red"));
-    // The hook's output follows the slot's line at the head of the log (contract §7.6 "The Gate slot").
+    // The hook's output follows the slot's line at the head of the log (contract §7.6 "The test slot").
     assert_eq!(fs::read_to_string(&hooks.pre_merge.log).unwrap(), "gate: slot 0 taken after 0 s\nred\n");
     assert!(!worktrees(&env, &repo).contains(".gate-"));
 }

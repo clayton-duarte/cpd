@@ -180,10 +180,10 @@ impl Fx {
         fs::write(self.env.root().join("gh").join(file), format!("{text}\n")).unwrap();
     }
 
-    /// Sets `gate_concurrency` (a top-level key, so before the tables) in `config.toml`.
-    fn gate_concurrency(&self, n: u32) {
+    /// Sets `test_concurrency` (a top-level key, so before the tables) in `config.toml`.
+    fn test_concurrency(&self, n: u32) {
         let config = fs::read_to_string(self.home.config()).unwrap();
-        fs::write(self.home.config(), config.replacen("machine = \"t\"\n", &format!("machine = \"t\"\ngate_concurrency = {n}\n"), 1)).unwrap();
+        fs::write(self.home.config(), config.replacen("machine = \"t\"\n", &format!("machine = \"t\"\ntest_concurrency = {n}\n"), 1)).unwrap();
     }
 
     /// Commits the Lead worktree's `.config/wt.toml`.
@@ -2900,16 +2900,16 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
     assert_eq!((fx.policy_errors().len(), fx.event_count()), (1, events));
 }
 
-// ------------------------------------------------------------ the Gate slots
+// ------------------------------------------------------------ the test slots
 
-/// Holds the Gate slot file `path` as another Gate would.
+/// Holds the test slot file `path` as another Gate would.
 fn hold_slot(path: &Path) -> Flock<fs::File> {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let file = fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap();
     Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap()
 }
 
-/// Whether some process holds the Gate slot file `path`.
+/// Whether some process holds the test slot file `path`.
 fn slot_is_held(path: &Path) -> bool {
     let file = fs::OpenOptions::new().read(true).write(true).open(path).unwrap();
     Flock::lock(file, FlockArg::LockExclusiveNonblock).is_err()
@@ -2918,13 +2918,13 @@ fn slot_is_held(path: &Path) -> bool {
 #[test]
 fn with_one_slot_a_second_gate_waits_until_the_first_lets_go_and_logs_the_wait() {
     let fx = fx("dispatch");
-    fx.gate_concurrency(1);
+    fx.test_concurrency(1);
     let ran = fx.env.root().join("pre-start-ran");
     fx.hooks(&format!("pre-start = \"touch {}\"\npre-merge = \"echo gate ran\"\n", ran.display()));
-    let held = hold_slot(&fx.home.gate_slot(0));
+    let held = hold_slot(&fx.home.test_slot(0));
 
     let child = fx.spawn_pr("open");
-    let waiting = "gate: waiting for a slot (1 of 1 busy; gate_concurrency 1)\n";
+    let waiting = "gate: waiting for a slot (1 of 1 busy; test_concurrency 1)\n";
     wait_until("the Gate to log that it waits", || fx.pr_log("pre-merge").contains(waiting));
     assert!(!ran.exists(), "pre-start ran while the only slot was held");
     drop(held);
@@ -2954,19 +2954,19 @@ fn a_gate_that_finds_a_free_slot_logs_it_in_the_log_only() {
     assert!(out.status.success());
     assert_eq!(fx.pr_log("pre-merge"), "gate: slot 0 taken after 0 s\ngate ran\n");
     assert!(!String::from_utf8_lossy(&out.stderr).contains("gate: "), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(!slot_is_held(&fx.home.gate_slot(0)), "the slot is released when the Gate ends");
+    assert!(!slot_is_held(&fx.home.test_slot(0)), "the slot is released when the Gate ends");
 }
 
 #[test]
 fn a_slot_held_by_a_killed_gate_is_free_at_once() {
     let fx = fx("dispatch");
-    fx.gate_concurrency(1);
+    fx.test_concurrency(1);
     let root = fx.env.root().to_path_buf();
     fx.hooks(&paused_gate(&root));
 
     let first = fx.spawn_pr("open");
     await_gate(&root);
-    assert!(slot_is_held(&fx.home.gate_slot(0)), "the running Gate holds the only slot");
+    assert!(slot_is_held(&fx.home.test_slot(0)), "the running Gate holds the only slot");
     // SIGKILL: no clean-up runs; its hook (a child) outlives it, and must not keep the slot.
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(first.pid() as i32), nix::sys::signal::Signal::SIGKILL).unwrap();
     first.finish();
@@ -2982,7 +2982,7 @@ fn a_slot_held_by_a_killed_gate_is_free_at_once() {
 #[test]
 fn with_two_slots_two_gates_run_together_and_a_third_waits() {
     let fx = fx("dispatch");
-    fx.gate_concurrency(2);
+    fx.test_concurrency(2);
     let root = fx.env.root().to_path_buf();
     // Each Gate marks itself `in-<pid of its shell>`, waits for `gate-go`, and fails, so no Gate changes the PR.
     let go = root.join("gate-go");
@@ -2997,10 +2997,10 @@ fn with_two_slots_two_gates_run_together_and_a_third_waits() {
     wait_until("two Gates to run together", || running() == 2);
     let third = fx.spawn_pr("open");
     wait_until("the third Gate to log that it waits", || {
-        fx.pr_log("pre-merge").contains("gate: waiting for a slot (2 of 2 busy; gate_concurrency 2)\n")
+        fx.pr_log("pre-merge").contains("gate: waiting for a slot (2 of 2 busy; test_concurrency 2)\n")
     });
     assert_eq!(running(), 2, "the third Gate runs nothing while both slots are held");
-    assert!(slot_is_held(&fx.home.gate_slot(0)) && slot_is_held(&fx.home.gate_slot(1)));
+    assert!(slot_is_held(&fx.home.test_slot(0)) && slot_is_held(&fx.home.test_slot(1)));
     release_gate(&root);
 
     let outs = [a.finish(), b.finish(), third.finish()];

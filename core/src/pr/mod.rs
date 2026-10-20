@@ -295,7 +295,7 @@ fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
         base: &pr.base,
         pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreStart) },
         pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
-        slots: Slots::new(&env.home, env.config.gate_concurrency),
+        slots: Slots::new(&env.home, env.config.test_concurrency),
     }
 }
 

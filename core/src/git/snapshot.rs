@@ -8,8 +8,9 @@ use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
 
-use super::gate::Slots;
-use super::hooks::{HookOutcome, Log, Operation, run_hook_as};
+use super::gate::{self, Slots};
+use crate::slot::SLOT_VARIABLE;
+use super::hooks::{Detached, HookOutcome, Log, Operation, run_hook_as};
 use super::run::{ok, worktree_add};
 use super::worktree::{Setup, list};
 use crate::error::{CpdError, ErrorCode};
@@ -72,8 +73,8 @@ pub struct GateHooks<'a> {
     pub pre_start: Setup,
     /// `gate_minutes`, and `run/<plan>/logs/pr-<key>.pre-merge.log`.
     pub pre_merge: Setup,
-    /// The machine-wide slots, one of which the Gate holds from before `pre-start` to after `pre-merge`
-    /// (contract §7.6 "The Gate slot").
+    /// The machine-wide test slots, one of which the Gate holds from before `pre-start` to after `pre-merge`
+    /// (contract §7.6 "The test slot").
     pub slots: Slots,
 }
 
@@ -126,9 +127,12 @@ impl GateWorktree {
     pub fn run(&self, hooks: &GateHooks<'_>) -> Result<Result<(), Refused>, CpdError> {
         let operation = Operation { branch: hooks.base };
         // Held until this returns: the slot is released as soon as `pre-merge` has ended, or `pre-start` has failed.
-        let _slot = hooks.slots.take(&hooks.pre_merge.log)?;
+        let slot = gate::take(&hooks.slots, &hooks.pre_merge.log)?;
+        // Both hooks see the slot they run in, so a `cpd slot` inside them takes no second one (contract §7.6).
+        let held = slot.index().to_string();
+        let detached = Detached { branch: hooks.lead_branch, env: &[(SLOT_VARIABLE, &held)] };
         for (hook, setup, log) in [(Hook::PreStart, &hooks.pre_start, Log::Truncate), (Hook::PreMerge, &hooks.pre_merge, Log::Append)] {
-            let result = run_hook_as(hook, &self.path, hooks.lead_branch, Some(&operation), setup.timeout, &setup.log, log)?;
+            let result = run_hook_as(hook, &self.path, &detached, Some(&operation), setup.timeout, &setup.log, log)?;
             if result.outcome != HookOutcome::Passed {
                 return Ok(Err(Refused { hook, outcome: result.outcome, tail: result.tail, log: setup.log.clone() }));
             }
