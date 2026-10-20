@@ -346,7 +346,7 @@ impl Fx {
                 "merged",
                 "",
             ),
-            Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');"),
+            Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'web', 'pay', 'repo');"),
         };
         self.store()
             .write("fixture", |tx| {
@@ -1449,7 +1449,7 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
                "changed": [
                    {"repo": "acme/pay", "number": 901, "state": "open", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"},
                    {"repo": "acme/web", "number": 902, "state": "open", "draft": false, "checks": "none", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown"}],
-               "removed": 0, "feedback": [], "merged": [], "done": [],
+               "base_changed": [], "removed": 0, "feedback": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}})
     );
     assert_eq!(fx.pull_requests(), [("acme/pay".to_owned(), 901), ("acme/web".to_owned(), 902)]);
@@ -1553,12 +1553,164 @@ fn a_second_identical_poll_writes_nothing() {
 
     assert_eq!(
         again,
-        json!({"ok": true, "polled": 2, "changed": [], "removed": 0, "feedback": [], "merged": [], "done": [],
+        json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "removed": 0, "feedback": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "prs": again["prs"]})
     );
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
     assert_eq!(fx.gh_calls().iter().filter(|c| is_search(c)).count(), 2);
     assert!(fx.gh_calls().iter().all(|c| !is_lookup(c)), "812 is in the search: no lookup");
+}
+
+// ------------------------------------------------------------------ pr poll: the base follow (hs-d325, hs-d326)
+
+/// `node`, with the base branch GitHub reports for the pull request (`baseRefName`).
+fn based(node: String, base: &str) -> String {
+    assert_eq!(node.matches(r#""mergedAt":"#).count(), 1);
+    node.replace(r#""mergedAt":"#, &format!(r#""baseRefName":"{base}","mergedAt":"#))
+}
+
+/// 814, the pull request of PR `up`.
+fn up(state: &str) -> String {
+    node("acme/pay", 814, state, None, None)
+}
+
+impl Fx {
+    /// Adds PR `up` of Plan `pay`, `open` with its pull request 814, stacked on PR `repo` (its base is `cpd/pay`).
+    fn stack_up(&self) {
+        let sql = format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+               VALUES ('acme/pay', 814, 'https://github.com/acme/pay/pull/814', 'Pay the bills', 0, 'open', 'none', 'none', 'opened', NULL, 'opened');
+             INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at,
+                              pr_number, pr_url, pr_opened_at, pull_request)
+               VALUES ('pay', 'up', '{}', 'cpd/pay', 'open', 'cpd/pay/up', '/nonexistent/up', cpd_txn(), 't', 't',
+                       814, 'https://github.com/acme/pay/pull/814', 'opened', (SELECT id FROM pull_requests WHERE number = 814));",
+            self.repo.display()
+        );
+        self.store().write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
+    }
+
+    /// `(status, base)` of PR `key` of Plan `pay`.
+    fn base_of(&self, key: &str) -> (String, String) {
+        self.store()
+            .read(|c| Ok(c.query_row("SELECT status, base FROM prs WHERE plan = 'pay' AND key = ?1", [key], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .unwrap()
+    }
+
+    /// `(draft, state)` of the pull request `number`, as the poll stored it.
+    fn stored_pull_request(&self, number: i64) -> (bool, String) {
+        self.store()
+            .read(|c| Ok(c.query_row("SELECT draft, state FROM pull_requests WHERE number = ?1", [number], |r| Ok((r.get(0)?, r.get(1)?)))?))
+            .unwrap()
+    }
+}
+
+/// Plan `pay`: PR `repo` (812, base `main`) and PR `up` (814) stacked on it, both open, as a poll stored them.
+fn stacked() -> Fx {
+    let fx = fx("deploy");
+    fx.stack_up();
+    fx.search(&[based(pay("OPEN", None, None), "main"), based(up("OPEN"), "cpd/pay")]);
+    let out = fx.poll();
+    assert_eq!(out["base_changed"], json!([]), "GitHub agrees with cpd: nothing to follow");
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
+    fx
+}
+
+#[test]
+fn poll_follows_github_repointing_a_stacked_pr_when_its_base_pr_merges_and_keeps_it_ready() {
+    let fx = stacked();
+    let events = fx.event_count();
+    // The base PR merged: GitHub deleted its branch and repointed 814 to `main`. 812 left the open search.
+    fx.search(&[based(up("OPEN"), "main")]);
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "up", "from": "cpd/pay", "to": "main"}]));
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!(out["feedback"], json!([]));
+    assert_eq!(out["done"], json!([]), "up is still open");
+    // The PR's base is `main` and nothing else about it moved: still open, its pull request still ready.
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "main".to_owned()));
+    assert_eq!(fx.stored_pull_request(814), (false, "open".to_owned()));
+    assert_eq!(fx.plan_row().0, "deploy");
+    // One informational Event for the Plan, once; no `pr-feedback`.
+    let told = fx.events("pr-base-changed");
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        told[0].0,
+        "PR up of Plan pay now targets main (was cpd/pay): its base PR pay/repo merged and GitHub repointed the pull request. \
+         Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan pay."
+    );
+    assert_eq!(
+        told[0].1,
+        json!({"pr": "up", "from": "cpd/pay", "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": "poll",
+               "number": 814, "url": "https://github.com/acme/pay/pull/814"})
+    );
+    assert!(fx.events("pr-feedback").is_empty());
+    assert_eq!(fx.event_count() - events, 2, "pr-merged and pr-base-changed, nothing else");
+    // cpd changes no base on GitHub, runs no Gate and opens nothing: it only asked GitHub (graphql).
+    assert!(fx.gh_calls().iter().all(|c| c[0] == "api"), "{:?}", fx.gh_calls());
+    assert!(!fx.home.plan_dir(&plan()).join("logs/pr-up.pre-merge.log").exists(), "no Gate ran for up");
+    assert_eq!(fx.gate_log(), "", "no Gate ran for repo");
+
+    // A second poll changes nothing.
+    let (txns, events) = (fx.txns(), fx.event_count());
+    let again = fx.poll();
+    assert_eq!(again["base_changed"], json!([]));
+    assert_eq!(again["changed"], json!([]));
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "main".to_owned()));
+}
+
+#[test]
+fn poll_follows_a_base_retargeted_by_hand_on_any_open_pr() {
+    let fx = stacked();
+    fx.search(&[based(pay("OPEN", None, None), "develop"), based(up("OPEN"), "cpd/pay")]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["base_changed"], json!([{"plan": "pay", "pr": "repo", "from": "main", "to": "develop"}]));
+    assert_eq!(fx.base_of("repo"), ("open".to_owned(), "develop".to_owned()));
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()), "814 still targets 812's branch, as GitHub says");
+    let told = fx.events("pr-base-changed");
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert_eq!(
+        told[0].0,
+        "PR repo of Plan pay now targets develop (was main): the base changed on GitHub. \
+         Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan pay."
+    );
+    assert_eq!(told[0].1["from_pr"], Value::Null);
+    assert_eq!(told[0].1["to_pr"], Value::Null);
+
+    let events = fx.event_count();
+    assert_eq!(fx.poll()["base_changed"], json!([]));
+    assert_eq!(fx.event_count(), events);
+}
+
+#[test]
+fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
+    let fx = stacked();
+    // GitHub deletes the branch of a merged pull request only: 812 is closed, 814 still targets `cpd/pay`.
+    fx.search(&[based(up("OPEN"), "cpd/pay")]);
+    fx.lookup(&[Some(pay("CLOSED", None, None))]);
+
+    let out = fx.poll();
+
+    assert_eq!(out["base_changed"], json!([]));
+    assert_eq!(out["feedback"], json!([{"plan": "pay", "pr": "repo"}]), "the closed pull request is the poll's usual pr-feedback");
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
+    assert_eq!(fx.stored_pull_request(814), (false, "open".to_owned()));
+    assert!(fx.events("pr-base-changed").is_empty());
+
+    // The same answers again: still nothing, and the base PR is not cancelled out from under the stacked PR.
+    let (txns, events) = (fx.txns(), fx.event_count());
+    assert_eq!(fx.poll()["base_changed"], json!([]));
+    assert_eq!((fx.txns(), fx.event_count()), (txns, events));
+    let run = fx.env.cpd(&["pr", "cancel", "repo", "--plan", "pay"]);
+    let error = common::refused(&run, "pr_in_use", 3);
+    assert_eq!(error["details"]["prs"], json!(["up"]), "{error}");
+    assert_eq!(fx.base_of("repo").0, "open");
+    assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
 }
 
 #[test]
@@ -2932,6 +3084,131 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
     fx.poll_all();
     fx.poll_all();
     assert_eq!((fx.policy_errors().len(), fx.event_count()), (1, events));
+}
+
+// ---------- stacked PRs (contract §7.6 `pr open`, §3.8 "Stacked PRs") ----------
+
+/// Plan `ship`, in `dispatch`, with its one PR `web` stacked on `pay`'s PR `repo` (its Lead Branch `cpd/pay`, whose
+/// Lead worktree is `fx.lead`): started from that branch, one Merged Job's commit on it, its Lead Branch pushed.
+struct Stacked {
+    lead: PathBuf,
+}
+
+fn stacked_pr(fx: &Fx) -> Stacked {
+    let ship = PlanId::parse("ship").unwrap();
+    let path = fx.repo.parent().unwrap().join("pay.ship.web");
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("web.log") };
+    let prepared = cpd_core::git::worktree::prepare_stacked_lead_worktree(&fx.repo, &ship, &path, "cpd/ship/web", "cpd/pay", &setup).map_err(|f| f.error).unwrap();
+    assert_eq!(prepared.base_sha, fx.lead_sha(), "cut from the base PR's Lead Branch head");
+    prepared.push().unwrap();
+    fx.git(&path, &["config", "user.name", "cpd test"]);
+    fx.git(&path, &["config", "user.email", "test@cpd.invalid"]);
+    fs::write(path.join("web.txt"), "web\n").unwrap();
+    fx.git(&path, &["add", "-A"]);
+    fx.git(&path, &["commit", "-q", "-m", "web"]);
+    let merged = fx.git(&path, &["rev-parse", "HEAD"]);
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead2', 'lead', 'ctx', 'ship', 'Lead', '/', 'O3', 'idle', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('ship', 'ctx', 'Ship the web', 'dispatch', 'lead2', 't', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
+                   VALUES ('ship', 'web', '{repo}', 'cpd/pay', 'dispatch', 'cpd/ship/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
+                repo = fx.repo.display(),
+                path = path.display()
+            ))?;
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, merged_sha, created_txn, created_at)
+                 VALUES ('ship', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
+                params!["f".repeat(64), merged, tx.id()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    Stacked { lead: path }
+}
+
+impl Fx {
+    fn open_web(&self) -> Run {
+        self.env.cpd(&["pr", "open", "--pr", "web", "--plan", "ship"])
+    }
+}
+
+#[test]
+fn open_of_a_stacked_pr_gates_a_head_with_the_base_prs_work_and_targets_its_lead_branch() {
+    let fx = fx("dispatch");
+    let web = stacked_pr(&fx);
+    // The Gate sees the base PR's work in the gated commit, and its `target` is the base PR's Lead Branch, whose
+    // worktree is `target_worktree_path`.
+    let marker = fx.env.root().join("gate-saw");
+    fs::create_dir_all(web.lead.join(".config")).unwrap();
+    fs::write(
+        web.lead.join(".config/wt.toml"),
+        format!("pre-merge = \"test -f api.txt && test -f web.txt && echo {{{{ target }}}} {{{{ target_worktree_path }}}} > {}\"\n", marker.display()),
+    )
+    .unwrap();
+    fx.git(&web.lead, &["add", "-A"]);
+    fx.git(&web.lead, &["commit", "-q", "-m", "hooks"]);
+
+    let out = fx.open_web().ok();
+
+    assert_eq!((&out["phase"], &out["pr"]["status"]), (&json!("deploy"), &json!("open")));
+    assert_eq!(fs::read_to_string(&marker).unwrap().trim(), format!("cpd/pay {}", fx.lead.display()));
+    // `gh pr create --base <the base PR's Lead Branch>`, never as a draft.
+    let calls = fx.gh_calls();
+    let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).expect("gh pr create ran");
+    let at = |flag: &str| create.iter().position(|a| a == flag).map(|i| create[i + 1].as_str());
+    assert_eq!((at("--base"), at("--head")), (Some("cpd/pay"), Some("cpd/ship/web")));
+    assert!(!create.iter().any(|a| a.contains("draft")), "{create:?}");
+    assert_eq!(fx.remote_branch("cpd/ship/web"), Some(fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/ship/web"])));
+}
+
+#[test]
+fn open_of_a_stacked_pr_is_refused_while_its_base_prs_branch_is_not_on_origin() {
+    let fx = fx("dispatch");
+    stacked_pr(&fx);
+    let pushed = fx.remote_branch("cpd/ship/web");
+    fx.git(&fx.repo, &["push", "-q", "origin", "--delete", "cpd/pay"]);
+
+    let run = fx.open_web();
+
+    assert_eq!(code(&run), ("base_not_found".into(), 4));
+    assert_eq!(run.error()["details"], json!({"pr": "web", "base": "cpd/pay", "base_pr": "pay/repo"}));
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "no pull request was created: {:?}", fx.gh_calls());
+    assert_eq!(fx.remote_branch("cpd/ship/web"), pushed, "nothing was pushed");
+    // Its Lead pushes the base branch, and the PR opens.
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
+}
+
+#[test]
+fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_it_is_behind() {
+    let fx = fx("dispatch");
+    let web = stacked_pr(&fx);
+    // A merge into the base PR's Lead Branch, pushed: the stacked head lacks it.
+    fs::write(fx.lead.join("more.txt"), "more\n").unwrap();
+    fx.git(&fx.lead, &["add", "-A"]);
+    fx.git(&fx.lead, &["commit", "-q", "-m", "more"]);
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    let base_sha = fx.lead_sha();
+
+    let run = fx.open_web();
+
+    assert_eq!(code(&run), ("base_behind".into(), 3));
+    let details = &run.error()["details"];
+    assert_eq!((&details["base"], &details["base_sha"]), (&json!("cpd/pay"), &json!(base_sha)));
+    assert_eq!(
+        details["next"],
+        json!([format!("git -C {} merge --no-edit origin/cpd/pay", web.lead.display()), "cpd pr open --pr web"])
+    );
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
+
+    // The stacked Lead takes the new commits by merge, as `next` says, and opens.
+    fx.git(&web.lead, &["merge", "-q", "--no-edit", "origin/cpd/pay"]);
+    assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
 }
 
 // ------------------------------------------------------------ the test slots

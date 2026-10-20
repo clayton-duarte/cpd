@@ -87,7 +87,7 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 
 Prevent conflicts between Leads' PRs before the work starts, and remedy them when they appear.
 
-- **Split by area.** Cut work between Leads by area: the files and directories each touches. Give two Plans the same area only when you cannot avoid it.
+- **Split by deliverable and area.** Cut work between Leads by deliverable and by area: the files and directories each touches. A small follow-up goes into its area's existing PR, not a new one. Give two Plans the same area only when you cannot avoid it.
 - **Keep a file map.** Map the files of every active PR: each pending Job's `touches` from `cpd context pending --context <c>`, and `cpd plan show --plan <p>` per Plan. `cpd plan render`'s Overlaps section shows a Plan's overlaps with other active Plans. Know every unavoidable overlap before the work starts, and tell both Leads in the brief or by `cpd session send`.
 - **Set the landing order.** For overlapping PRs, decide which lands first. Within one Plan the order is a PR's needs (`cpd pr add <key> --repo <path> --needs <k>`): it starts from the base after the other merges. Across Plans, tell each Lead with `cpd session send <lead-session>` which PR lands first and that the next one waits.
 - **Oversee all-merged PRs.** Leads open a PR as soon as its last Job merges. Watch the PRs whose Jobs are all merged (`cpd context pending --context <c>` shows each PR's Jobs) and stack those that would conflict, so each PR can simply be merged.

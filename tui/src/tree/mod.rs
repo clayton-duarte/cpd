@@ -9,6 +9,7 @@
 //!   before a command, with no inline prompt row;
 //! - [`actions`]: what it does, as `cpd` commands (`session open`, `plan new`, `session close`, the menu's), and the
 //!   legend popup; [`slug`]: the id of a new Context or Plan, from its title;
+//! - [`folds`]: the folds (collapsed Contexts, expanded `…` rows) kept in `run/tui/tree-folds.json` across restarts;
 //! - [`inbox`]: the Inbox section at the column's bottom (header, up to 3 items, the fold widget's `╰─ expand` / `╰─ collapse` row) and what a click on an item does:
 //!   `session open`, the logs popup at the item's Event, or nothing (the label is an OSC 8 link);
 //! - [`super::background`]: a command or the legend popup runs on a thread, one command at a time; the footer says
@@ -23,6 +24,7 @@
 mod actions;
 mod ask;
 mod cursor;
+mod folds;
 mod inbox;
 mod kinds;
 mod menu;
@@ -51,6 +53,7 @@ use cpd_core::inbox::model;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 use actions::Runner;
+use folds::FoldsFile;
 use kinds::KINDS;
 use view::{Effect, View};
 
@@ -76,7 +79,8 @@ pub(super) fn run() -> Result<Output, CpdError> {
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
             let snooze_end = read::snooze_end(&mut store)?;
-            let view = View::new(read::tree(&mut store)?, false);
+            let mut view = View::new(read::tree(&mut store)?, false);
+            view.keep_folds(FoldsFile::at(&home));
             let follow = read::Follow::new(&mut store, KINDS, view.tree.events_cursor)?;
             let poll = Duration::from_millis(u64::from(config.events.poll_ms));
             Ok((store, home, view, (follow, snooze_end), poll, Arc::new(Runner::new(&config))))
@@ -148,6 +152,8 @@ fn event_loop(
             last_snapshot = Instant::now();
             view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone());
         }
+        // the folds file follows every change of the folds (a write only when they changed)
+        view.save_folds();
         let (frame, second) = (palette::frame(SystemTime::now()), unix_second());
         redraw |= view.error != error || (view.animated() && frame != drawn_frame);
         // the Inbox items' ages are redrawn every second, from `opened_at`
