@@ -79,16 +79,22 @@ pub const OPT_HISTORY: &str = "@cpd_history";
 /// The pane border titles (contract §6.1), keyed by the pane options, first
 /// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` when set, else
 /// nothing; the chat placeholder and a history pane have none, since pi and
-/// the placeholder say what they are; the
-/// views have their column titles; any other pane shows its command. Every
-/// title is a pill (hs-d266): the title reversed (`#[reverse]`..`#[noreverse]`),
-/// a block in the border's colour with the text in the background colour, between
-/// a rounded cap on each side, `\u{e0b6}` and `\u{e0b4}`. The caps are drawn without
-/// reverse, so tmux gives them the border style's foreground: blue on the focused
-/// pane, the border colour elsewhere (checked on a private server).
-pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\u{e0b6}#[reverse] #{@cpd_title} #[noreverse]\u{e0b4},},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-\u{e0b6}#[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]\u{e0b4}}}}";
+/// the placeholder say what they are; the views have their column titles; any
+/// other pane shows its command. Every title is a pill (hs-d266, hs-d475): the
+/// text reversed (`#[reverse]`..`#[noreverse]`) with no padding, between a
+/// rounded cap on each side, `\u{e0b6}` and `\u{e0b4}`. The pill is grey (colour 8)
+/// and blue on the focused pane, set in the format itself (`pane_active`), so the
+/// caps and the block take it whatever the border lines' colour is. tmux draws two
+/// border line characters before the format; one `━` more in the pill's colour
+/// puts the left cap at column 3 from the pane's edge (hs-d478, checked on a
+/// private server).
+pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]\
+#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
+#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
+#[noreverse]\u{e0b4}}}}";
 
 /// What the supervising hooks run when the engine's pane died or its window is
 /// gone (contract §6.6): `watch --ensure --wait`, which starts the engine again
@@ -183,49 +189,59 @@ pub const LEGEND_GLYPH: &str = legend_glyph!();
 /// The logs button's glyph, U+F09ED md-text_box_outline.
 pub const LOGS_GLYPH: &str = logs_glyph!();
 
-// The preview pill's width (0 without a preview): the space before it, two caps, ` preview: ` and ` ` around the value.
-macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}" }; }
-// Whether the long workers form fits: the right items' long width, the buttons' 11 cells and 2 of air, and the preview.
+// The preview pill's width (0 without a preview): a join, two caps and `preview:` (12 cells) plus the value.
+macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}" }; }
+// Whether the long workers form fits: the right group's long width (the engine's, whose one space is the join),
+// the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), and the preview.
 macro_rules! long_fits {
     () => {
-        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},", preview_width!(), "}}")
+        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},14},", preview_width!(), "}}")
     };
 }
+// A join: one grey `─`, outside the click ranges.
+macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 
-/// The StatusBar (contract §6.1): the cockpit session's `status-format[0]`, a
-/// full line (hs-d266, hs-d322). Three one-glyph buttons, each a pill (a cap
-/// `\u{e0b6}`, the glyph as a grey block, a cap `\u{e0b4}`, 3 cells) in its own click
-/// range, one space apart outside the ranges (a range also owns the cell after
-/// it, so touching ranges would steal each other's first cell). Then a grey
-/// (colour 8) `\u{2500}` line, `#{R:\u{2500},n}`, over the free width: `#{client_width}` minus
-/// the buttons' 11 cells minus the width of the right items in the form drawn.
-/// At the right, each its own pill on `bg=colour236`: the Inbox counter the
-/// engine keeps in `@cpd_inbox`, one space, then the workers counts (User,
-/// hs-d198): the long form in `@cpd_workers` when `#{client_width}` is at least
-/// `@cpd_workers_width` (the visible width of the right items in the long form,
-/// caps included) plus 13 (the buttons' 11 cells and 2 of air), else the short
-/// form in `@cpd_workers_short`, whose width is `@cpd_workers_short_width`.
+/// The StatusBar (contract §6.1, hs-d479): the cockpit session's `status-format[0]`,
+/// one grey (colour 8) `\u{2500}` line across the full width that starts and ends with a
+/// `\u{2500}`. Every item is a pill, its text between the caps with no padding. At the
+/// left, the three one-glyph buttons (a cap `\u{e0b6}`, the glyph as a grey block, a cap
+/// `\u{e0b4}`, 3 cells), each in its own click range, joined by a single `\u{2500}` outside
+/// the ranges (a range also owns the cell after it, so the join does what the space did;
+/// the leading `\u{2500}` is outside the first range): the left group is 12 cells.
+/// Then the `\u{2500}` fill, `#{R:\u{2500},n}`, over the free width: `#{client_width}` minus
+/// the left group's 12, the preview pill and the right group in the form drawn (the
+/// engine's width plus the closing `\u{2500}`). At the right, each its own pill on
+/// `bg=colour236`, joined by a single `\u{2500}`: the Inbox counter the engine keeps in
+/// `@cpd_inbox`, then the workers counts (User, hs-d198): the long form in
+/// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
+/// least `@cpd_workers_width` plus 14), else the short form in `@cpd_workers_short`,
+/// whose width is `@cpd_workers_short_width`.
 ///
 /// While `@cpd_preview` is set (`scripts/preview-tui.sh on`, hs-n264), a yellow
-/// pill ` preview: <value> ` follows the buttons, after one space, and the line
-/// is shorter by its width (`#{n:@cpd_preview}` + 14: the space, two caps and
-/// ` preview: ` and ` `). Styles inside a conditional are one attribute per
-/// `#[…]`, because a comma there would split the branch.
+/// pill `preview: <value>` follows the buttons, joined by a single `\u{2500}`, and the
+/// fill is shorter by its width (`#{n:@cpd_preview}` + 12: the join, two caps and
+/// `preview: `). Styles inside a conditional are one attribute per `#[…]`, because a
+/// comma there would split the branch.
 ///
 /// `push-default` makes `bg=colour236` the pill's default, so that the `#[default]`
 /// the engine's texts end their coloured parts with does not end the pill.
 pub const STATUS_FORMAT: &str = concat!(
-    "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]", reset_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange] ",
-    "#[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]", legend_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange] ",
+    join!(),
+    "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]", reset_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
+    join!(),
+    "#[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]", legend_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
+    join!(),
     "#[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]", logs_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
-    "#{?#{@cpd_preview}, #[fg=yellow]\u{e0b6}#[reverse] preview: #{@cpd_preview} #[noreverse]\u{e0b4}#[default],}",
-    "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{client_width},11},", preview_width!(), "},",
-    "#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}}}}",
+    "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}",
+    "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},",
+    "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}",
     "#[default]#[align=right]",
-    "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default] ",
+    "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]",
+    join!(),
     "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]",
     "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}",
-    "#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]"
+    "#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]",
+    join!()
 );
 
 /// The cockpit session's own options (contract §6.1), set with `-t`: `status`
@@ -594,9 +610,9 @@ impl Tmux {
         self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_SESSION, session.as_str()])).map(drop)
     }
 
-    /// `set -p -t <pane> @cpd_title <title>`.
+    /// `set -p -t <pane> @cpd_title <title>`, the title in Title Case (hs-d475, [`title_case`]).
     pub fn set_pane_title(&self, pane: &PaneId, title: &str) -> Result<(), CpdError> {
-        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_TITLE, title])).map(drop)
+        self.run(&strings(&["set", "-p", "-t", pane.as_str(), OPT_TITLE, &title_case(title)])).map(drop)
     }
 
     /// `set -p -t <pane> @cpd_view <view>`.
@@ -923,6 +939,22 @@ fn parse_pane(line: &str) -> Option<Line> {
     }
 }
 
+/// The text in Title Case (contract §6.1, hs-d475): the first letter of each space-separated word upper-cased, the
+/// rest of each word unchanged, so ids, acronyms and `E10` stay.
+pub fn title_case(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut word_start = true;
+    for c in text.chars() {
+        if word_start {
+            out.extend(c.to_uppercase());
+        } else {
+            out.push(c);
+        }
+        word_start = c == ' ';
+    }
+    out
+}
+
 fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|s| (*s).to_owned()).collect()
 }
@@ -947,6 +979,22 @@ mod tests {
             assert!(!older_version(same, same));
         }
         assert!(!older_version("master", "3.8") && !older_version("3.4", "unknown"));
+    }
+
+    #[test]
+    fn title_case_upper_cases_the_first_letter_of_each_word_and_leaves_the_rest() {
+        for (text, want) in [
+            ("dynamic session titles", "Dynamic Session Titles"),
+            ("E10 retitle fix", "E10 Retitle Fix"),
+            ("cpd·tui visuals", "Cpd·tui Visuals"),
+            ("Retry payouts", "Retry Payouts"),
+            ("fix PAY-1 on hs-d475", "Fix PAY-1 On Hs-d475"),
+            ("", ""),
+        ] {
+            assert_eq!(title_case(text), want, "{text:?}");
+        }
+        // Twice is once, and the spaces stay as they are.
+        assert_eq!(title_case(&title_case("a  b")), "A  B");
     }
 
     #[test]
