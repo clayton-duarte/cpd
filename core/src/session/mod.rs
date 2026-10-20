@@ -37,7 +37,7 @@ use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 
 pub use archive::{Blocker, archive_blocked, blockers};
-pub use moves::{Closed, Place, Placed, close_lead, placed, reopen};
+pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
