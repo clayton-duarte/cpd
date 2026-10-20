@@ -118,6 +118,7 @@ export class Fixture {
     this.pi = new FakePi();
     this.respond("session-show", sessionShow());
     this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.7)
+    this.respond("policy-show", policyShow()); // no text anywhere: no section
     this.respond("--version", { ok: true, version: "0.0.0", schema: 6, store_schema: 6, protocol: PROTOCOL });
   }
 
@@ -175,9 +176,14 @@ export class Fixture {
     return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   }
 
-  /** argv of the calls that started, in order, without `events follow`. */
+  /** argv of the calls that started, in order, without `events follow`, `--version` and `policy show` (see `policyCalls`). */
   argvs(): string[][] {
-    return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events" && c.argv[0] !== "--version").map((c) => c.argv);
+    return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events" && c.argv[0] !== "--version" && c.argv[0] !== "policy").map((c) => c.argv);
+  }
+
+  /** argv of the `cpd policy …` calls that started. */
+  policyCalls(): string[][] {
+    return this.calls().filter((c) => c.phase === "start" && c.argv[0] === "policy").map((c) => c.argv);
   }
 
   /** How often the adapter ran `cpd --version`. */
@@ -206,11 +212,15 @@ export class Fixture {
   /** Start the adapter under test with fast timing; into `pi` (default the fixture's) to run a second adapter on the same fake `cpd`. */
   load(options: Options = {}, pi: FakePi = this.pi): void {
     const start = options.spawn ?? spawn;
+    // The caller's own `reload` object, completed: the adapter reads it at every poll, so a test can change `timeoutMs` while it runs.
+    const reload = options.reload ?? {};
+    reload.dir ??= this.adapterDir;
+    reload.intervalMs ??= 20;
     adapter(pi, {
       ...options,
       spawn: ((...args: Parameters<typeof spawn>) => pi.track(start(...args))) as typeof spawn,
       timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },
-      reload: { dir: this.adapterDir, intervalMs: 20, ...options.reload },
+      reload,
     });
   }
 
@@ -279,6 +289,15 @@ export const sessionShow = (over: Record<string, unknown> = {}) => ({
   session: { id: ID, role: "lead", context: "ctx", plan: "p1", attempt: null, name: "the lead", state: "stopped", plan_lead: true, grounded_lead: false, registered_event: 100, ...over },
   open_escalations: [],
 });
+
+/** A `cpd policy show` output (commands.md §22.1): the domains of contract §8.3, each with its audience; `texts` sets a domain's text and `source`. */
+export const policyShow = (role = "lead", texts: Record<string, string> = {}, source = "owner:/p/o.toml") => {
+  const audience: Record<string, string[]> = {
+    pr: ["lead", "worker"], deploy: ["lead"], code: ["lead", "worker"], tests: ["lead", "worker"], monitor: ["lead", "worker"], instructions: ["manager", "lead", "worker"],
+  };
+  const policy = Object.fromEntries(Object.entries(audience).map(([d, a]) => [d, { source: d in texts ? source : "default", audience: a, keys: {}, text: texts[d] ?? "" }]));
+  return { ok: true, key: { owner: "o", repo: null }, role, files: [], policy };
+};
 
 export const planShow = (over: Record<string, unknown> = {}) => ({ ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null, ...over });
 
@@ -390,8 +409,8 @@ export class FakePi implements PiApi {
   };
 
   /** Runs a registered tool like pi does. The adapter's tool reads nothing of the tool context, so the fake passes none of pi's. */
-  async runTool(tool: ToolDefinition<any, any, any>): Promise<{ text: string; details: unknown }> {
-    const out = await tool.execute("call-1", {}, undefined, undefined, undefined as never);
+  async runTool(tool: ToolDefinition<any, any, any>, params: Record<string, unknown> = {}): Promise<{ text: string; details: unknown }> {
+    const out = await tool.execute("call-1", params, undefined, undefined, undefined as never);
     return { text: out.content.map((c) => (c.type === "text" ? c.text : "")).join(""), details: out.details };
   }
 
@@ -451,12 +470,12 @@ export class FakePi implements PiApi {
     for (const h of this.handlers.get(event) ?? []) await h({ type: event, ...payload }, this.ctx());
   }
 
-  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). The adapter's `markReply` observer (reply.ts) adds nothing and is left out, so the list stays what the handlers that add a message returned. */
+  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). The adapter's `markReply` and `policyHandler` observers add no message and are left out, so the list stays what the handlers that add a message returned. */
   async fireWith(event: string, payload: Record<string, unknown> = {}): Promise<unknown[]> {
     const out: unknown[] = [];
     for (const h of this.handlers.get(event) ?? []) {
       const result = await h({ type: event, ...payload }, this.ctx());
-      if (h.name !== "markReply") out.push(result);
+      if (h.name !== "markReply" && h.name !== "policyHandler") out.push(result);
     }
     return out;
   }

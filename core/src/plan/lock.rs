@@ -60,7 +60,7 @@ pub(super) fn lock(args: LockArgs) -> Result<Output, CpdError> {
         .with("plan", id.as_str())
         .with("fingerprint", fingerprint)
         .with("review", latest)
-        .with("next", format!("cpd plan review --plan {id}")));
+        .with("next", format!("cpd plan review --plan {id} --title <title>")));
     };
     let live: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let empty: Vec<&str> =

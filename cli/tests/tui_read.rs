@@ -1022,6 +1022,45 @@ fn the_widgets_return_the_latest_events_oldest_first_and_the_cursor() {
     assert!(read::widgets(&mut store, 3, 1000).unwrap().events.len() as i64 <= last);
 }
 
+/// tui-F1: the StatusBar reads the slots and the Dispatch column the open pull requests, not the whole model.
+#[test]
+fn the_slots_and_the_open_prs_read_alone_are_the_widgets_own() {
+    let (_env, mut store) = fixture();
+    let w = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(read::slots(&mut store, 3).unwrap(), (w.slots, w.events_cursor));
+    assert_eq!(read::open_prs(&mut store).unwrap(), (w.prs, w.events_cursor));
+}
+
+/// tui-F3: a pull request row changes with no Event (`pr poll` writes the checks, the review, `mergeable`), so the follow
+/// tells a view that the rows moved; the first poll says so, since a change since the snapshot cannot be told from none.
+#[test]
+fn the_follow_tells_when_a_pull_request_row_changed_though_no_event_came() {
+    let (_env, mut store) = fixture();
+    let cursor = read::slots(&mut store, 3).unwrap().1;
+    let mut follow = read::Follow::new(&mut store, &[], cursor).unwrap();
+    let changes = |store: &mut Store, follow: &mut read::Follow| {
+        let changes = follow.poll_changes(store).unwrap();
+        (changes.events.len(), changes.pulls, changes.any())
+    };
+    assert_eq!(changes(&mut store, &mut follow), (0, true, true), "the first poll");
+    assert_eq!(changes(&mut store, &mut follow), (0, false, false), "nothing came");
+
+    sql(&mut store, "UPDATE pull_requests SET checks = 'failed', changed_at = '2026-03-01T00:00:00.000Z' WHERE number = 7");
+    assert_eq!(changes(&mut store, &mut follow), (0, true, true), "a row changed, with no Event");
+    assert_eq!(changes(&mut store, &mut follow), (0, false, false));
+
+    sql(&mut store, &event("watch-started", None, None, None, r#"{"pid":1}"#));
+    assert_eq!(changes(&mut store, &mut follow), (1, false, true), "an Event, no row");
+
+    sql(
+        &mut store,
+        "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+         VALUES ('acme/repo', 99, 'https://github.com/acme/repo/pull/99', 'New', 0, 'open', 'none', 'none',
+                 '2026-03-02T00:00:00.000Z', '2026-03-02T00:00:00.000Z')",
+    );
+    assert_eq!(changes(&mut store, &mut follow), (0, true, true), "a row came");
+}
+
 fn spawn_and_reap() -> u32 {
     let mut child = std::process::Command::new("true").spawn().unwrap();
     let pid = child.id();

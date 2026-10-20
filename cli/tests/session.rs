@@ -256,7 +256,7 @@ fn list_filters_and_derives_place_and_leads() {
         json!({"id": "lead1", "role": "lead", "context": "ctx", "plan": "pay", "attempt": null, "name": "Lead one",
                "state": "idle", "state_label": null, "state_at": "2020-01-01T00:00:01Z", "archived_at": null, "place": "none", "tmux_pane": null, "file": null,
                "forked_from": null, "plan_lead": true, "tier": "O3",
-               "cwd": env.root().display().to_string()})
+               "cwd": env.root().display().to_string(), "title": null, "titled_at": null})
     );
     let manager = sessions.iter().find(|s| s["id"] == MANAGER).unwrap();
     assert_eq!(
@@ -1139,6 +1139,28 @@ fn open_gives_a_new_pane_the_plans_title_for_the_plans_lead_and_the_name_for_a_f
     assert_eq!(title(&env, LEAD1), "Pay");
     let fork = env.cpd(&["session", "fork", LEAD1, "--name", "side"]).ok()["session"]["id"].as_str().unwrap().to_owned();
     assert_eq!(title(&env, &fork), "side");
+}
+
+#[test]
+fn open_resumes_a_titled_lead_with_its_dynamic_title_and_a_rename_keeps_it() {
+    let env = TestEnv::new();
+    setup(&env);
+    env.fake_cpd_views();
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    exec_sql(&env, &format!("UPDATE sessions SET title = 'Dynamic subject', titled_at = 't' WHERE id = '{LEAD1}'"));
+    let title = |env: &TestEnv, session: &str| {
+        let pane = panes(env).into_iter().find(|p| p.session == session).unwrap().pane;
+        let out = env.tmux(&["show", "-pqv", "-t", &pane, "@cpd_title"]);
+        String::from_utf8(out.stdout).unwrap().trim_end_matches('\n').to_owned()
+    };
+    // The Lead has no pane: opening resumes it in a new window, with the title.
+    env.cpd(&["session", "open", LEAD1]).ok();
+    assert_eq!(title(&env, LEAD1), "Dynamic subject");
+    // A rename writes the name and leaves the header.
+    env.cpd(&["session", "rename", "Lead one renamed", "--session", LEAD1]).ok();
+    assert_eq!(title(&env, LEAD1), "Dynamic subject");
+    assert_eq!(show(&env, LEAD1)["name"], "Lead one renamed");
 }
 
 // ---------- archive ----------

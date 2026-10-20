@@ -3,7 +3,7 @@ export type Wanted = { state: "working" | "stopped" } | { state: "idle"; reply?:
 
 export const LABEL_MAX = 80;
 
-/** hs-d303: `human` = the User has to act (`dialog`, `cpd: plan review`); `agent` = another agent handles it (`cpd: Worker question`). */
+/** Blocked means it needs the human (commands.md §15.4): `human` = the User has to act (`dialog`, `cpd: plan review`); `agent` = another agent handles it (`cpd: Worker question`). */
 export type Kind = "human" | "agent";
 
 type Open = { key: string; label: string; kind: Kind };
@@ -14,7 +14,7 @@ type Open = { key: string; label: string; kind: Kind };
  */
 export class Facts {
   active = false;
-  /** hs-d278: the run that is under way, or just ended, answered the User. Cleared at the next run start and once an `idle` that carries it is sent. */
+  /** The run that is under way, or just ended, answered the User. Cleared at the next run start and once an `idle` that carries it is sent. */
   reply = false;
   private opened: Open[] = [];
   private prompts = 0;

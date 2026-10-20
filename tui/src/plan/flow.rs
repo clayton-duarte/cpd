@@ -7,14 +7,15 @@
 //! vertical bus per gap between columns, lines that skip columns riding a row free of cards.
 //!
 //! Hand-written drawing is only the line glyphs (`Mask`) and the window copy (`Chart::blit`): ratatui has no widget for
-//! box-drawing edges that merge into junctions, nor for copying a window of a `Buffer`. Positions come from ratatui's
-//! `Layout`; pills are `Line`s aligned left and right.
+//! box-drawing edges that merge into junctions, nor for copying a window of a `Buffer`. Positions are lengths laid end to
+//! end ([`starts`]), not ratatui's `Layout`, whose constraint solver takes seconds for a few hundred cards; pills are
+//! `Line`s aligned left and right.
 
 use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Margin, Rect},
     style::{Modifier, Style},
     text::Line,
     widgets::Widget,
@@ -280,6 +281,20 @@ pub(super) fn free_row(near: u16, cols: std::ops::Range<usize>, busy: &[HashSet<
 }
 
 /// The chart of `all`, a running Job's icon at spinner frame `frame` (every frame is one cell wide: the layout is the same).
+/// Where each of `lengths` starts, laid end to end from `start` with `gap` between: what ratatui's `Layout` gives for
+/// `Length` constraints that fill their area exactly. Not `Layout` itself: its constraint solver took 4.6 s for a column of
+/// 300 cards in a debug build, the plan view's first draw (cli/tests/tui_idle.rs).
+fn starts(start: u16, lengths: impl IntoIterator<Item = u16>, gap: u16) -> Vec<u16> {
+    lengths
+        .into_iter()
+        .scan(start, |at, len| {
+            let here = *at;
+            *at = at.saturating_add(len).saturating_add(gap);
+            Some(here)
+        })
+        .collect()
+}
+
 pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let jobs = all;
     let cards = cards_of(&reduced_needs(&jobs));
@@ -299,7 +314,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i)).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
-    let xs: Vec<u16> = Layout::horizontal(col_w.iter().map(|&w| Constraint::Length(w))).spacing(spacing).split(Rect::new(1, 0, inner_w, 1)).iter().map(|r| r.x).collect();
+    let xs: Vec<u16> = starts(1, col_w.iter().copied(), spacing);
     let width = if ncols == 0 { 0 } else { inner_w + 2 };
 
     // y: each column's cards stacked (one empty row between cards), centred in the tallest column, ordered by the mean
@@ -318,10 +333,9 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
         let stack = cols[l].iter().map(|&c| height_of(c)).sum::<u16>() + cols[l].len() as u16 - 1;
         // centred; the spare row of an odd difference goes below (ratatui's own centring would put it above, and the
         // accepted render has it below)
-        let column = Rect::new(0, (hmax - stack) / 2, 1, stack);
-        let rows = Layout::vertical(cols[l].iter().map(|&c| Constraint::Length(height_of(c)))).spacing(1).split(column);
-        for (&c, r) in cols[l].iter().zip(rows.iter()) {
-            (top[c], mid[c]) = (r.y, r.y + (r.height - 1) / 2);
+        let ys = starts((hmax - stack) / 2, cols[l].iter().map(|&c| height_of(c)), 1);
+        for (&c, y) in cols[l].iter().zip(ys) {
+            (top[c], mid[c]) = (y, y + (height_of(c) - 1) / 2);
         }
     }
 

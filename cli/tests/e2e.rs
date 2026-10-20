@@ -47,7 +47,7 @@ if [ -n "$CPD_ATTEMPT" ]; then
   if [ "$job" = ui ] && [ ! -f api.txt ]; then exit 13; fi
   echo "$job" > "$job.txt"
   git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
-  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.json" 2>&1
+  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.part" 2>&1; mv "../submit-$CPD_ATTEMPT.part" "../submit-$CPD_ATTEMPT.json"
 else
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
 fi
@@ -90,6 +90,7 @@ struct Fx {
 impl Fx {
     fn new() -> Fx {
         let env = TestEnv::new();
+        env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
         // `cpd` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
         symlink(CPD, env.bin().join("cpd")).unwrap();
         env.fake_pi(&format!("{PI}exec sleep {SLEEP_SECONDS}"));
@@ -121,7 +122,7 @@ impl Fx {
         .unwrap();
 
         // The repo, its hooks (§7.3) and a bare `origin`.
-        let repo = env.git_repo("pay").canonicalize().unwrap();
+        let repo = env.keyed_repo("pay").canonicalize().unwrap();
         let hooks = env.root().join("hooks.log");
         fs::create_dir_all(repo.join(".config")).unwrap();
         fs::write(
@@ -138,7 +139,7 @@ impl Fx {
         env.git(&repo, &["commit", "-q", "-m", "hooks"]);
         let origin = env.root().join("origin.git");
         env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-        env.git(&repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+        env.local_origin(&repo, &origin);
         env.git(&repo, &["push", "-q", "-u", "origin", "main"]);
         let lead = repo.parent().unwrap().join(format!("pay.{PLAN}.pay"));
         Fx { env, repo, origin, lead }
@@ -231,6 +232,13 @@ fn of_kind<'a>(events: &'a [Value], kind: &str) -> Vec<&'a Value> {
     events.iter().filter(|e| e["kind"] == kind).collect()
 }
 
+/// What a Worker's `attempt submit` printed, saved by the fake pi at `path` whole (written, then renamed into place):
+/// it may land after the merge the test waited for, since the driver needs only the submission in the store.
+fn submitted(path: &Path) -> Value {
+    let text = common::wait_some(&format!("{} to be written", path.display()), common::WAIT, || fs::read_to_string(path).map_err(|e| e.to_string()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}: {text}", path.display()))
+}
+
 /// `argv[i + 1]` where `argv[i] == flag`.
 fn flag<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
     argv.iter().position(|a| a == flag).map(|i| argv[i + 1].as_str())
@@ -255,7 +263,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let repo = fx.repo.to_str().unwrap();
 
     // ---------- 1. context new
-    let out = fx.ok(&["context", "new", CONTEXT, "--title", "Payments"]);
+    let out = fx.ok(&["context", "new", CONTEXT, "--title", "Payments", "--owner", "acme"]);
     assert_eq!(out["context"]["id"], CONTEXT);
     let events = fx.events_since(0);
     assert_eq!(kinds(&events), ["context-created"]);
@@ -307,7 +315,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(calls[0][calls[0].len() - 2..], ["--".to_owned(), format!("@{}", message_file.display())]);
     assert!(!calls[0].contains(&"--fork".to_owned()), "{calls:?}");
     cursor = fx.cursor();
-    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--title", "Change the PR", "--plan", PLAN]);
     assert_eq!(out["pr"]["base"], "main");
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay/pay");
     assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);
@@ -329,7 +337,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
     assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
-    let review = fx.ok(&["plan", "review", "--plan", PLAN]);
+    let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     assert_eq!(review["review"]["id"], "r1");
     let decided = fx.ok(&["plan", "decide", "r1", "--approve", "--plan", PLAN]);
     assert_eq!(decided["current"], true);
@@ -379,8 +387,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
         assert_eq!(about[0]["data"], json!({"number": 1, "tier": tier, "origin": "ladder"}));
         assert_eq!(about[1]["data"], json!({"from": "starting", "to": "running"}));
         assert_eq!(about[2]["data"], json!({"from": "running", "to": "merging"}));
-        let submit: Value =
-            serde_json::from_str(&fs::read_to_string(fx.repo.parent().unwrap().join(format!("submit-{attempt}.json"))).unwrap()).unwrap();
+        let submit = submitted(&fx.repo.parent().unwrap().join(format!("submit-{attempt}.json")));
         assert_eq!(submit["submitted"], true, "{submit}");
         let shown = fx.ok(&["attempt", "show", attempt, "--plan", PLAN])["attempt"].clone();
         assert_eq!((&shown["status"], &shown["outcome"], &shown["cause"]), (&json!("ended"), &json!("merged"), &json!("merged")));
@@ -452,7 +459,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     // The engine's polls (`api graphql`) aside, `pr open` made these two calls.
     let gh: Vec<_> = fx.env.calls("gh").into_iter().filter(|c| c[0] != "api").collect();
     assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "all", "--json", "number,url,state"]);
-    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Retry failed payouts"]);
+    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Change the PR"]);
     let body = &gh[1][9];
     for sha in [&api_merged["data"]["sha"], &ui_merged["data"]["sha"]] {
         assert!(body.contains(sha.as_str().unwrap()), "{body}");

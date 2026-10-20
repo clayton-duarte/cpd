@@ -3,9 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, mock } from "node:test";
-import { type Component, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { type Component } from "@earendil-works/pi-tui";
 import { errorMessage, eventMessage, sessionMessage } from "../lib/delivery.ts";
-import type { CpdEvent } from "../lib/event.ts";
+import type { CpdEvent, EventOf } from "../lib/event.ts";
 import type { Message, MessageRenderer, RenderedMessage, Theme } from "../lib/pi.ts";
 import { loadStyle, RENDERED_TYPES, Rendering, type Style } from "../lib/render.ts";
 import { contextUpdate, type ContextRecord, type PendingPlan, type PlanEvent } from "../lib/updates.ts";
@@ -39,23 +39,24 @@ const show = (message: RenderedMessage, expanded: boolean, opts: { style?: Style
   draw(rendering(opts.style).render(message, { expanded, outputPad: opts.outputPad ?? 1 }, theme), opts.width);
 const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z]*>/g, ""));
 
-const HEAD = (summary: string) => ` <customMessageLabel>⦁</> <toolTitle><b>cpd</b></> <toolOutput>${summary}</>`;
-const rail = (line: string) => `<dim> │ </><toolOutput>${line}</>`;
-const closing = (word: string) => `<dim> └ </><dim>${word}</>`;
+const HEAD = (summary: string) => ` <customMessageLabel>⦁</> <b>cpd ${summary}</b>`;
+const rail = (line: string) => ` <muted>│</> ${line}`;
+const closing = (word: string) => ` <muted>└ ${word}</>`;
 
+const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
 const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev(7, kind, over) as unknown as CpdEvent;
 const deep = <T>(m: T): T => structuredClone(m);
 
 // ---- Event ----
 
-test("an Event, collapsed: the magenta dot, `cpd` bold, its text, the └ line", () => {
+test("an Event, collapsed: the dot, the bold title, a muted └ expand", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
-  assert.deepEqual(show(m, false), [HEAD("Job api-1 merged."), closing("Click to expand")]);
+  assert.deepEqual(show(m, false), [HEAD("Job api-1 merged."), closing("expand")]);
 });
 
-test("an Event, expanded: the head stays, the full content behind the rail, then the closing row", () => {
+test("an Event, expanded: the title stays, the full content behind a muted │, then a muted └ collapse", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
-  assert.deepEqual(show(m, true), [HEAD("Job api-1 merged."), rail("Job api-1 merged."), rail("second line"), closing("Click to collapse")]);
+  assert.deepEqual(show(m, true), [HEAD("Job api-1 merged."), rail("Job api-1 merged."), rail("second line"), closing("collapse")]);
 });
 
 test("a long summary is cut to 160 characters, 159 and `…`", () => {
@@ -65,32 +66,32 @@ test("a long summary is cut to 160 characters, 159 and `…`", () => {
   assert.ok(summary.endsWith("…"));
 });
 
-test("a head wider than the pane wraps behind ` │ `, it is never cut", () => {
+test("a head wider than the pane wraps under the title, it is never cut", () => {
   const m = eventMessage(event("job-merged", { text: "alpha beta gamma delta epsilon zeta" }), ID);
   const lines = plain(show(m, false, { width: 24 }));
-  assert.equal(lines[0], " ⦁ cpd alpha beta gamm");
-  assert.equal(lines[1], " │ a delta epsilon zeta");
-  assert.equal(lines.at(-1), " └ Click to expand");
+  assert.equal(lines[0], " ⦁ cpd alpha beta gamma");
+  assert.equal(lines[1], "   delta epsilon zeta");
+  assert.equal(lines.at(-1), " └ expand");
 });
 
 test("an empty content shows no body", () => {
   const m = eventMessage(event("job-merged", { text: "x" }), ID, "");
-  assert.deepEqual(show(m, true), [HEAD("x"), closing("Click to collapse")]);
+  assert.deepEqual(show(m, true), [HEAD("x"), closing("collapse")]);
 });
 
 // ---- Session messages ----
 
 test("a message from the User: `Message from the User`", () => {
-  const m = sessionMessage(event("session-message", { data: { from: null, text: "hi there", wake: false } }), ID, null);
-  assert.deepEqual(show(m, false), [HEAD("Message from the User"), closing("Click to expand")]);
-  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User: hi there"), closing("Click to collapse")]);
+  const m = sessionMessage(sessionEvent({ data: { from: null, text: "hi there", wake: false } }), ID, null);
+  assert.deepEqual(show(m, false), [HEAD("Message from the User"), closing("expand")]);
+  assert.deepEqual(show(m, true), [HEAD("Message from the User"), rail("Message from the User: hi there"), closing("collapse")]);
 });
 
 test("a message from a Session: its name, or its id when it has none", () => {
-  const named = sessionMessage(event("session-message", { data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
-  assert.deepEqual(show(named, false), [HEAD("Message from cross-repo"), closing("Click to expand")]);
+  const named = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: "cross-repo" });
+  assert.deepEqual(show(named, false), [HEAD("Message from cross-repo"), closing("expand")]);
   assert.deepEqual(show(named, true).slice(1, 2), [rail(`Message from cross-repo (${OTHER}): hello`)]);
-  const unnamed = sessionMessage(event("session-message", { data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
+  const unnamed = sessionMessage(sessionEvent({ data: { from: OTHER, text: "hello", wake: false } }), ID, { id: OTHER, name: null });
   assert.deepEqual(show(unnamed, false)[0], HEAD(`Message from ${OTHER}`));
 });
 
@@ -98,7 +99,7 @@ test("a message from a Session: its name, or its id when it has none", () => {
 
 test("an adapter error: `adapter: <what>`", () => {
   const { message } = errorMessage("session show", "bad_output", "cpd session show: the session object lacks role", { x: 1 });
-  assert.deepEqual(show(message, false), [HEAD("adapter: session show"), closing("Click to expand")]);
+  assert.deepEqual(show(message, false), [HEAD("adapter: session show"), closing("expand")]);
   assert.deepEqual(show(message, true)[1], rail("cpd adapter: session show: bad_output: cpd session show: the session object lacks role"));
 });
 
@@ -127,11 +128,11 @@ const FULL = [
 ];
 
 test("cpd-context, collapsed: its counts line is the summary", () => {
-  assert.deepEqual(show(context(), false), [HEAD("cpd-context: 2 records · 3 Plan Events · 1 Plan pending"), closing("Click to expand")]);
+  assert.deepEqual(show(context(), false), [HEAD("cpd-context: 2 records · 3 Plan Events · 1 Plan pending"), closing("expand")]);
 });
 
 test("cpd-context, expanded: the full text", () => {
-  assert.deepEqual(show(context(), true), [HEAD("cpd-context: 2 records · 3 Plan Events · 1 Plan pending"), ...FULL.map((l) => rail(l)), closing("Click to collapse")]);
+  assert.deepEqual(show(context(), true), [HEAD("cpd-context: 2 records · 3 Plan Events · 1 Plan pending"), ...FULL.map((l) => rail(l)), closing("collapse")]);
 });
 
 test("cpd-context whose details lack the counts (an older adapter's): always open, no closing row", () => {
@@ -153,9 +154,9 @@ const decision = (approved: boolean): Message => ({
 });
 
 test("cpd-plan-decision: `Plan review <id> approved|rejected`", () => {
-  assert.deepEqual(show(decision(true), false), [HEAD("Plan review rv-3 approved"), closing("Click to expand")]);
+  assert.deepEqual(show(decision(true), false), [HEAD("Plan review rv-3 approved"), closing("expand")]);
   assert.deepEqual(show(decision(false), false)[0], HEAD("Plan review rv-3 rejected"));
-  assert.deepEqual(show(decision(true), true), [HEAD("Plan review rv-3 approved"), rail("Plan review rv-3 was APPROVED."), rail("Next: cpd plan lock"), closing("Click to collapse")]);
+  assert.deepEqual(show(decision(true), true), [HEAD("Plan review rv-3 approved"), rail("Plan review rv-3 was APPROVED."), rail("Next: cpd plan lock"), closing("collapse")]);
 });
 
 test("a review that is gone (no verdict) shows the first line of its content", () => {
@@ -195,43 +196,39 @@ test("a left click toggles that one message; another button or event does nothin
   const cb = r.render(b, { expanded: false, outputPad: 1 }, theme);
   assert.equal(click(ca, "right"), undefined);
   assert.deepEqual(click(ca), { handled: true });
-  assert.deepEqual(draw(ca), [HEAD("A"), rail("A"), closing("Click to collapse")]);
-  assert.deepEqual(draw(cb), [HEAD("B"), closing("Click to expand")]);
+  assert.deepEqual(draw(ca), [HEAD("A"), rail("A"), closing("collapse")]);
+  assert.deepEqual(draw(cb), [HEAD("B"), closing("expand")]);
   click(ca);
-  assert.deepEqual(draw(ca), [HEAD("A"), closing("Click to expand")]);
+  assert.deepEqual(draw(ca), [HEAD("A"), closing("expand")]);
 });
 
 test("Ctrl+O (options.expanded) opens and closes the message both ways, a click in between included", () => {
   const r = rendering();
   const m = eventMessage(event("job-merged", { text: "A" }), ID);
   const render = (expanded: boolean) => draw(r.render(m, { expanded, outputPad: 1 }, theme));
-  assert.deepEqual(render(false), [HEAD("A"), closing("Click to expand")]);
+  assert.deepEqual(render(false), [HEAD("A"), closing("expand")]);
   click(r.render(m, { expanded: false, outputPad: 1 }, theme)); // a click opens this one
   assert.equal(render(false).length, 3, "a rebuild with the host still collapsed keeps the click");
   assert.equal(render(true).length, 3);
-  assert.deepEqual(render(false), [HEAD("A"), closing("Click to expand")], "Ctrl+O again closes it");
+  assert.deepEqual(render(false), [HEAD("A"), closing("expand")], "Ctrl+O again closes it");
 });
 
 // ---- the other styles and the pane ----
 
-test("style claude: `⦁ cpd(<summary>)`, `⎿  Click to expand`, expanded from the prefix on", () => {
-  const m = eventMessage(event("job-merged", { text: "Job done.\nmore" }), ID);
-  const head = ` <customMessageLabel>⦁</> <toolTitle><b>cpd</b></><toolOutput>(Job done.)</>`;
-  assert.deepEqual(show(m, false, { style: "claude" }), [head, "<dim>   ⎿  </><dim>Click to expand</>"]);
-  assert.deepEqual(show(m, true, { style: "claude" }), [head, "<dim>   ⎿  </><toolOutput>Job done.</>", "      <toolOutput>more</>"]);
-});
-
-test("style codex: ` • cpd <summary>`, `+ Show details`, expanded dim from `└` on, `− Show less`", () => {
-  const m = eventMessage(event("job-merged", { text: "Job done.\nmore" }), ID);
-  const head = ` <b><customMessageLabel>•</></b> <b>cpd</b> Job done.`;
-  assert.deepEqual(show(m, false, { style: "codex" }), [head, "<dim>     + Show details</>"]);
-  assert.deepEqual(show(m, true, { style: "codex" }), [head, "<dim>   └ </><dim>Job done.</>", "     <dim>more</>", "<dim>     − Show less</>"]);
-  assert.equal(stripTerminalSequences(plain(show(m, false, { style: "codex", width: 12 })).at(-1)!), "    + Show …", "the disclosure indent is min(width/4, 4) after the margin, and a row never passes the pane");
+test("Click to expand is gone; only the └ line names the toggle, muted", () => {
+  const m = eventMessage(event("job-merged", { text: "A\nB" }), ID);
+  for (const style of ["compact", "claude", "codex"] as const) {
+    for (const expanded of [false, true]) {
+      const lines = show(m, expanded, { style });
+      assert.ok(!plain(lines).join("\n").includes("Click to"));
+      assert.deepEqual(lines, expanded ? [HEAD("A"), rail("A"), rail("B"), closing("collapse")] : [HEAD("A"), closing("expand")]);
+    }
+  }
 });
 
 test("outputPad 0 gives the margin column back", () => {
   const m = eventMessage(event("job-merged", { text: "A" }), ID);
-  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), ["⦁ cpd A", "└ Click to expand"]);
+  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), ["⦁ cpd A", "└ expand"]);
 });
 
 test("style off: no component, so pi draws its own box", () => {
@@ -307,9 +304,9 @@ test("the adapter registers one renderer per displayed customType once at load, 
     // The fake stores pi's own renderer type; call it as the adapter's narrow MessageRenderer, which it is.
     const renderer = f.pi.renderers.get("cpd") as unknown as MessageRenderer;
     const render = () => draw(renderer(m, { expanded: false, outputPad: 1 }, theme));
-    assert.equal(render()[0], HEAD("Job done."), "compact until session_start reads the file");
+    assert.equal(render()[0], HEAD("Job done."), "before session_start");
     await f.pi.fire("session_start", { reason: "startup" });
-    assert.deepEqual(render(), [` <b><customMessageLabel>•</></b> <b>cpd</b> Job done.`, "<dim>     + Show details</>"]);
+    assert.deepEqual(render(), [HEAD("Job done."), closing("expand")], "every style but off draws the one fold");
   } finally {
     await f.close();
   }

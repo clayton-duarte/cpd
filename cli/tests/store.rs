@@ -195,7 +195,8 @@ fn contract_ddl_blocks() -> Vec<String> {
 /// documentation, not schema (a migration cannot change one without rebuilding the table).
 fn normalized(sql: &str) -> String {
     let code: Vec<&str> = sql.lines().map(|line| line.split("--").next().unwrap_or_default()).collect();
-    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    // `ALTER TABLE … ADD COLUMN` splices its column in as `, <column>)`: the spaces before `,` and `)` are layout too.
+    code.join(" ").split_whitespace().collect::<Vec<_>>().join(" ").replace(" ,", ",").replace(" )", ")")
 }
 
 /// `(name, sql)` of every table, index and trigger in `conn`, normalized: a
@@ -1110,7 +1111,7 @@ fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
     let out = env
         .command("sh")
         .args(["-c", "mkdir gone && cd gone && rmdir ../gone && exec \"$@\"", "sh", common::CPD])
-        .args(["context", "new", "ctx", "--title", "Ctx"])
+        .args(["context", "new", "ctx", "--title", "Ctx", "--owner", "acme"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -1531,7 +1532,7 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     let env = TestEnv::new();
     let out = env.cpd(&["--version"]).ok();
     assert!(out["store"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 4, "{out}");
+    assert_eq!(out["protocol"], 6, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }
@@ -1650,6 +1651,103 @@ fn a_held_setup_lock_gives_lock_timeout_after_store_busy_ms() {
     assert_eq!(err.details()["lock"], path.display().to_string());
     assert_eq!(err.details()["waited_ms"], 300);
     assert!(!home(&env).db().exists(), "a refused open created the database");
+}
+
+/// A process that migrates, as the contract's marker (§1.4) describes it: `locks/store.lock` held, with
+/// the marker of `pid` written into it. Dropping the guard releases the lock.
+struct Holder {
+    _lock: nix::fcntl::Flock<fs::File>,
+}
+
+fn hold_setup_lock(h: &CpdHome, marker: Option<Value>) -> Holder {
+    use nix::fcntl::{Flock, FlockArg};
+    use std::io::Write;
+    fs::create_dir_all(h.locks_dir()).unwrap();
+    let file = fs::OpenOptions::new().create(true).append(true).open(h.locks_dir().join("store.lock")).unwrap();
+    let mut lock = Flock::lock(file, FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
+    if let Some(marker) = marker {
+        lock.write_all(marker.to_string().as_bytes()).unwrap();
+    }
+    Holder { _lock: lock }
+}
+
+fn migrating_marker(pid: u32) -> Value {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+    json!({"migrating": true, "pid": pid, "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd test-migration"})
+}
+
+/// hs-n278: a holder that migrates is waited out for longer than `store_busy_ms`, then the open succeeds.
+#[test]
+fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
+    let env = TestEnv::new();
+    let h = home(&env);
+    let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
+    // time-claim: the open outlasts store_busy_ms (300 ms) while a migration holds the lock; no per-poll signal from the waiter.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        drop(holder);
+    });
+    let start = Instant::now();
+    let store = Store::open(&h, 300);
+    let waited = start.elapsed();
+    release.join().unwrap();
+    store.expect("the open waits for the migration");
+    assert!(waited >= Duration::from_millis(1400), "did not wait for the migration: {waited:?}");
+}
+
+/// hs-n278: a holder with no marker keeps the `store_busy_ms` bound.
+#[test]
+fn a_holder_that_is_not_migrating_still_times_out_after_store_busy_ms() {
+    let env = TestEnv::new();
+    let h = home(&env);
+    for marker in [None, Some(json!({"migrating": false, "pid": std::process::id(), "started_unix_ms": 0, "from": 1, "to": 2, "command": "x"}))] {
+        let _holder = hold_setup_lock(&h, marker);
+        let err = Store::open(&h, 300).map(drop).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
+    }
+}
+
+/// hs-n278: a marker of a process that is gone does not make anyone wait.
+#[test]
+fn a_marker_of_a_dead_process_does_not_block() {
+    let env = TestEnv::new();
+    let h = home(&env);
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let _holder = hold_setup_lock(&h, Some(migrating_marker(dead)));
+    let err = Store::open(&h, 300).map(drop).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::LockTimeout, "{err}");
+}
+
+/// hs-n278, contract §1.4: the opener that migrates writes its marker while it migrates and empties the file
+/// when it is done; a second opener that finds the lock held waits it out, whatever its own `busy_ms`.
+#[test]
+fn the_opener_that_migrates_writes_its_marker_and_clears_it() {
+    let env = TestEnv::new();
+    let h = home(&env);
+    let lock = h.locks_dir().join("store.lock");
+    let first = {
+        let h = h.clone();
+        std::thread::spawn(move || Store::open(&h, 5000).map(drop))
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let seen: Value = loop {
+        if let Some(marker) = fs::read_to_string(&lock).ok().and_then(|text| serde_json::from_str(&text).ok()) {
+            break marker;
+        }
+        assert!(Instant::now() < deadline && !first.is_finished(), "no marker while the store migrated");
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(seen["migrating"], true, "{seen}");
+    assert_eq!(seen["pid"], std::process::id(), "{seen}");
+    assert_eq!(seen["from"], 0, "{seen}");
+    assert!(seen["to"].as_u64().unwrap() > 0, "{seen}");
+    assert!(seen["started_unix_ms"].as_u64().unwrap() > 0 && seen["command"].is_string(), "{seen}");
+    // A second opener, whose own bound is 1 ms, waits for the migration instead of giving up.
+    Store::open(&h, 1).expect("the second opener waits for the migration");
+    first.join().unwrap().unwrap();
+    assert_eq!(fs::read_to_string(&lock).unwrap(), "", "the marker outlived the migration");
 }
 
 /// `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6) are both `store_busy` (contract §4.2).

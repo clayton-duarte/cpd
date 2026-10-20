@@ -1,5 +1,5 @@
-//! The merge (contract §7.4): driver step A8 against temporary repos, the
-//! per-repo lock, and the recovery R of an interrupted merge.
+//! The merge (contract §7.4): driver step A8 against temporary repos, with
+//! no per-repo lock (hs-d243), and the recovery R of an interrupted merge.
 //!
 //! No Gate runs at the merge (R19): there is no `gate_failed` or `gate_error`
 //! outcome (Escalation rs-merge-a1-q1).
@@ -17,7 +17,7 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree, pr_lead_worktree_path, prepare_lead_worktree};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
-use cpd_core::merge::{self, Attempt, Ctx, End, Failure, Merge, RepoLock, take_free_driver_lock};
+use cpd_core::merge::{self, Attempt, Ctx, End, Failure, Merge, take_free_driver_lock};
 use cpd_core::store::{Store, WriteTxn};
 use rusqlite::params;
 use serde_json::{Value, json};
@@ -102,7 +102,7 @@ fn add_origin(env: &TestEnv, repo: &Path) -> PathBuf {
     let origin = env.root().join("origins").join(format!("{name}.git"));
     fs::create_dir_all(&origin).unwrap();
     env.git(&origin, &["init", "-q", "--bare", "-b", "main"]);
-    env.git(repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(repo, &origin);
     env.git(repo, &["push", "-q", "origin", "main"]);
     origin
 }
@@ -274,10 +274,27 @@ impl Fx {
         self.git(pr.origin.as_ref().expect("the PR's repo has an origin"), &["rev-parse", &format!("refs/heads/{}", pr.branch)])
     }
 
-    /// R as E2 runs it for `repo`.
+    /// R as E2 runs it, for each Attempt in `merging` of a PR on `repo`, with no repo lock.
     fn recover_in(&self, repo: &Path) -> Vec<merge::Recovered> {
-        let lock = RepoLock::try_take(&self.home, repo).unwrap().expect("the per-repo lock is free");
-        merge::recover(&mut self.store(), &self.ctx("watch"), &lock).unwrap()
+        let merging: Vec<(String, String)> = self
+            .store()
+            .read(|c| {
+                let mut stmt = c.prepare(
+                    "SELECT a.plan, a.id FROM attempts a JOIN jobs j ON j.plan = a.plan AND j.key = a.job
+                       JOIN prs r ON r.plan = j.plan AND r.key = j.pr
+                      WHERE a.status = 'merging' AND r.repo = ?1 ORDER BY a.plan, a.id",
+                )?;
+                let rows = stmt.query_map([repo.to_str().unwrap()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+        merging
+            .into_iter()
+            .filter_map(|(p, a)| {
+                let (p, a) = (PlanId::parse(&p).unwrap(), AttemptId::parse(&a).unwrap());
+                merge::recover_attempt(&mut self.store(), &self.ctx("watch"), &p, &a).unwrap()
+            })
+            .collect()
     }
 
     fn request_cancel(&self, key: &str) {
@@ -296,10 +313,9 @@ impl Fx {
         merge::merge(&mut self.store(), &self.ctx("attempt run"), &plan(), attempt).unwrap()
     }
 
-    /// R as E2 runs it: the per-repo lock without waiting, then R.
+    /// R as E2 runs it, for the Attempts of [`Fx::repo`].
     fn recover(&self) -> Vec<merge::Recovered> {
-        let lock = RepoLock::try_take(&self.home, &self.repo).unwrap().expect("the per-repo lock is free");
-        merge::recover(&mut self.store(), &self.ctx("watch"), &lock).unwrap()
+        self.recover_in(&self.repo)
     }
 
     /// `(status, outcome, cause, merged_sha, metrics)` of an Attempt.
@@ -394,7 +410,6 @@ fn merged_rebases_fast_forwards_syncs_the_lead_worktree_and_records_it() {
 
     let new = fx.git(&worktree, &["rev-parse", "HEAD"]);
     assert_eq!(result.end, End::Merged { sha: new.clone() });
-    assert!(result.recovered.is_empty());
     // Rebased onto the newer Lead Branch, then fast-forwarded.
     assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD~1"]), other);
     assert_eq!(fx.lead_sha(), new);
@@ -487,23 +502,49 @@ fn merge_conflict_with_the_cap_reached_fails_the_job() {
     assert!(data["detail"].as_str().unwrap().contains("README.md"));
 }
 
+/// Step 3 is removed (hs-d243): an untracked file in the Lead worktree is no
+/// `dirty_target`; the merge lands, rule S syncs around the file and keeps it.
 #[test]
-fn dirty_target_is_checked_before_any_work_in_the_attempt_worktree() {
+fn an_untracked_file_in_the_lead_worktree_does_not_stop_the_merge() {
     let fx = fx();
     let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
-    let before = fx.git(&worktree, &["rev-parse", "HEAD"]);
-    fx.advance_lead("other.txt", "other\n");
-    let old = fx.lead_sha();
+    let other = fx.advance_lead("other.txt", "other\n");
     fs::write(fx.lead.join("stray.txt"), "untracked\n").unwrap();
 
     let result = fx.merge(&attempt);
 
-    assert!(matches!(result.end, End::Failed { cause: Failure::DirtyTarget, .. }), "{result:?}");
-    // Not rebased: the check came first.
-    assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD"]), before);
-    assert_eq!(fx.lead_sha(), old);
-    let data = fx.assert_failed(&attempt, "api", "dirty_target");
-    assert!(data["detail"].as_str().unwrap().contains("stray.txt"));
+    let new = fx.git(&worktree, &["rev-parse", "HEAD"]);
+    assert_eq!(result.end, End::Merged { sha: new.clone() });
+    assert_eq!(fx.git(&worktree, &["rev-parse", "HEAD~1"]), other);
+    assert_eq!(fx.lead_sha(), new);
+    assert_eq!(fs::read_to_string(fx.lead.join("api.txt")).unwrap(), "api\n");
+    assert_eq!(fs::read_to_string(fx.lead.join("stray.txt")).unwrap(), "untracked\n");
+    assert_eq!(fx.status(&fx.lead), "?? stray.txt");
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+}
+
+/// Rule S after the fast-forward never overwrites a Lead's staged edit: the
+/// merge stands, the edit is kept, and `lead_worktree_stale` is reported.
+#[test]
+fn a_staged_edit_in_the_lead_worktree_is_kept_and_reported_stale() {
+    let fx = fx();
+    let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+    fs::write(fx.lead.join("README.md"), "the Lead's edit\n").unwrap();
+    fx.git(&fx.lead, &["add", "README.md"]);
+
+    let result = fx.merge(&attempt);
+
+    let new = fx.git(&worktree, &["rev-parse", "HEAD"]);
+    assert_eq!(result.end, End::Merged { sha: new.clone() });
+    assert_eq!(fx.lead_sha(), new);
+    assert_eq!(fx.job_row("api"), ("merged".into(), Some(new), None));
+    assert_eq!(fs::read_to_string(fx.lead.join("README.md")).unwrap(), "the Lead's edit\n");
+    assert_eq!(fx.git(&fx.lead, &["diff", "--cached", "--name-only", "HEAD~1"]), "README.md");
+    assert!(!fx.lead.join("api.txt").exists(), "rule S stopped: nothing was written");
+    let events = fx.events(&attempt);
+    assert_eq!(events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged", "error"]);
+    assert_eq!(events[1].1["code"], "lead_worktree_stale");
+    assert_eq!(events[1].1["source"], "attempt run");
 }
 
 #[test]
@@ -672,7 +713,7 @@ fn a_cancel_request_ends_it_cancelled_before_the_merge() {
 fn step_9_failure_keeps_the_merge_and_reports_a_stale_lead_worktree() {
     let fx = fx();
     let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
-    // Clean for step 3, but step 9 cannot write the new file.
+    // Step 9 (rule S) cannot write the new file.
     let writable = fs::metadata(&fx.lead).unwrap().permissions();
     fs::set_permissions(&fx.lead, fs::Permissions::from_mode(0o555)).unwrap();
 
@@ -754,44 +795,25 @@ fn r_pushes_after_it_records_a_merge() {
     assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), tip);
 }
 
-// ------------------------------------------------------------ the per-repo lock
-
+/// Rule P: a push rejected because origin already holds a descendant of `new`
+/// (a later merge pushed first) is a success, with no `push_failed`.
 #[test]
-fn the_per_repo_lock_is_named_after_the_git_common_dir_and_excludes_others() {
-    let fx = fx();
-    let common = fx.repo.join(".git").canonicalize().unwrap();
-    let path = RepoLock::path(&fx.home, &fx.repo).unwrap();
-    assert_eq!(path, fx.home.repo_lock(&common));
-    // The same lock from a linked worktree of the repo.
-    assert_eq!(RepoLock::path(&fx.home, &fx.lead).unwrap(), path);
+fn a_push_that_origin_already_contains_is_no_push_failed() {
+    let (fx, origin) = fx_origin();
+    let (attempt, worktree) = fx.submitted("api", "api.txt", "api\n");
+    // The Attempt already contains the Lead tip, so step 5 does not rebase: `new` is its HEAD.
+    let new = fx.git(&worktree, &["rev-parse", "HEAD"]);
+    // A descendant of `new` reaches origin first, then leaves the worktree.
+    let later = fx.commit(&worktree, "later.txt", "later\n");
+    fx.git(&worktree, &["push", "-q", "origin", &format!("{later}:refs/heads/cpd/pay")]);
+    fx.git(&worktree, &["reset", "-q", "--hard", &new]);
 
-    let held = RepoLock::wait(&fx.home, &fx.repo).unwrap();
-    assert_eq!(held.file(), path);
-    assert!(RepoLock::try_take(&fx.home, &fx.repo).unwrap().is_none());
-    let err = RepoLock::wait_for(&fx.home, &fx.repo, Duration::from_millis(300)).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::LockTimeout);
-    drop(held);
-    assert!(RepoLock::try_take(&fx.home, &fx.repo).unwrap().is_some());
-}
+    let result = fx.merge(&attempt);
 
-#[test]
-fn the_merge_waits_for_the_per_repo_lock_and_holds_it_until_step_10() {
-    let fx = fx();
-    let (attempt, _) = fx.submitted("api", "api.txt", "api\n");
-    let held = RepoLock::wait(&fx.home, &fx.repo).unwrap();
-
-    std::thread::scope(|s| {
-        let merging = s.spawn(|| fx.merge(&attempt));
-        common::wait_for_flock_waiter(held.file());
-        // Still waiting: nothing happened.
-        assert_eq!(fx.attempt_row(&attempt).0, "merging");
-        assert!(!merging.is_finished());
-        drop(held);
-        let result = merging.join().unwrap();
-        assert!(matches!(result.end, End::Merged { .. }), "{result:?}");
-    });
-    // Released once step 10 committed.
-    assert!(RepoLock::try_take(&fx.home, &fx.repo).unwrap().is_some());
+    assert_eq!(result.end, End::Merged { sha: new.clone() });
+    assert_eq!(fx.lead_sha(), new);
+    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), later);
+    assert_eq!(fx.events(&attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
 }
 
 // ------------------------------------------------------------ R
@@ -922,26 +944,63 @@ fn r_leaves_an_attempt_whose_driver_is_alive() {
     assert!(take_free_driver_lock(&fx.home, &plan(), &attempt).unwrap().is_none());
 }
 
+/// The merge runs no R first (hs-d243): a dead driver's stale Lead worktree is
+/// finished by the next merge's rule S, and its Attempt is left to R (E2).
 #[test]
-fn the_merge_runs_r_first_so_a_dead_drivers_stale_lead_worktree_is_no_dirty_target() {
+fn rule_s_finishes_a_dead_drivers_stale_lead_worktree_and_the_merge_leaves_its_attempt_to_r() {
     let fx = fx();
     let (dead, dead_worktree) = fx.submitted("api", "api.txt", "api\n");
     let (live, live_worktree) = fx.submitted("ui", "ui.txt", "ui\n");
     let dead_tip = die_after_step_8(&fx, &dead_worktree);
+    assert_ne!(fx.status(&fx.lead), "", "the fixture needs a stale Lead worktree");
 
     let result = fx.merge(&live);
 
-    assert_eq!(result.recovered.len(), 1);
-    assert_eq!(result.recovered[0].attempt, dead);
-    assert_eq!(result.recovered[0].end, Some(End::Merged { sha: dead_tip.clone() }));
     let new = fx.git(&live_worktree, &["rev-parse", "HEAD"]);
     assert_eq!(result.end, End::Merged { sha: new.clone() });
     assert_eq!(fx.git(&live_worktree, &["rev-parse", "HEAD~1"]), dead_tip);
     assert_eq!(fx.lead_sha(), new);
     assert_eq!(fx.status(&fx.lead), "");
     assert!(fx.lead.join("api.txt").exists() && fx.lead.join("ui.txt").exists());
-    assert_eq!(fx.job_row("api").0, "merged");
+    assert_eq!(fx.events(&live).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
     assert_eq!(fx.job_row("ui").0, "merged");
+    // Not the merge's: the dead driver's Attempt is still `merging` until R.
+    assert_eq!(fx.attempt_row(&dead).0, "merging");
+    assert_eq!(fx.job_row("api").0, "running");
+    let recovered = fx.recover();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!((&recovered[0].attempt, &recovered[0].end), (&dead, &Some(End::Merged { sha: dead_tip })));
+    assert_eq!(fx.job_row("api").0, "merged");
+}
+
+/// Two merges of one PR at once, with no lock: the compare-and-swap lets one
+/// in and sends the other back to step 2; both land, and rule S leaves the
+/// Lead worktree at the tip, clean.
+#[test]
+fn two_merges_of_one_pr_at_once_both_land_and_the_lead_worktree_ends_at_the_tip() {
+    let (fx, origin) = fx_origin();
+    let (api, _) = fx.submitted("api", "api.txt", "api\n");
+    let (ui, _) = fx.submitted("ui", "ui.txt", "ui\n");
+
+    let (a, b) = std::thread::scope(|s| {
+        let a = s.spawn(|| fx.merge(&api));
+        let b = s.spawn(|| fx.merge(&ui));
+        (a.join().unwrap(), b.join().unwrap())
+    });
+
+    let (a, b) = (merged_sha(&a), merged_sha(&b));
+    let tip = fx.lead_sha();
+    assert!(tip == a || tip == b, "{tip} is neither {a} nor {b}");
+    for sha in [&a, &b] {
+        fx.git(&fx.repo, &["merge-base", "--is-ancestor", sha, &tip]);
+    }
+    assert_eq!(fx.git(&origin, &["rev-parse", "refs/heads/cpd/pay"]), tip);
+    assert_eq!(fx.status(&fx.lead), "");
+    assert_eq!(fx.git(&fx.lead, &["rev-parse", "HEAD"]), tip);
+    assert!(fx.lead.join("api.txt").exists() && fx.lead.join("ui.txt").exists());
+    for attempt in [&api, &ui] {
+        assert_eq!(fx.events(attempt).iter().map(|e| e.0.as_str()).collect::<Vec<_>>(), ["job-merged"]);
+    }
 }
 
 // ------------------------------------------------------------ PRs across repos (R34)
@@ -1024,7 +1083,6 @@ fn in_one_repo_each_merge_lands_on_its_own_prs_branch_only() {
     assert_eq!(fx.tip(&schema), on_schema);
     assert_eq!(fx.tip(&web), web_old);
     assert!(!web.lead.join("api.txt").exists());
-    // Submitted only now: the merge above ran R, which ends an Attempt of its repo whose driver is dead.
     let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
     let on_web = merged_sha(&fx.merge(&ui));
 
@@ -1057,50 +1115,6 @@ fn the_cas_and_the_dirty_check_are_those_of_the_prs_own_branch_and_worktree() {
 }
 
 #[test]
-fn a_merge_takes_the_lock_of_its_prs_repo_only() {
-    let (fx, schema, web) = two_prs(false, false);
-    let (api, _) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
-    let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
-    assert_ne!(RepoLock::path(&fx.home, &schema.repo).unwrap(), RepoLock::path(&fx.home, &web.repo).unwrap());
-    let held = RepoLock::wait(&fx.home, &schema.repo).unwrap();
-
-    std::thread::scope(|s| {
-        let waiting = s.spawn(|| fx.merge(&api));
-        // The other repo's merge is not held up by schema's lock.
-        let result = fx.merge(&ui);
-        assert!(matches!(result.end, End::Merged { .. }), "{result:?}");
-        common::wait_for_flock_waiter(held.file());
-        assert_eq!(fx.attempt_row(&api).0, "merging");
-        assert!(!waiting.is_finished());
-        drop(held);
-        let result = waiting.join().unwrap();
-        assert!(matches!(result.end, End::Merged { .. }), "{result:?}");
-    });
-    // Both locks are free again.
-    assert!(RepoLock::try_take(&fx.home, &schema.repo).unwrap().is_some());
-    assert!(RepoLock::try_take(&fx.home, &web.repo).unwrap().is_some());
-}
-
-#[test]
-fn two_prs_in_one_repo_share_its_lock() {
-    let (fx, schema, web) = two_prs(true, false);
-    let (ui, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
-    // Held through the other PR's Lead worktree: the same repo, the same lock.
-    assert_eq!(RepoLock::path(&fx.home, &schema.lead).unwrap(), RepoLock::path(&fx.home, &web.repo).unwrap());
-    let held = RepoLock::wait(&fx.home, &schema.repo).unwrap();
-
-    std::thread::scope(|s| {
-        let waiting = s.spawn(|| fx.merge(&ui));
-        common::wait_for_flock_waiter(held.file());
-        assert_eq!(fx.attempt_row(&ui).0, "merging");
-        assert!(!waiting.is_finished());
-        drop(held);
-        let result = waiting.join().unwrap();
-        assert!(matches!(result.end, End::Merged { .. }), "{result:?}");
-    });
-}
-
-#[test]
 fn the_tamper_list_is_that_of_the_prs_own_lead_branch() {
     let (fx, schema, web) = two_prs(true, false);
     // Only the schema PR's Lead Branch protects verify.sh.
@@ -1111,7 +1125,6 @@ fn the_tamper_list_is_that_of_the_prs_own_lead_branch() {
     assert!(matches!(result.end, End::Failed { cause: Failure::Tampered, .. }), "{result:?}");
     fx.assert_failed(&api, "api", "tampered");
 
-    // Submitted only now: the merge above ran R, which ends an Attempt of its repo whose driver is dead.
     let (ui, _) = fx.submitted_on(&web, "ui", "verify.sh", "exit 0\n");
     let on_web = merged_sha(&fx.merge(&ui));
     assert_eq!(fx.tip(&web), on_web);
@@ -1216,7 +1229,7 @@ fn r_of_one_repo_leaves_the_orphans_of_another_repo() {
 }
 
 #[test]
-fn a_merge_runs_r_for_its_repo_first_across_prs() {
+fn a_merge_leaves_another_prs_orphan_in_its_repo_to_r() {
     let (fx, schema, web) = two_prs(true, false);
     let (dead, dead_worktree) = fx.submitted_on(&schema, "api", "api.txt", "api\n");
     let (live, _) = fx.submitted_on(&web, "ui", "ui.txt", "ui\n");
@@ -1224,9 +1237,8 @@ fn a_merge_runs_r_for_its_repo_first_across_prs() {
 
     let result = fx.merge(&live);
 
-    assert_eq!(result.recovered.len(), 1);
-    assert_eq!((&result.recovered[0].attempt, &result.recovered[0].end), (&dead, &Some(End::Merged { sha: dead_tip.clone() })));
-    assert_eq!(fx.tip(&schema), dead_tip);
     assert_eq!(fx.tip(&web), merged_sha(&result));
-    assert_eq!(fx.job_row("api").0, "merged");
+    assert_eq!(fx.tip(&schema), dead_tip);
+    assert_eq!(fx.attempt_row(&dead).0, "merging");
+    assert_eq!(fx.job_row("api").0, "running");
 }

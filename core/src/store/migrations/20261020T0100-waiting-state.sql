@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 18
+-- cpd-migration: breaking after 24
 -- The Session state `waiting` (contract §3.6; hs-d303, Plan inbox, Job wait-core): an agent
 -- waits for another agent, not for the User. `blocked` stays for the human reasons only (a
 -- dialog, a pending Plan review); the Worker that `cpd ask`s and the Lead with an open
@@ -30,6 +30,8 @@ CREATE TABLE sessions_new (
   state_at    TEXT NOT NULL,
   created_at  TEXT NOT NULL,
   archived_at TEXT,
+  title       TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 60),
+  titled_at   TEXT,
   FOREIGN KEY (plan, attempt) REFERENCES attempts(plan, id) DEFERRABLE INITIALLY DEFERRED,
   CHECK ((role = 'worker') = (attempt IS NOT NULL)),
   CHECK (role = 'manager' OR role = 'lead' OR plan IS NOT NULL),
@@ -37,9 +39,9 @@ CREATE TABLE sessions_new (
   CHECK ((state IN ('waiting', 'blocked')) = (state_label IS NOT NULL))
 ) STRICT;
 INSERT INTO sessions_new (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-                          state, state_label, state_at, created_at, archived_at)
+                          state, state_label, state_at, created_at, archived_at, title, titled_at)
   SELECT id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-         state, state_label, state_at, created_at, archived_at
+         state, state_label, state_at, created_at, archived_at, title, titled_at
   FROM sessions;
 DROP TABLE sessions;
 ALTER TABLE sessions_new RENAME TO sessions;

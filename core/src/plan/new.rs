@@ -45,6 +45,9 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     let jira = args.jira.as_ref().map(|j| j.as_str().to_owned());
 
     let context = env.store.read(|conn| ContextRow::require(conn, &args.context))?;
+    if context.owner.is_none() {
+        return Err(crate::policy::owner_unset(&args.context));
+    }
     if let Some(plan) = env.store.read(|conn| find(conn, &id))? {
         // The caller's cwd is not a flag: a rerun from another directory is still `already`.
         let same = plan.plan.context == args.context && plan.plan.title == args.title.as_str() && plan.plan.jira == jira && plan.name == name;

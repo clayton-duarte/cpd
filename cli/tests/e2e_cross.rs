@@ -58,7 +58,7 @@ if [ -n "$CPD_ATTEMPT" ]; then
     echo "$job" > "$job.txt"
     git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
   fi
-  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.json" 2>&1
+  cpd attempt submit "$CPD_ATTEMPT" > "../submit-$CPD_ATTEMPT.part" 2>&1; mv "../submit-$CPD_ATTEMPT.part" "../submit-$CPD_ATTEMPT.json"
 else
   printf '%s\n' '{"type":"session","timestamp":"2026-10-14T21:00:00.000Z"}' "$msg" > "$f"
 fi
@@ -132,6 +132,7 @@ struct Fx {
 impl Fx {
     fn new() -> Fx {
         let env = TestEnv::new();
+        env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
         // `cpd` on PATH is the built binary: panes and the engine run it so (§6.5, E5).
         symlink(CPD, env.bin().join("cpd")).unwrap();
         let flags = env.root().join("github");
@@ -275,7 +276,7 @@ impl Fx {
 /// A repo `name` on `main` with hooks that log the branch they ran for (§7.3)
 /// and a bare `origin` holding `main`.
 fn repo(env: &TestEnv, name: &str) -> Repo {
-    let path = env.git_repo(name).canonicalize().unwrap();
+    let path = env.keyed_repo(name).canonicalize().unwrap();
     fs::create_dir_all(path.join(".config")).unwrap();
     let log = env.root().join(format!("{name}.hooks.log"));
     fs::write(
@@ -292,7 +293,7 @@ fn repo(env: &TestEnv, name: &str) -> Repo {
     env.git(&path, &["commit", "-q", "-m", "hooks"]);
     let origin = env.root().join(format!("{name}.git"));
     env.git(env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    env.git(&path, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    env.local_origin(&path, &origin);
     env.git(&path, &["push", "-q", "-u", "origin", "main"]);
     Repo { path, origin }
 }
@@ -309,6 +310,13 @@ fn id(event: &Value) -> i64 {
     event["id"].as_i64().unwrap()
 }
 
+/// What a Worker's `attempt submit` printed, saved by the fake pi at `path` whole (written, then renamed into place):
+/// it may land after the merge the test waited for, since the driver needs only the submission in the store.
+fn submitted(path: &Path) -> Value {
+    let text = common::wait_some(&format!("{} to be written", path.display()), common::WAIT, || fs::read_to_string(path).map_err(|e| e.to_string()));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}: {text}", path.display()))
+}
+
 /// `argv[i + 1]` where `argv[i] == flag`.
 fn flag<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
     argv.iter().position(|a| a == flag).map(|i| argv[i + 1].as_str())
@@ -320,7 +328,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let (shared, web) = (fx.shared.path.to_str().unwrap().to_owned(), fx.web.path.to_str().unwrap().to_owned());
 
     // ---------- 1. plan new from a directory that is no repo (A12)
-    fx.ok(&["context", "new", CONTEXT, "--title", "Chain"]);
+    fx.ok(&["context", "new", CONTEXT, "--title", "Chain", "--owner", "acme"]);
     assert!(!fx.env.root().join(".git").exists());
     let out = fx.ok(&["plan", "new", PLAN, "--context", CONTEXT, "--title", "Change A, then B, then A again"]);
     let lead_session = out["plan"]["lead_session"].as_str().unwrap().to_owned();
@@ -333,11 +341,11 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     });
 
     // ---------- 2. the PRs: a1 -> b -> a2, two of them in one repo (A4)
-    let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--plan", PLAN]);
-    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "base": "main", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
-    let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--needs", "a1", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--title", "Change the PR", "--plan", PLAN]);
+    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "title": "Change the PR", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
+    let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--title", "Change the PR", "--needs", "a1", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/b"), &json!(["a1"])));
-    let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--needs", "b", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--title", "Change the PR", "--needs", "b", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/a2"), &json!(["b"])));
     assert_eq!(of_kind(&fx.events(), "pr-added").len(), 3);
     fx.ok(&["plan", "phase", "plan", "--plan", PLAN]);
@@ -363,7 +371,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     );
 
     // ---------- 4. review and lock: only a1 starts (A8)
-    let review = fx.ok(&["plan", "review", "--plan", PLAN]);
+    let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     fx.ok(&["plan", "decide", review["review"]["id"].as_str().unwrap(), "--approve", "--plan", PLAN]);
     let out = fx.ok(&["plan", "lock", "--plan", PLAN]);
     assert_eq!(out["phase"], "dispatch");
@@ -488,7 +496,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!((&attempt["outcome"], &attempt["cause"], &attempt["merged_sha"]), (&json!("merged"), &json!("merged"), &json!(wire_tip)));
     let findings = fs::read_to_string(fx.env.cpd_home().join(format!("run/{PLAN}/reviews/audit.md"))).unwrap();
     assert_eq!(findings, "# Findings\nwire.txt\n", "the diff against the remote base holds only a2's own work");
-    let submit: Value = serde_json::from_str(&fs::read_to_string(fx.shared.path.parent().unwrap().join("submit-audit-a1.json")).unwrap()).unwrap();
+    let submit = submitted(&fx.shared.path.parent().unwrap().join("submit-audit-a1.json"));
     assert_eq!(submit["submitted"], true, "{submit}");
     // Its Worker is a fork of the Plan's Lead, in the hidden work session.
     let worker = fx.ok(&["session", "show", attempt["worker_session"].as_str().unwrap()])["session"].clone();

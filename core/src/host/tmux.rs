@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -22,7 +22,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::ids::SessionId;
 
 use super::deadline::{self, Failed};
-use super::layout::View;
+use super::layout::{LEGACY_STATUSBAR, View};
 
 /// Every tmux call's deadline (contract §6.3): a local socket answers in
 /// milliseconds, so a longer wait means a hung server.
@@ -56,14 +56,14 @@ pub const OPT_HISTORY: &str = "@cpd_history";
 
 /// The pane border titles (contract §6.1), keyed by the pane options, first
 /// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` when set, else
-/// nothing; the chat placeholder, a history pane and the
-/// StatusBar have none, since pi and the placeholder say what they are; the
+/// nothing; the chat placeholder and a history pane have none, since pi and
+/// the placeholder say what they are; the
 /// views have their column titles; any other pane shows its command. Every
 /// title is drawn reversed (`#[reverse]`..`#[noreverse]`), a block in the border's
 /// colour with the text in the background colour.
-pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,#{?#{==:#{@cpd_view},statusbar},,\
+pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},#[reverse] #{@cpd_title} #[noreverse],},#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
 #[reverse]#{?#{==:#{@cpd_view},worker}, Worker · #{@cpd_job} (read-only) ,#{?#{==:#{@cpd_view},tree}, Context ,\
-#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}}";
+#{?#{==:#{@cpd_view},plan}, Plan ,#{?#{==:#{@cpd_view},widgets}, Deploy ,#{pane_current_command}}}}}#[noreverse]}}}";
 
 /// The `pane-died` hook (contract §6.1): only a pane that carries `@cpd_view`
 /// (a view of the cockpit) is respawned when its program dies; a Lead or
@@ -77,14 +77,16 @@ pub const PANE_DIED_HOOK: &str = r##"if -F "#{@cpd_view}" "respawn-pane""##;
 /// Set at every server start, whichever command starts it (see
 /// [`new_session_args`]), and again by [`Tmux::apply_server_options`].
 ///
-/// The click binding: a click on the StatusBar is passed to it and never
-/// selects it, so the chat keeps the keyboard focus; every other pane is
-/// selected, then gets the click.
+/// The click bindings: a click on a pane is tmux's own `MouseDown1Pane`
+/// (`select-pane -t = ; send-keys -M`), bound again so that a server that
+/// still has cpd's earlier StatusBar override gets the default back; a click
+/// on a StatusBar button is [`STATUS_CLICK`].
 pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "mouse", "on"],
     &["set", "-g", "focus-events", "on"],
     &["set", "-g", "default-terminal", "tmux-256color"],
     &["set", "-g", "extended-keys", "on"],
+    &["set", "-gq", "extended-keys-format", "csi-u"],
     &["set", "-as", "terminal-features", TERMINAL_FEATURES],
     &["set", "-g", "escape-time", "10"],
     &["set", "-g", "status", "off"],
@@ -93,9 +95,44 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "pane-border-format", BORDER_FORMAT],
     &["set", "-g", "pane-active-border-style", "fg=blue"],
     &["set", "-g", "remain-on-exit", "on"],
+    &["set", "-g", "set-titles", "on"],
+    &["set", "-g", "set-titles-string", SET_TITLES_STRING],
     &["set-hook", "-g", "pane-died", PANE_DIED_HOOK],
-    &["bind", "-T", "root", "MouseDown1Pane", "if", "-F", "#{==:#{@cpd_view},statusbar}", "send-keys -M", "select-pane -t = ; send-keys -M"],
+    &["bind", "-T", "root", "MouseDown1Pane", "select-pane -t = ; send-keys -M"],
+    &["bind", "-T", "root", "MouseDown1Status", "run-shell", "-b", STATUS_CLICK],
 ];
+
+/// The terminal window's title (contract §6.1, hs-d300): the config's machine
+/// name, which `cpd tui` sets as the global `@cpd_machine`; the host's short
+/// name until then, on a server another command started.
+const SET_TITLES_STRING: &str = "cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}";
+
+/// What a click on a StatusBar button runs (contract §6.1): `cpd tui action`
+/// with the button's range and the clicking client, `cpd` found on `PATH` as
+/// for every pane cpd starts (`session::PROGRAM`). Its stderr is dropped,
+/// since a `run-shell -b` that fails or prints puts the active pane into view
+/// mode (research `statusbar-no-row.md` 2c).
+pub const STATUS_CLICK: &str = "cpd tui action #{mouse_status_range} --client #{client_name} 2>/dev/null";
+
+/// The StatusBar (contract §6.1): the cockpit session's `status-format[0]`.
+/// Three one-glyph buttons, each a grey block in its own click range, one
+/// space apart outside the ranges (a range also owns the cell after it, so
+/// touching ranges would steal each other's first cell); at the right, the
+/// Inbox counter the engine keeps in `@cpd_inbox`, one space, then the workers
+/// counts (User, hs-d198): the long form the engine keeps in `@cpd_workers`
+/// when `#{client_width}` is at least `@cpd_workers_width` (the visible width
+/// of the counter, the space and the long form) plus 7 (the buttons' 5 cells
+/// and 2 of air), else the short form in `@cpd_workers_short`.
+pub const STATUS_FORMAT: &str = "#[range=user|reset]#[fg=colour8,reverse]⧉#[norange,default] \
+#[range=user|legend]#[fg=colour8,reverse]?#[norange,default] \
+#[range=user|logs]#[fg=colour8,reverse]▤#[norange,default]#[align=right]#{@cpd_inbox} \
+#{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},7}},#{@cpd_workers},#{@cpd_workers_short}}";
+
+/// The cockpit session's own options (contract §6.1), set with `-t`: `status`
+/// is a session option, and `-g` would give `cpd-work` a row too.
+/// `status-style default` replaces tmux's green bar with the terminal's colours.
+pub const STATUS_OPTIONS: [(&str, &str); 3] =
+    [("status", "on"), ("status-style", "default"), ("status-format[0]", STATUS_FORMAT)];
 
 /// The value `terminal-features` is appended with (`set -as`), the one entry of
 /// [`SERVER_OPTIONS`] that is not idempotent: it runs once, when cpd starts
@@ -219,8 +256,6 @@ pub enum Split {
     Right,
     /// Stacked (`-v`).
     Below,
-    /// Full width at the bottom of the window (`-v -f`).
-    Bottom,
 }
 
 impl Split {
@@ -229,7 +264,6 @@ impl Split {
         match self {
             Split::Right => &["-h"],
             Split::Below => &["-v"],
-            Split::Bottom => &["-v", "-f"],
         }
     }
 }
@@ -240,22 +274,41 @@ pub struct Tmux {
     socket: String,
     /// `TMUX_TMPDIR` for every call, when set; otherwise the process's own environment applies.
     tmpdir: Option<PathBuf>,
+    /// The tmux program every call runs, when set (see [`Tmux::on_server_binary`]); otherwise `tmux` from `PATH`.
+    program: Option<PathBuf>,
 }
 
 impl Tmux {
     /// The server on socket `socket` (config `tmux.socket`).
     pub fn new(socket: impl Into<String>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: None }
+        Tmux { socket: socket.into(), tmpdir: None, program: None }
     }
 
     /// The server on socket `socket` whose socket file lives in `tmpdir`: every call sets
     /// `TMUX_TMPDIR` to it, so nothing depends on the process environment.
     pub fn with_tmpdir(socket: impl Into<String>, tmpdir: impl Into<PathBuf>) -> Tmux {
-        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()) }
+        Tmux { socket: socket.into(), tmpdir: Some(tmpdir.into()), program: None }
     }
 
     pub fn socket(&self) -> &str {
         &self.socket
+    }
+
+    /// This server, with every call run by `program` instead of `tmux` from `PATH`.
+    pub fn with_program(mut self, program: impl Into<PathBuf>) -> Tmux {
+        self.program = Some(program.into());
+        self
+    }
+
+    /// This server, with every call run by the server's own tmux program ([`Tmux::server_exe`]): a
+    /// client of another version cannot be trusted to talk to it, least of all while it dies (hs-n285).
+    ///
+    /// The program is the file `/proc/<pid>/exe` points to, which outlives the server; a file an upgrade
+    /// has replaced is only reachable as `/proc/<pid>/exe`, which lasts as long as the server does.
+    pub fn on_server_binary(&self) -> Result<Tmux, CpdError> {
+        let exe = self.server_exe()?;
+        let program = std::fs::read_link(&exe).ok().filter(|file| file.is_file()).unwrap_or(exe);
+        Ok(self.clone().with_program(program))
     }
 
     /// The full argv of a call: `tmux -L <socket> -f /dev/null <args>`.
@@ -268,7 +321,7 @@ impl Tmux {
     /// The `Command` for a call: its argv, without `TMUX` and `TMUX_PANE`.
     fn command(&self, args: &[String]) -> Command {
         let argv = self.argv(args);
-        let mut cmd = Command::new(&argv[0]);
+        let mut cmd = Command::new(self.program.as_deref().unwrap_or_else(|| Path::new(&argv[0])));
         cmd.args(&argv[1..]).env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null());
         if let Some(tmpdir) = &self.tmpdir {
             cmd.env("TMUX_TMPDIR", tmpdir);
@@ -394,6 +447,35 @@ impl Tmux {
         Ok(())
     }
 
+    /// Sets [`STATUS_OPTIONS`] on session `session` (`set -t =<session>:`;
+    /// `set` resolves its target as a pane, so a bare `=<session>` is refused):
+    /// the StatusBar, on that session only. Rerunning is safe.
+    pub fn apply_status_line(&self, session: &str) -> Result<(), CpdError> {
+        for (option, value) in STATUS_OPTIONS {
+            self.run(&strings(&["set", "-t", &format!("={session}:"), option, value]))?;
+        }
+        Ok(())
+    }
+
+    /// `display -p '#{version}'`: the version of the tmux the server runs
+    /// (`3.4`, `next-3.7`), which is the one it was started with.
+    pub fn server_version(&self) -> Result<String, CpdError> {
+        Ok(self.run(&strings(&["display", "-p", "#{version}"]))?.trim().to_owned())
+    }
+
+    /// The server's own tmux program: `/proc/<server pid>/exe` (Linux), which
+    /// execs the binary the server runs even when an upgrade has replaced its
+    /// file. A client of another version cannot attach to the server (hs-n224).
+    pub fn server_exe(&self) -> Result<PathBuf, CpdError> {
+        let out = self.run(&strings(&["display", "-p", "#{pid}"]))?;
+        let exe = PathBuf::from(format!("/proc/{}/exe", out.trim()));
+        std::fs::metadata(&exe).map_err(|e| {
+            CpdError::new(ErrorCode::TmuxFailed, format!("Cannot find the tmux server's own binary {}: {e}.", exe.display()))
+                .with("path", exe.display().to_string())
+        })?;
+        Ok(exe)
+    }
+
     /// `show -gv <option>`: a global option's value, without the newline.
     pub fn global_option(&self, option: &str) -> Result<String, CpdError> {
         Ok(self.run(&strings(&["show", "-gv", option]))?.trim_end_matches('\n').to_owned())
@@ -486,6 +568,57 @@ impl Tmux {
         self.run(&strings(&["kill-pane", "-t", pane.as_str()])).map(drop)
     }
 
+    /// `kill-server`: the server and everything in it end. Returns once the server is gone. A server that
+    /// exits before it answers makes the call fail, and one that is dying answers `list-sessions` with
+    /// `server exited unexpectedly` or a refused connection: neither is an error here (hs-n285).
+    pub fn kill_server(&self) -> Result<(), CpdError> {
+        let args = strings(&["kill-server"]);
+        let out = self.output(&args)?;
+        if !out.status.success() && !self.program_gone() && self.liveness()? == Liveness::Answering {
+            return Err(self.failed(&args, &out));
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if self.program_gone() {
+                return Ok(());
+            }
+            match self.liveness()? {
+                Liveness::Gone => return Ok(()),
+                Liveness::Answering | Liveness::Dying if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                // Its connection closed on us: the server is dead, only its cleanup is left.
+                Liveness::Dying => return Ok(()),
+                Liveness::Answering => {
+                    return Err(CpdError::new(ErrorCode::TmuxFailed, "The tmux server did not exit within 10 s of kill-server.")
+                        .with("argv", self.argv(&args)));
+                }
+            }
+        }
+    }
+
+    /// The program is the server's own `/proc/<pid>/exe` and it is gone: the server went, and took it.
+    fn program_gone(&self) -> bool {
+        self.program.as_deref().is_some_and(|p| p.starts_with("/proc/") && !p.exists())
+    }
+
+    /// `list-sessions`, read as the answer of a server that may be on its way out.
+    fn liveness(&self) -> Result<Liveness, CpdError> {
+        let args = strings(&["list-sessions", "-F", "#{session_id}"]);
+        let out = self.output(&args)?;
+        if out.status.success() {
+            return Ok(Liveness::Answering);
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if no_server(&stderr) || refused(&stderr) {
+            Ok(Liveness::Gone)
+        } else if dying(&stderr) {
+            Ok(Liveness::Dying)
+        } else {
+            Err(self.failed(&args, &out))
+        }
+    }
+
     /// `kill-window -t <window>`.
     pub fn kill_window(&self, window: &WindowId) -> Result<(), CpdError> {
         self.run(&strings(&["kill-window", "-t", window.as_str()])).map(drop)
@@ -513,6 +646,7 @@ impl Tmux {
             match parse_pane(line).ok_or_else(|| self.unexpected(&args, line))? {
                 Line::Pane(pane) => panes.push(pane),
                 Line::UnknownView(view) => warn_unknown_view(&view),
+                Line::LegacyStatusbar => {}
             }
         }
         Ok(panes)
@@ -527,6 +661,43 @@ impl Tmux {
     }
 }
 
+/// A tmux version as `#{version}` and `tmux -V` print it (`3.4`, `3.3a`, `next-3.7`), for the order of
+/// two versions: major, minor, and the letter of a patch release (none before `a`). `None` when it
+/// does not start with `<major>.<minor>` (after an optional `next-`).
+fn version_key(version: &str) -> Option<(u32, u32, u8)> {
+    let v = version.strip_prefix("next-").unwrap_or(version);
+    let (major, rest) = v.split_once('.')?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let minor = rest[..digits].parse().ok()?;
+    let letter = rest[digits..].bytes().next().filter(u8::is_ascii_lowercase).map_or(0, |b| b - b'a' + 1);
+    Some((major.parse().ok()?, minor, letter))
+}
+
+/// Whether tmux `server` is an older version than tmux `installed`. False when either does not parse.
+pub fn older_version(server: &str, installed: &str) -> bool {
+    matches!((version_key(server), version_key(installed)), (Some(s), Some(i)) if s < i)
+}
+
+/// The version of the installed tmux, the one on `PATH`: `tmux -V` without its
+/// `tmux ` prefix, in the form of [`Tmux::server_version`].
+pub fn installed_version() -> Result<String, CpdError> {
+    let argv = vec!["tmux".to_owned(), "-V".to_owned()];
+    let out = Command::new("tmux").arg("-V").env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null()).output().map_err(|e| {
+        CpdError::new(ErrorCode::TmuxFailed, format!("Cannot run tmux: {e}."))
+            .with("argv", argv.clone())
+            .with("exit", serde_json::Value::Null)
+            .with("stderr", e.to_string())
+    })?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    match (out.status.success(), text.trim().strip_prefix("tmux ")) {
+        (true, Some(version)) => Ok(version.to_owned()),
+        _ => Err(CpdError::new(ErrorCode::TmuxFailed, "tmux -V did not print `tmux <version>`.")
+            .with("argv", argv)
+            .with("exit", out.status.code())
+            .with("stderr", String::from_utf8_lossy(&out.stderr).into_owned())),
+    }
+}
+
 /// Whether a failed call's stderr is tmux saying that no server runs: its
 /// socket file is missing (`error connecting to <socket> (No such file or
 /// directory)`) or nothing listens on it (`no server running on <socket>`),
@@ -536,6 +707,29 @@ fn no_server(stderr: &str) -> bool {
         line.starts_with("no server running on ")
             || (line.starts_with("error connecting to ") && line.ends_with("(No such file or directory)"))
     })
+}
+
+/// What a `list-sessions` after `kill-server` says about the server.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Liveness {
+    /// It answered: the server runs.
+    Answering,
+    /// Its connection closed without an answer (`server exited unexpectedly`, `lost server`): it is exiting.
+    Dying,
+    /// No server runs: no socket file, nothing listens on it, or the connection was refused.
+    Gone,
+}
+
+/// Whether a failed call's stderr says the connection to the server was refused (its socket file is
+/// left behind, nothing listens on it).
+fn refused(stderr: &str) -> bool {
+    stderr.lines().any(|line| line.starts_with("error connecting to ") && line.ends_with("(Connection refused)"))
+}
+
+/// Whether a failed call's stderr says the server closed the connection without answering, as a
+/// server does while it exits.
+fn dying(stderr: &str) -> bool {
+    stderr.lines().any(|line| line.starts_with("server exited unexpectedly") || line.starts_with("lost server"))
 }
 
 /// The arguments of [`Tmux::create_session`]'s call: `new-session -d -s <name>
@@ -568,6 +762,9 @@ enum Line {
     /// A well-formed pane whose `@cpd_view` this binary does not know (§6.3): a
     /// newer cpd made it, so it is skipped, not an error.
     UnknownView(String),
+    /// A well-formed pane with `@cpd_view` [`LEGACY_STATUSBAR`]: an older
+    /// cpd's StatusBar pane, which `cpd tui` removes. Skipped, without a warning.
+    LegacyStatusbar,
 }
 
 /// Logs an unknown `@cpd_view` value to stderr, once per value and process.
@@ -603,6 +800,7 @@ fn parse_pane(line: &str) -> Option<Line> {
     }
     match View::parse(cpd_view) {
         Some(view) => Some(Line::Pane(Pane { cpd_view: Some(view), ..pane })),
+        None if cpd_view == LEGACY_STATUSBAR => Some(Line::LegacyStatusbar),
         None => Some(Line::UnknownView(cpd_view.to_owned())),
     }
 }
@@ -619,7 +817,18 @@ mod tests {
     fn a_split_is_placed_by_its_flags() {
         assert_eq!(Split::Right.flags(), ["-h"]);
         assert_eq!(Split::Below.flags(), ["-v"]);
-        assert_eq!(Split::Bottom.flags(), ["-v", "-f"]);
+    }
+
+    #[test]
+    fn versions_are_ordered_by_major_minor_and_patch_letter() {
+        for (server, installed) in [("3.4", "3.8"), ("3.3a", "3.4"), ("3.3", "3.3a"), ("2.9", "3.0"), ("next-3.5", "3.6"), ("3.6", "3.10")] {
+            assert!(older_version(server, installed), "{server} < {installed}");
+            assert!(!older_version(installed, server), "{installed} !< {server}");
+        }
+        for same in ["3.4", "3.3a", "next-3.7"] {
+            assert!(!older_version(same, same));
+        }
+        assert!(!older_version("master", "3.8") && !older_version("3.4", "unknown"));
     }
 
     #[test]
@@ -684,6 +893,18 @@ mod tests {
     }
 
     #[test]
+    fn an_old_statusbar_pane_is_a_line_to_skip_quietly() {
+        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t0\t\t4242\t\tstatusbar"), Some(Line::LegacyStatusbar));
+        assert_eq!(parse_pane("%4\t@2\tcpd\tmain\t2\t\t4242\t\tstatusbar"), None);
+    }
+
+    #[test]
+    fn a_status_click_runs_cpd_quietly() {
+        assert!(STATUS_CLICK.starts_with(&format!("{} tui action ", crate::session::PROGRAM)));
+        assert!(STATUS_CLICK.ends_with(" 2>/dev/null"));
+    }
+
+    #[test]
     fn a_fresh_server_gets_its_options_before_the_first_pane_spawns() {
         let spawn = Spawn { cwd: None, env: BTreeMap::new(), argv: strings(&["cpd", "watch"]) };
         let new_session = strings(&[
@@ -716,5 +937,66 @@ mod tests {
         assert_eq!(cmd.get_program(), "tmux");
         let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
         assert_eq!(removed, ["TMUX", "TMUX_PANE"]);
+    }
+
+    /// A `tmux` that behaves as one does while its server dies after `kill-server` (hs-n285): its
+    /// first answers to `list-sessions` are `server exited unexpectedly`, then a refused connection,
+    /// then `no server running`. Returns the script and the calls it logs.
+    fn dying_server(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("tmux");
+        let script = format!(
+            "#!/bin/sh\n\
+             d='{d}'\n\
+             echo \"$*\" >> \"$d/calls\"\n\
+             case \" $* \" in\n\
+               *' kill-server '*) touch \"$d/killed\"; echo 'server exited unexpectedly' >&2; exit 1;;\n\
+               *' list-sessions '*)\n\
+                 [ -e \"$d/killed\" ] || exit 0\n\
+                 n=$(cat \"$d/n\" 2>/dev/null || echo 0); n=$((n+1)); echo $n > \"$d/n\"\n\
+                 case $n in\n\
+                   1|2) echo 'server exited unexpectedly' >&2;;\n\
+                   3) echo 'lost server' >&2;;\n\
+                   4) echo 'error connecting to /tmp/x (Connection refused)' >&2;;\n\
+                   *) echo 'no server running on /tmp/x' >&2;;\n\
+                 esac; exit 1;;\n\
+             esac\n",
+            d = dir.display()
+        );
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Another test's `fork` may hold the script's write descriptor for a moment: run it until it can be.
+        for _ in 0..100 {
+            match Command::new(&path).arg("warm-up").status() {
+                Err(e) if e.raw_os_error() == Some(26) => std::thread::sleep(Duration::from_millis(20)),
+                _ => break,
+            }
+        }
+        path
+    }
+
+    #[test]
+    fn a_dying_server_answering_server_exited_unexpectedly_does_not_fail_kill_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let tmux = Tmux::new("dying").with_program(dying_server(dir.path()));
+        tmux.kill_server().unwrap();
+        let calls = std::fs::read_to_string(dir.path().join("calls")).unwrap();
+        let listed = calls.lines().filter(|l| l.contains("list-sessions")).count();
+        assert_eq!(listed, 4, "it waited until the connection was refused: {calls}");
+        assert!(calls.lines().any(|l| l == "-L dying -f /dev/null kill-server"), "{calls}");
+    }
+
+    #[test]
+    fn every_call_runs_the_program_it_was_given() {
+        let tmux = Tmux::new("s").with_program("/opt/tmux-3.4");
+        assert_eq!(tmux.command(&strings(&["kill-server"])).get_program(), "/opt/tmux-3.4");
+        assert_eq!(tmux.argv(&strings(&["kill-server"]))[0], "tmux");
+    }
+
+    #[test]
+    fn what_a_server_says_while_it_exits() {
+        assert!(dying("server exited unexpectedly\n") && dying("lost server\n") && !dying("no server running on /tmp/x"));
+        assert!(refused("error connecting to /tmp/x (Connection refused)") && !refused("error connecting to /tmp/x (No such file or directory)"));
+        assert!(no_server("error connecting to /tmp/x (No such file or directory)"));
     }
 }

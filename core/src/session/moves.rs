@@ -287,6 +287,126 @@ pub(super) fn park_lead(
     Ok((window, placeholder))
 }
 
+/// Where a Lead or Manager with a pane was before the tmux server's restart (contract §6.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// The chat slot.
+    Chat,
+    /// A parked window: `park-<label>`, or a Context's `ctx-<context>` for its Manager.
+    Parked,
+}
+
+/// A Lead or Manager Session that had a live pane, and where.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub id: SessionId,
+    pub place: Place,
+}
+
+/// Every Lead and Manager Session the restart must bring back, each with its place: the chat slot
+/// or a parked window. Those with a live pane in the server (`@cpd_session`, known to the store, not
+/// archived), and those whose row records a pane the server does not show (a dead pane, a pane
+/// without its `@cpd_session`: engine E2 has not noticed yet, hs-n285). `tmux` is the server's own.
+pub fn placed(store: &mut Store, tmux: &Tmux, cockpit: &str) -> Result<Vec<Placed>, CpdError> {
+    let panes = tmux.list_panes()?;
+    let in_slot = chat_slot(&panes, cockpit).and_then(|p| p.cpd_session.clone());
+    let mut found: Vec<Placed> = Vec::new();
+    for pane in panes.iter().filter(|p| !p.dead) {
+        let Some(id) = &pane.cpd_session else { continue };
+        if found.iter().any(|f| &f.id == id) {
+            continue;
+        }
+        let Some(row) = store.read(|conn| row::find(conn, id))? else { continue };
+        if row.role == Role::Worker || row.archived_at.is_some() {
+            continue;
+        }
+        let place = if in_slot.as_ref() == Some(id) { Place::Chat } else { Place::Parked };
+        found.push(Placed { id: id.clone(), place });
+    }
+    let recorded: Vec<String> = store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id FROM sessions WHERE role IN ('lead', 'manager') AND tmux_pane IS NOT NULL AND archived_at IS NULL ORDER BY created_at, id",
+        )?;
+        Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
+    })?;
+    for id in recorded {
+        let id = SessionId::parse(&id).map_err(|_| CpdError::bad_row(format!("session id {id:?}")))?;
+        if found.iter().any(|f| f.id == id) {
+            continue;
+        }
+        let row = store.read(|conn| row::load(conn, &id))?;
+        // One Session holds the chat slot: the live one when there is one, else the row that says so.
+        let slot_taken = found.iter().any(|f| f.place == Place::Chat);
+        let place = if row.place == "chat" && !slot_taken { Place::Chat } else { Place::Parked };
+        found.push(Placed { id, place });
+    }
+    // The chat slot's Session first: reopening the others must not displace it.
+    found.sort_by_key(|f| f.place != Place::Chat);
+    Ok(found)
+}
+
+/// Writes, as `command`, the rows engine E2 writes for the pane of each Session of `placed` that the
+/// killed server took with it (§3.6, `pane_gone`): `stopped`, no pane. So until the pi of its new pane
+/// reports `idle`, a Session says what is true, and no row names a pane id of the dead server, which
+/// the new server hands out again. Returns the Sessions it could not write, with why.
+pub fn gone(store: &mut Store, placed: &[Placed], command: &str) -> Vec<(SessionId, CpdError)> {
+    let mut failed = Vec::new();
+    for item in placed {
+        if let Err(e) = gone_one(store, &item.id, command) {
+            failed.push((item.id.clone(), e));
+        }
+    }
+    failed
+}
+
+fn gone_one(store: &mut Store, id: &SessionId, command: &str) -> Result<(), CpdError> {
+    // The old pi's adapter reports `stopped` as its pane dies, which changes the state the write is
+    // checked against: read again while the pane is still the row's.
+    for _ in 0..5 {
+        let row = store.read(|conn| row::load(conn, id))?;
+        let Some(pane) = row.tmux_pane.clone() else { return Ok(()) };
+        let why = format!("its pane {pane} died with the tmux server");
+        if store.write(command, |tx| pane_gone(tx, id, row.state.as_str(), Some(&pane), &why))? {
+            return Ok(());
+        }
+    }
+    Err(CpdError::new(ErrorCode::CasLost, format!("Session {id} kept changing while its pane was recorded gone.")).with("session", id.as_str()))
+}
+
+/// Brings back each Session of `placed` in its place on a rebuilt cockpit: the one of the chat slot
+/// as `session open` does, the others in a new parked window running `cpd session run <id>`, which
+/// resumes its pi session file. A Session that has a live pane already (`session open` displaced it
+/// into a parked window) is left there. Returns the Sessions that could not be reopened, with why.
+pub fn reopen(placed: &[Placed]) -> Vec<(SessionId, CpdError)> {
+    let mut failed = Vec::new();
+    for item in placed {
+        if let Err(e) = reopen_one(item) {
+            failed.push((item.id.clone(), e));
+        }
+    }
+    failed
+}
+
+fn reopen_one(item: &Placed) -> Result<(), CpdError> {
+    let mut env = Env::open()?;
+    let tmux = env.tmux();
+    let cockpit = env.config.tmux.cockpit_session.clone();
+    if item.place == Place::Chat {
+        return open(OpenArgs { id: crate::args::SessionRef::Plain(item.id.clone()) }).map(drop);
+    }
+    let row = env.store.read(|conn| row::load(conn, &item.id))?;
+    if tmux.list_panes()?.iter().any(|p| !p.dead && p.cpd_session.as_ref() == Some(&item.id)) {
+        return Ok(());
+    }
+    let spawn = lead_spawn(&env.home, &row.id, row.plan.as_ref(), Path::new(&row.cwd));
+    let (window, pane) = tmux.new_window(&cockpit, &parked_window(&row), &spawn)?;
+    kill_window_on_error(&tmux, &window, || {
+        tmux.set_pane_session(&pane, &row.id)?;
+        tmux.set_pane_title(&pane, &env.store.read(|conn| row.title(conn))?)?;
+        env.store.write("tmux restart", |tx| moved(tx, &row, &pane, &window, "parked"))
+    })
+}
+
 /// What [`close_lead`] found.
 pub struct Closed {
     /// The Lead's pane, or none when it had none.

@@ -66,7 +66,7 @@ The engine runs the Jobs.
 Mechanical checks, PR, Reviewing and Monitoring, Addressing; the end of phase `dispatch` and phase `deploy` until `done`.
 
 **Mechanical checks** (step):
-The Gate, run by `pr open`.
+The Gate, run by `pr open` when the PR's `pr.gate` is `local`; else the repo's CI.
 
 **PR** (step):
 The pull request is opened.
@@ -209,7 +209,7 @@ _Avoid_: blocker, ask
 ## Outcomes
 
 **Gate** (changed):
-The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd only at the PR level: on a PR's Lead Branch, in its Lead worktree, before `pr open` and `pr rebase` push. Never per Job or per merge (R19).
+The repository's mechanical checks (tests, typecheck, lint), defined by the repo as its `pre-merge` hook in `.config/wt.toml` and run by cpd only at the PR level: on a PR's Lead Branch, in its Lead worktree, before `pr open`, `pr push` and `pr rebase` push, and only when the PR's Policy sets `pr.gate = "local"`; with cpd's default, `ci`, the repo's CI is the check (hs-d292). Never per Job or per merge (R19).
 _Avoid_: CI, checks
 
 **Quick check** (new):
@@ -227,3 +227,25 @@ _Avoid_: done, completed
 **Tier**:
 A two-character code naming the model and effort an agent runs at, e.g. `O3` for the Lead or `S1` for a coding Worker.
 _Avoid_: level, profile
+
+## Policies
+
+**Policy** (new, hs-d288):
+How cpd and its agents work for one GitHub owner or repo: a fixed set of Domains, resolved per Policy key from cpd's built-in default and the instance's owner and repo files under `$CPD_HOME/policy/` (contract §8.3). Never per machine (hs-d263), and not in a repo's committed files yet. `cpd policy show` prints one.
+_Avoid_: rules, settings, profile, config
+
+**Domain** (new, hs-d288):
+One typed slot of a Policy, owned by cpd's code: `pr`, `deploy`, `code`, `tests`, `monitor` or `instructions`. Its value has typed keys that cpd's commands branch on (such as `pr.gate`, `local` or `ci`) and a free `text` for the agents its fixed audience names. A Scope that sets a Domain sets all of it; a key it leaves out takes cpd's default.
+_Avoid_: section, category, setting
+
+**Scope** (new, hs-d288):
+Where a Domain's value is set: cpd's default, an owner file, or a repo file. The most specific Scope that sets a Domain wins (repo > owner > default, hs-d279); no Domain adds up across Scopes.
+_Avoid_: layer, level, override file
+
+**Policy key** (new, hs-d288):
+What a Policy is resolved for: an owner, or an owner and a repo name (`Owner(login) | Repo(login, name)`). cpd derives it from the one row a consumer acts on: a Context, its Manager and its Leads use the Context's owner; a PR, its Workers and the commands on it use the PR's repo. Never a machine, a path or a cwd.
+_Avoid_: scope, selector, context
+
+**Resolved policy** (new, hs-d288):
+The Policy of one Policy key: every Domain's value with its source (`default`, `owner:<path>` or `repo:<path>`). It is total, because cpd's default sets every Domain.
+_Avoid_: effective config, merged policy

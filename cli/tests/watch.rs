@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use common::{CPD, Run, SLEEP_SECONDS, TestEnv, copy_executable, wait_until};
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
-use cpd_core::home::CpdHome;
+use cpd_core::home::{CpdHome, Infra};
 use cpd_core::ids::{AttemptId, PlanId};
 use cpd_core::plan::{jobs, locked_fingerprint};
 use cpd_core::store::{Store, WriteTxn};
@@ -163,7 +163,7 @@ fn fx_bare(config_extra: &str) -> Fx {
         .collect();
     fx.fixture(&format!(
         "{catalog}
-         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');"
+         INSERT INTO contexts (id, title, owner, created_at, created_on) VALUES ('ctx', 'Ctx', 'acme', 't', 'm1');"
     ));
     fx
 }
@@ -475,6 +475,144 @@ fn ensure_fails_when_the_engine_does_not_start() {
     assert_eq!(error["details"]["exit"], 7);
     assert_eq!(error["details"]["next"], "cpd watch --ensure");
     assert!(error["details"]["pane"].as_str().unwrap().starts_with('%'));
+}
+
+// ---------- @cpd_workers ----------
+
+const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3 · 0 waiting · 0 queued#[default]";
+const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3 · 0 waiting · 0 queued#[default]";
+
+impl Fx {
+    /// A tmux server with one session, `keepalive`.
+    fn tmux_server(&self) {
+        assert!(self.env.tmux(&["new-session", "-d", "-s", "keepalive", "sleep", "600"]).status.success());
+    }
+
+    fn workers(&self) -> String {
+        self.option("@cpd_workers")
+    }
+
+    fn option(&self, name: &str) -> String {
+        let out = self.env.tmux(&["show", "-gv", name]);
+        String::from_utf8_lossy(&out.stdout).trim_end().to_owned()
+    }
+}
+
+#[test]
+fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
+    let fx = fx("");
+    fx.tmux_server();
+    let lock = fx.live_driver("api-a1");
+    fx.add_running("api", "running", &ago(1));
+
+    let engine = fx.start();
+    wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·0#[default]");
+    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+
+    // Unchanged, it is not set again: a value put there by hand survives the next ticks.
+    assert!(fx.env.tmux(&["set", "-g", "@cpd_workers", "by hand"]).status.success());
+    // time-claim: the value is not set again over more than one engine tick; no per-poll signal from the engine, which
+    // sets nothing at a tick where the text did not change.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.workers(), "by hand");
+
+    // A change sets it.
+    fx.fixture("UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';");
+    wait_until("@cpd_workers to change", || fx.workers() == NO_WORKERS);
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn the_engine_counts_waiting_and_queued_jobs() {
+    let fx = fx("concurrency = 1");
+    fx.tmux_server();
+    let lock = fx.live_driver("run-a1");
+    fx.add_running("run", "running", &ago(1));
+    // Ready but the only slot is taken (E3 starts nothing); the other needs it, so it is queued and not waiting.
+    fx.add_job("free", &[], "");
+    fx.add_job("blocked", &["free"], "");
+
+    let engine = fx.start();
+    let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 2 queued#[default]";
+    wait_until("@cpd_workers", || fx.workers() == long);
+    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·2#[default]");
+    assert_eq!(fx.option("@cpd_workers_width"), "42", "inbox 0, one space, the long form");
+    engine.stop();
+    drop(lock);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+/// The Inbox counter: dim `inbox 0` with no item; two open, visible items, the most urgent red, make it red `inbox 2`,
+/// and the width the status line compares counts it.
+#[test]
+fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
+    let fx = fx("");
+    fx.tmux_server();
+    let engine = fx.start();
+    wait_until("@cpd_inbox", || fx.option("@cpd_inbox") == "#[dim]inbox 0#[default]");
+
+    // Two open pull requests the User authored outside cpd, with failed checks: E8 opens two red `pr-failing` items
+    // (a failed Job is the Manager's since hs-d318, so it opens none).
+    for n in [1, 2] {
+        fx.fixture(&format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
+             VALUES ('acme/shop', {n}, 'https://github.com/acme/shop/pull/{n}', 'T', 0, 'open', 'none', 'failed', 't', 't');"
+        ));
+    }
+    wait_until("@cpd_inbox red 2", || fx.option("@cpd_inbox") == "#[fg=red]inbox 2#[default]");
+    assert_eq!(fx.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'pr-failing'"), 2);
+    assert_eq!(fx.option("@cpd_workers_width"), "42");
+    engine.stop();
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn without_a_tmux_server_the_workers_step_does_nothing_and_sets_the_text_once_one_appears() {
+    let fx = fx("");
+    let engine = fx.start();
+    // time-claim: no error over more than one engine tick without a tmux server; no per-poll signal from the engine,
+    // which records nothing at a tick that does nothing.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+    assert!(!fx.env.tmux(&["has-session"]).status.success());
+
+    fx.tmux_server();
+    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
+    let out = engine.stop();
+    assert_eq!(out.exit, 0, "{out:?}");
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
+}
+
+#[test]
+fn a_tmux_failure_of_the_workers_step_is_one_error_and_the_engine_goes_on() {
+    let fx = fx("");
+    fx.tmux_server();
+    // A tmux that fails `set` and is the real one otherwise, first on the engine's PATH.
+    let real = std::env::var("PATH")
+        .unwrap()
+        .split(':')
+        .map(|dir| Path::new(dir).join("tmux"))
+        .find(|p| p.is_file())
+        .expect("tmux on PATH");
+    fx.env.fake("tmux", &format!("case \" $*\" in *\" set -g @cpd_workers\"*) echo boom >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
+    let engine = fx.start();
+    let workers_errors = || fx.texts("error").into_iter().filter(|t| t.contains("@cpd_workers")).collect::<Vec<_>>();
+    wait_until("the error", || workers_errors().len() == 1);
+    // time-claim: the failed set is not reported again over more than one engine tick; no per-poll signal from the
+    // engine, which records nothing at a tick that sets nothing new.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(workers_errors().len(), 1, "{:?}", workers_errors());
+    assert!(workers_errors()[0].contains("tmux set failed: boom"), "{:?}", workers_errors());
+    assert_eq!(fx.workers(), "");
+
+    // It kept running, and sets the text once tmux works again.
+    fx.env.fake("tmux", &format!("exec '{}' \"$@\"", real.display()));
+    wait_until("@cpd_workers", || fx.workers() == NO_WORKERS);
+    let out = engine.stop();
+    assert_eq!(out.exit, 0, "{out:?}");
 }
 
 #[test]
@@ -933,6 +1071,40 @@ fn e3_starts_one_urgent_job_beyond_the_concurrency_and_not_a_second() {
     assert_eq!((fx.job_status("hot1"), fx.job_status("hot2"), fx.job_status("old")), ("running".into(), "queued".into(), "queued".into()));
 }
 
+/// A pending restart of the tmux server (contract §6.1, hs-d294) holds E3: no Attempt starts while it
+/// is pending, a running one is left alone, and the Job starts at the next tick once it is cleared.
+#[test]
+fn a_pending_tmux_restart_stops_e3_from_starting_attempts_and_running_ones_finish() {
+    let fx = fx("concurrency = 2\nretry_cap = 0");
+    work_session_with_a_worker_that_stays(&fx);
+    // One Attempt runs (its driver holds the lock); a slot is free and a Job is ready.
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    fx.add_job("next", &[], "");
+    let pending = fx.env.cpd_home().join("run/tmux-restart.pending");
+    fs::create_dir_all(pending.parent().unwrap()).unwrap();
+    fs::write(&pending, r#"{"at":"2026-10-19T12:00:00.000Z","server":"3.4","installed":"3.8"}"#).unwrap();
+
+    let engine = fx.start();
+    // `doctor` shows the planned hold, which is not a failure.
+    let doctor = fx.env.cpd(&["doctor"]).json();
+    let checks = if doctor["ok"] == true { &doctor["checks"] } else { &doctor["error"]["details"]["checks"] };
+    let check = checks.as_array().unwrap().iter().find(|c| c["name"] == "tmux_restart").unwrap();
+    assert_eq!((check["ok"].as_bool(), check["message"].as_str()), (Some(true), Some("tmux restart pending")));
+    wait_until("E3's hold to be logged", || fs::read_to_string(fx.home().watch_log()).unwrap_or_default().contains("E3: holding"));
+    // time-claim: a pending restart holds E3, so no Attempt starts over several engine ticks; 2.5 s covers at least two ticks; no per-poll signal from the engine for a tick that held.
+    std::thread::sleep(Duration::from_millis(2500));
+    assert_eq!(fx.count("attempt-started"), 0, "a pending restart holds E3");
+    assert_eq!((fx.job_status("next"), fx.attempt("busy-a1").0), ("queued".into(), "running".into()));
+    assert!(fx.events("error").is_empty(), "the hold is not an error: {:?}", fx.events("error"));
+
+    // Cleared (a restart that ran, or none needed): the Job starts at once.
+    fs::remove_file(&pending).unwrap();
+    wait_until("attempt-started", || fx.count("attempt-started") == 1);
+    engine.stop();
+    assert_eq!(fx.events("attempt-started")[0].1.as_deref(), Some("next"));
+}
+
 /// The 00:02Z incident (hs-d151): the file the engine runs from is replaced, then
 /// E3 starts an Attempt. The driver starts from the path recorded at start
 /// (`cannot run <path> (deleted)` before).
@@ -1092,6 +1264,49 @@ fn e2_counts_only_attempts_whose_driver_started() {
     assert_eq!(fx.job_status("api"), "failed");
     let failed = fx.events("job-failed");
     assert_eq!((failed.len(), failed[0].1.as_deref(), &failed[0].3["cause"]), (1, Some("api"), &json!("crashed")));
+}
+
+/// hs-n278: a driver that an install or a store migration ended (it left its `.infra` marker) is not its Worker's
+/// failure: E2 ends it as one whose driver never started, so the Job is queued at the same Tier and `retry_cap`
+/// does not count it. A driver that died with no marker still climbs the ladder and counts.
+#[test]
+fn e2_ends_a_driver_ended_by_the_store_at_the_same_tier_uncounted_and_other_crashes_still_climb() {
+    let fx = fx("concurrency = 1\nretry_cap = 1");
+    let _busy = fx.live_driver("busy-a1");
+    fx.add_running("busy", "running", &ago(1));
+    let running = |key: &str, number: u32, tier: &str| {
+        format!(
+            "UPDATE jobs SET status = 'running' WHERE plan = 'pay' AND key = '{key}';
+             INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at, driver_pid)
+               VALUES ('pay', '{key}-a{number}', '{key}', {number}, '{tier}', 'ladder', 'running', 'cpd/pay--{key}-a{number}', '/w', '{}', 4242);",
+            ago(1)
+        )
+    };
+    // `web`: two Attempts that never had a driver, then a driver the store ended: three that are not the
+    // Worker's failures, more than `retry_cap = 1` allows if they counted.
+    let before = ended_attempt("web", 1, "S2", None, &ago(5)) + &ended_attempt("web", 2, "S2", None, &ago(4));
+    fx.add_job("web", &[], &(before + &running("web", 3, "S2")));
+    // `api`: the same Attempts, but its last driver died with no marker: the ladder counts it.
+    fx.add_job("api", &[], &(ended_attempt("api", 1, "S2", Some(4242), &ago(2)) + &running("api", 2, "S3")));
+    let plan = PlanId::parse(PLAN).unwrap();
+    fx.home().leave_infra(&plan, &AttemptId::parse("web-a3").unwrap(), Infra::StoreTooNew, "The store is newer than this cpd.").unwrap();
+
+    let engine = fx.start();
+    wait_until("both ended", || fx.attempt("web-a3").0 == "ended" && fx.attempt("api-a2").0 == "ended");
+    engine.stop();
+
+    // `web-a3`: same Tier S2, not counted, and the marker went with the Attempt.
+    assert_eq!(fx.job_status("web"), "queued");
+    assert_eq!(fx.attempt("web-a3"), ("ended".into(), Some("failed".into()), Some("crashed".into()), None));
+    assert_eq!(fx.query::<Option<i64>>("SELECT driver_pid FROM attempts WHERE id = 'web-a3'"), None);
+    assert!(!fx.home().attempt_infra(&plan, &AttemptId::parse("web-a3").unwrap()).exists());
+    let retry: Vec<_> = fx.events("attempt-retry").into_iter().filter(|e| e.1.as_deref() == Some("web")).collect();
+    assert_eq!((retry.len(), &retry[0].3["next_tier"]), (1, &json!("S2")), "{retry:?}");
+    assert!(retry[0].3["feedback"].as_str().unwrap().contains("store_too_new"), "{retry:?}");
+    // `api-a2`: a crash that counts: both tries used, the Job fails.
+    assert_eq!(fx.job_status("api"), "failed");
+    assert_eq!(fx.events("job-failed").len(), 1);
+    assert_eq!(fx.count("error"), 0, "{:?}", fx.texts("error"));
 }
 
 // ---------- a busy store (contract §3.7, §4.2) ----------
@@ -1491,7 +1706,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     // the repo an `origin` that has them, so the only `error` this test could see is E5's or E7's own.
     let origin = fx.env.root().join("repos/origin.git");
     fx.env.git(fx.env.root(), &["init", "--bare", "-q", "-b", "main", origin.to_str().unwrap()]);
-    fx.env.git(&fx.repo, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    fx.env.local_origin(&fx.repo, &origin);
     fx.env.git(&fx.repo, &["push", "-q", "origin", "main"]);
     // `web` is in its own repo: git cannot hold `cpd/pay` beside `cpd/pay/web`.
     let web = fx.env.git_repo("web").canonicalize().unwrap();
@@ -1518,6 +1733,230 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
     assert!(fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-merged'") < fx.query::<i64>("SELECT id FROM events WHERE kind = 'pr-started'"));
     assert!(!fx.lead.exists(), "the poll that saw the merge cleaned up the Lead worktree");
     assert_eq!(fx.count("error"), 0);
+}
+
+// ---------- E10 ----------
+
+/// What E10's tests share: the Fx, a tmux server with a live pane per Session (E2 stops an idle Session
+/// without one), a Job `api` with its live driver and open Escalations that E1 expires at a tick: waiting for
+/// two of them to be expired is waiting for a whole tick (E1 runs first in a tick, E10 last), so a test can
+/// say "E10 has run, and started nothing" without sleeping on wall time.
+struct Titles {
+    fx: Fx,
+    panes: Vec<String>,
+    asked: u32,
+    _driver: Flock<File>,
+}
+
+/// A Session file with one short conversation, as pi writes it.
+fn conversation(fx: &Fx, id: &str) -> PathBuf {
+    let path = fx.env.root().join(format!("{id}.jsonl"));
+    let lines = [
+        json!({"type": "session", "id": id}),
+        json!({"type": "message", "message": {"role": "user", "content": "How do we title Sessions?"}}),
+        json!({"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "With an auxiliary agent."}]}}),
+    ];
+    fs::write(&path, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n").unwrap();
+    path
+}
+
+impl Titles {
+    /// `fx`, a pane per id in `panes`, pi answering `pi` (a shell body, its stdin read first).
+    fn new(panes: usize, pi: &str) -> Titles {
+        let fx = fx("");
+        fx.env.fake_pi(&format!("cat > /dev/null\n{pi}"));
+        let mut ids = Vec::new();
+        for n in 0..panes {
+            let args: &[&str] = if n == 0 { &["new-session", "-d", "-s", "x"] } else { &["new-window", "-d", "-t", "=x:"] };
+            let out = fx.env.tmux(&[args, &["-P", "-F", "#{pane_id}", "sleep", "600"]].concat());
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            ids.push(String::from_utf8(out.stdout).unwrap().trim().to_owned());
+        }
+        let driver = fx.live_driver("api-a1");
+        fx.add_running("api", "running", &ago(1));
+        Titles { fx, panes: ids, asked: 0, _driver: driver }
+    }
+
+    /// Session `id` of `role` in `state`, on pane number `pane`, with its finished turn `turn` minutes ago (`None`:
+    /// only its start, `stopped` to `idle`) and its title written `titled` minutes ago (`None`: no title).
+    fn session(&self, id: &str, role: &str, state: &str, pane: usize, turn: Option<i64>, titled: Option<i64>) {
+        let (title, titled_at) = titled.map_or(("NULL".to_owned(), "NULL".to_owned()), |m| ("'Old title'".to_owned(), format!("'{}'", ago(m))));
+        let (from, at) = turn.map_or(("stopped", ago(60)), |m| ("working", ago(m)));
+        self.fx.fixture(&format!(
+            "INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_at, created_at, title, titled_at)
+               VALUES ('{id}', '{role}', 'ctx', {plan}, {attempt}, '{id}', '{file}', '/', 'O3', '{pane}', '{state}', 't', 't', {title}, {titled_at});
+             INSERT INTO events (txn, at, kind, context, session, text, data)
+               VALUES (cpd_txn(), '{at}', 'session-state', 'ctx', '{id}', 'x', '{{\"from\":\"{from}\",\"label\":null,\"to\":\"idle\"}}');",
+            file = conversation(&self.fx, id).display(),
+            pane = self.panes[pane],
+            plan = if role == "worker" { "'pay'" } else { "NULL" },
+            attempt = if role == "worker" { "'api-a1'" } else { "NULL" }
+        ));
+    }
+
+    /// Waits until the engine has run one whole tick since this call began: an Escalation E1 expires at its next
+    /// tick, which ends with E10 (the one before it is expired in a tick that already ended, or in this one).
+    fn tick(&mut self) {
+        let dead = {
+            let mut gone = std::process::Command::new("true").spawn().unwrap();
+            let pid = gone.id();
+            gone.wait().unwrap();
+            pid
+        };
+        self.asked += 1;
+        let n = self.asked;
+        self.fx.fixture(&format!(
+            "INSERT INTO escalations (plan, id, attempt, number, question, status, asker_pid, asked_at)
+               VALUES ('pay', 'api-a1-q{n}', 'api-a1', {n}, 'Why?', 'open', {dead}, '{}');",
+            ago(1)
+        ));
+        wait_until("the escalation expired", || {
+            self.fx.query::<String>(&format!("SELECT status FROM escalations WHERE id = 'api-a1-q{n}'")) == "expired"
+        });
+    }
+
+    /// Two whole ticks of E10 after now, so one of them began after this call.
+    fn ticks(&mut self) {
+        self.tick();
+        self.tick();
+    }
+
+    /// The Sessions with a title written by a retitle run (`titled_at` moved), by id.
+    fn retitled(&self) -> Vec<String> {
+        self.fx
+            .store()
+            .read(|conn| {
+                let mut stmt = conn.prepare("SELECT session FROM events WHERE kind = 'session-titled' ORDER BY id")?;
+                Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .unwrap()
+    }
+
+    fn started(&self) -> Vec<String> {
+        let mut logs: Vec<String> = fs::read_dir(self.fx.env.cpd_home().join("run/titles"))
+            .map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().trim_end_matches(".log").to_owned()).collect())
+            .unwrap_or_default();
+        logs.sort();
+        logs
+    }
+}
+
+/// An idle Lead or Manager whose turn ended after its title (and the title is 10 minutes old) is retitled; one titled
+/// less than 10 minutes ago, one that is working, one that only started, one without a finished turn and a Worker are
+/// not.
+#[test]
+fn e10_retitles_an_idle_session_whose_turn_ended_after_its_title_and_no_other() {
+    let mut t = Titles::new(7, "echo 'Auxiliary agent titles'");
+    t.session("due-manager", "manager", "idle", 0, Some(5), Some(20));
+    t.session("due-untitled", "lead", "idle", 1, Some(1), None);
+    t.session("throttled", "lead", "idle", 2, Some(1), Some(5));
+    t.session("working", "lead", "working", 3, Some(1), Some(20));
+    t.session("just-started", "lead", "idle", 4, None, None);
+    t.session("title-is-newer", "lead", "idle", 5, Some(40), Some(20));
+    t.session("worker", "worker", "idle", 6, Some(1), None);
+
+    let engine = t.fx.start();
+    wait_until("both retitled", || t.retitled().len() == 2);
+    t.ticks();
+    engine.stop();
+
+    let mut retitled = t.retitled();
+    retitled.sort();
+    assert_eq!(retitled, ["due-manager", "due-untitled"]);
+    assert_eq!(t.started(), ["due-manager", "due-untitled"]);
+    assert_eq!(t.fx.env.calls("pi").len(), 2, "no Session is retitled twice: the new title is newer than its turn");
+    let titles: Vec<String> = ["due-manager", "due-untitled", "throttled"]
+        .iter()
+        .map(|id| t.fx.query(&format!("SELECT title FROM sessions WHERE id = '{id}'")))
+        .collect();
+    assert_eq!(titles, ["Auxiliary agent titles", "Auxiliary agent titles", "Old title"]);
+    assert_eq!(t.fx.count("error"), 0);
+}
+
+/// At most 2 retitles at once: a third waits for one to end, and then runs.
+#[test]
+fn e10_runs_at_most_two_retitles_at_once() {
+    let release = std::env::temp_dir().join(format!("e10-release-{}", std::process::id()));
+    let mut t = Titles::new(
+        3,
+        &format!("i=0\nuntil [ -e '{r}' ] || [ $i -ge 1200 ]; do sleep 0.1; i=$((i+1)); done\necho 'A title'", r = release.display()),
+    );
+    for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
+        t.session(id, "lead", "idle", n, Some(1), None);
+    }
+
+    let engine = t.fx.start();
+    wait_until("two pi runs", || t.fx.env.calls("pi").len() == 2);
+    t.ticks();
+    assert_eq!((t.fx.env.calls("pi").len(), t.started()), (2, vec!["s1".to_owned(), "s2".to_owned()]), "the third waits");
+
+    fs::write(&release, "").unwrap();
+    wait_until("all three titled", || t.retitled().len() == 3);
+    engine.stop();
+    fs::remove_file(&release).unwrap();
+    assert_eq!(t.fx.env.calls("pi").len(), 3);
+    assert_eq!(t.started(), ["s1", "s2", "s3"]);
+    assert_eq!(t.fx.count("error"), 0);
+}
+
+/// A run E10 did not start counts: a held `title-<session>.lock` is a run in flight, so its Session is skipped and
+/// it takes one of the two places.
+#[test]
+fn e10_skips_a_session_whose_title_lock_is_held_and_counts_held_locks() {
+    let mut t = Titles::new(3, "echo 'A title'");
+    for (n, id) in ["s1", "s2", "s3"].iter().enumerate() {
+        t.session(id, "lead", "idle", n, Some(1), None);
+    }
+    let hold = |id: &str| {
+        let path = t.fx.home().locks_dir().join(format!("title-{id}.lock"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).unwrap();
+        file.lock().unwrap();
+        file
+    };
+    let (one, two) = (hold("s1"), hold("s2"));
+
+    let engine = t.fx.start();
+    t.ticks();
+    assert_eq!(t.fx.env.calls("pi").len(), 0, "two are held: no place for s3");
+    drop(one);
+    wait_until("s1 and s3 titled", || t.retitled().len() == 2);
+    t.ticks();
+    engine.stop();
+    drop(two);
+
+    let mut retitled = t.retitled();
+    retitled.sort();
+    assert_eq!(retitled, ["s1", "s3"], "s2 is held until the end");
+    assert_eq!(t.fx.env.calls("pi").len(), 2);
+}
+
+/// A failed retitle writes nothing, is reported once however many ticks retry it, and the report names no
+/// Session or Plan (no Lead gets a turn). A title less than 10 minutes old is not retried at all.
+#[test]
+fn e10_reports_a_failed_retitle_once_and_retries_only_what_is_due() {
+    let mut t = Titles::new(2, "echo 'pi: boom' >&2\nexit 1");
+    t.session("due", "lead", "idle", 0, Some(1), Some(20));
+    t.session("throttled", "lead", "idle", 1, Some(1), Some(5));
+
+    let engine = t.fx.start();
+    wait_until("the failure is reported", || t.fx.count("error") == 1);
+    wait_until("a retry", || t.fx.env.calls("pi").len() >= 2);
+    t.ticks();
+    engine.stop();
+
+    assert_eq!(t.started(), ["due"]);
+    let errors = t.fx.events("error");
+    assert_eq!(errors.len(), 1, "reported once: {errors:?}");
+    let data = &errors[0].3;
+    assert_eq!((data["source"].as_str(), data["code"].as_str()), (Some("watch"), Some("title_failed")));
+    assert_eq!(data["details"]["session"], "due");
+    assert!(data["details"]["tail"].as_str().unwrap().contains("pi: boom"), "{data}");
+    assert!(data["details"]["log"].as_str().unwrap().ends_with("run/titles/due.log"), "{data}");
+    assert_eq!(t.fx.query::<Option<String>>("SELECT session FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.fx.query::<Option<String>>("SELECT context FROM events WHERE kind = 'error'"), None);
+    assert_eq!(t.retitled(), Vec::<String>::new());
+    assert_eq!(t.fx.query::<String>("SELECT title FROM sessions WHERE id = 'due'"), "Old title");
 }
 
 // ---------- E6 (removed) ----------
@@ -1651,118 +2090,6 @@ fn install_accepts_a_build_that_opens_the_store_or_a_home_without_a_database() {
         assert!(out.status.success(), "{store}: {}", String::from_utf8_lossy(&out.stderr));
         assert!(env.home().join(".local/bin/cpd").exists());
     }
-}
-
-// ---------- scripts/restart-tmux.sh ----------
-
-/// Runs `scripts/restart-tmux.sh` in `env`, whose private tmux server runs one
-/// session `cpd`. The fake `tmux` forwards everything to the real one but
-/// answers `-V` with `installed` (empty: the real one); the fake `cpd` answers `config`,
-/// `plan list` (one Plan `p1`), `attempt list` with `attempts` (a JSON array),
-/// `session list` (a Lead with a pane and one without), and `tui`, which
-/// records whether the server was gone by then. `tmux_env` is the script's `$TMUX`.
-fn restart(env: &TestEnv, installed: &str, attempts: &str, tmux_env: Option<&str>) -> std::process::Output {
-    let socket = env.tmux_socket();
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.exists()).expect("tmux on PATH");
-    // The server runs a copy of tmux at its own path: the binary the script must name.
-    let server = server_binary(env);
-    fs::create_dir_all(server.parent().unwrap()).unwrap();
-    copy_executable(real.to_str().expect("a UTF-8 path to tmux"), &server);
-    let out = env.command(&server).args(["-L", &socket, "new-session", "-d", "-s", "cpd", "sleep", "600"]).output().unwrap();
-    assert!(out.status.success());
-    env.fake(
-        "tmux",
-        &format!("[ \"$1\" = -V ] && [ -n '{installed}' ] && {{ echo 'tmux {installed}'; exit 0; }}\nexec '{}' \"$@\"", real.display()),
-    );
-    env.fake(
-        "cpd",
-        &format!(
-            r#"case "$1 $2" in
-"config ") echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
-"plan list") echo '{{"ok":true,"plans":[{{"id":"p1"}}]}}' ;;
-"attempt list") echo '{{"ok":true,"attempts":{attempts}}}' ;;
-"session list") echo '{{"ok":true,"sessions":[{{"id":"lead-in-pane","role":"lead","tmux_pane":"%1"}},{{"id":"lead-away","role":"lead","tmux_pane":null}}]}}' ;;
-"tui ") tmux -L '{socket}' display -p x >/dev/null 2>&1 && echo alive > '{state}' || echo gone > '{state}' ;;
-esac"#,
-            state = env.root().join("server-at-tui").display()
-        ),
-    );
-    let mut cmd = env.command(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("scripts/restart-tmux.sh"));
-    if let Some(value) = tmux_env {
-        cmd.env("TMUX", value);
-    }
-    cmd.output().unwrap()
-}
-
-fn server_binary(env: &TestEnv) -> std::path::PathBuf {
-    env.root().join("server-bin/tmux-server")
-}
-
-fn killed(env: &TestEnv) -> bool {
-    env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "kill-server"))
-}
-
-fn tui_ran(env: &TestEnv) -> bool {
-    env.calls("cpd").iter().any(|c| c.first().is_some_and(|a| a == "tui"))
-}
-
-#[test]
-fn restart_tmux_refuses_while_an_attempt_runs_and_touches_nothing() {
-    for status in ["starting", "running", "merging"] {
-        let env = TestEnv::new();
-        let attempts = format!(r#"[{{"id":"job-a1","status":"{status}"}}]"#);
-        let out = restart(&env, "99.0", &attempts, None);
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "{status}: {stderr}");
-        assert!(stderr.contains("p1/job-a1"), "{stderr}");
-        // The plain tmux ("99.0") cannot attach: the line names the server's binary and why.
-        let attach = format!("{} -L {} attach -t cpd", server_binary(&env).display(), env.tmux_socket());
-        assert!(stderr.contains(&attach), "{stderr}");
-        assert!(stderr.contains("plain tmux, version 99.0, cannot attach"), "{stderr}");
-        assert!(!killed(&env) && !tui_ran(&env), "{status}");
-        assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success(), "{status}");
-    }
-}
-
-#[test]
-fn restart_tmux_with_the_same_version_does_not_kill() {
-    let env = TestEnv::new();
-    let out = restart(&env, "", "[]", None);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(stdout.contains("nothing to do"), "{stdout}");
-    assert!(!killed(&env) && !tui_ran(&env));
-    assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
-}
-
-#[test]
-fn restart_tmux_with_another_version_kills_the_server_then_runs_tui_and_prints_the_resume_lines() {
-    let env = TestEnv::new();
-    let out = restart(&env, "99.0", "[]", None);
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(killed(&env));
-    assert!(tui_ran(&env));
-    // `tui` ran after the kill-server, not before.
-    assert_eq!(fs::read_to_string(env.root().join("server-at-tui")).unwrap().trim(), "gone");
-    assert!(stdout.contains("resume: cpd session open lead-in-pane"), "{stdout}");
-    assert!(!stdout.contains("lead-away"), "{stdout}");
-    assert!(stdout.contains(&format!("attach: tmux -L {} attach -t cpd", env.tmux_socket())), "{stdout}");
-}
-
-#[test]
-fn restart_tmux_refuses_inside_the_server() {
-    let env = TestEnv::new();
-    let inside = format!("/tmp/tmux-1000/{},1234,0", env.tmux_socket());
-    let out = restart(&env, "99.0", "[]", Some(&inside));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("inside the server"), "{stderr}");
-    let attach = format!("{} -L {} attach -t cpd", server_binary(&env).display(), env.tmux_socket());
-    assert!(stderr.contains(&attach), "{stderr}");
-    assert!(!killed(&env) && !tui_ran(&env));
-    assert!(env.tmux(&["has-session", "-t", "=cpd"]).status.success());
 }
 
 // ---------- the adapter swap of scripts/install-cpd.sh (pi-ci-W9) ----------
