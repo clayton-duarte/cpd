@@ -4,13 +4,16 @@
 //! [`super::model::reconcile`] opens and closes the items.
 
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::model::{Condition, Kind, Urgency};
+use super::model::{Condition, Kind, Urgency, open_items};
+use super::team::{self, GhPr, Lookup, Memo, Post, Status};
+use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::addr::review_host;
@@ -33,14 +36,43 @@ pub struct EngineError {
 /// question goes to its Lead, a plan review has its own kind.
 const NOT_A_DIALOG: [&str; 2] = ["cpd: Worker question", "cpd: plan review"];
 
-/// Every condition of the kinds, in the order of the kinds. `now` and
-/// `stuck_after` decide `job-stuck`; `errors` are the engine's active ones.
+/// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
+/// the GitHub state of the posted pull requests, one call for all of them.
+pub struct Team<'a> {
+    pub bot_reviewers: &'a [String],
+    pub github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>,
+}
+
+/// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
+static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
+
+/// Every condition of the kinds, in the order of the kinds. `now` and `stuck_after` decide `job-stuck`; `errors` are
+/// the engine's active ones. The team review rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub
+/// through `gh`; [`conditions_with`] takes both as arguments.
 pub fn conditions(
     store: &mut Store,
     home: &CpdHome,
     now: OffsetDateTime,
     stuck_after: Duration,
     errors: &[EngineError],
+) -> Result<Vec<Condition>, CpdError> {
+    let config = Config::load(home)?;
+    let mut github = |refs: &[(String, u64)]| {
+        let mut held = GITHUB.lock().unwrap_or_else(PoisonError::into_inner);
+        held.get_or_insert_with(Memo::default).get(refs, Instant::now(), |refs| team::github_lookup(home, refs))
+    };
+    let team = (!config.inbox.team_channel.is_empty()).then_some(Team { bot_reviewers: &config.inbox.bot_reviewers, github: &mut github });
+    conditions_with(store, home, now, stuck_after, errors, team)
+}
+
+/// [`conditions`] with the team review rule's inputs given; `None` switches that kind off.
+pub fn conditions_with(
+    store: &mut Store,
+    home: &CpdHome,
+    now: OffsetDateTime,
+    stuck_after: Duration,
+    errors: &[EngineError],
+    team: Option<Team<'_>>,
 ) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| plan_reviews(conn, home))?);
@@ -51,7 +83,7 @@ pub fn conditions(
     all.extend(store.read(|conn| pr_failing(conn, home))?);
     all.extend(store.read(|conn| pr_changes(conn, home))?);
     all.extend(store.read(|conn| pr_ready(conn, home))?);
-    all.extend(store.read(|conn| review_requested(conn, home))?);
+    all.extend(review_requested(store, home, now, team)?);
     Ok(all)
 }
 
@@ -521,17 +553,80 @@ fn pr_ready(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdErro
     )
 }
 
-/// `review-requested`: an open pull request requests the User's review.
-fn review_requested(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-    pull_request_conditions(
-        conn,
-        home,
-        Kind::ReviewRequested,
-        Urgency::Yellow,
-        "r.review_requested = 1",
-        ChecksRule::Ignore,
-        |name, n, _| format!("review {name}#{n}"),
-    )
+/// `review-requested`: a pull request posted in the team channel in the last 7 days that hermes' rule calls
+/// `NEEDS_REVIEW` (contract §2.2 "The team review rule", hs-d320). GitHub's own review requests open nothing.
+///
+/// The posts are `run/team-review.json` (E10); a missing file is "unknown", not "empty", and so is a GitHub that
+/// cannot be read (the call fails, or no pull request of the posts can be read, hermes `main`): the open items stay
+/// as they are, and a failure that is not just "not yet" is one `engine-error` condition beside them. A single
+/// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
+fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team: Option<Team<'_>>) -> Result<Vec<Condition>, CpdError> {
+    let Some(team) = team else { return Ok(Vec::new()) };
+    let cache = match team::read_cache(home) {
+        Ok(Some(cache)) => cache,
+        Ok(None) => return kept_review_items(store, None),
+        Err(e) => return kept_review_items(store, Some(&e)),
+    };
+    let cutoff = now.unix_timestamp() as f64 - team::WINDOW.as_secs_f64();
+    let posts: Vec<&Post> = cache.posts.iter().filter(|p| p.primary && p.ts >= cutoff).collect();
+    if posts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let refs: Vec<(String, u64)> = posts.iter().map(|p| (p.repo.clone(), p.number)).collect();
+    let lookup = match (team.github)(&refs) {
+        Ok(lookup) => lookup,
+        Err(e) => return kept_review_items(store, Some(&e)),
+    };
+    let read = |p: &Post| -> Option<&GhPr> { lookup.prs.get(&(p.repo.clone(), p.number)).and_then(Option::as_ref) };
+    if posts.iter().all(|p| read(p).is_none()) {
+        let none = CpdError::new(ErrorCode::GhFailed, "GitHub could not read any pull request posted in the team channel.");
+        return kept_review_items(store, Some(&none));
+    }
+    Ok(posts
+        .into_iter()
+        .filter(|post| {
+            read(post).is_some_and(|pr| matches!(team::status(post, pr, &lookup.me, team.bot_reviewers), Status::NeedsReview(_)))
+        })
+        .map(|post| {
+            let name = post.repo.split_once('/').map_or(post.repo.as_str(), |(_, name)| name);
+            Condition {
+                kind: Kind::ReviewRequested,
+                urgency: Urgency::Yellow,
+                subject: format!("pr:{}#{}", post.repo, post.number),
+                label: format!("review {name}#{}", post.number),
+                url: Some(format!("https://github.com/{}/pull/{}", post.repo, post.number)),
+                context: None,
+                plan: None,
+                job: None,
+                session: None,
+                record: None,
+                event: None,
+            }
+        })
+        .collect())
+}
+
+/// The open `review-requested` items as conditions (nothing changes), and `why` as an `engine-error` when given.
+fn kept_review_items(store: &mut Store, why: Option<&CpdError>) -> Result<Vec<Condition>, CpdError> {
+    let mut out: Vec<Condition> =
+        store.read(open_items)?.iter().filter(|i| i.kind == Kind::ReviewRequested).map(Condition::from).collect();
+    if let Some(e) = why {
+        let code = e.code().as_str();
+        out.push(Condition {
+            kind: Kind::EngineError,
+            urgency: Urgency::Red,
+            subject: format!("error:E8/team-review/{code}"),
+            label: format!("team review: {code}"),
+            url: None,
+            context: None,
+            plan: None,
+            job: None,
+            session: None,
+            record: None,
+            event: None,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
