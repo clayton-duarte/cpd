@@ -21,13 +21,15 @@ export const SERVER = "slack";
 const AUTH_MARKERS = ["invalid_token", "unauthorized", "invalid_auth", "token_expired", "requires sign-in"];
 
 /** A failure the helper answers with: its code, exit status and details are the contract's (commands.md §21.6). */
+export type RefusalCode = "usage" | "slack_not_configured" | "slack_auth" | "slack_failed" | "slack_unparseable" | "slack_helper_failed";
+
 export class Refusal extends Error {
-  constructor(
-    readonly code: "usage" | "slack_not_configured" | "slack_auth" | "slack_failed" | "slack_unparseable" | "slack_helper_failed",
-    message: string,
-    readonly details: Record<string, unknown> = {},
-  ) {
+  readonly code: RefusalCode;
+  readonly details: Record<string, unknown>;
+  constructor(code: RefusalCode, message: string, details: Record<string, unknown> = {}) {
     super(message);
+    this.code = code;
+    this.details = details;
   }
   get exit(): number {
     return this.code === "usage" ? 2 : this.code === "slack_auth" || this.code === "slack_not_configured" ? 3 : 1;
