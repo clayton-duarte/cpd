@@ -49,9 +49,10 @@ impl HeadLog {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use super::*;
+    use crate::lock;
 
     /// `n` slots in a fresh directory, polled every 5 ms and announced every 20 ms.
     fn slots(n: u32) -> (tempfile::TempDir, Slots, PathBuf) {
