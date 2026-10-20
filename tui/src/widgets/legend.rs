@@ -568,4 +568,25 @@ mod tests {
         }
         assert!(!closes(&Event::FocusGained, &mut scroll));
     }
+
+    // ---- the legend's titles v4 (hs-d475, hs-d476): red until they are Title Case and the popup's title is a grey pill in its padding ----
+
+    #[test]
+    fn the_section_titles_are_in_title_case() {
+        let titles: Vec<&str> = sections().iter().map(|s| s.title).collect();
+        for want in ["Jobs: Plan Pills And Context Counters", "Session Dots", "Pulse"] {
+            assert!(titles.contains(&want), "{want:?} is a section title: {titles:?}");
+        }
+        assert!(!titles.contains(&"Session dots") && !titles.iter().any(|t| t.starts_with("Jobs: Plan pills")), "{titles:?}");
+    }
+
+    #[test]
+    fn the_popups_title_is_a_grey_pill_inside_the_padding_of_one_column_each_side() {
+        let (w, h) = size();
+        let buf = render(w, h, &mut Scroll::default());
+        assert_eq!((buf[(0, 1)].symbol(), buf[(1, 1)].symbol(), buf[(w - 1, 1)].symbol()), (" ", "╭", " "), "{}", row(&buf, 1));
+        assert_eq!((buf[(2, 1)].symbol(), buf[(3, 1)].symbol(), buf[(4, 1)].symbol()), ("─", "\u{E0B6}", "L"), "{}", row(&buf, 1));
+        let text: String = (4..).map(|x| buf[(x, 1)].symbol()).take_while(|s| *s != "\u{E0B4}").collect();
+        section::check::grey_pill(&buf, 3, 1, &text);
+    }
 }

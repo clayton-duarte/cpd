@@ -566,4 +566,33 @@ mod tests {
         terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
     }
+
+    // ---- spacing v2 (hs-d476): the section is a collapsible widget with an empty row above and one below; red until `Shape` has the row below ----
+
+    #[test]
+    fn the_section_is_an_empty_row_the_title_the_items_the_closing_row_and_an_empty_row() {
+        let rows = |count, expanded| {
+            let shape = Shape::new(count, expanded);
+            (0..shape.height()).map(|r| shape.hit(r)).collect::<Vec<_>>()
+        };
+        assert_eq!(rows(0, false), [None, Some(Hit::Header), None], "no item: the title between its two empty rows");
+        assert_eq!(rows(2, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None, None], "a plain closing row, then the empty row");
+        assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
+        assert_eq!(rows(5, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
+        assert_eq!(
+            rows(5, true),
+            [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle), None]
+        );
+        assert_eq!((Shape::new(0, false).height(), Shape::new(3, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (3, 7, 7, 9));
+    }
+
+    #[test]
+    fn capped_the_section_is_never_below_the_folded_one_empty_rows_included() {
+        assert_eq!(Shape::new(50, true).capped(20).height(), 20);
+        assert_eq!(Shape::new(50, true).capped(2).height(), 7, "the empty row, the title, three items, the closing row, the empty row");
+        assert_eq!(Shape::new(50, false).capped(20).height(), 7);
+        let bottom = Shape::new(50, true).capped(20);
+        assert_eq!(bottom.hit(18), Some(Hit::Toggle), "the closing row is the last but one");
+        assert_eq!(bottom.hit(19), None, "and the last is the empty row");
+    }
 }

@@ -238,4 +238,28 @@ mod tests {
         assert_eq!(row.spans[2].style.fg, Some(palette::color(Meaning::Failed)), "the icon keeps its colour");
         assert_eq!(flat(drawn.lines.last().unwrap()), format!("╰{UP} collapse"), "and the block closes with the arrow row");
     }
+
+    // ---- spacing v2 (commands.md §17, "Collapsible blocks"; hs-d476): red until `Fold::drawn` adds the margins ----
+
+    #[test]
+    fn a_collapsible_widget_has_one_empty_row_above_and_one_below_and_none_inside() {
+        assert_eq!(
+            words(&block(true)),
+            ["", "╭󰪥 building-cpd", "├─󰪥 cross-repo", "├─󰝦 other", format!("╰{UP} collapse").as_str(), ""],
+            "expanded: the margins, and the body with no vertical spacing"
+        );
+        let folded = Fold::new(Line::from("󰝦 dotfiles"), vec![Line::from("one")], false).branch(TREE_BRANCH).drawn();
+        assert_eq!(words(&folded), ["", "╭󰝦 dotfiles", format!("╰{DOWN} expand").as_str(), ""], "folded");
+        assert_eq!(words(&Fold::new(Line::from("x"), vec![], true).drawn()), ["", "╭x", format!("╰{UP} collapse").as_str(), ""], "no content");
+    }
+
+    #[test]
+    fn the_toggle_is_still_the_closing_row_between_the_margins() {
+        for (drawn, word) in [(block(true), "collapse"), (block(false), "expand")] {
+            assert_eq!(drawn.toggle, drawn.lines.len() - 2, "the row above the bottom margin");
+            assert!(flat(&drawn.lines[drawn.toggle]).starts_with('╰') && flat(&drawn.lines[drawn.toggle]).ends_with(word), "{:?}", words(&drawn));
+            assert_eq!(drawn.lines.iter().filter(|l| flat(l).starts_with('╰')).count(), 1, "one closing row");
+            assert_eq!(drawn.lines.iter().filter(|l| l.spans.iter().all(|s| s.content.is_empty())).count(), 2, "two empty rows, no more");
+        }
+    }
 }

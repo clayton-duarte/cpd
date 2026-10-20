@@ -2788,4 +2788,132 @@ mod tests {
         assert_eq!(view.note, "engine down 60 s+: telling m-alpha failed: no tmux");
         assert!(lines.iter().any(|l| l.contains("no tmux")), "{lines:?}");
     }
+
+    // ---------- spacing v2, the grey title and no closing row to fold nothing (hs-d475, hs-d476, hs-d477): red until the tree draws them ----------
+
+    #[test]
+    fn a_context_with_nothing_to_fold_ends_with_its_last_rows_corner_branch_and_no_closing_row() {
+        let rows = drawn(&mut View::new(sample(), true), 44, 26);
+        let starts = |row: usize, text: String| assert!(rows[row].starts_with(&text), "row {row} starts with {text:?}: {rows:#?}");
+        assert_eq!(rows[0], "", "the first block's empty row above");
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"));
+        starts(2, format!(" ├─{WORKING} ship"));
+        starts(3, format!(" ├─{IDLE} sketch"));
+        starts(4, format!(" ├─{STOPPED} old"));
+        starts(5, format!(" ├─{IDLE} ship·f-id"));
+        starts(6, format!(" ╰─{NEEDS_YOU} ship·f-bl"));
+        assert_eq!(rows[7], "", "one empty row between two blocks, not two (the Lead's assumption: adjacent margins collapse)");
+        assert_eq!(rows[8], format!(" ╭{NEEDS_YOU} beta"));
+        starts(9, format!(" ╰─{NEEDS_YOU} rel"));
+        assert_eq!(rows[10], "");
+        assert_eq!(rows.iter().filter(|r| r.trim() == "╰─").count(), 1, "no plain `╰─` line but the Context with no row's: {rows:#?}");
+    }
+
+    #[test]
+    fn a_context_with_archived_rows_keeps_its_closing_row_and_its_rows_keep_the_branch() {
+        let rows = drawn(&mut View::new(archived(), true), 44, 26);
+        let starts = |row: usize, text: String| assert!(rows[row].starts_with(&text), "row {row} starts with {text:?}: {rows:#?}");
+        assert_eq!(rows[0], "");
+        assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"));
+        starts(2, format!(" ├─{WORKING} ship"));
+        starts(3, format!(" ├─{IDLE} sketch"));
+        starts(4, format!(" ├─{IDLE} ship·f-id"));
+        starts(5, format!(" ├─{STOPPED} old"));
+        starts(6, format!(" ├─{NEEDS_YOU} ship·f-bl"));
+        assert_eq!(rows[7], COLLAPSE, "the closing row of the expanded Context");
+        assert_eq!(rows[8], "");
+        assert_eq!(rows[9], format!(" ╭{NEEDS_YOU} beta"));
+        starts(10, format!(" ╰─{NEEDS_YOU} rel"));
+        assert_eq!(rows[11], "");
+        assert_eq!(rows[12], format!(" ╭{STOPPED} gamma"));
+        assert_eq!(rows[13], " ╰─", "a Context with no row at all stays as it was");
+        assert_eq!(rows[14], "");
+        assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
+        assert_eq!(rows[16], EXPAND, "the folded Context with archived rows: `╰󰁋 expand`");
+        assert_eq!(rows[17], "");
+    }
+
+    #[test]
+    fn a_context_with_no_row_at_all_is_its_title_and_a_plain_corner_line_as_before() {
+        let tree = super::super::fixture::tree(vec![super::super::fixture::context("gamma", vec![])]);
+        let rows = drawn(&mut View::new(tree, true), 44, 10);
+        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰─".to_owned()]);
+    }
+
+    #[test]
+    fn with_no_item_the_section_is_an_empty_row_the_title_and_an_empty_row_pinned_to_the_bottom() {
+        let rows = text_rows(&draw_now(&mut with_inbox(0), 43, 16));
+        assert_eq!(rows[13], "", "the empty row above the title");
+        assert_eq!(rows[14], header(0));
+        assert_eq!(rows[15], "", "the empty row below it");
+    }
+
+    #[test]
+    fn three_items_close_with_a_plain_line_and_an_empty_row_below() {
+        let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 22));
+        assert_eq!(rows[15], "", "the empty row above the title");
+        assert_eq!(rows[16], header(3));
+        assert_eq!(rows[17], item_row("f-blocked: Worker question", "42s"));
+        assert_eq!(rows[19], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[20], " ╰─", "nothing to fold");
+        assert_eq!(rows[21], "", "the empty row below the section");
+    }
+
+    #[test]
+    fn five_items_fold_between_an_empty_row_above_and_one_below_and_the_tree_above_shares_the_row() {
+        // 20 rows: the tree's 12 (its last block's empty row below is the section's empty row above) and the section's 7
+        let rows = text_rows(&draw_now(&mut with_inbox(5), 43, 20));
+        assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
+        assert_eq!(rows[12], " ╰─");
+        assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
+        assert_eq!(rows[14], header(5));
+        assert_eq!(rows[15], item_row("f-blocked: Worker question", "42s"));
+        assert_eq!(rows[17], item_row("ship: Job c is stuck", "3h"));
+        assert_eq!(rows[18], EXPAND);
+        assert_eq!(rows[19], "", "the empty row below the section");
+    }
+
+    #[test]
+    fn expanded_the_closing_row_is_followed_by_an_empty_row_and_it_toggles_where_it_is_drawn() {
+        let mut view = with_inbox(5);
+        let rows = text_rows(&draw_now(&mut view, 43, 22));
+        assert_eq!((rows[20].as_str(), rows[21].as_str()), (EXPAND, ""));
+        assert_eq!(click(&mut view, 20, 20), Effect::None, "a view-state change: no command");
+        let rows = text_rows(&draw_now(&mut view, 43, 22));
+        assert_eq!(rows[13], "");
+        assert_eq!(rows[14], header(5));
+        assert_eq!(rows[19], item_row("ship lead has a reply", "10m"));
+        assert_eq!(rows[20], COLLAPSE);
+        assert_eq!(rows[21], "");
+    }
+
+    #[test]
+    fn the_inbox_pill_is_grey_the_block_muted_its_text_the_background_colour_and_its_caps_muted() {
+        let buf = draw_now(&mut with_inbox(5), 43, 20);
+        let y = text_rows(&buf).iter().position(|r| *r == header(5)).expect("the Inbox title") as u16;
+        assert_eq!(buf[(1, y)].symbol(), "╭");
+        crate::section::check::grey_pill(&buf, 3, y, "Inbox");
+    }
+
+    #[test]
+    fn the_inbox_title_sits_inside_the_panels_padding_one_column_each_side() {
+        let buf = draw_now(&mut with_inbox(5), 43, 20);
+        let y = text_rows(&buf).iter().position(|r| *r == header(5)).expect("the Inbox title") as u16;
+        assert_eq!((buf[(0, y)].symbol(), buf[(1, y)].symbol(), buf[(41, y)].symbol(), buf[(42, y)].symbol()), (" ", "╭", "5", " "));
+    }
+
+    #[test]
+    fn a_click_on_the_inbox_title_does_nothing_and_opens_no_menu() {
+        let mut view = with_inbox(5);
+        let rows = text_rows(&draw_now(&mut view, 43, 20));
+        let y = rows.iter().position(|r| *r == header(5)).expect("the Inbox title") as u16;
+        for column in [0, 1, 3, 6, 20, 41, 42] {
+            assert_eq!(click(&mut view, column, y), Effect::None, "column {column}");
+        }
+        for column in [1, 3, 6, 20, 41] {
+            assert_eq!(right_click(&mut view, column, y), Effect::None, "column {column}");
+            assert!(view.menu.is_none(), "no menu on a title: column {column}");
+        }
+        assert_eq!(text_rows(&draw_now(&mut view, 43, 20)), rows, "and nothing folds or moves");
+    }
 }

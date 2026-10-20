@@ -44,6 +44,36 @@ pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
     Line::from(spans)
 }
 
+/// What the tests of every view check of a section title's pill (hs-d475): one place, not a copy per view.
+#[cfg(test)]
+pub(crate) mod check {
+    use ratatui::buffer::Buffer;
+    use ratatui::style::{Color, Modifier};
+
+    use super::{CAP_LEFT, CAP_RIGHT};
+    use crate::palette::{self, Meaning};
+
+    /// The pill whose left cap is at (`x`, `y`) of `buf` reads `text` between its two caps, with no padding spaces, and is grey:
+    /// the caps are muted; the text is the block inverted (reverse video of the muted colour: the block is muted and the text is the
+    /// background colour).
+    pub(crate) fn grey_pill(buf: &Buffer, x: u16, y: u16, text: &str) {
+        let grey = palette::color(Meaning::Nothing);
+        let width = u16::try_from(text.chars().count()).unwrap();
+        let drawn: String = (x..x + width + 2).map(|x| buf[(x, y)].symbol()).collect();
+        assert_eq!(drawn, format!("{CAP_LEFT}{text}{CAP_RIGHT}"), "the pill at ({x}, {y})");
+        for cap in [x, x + width + 1] {
+            let cell = &buf[(cap, y)];
+            assert_eq!((cell.fg, cell.bg), (grey, Color::Reset), "the cap at ({cap}, {y}) is muted: {cell:?}");
+            assert!(!cell.modifier.contains(Modifier::REVERSED), "a cap is not inverted: {cell:?}");
+        }
+        for at in x + 1..=x + width {
+            let cell = &buf[(at, y)];
+            assert!(cell.modifier.contains(Modifier::REVERSED), "the text at ({at}, {y}) is inverted: {cell:?}");
+            assert_eq!((cell.fg, cell.bg), (grey, Color::Reset), "the block is muted, the text is the background colour: {cell:?}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,5 +132,39 @@ mod tests {
         assert_eq!(text(title("Jira", None, 3)), "╭──");
         assert_eq!(text(title("Jira", None, 1)), "╭");
         assert_eq!(text(title("Jira", Some(1), 0)), "");
+    }
+
+    // ---- section look v4 (commands.md §17, "Section titles"; hs-d475, hs-d476): red until `title` draws it ----
+
+    /// `line` drawn alone in a row `width` cells wide.
+    fn buffer_of(line: Line<'static>, width: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 1)).unwrap();
+        terminal.draw(|f| f.render_widget(ratatui::widgets::Paragraph::new(line), f.area())).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn the_pill_is_grey_its_block_muted_its_text_the_background_colour_and_its_caps_muted() {
+        let buf = buffer_of(title("Inbox", Some(35), 22), 22);
+        let row: String = (0..22).map(|x| buf[(x, 0)].symbol()).collect();
+        assert!(row.starts_with(" ╭─"), "{row:?}");
+        check::grey_pill(&buf, 3, 0, "Inbox");
+    }
+
+    #[test]
+    fn a_title_row_starts_at_column_1_and_ends_one_column_before_the_edge() {
+        let got = text(title("Inbox", Some(35), 22));
+        assert_eq!(got, format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}35 ", "─".repeat(9)));
+        assert_eq!(got.chars().count(), 22, "the row is as wide as it is told, its first and last cells blank");
+        let got = text(title("Git", None, 18));
+        assert_eq!(got, format!(" ╭─{CAP_LEFT}Git{CAP_RIGHT}{} ", "─".repeat(9)));
+        assert_eq!(got.chars().count(), 18);
+    }
+
+    #[test]
+    fn a_title_of_several_words_is_drawn_as_it_is_given_with_no_padding_spaces() {
+        let got = text(title("Section Or Panel Title", None, 40));
+        assert_eq!(got, format!(" ╭─{CAP_LEFT}Section Or Panel Title{CAP_RIGHT}{} ", "─".repeat(12)));
+        assert!(!got.contains(&format!("{CAP_LEFT} ")) && !got.contains(&format!(" {CAP_RIGHT}")), "{got:?}");
     }
 }

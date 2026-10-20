@@ -334,6 +334,22 @@ mod tests {
         assert!(row(5).contains("event 10") && got[(0, 5)].modifier.contains(Modifier::REVERSED));
         assert!(!got[(0, 4)].modifier.contains(Modifier::REVERSED));
     }
+
+    // ---- the logs popup's title v4 (hs-d475, hs-d476): red until it is `Logs`, a grey pill inside the padding ----
+
+    #[test]
+    fn the_title_is_a_grey_title_case_pill_inside_the_padding_of_one_column_each_side() {
+        let mut log = Log::at(events(30), 11);
+        log.fit(8);
+        let mut terminal = Terminal::new(TestBackend::new(24, 8)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &log)).unwrap();
+        let got = terminal.backend().buffer();
+        let row = |y: u16| (0..24).map(|x| got[(x, y)].symbol()).collect::<String>();
+        assert_eq!(row(0).trim_end(), "", "an empty row above");
+        assert_eq!(row(1), format!(" ╭─\u{E0B6}Logs\u{E0B4}{} ", "─".repeat(24 - 1 - 2 - 6 - 1)), "column 1 to column 22");
+        assert_eq!(row(2).trim_end(), "", "an empty row below");
+        crate::section::check::grey_pill(got, 3, 1, "Logs");
+    }
 }
 
 /// The colour of an `error` line: red when the engine reported it for itself, the waiting colour when it is a Lead's

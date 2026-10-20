@@ -806,4 +806,29 @@ mod tests {
         assert!((0..22).all(|x| buf[(x, y)].symbol() == " "), "nothing on the left of the cue");
         assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "`▼ 3 more` is dim and ends at the last column");
     }
+
+    // ---- the Deploy column's PRs title v4 (hs-d475, hs-d476): red until the column draws a grey pill inside its padding ----
+
+    #[test]
+    fn the_prs_title_is_a_grey_pill_inside_the_columns_one_column_of_padding_on_each_side() {
+        let buf = buffer(20, 15);
+        let y = 4;
+        let cells: String = (0..20).map(|x| buf[(x, y)].symbol()).collect();
+        assert_eq!(cells, format!(" ╭─\u{E0B6}PRs\u{E0B4}{}0 ", "─".repeat(10)), "starts at column 1, ends one column before the edge");
+        crate::section::check::grey_pill(&buf, 3, y, "PRs");
+        let (buf, _) = drawn(30, 15, &[pr(1, Some("l-a")), pr(2, None)], "");
+        let cells: String = (0..30).map(|x| buf[(x, y)].symbol()).collect();
+        assert_eq!(cells, format!(" ╭─\u{E0B6}PRs\u{E0B4}{}2 ", "─".repeat(30 - 1 - 2 - 5 - 1 - 1)));
+    }
+
+    #[test]
+    fn the_prs_title_has_one_empty_row_above_and_one_below_and_is_no_click_target() {
+        let open = [pr(1, Some("l-a")), pr(2, None)];
+        let (buf, d) = scrolled(24, 15, &open, "", 0);
+        assert_eq!((row(&buf, 3).as_str(), row(&buf, 5).as_str()), ("", ""), "an empty row above and one below");
+        assert!(row(&buf, 4).contains("PRs"), "the title is on row 4: {}", row(&buf, 4));
+        assert!(d.hits.iter().all(|h| h.area.y > 4), "no click on the title row: {:?}", d.hits);
+        assert!(d.rows.iter().all(|r| r.area.y > 4), "no menu on the title row: {:?}", d.rows);
+        assert!(d.icons.iter().all(|i| i.area.y > 4));
+    }
 }
