@@ -179,12 +179,12 @@ pub(super) fn derived_base_pr<'a>(known: &'a [Known], repo: &str, base: &str) ->
 }
 
 /// The PRs, not `cancelled`, of any Plan stacked on the PR whose Lead Branch is `lead_branch` in `repo`,
-/// as references of `own`'s Plan.
-pub(super) fn stacked_on(known: &[Known], own: &PlanId, repo: &str, lead_branch: &str) -> Vec<String> {
+/// as qualified references.
+pub(super) fn stacked_on(known: &[Known], repo: &str, lead_branch: &str) -> Vec<String> {
     known
         .iter()
         .filter(|p| p.status != "cancelled" && p.repo == repo && p.base == lead_branch)
-        .map(|p| reference(own.as_str(), &p.node()))
+        .map(|p| format!("{}/{}", p.plan, p.key))
         .collect()
 }
 

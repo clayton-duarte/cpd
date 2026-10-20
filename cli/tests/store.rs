@@ -453,7 +453,7 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
         ("context_records", "INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', 'n1', 'bogus', 't', 'm', 'x')".to_owned()),
         ("plans", "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('ops', 'ctx', 'O', 'bogus', 'lead1', 't')".to_owned()),
         ("prs", format!("INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pay', 'web', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't')")),
-        ("pr_needs", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'pay', 'pay')".to_owned()),
+        ("pr_needs", "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'pay', 'pay', 'pay')".to_owned()),
         ("plan_reviews", format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r2', 1, '{FP}', 'pending', 't')")),
         ("jobs", format!("INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at) VALUES ('pay', 'pay', 'web', 'W', 'X9', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {txn}, 't')")),
         ("dependencies", "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'ui', 'ui')".to_owned()),
@@ -476,6 +476,50 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
             exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('xy', 'T', 't', 'm');
                       INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1', 'O', 'm', '[]', 't');
                       INSERT INTO events (txn, at, kind, context, text, data) VALUES (cpd_txn(), 't', 'job-added', 'ctx', 'x', '{}');")
+        })
+        .unwrap();
+}
+
+/// Contract §4.4 `pr_needs` (migration `stacked-prs`): a need names a PR by Plan and key, of any Plan.
+#[test]
+fn a_need_of_another_plan_is_stored_and_one_naming_no_pr_is_refused() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let txn = fixture(&mut store);
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('ops', 'ctx', 'Ops', 'grounding', 'lead1', 't');
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                       VALUES ('ops', 'deploy', '/r', 'cpd/pay/pay', 'waiting', 'cpd/ops/deploy', {txn}, 't');
+                     INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('ops', 'deploy', 'pay', 'pay');"
+                ),
+            )
+        })
+        .unwrap();
+    let stored: (String, String) =
+        store.read(|c| Ok(c.query_row("SELECT needs_plan, needs FROM pr_needs WHERE plan = 'ops'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    assert_eq!(stored, ("pay".to_owned(), "pay".to_owned()));
+    for sql in [
+        "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'pay', 'ops', 'nowhere')",
+        "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'pay', 'nowhere', 'deploy')",
+    ] {
+        let err = refused(&mut store, sql);
+        assert!(sqlite_message(&err).contains("FOREIGN KEY constraint failed"), "{sql}: {err:?}");
+    }
+    // The same key in two Plans is two PRs: a PR may need `ops/deploy` while it is itself called `deploy`.
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                       VALUES ('pay', 'deploy', '/r', 'main', 'waiting', 'cpd/pay/deploy', {txn}, 't');
+                     INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'deploy', 'ops', 'deploy');"
+                ),
+            )
         })
         .unwrap();
 }

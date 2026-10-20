@@ -52,7 +52,7 @@ impl Fx {
         } else {
             ""
         };
-        let needs: String = needs.iter().map(|n| format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', '{key}', '{n}');")).collect();
+        let needs: String = needs.iter().map(|n| format!("INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay-1', '{key}', 'pay-1', '{n}');")).collect();
         self.env.sql(&format!(
             "{row}
              INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,

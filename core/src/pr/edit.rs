@@ -127,7 +127,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
         after.base = resolved.base;
     }
     if after.repo != before.repo {
-        let in_use = stacked_on(&known_prs(conn)?, plan, &before.repo, &before.lead_branch);
+        let in_use = stacked_on(&known_prs(conn)?, &before.repo, &before.lead_branch);
         if !in_use.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::PrInUse,

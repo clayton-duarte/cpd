@@ -297,7 +297,7 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
                     '2026-01-02T00:00:00.000Z');
             INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
             VALUES ('ship', 'web', '/src/web', 'develop', 'waiting', 'cpd/ship/web', cpd_txn(), '2026-01-02T00:00:00.000Z');
-            INSERT INTO pr_needs (plan, pr, needs) VALUES ('ship', 'web', 'api');"#;
+            INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('ship', 'web', 'ship', 'api');"#;
     s += &job_row_in("ship", "api", "a", "merged", "O3");
     s += &job_row_in("ship", "api", "b", "merged", "S3");
     s += &need_row("ship", "b", "a");
