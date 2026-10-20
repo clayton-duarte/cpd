@@ -1527,6 +1527,33 @@ fn a_feedback_fix_job_on_an_open_pr_reaches_the_remote_through_the_update_job() 
     assert!(fx.gh_pr_calls().is_empty());
 }
 
+/// The approval of a review queues the update Job for the fix drafts it queues on an open PR (hs-d497 (2); the other cause of `job add`): one
+/// Job whatever the number of drafts, `reason` `feedback`, in the transaction of the approval. A draft of no open PR queues none.
+#[test]
+fn the_approval_of_a_review_queues_the_update_job_for_a_fix_draft_of_an_open_pr() {
+    let (fx, _origin) = open_pr_fx();
+    let spec = fx.env.root().join("fix-spec.json");
+    fs::write(&spec, r#"{"goal": "Fix it.", "context": "A reviewer asked.", "touches": ["fix.txt"], "acceptance": ["ok"], "out_of_scope": []}"#).unwrap();
+    for key in ["fix", "fix2"] {
+        fx.env.cpd(&["job", "add", key, "--title", "Fix", "--tier", "S2", "--spec", spec.to_str().unwrap(), "--pr", "repo", "--plan", "pay", "--draft"]).ok();
+    }
+    let update_jobs = || -> Vec<(String, String)> {
+        fx.env.read(|c| {
+            let mut stmt = c.prepare("SELECT key, status FROM jobs WHERE kind = 'update' ORDER BY key")?;
+            Ok(stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+    };
+    assert_eq!(update_jobs(), Vec::<(String, String)>::new(), "a draft queues nothing");
+    let review = fx.env.cpd(&["plan", "review", "--plan", "pay", "--title", "Fixes"]).ok();
+
+    fx.env.cpd(&["plan", "decide", review["review"]["id"].as_str().unwrap(), "--approve", "--plan", "pay"]).ok();
+
+    assert_eq!(update_jobs(), [("up-repo".to_owned(), "queued".to_owned())]);
+    let added: Vec<Value> = fx.plan_events("job-added").into_iter().map(|e| e.1).filter(|d| d["kind"] == "update").collect();
+    assert_eq!(added.len(), 1, "{added:?}");
+    assert_eq!((&added[0]["reason"], &added[0]["pr"]), (&json!("feedback"), &json!("repo")));
+}
+
 /// The newest pull request of the Lead Branch is already `merged` on GitHub and cpd never recorded it (§7.7 submit step 1, §7.4 step 8b): the `open`
 /// Job adopts it. Its submit runs no Gate, its merge pushes nothing and creates nothing, and step 10 writes the rows of `pr open` step 0: the PR
 /// `merged`, `pr-merged` (no `pr-opened`), and the Plan `done` with the last PR.
