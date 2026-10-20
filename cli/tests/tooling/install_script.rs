@@ -4,7 +4,7 @@
 //! `cpd`, and the checkout, with an `origin/main` of its own, is a temporary git repo.
 
 use crate::common;
-#[path = "common/checkout.rs"]
+#[path = "../common/checkout.rs"]
 mod checkout;
 
 use std::fs;
