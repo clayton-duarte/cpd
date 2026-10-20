@@ -14,7 +14,8 @@ use cpd_core::git::{
     discard_worktree, push_commit, lead_branch, lead_worktree_path, protected_list, remove_merged_attempt, tamper_check,
     touched_protected,
 };
-use cpd_core::home::Hook;
+use cpd_core::git::gate::Slots;
+use cpd_core::home::{CpdHome, Hook};
 use cpd_core::ids::{AttemptId, PlanId, PrKey};
 
 fn plan() -> PlanId {
@@ -1129,6 +1130,7 @@ fn gate_hooks<'a>(env: &TestEnv, lead_branch: &'a str) -> GateHooks<'a> {
         base: "main",
         pre_start: setup(env, "pr-api.pre-start.log"),
         pre_merge: setup(env, "pr-api.pre-merge.log"),
+        slots: Slots::new(&CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap(), 2),
     }
 }
 
@@ -1201,7 +1203,8 @@ fn a_failing_pre_merge_refuses_the_gate_and_removes_the_worktree() {
     assert_eq!(refused.hook, Hook::PreMerge);
     assert_eq!(refused.outcome, HookOutcome::Failed { exit: 6 });
     assert_eq!(refused.tail.as_deref(), Some("red"));
-    assert_eq!(fs::read_to_string(&hooks.pre_merge.log).unwrap(), "red\n");
+    // The hook's output follows the slot's line at the head of the log (contract §7.6 "The Gate slot").
+    assert_eq!(fs::read_to_string(&hooks.pre_merge.log).unwrap(), "gate: slot 0 taken after 0 s\nred\n");
     assert!(!worktrees(&env, &repo).contains(".gate-"));
 }
 
