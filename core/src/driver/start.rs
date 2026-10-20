@@ -210,7 +210,7 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
 /// `dispatch` or `open` (a `waiting` PR has no Lead worktree yet), with every
 /// Dependency `merged`; else `job_not_ready`.
 fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: &str) -> Result<(), CpdError> {
-    // An `open` Job has no Dependency rows: it waits for the PR's other Jobs (§3.2, derived).
+    // An `open` or `update` Job has no Dependency rows: it waits for the PR's other Jobs (§3.2, derived).
     let derived = crate::job::open::unfinished(all, job);
     let waiting: Vec<&str> = match &derived {
         Some(keys) => keys.iter().map(String::as_str).collect(),
@@ -230,7 +230,7 @@ fn require_ready(all: &[Job], job: &Job, plan: &PlanId, phase: &str, pr_status: 
     } else if job.kind == "open" && pr_status != "dispatch" {
         format!("its PR {} is {pr_status}, and an open Job runs only while its PR is dispatch", job.pr)
     } else if !waiting.is_empty() && derived.is_some() {
-        format!("it waits for {}, not merged or cancelled yet", waiting.join(", "))
+        format!("it waits for {}, not finished yet", waiting.join(", "))
     } else if !waiting.is_empty() {
         format!("it needs {}, not merged yet", waiting.join(", "))
     } else if job.kind == "open" && crate::job::open::nothing_merged(all, job) {

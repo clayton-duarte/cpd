@@ -216,16 +216,21 @@ fn others<'a>(all: &'a [Job], job: &'a Job) -> impl Iterator<Item = &'a Job> {
     all.iter().filter(move |j| j.pr == job.pr && j.key != job.key && !matches!(j.kind.as_str(), "open" | "update"))
 }
 
-/// What an `open` Job waits for (§3.2: it has no Dependency rows, so this is its needs, derived each time it is read): the keys of the
-/// PR's other Jobs that are neither `merged` nor `cancelled`. `None` for a Job of another kind, whose Dependency rows are its needs.
+/// What an `open` or `update` Job waits for (§3.2: they have no Dependency rows, so this is their needs, derived each time it is read):
+/// for an `open` Job the keys of the PR's other Jobs that are neither `merged` nor `cancelled`; for an `update` Job those that are `queued`
+/// or `running` (a `draft` or `failed` Job does not hold it back). `None` for a Job of another kind, whose Dependency rows are its needs.
 pub fn unfinished(all: &[Job], job: &Job) -> Option<Vec<String>> {
-    (job.kind == "open").then(|| others(all, job).filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled")).map(|j| j.key.clone()).collect())
+    match job.kind.as_str() {
+        "open" => Some(others(all, job).filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled")).map(|j| j.key.clone()).collect()),
+        "update" => Some(others(all, job).filter(|j| matches!(j.status.as_str(), "queued" | "running")).map(|j| j.key.clone()).collect()),
+        _ => None,
+    }
 }
 
-/// The `needs` `job list` and `job show` print for an `open` Job (§3.2): the PR's other Jobs that are not `cancelled`, by key (its Ready rule's
-/// list, derived each time it is read). The Job's own `needs` for every other kind.
+/// The `needs` `job list` and `job show` print for an `open` or `update` Job (§3.2): the PR's other Jobs that are not `cancelled`, by key
+/// (their Ready rule's list, derived each time it is read). The Job's own `needs` for every other kind.
 pub fn shown_needs(all: &[Job], job: &Job) -> Vec<String> {
-    if job.kind != "open" {
+    if !matches!(job.kind.as_str(), "open" | "update") {
         return job.needs.clone();
     }
     let mut keys: Vec<String> = others(all, job).filter(|j| j.status != "cancelled").map(|j| j.key.clone()).collect();
@@ -285,6 +290,23 @@ mod tests {
         let long = PrKey::parse(&"a".repeat(24)).unwrap().to_string();
         let taken: Vec<String> = std::iter::once(format!("open-{long}")).chain((2..10).map(|n| format!("open-{long}-{n}"))).collect();
         assert_eq!(free_key(&taken, "open", &pr(&long)).unwrap().as_str().len(), 32);
+    }
+
+    #[test]
+    fn an_update_job_waits_only_for_the_queued_and_running_jobs_of_its_pr() {
+        let update = job("up-a", "a", "update", "queued");
+        let all = [
+            job("q", "a", "work", "queued"),
+            job("r", "a", "work", "running"),
+            job("d", "a", "work", "draft"),
+            job("f", "a", "work", "failed"),
+            job("m", "a", "work", "merged"),
+            job("other", "b", "work", "queued"),
+            job("open-a", "a", "open", "queued"),
+            update.clone(),
+        ];
+        assert_eq!(unfinished(&all, &update), Some(vec!["q".to_owned(), "r".to_owned()]));
+        assert_eq!(shown_needs(&all, &update), ["d", "f", "m", "q", "r"].map(str::to_owned));
     }
 
     #[test]
