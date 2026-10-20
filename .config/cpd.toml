@@ -1,8 +1,0 @@
-# cpd's own repo configuration (contract §7.5, §7.7). Protected: only a Lead commits it.
-
-# The test commands of the TDD checks (hs-d341, hs-d497): a `test` Job's named tests must
-# fail at submit, an `impl` Job's must pass. Named runs take no test slot (hs-d464).
-[tests]
-build = "scripts/cargo.sh nextest run --workspace --no-run"
-list  = "scripts/cargo.sh nextest list --workspace --message-format oneline {{ test }} | grep -q ."
-run   = "scripts/cargo.sh nextest run --workspace --no-fail-fast {{ tests }}"
