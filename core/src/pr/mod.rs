@@ -150,6 +150,9 @@ pub struct CancelArgs {
     /// The PR key
     #[arg(value_name = "key")]
     key: PrKey,
+    /// Cancel a dispatch PR whose merged work another PR carried: that PR, as <plan>/<key> (a bare <key> is of the Plan)
+    #[arg(long = "superseded-by", value_name = "ref")]
+    superseded_by: Option<add::PrRef>,
     #[command(flatten)]
     plan: PlanArg,
 }

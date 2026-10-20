@@ -1286,3 +1286,111 @@ fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
     // Its other fields, and the stacked PR's repo (it stays stacked only in its repo), are not blocked.
     fx.pr_in("ledger-9", &["edit", "api", "--base", "main"]).ok();
 }
+
+// ---------- pr cancel --superseded-by (hs-d301) ----------
+
+impl Fx {
+    /// A Job of PR `pr` that merged.
+    fn merged_job(&self, key: &str, pr: &str) {
+        self.job(key, pr, "queued");
+        self.env.sql(&format!(
+            "UPDATE jobs SET status = 'running' WHERE key = '{key}';
+             UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = '{key}'"
+        ));
+    }
+}
+
+#[test]
+fn a_dispatch_pr_with_merged_jobs_is_cancelled_when_superseded_and_the_plan_reaches_done() {
+    let fx = fx("dispatch");
+    fx.plan("other-1", "ctx", "deploy");
+    fx.merged_pr("other-1", "storefix", &fx.pay, 8);
+    fx.locked_pr("api", &fx.pay, "merged");
+    fx.locked_pr("busyfix", &fx.web, "dispatch");
+    fx.job("old", "busyfix", "cancelled");
+    fx.merged_job("done", "busyfix");
+
+    // Without the flag it is still held by its merged Job.
+    let writes = fx.writes();
+    let error = fx.refused(&fx.pr(&["cancel", "busyfix"]), "pr_in_use", 3, writes);
+    assert_eq!(error["details"]["jobs"], json!(["done"]));
+
+    let out = fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"]).ok();
+    assert_eq!(out["pr"], json!({"key": "busyfix", "status": "cancelled"}));
+    assert_eq!(out["phase"], "done");
+    assert_eq!((fx.pr_status("busyfix"), fx.phase()), ("cancelled".to_string(), "done".to_string()));
+    // The merged Job stays as it is.
+    assert_eq!(fx.query::<String>("SELECT status FROM jobs WHERE key = 'done'"), "merged");
+
+    let cancelled = fx.events("pr-cancelled");
+    assert_eq!(cancelled.len(), 1);
+    assert_eq!(cancelled[0]["data"], json!({"pr": "busyfix", "superseded_by": "other-1/storefix"}));
+    assert!(cancelled[0]["text"].as_str().unwrap().contains("other-1/storefix"));
+    let done = fx.events("plan-done");
+    assert_eq!((done.len(), done[0]["data"]["prs"][0]["key"].clone()), (1, json!("api")));
+
+    // Idempotent, with or without the flag.
+    let writes = fx.writes();
+    assert_eq!(fx.pr(&["cancel", "busyfix", "--superseded-by", "other-1/storefix"]).ok()["already"], true);
+    assert_eq!(fx.pr(&["cancel", "busyfix"]).ok()["already"], true);
+    assert_eq!(fx.writes(), writes);
+}
+
+#[test]
+fn a_bare_superseding_key_is_a_pr_of_the_plan_and_any_status_but_cancelled_will_do() {
+    let fx = fx("dispatch");
+    fx.locked_pr("busyfix", &fx.web, "dispatch");
+    fx.locked_pr("storefix", &fx.pay, "dispatch");
+    fx.merged_job("done", "busyfix");
+    let out = fx.pr(&["cancel", "busyfix", "--superseded-by", "pay-1/storefix"]).ok();
+    // The reference is recorded as the views print it: the bare key in the Plan itself.
+    assert!(out.get("phase").is_none(), "{out}");
+    assert_eq!(fx.events("pr-cancelled")[0]["data"], json!({"pr": "busyfix", "superseded_by": "storefix"}));
+}
+
+#[test]
+fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_own_pr_and_a_pr_that_is_not_dispatch() {
+    let fx = fx("dispatch");
+    fx.plan("other-1", "ctx", "deploy");
+    fx.plan("alien-1", "alien", "deploy");
+    fx.merged_pr("other-1", "storefix", &fx.pay, 8);
+    fx.merged_pr("alien-1", "foreign", &fx.pay, 9);
+    fx.locked_pr("busyfix", &fx.web, "dispatch");
+    fx.locked_pr("dead", &fx.pay, "dispatch");
+    fx.env.sql("UPDATE prs SET status = 'cancelled', lead_worktree = NULL, started_at = NULL WHERE key = 'dead'");
+    fx.merged_job("done", "busyfix");
+    fx.job("live", "busyfix", "queued");
+    let by = |reference: &str| fx.pr(&["cancel", "busyfix", "--superseded-by", reference]);
+    let writes = fx.writes();
+
+    // A live Job holds the PR, the merged one does not.
+    let error = fx.refused(&by("other-1/storefix"), "pr_in_use", 3, writes);
+    assert_eq!(error["details"]["jobs"], json!(["live"]));
+    fx.env.sql("UPDATE jobs SET status = 'cancelled', cancel_reason = 'x', cancel_requested_at = 't' WHERE key = 'live'");
+    let writes = fx.writes();
+
+    fx.refused(&by("other-1/nope"), "pr_not_found", 4, writes);
+    fx.refused(&by("nope"), "pr_not_found", 4, writes);
+    fx.refused(&by("nope-9/storefix"), "pr_not_found", 4, writes);
+    fx.refused(&by("alien-1/foreign"), "pr_other_context", 3, writes);
+    fx.refused(&by("dead"), "illegal_transition", 3, writes);
+    fx.refused(&by("busyfix"), "usage", 2, writes);
+    fx.refused(&by("pay-1/busyfix"), "usage", 2, writes);
+    assert_eq!(fx.pr_status("busyfix"), "dispatch");
+
+    // The flag is for a `dispatch` PR only: an open PR is ended by its closed pull request.
+    fx.locked_pr("web", &fx.web, "open");
+    let writes = fx.writes();
+    let error = fx.refused(&fx.pr(&["cancel", "web", "--superseded-by", "other-1/storefix"]), "illegal_transition", 3, writes);
+    assert_eq!(error["details"]["from"], "open");
+}
+
+#[test]
+fn superseding_a_waiting_pr_before_the_lock_is_refused() {
+    let fx = fx("plan");
+    fx.add("api", &fx.pay, &[]).ok();
+    fx.add("web", &fx.web, &[]).ok();
+    let writes = fx.writes();
+    fx.refused(&fx.pr(&["cancel", "web", "--superseded-by", "api"]), "illegal_transition", 3, writes);
+    assert_eq!(fx.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "waiting");
+}

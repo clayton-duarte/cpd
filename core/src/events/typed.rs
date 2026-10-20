@@ -195,6 +195,11 @@ impl NewEvent {
         make(Kind::PrCancelled, text, json!({"pr": pr}))
     }
 
+    /// `pr-cancelled` of a `dispatch` PR whose work another PR carried (§3.8, hs-d301): `superseded_by` is that PR as a reference.
+    pub fn pr_cancelled_superseded(text: impl Into<String>, pr: impl Serialize, superseded_by: &str) -> NewEvent {
+        make(Kind::PrCancelled, text, json!({"pr": pr, "superseded_by": superseded_by}))
+    }
+
     pub fn pr_started(
         text: impl Into<String>,
         pr: impl Serialize,
@@ -390,7 +395,7 @@ mod tests {
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
             Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, [s], b)],
             Kind::PrEdited => vec![NewEvent::pr_edited(T, s, [s])],
-            Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s)],
+            Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s), NewEvent::pr_cancelled_superseded(T, s, s)],
             Kind::PrStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
             Kind::PrBaseChanged => vec![
                 NewEvent::pr_base_changed(T, s, (s, s), (None, Some(s)), s, None),
