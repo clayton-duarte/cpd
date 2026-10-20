@@ -22,7 +22,7 @@ use cpd_core::session::PROGRAM;
 use crate::dialog::scroll::Scroll;
 use crate::palette::{self, Meaning};
 use crate::read::{Dot, JobCounts};
-use crate::widgets::section_header;
+use crate::section;
 use crate::{Capture, run_view};
 
 const COLUMN_SPACING: u16 = 2;
@@ -30,7 +30,8 @@ const COLUMN_SPACING: u16 = 2;
 const POPUP_BORDER: u16 = 2;
 const DOTS_TITLE: &str = "Session dots";
 /// The rows above the body: the title, drawn as a section header (hs-d124, hs-d297).
-const HEADER_ROWS: u16 = 1;
+/// The title's rows: an empty row above it; the body's first row is the empty row below (hs-d308).
+const HEADER_ROWS: u16 = 2;
 const INTRO: &str = "Legend: what the cockpit's colours and icons mean   (any key closes)";
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
@@ -224,7 +225,8 @@ pub fn draw(f: &mut Frame, area: Rect) {
 /// and, when the body is taller than the rest of `area`, a dim `first-last/total` closes the title's line.
 fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
     let [head, window] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
-    f.render_widget(Paragraph::new(section_header(INTRO, usize::from(head.width))), head);
+    let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
+    f.render_widget(Paragraph::new(section::title(INTRO, None, usize::from(title.width))), title);
     let buf = body(&sections(), window.width);
     scroll.resize(usize::from(buf.area.height), usize::from(window.height));
     for y in 0..window.height.min(buf.area.height.saturating_sub(scroll.offset() as u16)) {
@@ -236,8 +238,8 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
         let last = (scroll.offset() + scroll.page()).min(scroll.total());
         let position = format!(" {}-{}/{} ", scroll.offset() + 1, last, scroll.total());
         let width = position.chars().count() as u16;
-        if width < head.width {
-            let at = Rect::new(head.x + head.width - width, head.y, width, 1);
+        if width < title.width {
+            let at = Rect::new(title.x + title.width - width, title.y, width, 1);
             f.render_widget(Paragraph::new(position).style(palette::fg(Meaning::Nothing)), at);
         }
     }
@@ -419,13 +421,15 @@ mod tests {
     }
 
     #[test]
-    fn the_title_is_drawn_by_section_header() {
+    fn the_title_is_a_section_title_under_an_empty_row_and_over_one() {
         let (w, h) = size();
         let buf = render(w, h, &mut Scroll::default());
         let mut want = Terminal::new(TestBackend::new(w, 1)).unwrap();
-        want.draw(|f| f.render_widget(Paragraph::new(section_header(INTRO, usize::from(w))), f.area())).unwrap();
-        assert!((0..w).all(|x| buf[(x, 0)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 0));
-        assert!(row(&buf, 0).starts_with("── Legend: what") && row(&buf, 0).contains("(any key closes) ─"));
+        want.draw(|f| f.render_widget(Paragraph::new(section::title(INTRO, None, usize::from(w))), f.area())).unwrap();
+        assert!((0..w).all(|x| buf[(x, 1)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 1));
+        assert_eq!(row(&buf, 0), "");
+        assert_eq!(row(&buf, 2), "");
+        assert!(row(&buf, 1).starts_with("━━ Legend: what") && row(&buf, 1).contains("(any key closes) ━"));
     }
 
     #[test]
@@ -444,17 +448,18 @@ mod tests {
         let (w, h) = size();
         let full = render(w, h, &mut Scroll::default());
         let mut scroll = Scroll::default();
-        let page = h - 1 - 6;
+        let hr = HEADER_ROWS;
+        let page = h - hr - 6;
         let top = render(w, h - 6, &mut scroll);
-        assert!(scroll.scrollable() && (scroll.total(), scroll.page()) == (usize::from(h - 1), usize::from(page)));
-        assert!(row(&top, 0).ends_with(&format!(" 1-{page}/{}", h - 1)), "{}", row(&top, 0));
-        for y in 1..=page {
+        assert!(scroll.scrollable() && (scroll.total(), scroll.page()) == (usize::from(h - hr), usize::from(page)));
+        assert!(row(&top, 1).ends_with(&format!(" 1-{page}/{}", h - hr)), "{}", row(&top, 1));
+        for y in hr..hr + page {
             assert_eq!(row(&top, y), row(&full, y), "unscrolled, row {y}");
         }
         // ↓ and j: one row each
         assert!(!closes(&key(KeyCode::Down), &mut scroll) && !closes(&key(KeyCode::Char('j')), &mut scroll));
         let moved = render(w, h - 6, &mut scroll);
-        for y in 1..=page {
+        for y in hr..hr + page {
             assert_eq!(row(&moved, y), row(&full, y + 2), "two rows down, row {y}");
         }
         // the wheel: a notch is three rows; PgDn stops at the last row, which is the legend's
@@ -467,8 +472,8 @@ mod tests {
         }
         let bottom = render(w, h - 6, &mut scroll);
         assert_eq!(scroll.offset(), scroll.max_offset());
-        assert_eq!(row(&bottom, page), row(&full, h - 1));
-        assert!(row(&bottom, 0).ends_with(&format!(" {}-{}/{}", scroll.max_offset() + 1, h - 1, h - 1)), "{}", row(&bottom, 0));
+        assert_eq!(row(&bottom, hr + page - 1), row(&full, h - 1));
+        assert!(row(&bottom, 1).ends_with(&format!(" {}-{}/{}", scroll.max_offset() + 1, h - hr, h - hr)), "{}", row(&bottom, 1));
     }
 
     #[test]

@@ -188,9 +188,13 @@ fn find(buf: &Buffer, needle: &str) -> (u16, u16) {
 
 // ---------- the Dispatch column ----------
 
-/// A section header on the 46-column test pane: `──`, ` <title> `, then `─` to the edge.
-fn header(title: &str) -> String {
-    format!("── {title} {}", "─".repeat(46 - 4 - title.chars().count()))
+/// A section title on the 46-column test pane: `━━`, ` <title> `, then `━` to the edge, or to ` <count> ━━`.
+fn header(title: &str, count: Option<usize>) -> String {
+    let used = 4 + title.chars().count();
+    match count {
+        None => format!("━━ {title} {}", "━".repeat(46 - used)),
+        Some(n) => format!("━━ {title} {} {n} ━━", "━".repeat(46 - used - 4 - n.to_string().len())),
+    }
 }
 
 /// The column on the prepared store as the User sees it: the open pull requests, oldest first.
@@ -243,9 +247,10 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
     terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
-    let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
+    let head = |title: &str| format!("━━ {title} {}", "━".repeat(30 - 4 - title.chars().count()));
+    let prs_head = format!("━━ PRs {} 0 ━━", "━".repeat(30 - 4 - 3 - 4 - 1));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
-    assert_eq!(lines[3..6], ["", head("PRs").as_str(), ""]);
+    assert_eq!(lines[3..6], ["", prs_head.as_str(), ""]);
     assert_eq!(lines[6], " no open PRs");
     assert_eq!(lines[7..], ["", "", "", "", "", "", head("git").as_str(), "", " (future)", "", head("Jira").as_str(), "", " (future)"]);
 }
@@ -253,7 +258,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
 #[test]
 fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
     let (got, _) = column(25);
-    let (prs, git, jira) = (header("PRs"), header("git"), header("Jira"));
+    let (prs, git, jira) = (header("PRs", Some(2)), header("git", None), header("Jira", None));
     let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
     let failed_open = format!("  open {} changes requested  cpd-tui cockpit c…", palette::CHECKS_FAILED);
     let none_open = format!("  open {} no review  Plan fresh", palette::CHECKS_NONE);
@@ -291,8 +296,8 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
 fn each_section_header_has_a_blank_row_above_and_below() {
     for height in [20, 25, 29] {
         let (got, _) = column(height);
-        for title in ["PRs", "git", "Jira"] {
-            let at = got.iter().position(|r| *r == header(title)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
+        for (title, count) in [("PRs", Some(2)), ("git", None), ("Jira", None)] {
+            let at = got.iter().position(|r| *r == header(title, count)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
             assert_eq!(got[at - 1], "", "above {title} at {height}:\n{got:#?}");
             assert_eq!(got[at + 1], "", "below {title} at {height}:\n{got:#?}");
         }
@@ -315,7 +320,7 @@ fn three_open_prs_in_two_repos_come_out_oldest_first_in_two_lines_each() {
     assert_eq!(
         got[4..12],
         [
-            header("PRs").as_str(),
+            header("PRs", Some(3)).as_str(),
             "",
             web4.as_str(),
             draft_failed.as_str(),
@@ -438,7 +443,7 @@ fn no_open_pull_request_says_so() {
     assert!(w.prs.is_empty());
     let buf = render(46, 25, &w);
     let got = rows(&buf);
-    assert_eq!(got[4..7], [header("PRs").as_str(), "", " no open PRs"], "{got:#?}");
+    assert_eq!(got[4..7], [header("PRs", Some(0)).as_str(), "", " no open PRs"], "{got:#?}");
     assert!(buf[find(&buf, "no open PRs")].modifier.contains(Modifier::DIM));
 }
 
@@ -460,18 +465,17 @@ fn the_column_takes_every_colour_from_the_palette() {
     assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
     assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Failed));
     assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
-    // The headers: grey, the title a reversed block, not bold.
+    // The titles: the heavy rules grey, the title bold.
     for title in ["PRs", "git", "Jira"] {
-        let (x, y) = find(&buf, &format!("── {title} "));
+        let (x, y) = find(&buf, &format!("━━ {title} "));
         assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
-        let block = buf[(x + 3, y)].clone();
-        assert_eq!(block.fg, c(Meaning::Nothing), "{title}");
-        assert!(block.modifier.contains(Modifier::REVERSED) && !block.modifier.contains(Modifier::BOLD), "{title}");
-        assert!(!buf[(x, y)].modifier.contains(Modifier::REVERSED), "{title}");
+        let word = buf[(x + 3, y)].clone();
+        assert!(word.modifier.contains(Modifier::BOLD) && !word.modifier.contains(Modifier::REVERSED), "{title}");
+        assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD), "{title}");
     }
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine and the pull request names (the section titles are reversed, not bold); dim: the title of the PR, `(future)`.
+    // Bold: the machine and the pull request names (the section titles are bold too); dim: the title of the PR, `(future)`.
     for title in ["homeserver", "acme/repo#7"] {
         assert!(bold(find(&buf, title)), "{title}");
         assert!(!dim(find(&buf, title)), "{title}");
@@ -927,6 +931,134 @@ fn a_clean_pr_shows_the_merge_icon_and_a_click_on_it_opens_the_popup_not_the_lea
     assert_eq!(focused_session(&env), "1||widgets", "the focus did not move");
 }
 
+// ---------- the right-click menu of a PR row (hs-d296) ----------
+
+/// A right click at 0-based `column` and `row`, as the terminal sends it (SGR mouse reporting, button 2).
+fn right_click(env: &TestEnv, pane: &str, column: u16, row: u16) {
+    for end in ['M', 'm'] {
+        tmux_out(env, &["send-keys", "-t", pane, "-l", &format!("\x1b[<2;{};{}{end}", column + 1, row + 1)]);
+    }
+}
+
+/// The labels of the menu box on `screen`: the `│ <label> │` rows between the `┌` and the `┘` rows.
+fn menu_labels(screen: &[String]) -> Vec<String> {
+    let top = screen.iter().position(|r| r.contains('┌'));
+    let Some(top) = top else { return vec![] };
+    screen[top + 1..].iter().take_while(|r| !r.contains('└')).filter_map(|r| r.split('│').nth(1)).map(|l| l.trim().to_owned()).collect()
+}
+
+fn the_menu_is_closed(screen: &[String]) -> bool {
+    screen.iter().all(|r| !r.contains('┌') && !r.contains('└'))
+}
+
+/// The row of the first line of the PR named `name` (` acme/repo#9`) on `screen`.
+fn first_line_of(screen: &[String], name: &str) -> u16 {
+    u16::try_from(screen.iter().position(|r| r.starts_with(name)).unwrap_or_else(|| panic!("{name}: {screen:#?}"))).unwrap()
+}
+
+/// `acme/repo#20` (owned by `mine`) and `acme/repo#9` (no owner) are clean, `acme/web#4` (no owner) is blocked.
+fn clean_prs(env: &TestEnv) {
+    let mut store = prs_store(env);
+    sql(
+        &mut store,
+        "UPDATE pull_requests SET merge_state = 'clean' WHERE number IN (9, 20);
+         UPDATE pull_requests SET merge_state = 'blocked' WHERE number = 4;",
+    );
+    sql(&mut store, &moved("2026-01-04T00:00:00.000Z", "mine", "parked"));
+}
+
+#[test]
+fn a_right_click_on_a_pr_row_opens_its_menu_merge_only_when_clean_and_go_to_lead_only_when_owned() {
+    let env = pane_env();
+    clean_prs(&env);
+    let view = cockpit(&env);
+    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    for (name, second_line, labels) in [
+        (" acme/web#4", false, &["Copy Link"][..]),
+        (" acme/repo#9", true, &["Merge", "Copy Link"]),
+        (" acme/repo#20", false, &["Merge", "Copy Link", "Go to Lead"]),
+    ] {
+        right_click(&env, &view, 3, first_line_of(&shown, name) + u16::from(second_line));
+        let screen = wait_for_screen(&env, &view, name, |s| !menu_labels(s).is_empty());
+        assert_eq!(menu_labels(&screen), labels, "{name}");
+        tmux_out(&env, &["send-keys", "-t", &view, "Escape"]);
+        wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
+    }
+    // Not on a PR row: no menu.
+    right_click(&env, &view, 3, 1);
+    // time-claim: over the next redraws no menu opens (a right click that opens nothing leaves no signal)
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert!(the_menu_is_closed(&screen(&env, &view)));
+}
+
+#[test]
+fn an_open_menu_takes_every_click_and_go_to_lead_opens_the_lead_and_focuses_the_chat() {
+    let env = pane_env();
+    clean_prs(&env);
+    let view = cockpit(&env);
+    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    let (nine, twenty) = (first_line_of(&shown, " acme/repo#9"), first_line_of(&shown, " acme/repo#20"));
+    let before = moved_events(&env);
+
+    // A left click outside the menu, on the owned row, closes it and does not open the Lead.
+    right_click(&env, &view, 3, nine);
+    wait_for_screen(&env, &view, "the menu", |s| !menu_labels(s).is_empty());
+    click(&env, &view, 0, twenty);
+    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
+    // time-claim: over the next redraws the click that closed the menu opens no Lead
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    assert_eq!(moved_events(&env), before, "no `session open` ran");
+    assert_eq!(focused_session(&env), "1||widgets");
+
+    // Go to Lead: what a click on the row does.
+    right_click(&env, &view, 3, twenty);
+    wait_for_screen(&env, &view, "the menu", |s| menu_labels(s).len() == 3);
+    tmux_out(&env, &["send-keys", "-t", &view, "Down", "Down", "Enter"]);
+    wait_until("the Lead in the chat slot", || moved_events(&env).len() > before.len());
+    let mut expected = before;
+    expected.push(("l-mine".to_owned(), "chat".to_owned()));
+    assert_eq!(moved_events(&env), expected);
+    wait_until("the focus", || focused_session(&env).contains("|l-mine|"));
+}
+
+#[test]
+fn copy_link_puts_the_url_in_tmuxs_buffer_with_set_buffer_w_and_says_so() {
+    let env = pane_env();
+    clean_prs(&env);
+    let view = cockpit(&env);
+    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    fake_tmux(&env);
+    let url = "https://github.com/acme/repo/pull/9";
+    right_click(&env, &view, 3, first_line_of(&shown, " acme/repo#9"));
+    wait_for_screen(&env, &view, "the menu", |s| menu_labels(s) == ["Merge", "Copy Link"]);
+    tmux_out(&env, &["send-keys", "-t", &view, "Down", "Enter"]);
+    let note = format!("copied {url}");
+    wait_for_screen(&env, &view, "the note", |s| s.iter().any(|r| r == &note) && the_menu_is_closed(s));
+    let copies: Vec<Vec<String>> = env.calls("tmux").into_iter().filter(|c| c.iter().any(|a| a == "set-buffer")).collect();
+    let [copy] = &copies[..] else { panic!("{copies:?}") };
+    assert_eq!(&copy[copy.len() - 4..], ["set-buffer", "-w", "--", url], "{copy:?}");
+    let buffer = env.tmux(&["show-buffer"]);
+    assert_eq!(String::from_utf8_lossy(&buffer.stdout), url);
+    assert!(popups(&env).is_empty(), "no popup opened");
+}
+
+#[test]
+fn merge_in_the_menu_opens_the_same_popup_as_the_merge_icon() {
+    let env = pane_env();
+    clean_prs(&env);
+    let view = cockpit(&env);
+    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    fake_tmux(&env);
+    right_click(&env, &view, 3, first_line_of(&shown, " acme/repo#9"));
+    wait_for_screen(&env, &view, "the menu", |s| menu_labels(s) == ["Merge", "Copy Link"]);
+    tmux_out(&env, &["send-keys", "-t", &view, "Enter"]);
+    wait_until("the popup", || popups(&env).len() == 1);
+    let popup = &popups(&env)[0];
+    let at = popup.iter().position(|a| a == "display-popup").unwrap();
+    assert_eq!(popup.last().unwrap(), "cpd tui view merge 'acme/repo#9'", "{popup:?}");
+    assert_eq!(popup[at + 1], "-E", "{popup:?}");
+}
+
 // ---------- the legend ----------
 
 fn legend_buffer() -> Buffer {
@@ -1017,7 +1149,7 @@ fn the_pr_states_and_checks_are_listed_in_their_colours() {
 #[test]
 fn the_legend_fits_its_own_size() {
     let buf = legend_buffer();
-    assert!(row(&buf, 0).contains("any key closes"));
+    assert!(row(&buf, 1).contains("any key closes"));
     let (w, h) = legend::size();
     assert_eq!((buf.area.width, buf.area.height), (w, h));
     assert!(row(&buf, h - 1).contains("passed"), "the last section is not cut");

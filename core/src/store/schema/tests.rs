@@ -941,7 +941,8 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     for ((name, old), (_, new)) in before.iter().zip(&after) {
         // The history triggers list the rebuilt table's columns; every other keeps its text.
         // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started` and `open>cancelled` since `pr-cancel-open`.
-        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" {
+        // `prs_locked` has a second exception since `stacked-prs`: a stacked or an open PR's `base` follows GitHub.
+        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" && name != "prs_locked" {
             assert_eq!(new, old, "{name}");
         }
     }
@@ -1425,7 +1426,8 @@ fn prs_locked_refuses_a_change_of_identity_repo_or_base_after_the_lock() {
     let mut store = migrated(&dir);
     for sql in [
         "UPDATE prs SET repo = '/src/other' WHERE plan = 'di'",
-        "UPDATE prs SET base = 'develop' WHERE plan = 'pr'",
+        "UPDATE prs SET base = 'develop' WHERE plan = 'di'",
+        "UPDATE prs SET base = 'develop' WHERE plan = 'dn'",
         "UPDATE prs SET key = 'other' WHERE plan = 'dn'",
         "UPDATE prs SET lead_branch = 'cpd/di/pr-2fa' WHERE plan = 'di'",
     ] {
@@ -1450,29 +1452,29 @@ fn pr_needs_locked_refuses_a_need_after_the_lock_unless_the_pr_is_new() {
         )
     };
     write(&mut store, &add("old")).unwrap();
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('di', 'old', 'pr-2fa')");
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('di', 'old', 'di', 'pr-2fa')");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     // `pr add` in dispatch: the PR and its needs in one transaction.
-    write(&mut store, &format!("{} INSERT INTO pr_needs (plan, pr, needs) VALUES ('di', 'new', 'pr-2fa');", add("new"))).unwrap();
+    write(&mut store, &format!("{} INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('di', 'new', 'di', 'pr-2fa');", add("new"))).unwrap();
     // Before the lock, any time.
     write(&mut store, WEB).unwrap();
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay')").unwrap();
+    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay')").unwrap();
 }
 
 #[test]
 fn pr_needs_no_delete_refuses_after_the_lock_and_history_records_a_delete() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
-    write(&mut store, &format!("{WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay');")).unwrap();
+    write(&mut store, &format!("{WEB} INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay');")).unwrap();
     write(&mut store, "DELETE FROM pr_needs WHERE plan = 'gr'").unwrap();
     assert_eq!(
         rows(&mut store, "SELECT pk, op, before, after FROM history WHERE tbl = 'pr_needs' ORDER BY id"),
         vec![
-            serde_json::json!([r#"["gr","web","pay"]"#, "insert", Value::Null, r#"{"plan":"gr","pr":"web","needs":"pay"}"#]),
-            serde_json::json!([r#"["gr","web","pay"]"#, "delete", r#"{"plan":"gr","pr":"web","needs":"pay"}"#, Value::Null]),
+            serde_json::json!([r#"["gr","web","gr","pay"]"#, "insert", Value::Null, r#"{"plan":"gr","pr":"web","needs_plan":"gr","needs":"pay"}"#]),
+            serde_json::json!([r#"["gr","web","gr","pay"]"#, "delete", r#"{"plan":"gr","pr":"web","needs_plan":"gr","needs":"pay"}"#, Value::Null]),
         ]
     );
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay');
+    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay');
                        UPDATE plans SET phase = 'plan' WHERE id = 'gr';
                        UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'gr'")
         .unwrap();
@@ -1725,7 +1727,7 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             let mut rows_before = rows_before;
             assert_eq!(rows_after.remove("schema_migrations").map(|r| r.len()), Some(LEGACY.len() + NAMED.len()));
             // `kind-tables`' own tables: every Event kind that exists, the record kinds, the tables with history.
-            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(47));
+            assert_eq!(rows_after.remove("event_kinds").map(|r| r.len()), Some(crate::events::Kind::ALL.len()));
             assert_eq!(rows_after.remove("record_kinds").map(|r| r.len()), Some(6));
             assert_eq!(rows_after.remove("history_tables").map(|r| r.len()), Some(17));
             let (txns_before, txns_after) = (rows_before.remove("txns").unwrap(), rows_after.remove("txns").unwrap());
@@ -1738,15 +1740,38 @@ fn a_legacy_store_of_every_version_converts_keeping_every_row_and_id() {
             // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
             // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
             assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
-            for table in ["contexts", "prs"] {
+            // The filled column is taken out by its position: a later additive migration (`pr-title`) adds a column after it.
+            for (table, column) in [("contexts", "owner"), ("prs", "name")] {
+                let at = table_columns(&conn, table).unwrap().iter().position(|(c, _)| c == column).unwrap();
                 for row in rows_after.get_mut(table).unwrap() {
-                    let at = row.rfind(',').unwrap();
-                    *row = format!("{}]", &row[..at]);
+                    let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
+                    values.remove(at);
+                    *row = Value::from(values).to_string();
                 }
+            }
+            // `stacked-prs` rebuilt `pr_needs` with `needs_plan` third: every need was a need of its own Plan.
+            for row in rows_before.get_mut("pr_needs").unwrap() {
+                let mut cells: Vec<Value> = serde_json::from_str(row).unwrap();
+                cells.insert(2, cells[0].clone());
+                *row = Value::from(cells).to_string();
             }
             let (history_before, history_after) = (rows_before.remove("history").unwrap(), rows_after.remove("history").unwrap());
             assert_eq!(history_after[..history_before.len()], history_before[..]);
             assert!(history_after[history_before.len()..].iter().all(|r| r.contains("\"update\"")), "{history_after:?}");
+            // The columns the other additive named migrations add come last and are null in every converted row.
+            for (table, rows) in rows_after.iter_mut() {
+                let width = rows_before.get(table).and_then(|r| r.first()).map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().len());
+                for row in rows.iter_mut() {
+                    let mut values: Vec<Value> = serde_json::from_str(row).unwrap();
+                    let width = width.unwrap_or(values.len());
+                    if values.len() == width {
+                        continue;
+                    }
+                    assert!(values[width..].iter().all(Value::is_null), "{table}: an added column is set: {row}");
+                    values.truncate(width);
+                    *row = Value::from(values).to_string();
+                }
+            }
             assert_eq!(rows_after, rows_before);
         }
 
@@ -2409,4 +2434,229 @@ fn a_version_9_database_with_no_grounded_lead_migrates_to_10_with_no_new_event()
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(count(&mut store, "SELECT count(*) FROM events"), 0);
     assert!(store.schema_mismatch().is_none());
+}
+
+// ---------- named migration `stacked-prs` (§4.5; §2.2 "The base PR", §3.8 "Stacked PRs") ----------
+
+/// A locked Plan `pl` of every kind of PR, and a Plan `other` in grounding with one; the PR `b` needs `c`.
+/// `b` and `e` are stacked on `a` (their `base` is its Lead Branch); `ms` and `xs` are too, but `merged` and `cancelled`.
+const STACK: &str = "
+  INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+    VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't'),
+           ('lead2', 'lead', 'ctx', 'other', 'Lead', '/', 'O3', 'idle', 't', 't');
+  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+    VALUES ('pl', 'ctx', 'Plan', 'dispatch', 'lead', 't', 't');
+  INSERT INTO plans (id, context, title, phase, lead_session, created_at)
+    VALUES ('other', 'ctx', 'Other', 'grounding', 'lead2', 't');
+  INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
+    VALUES ('acme/r', 7, 'u7', 'T', 0, 'open', 'none', 'none', 't', NULL, 't'),
+           ('acme/r', 8, 'u8', 'T', 0, 'merged', 'none', 'none', 't', 't', 't'),
+           ('acme/r', 9, 'u9', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
+  INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at) VALUES
+    ('pl', 'a',  '/r', 'main',     'waiting',  'cpd/pl/a',  NULL,   NULL, 1, 't'),
+    ('pl', 'b',  '/r', 'cpd/pl/a', 'waiting',  'cpd/pl/b',  NULL,   NULL, 1, 't'),
+    ('pl', 'c',  '/r', 'main',     'waiting',  'cpd/pl/c',  NULL,   NULL, 1, 't'),
+    ('pl', 'd',  '/r', 'main',     'dispatch', 'cpd/pl/d',  '/w/d', 't',  1, 't'),
+    ('pl', 'e',  '/r', 'cpd/pl/a', 'dispatch', 'cpd/pl/e',  '/w/e', 't',  1, 't'),
+    ('pl', 'xs', '/r', 'cpd/pl/a', 'cancelled', 'cpd/pl/xs', NULL,  NULL, 1, 't'),
+    ('pl', 'x',  '/r', 'main',     'cancelled', 'cpd/pl/x',  NULL,  NULL, 1, 't'),
+    ('other', 'o', '/r2', 'main',   'waiting',  'cpd/other/o', NULL, NULL, 1, 't');
+  INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, started_at, pr_number, pr_url, pr_opened_at,
+                   pull_request, merged_at, created_txn, created_at) VALUES
+    ('pl', 'op', '/r', 'main',     'open',   'cpd/pl/op', '/w/op', 't', 7, 'u7', 't', 1, NULL, 1, 't'),
+    ('pl', 'm',  '/r', 'main',     'merged', 'cpd/pl/m',  '/w/m',  't', 8, 'u8', 't', 2, 't',  1, 't'),
+    ('pl', 'ms', '/r', 'cpd/pl/a', 'merged', 'cpd/pl/ms', '/w/ms', 't', 9, 'u9', 't', 3, 't',  1, 't');
+";
+
+/// A named store as the binaries before `stacked-prs` left it, holding [`STACK`] and one need.
+fn store_before_stacked_prs(home: &CpdHome) -> Vec<Named> {
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-stacked-prs")).collect();
+    assert!(earlier.len() < NAMED.len(), "stacked-prs is a built-in migration");
+    drop(crate::store::tests::open_named(home, &earlier).unwrap());
+    let conn = connection(&home.db());
+    // The Plans and their Leads point at each other: the fixture is written with foreign keys off.
+    conn.execute_batch(&format!("PRAGMA foreign_keys = OFF; {STACK} INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'b', 'c');")).unwrap();
+    earlier
+}
+
+#[test]
+fn stacked_prs_is_breaking_after_the_names_before_it() {
+    let (index, migration) = NAMED.iter().enumerate().find(|(_, n)| n.name.ends_with("-stacked-prs")).unwrap();
+    assert_eq!(migration.compat, Compat::Breaking);
+    let after = LEGACY.len() + index;
+    assert_eq!(migration.sql.lines().next().unwrap(), format!("-- cpd-migration: breaking after {after}"));
+}
+
+#[test]
+fn stacked_prs_keeps_every_pr_and_need_and_gives_pr_needs_its_plan() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier = store_before_stacked_prs(&home);
+    let before = dump(&connection(&home.db()));
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-stacked-prs")));
+    let violations: i64 = connection(&home.db()).query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
+    assert_eq!(violations, 0);
+
+    // Every `pr_needs` row is a need of its own Plan; every `prs` row is as it was.
+    assert_eq!(
+        rows(&mut store, "SELECT plan, pr, needs_plan, needs FROM pr_needs"),
+        vec![serde_json::json!(["pl", "b", "pl", "c"])]
+    );
+    let after = dump(&connection(&home.db()));
+    assert_eq!(after["prs"], before["prs"]);
+    assert_eq!(after["pr_needs"].len(), 1);
+
+    // A need of another Plan is stored; one naming no PR is refused by the foreign key.
+    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'pl', 'd')").unwrap();
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'pl', 'nope')");
+    assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'nowhere', 'd')");
+    assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
+    // A PR does not need itself, in any Plan.
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'other', 'o')");
+    assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
+    // The history key and the generated triggers list the new column.
+    assert_eq!(
+        rows(&mut store, "SELECT pk, after FROM history WHERE tbl = 'pr_needs' ORDER BY id DESC LIMIT 1"),
+        vec![serde_json::json!([r#"["other","o","pl","d"]"#, r#"{"plan":"other","pr":"o","needs_plan":"pl","needs":"d"}"#])]
+    );
+
+    // pr_needs_locked: after the lock only a PR's own insert may add needs; the Plan `pl` is locked.
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pl', 'a', 'other', 'o')");
+    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    // pr_needs_no_delete: and its history row for a delete holds the key with `needs_plan`.
+    let err = refused(&mut store, "DELETE FROM pr_needs WHERE plan = 'pl'");
+    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    write(&mut store, "DELETE FROM pr_needs WHERE plan = 'other'").unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT pk, op, before FROM history WHERE tbl = 'pr_needs' ORDER BY id DESC LIMIT 1"),
+        vec![serde_json::json!([
+            r#"["other","o","pl","d"]"#,
+            "delete",
+            r#"{"plan":"other","pr":"o","needs_plan":"pl","needs":"d"}"#
+        ])]
+    );
+    drop(store);
+
+    // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
+    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+}
+
+#[test]
+fn stacked_prs_lets_base_follow_github_on_an_open_or_stacked_pr_only() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    store_before_stacked_prs(&home);
+    // Before it, `base` is Locked for every status after the lock.
+    for key in ["a", "b", "c", "d", "e", "x", "xs", "op", "m", "ms"] {
+        let err = connection(&home.db()).execute_batch(&format!("UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'")).unwrap_err();
+        assert!(err.to_string().contains("pr_locked"), "{key}: {err}");
+    }
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    // After it, only an `open` PR and a PR whose `base` is the Lead Branch of a PR of its repo; `pl` is locked.
+    for key in ["a", "c", "d", "x", "m"] {
+        let err = refused(&mut store, &format!("UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = '{key}'"));
+        assert_eq!(err.code(), ErrorCode::PrLocked, "{key}: {err:?}");
+    }
+    for key in ["xs", "ms"] {
+        let err = refused(&mut store, &format!("UPDATE prs SET base = 'main' WHERE plan = 'pl' AND key = '{key}'"));
+        assert_eq!(err.code(), ErrorCode::PrLocked, "a {key} PR is not followed: {err:?}");
+    }
+    // Nothing but `base` moves: not the identity, the repo or the Lead Branch, nor with the base.
+    for set in ["key = 'z'", "repo = '/x'", "lead_branch = 'cpd/pl/z'", "plan = 'other'", "base = 'main', repo = '/x'", "base = 'main', lead_branch = 'cpd/pl/z'"] {
+        for key in ["b", "e", "op"] {
+            let err = refused(&mut store, &format!("UPDATE prs SET {set} WHERE plan = 'pl' AND key = '{key}'"));
+            assert_eq!(err.code(), ErrorCode::PrLocked, "{set} on {key}: {err:?}");
+        }
+    }
+    write(
+        &mut store,
+        "UPDATE prs SET base = 'main' WHERE plan = 'pl' AND key IN ('b', 'e');
+         UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = 'op'",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT key, base FROM prs WHERE plan = 'pl' AND key IN ('b', 'e', 'op') ORDER BY key"),
+        vec![serde_json::json!(["b", "main"]), serde_json::json!(["e", "main"]), serde_json::json!(["op", "develop"])]
+    );
+    // `b` is no longer stacked, so its base is Locked again; the legacy rename of a merged PR is unchanged.
+    let err = refused(&mut store, "UPDATE prs SET base = 'develop' WHERE plan = 'pl' AND key = 'b'");
+    assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
+    // Before the lock any PR may change, as before.
+    write(&mut store, "UPDATE prs SET base = 'develop' WHERE plan = 'other'").unwrap();
+}
+
+// ---------- named migration `event-pr-base-changed` (§4.5, §5.2) ----------
+
+#[test]
+fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
+    let migration = NAMED.iter().find(|n| n.name.ends_with("-event-pr-base-changed")).unwrap();
+    assert_eq!(migration.compat, Compat::Additive);
+    assert_eq!(migration.sql.lines().next().unwrap(), "-- cpd-migration: additive");
+
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-event-pr-base-changed")).collect();
+    drop(crate::store::tests::open_named(&home, &earlier).unwrap());
+    let before: i64 = connection(&home.db()).query_row("SELECT count(*) FROM event_kinds", [], |r| r.get(0)).unwrap();
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1])]);
+}
+
+// ---------- named migration session-titles ----------
+
+#[test]
+fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_and_accepts_session_titled() {
+    let titles = NAMED.iter().position(|n| n.name.ends_with("-session-titles")).expect("the migration session-titles exists");
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    let mut before = crate::store::tests::open_named(&home, &NAMED[..titles]).unwrap();
+    write(
+        &mut before,
+        &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
+           ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
+           ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
+           ('w', 'worker', 'ctx', 'pay', 'api-a1', 'W', '/', 'S2', 'working', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'l', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+           VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', cpd_txn(), 't');
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
+           VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', 'w', 't');"
+            .replace("{fp}", &"a".repeat(64)),
+    )
+    .unwrap();
+    let columns = "rowid, id, role, context, plan, attempt, name, cwd, tier, state";
+    let sessions = rows(&mut before, &format!("SELECT {columns} FROM sessions ORDER BY id"));
+    assert!(sqlite_message(&refused(&mut before, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{}')"))
+        .contains("FOREIGN KEY constraint failed"));
+    drop(before);
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert_eq!(rows(&mut store, &format!("SELECT {columns} FROM sessions ORDER BY id")), sessions);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM sessions WHERE title IS NOT NULL OR titled_at IS NOT NULL"), 0);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{\"title\":\"T\"}')").unwrap();
+    // The title is 1–60 characters, and the history lists both new columns.
+    write(&mut store, &format!("UPDATE sessions SET title = '{}', titled_at = 't' WHERE id = 'l'", "é".repeat(60))).unwrap();
+    for bad in [String::new(), "x".repeat(61)] {
+        let error = refused(&mut store, &format!("UPDATE sessions SET title = '{bad}' WHERE id = 'm'"));
+        assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{bad:?}: {error:?}");
+    }
+    assert_eq!(
+        rows(&mut store, "SELECT json_extract(after, '$.title') IS NOT NULL, json_extract(after, '$.titled_at') FROM history WHERE tbl = 'sessions' AND op = 'update'"),
+        vec![serde_json::json!([1, "t"])]
+    );
+    let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
+    assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
 }

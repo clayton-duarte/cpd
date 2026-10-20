@@ -92,8 +92,12 @@ release() {
   git_root worktree add -q -b "$branch" "$wt" origin/main
   (
     cd "$wt"
-    # release.toml: the release commit "Release <version>", with CHANGELOG.md written by git-cliff.
+    # release.toml: the release commit "Release <version>" (Cargo.toml, Cargo.lock). git-cliff then
+    # runs once, here, and the unpushed commit is amended to hold CHANGELOG.md too.
     "$root/scripts/cargo.sh" release "$version" --workspace --no-publish --no-tag --no-push --no-confirm --execute
+    git-cliff --unreleased --tag "v$version" --prepend CHANGELOG.md
+    git add CHANGELOG.md
+    git commit -q --amend --no-edit
     [ -d node_modules ] || npm ci
     npm run verify
     git push origin "$branch"

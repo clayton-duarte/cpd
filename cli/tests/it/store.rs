@@ -453,7 +453,7 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
         ("context_records", "INSERT INTO context_records (context, id, kind, at, machine, text) VALUES ('ctx', 'n1', 'bogus', 't', 'm', 'x')".to_owned()),
         ("plans", "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('ops', 'ctx', 'O', 'bogus', 'lead1', 't')".to_owned()),
         ("prs", format!("INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at) VALUES ('pay', 'web', '/r', 'main', 'waiting', 'cpd/other', {txn}, 't')")),
-        ("pr_needs", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'pay', 'pay')".to_owned()),
+        ("pr_needs", "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'pay', 'pay', 'pay')".to_owned()),
         ("plan_reviews", format!("INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('pay', 'r2', 1, '{FP}', 'pending', 't')")),
         ("jobs", format!("INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at) VALUES ('pay', 'pay', 'web', 'W', 'X9', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, NULL, {txn}, 't')")),
         ("dependencies", "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'ui', 'ui')".to_owned()),
@@ -476,6 +476,50 @@ fn check_constraints_reject_a_bad_value_in_every_constrained_table() {
             exec(tx, "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('xy', 'T', 't', 'm');
                       INSERT INTO tier_catalog (pi_version, letter, model, efforts, read_at) VALUES ('1', 'O', 'm', '[]', 't');
                       INSERT INTO events (txn, at, kind, context, text, data) VALUES (cpd_txn(), 't', 'job-added', 'ctx', 'x', '{}');")
+        })
+        .unwrap();
+}
+
+/// Contract §4.4 `pr_needs` (migration `stacked-prs`): a need names a PR by Plan and key, of any Plan.
+#[test]
+fn a_need_of_another_plan_is_stored_and_one_naming_no_pr_is_refused() {
+    let env = TestEnv::new();
+    let mut store = open(&env);
+    let txn = fixture(&mut store);
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('ops', 'ctx', 'Ops', 'grounding', 'lead1', 't');
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                       VALUES ('ops', 'deploy', '/r', 'cpd/pay/pay', 'waiting', 'cpd/ops/deploy', {txn}, 't');
+                     INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('ops', 'deploy', 'pay', 'pay');"
+                ),
+            )
+        })
+        .unwrap();
+    let stored: (String, String) =
+        store.read(|c| Ok(c.query_row("SELECT needs_plan, needs FROM pr_needs WHERE plan = 'ops'", [], |r| Ok((r.get(0)?, r.get(1)?)))?)).unwrap();
+    assert_eq!(stored, ("pay".to_owned(), "pay".to_owned()));
+    for sql in [
+        "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'pay', 'ops', 'nowhere')",
+        "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'pay', 'nowhere', 'deploy')",
+    ] {
+        let err = refused(&mut store, sql);
+        assert!(sqlite_message(&err).contains("FOREIGN KEY constraint failed"), "{sql}: {err:?}");
+    }
+    // The same key in two Plans is two PRs: a PR may need `ops/deploy` while it is itself called `deploy`.
+    store
+        .write("test", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                       VALUES ('pay', 'deploy', '/r', 'main', 'waiting', 'cpd/pay/deploy', {txn}, 't');
+                     INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'deploy', 'ops', 'deploy');"
+                ),
+            )
         })
         .unwrap();
 }
@@ -1532,7 +1576,7 @@ fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
     let env = TestEnv::new();
     let out = env.cpd(&["--version"]).ok();
     assert!(out["store"].is_null(), "{out}");
-    assert_eq!(out["protocol"], 4, "{out}");
+    assert_eq!(out["protocol"], 6, "{out}");
     assert!(!home(&env).db().exists());
     assert!(!home(&env).locks_dir().exists());
 }
@@ -1671,6 +1715,13 @@ fn hold_setup_lock(h: &CpdHome, marker: Option<Value>) -> Holder {
     Holder { _lock: lock }
 }
 
+impl Holder {
+    /// The migrating holder's marker going away while it still holds the lock.
+    fn clear_marker(&self) {
+        self._lock.set_len(0).unwrap();
+    }
+}
+
 fn migrating_marker(pid: u32) -> Value {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
     json!({"migrating": true, "pid": pid, "started_unix_ms": now, "from": 3, "to": 20, "command": "cpd test-migration"})
@@ -1693,6 +1744,58 @@ fn an_open_waits_out_a_migrating_holder_for_longer_than_store_busy_ms() {
     release.join().unwrap();
     store.expect("the open waits for the migration");
     assert!(waited >= Duration::from_millis(1400), "did not wait for the migration: {waited:?}");
+}
+
+/// hs-n278, contract §4.2: a waiter that saw the migrating holder's marker keeps waiting while the same holder
+/// holds the lock after the marker is gone, until the release, whatever its own `busy_ms`.
+#[test]
+fn a_waiter_that_saw_the_marker_waits_for_the_release_after_the_marker_is_gone() {
+    let env = TestEnv::new();
+    let h = home(&env);
+    let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
+    // time-claim: the waiter (1 ms bound) polls every 20 ms, so it reads the marker within the first 300 ms, then the
+    // lock stays held for 300 ms more without a marker; no per-poll signal from the waiter.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        holder.clear_marker();
+        std::thread::sleep(Duration::from_millis(300));
+        drop(holder);
+    });
+    let start = Instant::now();
+    let store = Store::open(&h, 1);
+    let waited = start.elapsed();
+    release.join().unwrap();
+    store.expect("the waiter outlasts the marker, until the release");
+    assert!(waited >= Duration::from_millis(550), "did not wait for the release: {waited:?}");
+}
+
+/// hs-n278, contract §4.2: an opener that waited out a migration waits for SQLite in its own setup at least
+/// `MIGRATION_SETTLE_MS`, whatever its `busy_ms`: the migrating holder may still be finishing (here: another
+/// connection holds the database's exclusive lock a while longer).
+#[test]
+fn an_opener_that_waited_out_a_migration_waits_for_sqlite_in_its_setup() {
+    let env = TestEnv::new();
+    let h = home(&env);
+    Store::open(&h, 5000).map(drop).unwrap();
+    // A rollback-journal database, so that an exclusive lock blocks a reader at once.
+    let finishing = Connection::open(h.db()).unwrap();
+    finishing.pragma_update(None, "journal_mode", "DELETE").unwrap();
+    finishing.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let holder = hold_setup_lock(&h, Some(migrating_marker(std::process::id())));
+    // time-claim: the waiter (1 ms bound) reads the marker within the first 300 ms, gets the lock after that, and finds
+    // the database locked for 300 ms more; no per-poll signal from the waiter.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        drop(holder);
+        std::thread::sleep(Duration::from_millis(300));
+        finishing.execute_batch("COMMIT").unwrap();
+    });
+    let start = Instant::now();
+    let store = Store::open(&h, 1);
+    let waited = start.elapsed();
+    release.join().unwrap();
+    store.expect("the waiter waits for SQLite in its setup");
+    assert!(waited >= Duration::from_millis(550), "did not wait for the database: {waited:?}");
 }
 
 /// hs-n278: a holder with no marker keeps the `store_busy_ms` bound.

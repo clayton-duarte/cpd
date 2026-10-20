@@ -409,8 +409,8 @@ export class FakePi implements PiApi {
   };
 
   /** Runs a registered tool like pi does. The adapter's tool reads nothing of the tool context, so the fake passes none of pi's. */
-  async runTool(tool: ToolDefinition<any, any, any>): Promise<{ text: string; details: unknown }> {
-    const out = await tool.execute("call-1", {}, undefined, undefined, undefined as never);
+  async runTool(tool: ToolDefinition<any, any, any>, params: Record<string, unknown> = {}): Promise<{ text: string; details: unknown }> {
+    const out = await tool.execute("call-1", params, undefined, undefined, undefined as never);
     return { text: out.content.map((c) => (c.type === "text" ? c.text : "")).join(""), details: out.details };
   }
 

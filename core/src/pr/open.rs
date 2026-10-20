@@ -10,6 +10,7 @@ use super::row::PlanPrs;
 use crate::plan::PrRow;
 use super::gh::{self, HeadState, Listed, Membership, PolledPr, PrRef};
 use super::pulls;
+use super::start::base_pr;
 use super::status::{ChecksSummary, MergeState, Mergeable, PrState, ReviewDecision};
 use super::{Args, Env, gate, illegal_phase, pr_policy, short};
 use crate::error::{CpdError, ErrorCode};
@@ -33,6 +34,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     };
     let policy = pr_policy(&mut env, &id, &key)?;
     let list = require_jobs_done(&mut env, &plan, &key)?;
+    let stored = stored_title(&mut env, &id, &key)?;
 
     // No lock and no R (hs-d243): an unrecorded merge leaves its Job `running`,
     // which `jobs_not_done` refused above.
@@ -64,6 +66,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     // 1. The base check on the Lead Branch's head, then G, read once, and the same check on G (hs-d329), before the
     // Gate, under `pr.gate` `ci` as under `local`; 2. the Gate on G, in a gate worktree of its own.
     let repo = Path::new(&pr.repo);
+    require_base_on_remote(&mut env, repo, pr)?;
     let base_sha = fresh_base(repo, &pr.base)?;
     let lead_ref = format!("refs/heads/{branch}");
     require_base(repo, &lead, pr, &base_sha, &git::run::rev_parse(repo, &lead_ref)?)?;
@@ -93,7 +96,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
             .with("stderr", stderr));
         }
     };
-    let title = title(&plan, &key);
+    let title = github_title(&stored);
     let found = find_or_create(&lead, pr, existing, &title, &list)?;
     let (repo, _) = pulls::parse_url(&found.url).ok_or_else(|| {
         CpdError::new(ErrorCode::GhFailed, format!("gh printed the pull request URL {:?}, which is not https://github.com/<owner>/<name>/pull/<n>.", found.url))
@@ -160,6 +163,33 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     Ok(Output::success(
         json!({"plan": id, "phase": phase.as_str(), "pr": pr_of(&plan, &key).to_json(), "sha": sha, "pushed": pushed, "remote": remote}),
     ))
+}
+
+/// A stacked PR's base branch, its base PR's Lead Branch, is on the remote (contract §7.6 `pr open` step 1), else
+/// `base_not_found` (exit 4): the pull request targets it, and the base PR's Lead pushes it. A PR that is not stacked
+/// has its base fetched next, and a repo with no `origin` has no pull request to target a branch of.
+fn require_base_on_remote(env: &mut Env, repo: &Path, pr: &PrRow) -> Result<(), CpdError> {
+    let Some(base_pr) = env.store.read(|conn| base_pr(conn, pr))? else { return Ok(()) };
+    if !git::run::has_origin(repo)? {
+        return Ok(());
+    }
+    let listed = git::run::run(repo, &["ls-remote", "--exit-code", "--heads", "origin", &pr.base])?;
+    match listed.code {
+        0 => Ok(()),
+        2 => Err(CpdError::new(
+            ErrorCode::BaseNotFound,
+            format!(
+                "PR {}'s base {}, the Lead Branch of {base_pr}, is not on origin: the pull request cannot target it. Its Lead pushes it (cpd pr push), then run cpd pr open again. Nothing was gated, pushed or opened.",
+                pr.key, pr.base
+            ),
+        )
+        .with("pr", pr.key.as_str())
+        .with("base", pr.base.as_str())
+        .with("base_pr", base_pr)),
+        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git ls-remote origin {} exited {code}.", pr.base))
+            .with("exit", code)
+            .with("stderr", listed.stderr)),
+    }
 }
 
 /// B (contract §7.6 `pr open` step 1): `origin/<base>` after `git fetch origin <base>`, read once; a repo with no
@@ -393,9 +423,25 @@ fn require_jobs_done(env: &mut Env, plan: &PlanPrs, key: &PrKey) -> Result<Vec<j
     Ok(all)
 }
 
-/// The Plan's title when it has one PR that is not `cancelled`, else `<title> (<key>)` (§7.6).
-fn title(plan: &PlanPrs, key: &PrKey) -> String {
-    if plan.live().count() == 1 { plan.plan.title.clone() } else { format!("{} ({key})", plan.plan.title) }
+/// The PR's stored title (hs-d285), which it must have: a PR that existed before migration `pr-title` has none, and
+/// there is no fallback to the Plan's title (`pr_title_required`).
+fn stored_title(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result<String, CpdError> {
+    let stored: Option<String> =
+        env.store.read(|conn| Ok(conn.query_row("SELECT title FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), key.as_str()], |r| r.get(0))?))?;
+    stored.ok_or_else(|| {
+        CpdError::new(
+            ErrorCode::PrTitleRequired,
+            format!("PR {key} of Plan {plan} has no title: run cpd pr edit {key} --title \"<text>\" (1-72 characters), then open it again."),
+        )
+        .with("plan", plan.as_str())
+        .with("pr", key.as_str())
+    })
+}
+
+/// The seam from a PR's stored title to the title of its pull request on GitHub: the one place a per-owner format
+/// (hs-d277, repo-policy) would change it. Today it is unchanged. `gh pr create` and the body's `# <title>` both use it.
+fn github_title(stored: &str) -> String {
+    stored.to_owned()
 }
 
 /// A table cell: one line, no `|`.
