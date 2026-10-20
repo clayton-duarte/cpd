@@ -22,7 +22,7 @@ use ratatui::{
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
-use crate::read::{JobNode, NeedsUser, PrNode, PrState, Pull};
+use crate::read::{Dot, JobNode, NeedsUser, PrNode, PrState, Pull};
 
 /// Rows between two rows of boxes: the run of lines, then the arrowheads.
 const GAP: u16 = 2;
@@ -89,8 +89,9 @@ fn state_word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󰏌` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
-/// waiting, red when the Plan's Lead `asked` the User, see [`state_word`]), else the PR's status, dim.
-pub fn title(pr: &PrNode, asked: bool) -> Line<'static> {
+/// waiting, red when the Plan's Lead `asked` the User, see [`state_word`]), else the PR's status, dim. While the Plan's Lead
+/// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󰏌`.
+pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
     let mut spans: Vec<Span<'static>> =
         vec![" ".into(), pr.key.to_string().bold(), format!(" · {} {TO} {} · ", pr.repo_name, pr.base).into()];
     match &pr.pull {
@@ -98,6 +99,9 @@ pub fn title(pr: &PrNode, asked: bool) -> Line<'static> {
             spans.push(format!("#{} ", pull.number).into());
             let (word, meaning) = state_word(pull, asked);
             spans.push(Span::styled(word, palette::fg(meaning)));
+            if pull.lead_working {
+                spans.extend([" ".into(), palette::dot_span(Dot::Working, frame, false)]);
+            }
             spans.push(format!(" {CUE}").into());
         }
         None => spans.push(pr.status.as_str().dim()),
@@ -114,7 +118,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         .iter()
         .map(|p| flow::layout(&flow::flow_jobs(jobs.iter().filter(|j| j.pr == p.key), &needs_user.stuck_jobs), frame))
         .collect();
-    let titles: Vec<Line> = prs.iter().map(|p| title(p, needs_user.lead_dialog)).collect();
+    let titles: Vec<Line> = prs.iter().map(|p| title(p, needs_user.lead_dialog, frame)).collect();
     // each box: its border around the chart, or around ` no Jobs `, and at least as wide as its title
     let size: Vec<(u16, u16)> = charts
         .iter()
@@ -193,8 +197,9 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         Block::bordered().border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
         if let Some(pull) = &prs[i].pull {
             // the title starts after the corner and ends with one space; the `󰏌` is the cell before it, and the link
-            // runs back from there over `#<number> <state> 󰏌`
-            let len = format!("#{} {} {CUE}", pull.number, state_word(pull, false).0).chars().count() as u16;
+            // runs back from there over `#<number> <state>`, the Lead's dot when it works, and `󰏌`
+            let dot = if pull.lead_working { 2 } else { 0 };
+            let len = format!("#{} {} {CUE}", pull.number, state_word(pull, false).0).chars().count() as u16 + dot;
             link(&mut buf, Rect::new(rect.x + titles[i].width() as u16 - len, rect.y, len, 1), &pull.url);
         }
         let inner = rect.inner(Margin { horizontal: 1, vertical: 1 });
@@ -303,7 +308,7 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, lead_working: false }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
@@ -405,35 +410,83 @@ mod tests {
         let failed = palette::fg(Meaning::Waiting).fg;
         let mut p = pr("api", &[]);
         p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
-        let t = title(&p, false);
+        let t = title(&p, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󰏌 ");
         assert_eq!(t.spans[4].style.fg, failed);
         assert_ne!(t.spans[4].style.fg, palette::fg(Meaning::Failed).fg);
         // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the waiting colour
         p.pull = Some(pull(12, PrState::Open));
-        let t = title(&p, false);
+        let t = title(&p, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
         assert_ne!(t.spans[4].style.fg, failed);
         // merged and closed never read `conflict`
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
             p.pull = Some(Pull { conflicting: true, ..pull(12, state) });
-            let t = title(&p, false);
+            let t = title(&p, false, 0);
             assert_eq!(t.spans[4].content, word);
             assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(state)).fg);
         }
     }
 
     #[test]
+    fn a_working_lead_puts_its_dot_after_the_state_word_and_turns_with_the_frame() {
+        let mut p = pr("api", &[]);
+        p.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
+        for frame in 0..palette::SPINNER.len() {
+            let t = title(&p, false, frame);
+            assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 open {} 󰏌 ", palette::SPINNER[frame]), "frame {frame}");
+            assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(PrState::Open)).fg, "the state keeps its colour");
+        }
+        // the dot goes with the state, in the waiting colour of `conflict` too
+        p.pull = Some(Pull { lead_working: true, conflicting: true, ..pull(12, PrState::Open) });
+        let t = title(&p, false, 3);
+        assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 conflict {} 󰏌 ", palette::SPINNER[3]));
+        assert_eq!(t.spans[4].style.fg, palette::fg(Meaning::Waiting).fg);
+    }
+
+    #[test]
+    fn an_idle_lead_shows_no_dot_and_a_pr_without_a_pull_request_none() {
+        let mut p = pr("api", &[]);
+        p.pull = Some(pull(12, PrState::Open));
+        for frame in 0..palette::SPINNER.len() {
+            let text = title(&p, false, frame).to_string();
+            assert_eq!(text, " api · api-repo 󱦰 main · #12 open 󰏌 ");
+            assert!(!palette::SPINNER.iter().any(|g| text.contains(g)), "{text}");
+        }
+        // no pull request yet: nothing to show beside
+        let mut waiting = pr("web", &["api"]);
+        waiting.status = PrStatus::Waiting;
+        assert_eq!(title(&waiting, false, 4).to_string(), " web · web-repo 󱦰 main · waiting ");
+    }
+
+    #[test]
+    fn the_working_dot_is_drawn_in_the_box_title_inside_the_link_and_widens_the_box_by_its_cell() {
+        let mut p = pr("api", &[]);
+        p.pull = Some(pull(12, PrState::Open));
+        let mut w = p.clone();
+        w.pull = Some(Pull { lead_working: true, ..pull(12, PrState::Open) });
+        let plain = layout(&[p], &[], &NeedsUser::default(), 5).chart;
+        let working = layout(&[w], &[], &NeedsUser::default(), 5).chart;
+        assert_eq!(working.buf.area.width, plain.buf.area.width + 2);
+        let top: String = (0..working.buf.area.width).map(|x| working.buf[(x, 0)].symbol().to_owned()).collect();
+        assert!(top.contains(palette::SPINNER[5]), "{top}");
+        // one frame later: the next glyph
+        let w2 = layout(&[PrNode { pull: Some(Pull { lead_working: true, ..pull(12, PrState::Open) }), ..pr("api", &[]) }], &[], &NeedsUser::default(), 6).chart;
+        let top: String = (0..w2.buf.area.width).map(|x| w2.buf[(x, 0)].symbol().to_owned()).collect();
+        assert!(top.contains(palette::SPINNER[6]) && !top.contains(palette::SPINNER[5]), "{top}");
+    }
+
+    #[test]
     fn a_closed_pull_request_is_waiting_and_red_only_when_its_lead_asked_the_user() {
         let mut p = pr("api", &[]);
         p.pull = Some(pull(12, PrState::Closed));
-        let colour = |asked| title(&p, asked).spans[4].style.fg;
+        let colour = |asked| title(&p, asked, 0).spans[4].style.fg;
         assert_eq!(colour(false), palette::fg(Meaning::Waiting).fg, "its Lead handles it");
         assert_eq!(colour(true), palette::fg(Meaning::Failed).fg, "its Lead has a dialog open: it asks the User");
         // the question concerns the closed pull request only
         for state in [PrState::Open, PrState::Merged] {
             p.pull = Some(pull(12, state));
-            assert_eq!(title(&p, true).spans[4].style.fg, title(&p, false).spans[4].style.fg, "{state:?}");
+            assert_eq!(title(&p, true, 0).spans[4].style.fg, title(&p, false, 0).spans[4].style.fg, "{state:?}");
         }
         // through the layout: the title is drawn in the colour
         p.pull = Some(pull(12, PrState::Closed));
@@ -472,19 +525,19 @@ mod tests {
     fn the_title_names_the_pull_request_in_its_colour_else_the_status_dim() {
         let mut open = pr("api", &[]);
         open.pull = Some(pull(12, PrState::Open));
-        let t = title(&open, false);
+        let t = title(&open, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
         assert!(t.spans[1].style.add_modifier.contains(Modifier::BOLD), "the key is bold");
         assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(PrState::Open)).fg);
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
             open.pull = Some(pull(12, state));
-            let t = title(&open, false);
+            let t = title(&open, false, 0);
             assert_eq!(t.spans[4].content, word);
             assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(state)).fg);
         }
         let mut waiting = pr("web", &["api"]);
         waiting.status = PrStatus::Waiting;
-        let t = title(&waiting, false);
+        let t = title(&waiting, false, 0);
         assert_eq!(t.to_string(), " web · web-repo 󱦰 main · waiting ");
         assert!(t.spans[3].style.add_modifier.contains(Modifier::DIM));
     }

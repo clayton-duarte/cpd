@@ -143,7 +143,7 @@ fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
 fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut hits = vec![];
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note, 0).hits).unwrap();
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), w, &machine(), note, 0, 0).hits).unwrap();
     (terminal.backend().buffer().clone(), hits)
 }
 
@@ -240,7 +240,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, "", 0))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w, &machine, "", 0, 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
@@ -807,7 +807,7 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     let mut drawn = None;
-    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w, &machine(), "", 0))).unwrap();
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w, &machine(), "", 0, 0))).unwrap();
     let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
     let buf = terminal.backend().buffer().clone();
     for (y, icon) in [(7, false), (9, true), (11, true)] {

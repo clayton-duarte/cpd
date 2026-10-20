@@ -16,13 +16,14 @@ pub mod legend;
 
 use std::collections::BTreeMap;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind,
 };
 use ratatui::layout::Position;
 
+use super::palette;
 use super::read::{self, Widgets};
 use super::{RunCommand, not_a_terminal, on_a_terminal};
 use cpd_core::config::Config;
@@ -41,6 +42,8 @@ pub(crate) use column::{Window, dim, max_scroll, section_header, window};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);
+/// How often the view redraws while a shown PR's Lead is working: one frame of the spinner (`palette::frame`, 100 ms).
+const FRAME: Duration = Duration::from_millis(100);
 /// At most one snapshot per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 /// A snapshot and the load at least this often: the load average is no Event.
@@ -98,10 +101,11 @@ fn show(
     // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
     let mut scroll = 0usize;
     loop {
-        terminal.draw(|f| last = Some(draw(f, f.area(), &widgets, &machine, &note, scroll))).map_err(terminal_failed)?;
+        let frame = palette::frame(SystemTime::now());
+        terminal.draw(|f| last = Some(draw(f, f.area(), &widgets, &machine, &note, scroll, frame))).map_err(terminal_failed)?;
         let drawn = last.as_ref().expect("the terminal drew");
         scroll = scroll.min(drawn.max_scroll);
-        if event::poll(TICK).map_err(terminal_failed)? {
+        if event::poll(tick(&widgets)).map_err(terminal_failed)? {
             match event::read().map_err(terminal_failed)? {
                 Event::Key(key) if quits(&key) => return Ok(()),
                 Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
@@ -133,6 +137,11 @@ fn show(
             }
         }
     }
+}
+
+/// How long the view waits for input before it draws again: one spinner frame while a PR's Lead works, else [`TICK`].
+fn tick(w: &Widgets) -> Duration {
+    if w.prs.iter().any(|p| p.lead_working) { FRAME } else { TICK }
 }
 
 /// A click on a tab or on an owned PR row: `session open <id>`, which moves that Lead into the chat slot, then `select-pane`
@@ -309,6 +318,43 @@ pub(crate) fn newest_client(listing: &str) -> Option<(u16, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pr(working: bool) -> read::OpenPr {
+        read::OpenPr {
+            repo: "acme/repo".to_owned(),
+            number: 1,
+            url: String::new(),
+            title: String::new(),
+            draft: false,
+            checks: read::Checks::Passed,
+            review_decision: read::ReviewDecision::None,
+            conflicting: false,
+            clean: false,
+            active: false,
+            lead: Some(SessionId::parse("l-a").unwrap()),
+            lead_working: working,
+        }
+    }
+
+    fn widgets(prs: Vec<read::OpenPr>) -> Widgets {
+        Widgets {
+            slots: read::Slots { limit: 3, held: vec![] },
+            engine: read::Engine::Never,
+            plans: vec![],
+            prs,
+            escalations: vec![],
+            events: vec![],
+            events_cursor: 0,
+        }
+    }
+
+    #[test]
+    fn the_view_redraws_every_spinner_frame_while_a_shown_leads_works_and_every_tick_otherwise() {
+        assert_eq!(tick(&widgets(vec![])), TICK);
+        assert_eq!(tick(&widgets(vec![pr(false), pr(false)])), TICK);
+        assert_eq!(tick(&widgets(vec![pr(false), pr(true)])), FRAME);
+        assert_eq!(FRAME, Duration::from_millis(100), "one frame of `palette::frame`");
+    }
 
     #[test]
     fn the_legend_popup_is_sized_by_the_most_recently_active_client() {
