@@ -173,7 +173,7 @@ impl Fx {
     }
 
     fn ship_status(&self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM prs WHERE plan = 'ship' AND key = '{key}'"))
+        self.env.query(&format!("SELECT status FROM prs WHERE plan = 'ship' AND key = '{key}'"))
     }
 
     /// Where PR `key` of Plan `ship` has its Lead worktree in `repo`.
