@@ -2,7 +2,7 @@
 //
 //   node pi/lib/slack-channel.ts --coding-agent <…/pi-coding-agent/dist/index.js> --channel <C…> --me <U…>
 //
-// Reads the team channel through pi's own MCP client and token store, so cpd has no HTTP client (hs-d107) and never
+// Reads the team channel through pi's own MCP client and token store, so cpd has no HTTP client and never
 // reads, copies or logs the credential (hermes' `slack_fetch.py` did the same through Hermes' storage). Prints one JSON
 // value on stdout, progress on stderr. Writes nothing, to no file and to no Slack channel.
 import { dirname, join } from "node:path";
