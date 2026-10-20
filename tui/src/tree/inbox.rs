@@ -202,7 +202,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
 /// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318). `engine-down`
 /// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
-/// one); the `url` is copied for `review-requested` (their OSC 8 link stays for the
+/// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (their OSC 8 link stays for the
 /// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
@@ -219,8 +219,14 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
                 None => Jump::Run(open),
             })
         }
-        // stub (hs-d496): pnbox-corei makes it open the item's Session, then copy its url
-        Kind::ReviewWaiting => None,
+        // hs-d496: the Session that opened the plannotator session, then the review page's url (when known)
+        Kind::ReviewWaiting => {
+            let open = open_or_history(tree, item.session.as_ref()?);
+            Some(match item.url.as_ref() {
+                Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
+                None => Jump::Run(open),
+            })
+        }
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
@@ -236,7 +242,7 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
 
 /// The kinds whose label is an OSC 8 link to the item's `url`.
 fn is_link(kind: Kind) -> bool {
-    matches!(kind, Kind::PlanReview | Kind::PrReady | Kind::ReviewRequested)
+    matches!(kind, Kind::PlanReview | Kind::ReviewWaiting | Kind::PrReady | Kind::ReviewRequested)
 }
 
 /// An item's row: the fold's muted `│`, a space, the item's icon in its urgency's colour, a space, the label cut with

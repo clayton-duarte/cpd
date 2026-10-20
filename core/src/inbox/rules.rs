@@ -54,6 +54,7 @@ pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, C
 pub fn conditions_with(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team: Option<Team<'_>>) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| plan_reviews(conn, home))?);
+    all.extend(store.read(review_waiting)?);
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
@@ -198,11 +199,46 @@ fn plannotator_url(home: &CpdHome, plan: &PlanId) -> Result<Option<String>, CpdE
             .trim()
             .parse::<u16>()
             .ok()
-            .map(|port| format!("http://{}:{port}/", review_host(&mut std::io::stderr())))),
+            .map(review_url)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display()))
             .with("path", path.display().to_string())),
     }
+}
+
+/// The plannotator page on `port`, on the review host.
+fn review_url(port: u16) -> String {
+    format!("http://{}:{port}/", review_host(&mut std::io::stderr()))
+}
+
+/// `review-waiting` (hs-d496): an open tracked plannotator session (`plannotator_reviews`) of a Session that is neither
+/// archived nor `stopped`. Always magenta; it links its Session (and that Session's Plan, if it has one); its URL is the
+/// review host's page on the row's port. It marks no Session `blocked`.
+fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+    let filter = "s.state <> 'stopped' AND EXISTS (SELECT 1 FROM plannotator_reviews r WHERE r.session = s.id AND r.closed_at IS NULL)";
+    let mut stmt = conn.prepare("SELECT pn_id, subject, port FROM plannotator_reviews WHERE session = ?1 AND closed_at IS NULL ORDER BY opened_at, pn_id")?;
+    let mut out = Vec::new();
+    for seat in seats(conn, "NULL", filter)? {
+        let rows = stmt
+            .query_map([seat.session.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, u16>(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (pn_id, subject, port) in rows {
+            out.push(Condition {
+                kind: Kind::ReviewWaiting,
+                urgency: Urgency::Magenta,
+                subject: format!("pn:{}/{pn_id}", seat.session),
+                label: format!("{} review: {subject}", seat.who),
+                url: Some(review_url(port)),
+                context: Some(seat.context.clone()),
+                plan: seat.plan.clone(),
+                job: None,
+                session: Some(seat.session.clone()),
+                record: None,
+                event: None,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// `plan-review`: a Plan's latest review is `pending`. Its subject is Plan-qualified because review ids (`r1`)

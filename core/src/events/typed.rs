@@ -297,6 +297,14 @@ impl NewEvent {
         make(Kind::SessionRenamed, text, json!({"name": name}))
     }
 
+    pub fn review_opened(text: impl Into<String>, pn_id: &str, kind: &str, subject: &str, port: u16) -> NewEvent {
+        make(Kind::ReviewOpened, text, json!({"pn_id": pn_id, "kind": kind, "subject": subject, "port": port}))
+    }
+
+    pub fn review_closed(text: impl Into<String>, pn_id: &str, ended: &str) -> NewEvent {
+        make(Kind::ReviewClosed, text, json!({"pn_id": pn_id, "ended": ended}))
+    }
+
     pub fn session_titled(text: impl Into<String>, title: &str) -> NewEvent {
         make(Kind::SessionTitled, text, json!({"title": title}))
     }
@@ -442,8 +450,8 @@ mod tests {
             Kind::WatchStarted => vec![NewEvent::watch_started(T, 1)],
             Kind::WatchStopped => vec![NewEvent::watch_stopped(T, 1)],
             Kind::Error => vec![NewEvent::error(T, s, s, s, serde_json::Value::Null)],
-            // hs-d496: no constructor yet (pnbox-corei writes them); this stub keeps the test module compiling.
-            Kind::ReviewOpened | Kind::ReviewClosed => vec![],
+            Kind::ReviewOpened => vec![NewEvent::review_opened(T, s, s, s, 1)],
+            Kind::ReviewClosed => vec![NewEvent::review_closed(T, s, s)],
         }
     }
 
