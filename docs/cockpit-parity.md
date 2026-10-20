@@ -61,7 +61,7 @@ Status values: **same**, **differs**, **missing**, **extra**.
 | Jira section | ` Jira` bold / ` (future)` dim (`main.rs:884`) | missing | missing | add |
 | Separators | `separator::draw`, `Borders::TOP`, colour 8 | `column.rs:201` | same | — |
 | Keys | `q` quits (`main.rs:~905`) | `q` (`widgets/mod.rs:81`), `?` legend (`:82`) | extra | Remove `?` (in the reference it's on the Context column and the StatusBar) |
-| Refresh | every 2 s; PRs via `gh` with a 60 s cache | Events, coalesced to 500 ms, at least every 2 s | differs (source) | Keep the Event-driven refresh (data from the store); add the load every 2 s |
+| Refresh | every 2 s; PRs via `gh` with a 60 s cache | Events and changes of the pull request rows, coalesced to 500 ms, no timer | differs (source) | Keep the Event-driven refresh (data from the store); add the load every 2 s |
 | Border title | ` Dispatch ` (`tmux.conf:11`) | ` Dispatch ` (`cockpit.rs` `BORDER_FORMAT`) | same | — |
 | Reference test to port | `main.rs:1053–1062` exact lines | — | — | Port as a snapshot test |
 
