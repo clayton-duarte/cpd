@@ -213,9 +213,9 @@ fn with_inbox(items: Vec<Item>) -> View {
 }
 
 /// The pill title row at `inner` columns (the pane has one blank column on each side): `╭─`, the capped title, a muted
-/// line, the count.
+/// line, the count as a pill (hs-d480).
 fn pill(inner: usize, count: usize) -> String {
-    format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{count}", "─".repeat(inner - 2 - 7 - count.to_string().len()))
+    format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{CAP_LEFT}{count}{CAP_RIGHT}", "─".repeat(inner - 2 - 7 - (count.to_string().len() + 2)))
 }
 
 /// An item row at 41 inner columns: `│`, a space, the icon, a space, the label, the age at the last column.
@@ -264,6 +264,7 @@ fn the_pill_is_grey_the_caps_and_lines_muted_and_the_text_inverted() {
     assert_eq!((buf[(1, y)].symbol(), buf[(1, y)].fg), ("╭", muted()));
     assert_eq!((buf[(2, y)].symbol(), buf[(2, y)].fg), ("─", muted()));
     crate::section::check::grey_pill(&buf, 3, y, "Inbox");
+    crate::section::check::grey_pill(&buf, 39, y, "3"); // the count is a grey pill too (hs-d480), ending at column 41
     assert_eq!((buf[(10, y)].symbol(), buf[(10, y)].fg), ("─", muted()), "the line to the right edge");
 }
 

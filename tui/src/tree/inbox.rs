@@ -274,7 +274,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
         let at = usize::from(dy);
         match shape.hit(dy) {
             Some(Hit::Header) => {
-                f.render_widget(Paragraph::new(section::title("Inbox", Some(items.len()), usize::from(full.width))), full);
+                f.render_widget(Paragraph::new(section::collapsible_title("Inbox", Some(items.len()), usize::from(full.width))), full);
             }
             Some(Hit::Item(i)) => {
                 let item = &items[i];

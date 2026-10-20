@@ -503,7 +503,7 @@ mod tests {
         assert!((0..w).all(|x| buf[(x, 1)] == want.backend().buffer()[(x, 0)]), "{}", row(&buf, 1));
         assert_eq!(row(&buf, 0), "");
         assert_eq!(row(&buf, 2), "");
-        assert!(row(&buf, 1).starts_with(" ╭─\u{E0B6}Legend: What") && row(&buf, 1).contains("(Any Key Closes)\u{E0B4}─"));
+        assert!(row(&buf, 1).starts_with(" ──\u{E0B6}Legend: What") && row(&buf, 1).contains("(Any Key Closes)\u{E0B4}─"));
     }
 
     #[test]
@@ -585,7 +585,7 @@ mod tests {
     fn the_popups_title_is_a_grey_pill_inside_the_padding_of_one_column_each_side() {
         let (w, h) = size();
         let buf = render(w, h, &mut Scroll::default());
-        assert_eq!((buf[(0, 1)].symbol(), buf[(1, 1)].symbol(), buf[(w - 1, 1)].symbol()), (" ", "╭", " "), "{}", row(&buf, 1));
+        assert_eq!((buf[(0, 1)].symbol(), buf[(1, 1)].symbol(), buf[(w - 1, 1)].symbol()), (" ", "─", " "), "{}", row(&buf, 1));
         assert_eq!((buf[(2, 1)].symbol(), buf[(3, 1)].symbol(), buf[(4, 1)].symbol()), ("─", "\u{E0B6}", "L"), "{}", row(&buf, 1));
         let text: String = (4..).map(|x| buf[(x, 1)].symbol()).take_while(|s| *s != "\u{E0B4}").collect();
         section::check::grey_pill(&buf, 3, 1, &text);

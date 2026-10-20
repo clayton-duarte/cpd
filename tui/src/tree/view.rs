@@ -1899,7 +1899,14 @@ mod tests {
 
     /// The title of the section at 43 columns: a blank margin, then the pill, the line and the count of `n` items.
     fn header(n: usize) -> String {
-        format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}{n}", "─".repeat(41 - 2 - 7 - n.to_string().len()))
+        format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}{n}\u{E0B4}", "─".repeat(41 - 2 - 7 - (n.to_string().len() + 2)))
+    }
+
+    /// The row of the Inbox's title: it is the pill title with the count pill (hs-d480), asserted whole.
+    fn inbox_title_y(rows: &[String], n: usize) -> u16 {
+        let y = rows.iter().position(|r| r.starts_with(" ╭─\u{E0B6}Inbox")).expect("the Inbox title");
+        assert_eq!(rows[y], header(n));
+        y as u16
     }
 
     /// An item row at 43 columns: the margin, the fold's `│`, a space, the icon, a space, the label, the age ending at the last column of the inner area.
@@ -2889,15 +2896,16 @@ mod tests {
     #[test]
     fn the_inbox_pill_is_grey_the_block_muted_its_text_the_background_colour_and_its_caps_muted() {
         let buf = draw_now(&mut with_inbox(5), 43, 20);
-        let y = text_rows(&buf).iter().position(|r| *r == header(5)).expect("the Inbox title") as u16;
+        let y = inbox_title_y(&text_rows(&buf), 5);
         assert_eq!(buf[(1, y)].symbol(), "╭");
         crate::section::check::grey_pill(&buf, 3, y, "Inbox");
+        crate::section::check::grey_pill(&buf, 39, y, "5"); // the count is a grey pill too (hs-d480), ending at column 41
     }
 
     #[test]
     fn the_inbox_title_sits_inside_the_panels_padding_one_column_each_side() {
         let buf = draw_now(&mut with_inbox(5), 43, 20);
-        let y = text_rows(&buf).iter().position(|r| *r == header(5)).expect("the Inbox title") as u16;
+        let y = inbox_title_y(&text_rows(&buf), 5);
         assert_eq!((buf[(0, y)].symbol(), buf[(1, y)].symbol(), buf[(41, y)].symbol(), buf[(42, y)].symbol()), (" ", "╭", "5", " "));
     }
 
@@ -2905,7 +2913,7 @@ mod tests {
     fn a_click_on_the_inbox_title_does_nothing_and_opens_no_menu() {
         let mut view = with_inbox(5);
         let rows = text_rows(&draw_now(&mut view, 43, 20));
-        let y = rows.iter().position(|r| *r == header(5)).expect("the Inbox title") as u16;
+        let y = inbox_title_y(&rows, 5);
         for column in [0, 1, 3, 6, 20, 41, 42] {
             assert_eq!(click(&mut view, column, y), Effect::None, "column {column}");
         }
