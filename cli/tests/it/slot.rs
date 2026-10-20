@@ -5,7 +5,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use crate::common::{CPD, TestEnv, output, spawn, wait_until, write_executable};
+use crate::common::{CPD, SLEEP_SECONDS, TestEnv, output, spawn, wait_until, write_executable};
 
 /// A test environment whose `config.toml` has `test_concurrency` = `n`.
 fn env(n: u32) -> TestEnv {
@@ -120,7 +120,7 @@ fn a_killed_holder_frees_its_slot_even_though_its_command_lives_on() {
     let env = env(1);
     let (pid_file, ready) = (env.root().join("command.pid"), env.root().join("ready"));
     let held_err = env.root().join("held.err");
-    let script = format!("echo $$ > {pid}; touch {ready}; exec sleep 600", pid = pid_file.display(), ready = ready.display());
+    let script = format!("echo $$ > {pid}; touch {ready}; exec sleep {SLEEP_SECONDS}", pid = pid_file.display(), ready = ready.display());
     let mut holder = spawn_slot(&env, &script, &held_err);
     wait_until("the command to hold the slot", || ready.exists());
 
