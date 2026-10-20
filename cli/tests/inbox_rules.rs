@@ -121,8 +121,8 @@ fn the_polled_pull_requests_open_and_clear_their_items() {
             (Kind::PrFailing, Urgency::Red, "shop#1 merge conflict"),
             (Kind::PrChanges, Urgency::Red, "shop#2 changes requested"),
             (Kind::PrReady, Urgency::Yellow, "shop#3 ready to merge"),
-            (Kind::ReviewRequested, Urgency::Yellow, "review shop#4"),
-        ]
+        ],
+        "pull request 4 requests the User's review on GitHub, which alone opens nothing (hs-d320)"
     );
     assert_eq!(items[0].subject, "pr:acme/shop#1");
     assert_eq!(items[0].url.as_deref(), Some("https://github.com/acme/shop/pull/1"));

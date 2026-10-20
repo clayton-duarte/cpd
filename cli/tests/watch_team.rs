@@ -245,3 +245,21 @@ fn e10_reports_pi_not_found_once_and_keeps_ticking() {
     assert_eq!(errors[0]["code"], "pi_not_found");
     assert_eq!(fx.helper_calls(), 0);
 }
+
+#[test]
+fn e8_opens_the_review_item_for_a_cached_post_hermes_calls_needs_review() {
+    let fx = fx(Some(3600), 0);
+    // The post is unclaimed; GitHub (the second query of the fake) says nobody reviewed the pull request.
+    let post = r#"{"ok":true,"channel":"C02JU6C2Z1D","read":1,"posts":[{"repo":"acme/pay","number":812,"ts":TS,"ts_raw":"1.1","author":"Ryan Case","primary":true,"reactions":[],"claim":null,"eyes_me":null,"thread_tags_me":false}]}"#
+        .replace("TS", &std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs().to_string());
+    fs::write(&fx.answer, format!("0 {post}")).unwrap();
+    fx.env.fake_gh(
+        r#"case "$*" in
+*viewer*) echo '{"data":{"viewer":{"login":"clayton-duarte"},"p0":{"pullRequest":{"isDraft":false,"state":"OPEN","reviewDecision":null,"author":{"login":"ryan"},"latestReviews":{"nodes":[]}}}}}';;
+*) echo '{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}';;
+esac"#,
+    );
+    let _engine = fx.start();
+
+    wait_until("the review item", || fx.items().contains(&("pr:acme/pay#812".to_owned(), "review pay#812".to_owned())));
+}
