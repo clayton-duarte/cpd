@@ -28,6 +28,7 @@ use time::OffsetDateTime;
 
 use super::engine::Engine;
 use super::lock;
+use super::record_detached;
 use crate::clock::timestamp;
 use super::report::{About, Step};
 use super::SOURCE;
@@ -344,7 +345,8 @@ fn report(engine: &mut Engine, pending: &Pending, failed: &Failed) {
 }
 
 /// Starts `cpd watch --restart-tmux` detached (`setsid`, stdin `/dev/null`, stdout and stderr
-/// appended to `run/tmux-restart.log`), as E3 starts a driver. Returns its pid.
+/// appended to `run/tmux-restart.log`), as E3 starts a driver, its pid recorded in
+/// `run/tmux-restart.pid` ([`record_detached`]). Returns its pid.
 fn spawn(home: &CpdHome) -> Result<u32, CpdError> {
     let log_path = home.tmux_restart_log();
     let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the tmux restart: {why}."));
@@ -369,11 +371,9 @@ fn spawn(home: &CpdHome) -> Result<u32, CpdError> {
     unsafe {
         command.pre_exec(|| nix::unistd::setsid().map(drop).map_err(std::io::Error::from));
     }
-    let mut child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
-    let pid = child.id();
-    // Reaps it while this process lives; detached otherwise.
-    std::thread::spawn(move || child.wait());
-    Ok(pid)
+    let child = command.spawn().map_err(|e| failed(format!("cannot run {}: {e}", exe.display())))?;
+    let pid_path = home.tmux_restart_pid();
+    record_detached(child, pid_path.clone()).map_err(|e| failed(format!("it runs, but its pid cannot be written to {}: {e}", pid_path.display())))
 }
 
 #[cfg(test)]

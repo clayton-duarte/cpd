@@ -104,6 +104,7 @@ $CPD_HOME/
     watch.log                     the engine's stderr
     tmux-restart.pending          a restart of the tmux server is pending (§6.1, hs-d294): JSON `{at, server, installed, failed}`; not in the store
     tmux-restart.log              the output of the detached tmux restart (§6.1)
+    tmux-restart.pid              the pid of the detached tmux restart the engine started, one line; removed when the engine reaps it (an engine that dies first leaves it, its pid perhaps reused); what finds that process, which is in no process group of the engine's
     <plan>/plan.md                the last `plan render`
     <plan>/lead-message.md        the Lead's first message, written by `plan new`
     <plan>/plannotator-port       the Plan's plannotator port, one line, assigned by `session run` (§6.5)
@@ -125,6 +126,7 @@ $CPD_HOME/
     context-digests/<context>/repair-prompt.md, digest.md, missing.md, problem.md   the inputs of a repair turn, written by it (§4.6 step 5)
     context-digests/<context>/records.md         the records in force a run gives the distiller (§4.6)
     context-digests/<context>/distill.log        every distill run's stderr, appended; the engine's runs also their stdout (§3.7 E9)
+    context-digests/<context>/distill.pid        the pid of the distill run the engine started (§3.7 E9), one line, as `tmux-restart.pid`
 ```
 
 **The migration marker** (hs-n278). The process that takes `locks/store.lock` and finds a migration or the conversion of a legacy store to run, writes into the lock file, before it starts migrating and while it holds the `flock`, one JSON object `{"migrating": true, "pid", "started_unix_ms", "from", "to", "command"}` (`from` and `to`: the schema versions or the count of applied migrations before and after; `command`: its `argv[0..]` as `txns.command` would name it). It truncates the file when the migration commits or fails, still under the `flock`. A file that is empty, or whose `pid` is not the holder's, is not a marker: the lock file is a marker only while the `flock` is held and `migrating` is true. A holder that dies releases the `flock` by itself (below) and its marker is ignored; the next opener takes the lock and overwrites it.
