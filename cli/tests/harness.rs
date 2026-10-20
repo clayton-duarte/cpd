@@ -263,33 +263,71 @@ fn the_shared_helpers_are_defined_only_in_the_harness() {
 const HELPER_GATE: &str = "CPD_HARNESS_KILLED_TEST_HELPER";
 const WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// What a helper env put up: the dir and the pids of its tmux server, a detached process
-/// under its cwd and a detached process with the dir in its command line.
+/// What a helper env put up: the dir and the pids of what its teardown must stop.
 struct Up {
     dir: std::path::PathBuf,
-    pids: Vec<(&'static str, u32)>,
+    pids: Vec<(String, u32)>,
 }
 
+/// Starts `argv` as cpd starts its detached children: in a session of its own (`setsid`), so out
+/// of the env's process group, and not a child of the test process. Returns its pid.
+fn detached(env: &TestEnv, argv: &[&str]) -> u32 {
+    let mut cmd = env.command("sh");
+    cmd.args(["-c", r#"setsid "$@" </dev/null >/dev/null 2>&1 & echo $!"#, "sh"]).args(argv);
+    let out = common::output(&mut cmd).unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).unwrap().trim().parse().unwrap()
+}
+
+/// Records `pid` as the driver of Attempt `api-a1` (running) in the env's store.
+fn record_driver(env: &TestEnv, pid: u32) {
+    let cwd = env.root().display();
+    let mut store = env.store();
+    store
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1');
+                 INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead1', 'lead', 'ctx', 'pay', NULL, 'Lead', '{cwd}', 'O3', 'idle', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'lead1', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                   VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', {id}, 't');
+                 INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, created_txn, created_at)
+                   VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'running', 0, '{fp}', {id}, 't');
+                 INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, driver_pid, started_at)
+                   VALUES ('pay', 'api-a1', 'api', 1, 'S2', 'ladder', 'running', 'cpd/pay--api-a1', '/w', {pid}, 't');",
+                fp = "a".repeat(64),
+                id = tx.id()
+            ))?;
+            Ok::<(), cpd_core::error::CpdError>(())
+        })
+        .unwrap();
+}
+
+/// Puts up in `env` what its teardown must stop, each found its own way: the tmux server and
+/// its pane (through tmux), a process of the env's group, and two detached processes cpd
+/// records: a driver (`attempts.driver_pid`) and the holder of a lock (`locks/*.lock`).
 fn put_up(env: &TestEnv) -> Up {
     let out = env.tmux(&["new-session", "-d", "-s", "t", "sleep 100"]);
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    let tmux = String::from_utf8(env.tmux(&["display-message", "-p", "#{pid}"]).stdout).unwrap();
-    let detached = |cmd: &mut std::process::Command| {
-        cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn().unwrap().id()
-    };
-    // Under the dir by its cwd only.
-    let by_cwd = detached(env.command("setsid").args(["sleep", "100"]));
-    // Under the dir by its command line only (a shell loop that never execs).
-    let marker = env.root().join("driver");
-    let by_cmdline = detached(
-        env.command("setsid")
-            .args(["sh", "-c", "while :; do sleep 1; done"])
-            .arg(&marker)
-            .current_dir("/"),
-    );
+    let tmux = |format: &str| -> u32 { String::from_utf8(env.tmux(&["display-message", "-p", format]).stdout).unwrap().trim().parse().unwrap() };
+    let group = common::output(env.command("sh").args(["-c", "sleep 100 >/dev/null 2>&1 & echo $!"])).unwrap();
+    let group = String::from_utf8(group.stdout).unwrap().trim().parse().unwrap();
+    let driver = detached(env, &["sleep", "100"]);
+    record_driver(env, driver);
+    let lock = env.cpd_home().join("locks/distill-ctx.lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let lock = lock.to_str().unwrap();
+    let holder = detached(env, &["flock", lock, "sleep", "100"]);
+    common::wait_until("the lock holder to take the lock", || {
+        !common::output(env.command("flock").args(["-n", lock, "true"])).unwrap().status.success()
+    });
     Up {
         dir: env.root().to_owned(),
-        pids: vec![("tmux server", tmux.trim().parse().unwrap()), ("cwd process", by_cwd), ("cmdline process", by_cmdline)],
+        pids: [("tmux server", tmux("#{pid}")), ("tmux pane", tmux("#{pane_pid}")), ("group process", group), ("driver", driver), ("lock holder", holder)]
+            .map(|(name, pid)| (name.to_owned(), pid))
+            .into(),
     }
 }
 
@@ -300,6 +338,7 @@ fn alive(pid: u32) -> bool {
 }
 
 /// Every live process whose command line mentions `dir` (the reaper's is `sh <dir>/teardown.sh watch <pid>`).
+/// A scan of all of /proc: the tests' own check, never the teardown's.
 fn processes_mentioning(dir: &std::path::Path) -> Vec<u32> {
     let needle = dir.to_string_lossy().into_owned().into_bytes();
     std::fs::read_dir("/proc")
@@ -370,11 +409,11 @@ fn a_killed_test_leaves_no_tmux_server_process_dir_or_reaper() {
             dir = Some(std::path::PathBuf::from(d));
         } else if let Some(p) = line.strip_prefix("PID ") {
             let (name, pid) = p.split_once('|').unwrap();
-            pids.push((match name { "tmux server" => "tmux server", "cwd process" => "cwd process", _ => "cmdline process" }, pid.parse().unwrap()));
+            pids.push((name.to_owned(), pid.parse().unwrap()));
         }
     }
     let up = Up { dir: dir.expect("the helper printed no DIR"), pids };
-    assert_eq!(up.pids.len(), 3, "the helper printed no READY with its pids");
+    assert_eq!(up.pids.len(), 5, "the helper printed no READY with its pids");
     assert!(up.pids.iter().all(|(_, p)| alive(*p)), "everything is up before the kill");
     assert!(up.dir.exists());
     assert!(!processes_mentioning(&up.dir).is_empty(), "the reaper is up before the kill");
@@ -396,6 +435,17 @@ fn a_dropped_env_leaves_no_tmux_server_process_dir_or_reaper() {
     assert!(!up.dir.exists(), "the dir is removed when drop returns");
     let left = leftovers_after_wait(&up);
     assert!(left.is_empty(), "a dropped env left behind: {left:?}");
+}
+
+#[test]
+fn a_process_that_leaves_the_group_and_is_not_recorded_outlives_the_teardown() {
+    // What the teardown does not stop: it finds nothing by scanning, and cpd records only its own detached children.
+    let env = TestEnv::new();
+    let escaped = detached(&env, &["sleep", "100"]);
+    drop(env);
+    let outlived = alive(escaped);
+    let _ = std::process::Command::new("kill").arg(escaped.to_string()).status();
+    assert!(outlived, "an unrecorded process in a session of its own was stopped");
 }
 
 #[test]
