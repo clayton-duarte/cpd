@@ -253,8 +253,7 @@ impl Fx {
     /// logs `start <plan>/<attempt> <ns>` to `merges.log`, waits until two merges have
     /// arrived there (at most [`BARRIER_SECONDS`]), runs, then logs `end … <ns>`.
     fn slow_git(&self) {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        let real = std::env::split_paths(&path)
+        let real = std::env::split_paths(common::inherited_path())
             .filter(|dir| *dir != self.env.bin())
             .map(|dir| dir.join("git"))
             .find(|p| fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
