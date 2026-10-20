@@ -65,9 +65,12 @@ pub(super) fn submit(args: SubmitArgs) -> Result<Output, CpdError> {
     let check_tail = if review {
         None
     } else {
-        let (lead, pr_base) = env.store.read(|conn| lead_branch(conn, &plan, &attempt.job))?;
-        let base_ref = git::tamper::base_ref(&root, &pr_base)?;
-        git::tamper_check(&root, &lead, &base_ref, &base, &sha)?;
+        // A stacked PR's check reads the root base too (§7.5), so one more ref than an unstacked PR's.
+        let (lead, base_refs) = env.store.read(|conn| {
+            let (lead, repo, pr_base) = lead_branch(conn, &plan, &attempt.job)?;
+            Ok((lead, crate::pr::start::tamper_bases(conn, &root, &repo, &pr_base)?))
+        })?;
+        git::tamper::check_over(&root, &lead, &base_refs.iter().map(String::as_str).collect::<Vec<_>>(), &base, &sha)?;
         quick_check(&env, &plan, &id, &root, &lead)?
     };
 
@@ -138,11 +141,11 @@ fn require_review(env: &Env, plan: &PlanId, id: &AttemptId, job: &str, base: &st
 }
 
 /// The Lead Branch and the base of the PR that holds Job `job` of `plan`.
-fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<(String, String), CpdError> {
+fn lead_branch(conn: &rusqlite::Connection, plan: &PlanId, job: &str) -> Result<(String, String, String), CpdError> {
     Ok(conn.query_row(
-        "SELECT r.lead_branch, r.base FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
+        "SELECT r.lead_branch, r.repo, r.base FROM jobs j JOIN prs r ON r.plan = j.plan AND r.key = j.pr WHERE j.plan = ?1 AND j.key = ?2",
         [plan.as_str(), job],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?)
 }
 
