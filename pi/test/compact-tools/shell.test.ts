@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * Both summary styles fold a command that only looks around into a group that hides
  * it. These pin the guarantee that makes that safe: a command that writes a file or

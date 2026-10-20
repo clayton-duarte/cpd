@@ -246,7 +246,7 @@ test("style off: no component, so pi draws its own box", () => {
 
 // ---- reading the extension's config, once ----
 
-function scratch<T>(fn: (dirs: { agent: string; cwd: string; env: Record<string, string>; config: (dir: string, text: string) => string }) => T): T {
+function scratch<T>(fn: (dirs: { agent: string; cwd: string; config: (dir: string, text: string) => string }) => T): T {
   const root = mkdtempSync(join(tmpdir(), "render-test-"));
   try {
     const agent = join(root, "agent");
@@ -257,41 +257,49 @@ function scratch<T>(fn: (dirs: { agent: string; cwd: string; env: Record<string,
       writeFileSync(join(dir, "compact-tools.json"), text);
       return join(dir, "compact-tools.json");
     };
-    return fn({ agent, cwd, env: { PI_CODING_AGENT_DIR: agent }, config });
+    // pi's getAgentDir() reads PI_CODING_AGENT_DIR (as pi/test/fake.ts sets it).
+    const before = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agent;
+    try {
+      return fn({ agent, cwd, config });
+    } finally {
+      if (before === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = before;
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
 
 test("no compact-tools.json: the extension's default, compact", () => {
-  scratch(({ cwd, env }) => assert.equal(loadStyle(env, { cwd, trusted: true }), "compact"));
+  scratch(({ cwd }) => assert.equal(loadStyle({ cwd, trusted: true }), "compact"));
 });
 
 test("the agent directory's style, then a trusted project's over it; an untrusted project's is not read", () => {
-  scratch(({ agent, cwd, env, config }) => {
+  scratch(({ agent, cwd, config }) => {
     config(agent, '{"style": "claude", "mode": "silent"}');
-    assert.equal(loadStyle(env, { cwd, trusted: false }), "claude");
+    assert.equal(loadStyle({ cwd, trusted: false }), "claude");
     config(join(cwd, ".pi"), '{"style": "codex"}');
-    assert.equal(loadStyle(env, { cwd, trusted: false }), "claude");
-    assert.equal(loadStyle(env, { cwd, trusted: true }), "codex");
+    assert.equal(loadStyle({ cwd, trusted: false }), "claude");
+    assert.equal(loadStyle({ cwd, trusted: true }), "codex");
     config(join(cwd, ".pi"), '{"tools": []}');
-    assert.equal(loadStyle(env, { cwd, trusted: true }), "claude", "a file without `style` keeps the one before it");
+    assert.equal(loadStyle({ cwd, trusted: true }), "claude", "a file without `style` keeps the one before it");
   });
 });
 
 test("a file that does not parse, and a style that is not one of the four, are reported as the extension reports them and the value before kept", () => {
-  scratch(({ agent, cwd, env, config }) => {
+  scratch(({ agent, cwd, config }) => {
     const errors = mock.method(console, "error", () => {});
     try {
       const bad = config(agent, "{nope");
-      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(loadStyle({ cwd, trusted: false }), "compact");
       assert.equal(errors.mock.callCount(), 1);
       assert.match(String(errors.mock.calls[0]!.arguments[0]), new RegExp(`^\\[compact-tools\\] ${bad.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: `));
       config(agent, '{"style": "fancy"}');
-      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(loadStyle({ cwd, trusted: false }), "compact");
       assert.equal(errors.mock.calls[1]!.arguments[0], `[compact-tools] ${join(agent, "compact-tools.json")}: style must be one of compact, claude, codex, off; using previous value`);
       config(agent, "[1]");
-      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(loadStyle({ cwd, trusted: false }), "compact");
       assert.equal(errors.mock.calls[2]!.arguments[0], `[compact-tools] ${join(agent, "compact-tools.json")}: expected a JSON object; using previous values`);
     } finally {
       errors.mock.restore();

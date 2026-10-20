@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * Claude-style group lines are kept once drawn: a finished group is not drawn
  * again until something it shows changes, and every such change is drawn.

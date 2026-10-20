@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * A row's time is the tool's time: it starts when the tool runs, as Pi times its
  * own rows, not when the model starts writing the call's arguments.

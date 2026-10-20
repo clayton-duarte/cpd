@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * Drives rows through Pi's own ToolExecutionComponent in the order Pi drives them,
  * with the animation clock under the test's control.

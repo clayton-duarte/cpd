@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * The Codex style's pure rules, checked against Codex CLI 0.160.0: how it names a
  * file, prints a duration, offers hidden lines, and tells a command that only looks

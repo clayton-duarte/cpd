@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * Hand-made themes for unit tests. A test names the few colors it cares about the
  * way Pi writes them, as escape sequences from `getFgAnsi`; this adds what Pi 0.99's

@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * The dark and light themes the golden renders are recorded in, pinned to the
  * files Pi 0.85 to 0.87 shipped. Pi revises its built-in themes (0.99 did), and

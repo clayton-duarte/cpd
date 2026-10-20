@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * Golden Claude-style groups: a transcript that grows the way Pi grows it, drawn
  * after every change and on every animation frame, so a change to how groups are
@@ -41,7 +40,14 @@ export class Transcript {
 	readonly frames: string[][] = [];
 	private sequence = 0;
 
-	constructor(readonly harness: Harness, readonly width: number, readonly label: string) {
+	readonly harness: Harness;
+	readonly width: number;
+	readonly label: string;
+
+	constructor(harness: Harness, width: number, label: string) {
+		this.harness = harness;
+		this.width = width;
+		this.label = label;
 		harness.chat.children = [];
 	}
 

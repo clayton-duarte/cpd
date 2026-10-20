@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * Display styles end to end: what `off`, `compact`, and `claude` install, how a
  * switch between them lands, and the guarantees the claude style's grouping keeps.
@@ -194,7 +193,14 @@ class ToolExecutionComponent {
 	expanded = false;
 	isPartial = false;
 	result = { content: [{ type: "text" as const, text: "a" }] };
-	constructor(readonly toolName: string, public args: Record<string, unknown>, readonly toolCallId = toolName) {}
+	readonly toolName: string;
+	args: Record<string, unknown>;
+	readonly toolCallId: string;
+	constructor(toolName: string, args: Record<string, unknown>, toolCallId = toolName) {
+		this.toolName = toolName;
+		this.args = args;
+		this.toolCallId = toolCallId;
+	}
 	render(): string[] {
 		return ["", `ROW ${this.toolName}`];
 	}

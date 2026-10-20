@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * However narrow the pane, no style draws a row past its edge: every built-in and
  * custom tool, finished or failed, collapsed or opened, at every width from one

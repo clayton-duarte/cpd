@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * fold: "toggle", the fold language, as docs/contract.md section 6.9 fixes it (the fork's tests, moved here).
  * cpd's defaults are fold "toggle" with the cockpit's glyphs; the fork's were "status" and ▸ ▾, which are

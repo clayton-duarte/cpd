@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * How the running dot is kept alive, and what a row draws when it cannot run: bound
  * to Pi's terminal, a live row draws exactly its golden frames without Pi

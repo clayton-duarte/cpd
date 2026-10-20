@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 import "./pinned-themes.ts";
 import { uiRenderers } from "./ui-renderers.ts";
 import assert from "node:assert/strict";
@@ -141,7 +140,10 @@ test("parses /silent arguments as a toggle or an explicit state", () => {
 
 test("wraps a render prototype once and hides only while the predicate holds", () => {
 	class Row {
-		constructor(readonly label: string) {}
+		readonly label: string;
+		constructor(label: string) {
+			this.label = label;
+		}
 		render(_width: number): string[] {
 			return [this.label];
 		}
@@ -207,7 +209,7 @@ test("/silent offers on and off, but nothing already typed in full, so Enter run
 		},
 		registerShortcut: () => {},
 	} as unknown as ExtensionAPI;
-	new SilentModeController(pi, () => {});
+	new SilentModeController(pi);
 	assert.deepEqual(await completions!(""), [{ value: "on", label: "on" }, { value: "off", label: "off" }]);
 	assert.deepEqual(await completions!("o"), [{ value: "on", label: "on" }, { value: "off", label: "off" }]);
 	assert.deepEqual(await completions!("of"), [{ value: "off", label: "off" }]);
@@ -1622,10 +1624,15 @@ test("parses custom_tools as a switch or a policy object", () => {
 });
 
 class FakeToolRow {
+	readonly toolName: string;
+	readonly toolDefinition?: { renderCall?: unknown; renderResult?: unknown; renderShell?: "default" | "self" };
 	constructor(
-		readonly toolName: string,
-		readonly toolDefinition?: { renderCall?: unknown; renderResult?: unknown; renderShell?: "default" | "self" },
-	) {}
+		toolName: string,
+		toolDefinition?: { renderCall?: unknown; renderResult?: unknown; renderShell?: "default" | "self" },
+	) {
+		this.toolName = toolName;
+		this.toolDefinition = toolDefinition;
+	}
 	getCallRenderer(): unknown {
 		return this.toolDefinition?.renderCall;
 	}
@@ -1974,13 +1981,19 @@ class ToolExecutionComponent {
 	expanded = false;
 	isPartial: boolean;
 	result?: { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+	readonly toolName: string;
+	readonly args: Record<string, unknown>;
+	readonly toolCallId: string;
 	constructor(
-		readonly toolName: string,
-		readonly args: Record<string, unknown>,
+		toolName: string,
+		args: Record<string, unknown>,
 		output?: string,
 		isError = false,
-		readonly toolCallId = `${toolName}-${Math.random()}`,
+		toolCallId = `${toolName}-${Math.random()}`,
 	) {
+		this.toolName = toolName;
+		this.args = args;
+		this.toolCallId = toolCallId;
 		this.isPartial = output === undefined;
 		if (output !== undefined) this.result = { content: [{ type: "text", text: output }], isError };
 	}

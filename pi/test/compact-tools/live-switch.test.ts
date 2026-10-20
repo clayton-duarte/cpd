@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * /compact-tools switches between the compact, Claude, and Codex styles in place: no
  * reload, so it works while a response runs. Rows already on screen, a running one

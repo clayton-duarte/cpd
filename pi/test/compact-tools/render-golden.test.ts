@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * Golden renders: every tool, in every display mode, collapsed and opened, running,
  * finished, and failed, at a wide and a narrow width. The first run records what
@@ -332,13 +331,24 @@ for (const [mode, config] of Object.entries(MODE_CONFIGS)) {
 // Stand-ins for Pi's rows, named like its class so grouping recognizes them.
 class ToolExecutionComponent {
 	expanded = false;
+	readonly toolName: string;
+	readonly args: Record<string, unknown>;
+	result: (Result & { isError?: boolean }) | undefined;
+	isPartial: boolean;
+	readonly toolCallId: string;
 	constructor(
-		readonly toolName: string,
-		readonly args: Record<string, unknown>,
-		public result: (Result & { isError?: boolean }) | undefined,
-		public isPartial: boolean,
-		readonly toolCallId: string,
-	) {}
+		toolName: string,
+		args: Record<string, unknown>,
+		result: (Result & { isError?: boolean }) | undefined,
+		isPartial: boolean,
+		toolCallId: string,
+	) {
+		this.toolName = toolName;
+		this.args = args;
+		this.result = result;
+		this.isPartial = isPartial;
+		this.toolCallId = toolCallId;
+	}
 	render(): string[] {
 		return ["", `ROW ${this.toolName} ${JSON.stringify(this.args)}`];
 	}

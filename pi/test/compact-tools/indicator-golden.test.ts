@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 /**
  * Golden lifecycles: every row driven through Pi's own ToolExecutionComponent in
  * the order Pi drives it, with the running dot recorded on every animation frame.

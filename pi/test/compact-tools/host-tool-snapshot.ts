@@ -1,4 +1,3 @@
-// @ts-nocheck: the extension it imports is not copied yet; implementing.md "The compact-tools extension" point 4 removes this line, and layout.test.ts fails until it is gone
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 /** Model declarations plus registry metadata: renderer routing must not change either. */
