@@ -121,11 +121,11 @@ pub fn is_fetch_race(stderr: &str) -> bool {
     stderr.contains("bad object worktrees/")
 }
 
-/// Whether a failed `git worktree add` read another `worktree add`'s
-/// half-created `.git/worktrees/<id>/`: `fatal: failed to read
+/// Whether a failed `git worktree add` or `git worktree list` read another
+/// cpd operation's half-written (being added) or half-removed `.git/worktrees/<id>/`: `fatal: failed to read
 /// .git/worktrees/<id>/commondir: Success` (the file created, not yet written)
 /// or `...: No such file or directory`.
-pub fn is_worktree_add_race(stderr: &str) -> bool {
+pub fn is_admin_dir_race(stderr: &str) -> bool {
     stderr.lines().any(|line| {
         line.starts_with("fatal: failed to read ")
             && line.contains("worktrees/")
@@ -140,13 +140,19 @@ pub fn fetch(dir: &Path, args: &[&str]) -> Result<String, CpdError> {
     retry_transient(dir, &all, is_fetch_race, || {})
 }
 
+/// `git worktree list --porcelain`, as [`ok`], read again while it fails on a
+/// half-written or half-removed admin dir ([`is_admin_dir_race`], contract §7).
+pub fn worktree_list(dir: &Path) -> Result<String, CpdError> {
+    retry_transient(dir, &["worktree", "list", "--porcelain"], is_admin_dir_race, || {})
+}
+
 /// `git worktree add <args>`, as [`ok`], retried while it fails on a concurrent
-/// `git worktree add` ([`is_worktree_add_race`], contract §7). `path` is the
+/// `git worktree add` ([`is_admin_dir_race`], contract §7). `path` is the
 /// worktree being added, and is the caller's own: a partial one the failed round left
 /// is removed before the next.
 pub fn worktree_add(dir: &Path, args: &[&str], path: &Path) -> Result<String, CpdError> {
     let all: Vec<&str> = ["worktree", "add"].into_iter().chain(args.iter().copied()).collect();
-    retry_transient(dir, &all, is_worktree_add_race, || {
+    retry_transient(dir, &all, is_admin_dir_race, || {
         let target = path.to_string_lossy();
         let _ = run(dir, &["worktree", "remove", "--force", "--force", &target]);
         let _ = std::fs::remove_dir_all(path);
@@ -155,7 +161,7 @@ pub fn worktree_add(dir: &Path, args: &[&str], path: &Path) -> Result<String, Cp
 
 #[cfg(test)]
 mod tests {
-    use super::{is_fetch_race, is_worktree_add_race};
+    use super::{is_fetch_race, is_admin_dir_race};
 
     #[test]
     fn worktree_add_retries_the_reproduced_shapes_only() {
@@ -163,7 +169,7 @@ mod tests {
             "Preparing worktree (detached HEAD f094ea8)\nfatal: failed to read .git/worktrees/pay.gate-7/commondir: Success\n",
             "fatal: failed to read .git/worktrees/w3/commondir: No such file or directory",
         ] {
-            assert!(is_worktree_add_race(stderr), "{stderr}");
+            assert!(is_admin_dir_race(stderr), "{stderr}");
         }
         for stderr in [
             "fatal: '/x/w' already exists",
@@ -172,7 +178,7 @@ mod tests {
             "fatal: failed to read .git/index: Success",
             "",
         ] {
-            assert!(!is_worktree_add_race(stderr), "{stderr}");
+            assert!(!is_admin_dir_race(stderr), "{stderr}");
         }
     }
 
