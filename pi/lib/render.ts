@@ -165,9 +165,10 @@ const withinWidth = (lines: string[], width: number): string[] => lines.map((l) 
 
 // ---- the fold ----
 
-const INDICATOR = "\u{2981}";
+const CAP_LEFT = "\u{E0B6}";
+const CAP_RIGHT = "\u{E0B4}";
 const MARGIN = " ";
-const TOP = "╭";
+const TOP = "╭─";
 const RAIL = "│ ";
 const CLOSE = "╰";
 const DOWN = "\u{F004B}";
@@ -181,11 +182,15 @@ type Rows = { head: (width: number) => string[]; body: (width: number) => string
 function rowsOf(summary: string, content: string, theme: Theme): Rows {
   const muted = (text: string) => theme.fg("muted", text);
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${muted(TOP)}${theme.fg("customMessageLabel", INDICATOR)} `;
+  const lead = `${MARGIN}${muted(`${TOP}${CAP_LEFT}`)}`;
   const indent = " ".repeat(visibleWidth(lead));
+  const pill = (line: string) => `\x1b[7m${muted(line)}\x1b[27m`;
   const rail = `${MARGIN}${muted(RAIL)}`;
   return {
-    head: (width) => hardWrap(theme.bold(`cpd ${summary}`), width - visibleWidth(lead)).map((l, i) => `${i === 0 ? lead : indent}${l}`),
+    head: (width) => {
+      const lines = hardWrap(`cpd ${summary}`, width - visibleWidth(lead) - visibleWidth(CAP_RIGHT));
+      return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? muted(CAP_RIGHT) : ""}`);
+    },
     body: text === "" ? () => [] : prefixedText(text, rail),
     toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE}${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`)}`],
   };
