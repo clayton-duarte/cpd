@@ -408,7 +408,7 @@ fn a_failing_call_is_tmux_failed_with_argv_exit_and_stderr() {
     let err = t.kill_pane(&missing).unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     let d = err.details();
-    assert_eq!(d["argv"], serde_json::json!(["tmux", "-L", s.env.tmux_socket(), "-f", "/dev/null", "kill-pane", "-t", "%999"]));
+    assert_eq!(d["argv"], serde_json::json!(["tmux", "-u", "-L", s.env.tmux_socket(), "-f", "/dev/null", "kill-pane", "-t", "%999"]));
     assert_eq!(d["exit"], 1);
     assert!(d["stderr"].as_str().unwrap().contains("%999"), "{d:?}");
 }
@@ -427,7 +427,7 @@ fn set_pane_title_runs_set_p_on_cpd_title_and_a_missing_pane_fails_with_its_argv
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     assert_eq!(
         err.details()["argv"],
-        serde_json::json!(["tmux", "-L", s.env.tmux_socket(), "-f", "/dev/null", "set", "-p", "-t", "%999", "@cpd_title", "X"])
+        serde_json::json!(["tmux", "-u", "-L", s.env.tmux_socket(), "-f", "/dev/null", "set", "-p", "-t", "%999", "@cpd_title", "X"])
     );
 }
 
@@ -596,55 +596,7 @@ fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() 
 // A tmux 3.8 client with no UTF-8 locale prints the tabs of a `-F` format as `_`, so `list-panes` cannot be parsed.
 // The mechanism is `tmux -u`, first after the program, whatever the caller's `LANG`/`LC_*`.
 
-use std::process::Command;
-
-/// The caller's locale of a `cpd` or tmux call: what the incident's launchd agent had (nothing), and the cases around it.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Locale {
-    /// No `LANG`, no `LANGUAGE`, no `LC_*`: the launchd agent of the incident, which sets only `PATH`.
-    Unset,
-    /// `LANG` set and empty.
-    EmptyLang,
-    /// `LANG=C`.
-    LangC,
-    /// `LC_ALL=C`, which tmux reads before `LANG`: a `LANG` of cpd's could not undo it.
-    LcAllC,
-}
-
-pub(crate) const LOCALES: [Locale; 4] = [Locale::Unset, Locale::EmptyLang, Locale::LangC, Locale::LcAllC];
-
-impl Locale {
-    /// `cmd` with every locale variable of this process removed, then this locale's own.
-    pub(crate) fn apply(self, cmd: &mut Command) -> &mut Command {
-        for (key, _) in std::env::vars_os() {
-            if key == "LANG" || key == "LANGUAGE" || key.to_string_lossy().starts_with("LC_") {
-                cmd.env_remove(&key);
-            }
-        }
-        match self {
-            Locale::Unset => cmd,
-            Locale::EmptyLang => cmd.env("LANG", ""),
-            Locale::LangC => cmd.env("LANG", "C"),
-            Locale::LcAllC => cmd.env("LC_ALL", "C"),
-        }
-    }
-
-    /// The same as `env` words for `env -i`: what a wrapper script passes to the real tmux.
-    fn env_words(self) -> &'static str {
-        match self {
-            Locale::Unset => "",
-            Locale::EmptyLang => "LANG=",
-            Locale::LangC => "LANG=C",
-            Locale::LcAllC => "LC_ALL=C",
-        }
-    }
-}
-
-/// The first `tmux` of the real `PATH`.
-pub(crate) fn real_tmux() -> std::path::PathBuf {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).map(|dir| dir.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH")
-}
+use crate::common::{LOCALES, Locale, real_tmux};
 
 /// A program that runs the real tmux as a caller with the locale `locale` and nothing else would: `env -i`, `PATH` and
 /// `TMUX_TMPDIR` (which `Tmux::with_tmpdir` sets for the call).

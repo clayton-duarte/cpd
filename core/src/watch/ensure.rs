@@ -1,6 +1,7 @@
 //! `cpd watch --ensure` (commands.md §12, contract §6.4, §6.6): starts the
 //! engine in `cpd-work:watch` when `locks/watch.lock` is free, and returns
-//! once its process has taken the lock.
+//! once its process has taken the lock; and `cpd watch --check` (hs-d463), which
+//! verifies, read-only, what that start depends on.
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
@@ -15,6 +16,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::highest_id;
 use crate::home::CpdHome;
 use crate::host::layout::WATCH_WINDOW;
+use crate::host::tmux::{installed_version, supported_version};
 use crate::host::{PaneId, Spawn, Tmux};
 use crate::output::Output;
 use crate::session::PROGRAM;
@@ -61,6 +63,85 @@ pub(super) fn ensure(wait: bool) -> Result<Output, CpdError> {
         }
     }
     result
+}
+
+/// `watch --check` (commands.md §12, contract §3.7 "The install's engine order"): everything
+/// [`ensure`] and the engine's start depend on, checked in that order and failing at the first,
+/// and **nothing written**: no row, no Event, no migration, no window, no lock taken, no tmux
+/// option, no server started, no directory made. The failure is the failing step's own error.
+pub(super) fn check() -> Result<Output, CpdError> {
+    let home = CpdHome::from_env()?;
+    let config = Config::load(&home)?;
+    verify_store(&home)?;
+    let version = installed_version()?;
+    if !supported_version(&version) {
+        return Err(CpdError::new(ErrorCode::TmuxFailed, format!("tmux {version} is older than the 3.6 cpd needs."))
+            .with("version", version)
+            .with("expected", ">= 3.6"));
+    }
+    let running = verify_listing(&Tmux::new(config.tmux.socket.as_str()))?;
+    verify_home(&home)?;
+    Ok(Output::success(json!({
+        "checked": ["config", "store", "tmux", "listing", "home"],
+        "tmux": {"version": version, "server": if running { "running" } else { "none" }},
+    })))
+}
+
+/// Whether this binary opens the store (contract §4.5), from the read-only verdict that
+/// `cpd --version` prints: it never creates, migrates or checks it. No database is no refusal.
+/// The refusal is the store's own error (`store_too_new`, `migration_changed`, …).
+fn verify_store(home: &CpdHome) -> Result<(), CpdError> {
+    let path = home.db();
+    let failed = |e: &dyn std::fmt::Display| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display())).with("path", path.display().to_string())
+    };
+    if !path.try_exists().map_err(|e| failed(&e))? {
+        return Ok(());
+    }
+    let conn = rusqlite::Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| failed(&e))?;
+    match crate::store::verdict(&conn)?.refusal() {
+        Some(refusal) => Err(refusal.clone()),
+        None => Ok(()),
+    }
+}
+
+/// The tmux listing, as the liveness call parses it (contract §6.3): with the server running,
+/// `list-panes -a -F` is run and every line must parse (`tmux_failed`); with no server it is
+/// skipped. Returns whether the server runs.
+fn verify_listing(tmux: &Tmux) -> Result<bool, CpdError> {
+    let running = tmux.server_running()?;
+    if running {
+        tmux.list_panes()?;
+    }
+    Ok(running)
+}
+
+/// That `locks/` and `run/` exist or can be made, and that `locks/watch.lock` can be opened:
+/// the probes `watch --ensure` makes, without making anything (a directory that does not exist
+/// is writable when its nearest existing ancestor is).
+fn verify_home(home: &CpdHome) -> Result<(), CpdError> {
+    let failed = |path: &std::path::Path, why: String| {
+        CpdError::new(ErrorCode::StoreFailed, format!("Cannot use {}: {why}.", path.display())).with("path", path.display().to_string())
+    };
+    for dir in [home.locks_dir(), home.run_dir()] {
+        let mut existing = dir.as_path();
+        while !existing.exists() {
+            match existing.parent() {
+                Some(parent) => existing = parent,
+                None => break,
+            }
+        }
+        if !existing.is_dir() {
+            return Err(failed(&dir, format!("{} is not a directory", existing.display())));
+        }
+        nix::unistd::access(existing, nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::X_OK)
+            .map_err(|e| failed(&dir, format!("{} is not writable: {e}", existing.display())))?;
+    }
+    let lock = home.watch_lock();
+    if lock.exists() {
+        OpenOptions::new().read(true).write(true).open(&lock).map_err(|e| failed(&lock, e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Takes `locks/watch-ensure.lock`, which every call holds while it checks and starts the

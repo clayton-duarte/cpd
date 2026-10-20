@@ -554,6 +554,74 @@ fn tmux_refusing_the_session_mark(env: &TestEnv) {
     env.fake("tmux", &format!("case \" $* \" in *\" set \"*\" @cpd_session \"*) echo refused >&2; exit 1;; esac\nexec '{}' \"$@\"", real.display()));
 }
 
+/// A `tmux` that, as `set -p -t <pane> @cpd_session <id>` is about to run (the go signal: the wrapper's `session run`
+/// waits for it, then its pi reports), appends `<pane> <id> <cpd session show <id>>` to `<root>/go-signals` first, so the
+/// file says what the store knew of the Session when the pane got the signal. Everything goes on to the real `tmux`.
+fn tmux_recording_go_signals(env: &TestEnv) {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let real = std::env::split_paths(&path).map(|d| d.join("tmux")).find(|p| p.is_file()).expect("tmux on PATH");
+    env.fake(
+        "tmux",
+        &format!(
+            "a=''; b=''; c=''; d=''; e=''; for x in \"$@\"; do a=$b; b=$c; c=$d; d=$e; e=$x; done\n\
+             if [ \"$b\" = -t ] && [ \"$d\" = @cpd_session ] && [ -n \"$e\" ]; then\n\
+               echo \"$c $e $('{CPD}' session show \"$e\" 2>&1 | tr -d '\\n')\" >> '{root}/go-signals'\n\
+             fi\n\
+             exec '{real}' \"$@\"",
+            root = env.root().display(),
+            real = real.display()
+        ),
+    );
+}
+
+/// The pane `session` was given the go signal on, and the `tmux_pane` the store had for it at that moment.
+fn pane_and_store_at_go_signal(env: &TestEnv, session: &str) -> (String, Value) {
+    let text = fs::read_to_string(env.root().join("go-signals")).unwrap_or_default();
+    let mut found = text.lines().filter_map(|l| {
+        let mut f = l.splitn(3, ' ');
+        let (pane, id, row) = (f.next()?, f.next()?, f.next()?);
+        (id == session).then(|| (pane.to_owned(), row.to_owned()))
+    });
+    let (pane, row) = found.next().unwrap_or_else(|| panic!("{session} never got @cpd_session:\n{text}"));
+    let row: Value = serde_json::from_str(&row).unwrap_or_else(|e| panic!("`session show {session}` at the go signal: {e}: {row}"));
+    (pane, row["session"]["tmux_pane"].clone())
+}
+
+/// The pane gets `@cpd_session` only once the store records the pane (contract §6.4): the signal is what lets the
+/// pane's `session run` go on and its pi report, and a report that lands before the store has the pane writes a
+/// row with no pane that the engine then stops (hs-d238).
+fn assert_the_store_had_the_pane_at_the_go_signal(env: &TestEnv, session: &str) {
+    let (pane, recorded) = pane_and_store_at_go_signal(env, session);
+    assert_eq!(recorded, json!(pane), "pane {pane} got @cpd_session {session} while the store's tmux_pane for it was {recorded}");
+}
+
+/// `session open` of a Lead with no pane, into the chat slot.
+#[test]
+fn open_records_the_pane_before_it_gets_the_go_signal() {
+    let env = TestEnv::new();
+    setup(&env);
+    env.fake_cpd_views();
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    tmux_recording_go_signals(&env);
+
+    env.cpd(&["session", "open", LEAD1]).ok();
+    assert_the_store_had_the_pane_at_the_go_signal(&env, LEAD1);
+}
+
+#[test]
+fn fork_records_the_pane_before_it_gets_the_go_signal() {
+    let env = TestEnv::new();
+    setup(&env);
+    env.fake_cpd_views();
+    fake_pi(&env, &format!("exec sleep {SLEEP_SECONDS}"));
+    cockpit(&env);
+    tmux_recording_go_signals(&env);
+
+    let out = env.cpd(&["session", "fork", LEAD1, "--plan", "pay"]).ok();
+    assert_the_store_had_the_pane_at_the_go_signal(&env, out["session"]["id"].as_str().unwrap());
+}
+
 /// G11: a step after `new-window` fails: the new window is killed and the original error returned.
 #[test]
 fn fork_and_open_leave_no_window_when_a_step_after_new_window_fails() {
