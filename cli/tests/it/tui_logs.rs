@@ -42,9 +42,12 @@ fn append(store: &mut Store, first: usize, events: &[(&str, &str)]) {
         .unwrap();
 }
 
-/// The log in an area of `height` rows of Events under the title's row.
+/// The rows above the Events: an empty row, the title and an empty row.
+const HEAD: u16 = 3;
+
+/// The log in an area of `height` rows of Events under the title's rows.
 fn render(width: u16, height: u16, log: &mut Log) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(width, height + 1)).unwrap();
+    let mut terminal = Terminal::new(TestBackend::new(width, height + HEAD)).unwrap();
     terminal
         .draw(|f| {
             log.fit(f.area().height);
@@ -56,7 +59,7 @@ fn render(width: u16, height: u16, log: &mut Log) -> Buffer {
 
 /// The rows under the title.
 fn rows(buf: &Buffer) -> Vec<String> {
-    (1..buf.area.height)
+    (HEAD..buf.area.height)
         .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_owned())
         .collect()
 }
@@ -82,9 +85,9 @@ fn the_log_lists_the_events_one_line_each_newest_last() {
         [" 00:00:00 context-created", " 00:00:01 Plan ship: dispatch", " 00:00:02 store busy", "", ""]
     );
     // the time is dim, an `error` Event is in the failed colour and the others are not
-    assert!(buf[(1, 1)].modifier.contains(Modifier::DIM) && !buf[(10, 1)].modifier.contains(Modifier::DIM));
-    assert_eq!(buf[(10, 3)].fg, palette::fg(Meaning::Failed).fg.unwrap());
-    assert_ne!(buf[(10, 2)].fg, palette::fg(Meaning::Failed).fg.unwrap());
+    assert!(buf[(1, 3)].modifier.contains(Modifier::DIM) && !buf[(10, 3)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(10, 5)].fg, palette::fg(Meaning::Failed).fg.unwrap());
+    assert_ne!(buf[(10, 4)].fg, palette::fg(Meaning::Failed).fg.unwrap());
 }
 
 #[test]
@@ -209,17 +212,18 @@ fn wait_screen(env: &TestEnv, pane: &str, what: &str, done: impl FnMut(&[String]
     common::wait_screen(what, || screen(env, pane), done)
 }
 
-/// The log view in a pane showing `events` rows of Events under the title's row.
+/// The log view in a pane showing `events` rows of Events under the title's rows.
 fn start_log(env: &TestEnv, args: &[&str], width: u16, events: u16) -> String {
     let view: Vec<&str> = ["logs"].into_iter().chain(args.iter().copied()).collect();
-    start(env, &view, width, events + 1)
+    start(env, &view, width, events + HEAD)
 }
 
-/// Waits for the rows under the title; the title itself is asserted to be the section header.
+/// Waits for the rows under the title; the title itself is asserted to be a section title between two empty rows.
 fn wait_log(env: &TestEnv, pane: &str, what: &str, mut done: impl FnMut(&[String]) -> bool) -> Vec<String> {
-    let rows = common::wait_screen(what, || screen(env, pane), |r| r.len() > 1 && done(&r[1..]));
-    assert!(rows[0].starts_with("── logs ─"), "the title is a section header: {:?}", rows[0]);
-    rows[1..].to_vec()
+    let rows = common::wait_screen(what, || screen(env, pane), |r| r.len() > 3 && done(&r[3..]));
+    assert_eq!((rows[0].as_str(), rows[2].as_str()), ("", ""), "an empty row above and below the title: {rows:?}");
+    assert!(rows[1].starts_with("━━ logs ━"), "the title is a section title: {:?}", rows[1]);
+    rows[3..].to_vec()
 }
 
 /// One notch of the wheel at 1-based `column`, `row` of the pane, as the terminal sends it (SGR: 64 up, 65 down).
@@ -290,15 +294,15 @@ fn a_failed_read_keeps_the_events_and_shows_the_error_until_a_read_succeeds() {
     let env = env();
     let mut store = open(&env);
     append_numbered(&mut store, 0, 10);
-    let pane = start(&env, &["logs"], 60, 5);
-    wait_screen(&env, &pane, "the latest Events", |r| r.get(4).is_some_and(|l| l == " 00:00:09 event 9"));
+    let pane = start(&env, &["logs"], 60, 7);
+    wait_screen(&env, &pane, "the latest Events", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9"));
     // not through `Store`, which refuses a changed schema
     let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
     raw("ALTER TABLE events RENAME TO events_gone;");
-    let rows = wait_screen(&env, &pane, "the error in the last row", |r| r.get(4).is_some_and(|l| l.contains("no such table")));
-    assert_eq!(rows[3], " 00:00:09 event 9", "the Events stay, one row less: {rows:?}");
+    let rows = wait_screen(&env, &pane, "the error in the last row", |r| r.get(6).is_some_and(|l| l.contains("no such table")));
+    assert_eq!(rows[5], " 00:00:09 event 9", "the Events stay, one row less: {rows:?}");
     raw("ALTER TABLE events_gone RENAME TO events;");
-    wait_screen(&env, &pane, "the error to go", |r| r.get(4).is_some_and(|l| l == " 00:00:09 event 9"));
+    wait_screen(&env, &pane, "the error to go", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9"));
 }
 
 /// A follow that fails is shown in the last row, as a failed read is (tui-G4): the highest Event id fell below the
@@ -308,13 +312,13 @@ fn a_follow_that_fails_is_shown_and_the_events_stay() {
     let env = env();
     let mut store = open(&env);
     append_numbered(&mut store, 0, 10);
-    let pane = start(&env, &["logs"], 80, 5);
-    wait_screen(&env, &pane, "the latest Events", |r| r.get(4).is_some_and(|l| l == " 00:00:09 event 9"));
+    let pane = start(&env, &["logs"], 80, 7);
+    wait_screen(&env, &pane, "the latest Events", |r| r.get(6).is_some_and(|l| l == " 00:00:09 event 9"));
     // not through `Store`, which keeps the Events append-only
     let raw = |text: &str| rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap().execute_batch(text).unwrap();
     raw("DROP TRIGGER events_no_delete; DELETE FROM events WHERE id > 5;");
-    let rows = wait_screen(&env, &pane, "the error in the last row", |r| r.get(4).is_some_and(|l| l.contains("Event cursor")));
-    assert_eq!(rows[3], " 00:00:09 event 9", "the Events stay: {rows:?}");
+    let rows = wait_screen(&env, &pane, "the error in the last row", |r| r.get(6).is_some_and(|l| l.contains("Event cursor")));
+    assert_eq!(rows[5], " 00:00:09 event 9", "the Events stay: {rows:?}");
 }
 
 #[test]
@@ -330,17 +334,18 @@ fn the_logs_view_needs_a_terminal() {
 fn a_legend_taller_than_its_pane_scrolls_with_the_wheel_and_any_other_key_closes_it() {
     let env = env();
     let pane = start(&env, &["legend"], 100, 10);
-    let rows = wait_screen(&env, &pane, "the legend", |r| r.first().is_some_and(|l| l.starts_with("── Legend: what")));
-    assert!(rows[0].contains(" 1-9/"), "{:?}", rows[0]);
-    assert!(rows[2].contains("Meanings"), "{rows:?}");
+    let rows = wait_screen(&env, &pane, "the legend", |r| r.get(1).is_some_and(|l| l.starts_with("━━ Legend: what")));
+    assert!(rows[1].contains(" 1-8/"), "{:?}", rows[1]);
+    assert_eq!(rows[0], "", "an empty row above the title");
+    assert!(rows[3].contains("Meanings"), "{rows:?}");
     wheel(&env, &pane, false, 5, 5);
-    let rows = wait_screen(&env, &pane, "the wheel down", |r| r.first().is_some_and(|l| l.contains(" 4-12/")));
-    assert!(rows[0].starts_with("── Legend: what"), "the title stays");
+    let rows = wait_screen(&env, &pane, "the wheel down", |r| r.get(1).is_some_and(|l| l.contains(" 4-11/")));
+    assert!(rows[1].starts_with("━━ Legend: what"), "the title stays");
     assert!(!rows.iter().any(|l| l.contains("Meanings")), "{rows:?}");
     wheel(&env, &pane, true, 5, 5);
-    wait_screen(&env, &pane, "the wheel up", |r| r.first().is_some_and(|l| l.contains(" 1-9/")));
+    wait_screen(&env, &pane, "the wheel up", |r| r.get(1).is_some_and(|l| l.contains(" 1-8/")));
     tmux_out(&env, &["send-keys", "-t", &pane, "PageDown"]);
-    wait_screen(&env, &pane, "a page down", |r| r.first().is_some_and(|l| l.contains(" 10-18/")));
+    wait_screen(&env, &pane, "a page down", |r| r.get(1).is_some_and(|l| l.contains(" 9-16/")));
     tmux_out(&env, &["send-keys", "-t", &pane, "x"]);
     wait_until("the legend to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
 }
@@ -360,7 +365,7 @@ fn the_popup_is_sized_like_the_legends_and_at_most_80_percent_of_the_client() {
     assert_eq!(small[3], " logs ");
 }
 
-/// A fake `tmux` on `PATH`: client `/dev/pts/9` is 200x60, `display-popup` does nothing.
+/// A fake `tmux` on `PATH`: client `/dev/pts/9` is 200x60 (the popup is at most 48 rows), `display-popup` does nothing.
 fn fake_tmux(env: &TestEnv) {
     env.fake(
         "tmux",
@@ -385,7 +390,7 @@ fn the_logs_action_opens_the_popup_on_the_clicking_client() {
     assert_eq!(
         popup[at..],
         [
-            "display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(),
+            "display-popup", "-c", "/dev/pts/9", "-E", "-T", " logs ", "-w", &(w + 2).to_string(), "-h", &(h + 2).min(48).to_string(),
             "cpd tui view logs"
         ]
     );
@@ -403,9 +408,9 @@ fn the_logs_action_opens_the_popup_on_the_clicking_client() {
 /// The row indexes (under the title) of `buf` whose first and last cell are reversed.
 fn reversed_rows(buf: &Buffer) -> Vec<u16> {
     let width = buf.area.width;
-    (1..buf.area.height)
+    (HEAD..buf.area.height)
         .filter(|&y| buf[(0, y)].modifier.contains(Modifier::REVERSED) && buf[(width - 1, y)].modifier.contains(Modifier::REVERSED))
-        .map(|y| y - 1)
+        .map(|y| y - HEAD)
         .collect()
 }
 
