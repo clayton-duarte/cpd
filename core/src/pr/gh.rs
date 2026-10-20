@@ -258,6 +258,14 @@ pub fn close_pr(cwd: &Path, repo: &str, number: i64) -> Result<(), CpdError> {
     }
 }
 
+/// Retitles the pull request `repo`#`number` (`owner/name`): `gh api -X PATCH repos/<repo>/pulls/<n> -f title=<title>`.
+/// Not `gh pr edit`: it fails on repos with the deprecated classic Projects (commands.md §9.5, hs-d285).
+pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<(), CpdError> {
+    let endpoint = format!("repos/{repo}/pulls/{number}");
+    let field = format!("title={title}");
+    run(cwd, &["api", "-X", "PATCH", &endpoint, "-f", &field]).map(drop)
+}
+
 /// `gh pr view <n> --repo <repo> --json state,mergeStateStatus,headRefOid,title`: what `pr merge` re-checks (`title` is selected, as the docs say, and not kept).
 #[derive(Debug, Deserialize)]
 pub struct MergeView {

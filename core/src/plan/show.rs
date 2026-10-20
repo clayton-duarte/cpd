@@ -26,7 +26,7 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
     // The base PR is derived from `base` (contract §2.2 "The base PR"): the PR of the same repo whose Lead Branch it is.
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
-                all_merged_at, start_failed_at, created_at, started_at, merged_at,
+                all_merged_at, start_failed_at, created_at, started_at, merged_at, title,
                 (SELECT q.plan || '/' || q.key FROM prs q WHERE q.repo = prs.repo AND q.lead_branch = prs.base)
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
@@ -38,12 +38,13 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
             };
             Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(9)?, json!({
                 "key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "base": r.get::<_, String>(2)?,
-                "base_pr": r.get::<_, Option<String>>(15)?,
+                "base_pr": r.get::<_, Option<String>>(16)?,
                 "status": r.get::<_, String>(3)?, "lead_branch": r.get::<_, String>(4)?,
                 "lead_worktree": r.get::<_, Option<String>>(5)?, "pr": pull,
                 "all_merged_at": r.get::<_, Option<String>>(10)?,
                 "start_failed_at": r.get::<_, Option<String>>(11)?, "created_at": r.get::<_, String>(12)?,
                 "started_at": r.get::<_, Option<String>>(13)?, "merged_at": r.get::<_, Option<String>>(14)?,
+                "title": r.get::<_, Option<String>>(15)?,
             })))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

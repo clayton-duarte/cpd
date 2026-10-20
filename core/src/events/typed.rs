@@ -183,8 +183,8 @@ impl NewEvent {
         )
     }
 
-    pub fn pr_added(text: impl Into<String>, pr: impl Serialize, repo: &str, base: &str, needs: impl Serialize, appended: bool) -> NewEvent {
-        make(Kind::PrAdded, text, json!({"pr": pr, "repo": repo, "base": base, "needs": needs, "appended": appended}))
+    pub fn pr_added(text: impl Into<String>, pr: impl Serialize, repo: &str, base: &str, title: &str, needs: impl Serialize, appended: bool) -> NewEvent {
+        make(Kind::PrAdded, text, json!({"pr": pr, "repo": repo, "base": base, "title": title, "needs": needs, "appended": appended}))
     }
 
     pub fn pr_edited(text: impl Into<String>, pr: impl Serialize, fields: impl Serialize) -> NewEvent {
@@ -274,6 +274,10 @@ impl NewEvent {
 
     pub fn session_renamed(text: impl Into<String>, name: &str) -> NewEvent {
         make(Kind::SessionRenamed, text, json!({"name": name}))
+    }
+
+    pub fn session_titled(text: impl Into<String>, title: &str) -> NewEvent {
+        make(Kind::SessionTitled, text, json!({"title": title}))
     }
 
     pub fn context_owner(text: impl Into<String>, owner: &str) -> NewEvent {
@@ -374,7 +378,7 @@ mod tests {
             Kind::AttemptNudge => vec![NewEvent::attempt_nudge(T, s, 1)],
             Kind::AllMerged => vec![NewEvent::all_merged(T, s, [s], [s])],
             Kind::PrFeedback => vec![NewEvent::pr_feedback(T, s, n, s, s, s, s, s, s, b, &[s])],
-            Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, [s], b)],
+            Kind::PrAdded => vec![NewEvent::pr_added(T, s, s, s, s, [s], b)],
             Kind::PrEdited => vec![NewEvent::pr_edited(T, s, [s])],
             Kind::PrCancelled => vec![NewEvent::pr_cancelled(T, s)],
             Kind::PrStarted => vec![NewEvent::pr_started(T, s, s, s, s, s, s, b, b, s)],
@@ -391,6 +395,7 @@ mod tests {
             Kind::SessionState => vec![NewEvent::session_state(T, s, s, None, false), NewEvent::session_state(T, s, s, None, true)],
             Kind::SessionMoved => vec![NewEvent::session_moved(T, Some(s), Some(s), s), NewEvent::session_moved(T, None, None, s)],
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
+            Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],
             Kind::ContextOwner => vec![NewEvent::context_owner(T, s)],
             Kind::PlanRenamed => vec![NewEvent::plan_renamed(T, s)],

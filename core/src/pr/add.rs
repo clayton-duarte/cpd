@@ -33,6 +33,7 @@ struct Wanted {
     /// The repo's GitHub name, from its `origin` (§8.3).
     name: RepoName,
     base: BaseWanted,
+    title: String,
     /// `--needs` as given, as sorted PR references (`needs_refs`); `Some(vec![])` is `--no-needs`; `None`: the default.
     needs: Option<Vec<String>>,
 }
@@ -409,6 +410,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         base: wanted_base(&repo, base)?,
         repo: repo.display().to_string(),
         name,
+        title: args.title.to_string(),
         key: args.key,
         needs,
     };
@@ -442,7 +444,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         "PR {key} added to Plan {plan} (repo {}, base {base}{with}), waiting. Next: cpd plan show --plan {plan}",
                         wanted.repo
                     );
-                    let event = NewEvent::pr_added(text, key, &wanted.repo, &base, &needs, appended);
+                    let event = NewEvent::pr_added(text, key, &wanted.repo, &base, &wanted.title, &needs, appended);
                     append(tx, event.plan(plan.clone()))?;
                     Ok(("waiting".to_owned(), lead_branch, appended, base, base_pr, needs, false))
                 }
@@ -450,7 +452,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         }
     };
     let mut out = json!({"pr": {
-        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "needs": needs,
+        "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "title": wanted.title, "needs": needs,
         "status": status, "lead_branch": lead_branch, "appended": appended,
     }});
     if already {
@@ -497,14 +499,14 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     let phase = check_plan(conn, plan)?;
     let prs = load_prs(conn, plan)?;
     if let Some(existing) = prs.iter().find(|p| p.key == wanted.key) {
-        if same(existing, wanted, &prs, &base_branch(conn, &wanted.base)?) {
-            // `appended`: the PR came after the lock.
-            let (lead_branch, appended) = conn.query_row(
-                "SELECT r.lead_branch, coalesce(p.locked_at IS NOT NULL AND r.created_at >= p.locked_at, 0)
-                   FROM prs r JOIN plans p ON p.id = r.plan WHERE r.plan = ?1 AND r.key = ?2",
-                [plan.as_str(), wanted.key.as_str()],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)),
-            )?;
+        // `appended`: the PR came after the lock.
+        let (lead_branch, appended, title) = conn.query_row(
+            "SELECT r.lead_branch, coalesce(p.locked_at IS NOT NULL AND r.created_at >= p.locked_at, 0), r.title
+               FROM prs r JOIN plans p ON p.id = r.plan WHERE r.plan = ?1 AND r.key = ?2",
+            [plan.as_str(), wanted.key.as_str()],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<String>>(2)?)),
+        )?;
+        if same(existing, title.as_deref(), wanted, &prs, &base_branch(conn, &wanted.base)?) {
             let base_pr = derived_base_pr(&known_prs(conn)?, &existing.repo, &existing.base).map(|q| format!("{}/{}", q.plan, q.key));
             return Ok(Decision::Already {
                 status: existing.status.clone(),
@@ -520,6 +522,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
             .with("pr", wanted.key.as_str())
             .with("repo", existing.repo.as_str())
             .with("base", existing.base.as_str())
+            .with("title", title)
             .with("needs", existing.needs.clone())
             .with("status", existing.status.as_str()));
     }
@@ -556,20 +559,21 @@ fn merged_keys(prs: &[PrRow]) -> Vec<String> {
 }
 
 /// Without `--needs` or `--no-needs` the needs match when none, or when all merged: a rerun
-/// after the reopen sees the Plan in `dispatch`, where the default is none.
-fn same(existing: &PrRow, wanted: &Wanted, prs: &[PrRow], base: &str) -> bool {
+/// after the reopen sees the Plan in `dispatch`, where the default is none. `title` is the
+/// stored one (null for a PR that existed before migration `pr-title`: it never matches).
+fn same(existing: &PrRow, title: Option<&str>, wanted: &Wanted, prs: &[PrRow], base: &str) -> bool {
     let needs_match = match &wanted.needs {
         Some(needs) => &existing.needs == needs,
         None => existing.needs.iter().all(|n| merged_keys(prs).contains(n)),
     };
-    (existing.repo.as_str(), existing.base.as_str()) == (wanted.repo.as_str(), base) && needs_match
+    (existing.repo.as_str(), existing.base.as_str()) == (wanted.repo.as_str(), base) && title == Some(wanted.title.as_str()) && needs_match
 }
 
 fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
     tx.execute(
-        "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, created_txn, created_at)
-         SELECT ?1, ?2, ?3, ?6, ?4, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
-        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, base, lead_branch, wanted.name.as_str()],
+        "INSERT INTO prs (plan, key, repo, name, base, title, status, lead_branch, created_txn, created_at)
+         SELECT ?1, ?2, ?3, ?6, ?4, ?7, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, base, lead_branch, wanted.name.as_str(), wanted.title],
     )?;
     insert_needs(tx, plan, &wanted.key, needs)
 }

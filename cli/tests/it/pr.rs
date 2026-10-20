@@ -47,6 +47,10 @@ const WEB_URL: &str = "https://github.com/acme/web/pull/813";
 
 const TITLE: &str = "Add the payment webhook";
 
+/// The stored title of PR `repo`, and of PR `web` (hs-d285): neither is the Plan's title, `Pay the bills`.
+const REPO_TITLE: &str = "Charge the card at checkout";
+const WEB_PR_TITLE: &str = "Show the receipt";
+
 const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
 fn plan() -> PlanId {
@@ -142,8 +146,8 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
          INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
-         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, cpd_txn(), 't', {locked}{values});",
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at{columns})
+           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, '{REPO_TITLE}', cpd_txn(), 't', {locked}{values});",
         repo = fx.repo.display(),
     );
     fx.store()
@@ -336,8 +340,8 @@ impl Fx {
             .write("fixture", |tx| {
                 tx.execute_batch(&format!(
                     "{row}
-                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at{open_columns})
-                       VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', {worktree}, cpd_txn(), 't', {started}{open_values});
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at{open_columns})
+                       VALUES ('pay', 'web', '{repo}', 'main', '{status}', 'cpd/pay/web', {worktree}, '{WEB_PR_TITLE}', cpd_txn(), 't', {started}{open_values});
                      {needs}",
                     repo = repo.display(),
                     row = if matches!(state, Web::Open) {
@@ -444,7 +448,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     // gh: look for an existing PR, then create it with the Jobs table as its body.
     let calls = fx.gh_calls();
     assert_eq!(calls[0], ["pr", "list", "--head", "cpd/pay", "--state", "all", "--json", "number,url,state"]);
-    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", "Pay the bills"]);
+    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE]);
     let body = &calls[1][9];
     assert_eq!(calls[1][8], "--body");
     assert!(body.contains("| api | The \\| API | merged | `"), "{body}");
@@ -456,7 +460,7 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert!(row.4.is_some(), "prs.pull_request is set");
     assert_eq!(
         fx.shown_pull_request(),
-        json!({"repo": "acme/pay", "number": 812, "url": URL, "title": "Pay the bills", "draft": false, "state": "open",
+        json!({"repo": "acme/pay", "number": 812, "url": URL, "title": REPO_TITLE, "draft": false, "state": "open",
                "review_decision": "none", "checks": "none", "mergeable": "unknown", "merge_state": "unknown",
                "created_at": "opened", "merged_at": null})
     );
@@ -467,6 +471,36 @@ fn open_gates_pushes_creates_the_pr_and_records_it() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].1, json!({"from": "dispatch", "to": "deploy", "prs": [{"key": "repo", "number": 812, "url": URL}]}));
     assert!(events[0].0.contains("cpd pr poll --plan pay"), "{}", events[0].0);
+}
+
+#[test]
+fn open_titles_the_pull_request_and_the_body_with_the_stored_title() {
+    let fx = fx("dispatch");
+    fx.pr("open").ok();
+
+    let create = &fx.gh_calls()[1];
+    assert_eq!(create[1], "create");
+    assert_eq!(create[7], REPO_TITLE, "not the Plan's title");
+    assert!(create[9].starts_with(&format!("# {REPO_TITLE}\n")), "{}", create[9]);
+}
+
+#[test]
+fn open_refuses_a_pr_without_a_title_before_the_gate_and_any_gh_call() {
+    let fx = fx("dispatch");
+    fx.hooks("pre-merge = \"echo gate ran\"\n");
+    fx.store().write("fixture", |tx| Ok(tx.execute("UPDATE prs SET title = NULL", [])?)).unwrap();
+    let txns = fx.txns();
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run), ("pr_title_required".into(), 3));
+    let error = run.error();
+    assert_eq!(error["details"], json!({"plan": "pay", "pr": "repo"}));
+    assert!(error["message"].as_str().unwrap().contains("cpd pr edit repo --title \"<text>\""), "{error}");
+    assert!(fx.gh_calls().is_empty(), "no gh call");
+    assert!(fs::read_to_string(fx.home.plan_dir(&plan()).join("logs/pr-repo.pre-merge.log")).is_err(), "the Gate did not run");
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "nothing pushed");
+    assert_eq!((fx.plan_row().0, fx.txns()), ("dispatch".to_owned(), txns));
 }
 
 #[test]
@@ -495,9 +529,9 @@ fn open_keeps_the_row_the_poll_stored_first() {
     assert_eq!(rows, 1);
 }
 
-/// `pay` as GitHub reports it, created at `created`.
+/// `pay` as GitHub reports it (with the title `pr open` gave it), created at `created`.
 fn pay_created(state: &str, created: &str) -> String {
-    pay(state, None, None).replace(r#""createdAt":"opened""#, &format!(r#""createdAt":"{created}""#))
+    pay(state, None, None).replace("Pay the bills", REPO_TITLE).replace(r#""createdAt":"opened""#, &format!(r#""createdAt":"{created}""#))
 }
 
 #[test]
@@ -2706,10 +2740,10 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     assert_eq!((fx.phase().as_str(), fx.pr_status("repo").as_str(), fx.pr_status("web").as_str()), ("dispatch", "open", "dispatch"));
     assert!(fx.events("plan-phase").is_empty());
     assert_eq!(fx.events("pr-opened")[0].1, json!({"pr": "repo", "number": 812, "url": URL}));
-    // Its own Gate log, in its own gate worktree; its own title: two PRs, so `<plan title> (<key>)`.
+    // Its own Gate log, in its own gate worktree; its own stored title: no `(<key>)` suffix with two PRs (hs-d285).
     assert!(fx.gate_log().trim().starts_with("gate ran in pay.pay.repo.gate-"), "{}", fx.gate_log());
     let calls = fx.gh_calls();
-    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", "Pay the bills (repo)"].map(String::from));
+    assert_eq!(calls[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay", "--title", REPO_TITLE].map(String::from));
 
     // `web` opens: now every PR is open, and the Plan moves on.
     let out = fx.pr_cmd("open", "web").ok();
@@ -2722,7 +2756,7 @@ fn open_selects_the_pr_and_the_plan_moves_to_pr_with_the_last_one() {
     assert_eq!(fx.git(&web.parent().unwrap().join("web"), &["rev-parse", "refs/heads/cpd/pay/web"]), fx.git(&web, &["rev-parse", "HEAD"]));
     let calls = fx.gh_calls();
     let create = calls.iter().filter(|c| c[1] == "create").nth(1).unwrap();
-    assert_eq!(create[2..8], ["--base", "main", "--head", "cpd/pay/web", "--title", "Pay the bills (web)"].map(String::from));
+    assert_eq!(create[2..8], ["--base", "main", "--head", "cpd/pay/web", "--title", WEB_PR_TITLE].map(String::from));
     // The body covers the PR's own Jobs only.
     assert!(create[9].contains("| ui | The UI | merged |") && !create[9].contains("| api |"), "{}", create[9]);
 
@@ -2820,7 +2854,7 @@ fn a_reopened_plan_whose_new_pr_merges_is_done_again_with_a_second_plan_done() {
     assert_eq!(fx.events("plan-done").len(), 1);
 
     // `pr add` moves the legacy branch and reopens the Plan.
-    fx.env.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--plan", "pay"]).ok();
+    fx.env.cpd(&["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
     assert_eq!(fx.phase(), "dispatch");
     // The engine would start the PR and the Lead open it: written straight, as the other tests do,
     // with the pull request's row `pr open` writes.
@@ -2917,7 +2951,7 @@ fn needs_of(fx: &Fx, key: &str) -> Vec<String> {
 }
 
 fn add_fix(fx: &Fx, extra: &[&str]) -> Run {
-    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--plan", "pay"];
+    let mut args = vec!["pr", "add", "fix", "--repo", fx.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"];
     args.extend(extra);
     fx.env.cpd(&args)
 }
@@ -2940,7 +2974,7 @@ fn pr_add_no_needs_and_needs_override_the_reopen_default() {
     assert!(needs_of(&a, "fix").is_empty());
 
     let b = fx("done");
-    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--plan", "pay", "--no-needs"]).ok();
+    b.env.cpd(&["pr", "add", "x", "--repo", b.repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay", "--no-needs"]).ok();
     // The Plan is in dispatch now; `--needs x` names a PR that is not merged.
     assert_eq!(add_fix(&b, &["--needs", "x"]).ok()["pr"]["needs"], json!(["x"]));
     assert_eq!(needs_of(&b, "fix"), ["x"]);
@@ -2955,7 +2989,7 @@ fn pr_add_on_a_plan_in_dispatch_has_no_needs_by_default() {
     let f = fx("dispatch");
     // Another repo: the fixture's own holds `cpd/pay` for its unmerged PR.
     let other = f.env.keyed_repo("other").canonicalize().unwrap();
-    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--plan", "pay"]).ok();
+    let out = f.env.cpd(&["pr", "add", "fix", "--repo", other.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"]).ok();
     assert_eq!(out["pr"]["needs"], json!([]));
     assert!(needs_of(&f, "fix").is_empty());
 }
@@ -3068,8 +3102,8 @@ fn stacked_pr(fx: &Fx) -> Stacked {
                    VALUES ('lead2', 'lead', 'ctx', 'ship', 'Lead', '/', 'O3', 'idle', 't', 't');
                  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
                    VALUES ('ship', 'ctx', 'Ship the web', 'dispatch', 'lead2', 't', 't');
-                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
-                   VALUES ('ship', 'web', '{repo}', 'cpd/pay', 'dispatch', 'cpd/ship/web', '{path}', cpd_txn(), 't', 't');",
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
+                   VALUES ('ship', 'web', '{repo}', 'cpd/pay', 'dispatch', 'cpd/ship/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
                 repo = fx.repo.display(),
                 path = path.display()
             ))?;

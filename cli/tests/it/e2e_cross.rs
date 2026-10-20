@@ -341,11 +341,11 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     });
 
     // ---------- 2. the PRs: a1 -> b -> a2, two of them in one repo (A4)
-    let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--plan", PLAN]);
-    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "base_pr": null, "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
-    let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--needs", "a1", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--title", "Change the PR", "--plan", PLAN]);
+    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "base_pr": null, "title": "Change the PR", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
+    let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--title", "Change the PR", "--needs", "a1", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/b"), &json!(["a1"])));
-    let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--needs", "b", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--title", "Change the PR", "--needs", "b", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/a2"), &json!(["b"])));
     assert_eq!(of_kind(&fx.events(), "pr-added").len(), 3);
     fx.ok(&["plan", "phase", "plan", "--plan", PLAN]);
@@ -371,7 +371,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     );
 
     // ---------- 4. review and lock: only a1 starts (A8)
-    let review = fx.ok(&["plan", "review", "--plan", PLAN]);
+    let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     fx.ok(&["plan", "decide", review["review"]["id"].as_str().unwrap(), "--approve", "--plan", PLAN]);
     let out = fx.ok(&["plan", "lock", "--plan", PLAN]);
     assert_eq!(out["phase"], "dispatch");

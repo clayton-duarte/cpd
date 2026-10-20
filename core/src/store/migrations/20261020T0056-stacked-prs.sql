@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 21
+-- cpd-migration: breaking after 24
 -- Stacked PRs and PR needs across Plans (contract §2.2 "The base PR", §3.8 "Stacked PRs", §4.5 `stacked-prs`, hs-d324,
 -- hs-d325). Breaking: it rebuilds `pr_needs` (a rebuild copies only the columns its author knew, K4) and relaxes
 -- `prs_locked` (A1), and a binary that does not know it would start a PR whose need is a PR of another Plan as if it had
