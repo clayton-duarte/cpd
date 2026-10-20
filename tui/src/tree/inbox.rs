@@ -481,12 +481,12 @@ mod tests {
             assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?} gives no merge popup");
         }
         for kind in [Kind::PrFailing, Kind::PrChanges] {
-            assert_eq!(jump(&tree, &with(kind, &owned)), copy, "{kind:?} copies its url, a Plan's or not");
-            assert_eq!(jump(&tree, &with(kind, &url)), copy);
+            assert_eq!(jump(&tree, &with(kind, &owned)), None, "{kind:?} (an old row, hs-d470): no click, a Plan's or not");
+            assert_eq!(jump(&tree, &with(kind, &url)), None, "{kind:?} (an old row, hs-d470): no url copy");
         }
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &url)), copy);
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &owned)), copy, "a review request is never a Plan's");
-        assert_eq!(jump(&tree, &with(Kind::PrFailing, &|_| {})), None, "a link without a url has nothing to copy");
+        assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &|_| {})), None, "a link without a url has nothing to copy");
         assert_eq!(jump(&tree, &with(Kind::PlanReview, &|_| {})), None);
         // an item without what its jump needs jumps nowhere
         assert_eq!(jump(&tree, &with(Kind::Dialog, &|_| {})), None);
@@ -542,7 +542,7 @@ mod tests {
         )
         .unwrap();
         let url = "https://github.com/acme/api/pull/12";
-        let mut linked = item(1, Kind::PrFailing, Urgency::Red, "api#12 failing", OPENED);
+        let mut linked = item(1, Kind::ReviewRequested, Urgency::Red, "api#12 failing", OPENED);
         linked.url = Some(url.into());
         terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
         let bytes = sink.0.borrow().clone();

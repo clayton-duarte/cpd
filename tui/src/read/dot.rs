@@ -193,6 +193,18 @@ mod tests {
         }
     }
 
+    /// hs-d470: the dropped kinds (an older engine's history rows) fill no dot, whoever they name.
+    #[test]
+    fn pr_failing_and_pr_changes_rows_fill_no_dot_at_all() {
+        for kind in [Kind::PrFailing, Kind::PrChanges] {
+            for (session, plan) in [(None, None), (None, Some("pp")), (Some("s-lead"), None), (Some("s-lead"), Some("pp"))] {
+                let items = [item(kind, Urgency::Red, session, plan)];
+                let p = plan.map(self::plan);
+                assert_eq!(urgency(&items, &id("s-lead"), p.as_ref()), None, "{kind:?} {session:?} {plan:?}");
+            }
+        }
+    }
+
     #[test]
     fn items_that_belong_to_no_session_fill_no_dot() {
         let items = [

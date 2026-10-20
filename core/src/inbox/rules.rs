@@ -1074,26 +1074,21 @@ mod tests {
     }
 
     #[test]
-    fn failed_checks_open_pr_failing_and_clear_when_they_pass() {
+    fn failed_checks_open_no_pr_failing_condition_hs_d470() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 7, "failed", "mergeable", "none");
-        let c = one(f.of(Kind::PrFailing));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "pr:acme/shop#7", "shop#7 checks failed"));
-        assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/7"));
-        assert_eq!((c.context, c.plan, c.session, c.job, c.record, c.event), (None, None, None, None, None, None));
-        set(&mut f, 7, "checks = 'passed'");
         assert!(f.of(Kind::PrFailing).is_empty());
+        assert!(pr_kinds(&mut f).is_empty());
     }
 
     #[test]
-    fn a_conflicting_pr_is_failing_with_the_conflict_label_and_never_ready() {
+    fn a_conflicting_pr_opens_no_pr_failing_condition_and_is_never_ready() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 8, "passed", "conflicting", "approved");
-        let c = one(f.of(Kind::PrFailing));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "pr:acme/shop#8", "shop#8 merge conflict"));
+        assert!(f.of(Kind::PrFailing).is_empty());
         assert!(f.of(Kind::PrReady).is_empty());
         set(&mut f, 8, "checks = 'failed'");
-        assert_eq!(one(f.of(Kind::PrFailing)).label, "shop#8 checks failed", "failed checks name themselves first");
+        assert!(f.of(Kind::PrFailing).is_empty());
         set(&mut f, 8, "checks = 'passed', mergeable = 'mergeable'");
         assert!(f.of(Kind::PrFailing).is_empty());
         assert_eq!(f.of(Kind::PrReady).len(), 1);
@@ -1107,14 +1102,11 @@ mod tests {
     }
 
     #[test]
-    fn a_pr_with_changes_requested_is_pr_changes_and_clears_with_the_decision() {
+    fn a_pr_with_changes_requested_opens_no_pr_changes_condition() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
-        let c = one(f.of(Kind::PrChanges));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "pr:acme/shop#3", "shop#3 changes requested"));
-        assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/3"));
-        set(&mut f, 3, "review_decision = 'approved'");
         assert!(f.of(Kind::PrChanges).is_empty());
+        assert!(pr_kinds(&mut f).is_empty());
     }
 
     #[test]
@@ -1161,10 +1153,11 @@ mod tests {
     }
 
     #[test]
-    fn only_authored_pull_requests_are_failing_changed_or_ready_and_a_github_request_opens_nothing() {
+    fn only_authored_pull_requests_are_ready_and_a_github_request_opens_nothing() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady], "authored: only the ready one opens an item");
         f.sql("UPDATE pull_requests SET authored = 0, review_requested = 1");
         assert!(pr_kinds(&mut f).is_empty(), "review_requested alone is no item (hs-d320)");
     }
@@ -1174,7 +1167,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
-        assert_eq!(pr_kinds(&mut f).len(), 3);
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady]);
         f.sql("UPDATE pull_requests SET state = 'closed'");
         assert!(pr_kinds(&mut f).is_empty());
     }
@@ -1227,7 +1220,7 @@ mod tests {
     }
 
     #[test]
-    fn the_same_states_on_an_unowned_authored_pull_request_still_open_their_items() {
+    fn the_same_states_on_an_unowned_authored_pull_request_open_no_item_either() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "mergeable", "none");
         pull_request(&mut f, 2, "passed", "conflicting", "approved");
@@ -1235,7 +1228,26 @@ mod tests {
         pull_request(&mut f, 6, "failed", "conflicting", "changes_requested");
         own(&mut f, 6);
         let seen: Vec<_> = f.of(Kind::PrFailing).into_iter().chain(f.of(Kind::PrChanges)).map(|c| c.subject).collect();
-        assert_eq!(seen, ["pr:acme/shop#1", "pr:acme/shop#2", "pr:acme/shop#3"]);
+        assert!(seen.is_empty(), "{seen:?}");
+    }
+
+    /// hs-d470: `pr-failing` and `pr-changes` are dropped, so items an older engine opened close at the next reconcile.
+    #[test]
+    fn open_pr_failing_and_pr_changes_items_an_older_engine_opened_are_closed_by_the_next_reconcile() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 1, "failed", "mergeable", "none");
+        pull_request(&mut f, 2, "passed", "mergeable", "changes_requested");
+        for (kind, n) in [("pr-failing", 1), ("pr-changes", 2)] {
+            f.sql(&format!(
+                "INSERT INTO inbox_items (kind, urgency, subject, label, opened_at)
+                 VALUES ('{kind}', 'red', 'pr:acme/shop#{n}', 'shop#{n} {kind}', '{T}')"
+            ));
+        }
+        let found = conditions(&mut f.store, &f.home).unwrap();
+        let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
+        assert_eq!(changes.closed.len(), 2);
+        let open: i64 = f.store.read(|c| Ok(c.query_row("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind IN ('pr-failing','pr-changes')", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(open, 0);
     }
 
     #[test]
@@ -1487,7 +1499,7 @@ mod tests {
         f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
                VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
         let tail: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).skip(3).collect();
-        assert_eq!(tail, [Kind::PrFailing, Kind::PrChanges, Kind::PrReady]);
+        assert_eq!(tail, [Kind::PrReady]);
         write_cache(&f, &[post("acme/pay", 812)]);
         let lookup = lookup(&[("acme/pay", 812, open_pr())]);
         let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(lookup.clone()))))
@@ -1495,6 +1507,6 @@ mod tests {
             .into_iter()
             .map(|c| c.kind)
             .collect();
-        assert_eq!(kinds[3..], [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
+        assert_eq!(kinds[3..], [Kind::PrReady, Kind::ReviewRequested]);
     }
 }
