@@ -101,7 +101,7 @@ fn names(conn: &Connection, sql: &str) -> BTreeSet<String> {
 
 #[test]
 fn a_new_database_is_wal_with_cpds_application_id() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let store = open(&env);
     assert_eq!(store.path(), env.cpd_home().join("cpd.db"));
     assert!(store.schema_mismatch().is_none());
@@ -155,7 +155,7 @@ fn a_file_that_is_not_a_database_is_store_failed() {
 
 #[test]
 fn a_foreign_application_id_is_refused_and_never_written() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let conn = Connection::open(home(&env).db()).unwrap();
     conn.pragma_update(None, "application_id", 42).unwrap();
     drop(conn);
@@ -963,7 +963,7 @@ fn only_the_live_sessions_are_in_sessions_live() {
 
 #[test]
 fn migrating_an_empty_file_creates_the_schema_once() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     fs::write(home(&env).db(), b"").unwrap();
     let store = open(&env);
     assert!(store.schema_mismatch().is_none());
@@ -987,7 +987,7 @@ fn migrating_an_empty_file_creates_the_schema_once() {
 
 #[test]
 fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its_schema_hash() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let mut store = fixture_store(&env);
     assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
     let hash = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
@@ -1021,7 +1021,7 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
 
 #[test]
 fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let mut store = fixture_store(&env);
     let columns: i64 = store
         .read(|c| Ok(c.query_row("SELECT count(*) FROM pragma_table_info('contexts') WHERE name IN ('lead_session', 'grounded_seq')", [], |r| r.get(0))?))
@@ -1068,7 +1068,7 @@ fn a_newer_schema_is_store_too_new() {
 
 #[test]
 fn a_failed_migration_rolls_back_entirely() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     // A database whose migration 1 cannot apply: a table `history` already exists.
     raw(&env).execute_batch("CREATE TABLE history (x)").unwrap();
     let err = Store::open(&home(&env), 5000).err().unwrap();
@@ -1086,7 +1086,7 @@ fn a_failed_migration_rolls_back_entirely() {
 
 #[test]
 fn a_migration_whose_schema_differs_from_the_expected_hash_rolls_back() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     // Every migration applies, but the schema it leaves is not the one the binary
     // describes: an object the migrations do not know stays in `sqlite_schema`.
     raw(&env).execute_batch("CREATE TABLE stray (x)").unwrap();
@@ -1142,7 +1142,7 @@ fn pragmas(store: &mut Store) -> (i64, i64) {
 
 #[test]
 fn foreign_keys_are_on_and_legacy_alter_table_off_after_the_migrating_open() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let mut store = open(&env);
     assert_eq!(pragmas(&mut store), (1, 0));
 }
@@ -1174,7 +1174,7 @@ fn a_write_from_a_deleted_cwd_succeeds_and_records_unreadable() {
 
 #[test]
 fn schema_migrations_records_every_legacy_migration_and_is_written_only_by_the_runner() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let mut store = open(&env);
     let rows: Vec<(String, String, i64, i64)> = store
         .read(|c| {
@@ -1248,11 +1248,7 @@ fn child_writer() {
             match std::env::var_os("STORE_CHILD_RELEASE").map(PathBuf::from) {
                 // Holds the lock until the test says so, not for a time.
                 Some(release) => {
-                    let deadline = Instant::now() + Duration::from_secs(60);
-                    while !release.exists() {
-                        assert!(Instant::now() < deadline, "{} never appeared", release.display());
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
+                    common::wait_until_for(&format!("{}", release.display()), Duration::from_secs(60), || release.exists());
                 }
                 None => std::thread::sleep(hold),
             }
@@ -1356,14 +1352,12 @@ impl Writer {
 impl Writer {
     /// Waits until the writer is inside its write transaction.
     fn wait_started(&mut self, started: &Path) {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !started.exists() {
+        common::wait_until(&format!("{}", started.display()), || {
             if let Some(status) = self.child.try_wait().unwrap() {
                 panic!("the writer exited ({status}) before starting: {}", fs::read_to_string(&self.out).unwrap_or_default());
             }
-            assert!(Instant::now() < deadline, "{} never appeared", started.display());
-            std::thread::sleep(Duration::from_millis(10));
-        }
+            started.exists()
+        });
     }
 }
 
@@ -1500,7 +1494,8 @@ fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
     let env = TestEnv::new();
     drop(open(&env));
     let started = env.root().join("a.started");
-    let mut a = Writer::spawn(&env, "a", 5000, 2500, Some(&started));
+    let release = env.root().join("a.release");
+    let mut a = Writer::spawn_holding(&env, "a", 5000, &started, &release);
     a.wait_started(&started);
     let a_pid = a.child.id();
 
@@ -1509,9 +1504,17 @@ fn a_persisting_store_waits_for_a_lock_held_longer_than_store_busy_ms() {
 
     let lines = Lines::default();
     let mut store = Store::open_persistent(&home(&env), 100, persisting(&lines, || false)).unwrap();
-    let t = Instant::now();
-    let txn = store.write("persisted", |tx| Ok(tx.id())).unwrap();
-    assert!(t.elapsed() >= Duration::from_millis(500), "it did not wait: {:?}", t.elapsed());
+    // A holds the lock until the persisting store has met it and said so: the store waits past `store_busy_ms` for
+    // as long as A holds it.
+    let (txn, waited) = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            common::wait_until("the persisting store to report the held lock", || !lines.lock().unwrap().is_empty());
+            fs::write(&release, "").unwrap();
+        });
+        let t = Instant::now();
+        (store.write("persisted", |tx| Ok(tx.id())).unwrap(), t.elapsed())
+    });
+    assert!(waited >= Duration::from_millis(100), "it did not wait past store_busy_ms: {waited:?}");
     assert_eq!(a.wait()["ok"], true);
     let lines = lines.lock().unwrap().clone();
     assert_eq!(lines.len(), 2, "{lines:?}");
@@ -1551,7 +1554,7 @@ fn only_busy_and_locked_are_transient() {
 
 #[test]
 fn processes_opening_a_new_database_at_once_migrate_it_once() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let writers: Vec<Writer> = (0..4).map(|i| Writer::spawn(&env, &format!("w{i}"), 20_000, 0, None)).collect();
     let mut ids: Vec<u64> = writers
         .into_iter()
@@ -1573,7 +1576,7 @@ fn processes_opening_a_new_database_at_once_migrate_it_once() {
 
 #[test]
 fn version_on_an_empty_home_reports_no_store_and_creates_nothing() {
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let out = env.cpd(&["--version"]).ok();
     assert!(out["store"].is_null(), "{out}");
     assert_eq!(out["protocol"], 6, "{out}");
@@ -1613,7 +1616,7 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
         (13, &["0014-register"][..]),
         (14, &[][..]),
     ] {
-        let env = TestEnv::new();
+        let env = TestEnv::empty();
         // `--version` reads only `user_version` of a legacy store: it never converts.
         raw(&env).pragma_update(None, "user_version", version).unwrap();
         let before = fs::read(home(&env).db()).unwrap();
@@ -1623,7 +1626,7 @@ fn version_on_a_legacy_home_reports_the_conversion_up_to_0014_and_refuses_a_late
         assert_eq!(fs::read(home(&env).db()).unwrap(), before, "version {version}");
     }
     // 15 is no legacy version: a numbered migration this binary lacks.
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     raw(&env).pragma_update(None, "user_version", 15).unwrap();
     let out = env.cpd(&["--version"]).ok();
     assert_eq!(out["store"]["refusal"]["code"], "store_too_new", "{out}");
@@ -1668,7 +1671,7 @@ fn version_refuses_a_store_whose_floor_it_lacks() {
 #[test]
 fn a_held_setup_lock_gives_lock_timeout_after_store_busy_ms() {
     use nix::fcntl::{Flock, FlockArg};
-    let env = TestEnv::new();
+    let env = TestEnv::empty();
     let h = home(&env);
     fs::create_dir_all(h.locks_dir()).unwrap();
     let path = h.locks_dir().join("store.lock");
@@ -1827,29 +1830,41 @@ fn a_marker_of_a_dead_process_does_not_block() {
 /// when it is done; a second opener that finds the lock held waits it out, whatever its own `busy_ms`.
 #[test]
 fn the_opener_that_migrates_writes_its_marker_and_clears_it() {
-    let env = TestEnv::new();
+    // An env with no store (TestEnv::new copies a migrated one in): this opener migrates from 0.
+    let env = TestEnv::empty();
     let h = home(&env);
     let lock = h.locks_dir().join("store.lock");
+    fs::create_dir_all(h.db().parent().unwrap()).unwrap();
+    // An empty database in WAL mode, as the opener leaves it before it migrates, with its write lock held.
+    let blocker = Connection::open(h.db()).unwrap();
+    blocker.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get::<_, String>(0)).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
     let first = {
         let h = h.clone();
-        std::thread::spawn(move || Store::open(&h, 5000).map(drop))
+        std::thread::spawn(move || Store::open(&h, 60_000).map(drop))
     };
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let seen: Value = loop {
-        if let Some(marker) = fs::read_to_string(&lock).ok().and_then(|text| serde_json::from_str(&text).ok()) {
-            break marker;
-        }
-        assert!(Instant::now() < deadline && !first.is_finished(), "no marker while the store migrated");
-        std::thread::sleep(Duration::from_millis(1));
-    };
+    let seen: Value = common::poll(Duration::from_secs(60), || {
+        assert!(!first.is_finished(), "no marker while the store migrated");
+        fs::read_to_string(&lock).ok().and_then(|text| serde_json::from_str(&text).ok())
+    })
+    .expect("no marker while the store migrated");
     assert_eq!(seen["migrating"], true, "{seen}");
     assert_eq!(seen["pid"], std::process::id(), "{seen}");
     assert_eq!(seen["from"], 0, "{seen}");
     assert!(seen["to"].as_u64().unwrap() > 0, "{seen}");
     assert!(seen["started_unix_ms"].as_u64().unwrap() > 0 && seen["command"].is_string(), "{seen}");
     // A second opener, whose own bound is 1 ms, waits for the migration instead of giving up.
-    Store::open(&h, 1).expect("the second opener waits for the migration");
+    let second = {
+        let h = h.clone();
+        std::thread::spawn(move || Store::open(&h, 1).map(drop))
+    };
+    // The migration cannot end while the test holds the write lock: both openers are still waiting.
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!first.is_finished() && !second.is_finished(), "an opener returned while the migration was held");
+    assert!(!fs::read_to_string(&lock).unwrap().is_empty(), "the marker was cleared while the migration was held");
+    blocker.execute_batch("ROLLBACK").unwrap();
     first.join().unwrap().unwrap();
+    second.join().unwrap().expect("the second opener waits for the migration");
     assert_eq!(fs::read_to_string(&lock).unwrap(), "", "the marker outlived the migration");
 }
 

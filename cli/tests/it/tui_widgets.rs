@@ -12,7 +12,7 @@ use cpd_core::host::tmux::PANE_DIED_HOOK;
 use cpd_core::store::Store;
 use cpd_tui::palette::{self, Meaning};
 use cpd_tui::read::{self, Dot, Widgets};
-use cpd_tui::widgets::{self, Hit, Machine, legend};
+use cpd_tui::widgets::{self, Hit, Machine, Usage, legend};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -133,7 +133,7 @@ fn fixture() -> (TestEnv, Store) {
 }
 
 fn machine() -> Machine {
-    Machine { name: "homeserver".to_owned(), load: ["3.70", "3.05", "4.84"].map(str::to_owned).to_vec() }
+    Machine { name: "homeserver".to_owned(), usage: Usage { cpu: Some(23), gpus: vec![], mem: Some(41) } }
 }
 
 fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
@@ -258,28 +258,27 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let env = TestEnv::new();
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
-    let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
+    let machine = Machine { name: "homeserver".to_owned(), usage: Usage { cpu: None, gpus: vec![], mem: Some(7) } };
     terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
-    let head = |title: &str| pill(30, title, None);
     let prs_head = pill(30, "PRs", Some(0));
-    assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
+    assert_eq!(lines[..3], ["", " homeserver", " \u{F4BC} –%  \u{EFC5} 7%"], "no CPU % until a second sample");
     assert_eq!(lines[3..6], ["", prs_head.as_str(), ""]);
     assert_eq!(lines[6], " no open PRs");
-    assert_eq!(lines[7..], ["", "", "", "", "", "", head("git").as_str(), "", " (future)", "", head("Jira").as_str(), "", " (future)"]);
+    assert_eq!(lines[7..], [""; 13], "the PRs take the rest of the column: no git, no Jira");
 }
 
 #[test]
-fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
+fn the_column_shows_the_machine_and_the_open_prs_and_nothing_else() {
     let (got, _) = column(25);
-    let (prs, git, jira) = (header("PRs", Some(2)), header("git", None), header("Jira", None));
+    let prs = header("PRs", Some(2));
     let (seven, eleven) = (first_line(" acme/repo#7", 46), first_line(" acme/repo#11", 46));
     let failed_open = format!("  open {} changes requested  cpd-tui cockpit c…", palette::CHECKS_FAILED);
     let none_open = format!("  open {} no review  Plan fresh", palette::CHECKS_NONE);
-    let expected = [
+    let mut expected = vec![
         "",
         " homeserver",
-        " load 3.70 3.05 4.84",
+        " \u{F4BC} 23%  \u{EFC5} 41%",
         "",
         prs.as_str(),
         "",
@@ -287,22 +286,8 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
         failed_open.as_str(),
         eleven.as_str(),
         none_open.as_str(),
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        "",
-        git.as_str(),
-        "",
-        " (future)",
-        "",
-        jira.as_str(),
-        "",
-        " (future)",
     ];
+    expected.resize(25, "");
     assert_eq!(got, expected, "\n{}", got.join("\n"));
 }
 
@@ -310,7 +295,7 @@ fn the_column_shows_the_machine_the_open_prs_git_and_jira() {
 fn each_section_header_has_a_blank_row_above_and_below() {
     for height in [20, 25, 29] {
         let (got, _) = column(height);
-        for (title, count) in [("PRs", Some(2)), ("git", None), ("Jira", None)] {
+        for (title, count) in [("PRs", Some(2))] {
             let at = got.iter().position(|r| *r == header(title, count)).unwrap_or_else(|| panic!("{title} at {height}:\n{got:#?}"));
             assert_eq!(got[at - 1], "", "above {title} at {height}:\n{got:#?}");
             assert_eq!(got[at + 1], "", "below {title} at {height}:\n{got:#?}");
@@ -480,7 +465,7 @@ fn the_column_takes_every_colour_from_the_palette() {
     assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Failed));
     assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
     // The titles: the corner and the line grey, the title inverted inside its caps.
-    for title in ["PRs", "git", "Jira"] {
+    for title in ["PRs"] {
         let (x, y) = find(&buf, &format!("╭─{CAP_LEFT}{title}"));
         assert_eq!(buf[(x, y)].fg, c(Meaning::Nothing), "{title}");
         assert_eq!(buf[(x + 1, y)].fg, c(Meaning::Nothing), "{title}");
@@ -490,17 +475,17 @@ fn the_column_takes_every_colour_from_the_palette() {
     }
     let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine and the pull request names (the section titles are bold too); dim: the title of the PR, `(future)`.
+    // Bold: the machine and the pull request names (the section titles are bold too); dim: the title of the PR.
     for title in ["homeserver", "acme/repo#7"] {
         assert!(bold(find(&buf, title)), "{title}");
         assert!(!dim(find(&buf, title)), "{title}");
     }
-    for faint in ["cpd-tui cockpit", "Plan fresh", "(future)"] {
+    for faint in ["cpd-tui cockpit", "Plan fresh"] {
         assert!(dim(find(&buf, faint)), "{faint}");
         assert!(!bold(find(&buf, faint)), "{faint}");
     }
-    // Plain: the review decision and the load.
-    for plain in ["no review", "changes requested", "load 3.70"] {
+    // Plain: the review decision and the CPU and memory %.
+    for plain in ["no review", "changes requested", "23%", "41%"] {
         let at = find(&buf, plain);
         assert!(!dim(at) && !bold(at), "{plain}");
     }
@@ -525,9 +510,9 @@ fn a_long_title_is_cut_with_an_ellipsis_first_and_a_line_never_wraps() {
 fn a_short_pane_hides_the_pull_requests_that_do_not_fit_beside_the_cue_below() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
-    // Beside the 14 rows of the blank row, the machine, the headers and their blank rows, each pull request takes 2, and
+    // Beside the 6 rows of the blank row, the machine, the header and its blank rows, each pull request takes 2, and
     // when some are hidden the `▼` row takes one more.
-    for (height, listed) in [(14 + 6, 3), (14 + 5, 2), (14 + 4, 1), (14 + 3, 1), (14 + 2, 0), (14 + 1, 0)] {
+    for (height, listed) in [(6 + 6, 3), (6 + 5, 2), (6 + 4, 1), (6 + 3, 1), (6 + 2, 0), (6 + 1, 0)] {
         let got = rows(&render(46, height, &w)).join("\n");
         let shown = ["acme/web#4", "acme/repo#9", "acme/repo#20"].iter().filter(|n| got.contains(**n)).count();
         assert_eq!(shown, listed, "height {height}:\n{got}");
@@ -790,24 +775,24 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
     drop(store);
     let pane = start(&env, "view");
     let has = |s: &[String], name: &str| s.iter().any(|r| r.starts_with(&format!(" {name} ")));
-    // 40 rows less the 14 of the rest of the column leave 26 for the PRs: 12 whole ones beside the `▼` row.
+    // 40 rows less the 6 of the rest of the column leave 34 for the PRs: 16 whole ones beside the `▼` row.
     // (polling for the whole screen: a capture can catch the pane mid-draw)
     wait_for_screen(&env, &pane, "the first PRs and the cue below", |s| {
-        s.iter().any(|r| *r == cue_row('▼', 9))
+        s.iter().any(|r| *r == cue_row('▼', 5))
             && has(s, "acme/repo#1")
-            && has(s, "acme/repo#12")
-            && !has(s, "acme/repo#13")
+            && has(s, "acme/repo#16")
+            && !has(s, "acme/repo#17")
             && !s.iter().any(|r| r.contains('▲'))
     });
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    let cue = styled.lines().find(|l| l.contains("▼ 9 more")).unwrap();
+    let cue = styled.lines().find(|l| l.contains("▼ 5 more")).unwrap();
     assert!(cue.contains("\x1b[2m"), "the cue is dim: {cue:?}");
 
     // A notch outside the section does nothing; one inside moves by one pull request.
     wheel(&env, &pane, true, 3, 1);
     wheel(&env, &pane, true, 3, 10);
     wait_for_screen(&env, &pane, "one pull request down", |s| {
-        s.iter().any(|r| *r == cue_row('▲', 1)) && s.iter().any(|r| *r == cue_row('▼', 8)) && has(s, "acme/repo#2") && !has(s, "acme/repo#1")
+        s.iter().any(|r| *r == cue_row('▲', 1)) && s.iter().any(|r| *r == cue_row('▼', 4)) && has(s, "acme/repo#2") && !has(s, "acme/repo#1")
     });
 
     // Past the end it stops, with the last pull request at the bottom and no cue below.
@@ -815,20 +800,20 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
         wheel(&env, &pane, true, 3, 10);
     }
     wait_for_screen(&env, &pane, "the end", |s| {
-        s.iter().any(|r| *r == cue_row('▲', 9))
+        s.iter().any(|r| *r == cue_row('▲', 5))
             && has(s, "acme/repo#21")
-            && has(s, "acme/repo#10")
-            && !has(s, "acme/repo#9")
+            && has(s, "acme/repo#6")
+            && !has(s, "acme/repo#5")
             && !s.iter().any(|r| r.contains('▼'))
     });
 
     // And back up, one at a time.
     wheel(&env, &pane, false, 3, 10);
-    wait_for_screen(&env, &pane, "one back up", |s| s.iter().any(|r| *r == cue_row('▲', 8)) && s.iter().any(|r| *r == cue_row('▼', 1)) && has(s, "acme/repo#9") && !has(s, "acme/repo#21"));
+    wait_for_screen(&env, &pane, "one back up", |s| s.iter().any(|r| *r == cue_row('▲', 4)) && s.iter().any(|r| *r == cue_row('▼', 1)) && has(s, "acme/repo#5") && !has(s, "acme/repo#21"));
     for _ in 0..20 {
         wheel(&env, &pane, false, 3, 10);
     }
-    wait_for_screen(&env, &pane, "the top", |s| s.iter().any(|r| *r == cue_row('▼', 9)) && has(s, "acme/repo#1") && !s.iter().any(|r| r.contains('▲')));
+    wait_for_screen(&env, &pane, "the top", |s| s.iter().any(|r| *r == cue_row('▼', 5)) && has(s, "acme/repo#1") && !s.iter().any(|r| r.contains('▲')));
 }
 
 #[test]
@@ -848,7 +833,7 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
     // time-claim: the clicks on the unowned rows and the arrow leave no note, over a few redraws of the view; a click
     // that runs nothing leaves no signal (the view opens sessions in its own process, not through a recorded `cpd`).
     std::thread::sleep(std::time::Duration::from_millis(600));
-    assert_eq!(last_row(&screen(&env, &pane)), " (future)", "nothing was refused: Jira's row is still the last");
+    assert!(!last_row(&screen(&env, &pane)).contains("cockpit"), "nothing was refused");
 
     click(&env, &pane, 3, 10);
     let shown = wait_for_screen(&env, &pane, "the refusal", |s| last_row(s).contains("cockpit"));
@@ -856,10 +841,10 @@ fn a_refused_session_open_shows_its_message_in_the_last_row_until_the_next_click
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     let last = styled.lines().last().unwrap();
     assert!(last.contains("\x1b[") && last.contains("cockpit"), "{last:?}");
-    assert!(shown[..height - 1].iter().any(|r| r.contains("(future)")), "the git section is as before");
+    assert!(shown[..height - 1].iter().any(|r| r.contains("acme/repo#20")), "the PRs are as before");
 
     click(&env, &pane, 3, 6);
-    wait_for_screen(&env, &pane, "the note gone", |s| last_row(s) == " (future)");
+    wait_for_screen(&env, &pane, "the note gone", |s| !last_row(s).contains("cockpit"));
 }
 
 #[test]

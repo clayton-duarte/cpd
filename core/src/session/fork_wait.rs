@@ -12,10 +12,11 @@ use super::row::{self, State};
 use super::run::{existing_file, patiently};
 use super::Env;
 use crate::error::CpdError;
+use crate::host::limit::limit;
 use crate::host::pi::PiDirs;
 use crate::ids::SessionId;
 
-/// How often the fork waits for its source to be idle (§6.7 step 1).
+/// How often the fork waits for its source to be idle (§6.7 step 1; tests: `CPD_TEST_SOURCE_POLL`, [`limit`]).
 const SOURCE_POLL: Duration = Duration::from_secs(2);
 
 /// Waits until the source is idle (§6.7 step 1) and returns its file: the file
@@ -53,7 +54,7 @@ pub(super) fn wait_for_source(env: &mut Env, dirs: &PiDirs, source: &SessionId, 
             let _ = std::io::stdout().flush();
             shown = true;
         }
-        std::thread::sleep(SOURCE_POLL);
+        std::thread::sleep(limit("SOURCE_POLL", SOURCE_POLL));
     }
 }
 
