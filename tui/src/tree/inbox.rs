@@ -492,7 +492,7 @@ mod tests {
             .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
             .collect();
         let text = printed(&bytes);
-        assert!(text.contains(&format!("│  {pieces}3m")), "the lead, the label in pieces of two cells, the age: {text:?}");
+        assert!(text.contains(&format!("│{pieces}3m")), "the branch (the two spaces after it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
         assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead or the age");
         // an item with no url, or of a kind that jumps, has no link
         let sink = Sink::default();

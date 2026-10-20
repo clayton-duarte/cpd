@@ -792,11 +792,11 @@ mod tests {
         press(&mut view, KeyCode::Char('n'));
         press(&mut view, KeyCode::Char('x'));
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[14..17].iter().all(|r| r.is_empty()) && rows[17].starts_with(" ── Inbox 0 "), "no row for a prompt: {rows:?}");
+        assert!(rows[14..17].iter().all(|r| r.is_empty()) && rows[17].starts_with(" ┯━━ Inbox ━"), "no row for a prompt: {rows:?}");
         assert!(rows.iter().all(|r| !r.contains("Enter") && !r.contains("█") && !r.contains("(y/N)")), "{rows:?}");
         view.done(Err("closed".into()));
         let rows = drawn(&mut view, 44, 18);
-        assert!(rows[16].starts_with(" ── Inbox 0 "), "the Inbox section is above the note: {rows:?}");
+        assert!(rows[16].starts_with(" ┯━━ Inbox ━"), "the Inbox section is above the note: {rows:?}");
         assert_eq!(rows[17], " closed", "a note is one row at the bottom");
         let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
         terminal.draw(|f| view.draw(f, 0)).unwrap();
@@ -1158,7 +1158,7 @@ mod tests {
         let box_row = |left: char, fill: &str, right: char| format!("{}{left}{fill}{right}", " ".repeat(27));
         assert_eq!((rows[13].clone(), rows[14].clone()), (box_row('┌', &"─".repeat(14), '┐'), box_row('│', " New Context… ", '│')));
         // the menu is drawn over the Inbox header, which shows to its left
-        assert!(rows[15].starts_with(" ── Inbox 0 ─") && rows[15].ends_with("└──────────────┘"), "{rows:?}");
+        assert!(rows[15].starts_with(" ┯━━ Inbox ━") && rows[15].ends_with("└──────────────┘"), "{rows:?}");
     }
 
     #[test]
@@ -1338,9 +1338,9 @@ mod tests {
     fn rename_and_unarchive_on_an_archived_row_run_without_asking_to_confirm() {
         let mut view = archived_open();
         for (row, subject) in [
-            (6, Subject::Plan(PlanId::parse("old").unwrap())),
-            (7, Subject::Session(sid("f-blocked"))),
-            (16, Subject::Context(ContextId::parse("zeta").unwrap())),
+            (5, Subject::Plan(PlanId::parse("old").unwrap())),
+            (6, Subject::Session(sid("f-blocked"))),
+            (13, Subject::Context(ContextId::parse("zeta").unwrap())),
         ] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
@@ -1349,7 +1349,7 @@ mod tests {
             assert!(view.menu.is_none());
         }
         // Rename… starts from the label of the archived row and runs the rename of the object
-        right_click(&mut view, 8, 6);
+        right_click(&mut view, 8, 5);
         let rename = Question::input("Rename", Ask::RenamePlan(PlanId::parse("old").unwrap()), "Old".into());
         assert_eq!(asked(press(&mut view, KeyCode::Enter)), rename);
         assert_eq!(
@@ -1357,12 +1357,12 @@ mod tests {
             Ok(Some(Action::RenamePlan { id: PlanId::parse("old").unwrap(), title: "Older".into() }))
         );
         drawn(&mut view, 44, 24);
-        right_click(&mut view, 8, 16);
+        right_click(&mut view, 8, 13);
         let rename = Question::input("Rename", Ask::RenameContext(ContextId::parse("zeta").unwrap()), "Zeta".into());
         assert_eq!(asked(press(&mut view, KeyCode::Enter)), rename);
         // and of an archived fork: its name
         drawn(&mut view, 44, 24);
-        right_click(&mut view, 8, 7);
+        right_click(&mut view, 8, 6);
         let rename = Question::input("Rename", Ask::RenameSession(sid("f-blocked")), "ship review".into());
         assert_eq!(asked(press(&mut view, KeyCode::Enter)), rename);
     }
@@ -1381,7 +1381,7 @@ mod tests {
         }
         // archived rows: a Plan, a fork of it, an archived Context
         let mut view = archived_open();
-        for (row, id) in [(6, "old"), (7, "ship·f-bl"), (16, "zeta")] {
+        for (row, id) in [(5, "old"), (6, "ship·f-bl"), (13, "zeta")] {
             right_click(&mut view, 8, row);
             press(&mut view, KeyCode::Down);
             assert_eq!(press(&mut view, KeyCode::Enter), Effect::Run(Action::CopyId(id.into())), "row {row}");
@@ -1698,13 +1698,13 @@ mod tests {
 
     /// The header of the section at 43 columns: a blank margin, then the column's header for `n` items.
     fn header(n: usize) -> String {
-        let title = format!(" Inbox {n} ");
-        format!(" ── Inbox {n} {}", "─".repeat(41 - 2 - title.chars().count()))
+        let count = format!(" {n} ");
+        format!(" ┯━━ Inbox {}{count}━━", "━".repeat(41 - 3 - " Inbox ".chars().count() - count.chars().count() - 2))
     }
 
-    /// An item row at 43 columns: the margin, the filled dot, the label, the age ending at the last column of the inner area.
+    /// An item row at 43 columns: the margin, the fold's `│` and two spaces (no dot), the label, the age ending at the last column of the inner area.
     fn item_row(label: &str, age: &str) -> String {
-        format!(" {NEEDS_YOU} {label}{}{age}", " ".repeat(41 - 2 - label.chars().count() - age.chars().count()))
+        format!(" │  {label}{}{age}", " ".repeat(41 - 3 - label.chars().count() - age.chars().count()))
     }
 
     #[test]
@@ -1763,7 +1763,7 @@ mod tests {
         assert!(view.inbox_expanded, "`╰─ expand` does");
         let rows = text_rows(&draw_now(&mut view, 43, 16));
         assert_eq!(rows[15], " ╰─ collapse");
-        assert_eq!(click(&mut view, 20, rows.iter().position(|r| r.starts_with(" ── Inbox")).unwrap() as u16), Effect::None);
+        assert_eq!(click(&mut view, 20, rows.iter().position(|r| r.starts_with(" ┯━━ Inbox")).unwrap() as u16), Effect::None);
         assert!(view.inbox_expanded, "the header does not fold it");
         click(&mut view, 20, 15);
         assert!(!view.inbox_expanded, "`╰─ collapse` does");
@@ -1787,12 +1787,12 @@ mod tests {
         let mut view = with_inbox(1);
         view.tree.inbox[0].label = "f-blocked: a very long question that cannot fit the row".into();
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        let label = "f-blocked: a very long question th…"; // 41 - 2 (dot) - 1 (space) - 3 (age) = 35 columns
-        assert_eq!(label.chars().count(), 35);
-        assert_eq!(rows[15], format!(" {NEEDS_YOU} {label} 42s"));
+        let label = "f-blocked: a very long question t…"; // 41 - 3 (`│` and two spaces) - 1 (space) - 3 (age) = 34 columns
+        assert_eq!(label.chars().count(), 34);
+        assert_eq!(rows[15], format!(" │  {label} 42s"));
         view.tree.inbox[0].label = "x".repeat(33);
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[15], format!(" {NEEDS_YOU} {}   42s", "x".repeat(33)), "a label that fits is not cut");
+        assert_eq!(rows[15], format!(" │  {}  42s", "x".repeat(33)), "a label that fits is not cut");
     }
 
     #[test]
@@ -1812,20 +1812,16 @@ mod tests {
     }
 
     #[test]
-    fn the_dots_have_the_urgency_colours_and_the_ages_the_grey() {
+    fn the_item_rows_have_no_dots_a_muted_branch_and_a_grey_age() {
         let buf = draw_now(&mut with_inbox(5), 43, 16);
-        let colour = |x, y| buf[(x, y)].fg;
-        let dot = |dot: crate::read::Dot| palette::dot_span(dot, 0, false).style.fg.unwrap();
-        use crate::read::Dot;
-        // rows 12.. are the items: red, red, yellow
-        assert_eq!([colour(1, 12), colour(1, 13), colour(1, 14)], [dot(Dot::Red), dot(Dot::Red), dot(Dot::Yellow)]);
-        assert_eq!(colour(40, 12), palette::color(palette::Meaning::Nothing), "the age");
-        let buf = draw_now(&mut {
-            let mut v = with_inbox(5);
-            v.inbox_expanded = true;
-            v
-        }, 43, 16);
-        assert_eq!((buf[(1, 13)].fg, buf[(1, 14)].fg), (dot(Dot::Magenta), dot(Dot::White)));
+        let rows = text_rows(&buf);
+        let muted = palette::color(palette::Meaning::Nothing);
+        for y in 12..15 {
+            assert!(rows[y].starts_with(" │  "), "no dot in row {y}: {rows:?}");
+            assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted), "the branch of row {y}");
+            assert_ne!(buf[(4, y as u16)].fg, muted, "the label of row {y} is not muted");
+        }
+        assert_eq!(buf[(40, 12)].fg, muted, "the age");
     }
 
     #[test]
