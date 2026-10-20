@@ -12,7 +12,18 @@ import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONFIG, loadConfig } from "../../compact-tools/extensions/compact-tools-config.ts";
 import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
-import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, shutdown } from "./indicator-harness.ts";
+
+// The agent directory of this file, pi's getAgentDir(). The harness points PI_CODING_AGENT_DIR at a directory of its own when it
+// loads, so it is loaded when a test needs it (tests of the config alone do not), and the variable set back.
+const AGENT_DIR = mkdtempSync(join(tmpdir(), "compact-tools-agent-"));
+process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
+let harnessLoaded = false;
+async function loadHarness() {
+	const loaded = await import("./indicator-harness.ts");
+	harnessLoaded = true;
+	process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
+	return loaded;
+}
 
 const EXPAND = "\u{F004B}";
 const COLLAPSE = "\u{F0063}";
@@ -31,7 +42,7 @@ function noConfigFile<T>(fn: (cwd: string) => T): T {
 	try { return fn(cwd); } finally { rmSync(cwd, { recursive: true, force: true }); }
 }
 
-test("DEFAULT_CONFIG is the fold language: toggle, U+F004B, U+F0063, seven tools, style compact", () => {
+test("DEFAULT_CONFIG is the fold language: toggle, U+F004B, U+F0063, seven tools, style compact, the rest upstream's", () => {
 	assert.equal(DEFAULT_CONFIG.style, "compact");
 	assert.equal(DEFAULT_CONFIG.fold, "toggle");
 	assert.deepEqual(DEFAULT_CONFIG.toggle, { expand: EXPAND, collapse: COLLAPSE });
@@ -39,13 +50,11 @@ test("DEFAULT_CONFIG is the fold language: toggle, U+F004B, U+F0063, seven tools
 	assert.equal(DEFAULT_CONFIG.toggle.expand.codePointAt(0), 0xF004B);
 	assert.equal(DEFAULT_CONFIG.toggle.collapse.codePointAt(0), 0xF0063);
 	assert.deepEqual(DEFAULT_CONFIG.tools, SEVEN);
-});
-
-test("the other defaults are upstream's: mode normal, previewLines 10, auto_compact true but edit, custom_tools on", () => {
+	// The rest is upstream's.
 	assert.equal(DEFAULT_CONFIG.mode, "normal");
 	assert.equal(DEFAULT_CONFIG.previewLines, 10);
 	assert.deepEqual(DEFAULT_CONFIG.custom_tools, { enabled: true, auto_compact: true, exclude: [] });
-	for (const [tool, value] of Object.entries(DEFAULT_CONFIG.auto_compact)) assert.equal(value, tool !== "edit", tool);
+	for (const [tool, value] of Object.entries(DEFAULT_CONFIG.auto_compact)) assert.equal(value, tool !== "edit", `auto_compact.${tool}`);
 });
 
 test("with no compact-tools.json anywhere, loadConfig is DEFAULT_CONFIG, for a trusted project and an untrusted one", () => {
@@ -60,6 +69,7 @@ interface Drawn { running: string[]; done: string[] }
 
 /** One of the tools run to its end on the extension's own defaults (no file), drawn while it runs and with its result. */
 async function draw(name: string, expanded = false): Promise<Drawn> {
+	const { advance, announce, CASES, loadExtension, makeRow, shutdown } = await loadHarness();
 	const harness = await loadExtension({}, { defaults: true });
 	try {
 		const id = `defaults-${name}-${expanded}`;
@@ -81,6 +91,7 @@ async function draw(name: string, expanded = false): Promise<Drawn> {
 }
 
 test("with no file the extension registers the seven tools and no other", async () => {
+	const { loadExtension, shutdown } = await loadHarness();
 	const harness = await loadExtension({}, { defaults: true });
 	try {
 		assert.deepEqual([...harness.definitions.keys()].sort(), [...SEVEN].sort());
@@ -113,6 +124,7 @@ test("with no file the row still opens with ╭ while it runs, and has no closin
 
 /** The thinking block as the extension's Markdown transformer draws it, on the defaults, and Ctrl+T as the user presses it. */
 async function thinking(source = "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.") {
+	const { loadExtension } = await loadHarness();
 	await loadExtension({}, { defaults: true });
 	const compactTools = (await import("../../compact-tools/extensions/compact-tools.ts")).default;
 	const transforms: Array<(markdown: string, context: unknown) => string> = [];
@@ -157,4 +169,7 @@ test("with no file the thinking block's control row is the toggle: ╰ U+F004B e
 	} finally { block.end(); }
 });
 
-test.after(() => restoreClocks());
+test.after(async () => {
+	if (harnessLoaded) (await import("./indicator-harness.ts")).restoreClocks();
+	rmSync(AGENT_DIR, { recursive: true, force: true });
+});

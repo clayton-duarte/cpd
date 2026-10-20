@@ -3,7 +3,6 @@
  * still list the npm package pi-compact-tools, or a git source of that name, cpd's own copy stands down at load, before it
  * registers anything, and says so once per process. `otherCopy` is a pure function of the two `packages` lists.
  */
-import { restoreClocks } from "./indicator-harness.ts"; // first: the fake clock and the temporary agent directory exist before the extension loads
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -178,5 +177,3 @@ test("with no other copy, or with other packages, the factory registers what it 
 		});
 	}
 });
-
-test.after(() => restoreClocks());

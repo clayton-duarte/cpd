@@ -2,7 +2,7 @@
  * compact-tools.json still overrides the defaults, as docs/contract.md section 6.9 specifies: `<agent dir>/compact-tools.json`,
  * then, for a trusted project only, `<cwd>/.pi/compact-tools.json`, each merged field by field over cpd's defaults
  * (fold "toggle", the cockpit's glyphs, seven tools), a bad file reported on stderr as `[compact-tools] <path>: <message>`.
- * The agent directory is pi's getAgentDir(), which reads PI_CODING_AGENT_DIR (set by indicator-harness.ts).
+ * The agent directory is pi's getAgentDir(), which reads PI_CODING_AGENT_DIR (set below).
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -10,7 +10,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock } from "node:test";
 import { DEFAULT_CONFIG, loadConfig } from "../../compact-tools/extensions/compact-tools-config.ts";
-import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, shutdown } from "./indicator-harness.ts";
+
+// The agent directory of this file, pi's getAgentDir(). The harness points PI_CODING_AGENT_DIR at a directory of its own when it
+// loads, so it is loaded when a test needs it (tests of the config alone do not), and the variable set back.
+const AGENT_DIR = mkdtempSync(join(tmpdir(), "compact-tools-agent-"));
+process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
+let harnessLoaded = false;
+async function loadHarness() {
+	const loaded = await import("./indicator-harness.ts");
+	harnessLoaded = true;
+	process.env.PI_CODING_AGENT_DIR = AGENT_DIR;
+	return loaded;
+}
 
 const EXPAND = "\u{F004B}";
 const COLLAPSE = "\u{F0063}";
@@ -50,6 +61,7 @@ test("a file that sets only style off keeps fold toggle, the glyphs and the seve
 
 test("fold: status brings back upstream's rows: a leading space, a └ closing row, no toggle", async () => {
 	files('{"fold": "status"}', undefined, (cwd) => assert.equal(loadConfig(cwd, false).fold, "status"));
+	const { advance, announce, CASES, loadExtension, makeRow, shutdown } = await loadHarness();
 	const harness = await loadExtension({ fold: "status" }, { defaults: true });
 	try {
 		const id = "override-status";
@@ -136,4 +148,7 @@ test("an untrusted project's file is not read, so not reported either", () => {
 	});
 });
 
-test.after(() => restoreClocks());
+test.after(async () => {
+	if (harnessLoaded) (await import("./indicator-harness.ts")).restoreClocks();
+	rmSync(AGENT_DIR, { recursive: true, force: true });
+});
