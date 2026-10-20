@@ -36,6 +36,9 @@ pub struct Config {
     pub machine: MachineName,
     /// Attempts not ended, machine-wide (§3.4).
     pub concurrency: u32,
+    /// Full test runs at once (Gates and `cpd slot` commands), machine-wide: the number of `run/test-<i>.lock` slots
+    /// (§7.6 "The test slot", hs-d336, hs-d301).
+    pub test_concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
@@ -259,6 +262,7 @@ impl Config {
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
+        let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
         let lead_tier = r.get("lead_tier", Tier::parse("O3").expect("a valid Tier"), |v| {
             Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
@@ -355,6 +359,7 @@ impl Config {
             version,
             machine,
             concurrency,
+            test_concurrency,
             retry_cap,
             lead_tier,
             manager_tier,

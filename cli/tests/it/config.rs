@@ -40,6 +40,7 @@ fn config_with_only_the_required_keys_has_every_default() {
             "version": 1,
             "machine": "hs",
             "concurrency": 3,
+            "test_concurrency": 2,
             "retry_cap": 2,
             "lead_tier": "O3",
             "manager_tier": "O5",
@@ -143,7 +144,7 @@ fn config_has_one_source_per_leaf_key() {
     for key in ["version", "machine", "concurrency", "tiers.O", "timeouts.ask_minutes"] {
         assert_eq!(sources[key], "file", "{key}");
     }
-    for key in ["retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "lead_pi_packages", "pi_adapter", "pr_open_escalate_minutes", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
+    for key in ["test_concurrency", "retry_cap", "lead_tier", "manager_tier", "context_distill_tier", "lead_pi_packages", "pi_adapter", "pr_open_escalate_minutes", "tiers.S", "timeouts.attempt_minutes", "events.poll_ms", "tmux.socket"] {
         assert_eq!(sources[key], "default", "{key}");
     }
     assert_eq!(out["config"]["concurrency"], 5);
@@ -162,6 +163,7 @@ fn config_accepts_every_key_with_a_value_at_its_boundary() {
 version = 1
 machine = "a1234567"
 concurrency = 1
+test_concurrency = 64
 retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"
@@ -206,6 +208,7 @@ work_session = "w"
     );
     let out = config_with(&env, &text).ok();
     assert_eq!(out["config"]["machine"], "a1234567");
+    assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "H0");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
@@ -256,6 +259,8 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = 7\n", "machine"),
         ("version = 1\nmachine = \"hs\"\nconcurrency = \"3\"\n", "concurrency"),
         ("version = 1\nmachine = \"hs\"\nconcurrency = 2.5\n", "concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = \"2\"\n", "test_concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = 1.5\n", "test_concurrency"),
         ("version = 1\nmachine = \"hs\"\nlead_pi_packages = \"npm:x\"\n", "lead_pi_packages"),
         ("version = 1\nmachine = \"hs\"\nlead_pi_packages = [1]\n", "lead_pi_packages"),
         ("version = 1\nmachine = \"hs\"\ntiers = 3\n", "tiers"),
@@ -266,6 +271,9 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         ("version = 1\nmachine = \"hs\"\nconcurrency = 0\n", "concurrency"),
         ("version = 1\nmachine = \"hs\"\nconcurrency = -1\n", "concurrency"),
         ("version = 1\nmachine = \"hs\"\nconcurrency = 99999999999\n", "concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = 0\n", "test_concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = 65\n", "test_concurrency"),
+        ("version = 1\nmachine = \"hs\"\ntest_concurrency = -1\n", "test_concurrency"),
         ("version = 1\nmachine = \"hs\"\nretry_cap = -1\n", "retry_cap"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nattempt_minutes = 0\n", "timeouts.attempt_minutes"),
         ("version = 1\nmachine = \"hs\"\n[timeouts]\nstore_busy_ms = 0\n", "timeouts.store_busy_ms"),

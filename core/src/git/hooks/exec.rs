@@ -81,17 +81,17 @@ struct Running {
     ended: Option<Ended>,
 }
 
-/// Runs the blocks in order in `cwd`; a failing block stops the pipeline. Every
+/// Runs the blocks in order in `cwd`, each with `env` added to its environment; a failing block stops the pipeline. Every
 /// output line is written to `log` as it arrives; only the last `tail_lines`
 /// are kept.
-pub fn execute(blocks: &[Vec<Rendered>], cwd: &Path, timeout: Duration, log: File, tail_lines: usize) -> Executed {
+pub fn execute(blocks: &[Vec<Rendered>], cwd: &Path, timeout: Duration, env: &[(&str, &str)], log: File, tail_lines: usize) -> Executed {
     let deadline = Instant::now() + timeout;
     let output = Arc::new(Mutex::new(Output { log, tail: VecDeque::new(), keep: tail_lines, log_error: None }));
     let mut failure = None;
     for block in blocks.iter().filter(|b| !b.is_empty()) {
         let prefixed = block.len() > 1;
         let mut running: Vec<Running> =
-            block.iter().map(|c| start(c, cwd, prefixed, &output)).collect();
+            block.iter().map(|c| start(c, cwd, prefixed, env, &output)).collect();
         wait(&mut running, deadline);
         failure = running.into_iter().filter_map(|r| r.ended).find(|e| *e != Ended::Exit(0));
         if failure.is_some() {
@@ -102,7 +102,7 @@ pub fn execute(blocks: &[Vec<Rendered>], cwd: &Path, timeout: Duration, log: Fil
     Executed { failure, tail: output.tail.drain(..).collect(), log_error: output.log_error.take() }
 }
 
-fn start(command: &Rendered, cwd: &Path, prefixed: bool, output: &Arc<Mutex<Output>>) -> Running {
+fn start(command: &Rendered, cwd: &Path, prefixed: bool, env: &[(&str, &str)], output: &Arc<Mutex<Output>>) -> Running {
     let not_started = |why: String| Running { child: None, done: None, ended: Some(Ended::NotStarted(why)) };
     let (reader, writer) = match std::io::pipe().and_then(|(r, w)| Ok((r, w.try_clone()?, w))) {
         Ok((r, w1, w2)) => (r, (w1, w2)),
@@ -121,6 +121,8 @@ fn start(command: &Rendered, cwd: &Path, prefixed: bool, output: &Arc<Mutex<Outp
             cmd.env_remove(&key);
         }
     }
+    // After the removal: only the variables the caller names pass, an inherited `CPD_*` never does.
+    cmd.envs(env.iter().copied());
     let spawned = cmd.spawn();
     drop(cmd); // closes our copies of the pipe's write end, so the reader sees EOF
     let mut child = match spawned {

@@ -179,6 +179,11 @@ impl CpdHome {
         self.root.join("run")
     }
 
+    /// `run/test-<i>.lock`: the machine-wide test slot `i`, for `i` in `0..test_concurrency` (contract §1.4, §7.6).
+    pub fn test_slot(&self, i: u32) -> PathBuf {
+        self.run_dir().join(format!("test-{i}.lock"))
+    }
+
     /// `run/watch.log`: the engine's stderr.
     pub fn watch_log(&self) -> PathBuf {
         self.run_dir().join("watch.log")
