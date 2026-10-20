@@ -1698,7 +1698,7 @@ fn fake_tmux_without_popups(env: &TestEnv) {
 }
 
 #[test]
-fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_a_click_on_it_runs_watch_ensure() {
+fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_only_a_click_on_it_runs_watch_ensure() {
     let env = env_without_engine();
     populate(&env);
     archive_managers(&env);
@@ -1706,71 +1706,37 @@ fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_a_click_on
     fake_tmux_without_popups(&env);
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
-    // the tree restarted the engine on its own, as soon as it saw it down; the fake leaves the lock free, so it is down still
-    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
-    // counted in the header, first of the rows (the note of the restart takes two rows of the narrow pane)
+    // counted in the header, first of the rows
     let screen = pane.wait("the item", |s| s.iter().any(|r| r.contains("engine is down")));
     let first = screen.iter().position(|r| r.contains("engine is down")).unwrap();
     assert!(screen[first - 1].contains("Inbox") && screen[first - 1].ends_with('5'), "{:?}", screen[first - 1]);
+    // hs-d363: the tree never restarts the engine by itself (the supervisor does), and says nothing of it
+    // time-claim: the tree took its first snapshot before `ready`, and the old restart ran on it; none comes in 3 s; no per-poll signal from the view.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    assert_eq!(calls(&env), Vec::<Vec<String>>::new(), "no automatic `watch --ensure`");
+    assert!(!pane.screen().iter().any(|r| r.contains("engine was down")), "{:?}", pane.screen());
+    // the User's own click does
     pane.click(10, u16::try_from(first).unwrap());
-    assert_eq!(wait_for_calls(&env, 2), [words(&["watch", "--ensure"]), words(&["watch", "--ensure"])]);
+    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
     pane.wait("the note", |_| pane.footer_has("engine started"));
     pane.settled_with_a_client();
     assert_eq!(popups(&env).len(), 1, "only the legend's, from the settling: {:?}", popups(&env));
-    assert_eq!(calls(&env).len(), 2, "the restart and the click ran `watch --ensure`: {:?}", calls(&env));
+    assert_eq!(calls(&env).len(), 1, "the click ran `watch --ensure`, once: {:?}", calls(&env));
 }
 
 #[test]
-fn a_stopped_engine_is_restarted_once_and_not_again_within_a_minute_and_no_engine_down_shows_with_a_manager() {
+fn a_stopped_engine_is_not_restarted_by_the_tree_and_no_note_says_so_and_no_engine_down_shows_with_a_manager() {
     let env = env_without_engine();
     populate(&env); // its Contexts have Managers: the engine's absence is no Inbox item
     fake_cpd(&env, r#"{"ok":true,"started":true,"pane":"%3"}"#);
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
-    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
-    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure started"));
-    let screen = pane.screen();
-    assert!(!screen.iter().any(|r| r.contains("engine is down")), "a Manager handles it: {screen:?}");
-    // the view takes a snapshot every 2 s and sees the engine down each time, but tries once a minute
-    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 6 s; no per-poll signal from the view.
+    // hs-d363: one restart path, the supervisor's; the tree speaks only after 60 s down, and no e2e test waits that long
+    // time-claim: the old restart ran on the tree's first snapshot, before `ready`; none comes in 6 s (two snapshots); no per-poll signal from the view.
     std::thread::sleep(std::time::Duration::from_secs(6));
-    assert_eq!(calls(&env), [words(&["watch", "--ensure"])], "once, and no message: it started");
-}
-
-#[test]
-fn a_failed_restart_reaches_each_live_manager_once_and_none_without_a_manager() {
-    let env = env_without_engine();
-    populate(&env);
-    env.fake(
-        "cpd",
-        "if [ \"$1\" = watch ]; then echo '{\"ok\":false,\"error\":{\"code\":\"watch_start_failed\",\"message\":\"no tmux\"}}'; else echo '{\"ok\":true}'; fi",
-    );
-    let pane = Pane::start(&env, 46, 20);
-    pane.ready();
-    let text = "The cpd engine is down and 'cpd watch --ensure' failed: watch_start_failed: no tmux. Start it with cpd watch --ensure.";
-    let expected = [words(&["watch", "--ensure"]), words(&["session", "send", "m-alpha", text]), words(&["session", "send", "m-beta", text])];
-    assert_eq!(wait_for_calls(&env, 3), expected);
-    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure failed:"));
-    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 4 s; no per-poll signal from the view.
-    std::thread::sleep(std::time::Duration::from_secs(4));
-    assert_eq!(calls(&env), expected, "nothing more within the minute");
-
-    // with no live Manager, nothing is sent: the Inbox item is the User's
-    let env = env_without_engine();
-    populate(&env);
-    archive_managers(&env);
-    env.fake(
-        "cpd",
-        "if [ \"$1\" = watch ]; then echo '{\"ok\":false,\"error\":{\"code\":\"watch_start_failed\",\"message\":\"no tmux\"}}'; else echo '{\"ok\":true}'; fi",
-    );
-    let pane = Pane::start(&env, 46, 20);
-    pane.ready();
-    assert_eq!(wait_for_calls(&env, 1), [words(&["watch", "--ensure"])]);
-    pane.wait("the note", |_| pane.footer_has("engine was down: cpd watch --ensure failed"));
-    pane.wait("the item", |s| s.iter().any(|r| r.contains("engine is down")));
-    // time-claim: the tree takes a snapshot every 2 s and tries `watch --ensure` once a minute, so none comes in 4 s; no per-poll signal from the view.
-    std::thread::sleep(std::time::Duration::from_secs(4));
-    assert_eq!(calls(&env), [words(&["watch", "--ensure"])], "no Manager to tell");
+    assert_eq!(calls(&env), Vec::<Vec<String>>::new(), "no `watch --ensure`, no message to a Manager");
+    let screen = pane.screen();
+    assert!(!screen.iter().any(|r| r.contains("engine was down") || r.contains("engine is down")), "{screen:?}");
 }
 
 /// An Attempt of Job `job` of `ship`, ended failed with `cause` (`Some`), or running.
