@@ -16,7 +16,6 @@ use time::format_description::well_known::Rfc3339;
 
 use super::fixture::{archived, sample};
 use super::inbox::item;
-use super::rows::ACTIVE_MARK;
 use super::view::{Effect, View};
 use crate::palette::{self, IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED};
 use cpd_core::inbox::model::{Item, Kind, Urgency};
@@ -90,7 +89,7 @@ fn is_muted_line(buf: &Buffer, y: u16, from: u16, to: u16) {
 fn alpha_live() -> Vec<String> {
     vec![
         format!(" ╭{NEEDS_YOU} alpha"),
-        format!(" {ACTIVE_MARK}─{WORKING} ship"),
+        format!(" ├─{WORKING} ship"),
         format!(" ├─{IDLE} sketch"),
         format!(" ├─{IDLE} ship·f-id"),
     ]

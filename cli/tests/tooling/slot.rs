@@ -247,16 +247,21 @@ fn cargo_script_runs_the_command_directly_when_cpd_has_no_slot() {
     assert_eq!(text(&calls), "cargo nextest run\n");
 }
 
-/// `package.json`'s `test` script, run by `sh -c` as npm does, with a fake `node` that records its arguments.
-fn npm_test(cpd: FakeCpd) -> String {
+/// `package.json`'s `test` script, run by `sh -c` as npm does (npm appends the arguments of `npm test -- <args>` to the script's
+/// command line), with a fake `node` that records its arguments.
+fn npm_test_with(cpd: FakeCpd, args: &[&str]) -> String {
     let tmp = tempfile::tempdir().unwrap();
     let (bin, calls) = fakes(tmp.path(), cpd);
     write_executable(&bin.join("node"), &format!("#!/bin/sh\necho node \"$@\" >> {}\n", calls.display()));
     let package: serde_json::Value = serde_json::from_str(&fs::read_to_string(repo_root().join("package.json")).unwrap()).unwrap();
-    let script = package["scripts"]["test"].as_str().unwrap();
-    let out = run_sh(&bin, &["-c", script], &repo_root());
+    let script = [package["scripts"]["test"].as_str().unwrap()].into_iter().chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
+    let out = run_sh(&bin, &["-c", &script], &repo_root());
     assert!(out.status.success(), "{out:?}");
     text(&calls)
+}
+
+fn npm_test(cpd: FakeCpd) -> String {
+    npm_test_with(cpd, &[])
 }
 
 #[test]
@@ -272,4 +277,80 @@ fn npm_test_goes_through_the_slot_and_runs_without_cpd() {
 fn npm_test_runs_directly_when_cpd_has_no_slot() {
     let direct = npm_test(FakeCpd::WithoutSlot);
     assert!(direct.starts_with("node --test pi/test/") && !direct.contains("cpd"), "{direct}");
+}
+
+/// Only a full run takes a slot (contract §7.6 "What is full", hs-d464): the `test` script with no file or name argument, or only
+/// options; with a file or a name it runs directly.
+#[test]
+fn the_npm_test_script_takes_a_slot_for_a_full_run_only() {
+    for (args, slot) in [(&[][..], true), (&["--test-reporter=spec"], true), (&["pi/test/x.test.ts"], false), (&["--test-reporter=spec", "pi/test/x.test.ts"], false)] {
+        let calls = npm_test_with(FakeCpd::WithSlot, args);
+        assert_eq!(calls.contains("cpd slot -- "), slot, "the test script with {args:?}: {calls}");
+        assert!(args.iter().all(|a| calls.contains(a)), "the test script with {args:?} passes its arguments on: {calls}");
+    }
+}
+
+/// What `scripts/cargo.sh <args>` ran, with a fake `cpd` that has `slot`: whether it went through `cpd slot --`. Both ways it
+/// ran cargo itself with `<args>`.
+fn cargo_script_took_a_slot(args: &[&str]) -> Result<bool, String> {
+    let tmp = tempfile::tempdir().unwrap();
+    let (bin, calls) = fakes(tmp.path(), FakeCpd::WithSlot);
+    let script = repo_root().join("scripts/cargo.sh");
+    let out = run_sh(&bin, &[&[script.to_str().unwrap()][..], args].concat(), tmp.path());
+    assert!(out.status.success(), "{args:?}: {out:?}");
+    let (cargo, words) = (bin.join("cargo"), args.join(" "));
+    let (through, direct) = (format!("cpd slot -- {} {words}\ncargo {words}\n", cargo.display()), format!("cargo {words}\n"));
+    match text(&calls) {
+        t if t == through => Ok(true),
+        t if t == direct => Ok(false),
+        t => Err(format!("{args:?}: neither through the slot nor direct: {t:?}")),
+    }
+}
+
+/// The shapes of contract §7.6 "What is full" (hs-d464): which `scripts/cargo.sh` runs take a test slot.
+#[test]
+fn cargo_script_takes_a_slot_for_a_full_run_only() {
+    let shapes: &[(&[&str], bool)] = &[
+        // Full: no test filter, whatever else the run has.
+        (&["nextest", "run", "--workspace"], true),
+        (&["nextest", "run"], true),
+        (&["nextest", "run", "-p", "cpd"], true),
+        (&["nextest", "run", "--package", "cpd", "--no-fail-fast"], true),
+        (&["test", "--workspace"], true),
+        (&["test", "-p", "cpd", "--test", "plan_overlap"], true),
+        (&["test", "--lib", "--features", "x", "-j", "4"], true),
+        (&["nextest", "run", "--profile", "ci", "--all-targets"], true),
+        (&["test", "--", "--skip", "slow"], true),
+        // Filtered to named tests: takes none, `--workspace` and `-p` included.
+        (&["nextest", "run", "--workspace", "-E", "test(/x/)"], false),
+        (&["nextest", "run", "-E", "test(/x/)"], false),
+        (&["nextest", "run", "--filterset", "test(x)"], false),
+        (&["nextest", "run", "-p", "cpd", "-E", "test(x)"], false),
+        (&["nextest", "run", "some_test_name"], false),
+        (&["nextest", "run", "foo", "bar"], false),
+        (&["nextest", "run", "-p", "cpd", "some_test_name"], false),
+        (&["nextest", "run", "--", "foo"], false),
+        (&["test", "some_name"], false),
+        (&["test", "-p", "cpd", "some_name"], false),
+        (&["test", "--workspace", "foo"], false),
+        (&["test", "--", "foo"], false),
+        (&["test", "--", "--exact", "foo"], false),
+        // No test is run.
+        (&["test", "--no-run"], false),
+        (&["test", "--workspace", "--no-run"], false),
+        (&["nextest", "run", "--no-run"], false),
+        (&["nextest", "list"], false),
+        (&["nextest", "archive", "--archive-file", "x.tar.zst"], false),
+        (&["build", "--workspace"], false),
+        (&["check", "-p", "cpd"], false),
+    ];
+    let wrong: Vec<String> = shapes
+        .iter()
+        .filter_map(|(args, slot)| match cargo_script_took_a_slot(args) {
+            Ok(took) if took == *slot => None,
+            Ok(took) => Some(format!("{args:?}: took a slot {took}, the contract says {slot}")),
+            Err(e) => Some(e),
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
