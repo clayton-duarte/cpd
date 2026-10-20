@@ -89,6 +89,7 @@ $CPD_HOME/
   policy/                         the owner and repo scopes of the policies (§8.3); any file may be a symlink
     owners/<owner>.toml           an owner's policy; required for every owner a Context uses
     repos/<owner>/<name>.toml     a repo's policy; optional
+  bin/git                         the `git` wrapper first on every Session's `PATH`: refuses `git stash` (§6.5, hs-d310); an executable `sh` script
   cpd.db, cpd.db-wal, cpd.db-shm  the database (§4)
   archive/contexts/<context>/     an old git store of a Context, moved here by migration 0007 (§4.5); nothing reads it
   locks/
@@ -1907,6 +1908,12 @@ Every title is drawn reversed: `#[reverse]` before it and `#[noreverse]` after i
 | Distiller (§4.6, D5) | `--mode json --no-session --no-extensions --no-skills --no-context-files --no-tools --model <tiers[L]>:<level of context_distill_tier> -- @prompt.md @records.md` (the repair turn of §4.6 step 5: `-- @repair-prompt.md @digest.md @missing.md @problem.md`); cwd `run/context-digests/<context>/`; stdout (JSON lines) read by cpd, which writes the final assistant text to `<upto_seq>.md.tmp` and the usage to `runs.jsonl` (§4.6; hs-d244 D-d). No `-e`: it needs no adapter and no package. No tools and no context files, so its only input is the two files and it writes nothing itself (flags read in pi 1.3.0 `--help`; their effect on a model run is unverified) | `PI_SKIP_VERSION_CHECK=1` only: no `CPD_*` (it is no Session) |
 
 A Lead's or a Manager's first message is passed as the absolute path of its file (`run/<plan>/lead-message.md`, `run/<plan>/messages/<session>.md` or, for a Manager, `run/<context>/manager-message.md`, §1.4) prefixed with `@`, never as text, because Linux limits one argument to 131072 bytes (MAX_ARG_STRLEN; hs-n111) and pi reads `@` files after `--` into the first user message (pi 1.3.0 `--help`: `pi [options] [--] [@files...] [messages...]`).
+
+**`PATH` and the `git` wrapper** (hs-d310). Every pi Session cpd starts (a Worker, a Lead, a Manager; not the Distiller, which is no Session and runs no tools) gets `PATH=$CPD_HOME/bin:<the PATH of the process that starts it>` in its environment, in addition to the variables of the table. `$CPD_HOME/bin/git` (§1.4) is an executable `sh` script that cpd writes (mode 0755) before it starts such a Session. It is idempotent: if the file already has exactly the wrapper's content and mode it is not rewritten; otherwise it is written to a temporary file in `bin/` and renamed into place.
+
+- **What it refuses:** the `stash` subcommand wherever git's global options put it. It skips the global options that come before the subcommand (`-C <dir>`, `-c <k=v>`, `--git-dir <d>`, `--work-tree <d>`, `--namespace <n>`, `--super-prefix <p>`, `--config-env <k=v>`, their `--opt=value` forms, and the flags without a value such as `--no-pager`, `-p`, `--bare`) and refuses when the first other word is `stash`: `git stash`, `git -C <dir> stash list` and `git -c k=v stash` all fail. It exits 1 and prints one line on stderr: `git stash is refused in cpd Sessions (hs-d310): refs/stash is shared by every worktree of a repo; commit on your branch instead.` Every other command is passed through unchanged.
+- **The real git:** at run time the wrapper takes its own directory (the one it was found in) out of `PATH` and `exec`s the first `git` on what is left, with the arguments as given, so it never calls itself. When there is none it prints `git: no git on PATH besides the cpd wrapper` on stderr and exits 127.
+- **Not covered** (one sentence): a `git` called by absolute path, git run by hooks or programs that reset `PATH`, and other users of the repo are not stopped.
 
 `PI_SKIP_VERSION_CHECK=1` is in every row (A1). It disables pi's request for the latest version and so its "Update Available" banner; dotfiles pins pi's version (hs-d134, hs-d144). cpd does not use `PI_OFFLINE`: it also stops model catalog refreshes.
 

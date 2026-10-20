@@ -25,6 +25,7 @@ use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::addr::review_host;
 use crate::host::exe::{Exe, Watched};
+use crate::host::git_guard;
 use crate::host::pi::{self, LeadLaunch, LeadStart, PiDirs, Plannotator};
 use crate::host::{PaneId, Tmux};
 use crate::ids::{PlanId, SessionId};
@@ -175,6 +176,7 @@ fn launch_pi(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<(PiProc, 
     let extensions = pi::extensions_to_pass(&candidates, Path::new(&row.cwd), dirs, &mut std::io::stderr());
     // The port is the Plan's, whatever the environment holds; the host is the review host (§6.5).
     let plannotator = Plannotator { port: port.map(|p| p.to_string()), url_host: review_host(&mut std::io::stderr()) };
+    git_guard::install(&env.home)?;
     let launch = pi::lead(&LeadLaunch {
         home: &env.home,
         session: &row.id,
