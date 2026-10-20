@@ -52,7 +52,7 @@ impl Fx {
         } else {
             ""
         };
-        let needs: String = needs.iter().map(|n| format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', '{key}', '{n}');")).collect();
+        let needs: String = needs.iter().map(|n| format!("INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay-1', '{key}', 'pay-1', '{n}');")).collect();
         self.env.sql(&format!(
             "{row}
              INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
@@ -143,7 +143,7 @@ fn show_with_one_pr_lists_its_fields_and_its_jobs() {
     assert_eq!(prs.len(), 1);
     assert_eq!(
         prs[0],
-        json!({"key": "pay", "repo": "/r/pay", "base": "main", "needs": [], "status": "dispatch",
+        json!({"key": "pay", "repo": "/r/pay", "base": "main", "base_pr": null, "needs": [], "status": "dispatch",
                "lead_branch": "cpd/pay-1/pay", "lead_worktree": "/r/pay.pay-1.pay",
                "pr": null, "pull_request": null, "all_merged_at": null, "start_failed_at": null,
                "created_at": "t", "started_at": "2000-01-01T00:00:01.000Z", "merged_at": null, "title": null,

@@ -237,7 +237,7 @@ mod tests {
         keys.sort();
         assert_eq!(keys, ["protocol", "store", "version"]);
         assert!(fields.contains_key("store"));
-        assert_eq!(fields["protocol"], 5);
+        assert_eq!(fields["protocol"], 6);
     }
 
     /// A stand-in for an area's arguments, to test how our parsers' errors
