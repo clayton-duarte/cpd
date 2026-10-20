@@ -12,7 +12,7 @@ use common::{SLEEP_SECONDS, TestEnv, wait_until};
 use cpd_core::error::ErrorCode;
 use cpd_core::host::layout::{self, View};
 use cpd_core::host::tmux::SERVER_OPTIONS;
-use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux};
+use cpd_core::host::{Pane, PaneId, Spawn, Split, Tmux, WindowId};
 use cpd_core::ids::{AttemptId, PlanId, SessionId};
 
 struct Server {
@@ -408,7 +408,7 @@ fn a_failing_call_is_tmux_failed_with_argv_exit_and_stderr() {
     let err = t.kill_pane(&missing).unwrap_err();
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     let d = err.details();
-    assert_eq!(d["argv"], serde_json::json!(["tmux", "-L", s.env.tmux_socket(), "-f", "/dev/null", "kill-pane", "-t", "%999"]));
+    assert_eq!(d["argv"], serde_json::json!(["tmux", "-u", "-L", s.env.tmux_socket(), "-f", "/dev/null", "kill-pane", "-t", "%999"]));
     assert_eq!(d["exit"], 1);
     assert!(d["stderr"].as_str().unwrap().contains("%999"), "{d:?}");
 }
@@ -427,7 +427,7 @@ fn set_pane_title_runs_set_p_on_cpd_title_and_a_missing_pane_fails_with_its_argv
     assert_eq!(err.code(), ErrorCode::TmuxFailed);
     assert_eq!(
         err.details()["argv"],
-        serde_json::json!(["tmux", "-L", s.env.tmux_socket(), "-f", "/dev/null", "set", "-p", "-t", "%999", "@cpd_title", "X"])
+        serde_json::json!(["tmux", "-u", "-L", s.env.tmux_socket(), "-f", "/dev/null", "set", "-p", "-t", "%999", "@cpd_title", "X"])
     );
 }
 
@@ -589,4 +589,159 @@ fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() 
     assert_eq!(d["tool"], "tmux");
     assert_eq!(d["deadline_seconds"], 1);
     assert_eq!(d["argv"], serde_json::json!(tmux.argv(&["list-sessions".into(), "-F".into(), "#{session_id}".into()])));
+}
+
+// ---- Every tmux call is a UTF-8 client (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----
+//
+// A tmux 3.8 client with no UTF-8 locale prints the tabs of a `-F` format as `_`, so `list-panes` cannot be parsed.
+// The mechanism is `tmux -u`, first after the program, whatever the caller's `LANG`/`LC_*`.
+
+use crate::common::{LOCALES, Locale, real_tmux};
+
+/// A program that runs the real tmux as a caller with the locale `locale` and nothing else would: `env -i`, `PATH` and
+/// `TMUX_TMPDIR` (which `Tmux::with_tmpdir` sets for the call).
+fn tmux_as_caller_with(env: &TestEnv, name: &str, locale: Locale) -> std::path::PathBuf {
+    let path = env.root().join(name);
+    let script = format!("#!/bin/sh\nexec env -i PATH=\"$PATH\" TMUX_TMPDIR=\"$TMUX_TMPDIR\" {} '{}' \"$@\"\n", locale.env_words(), real_tmux().display());
+    common::write_executable(&path, &script);
+    path
+}
+
+/// The defect itself (hs-d463): the liveness call, `list-panes -a -F` (§6.3), through `Tmux` against a real server whose
+/// caller has no UTF-8 locale. Before the fix the tabs print as `_` and `list_panes` fails `tmux_failed: tmux list-panes
+/// printed unexpected output`.
+#[test]
+fn list_panes_parses_for_a_caller_without_a_utf8_locale() {
+    let mut failures = Vec::new();
+    for locale in LOCALES {
+        let env = TestEnv::new();
+        let program = tmux_as_caller_with(&env, "tmux-caller", locale);
+        let tmux = Tmux::with_tmpdir(env.tmux_socket(), env.root().join("tmux")).with_program(program);
+        if let Err(e) = tmux.ensure_session("cpd", "main", &sleeper(env.root())) {
+            failures.push(format!("{locale:?}: ensure_session: {e:?}"));
+            continue;
+        }
+        match tmux.list_panes() {
+            Ok(panes) if panes.len() == 1 => {}
+            other => failures.push(format!("{locale:?}: list_panes: {other:?}")),
+        }
+    }
+    assert!(failures.is_empty(), "list-panes does not parse for a caller whose locale is not UTF-8:\n{}", failures.join("\n"));
+}
+
+/// `tmux -V` and the other program-less calls are UTF-8 clients too: the argv of every `Tmux` call starts `-u`, in `Tmux::argv`
+/// (`tmux -u -L <socket> -f /dev/null <command>`) and in what a fake tmux receives from every method.
+#[test]
+fn every_tmux_method_runs_tmux_with_u_first() {
+    let env = TestEnv::new();
+    let fake = env.fake("tmux-recorder", "exit 0");
+    let tmux = Tmux::with_tmpdir("cpdt-argv", env.root().join("tmux")).with_program(&fake);
+
+    let argv = tmux.argv(&["list-panes".into()]);
+    assert_eq!(&argv[..2], ["tmux", "-u"], "{argv:?}");
+    assert_eq!(argv[2..], ["-L", "cpdt-argv", "-f", "/dev/null", "list-panes"], "{argv:?}");
+
+    let pane = PaneId::parse("%1").unwrap();
+    let other = PaneId::parse("%2").unwrap();
+    let window = WindowId::parse("@1").unwrap();
+    let spawn = sleeper(env.root());
+    // Each method runs one or more tmux calls; what a fake answers does not matter, only what it is called with.
+    let _ = tmux.server_running();
+    let _ = tmux.has_session("cpd");
+    let _ = tmux.ensure_session("cpd", "main", &spawn);
+    let _ = tmux.create_session("cpd", "main", &spawn);
+    let _ = tmux.apply_server_options();
+    let _ = tmux.apply_status_line("cpd");
+    let _ = tmux.preview();
+    let _ = tmux.server_version();
+    let _ = tmux.global_option("status");
+    let _ = tmux.set_pane_session(&pane, &SessionId::new_v4());
+    let _ = tmux.set_pane_title(&pane, "t");
+    let _ = tmux.set_pane_view(&pane, View::Tree);
+    let _ = tmux.new_window("cpd", "w", &spawn);
+    let _ = tmux.split_window(&pane, Split::Right, None, &spawn);
+    let _ = tmux.swap_pane(&pane, &other);
+    let _ = tmux.rename_window(&window, "w");
+    let _ = tmux.respawn_pane(&pane, &spawn);
+    let _ = tmux.respawn_pane_killing(&pane, &spawn);
+    let _ = tmux.kill_pane(&pane);
+    let _ = tmux.kill_window(&window);
+    let _ = tmux.list_panes();
+    let _ = tmux.kill_server();
+
+    let calls = env.calls("tmux-recorder");
+    assert!(calls.len() >= 20, "the fake tmux saw {} calls", calls.len());
+    let bare: Vec<String> = calls.iter().filter(|c| c.first().map(String::as_str) != Some("-u")).map(|c| c.join(" ")).collect();
+    assert!(bare.is_empty(), "tmux calls that are not UTF-8 clients (`-u` first):\n{}", bare.join("\n"));
+}
+
+/// Writes `$CPD_HOME/config.toml` of `env` for the fake-tmux runs below.
+fn fake_tmux_recording(env: &TestEnv) {
+    env.write_tmux_config("");
+    // `-V` answers like a tmux; the server has no session, so every other call fails or prints nothing.
+    env.fake("tmux", "case \"$*\" in *\" -V\"*|-V*) echo 'tmux 3.8' ;; *) exit 1 ;; esac");
+}
+
+/// The tmux calls of `cpd` itself, from the commands that make them, with a fake tmux first on `PATH`, for each locale: the
+/// `-V` probe of `doctor` and `watch --ensure`, `tui`, `tui --respawn`: every one starts `-u` (a bare call is the defect).
+#[test]
+fn every_tmux_call_of_cpd_is_a_utf8_client_whatever_the_callers_locale() {
+    let mut bare = Vec::new();
+    for locale in LOCALES {
+        let env = TestEnv::new();
+        fake_tmux_recording(&env);
+        for args in [&["doctor"][..], &["tui"], &["tui", "--respawn"], &["watch", "--ensure"]] {
+            let mut cmd = env.command(common::CPD);
+            locale.apply(&mut cmd).args(args);
+            let _ = common::output(&mut cmd).unwrap();
+        }
+        let calls = env.calls("tmux");
+        assert!(calls.len() >= 4, "{locale:?}: the fake tmux saw {} calls", calls.len());
+        for call in calls.iter().filter(|c| c.first().map(String::as_str) != Some("-u")) {
+            bare.push(format!("{locale:?}: tmux {}", call.join(" ")));
+        }
+    }
+    bare.sort();
+    bare.dedup();
+    assert!(bare.is_empty(), "calls cpd makes that are not UTF-8 clients (`-u` first):\n{}", bare.join("\n"));
+}
+
+/// The structural guard (hs-d463): the one place that spawns tmux is `core/src/host/tmux.rs`, and what it spawns goes
+/// through `client(program)`, which puts `-u` first; no source names the program in a `Command::new("tmux")` of its own.
+#[test]
+fn no_source_spawns_tmux_with_a_command_of_its_own() {
+    fn sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut files = Vec::new();
+    for dir in ["core/src", "cli/src", "tui/src"] {
+        sources(&root.join(dir), &mut files);
+    }
+    assert!(files.len() > 50, "found only {} sources", files.len());
+    let mut hits = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        // Production code only: unit tests (`#[cfg(test)]`, the end of every file here) may name the program.
+        let code = text.split("#[cfg(test)]").next().unwrap();
+        let name = file.strip_prefix(&root).unwrap().display().to_string();
+        for (n, line) in code.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            // `Command::new("tmux")`: the program named in place, not given to `client(program)`.
+            if line.contains("Command::new(\"tmux\"") {
+                hits.push(format!("{name}:{}: {}", n + 1, t));
+            }
+        }
+    }
+    assert!(hits.is_empty(), "tmux is spawned outside `host::tmux::client` (it puts `-u` first, hs-d463):\n{}", hits.join("\n"));
 }

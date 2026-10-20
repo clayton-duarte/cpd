@@ -2066,10 +2066,10 @@ Idempotent: read-only; the same `--since` replays the same lines.
 ## 12. `watch`
 
 ```
-cpd watch [--ensure]
+cpd watch [--ensure | --check]
 ```
 
-(and the internal `cpd watch --restart-tmux` and `cpd watch --ensure --wait`, below)
+(and the internal `cpd watch --restart-tmux`, `cpd watch --ensure --wait` and `cpd watch --mark-restart`, below)
 
 The engine, one per machine (§3.7, §6.6, D5).
 
@@ -2101,6 +2101,25 @@ Effects: probe `locks/watch.lock` (open and `flock(LOCK_EX | LOCK_NB)`, released
 Idempotent: yes; a running engine gives `"started": false` with `"already": true`.
 
 Every `--ensure`, plain or `--wait`, takes `locks/watch-ensure.lock` before it probes the engine's lock and holds it until it has started the engine, so two calls never start two windows. A plain call waits for it 30 s at most (a supervising call holds it up to 15 s + 10 s + 2 s) and then fails with `watch_start_failed` (`details.next` = `cpd watch --ensure`); it still answers `already` when an engine runs.
+
+**With `--check`** (hs-d463; contract §3.7 "The install's engine order"): verifies, and **writes nothing**, what `--ensure` and the engine's start depend on: no row, no Event, no migration, no window, no pane, no lock taken, no tmux option set, no server started, no directory made. In this order, failing at the first, each with its own error and exit code (§1.2): (a) the config loads (`config_missing`, `config_invalid`); (b) the store opens, from the **read-only verdict** of `cpd --version` (§1.2; `store::verdict`, contract §4.5) on the database opened read-only: it reads `user_version`, `schema_migrations` and this binary's list, and **never migrates or writes**; the database file, its WAL and `locks/store.lock` are not written, created or locked (no `Store::open`, which migrates). No database is no refusal; a verdict that opens, with every pending migration known to this binary, passes; a refusal is its own `store_too_new`, `store_failed`, `migration_changed` or `migration_order`. The migration happens only in the new engine's own start, after the old engine is retired, so a failed check leaves the old engine working against an unmigrated store (hs-d463); (c) `tmux -V` parses and is at least 3.6 (`tmux_failed`); (d) the tmux listing: with the server of `<socket>` running, `list-panes -a -F` with the format of the liveness call (§6.3), as a UTF-8 client (§6.1), and every line parses (`tmux_failed`); with no server it is skipped; (e) `$CPD_HOME/locks` and `run` exist or can be made (their nearest existing ancestor is a writable directory) and `locks/watch.lock`, only if it exists, opens read-write, with no `O_CREAT` and no `flock`, so nothing is created or locked (`store_failed`); a missing file passes, `--ensure` creates it. Idempotent; no bound of its own.
+
+```json
+{"ok": true, "checked": ["config", "store", "tmux", "listing", "home"], "tmux": {"version": "3.8", "server": "running"}}
+```
+
+`"server"` is `"running"` or `"none"`. `scripts/install-cpd.sh` runs it with the new binary before it stops anything (contract §3.7).
+**`--mark-restart` (internal; hs-d471).** What `scripts/install-cpd.sh` runs right before it retires the old engine (contract §3.7 "The install's engine order", step 3); not an interface of the User or an agent. It writes `run/install-restart.json`, `{"by": "install-cpd.sh", "at": <now>, "engine_pid": <pid>}` (`pid` of the latest `watch-started` Event, the engine about to be retired), by rename of a temporary file, replacing any earlier marker. No Event, no row, no lock, no tmux call. It does not need the engine to run.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the home has a `watch-started` Event | `watch_not_started` | 3 |
+
+```json
+{"ok": true, "marked": true, "engine_pid": 4242}
+```
+
+Idempotent: a second one rewrites the same marker with a new `at`. The next engine consumes the marker at its start: a restart back within 10 s (`PLANNED_RESTART_QUIET_SECS`) whose marker names the previous engine's pid is logged only (`watch-started`'s `text` and `run/watch.log`) and sends no `session-message` to the Managers; past 10 s, or with no valid marker, they hear it as before (contract §3.7 "A planned restart", hs-d471). The tests are listed there.
 
 **`--ensure --wait` (internal; hs-d328).** What the tmux server's hooks run when the engine's pane died or its window is gone (contract §6.1, §6.6); not an interface of the User or an agent. As `--ensure`, with these differences:
 

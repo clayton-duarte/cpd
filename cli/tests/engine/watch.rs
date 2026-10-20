@@ -12,6 +12,7 @@ use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
 
 use common::{CPD, PR_POLL_EVERY_TICK, Run, SLEEP_SECONDS, TICK_SECONDS, TestEnv, copy_executable, wait_until, wait_until_for};
+use cpd_core::clock;
 use cpd_core::error::CpdError;
 use cpd_core::git::{self, Setup, create_attempt_worktree, create_lead_worktree};
 use cpd_core::home::{CpdHome, Infra};
@@ -2959,7 +2960,9 @@ fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<St
             r#"case "$1" in
 --version) echo '{{"ok":true,"version":"0.0.0","store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
-watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
+watch) [ "$2" = --check ] && {{ echo '{{"ok":true}}'; exit 0; }}
+  if [ "$2" = --mark-restart ]; then echo '{{"ok":true,"marked":true,"engine_pid":1}}'; exit 0; fi
+  tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
   l="$CPD_HOME/locks/watch.lock"; mkdir -p "$CPD_HOME/locks"
   sh -c 'echo $$ > "$CPD_HOME/engine.pid"; exec flock "$1" sleep 120' sh "$l" </dev/null >/dev/null 2>&1 &
   until ! flock -n "$l" true; do :; done
@@ -2997,7 +3000,7 @@ fn install_restarts_a_running_engine_with_ensure_and_says_so() {
     let (stderr, calls) = install(&env);
 
     assert!(stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--ensure"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--check"], vec!["watch", "--mark-restart"], vec!["watch", "--ensure"]]);
     // The window was killed before --ensure ran; the other window is untouched.
     assert_eq!(fs::read_to_string(env.root().join("windows-at-ensure")).unwrap().trim(), "other");
 }
@@ -3011,7 +3014,7 @@ fn install_leaves_a_server_without_an_engine_alone() {
     let (stderr, calls) = install(&env);
 
     assert!(!stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["--version"], vec!["config"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--check"]]);
 }
 
 #[test]
@@ -3192,4 +3195,438 @@ fn install_over_a_real_adapter_directory_moves_it_aside_and_links_in_one_process
     assert!(!adapter.join("stale.ts").exists() && !adapter.join("old").exists(), "the old adapter was not replaced as a whole");
     assert!(share.join("pi.legacy/stale.ts").exists() && share.join("pi.legacy/old/f.ts").exists(), "pi.legacy holds the old files");
     assert!(adapter.join("package.json").exists());
+}
+
+// ---------- a caller with no UTF-8 locale (hs-d463; contract §6.1 "Every tmux call is a UTF-8 client") ----------
+
+/// The install's `cpd watch --ensure` runs from a launchd agent that sets only `PATH`: tmux then prints the tabs of cpd's `-F`
+/// formats as `_`, and the call failed `tmux_failed: tmux list-panes printed unexpected output` (mac-pro, hs-d463).
+#[test]
+fn ensure_starts_the_engine_for_a_caller_without_a_utf8_locale() {
+    let mut failures = Vec::new();
+    for locale in crate::common::LOCALES {
+        let fx = fx("");
+        fx.env.fake("cpd", &format!("exec '{CPD}' \"$@\""));
+        let mut cmd = fx.env.command(CPD);
+        locale.apply(&mut cmd).args(["watch", "--ensure"]);
+        let out = common::output(&mut cmd).unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if !out.status.success() || !stdout.contains("\"started\":true") {
+            failures.push(format!("{locale:?}: watch --ensure exited {:?}: {stdout}{}", out.status.code(), String::from_utf8_lossy(&out.stderr)));
+            continue;
+        }
+        // The second call sees the engine's window through the same listing.
+        let mut again = fx.env.command(CPD);
+        locale.apply(&mut again).args(["watch", "--ensure"]);
+        let out = common::output(&mut again).unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        if !stdout.contains("\"already\":true") {
+            failures.push(format!("{locale:?}: the second watch --ensure: {stdout}{}", String::from_utf8_lossy(&out.stderr)));
+        }
+    }
+    assert!(failures.is_empty(), "cpd watch --ensure fails without a UTF-8 locale:\n{}", failures.join("\n"));
+}
+
+// ---------- a planned restart is logged only (hs-d471, contract §3.7 "A planned restart") ----------
+
+/// The pid of the engine the tests below say ran before the one under test: no process.
+const PREVIOUS_ENGINE: i64 = 424_242;
+
+/// The sentence a planned restart adds before the final full stop.
+const PLANNED: &str = "(an install's planned restart)";
+
+fn secs_ago(secs: f64) -> String {
+    clock::timestamp(OffsetDateTime::now_utc() - time::Duration::seconds_f64(secs))
+}
+
+impl Fx {
+    /// A home whose previous engine (pid [`PREVIOUS_ENGINE`]) started an hour ago and stopped `down` seconds ago, saying so
+    /// (`watch-stopped`) when `said`, else leaving nothing (a crash: it was last alive at its start, no lock file).
+    /// The new engine's own start comes a moment after `down`.
+    fn previous_engine(&self, down: f64, said: bool) {
+        let stopped = if said {
+            format!(
+                "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-stopped', 'The engine stopped.', '{{\"pid\":{PREVIOUS_ENGINE}}}');",
+                secs_ago(down)
+            )
+        } else {
+            String::new()
+        };
+        // Without a `watch-stopped` the engine is dated by its `watch-started`.
+        let started_ago = if said { 3600.0 } else { down };
+        self.fixture(&format!(
+            "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-started', 'The engine started.', '{{\"pid\":{PREVIOUS_ENGINE}}}');{stopped}",
+            secs_ago(started_ago)
+        ));
+    }
+
+    fn marker_path(&self) -> PathBuf {
+        self.env.cpd_home().join("run/install-restart.json")
+    }
+
+    /// The install's marker, written `age` seconds ago for the engine `pid`.
+    fn marker(&self, pid: i64, age: f64) {
+        self.raw_marker(&json!({"by": "install-cpd.sh", "at": secs_ago(age), "engine_pid": pid}).to_string());
+    }
+
+    fn raw_marker(&self, text: &str) {
+        fs::create_dir_all(self.marker_path().parent().unwrap()).unwrap();
+        fs::write(self.marker_path(), text).unwrap();
+    }
+
+    /// Starts the engine, lets it finish its start and stops it: what the Managers were told is then settled.
+    fn start_and_stop(&self) {
+        let _ = self.start().stop();
+    }
+
+    /// The `watch-started` text of the engine under test.
+    fn started_text(&self) -> String {
+        self.texts("watch-started").pop().unwrap()
+    }
+
+    /// Every Manager (`mgr1`) got one downtime message that says `how`.
+    fn told_with(&self, how: &str) {
+        self.manager_heard(how);
+    }
+}
+
+#[test]
+fn a_planned_restart_back_within_ten_seconds_is_logged_and_tells_no_manager() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(0.5, true);
+    fx.marker(PREVIOUS_ENGINE, 1.0);
+    fx.start_and_stop();
+    assert_eq!(fx.messages(), [], "a quiet restart sends no session-message");
+    let text = fx.started_text();
+    assert!(text.contains("The engine was down for ") && text.contains(&format!("{PLANNED}.")), "{text}");
+    assert!(watch_log(&fx).contains(&format!("{PLANNED}.")), "{}", watch_log(&fx));
+    assert!(!fx.marker_path().exists(), "the marker is consumed at the start");
+}
+
+#[test]
+fn a_stop_with_no_marker_tells_each_manager_as_before() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(0.5, true);
+    fx.start_and_stop();
+    fx.told_with("it stopped at");
+    assert!(!fx.started_text().contains(PLANNED), "{}", fx.started_text());
+}
+
+#[test]
+fn a_planned_restart_that_stayed_down_past_ten_seconds_tells_each_manager_it_took_longer() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(11.0, true);
+    fx.marker(PREVIOUS_ENGINE, 12.0);
+    fx.start_and_stop();
+    fx.told_with("it was an install's restart that took longer than 10 s");
+    assert!(!fx.marker_path().exists(), "the marker is consumed at the start");
+}
+
+/// The bound is `downtime <= 10 s` quiet, `> 10 s` tells. The new engine starts a moment after the time the fixture sets, so the
+/// quiet side is set a little under 10 s (exactly 10.0 would be a race with the process start) and the other a little over.
+#[test]
+fn the_bound_is_ten_seconds_quiet_up_to_it_and_told_past_it() {
+    let quiet = fx("");
+    quiet.manager("mgr1");
+    quiet.previous_engine(9.2, true);
+    quiet.marker(PREVIOUS_ENGINE, 9.5);
+    quiet.start_and_stop();
+    assert_eq!(quiet.messages(), [], "under 10 s is quiet");
+
+    let told = fx("");
+    told.manager("mgr1");
+    told.previous_engine(10.6, true);
+    told.marker(PREVIOUS_ENGINE, 11.0);
+    told.start_and_stop();
+    told.told_with("took longer than 10 s");
+}
+
+#[test]
+fn a_marker_for_another_engine_does_not_silence_the_stop_and_is_deleted() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(0.5, true);
+    fx.marker(PREVIOUS_ENGINE + 1, 1.0);
+    fx.start_and_stop();
+    fx.told_with("it stopped at");
+    assert!(!fx.started_text().contains(PLANNED), "{}", fx.started_text());
+    assert!(!fx.marker_path().exists(), "a foreign marker is deleted too");
+}
+
+#[test]
+fn a_marker_older_than_120_seconds_does_not_silence_the_stop_and_is_deleted() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(0.5, true);
+    fx.marker(PREVIOUS_ENGINE, 130.0);
+    fx.start_and_stop();
+    fx.told_with("it stopped at");
+    assert!(!fx.started_text().contains(PLANNED), "{}", fx.started_text());
+    assert!(!fx.marker_path().exists(), "a stale marker is deleted too");
+}
+
+#[test]
+fn an_unparseable_marker_does_not_silence_the_stop_is_logged_once_deleted_and_the_engine_runs() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(0.5, true);
+    fx.raw_marker("{not json");
+    fx.start_and_stop();
+    fx.told_with("it stopped at");
+    assert!(!fx.marker_path().exists(), "the unreadable marker is deleted");
+    let lines = watch_log(&fx).lines().filter(|l| l.contains("install-restart.json")).count();
+    assert_eq!(lines, 1, "{}", watch_log(&fx));
+}
+
+#[test]
+fn a_marker_with_a_field_of_another_type_is_no_marker() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(0.5, true);
+    fx.raw_marker(&json!({"by": "install-cpd.sh", "at": secs_ago(1.0), "engine_pid": "424242"}).to_string());
+    fx.start_and_stop();
+    fx.told_with("it stopped at");
+    assert!(!fx.marker_path().exists());
+}
+
+#[test]
+fn a_crashed_engine_with_a_valid_marker_is_quiet_by_the_time_it_was_last_alive() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(0.5, false);
+    fx.marker(PREVIOUS_ENGINE, 1.0);
+    fx.start_and_stop();
+    assert_eq!(fx.messages(), []);
+    let text = fx.started_text();
+    assert!(text.contains("it was last alive") && text.contains(&format!("{PLANNED}.")), "{text}");
+}
+
+#[test]
+fn a_crashed_engine_with_a_valid_marker_past_ten_seconds_tells() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    fx.previous_engine(11.0, false);
+    fx.marker(PREVIOUS_ENGINE, 12.0);
+    fx.start_and_stop();
+    fx.told_with("took longer than 10 s");
+}
+
+#[test]
+fn mark_restart_writes_the_marker_of_the_latest_engine_and_twice_leaves_one_file() {
+    let fx = fx("");
+    fx.previous_engine(0.5, true);
+    fx.fixture(&format!(
+        "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), '{}', 'watch-started', 'The engine started.', '{{\"pid\":{}}}');",
+        secs_ago(0.1),
+        PREVIOUS_ENGINE + 7
+    ));
+    let before = OffsetDateTime::now_utc() - time::Duration::seconds(1);
+    let out = fx.env.cpd(&["watch", "--mark-restart"]).ok();
+    assert_eq!(out, json!({"ok": true, "marked": true, "engine_pid": PREVIOUS_ENGINE + 7}));
+    let marker: Value = serde_json::from_str(&fs::read_to_string(fx.marker_path()).unwrap()).unwrap();
+    assert_eq!((marker["by"].clone(), marker["engine_pid"].clone()), (json!("install-cpd.sh"), json!(PREVIOUS_ENGINE + 7)), "{marker}");
+    let at = parse_time(marker["at"].as_str().unwrap());
+    assert!(at >= before && at <= OffsetDateTime::now_utc() + time::Duration::seconds(1), "{marker}");
+
+    fx.env.cpd(&["watch", "--mark-restart"]).ok();
+    let files: Vec<_> = fs::read_dir(fx.marker_path().parent().unwrap())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains("install-restart"))
+        .collect();
+    assert_eq!(files, ["install-restart.json"], "one marker, no temporary file left");
+}
+
+#[test]
+fn mark_restart_with_no_watch_started_writes_nothing_and_fails_watch_not_started() {
+    let fx = fx("");
+    let run = fx.env.cpd(&["watch", "--mark-restart"]);
+    assert_eq!(run.exit, 3, "{run:?}");
+    assert_eq!(run.error()["code"], "watch_not_started");
+    assert!(!fx.marker_path().exists());
+}
+
+#[test]
+fn a_marker_written_by_mark_restart_silences_the_restart_it_marks() {
+    let fx = fx("");
+    fx.manager("mgr1");
+    let first = fx.start();
+    let _ = first.stop();
+    fx.env.cpd(&["watch", "--mark-restart"]).ok();
+    fx.start_and_stop();
+    assert_eq!(fx.messages(), [], "the engine that stopped was marked, and the next one is back within a moment");
+    assert!(fx.started_text().contains(PLANNED), "{}", fx.started_text());
+}
+
+// ---------- `watch --check` is read-only (hs-d463; contract §3.7 step 1, commands.md §12) ----------
+
+/// A store one migration behind this binary, and what the check must leave alone. The store is the template's, whose
+/// newest migration's row is removed (the trigger that makes `schema_migrations` append-only is dropped and recreated
+/// as it was): the verdict (§4.5) is then `opens` with that one migration `pending`. The migration's effects are
+/// already in the schema, so a check that migrated would fail on it or double-record it: either way the checks below fail.
+struct BehindStore {
+    env: TestEnv,
+    /// The newest migration of this binary: the one the store lacks.
+    pending: String,
+    /// Held open, so that the WAL and its shared memory exist for the whole check: a read-only open must not create them.
+    _held: rusqlite::Connection,
+}
+
+/// What `watch --check` must leave byte-for-byte unchanged: the database, its WAL, `locks/store.lock`, with their
+/// modification times, and the set of files under `$CPD_HOME`. (The shared-memory file is the readers' own scratch,
+/// written by any reader, so it is listed but not compared.)
+#[derive(Debug, PartialEq)]
+struct Files {
+    contents: Vec<(String, Option<Vec<u8>>, Option<std::time::SystemTime>)>,
+    names: Vec<String>,
+}
+
+fn files(env: &TestEnv) -> Files {
+    fn walk(dir: &Path, root: &Path, names: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            names.push(path.strip_prefix(root).unwrap().display().to_string());
+            if path.is_dir() {
+                walk(&path, root, names);
+            }
+        }
+    }
+    let home = env.cpd_home();
+    let mut names = Vec::new();
+    walk(&home, &home, &mut names);
+    names.sort();
+    let contents = ["cpd.db", "cpd.db-wal", "locks/store.lock"]
+        .iter()
+        .map(|name| {
+            let path = home.join(name);
+            (name.to_string(), fs::read(&path).ok(), fs::metadata(&path).and_then(|m| m.modified()).ok())
+        })
+        .collect();
+    Files { contents, names }
+}
+
+/// Every table's row count: the check writes no row and no Event.
+fn row_counts(env: &TestEnv) -> Vec<(String, i64)> {
+    env.read(|conn| {
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        tables
+            .into_iter()
+            .map(|t| Ok((t.clone(), conn.query_row(&format!("SELECT count(*) FROM \"{t}\""), [], |r| r.get(0))?)))
+            .collect()
+    })
+}
+
+fn applied(env: &TestEnv) -> Vec<String> {
+    env.read(|conn| {
+        Ok(conn.prepare("SELECT name FROM schema_migrations ORDER BY seq")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    })
+}
+
+fn user_version(env: &TestEnv) -> i64 {
+    env.query("PRAGMA user_version")
+}
+
+fn behind_store() -> BehindStore {
+    let env = TestEnv::new();
+    env.write_tmux_config("");
+    let conn = rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+    conn.pragma_update(None, "journal_mode", "wal").unwrap();
+    let (pending, trigger): (String, String) = (
+        conn.query_row("SELECT name FROM schema_migrations ORDER BY seq DESC LIMIT 1", [], |r| r.get(0)).unwrap(),
+        conn.query_row("SELECT sql FROM sqlite_schema WHERE name = 'schema_migrations_no_delete'", [], |r| r.get(0)).unwrap(),
+    );
+    conn.execute_batch("DROP TRIGGER schema_migrations_no_delete").unwrap();
+    conn.execute("DELETE FROM schema_migrations WHERE name = ?1", [&pending]).unwrap();
+    conn.execute_batch(&trigger).unwrap();
+    // `locks/store.lock` exists, as it does on a machine that has run cpd.
+    fs::create_dir_all(env.cpd_home().join("locks")).unwrap();
+    OpenOptions::new().create(true).append(true).open(env.cpd_home().join("locks/store.lock")).unwrap();
+    assert!(env.cpd_home().join("cpd.db-wal").exists(), "the held connection keeps the WAL");
+    BehindStore { env, pending, _held: conn }
+}
+
+impl BehindStore {
+    /// The stand-in for the old engine (the binary with the earlier list of migrations; none is built here, and a store
+    /// whose last row was removed cannot be opened by this binary's `Store::open`, which would migrate it, the thing
+    /// that must not happen): what makes the old engine fail `store_too_new` (§4.5) is an applied migration it does
+    /// not know. So the old engine still works against the store when no migration the old list lacks is applied, the
+    /// store is not marked newer (`user_version` is the one every named store has), and it reads as it did.
+    fn assert_the_old_engine_still_works(&self, before_applied: &[String], before_version: i64) {
+        let env = &self.env;
+        let now = applied(env);
+        assert_eq!(now, before_applied, "no migration was applied");
+        assert!(!now.contains(&self.pending), "the new binary's migration {} was applied by the check", self.pending);
+        assert_eq!(user_version(env), before_version, "user_version is unchanged");
+        // The old engine's own read and its own write, from a connection that is not this binary's `Store`.
+        let conn = rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap();
+        conn.busy_timeout(Duration::from_secs(5)).unwrap();
+        let check: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+        assert_eq!(check, "ok");
+        conn.execute_batch("BEGIN IMMEDIATE; COMMIT").expect("the old engine can still take the write lock");
+    }
+}
+
+/// The tmux the check fails at: a UTF-8-less client's listing, tabs printed as `_` (the mac-pro failure of hs-d463).
+fn tmux_printing_underscores(env: &TestEnv) {
+    env.fake(
+        "tmux",
+        r#"case " $*" in
+*" -V"*) echo "tmux 3.6";;
+*" list-sessions"*) echo '$0';;
+*" list-panes"*) echo '%1_cpd_main_0_1234_x';;
+esac"#,
+    );
+}
+
+/// (1) A check that passes against a store one migration behind writes nothing: the database, its WAL and `locks/store.lock`
+/// are byte-for-byte and mtime-for-mtime what they were, no file is made, the schema version is unchanged.
+#[test]
+fn watch_check_against_a_store_one_migration_behind_passes_and_changes_no_file_and_no_version() {
+    let s = behind_store();
+    let before = (files(&s.env), applied(&s.env), user_version(&s.env));
+    let run = s.env.cpd(&["watch", "--check"]);
+    let out = run.ok();
+    assert_eq!(out["checked"], json!(["config", "store", "tmux", "listing", "home"]), "{out}");
+    assert_eq!((files(&s.env), applied(&s.env), user_version(&s.env)), before, "the check passed and wrote nothing");
+    s.assert_the_old_engine_still_works(&before.1, before.2);
+}
+
+/// (2) The Manager's test: the check fails after the store step (the tmux listing, a tmux that prints `_` for tabs) against the
+/// store one migration behind: the store is not migrated, and the old engine still works against it.
+#[test]
+fn a_watch_check_that_fails_after_the_store_step_leaves_the_store_unmigrated_for_the_old_engine() {
+    let s = behind_store();
+    tmux_printing_underscores(&s.env);
+    let before = (files(&s.env), applied(&s.env), user_version(&s.env));
+    let run = s.env.cpd(&["watch", "--check"]);
+    let error = run.error();
+    assert_eq!(error["code"], "tmux_failed", "the check fails at the listing, after the store step: {error}");
+    assert!(error["message"].as_str().unwrap().contains("unexpected output"), "{error}");
+    assert!(
+        s.env.calls("tmux").iter().any(|c| c.iter().any(|a| a == "list-panes")),
+        "the check got as far as the tmux listing: {:?}",
+        s.env.calls("tmux")
+    );
+    assert_eq!((files(&s.env), applied(&s.env), user_version(&s.env)), before, "the failed check left the store as it was");
+    s.assert_the_old_engine_still_works(&before.1, before.2);
+}
+
+/// (3) The check writes no row and no Event, whether it passes or fails.
+#[test]
+fn watch_check_writes_no_row_and_no_event_passing_or_failing() {
+    let s = behind_store();
+    let before = row_counts(&s.env);
+    assert!(before.iter().any(|(t, _)| t == "events") && before.iter().any(|(t, _)| t == "txns"));
+    s.env.cpd(&["watch", "--check"]).ok();
+    assert_eq!(row_counts(&s.env), before, "a passing check wrote a row");
+    tmux_printing_underscores(&s.env);
+    assert_eq!(s.env.cpd(&["watch", "--check"]).error()["code"], "tmux_failed");
+    assert_eq!(row_counts(&s.env), before, "a failing check wrote a row");
+    assert_eq!(s.env.query::<i64>("SELECT count(*) FROM events"), before.iter().find(|(t, _)| t == "events").unwrap().1);
 }

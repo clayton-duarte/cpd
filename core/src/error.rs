@@ -125,6 +125,7 @@ error_codes! {
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
     DistillRunning = "distill_running" => Refused,
+    WatchNotStarted = "watch_not_started" => Refused,
     IllegalTransition = "illegal_transition" => Refused,
     LockedJobTampered = "locked_job_tampered" => Refused,
     RecordNotFound = "record_not_found" => Refused,
