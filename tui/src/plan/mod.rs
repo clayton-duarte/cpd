@@ -553,6 +553,7 @@ mod tests {
                 state: read::PrState::Open,
                 url: "https://github.com/acme/api/pull/12".into(),
                 conflicting: false,
+                lead_working: false,
             }),
         }];
         let plan = PlanBoxes {

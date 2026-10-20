@@ -5,13 +5,16 @@
 //! condition: [`stuck_jobs`] finds the ones the engine tells the Manager of (hs-d318).
 
 use std::path::Path;
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::model::{Condition, Kind, Urgency};
+use super::model::{Condition, Kind, Urgency, open_items};
+use super::team::{self, GhPr, Lookup, Memo, Post, Status};
+use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::addr::review_host;
@@ -24,9 +27,32 @@ use crate::store::Store;
 /// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
 const PLAN_REVIEW: &str = "cpd: plan review";
 
+/// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
+/// the GitHub state of the posted pull requests, one call for all of them.
+pub struct Team<'a> {
+    pub bot_reviewers: &'a [String],
+    pub github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>,
+}
+
+/// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
+static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
+
 /// Every condition of the kinds, in the order of the kinds. There is no `engine-error` (hs-d314: the engine's errors go to
-/// the Manager) and no `job-stuck` (hs-d318: a stuck Job goes to the Manager too, see [`stuck_jobs`]).
+/// the Manager) and no `job-stuck` (hs-d318: a stuck Job goes to the Manager too, see [`stuck_jobs`]). The team review
+/// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
+/// time and both as arguments.
 pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+    let config = Config::load(home)?;
+    let mut github = |refs: &[(String, u64)]| {
+        let mut held = GITHUB.lock().unwrap_or_else(PoisonError::into_inner);
+        held.get_or_insert_with(Memo::default).get(refs, Instant::now(), |refs| team::github_lookup(home, refs))
+    };
+    let team = (!config.inbox.team_channel.is_empty()).then_some(Team { bot_reviewers: &config.inbox.bot_reviewers, github: &mut github });
+    conditions_with(store, home, OffsetDateTime::now_utc(), team)
+}
+
+/// [`conditions`] at `now` with the team review rule's inputs given; `None` switches that kind off.
+pub fn conditions_with(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team: Option<Team<'_>>) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| plan_reviews(conn, home))?);
     all.extend(store.read(unread)?);
@@ -35,7 +61,7 @@ pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, C
     all.extend(store.read(|conn| pr_failing(conn, home))?);
     all.extend(store.read(|conn| pr_changes(conn, home))?);
     all.extend(store.read(|conn| pr_ready(conn, home))?);
-    all.extend(store.read(|conn| review_requested(conn, home))?);
+    all.extend(review_requested(store, home, now, team)?);
     Ok(all)
 }
 
@@ -471,25 +497,97 @@ fn pr_ready(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdErro
     )
 }
 
-/// `review-requested`: an open pull request requests the User's review.
-fn review_requested(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
-    pull_request_conditions(
-        conn,
-        home,
-        Kind::ReviewRequested,
-        Urgency::Yellow,
-        "r.review_requested = 1",
-        ChecksRule::Ignore,
-        |name, n, _| format!("review {name}#{n}"),
-    )
+/// `review-requested`: a pull request posted in the team channel in the last 7 days that hermes' rule calls
+/// `NEEDS_REVIEW` (contract §2.2 "The team review rule", hs-d320). GitHub's own review requests open nothing.
+///
+/// The posts are `run/team-review.json` (E11); a missing file is "unknown", not "empty", and so is a GitHub that
+/// cannot be read (the call fails, or no pull request of the posts can be read, hermes `main`): the open items stay
+/// as they are, and a failure that is not just "not yet" is one `engine-error` condition beside them. A single
+/// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
+fn review_requested(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team: Option<Team<'_>>) -> Result<Vec<Condition>, CpdError> {
+    let Some(team) = team else { return Ok(Vec::new()) };
+    let cache = match team::read_cache(home) {
+        Ok(Some(cache)) => cache,
+        Ok(None) => return kept_review_items(store, None),
+        Err(e) => return kept_review_items(store, Some(&e)),
+    };
+    let cutoff = now.unix_timestamp() as f64 - team::WINDOW.as_secs_f64();
+    let posts: Vec<&Post> = cache.posts.iter().filter(|p| p.primary && p.ts >= cutoff).collect();
+    if posts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let refs: Vec<(String, u64)> = posts.iter().map(|p| (p.repo.clone(), p.number)).collect();
+    let lookup = match (team.github)(&refs) {
+        Ok(lookup) => lookup,
+        Err(e) => return kept_review_items(store, Some(&e)),
+    };
+    let read = |p: &Post| -> Option<&GhPr> { lookup.prs.get(&(p.repo.clone(), p.number)).and_then(Option::as_ref) };
+    if posts.iter().all(|p| read(p).is_none()) {
+        let none = CpdError::new(ErrorCode::GhFailed, "GitHub could not read any pull request posted in the team channel.");
+        return kept_review_items(store, Some(&none));
+    }
+    Ok(posts
+        .into_iter()
+        .filter(|post| {
+            read(post).is_some_and(|pr| matches!(team::status(post, pr, &lookup.me, team.bot_reviewers), Status::NeedsReview(_)))
+        })
+        .map(|post| {
+            let name = post.repo.split_once('/').map_or(post.repo.as_str(), |(_, name)| name);
+            Condition {
+                kind: Kind::ReviewRequested,
+                urgency: Urgency::Yellow,
+                subject: format!("pr:{}#{}", post.repo, post.number),
+                label: format!("review {name}#{}", post.number),
+                url: Some(format!("https://github.com/{}/pull/{}", post.repo, post.number)),
+                context: None,
+                plan: None,
+                job: None,
+                session: None,
+                record: None,
+                event: None,
+            }
+        })
+        .collect())
+}
+
+/// The open `review-requested` items as conditions (nothing changes), and `why` as an `engine-error` when given.
+fn kept_review_items(store: &mut Store, why: Option<&CpdError>) -> Result<Vec<Condition>, CpdError> {
+    let mut out: Vec<Condition> =
+        store.read(open_items)?.iter().filter(|i| i.kind == Kind::ReviewRequested).map(Condition::from).collect();
+    if let Some(e) = why {
+        let code = e.code().as_str();
+        out.push(Condition {
+            kind: Kind::EngineError,
+            urgency: Urgency::Red,
+            subject: format!("error:E8/team-review/{code}"),
+            label: format!("team review: {code}"),
+            url: None,
+            context: None,
+            plan: None,
+            job: None,
+            session: None,
+            record: None,
+            event: None,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use time::macros::datetime;
 
+    use serde_json::{Value, json};
+
     use super::*;
     use crate::host::addr::URL_HOST;
+    use crate::inbox::model::reconcile;
+    use crate::inbox::team::{GhState, Review};
+
+    /// [`super::conditions_with`] with the team review rule off: these tests need no config file.
+    fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+        conditions_with(store, home, NOW, None)
+    }
 
     const NOW: OffsetDateTime = datetime!(2026-01-02 00:00 UTC);
     const TEN: Duration = Duration::from_secs(600);
@@ -1063,24 +1161,12 @@ mod tests {
     }
 
     #[test]
-    fn a_review_request_is_an_item_while_it_lasts() {
-        let mut f = fixture("dispatch");
-        pull_request(&mut f, 5, "none", "unknown", "none");
-        set(&mut f, 5, "authored = 0, review_requested = 1");
-        let c = one(f.of(Kind::ReviewRequested));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/shop#5", "review shop#5"));
-        assert_eq!(c.url.as_deref(), Some("https://github.com/acme/shop/pull/5"));
-        set(&mut f, 5, "review_requested = 0");
-        assert!(f.of(Kind::ReviewRequested).is_empty());
-    }
-
-    #[test]
-    fn only_authored_pull_requests_are_failing_changed_or_ready() {
+    fn only_authored_pull_requests_are_failing_changed_or_ready_and_a_github_request_opens_nothing() {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
         f.sql("UPDATE pull_requests SET authored = 0, review_requested = 1");
-        assert_eq!(pr_kinds(&mut f), [Kind::ReviewRequested, Kind::ReviewRequested]);
+        assert!(pr_kinds(&mut f).is_empty(), "review_requested alone is no item (hs-d320)");
     }
 
     #[test]
@@ -1088,9 +1174,7 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 1, "failed", "conflicting", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
-        set(&mut f, 2, "review_requested = 1");
-        set(&mut f, 1, "review_requested = 1");
-        assert_eq!(pr_kinds(&mut f).len(), 5);
+        assert_eq!(pr_kinds(&mut f).len(), 3);
         f.sql("UPDATE pull_requests SET state = 'closed'");
         assert!(pr_kinds(&mut f).is_empty());
     }
@@ -1114,9 +1198,8 @@ mod tests {
         let mut f = fixture("dispatch");
         pull_request(&mut f, 6, "passed", "mergeable", "approved");
         pull_request(&mut f, 7, "passed", "mergeable", "approved");
-        set(&mut f, 6, "review_requested = 1");
         own(&mut f, 6);
-        for kind in [Kind::PrReady, Kind::ReviewRequested] {
+        for kind in [Kind::PrReady] {
             let c = one(f.of(kind).into_iter().filter(|c| c.subject == "pr:acme/shop#6").collect());
             assert_eq!(
                 (c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str()), c.session.as_ref().map(|s| s.as_str())),
@@ -1163,6 +1246,229 @@ mod tests {
         assert_eq!(pr_kinds(&mut f), [Kind::PrReady]);
     }
 
+    // ---- review-requested: the team review rule (hs-d320) ----
+
+    const BOTS: [&str; 1] = ["github-actions"];
+    const ME_LOGIN: &str = "clayton-duarte";
+
+    /// `ts` of a post an hour before `NOW`.
+    fn recent() -> f64 {
+        NOW.unix_timestamp() as f64 - 3600.0
+    }
+
+    /// A primary post with no reaction, no claim and no tag, as the helper prints it (commands.md §21.6).
+    fn post(repo: &str, number: u64) -> Value {
+        json!({"repo": repo, "number": number, "ts": recent(), "ts_raw": "1.1", "author": "Ryan Case", "primary": true,
+               "reactions": [], "claim": null, "eyes_me": null, "thread_tags_me": false})
+    }
+
+    fn claimed(mut post: Value, eyes_me: Value) -> Value {
+        post["reactions"] = json!(["eyes"]);
+        post["claim"] = json!({"kind": "claimed", "reason": "claimed with :eyes: in Slack"});
+        post["eyes_me"] = eyes_me;
+        post
+    }
+
+    fn tagged(mut post: Value) -> Value {
+        post["thread_tags_me"] = json!(true);
+        post
+    }
+
+    fn write_cache(f: &Fixture, posts: &[Value]) {
+        let path = f.home.run_dir().join("team-review.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let cache = json!({"version": 1, "polled_at": T, "channel": "C02JU6C2Z1D", "read": 10, "posts": posts});
+        std::fs::write(path, cache.to_string()).unwrap();
+    }
+
+    fn open_pr() -> GhPr {
+        GhPr { draft: false, state: GhState::Open, author: "ryan".to_owned(), decision: None, reviews: Vec::new() }
+    }
+
+    fn reviewed_by(login: &str) -> GhPr {
+        GhPr { reviews: vec![Review { author: login.to_owned(), state: "COMMENTED".to_owned() }], ..open_pr() }
+    }
+
+    fn lookup(prs: &[(&str, u64, GhPr)]) -> Lookup {
+        Lookup { me: ME_LOGIN.to_owned(), prs: prs.iter().map(|(repo, n, pr)| (((*repo).to_owned(), *n), Some(pr.clone()))).collect() }
+    }
+
+    fn team<'a>(github: &'a mut dyn FnMut(&[(String, u64)]) -> Result<Lookup, CpdError>) -> Team<'a> {
+        static BOT_LIST: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| BOTS.map(str::to_owned).to_vec());
+        Team { bot_reviewers: &BOT_LIST, github }
+    }
+
+    /// The `review-requested` conditions for the cache's `posts` and GitHub's `prs`.
+    fn reviews(f: &mut Fixture, posts: &[Value], prs: &[(&str, u64, GhPr)]) -> Vec<Condition> {
+        write_cache(f, posts);
+        let lookup = lookup(prs);
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(lookup.clone())))).unwrap();
+        all.into_iter().filter(|c| c.kind == Kind::ReviewRequested).collect()
+    }
+
+    #[test]
+    fn a_post_with_no_review_opens_an_item_with_the_posts_pull_request() {
+        let mut f = fixture("dispatch");
+        let c = one(reviews(&mut f, &[post("acme/pay", 812)], &[("acme/pay", 812, open_pr())]));
+        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Yellow, "pr:acme/pay#812", "review pay#812"));
+        assert_eq!(c.url.as_deref(), Some("https://github.com/acme/pay/pull/812"));
+        assert_eq!((c.context, c.plan, c.session, c.job, c.record, c.event), (None, None, None, None, None, None));
+    }
+
+    /// One case per hermes rule: what GitHub says, what Slack says, and whether the item opens.
+    #[test]
+    fn each_hermes_rule_opens_the_item_or_not() {
+        let changes = GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), ..open_pr() };
+        let approved = GhPr { decision: Some("APPROVED".to_owned()), ..open_pr() };
+        let cases: Vec<(&str, Value, GhPr, bool)> = vec![
+            ("no review yet", post("acme/pay", 1), open_pr(), true),
+            ("AI review only", post("acme/pay", 1), reviewed_by("github-actions"), true),
+            ("a human is reviewing", post("acme/pay", 1), reviewed_by("wes"), false),
+            ("draft", post("acme/pay", 1), GhPr { draft: true, ..open_pr() }, false),
+            ("the User's own PR", post("acme/pay", 1), GhPr { author: ME_LOGIN.to_owned(), ..open_pr() }, false),
+            ("merged", post("acme/pay", 1), GhPr { state: GhState::Merged, ..open_pr() }, false),
+            ("closed", post("acme/pay", 1), GhPr { state: GhState::Closed, ..open_pr() }, false),
+            ("approved", post("acme/pay", 1), approved, false),
+            ("changes requested", post("acme/pay", 1), changes, false),
+            ("claimed by a peer's :eyes:", claimed(post("acme/pay", 1), json!(false)), open_pr(), false),
+            ("claimed, attribution unavailable", claimed(post("acme/pay", 1), Value::Null), open_pr(), false),
+            ("assigned to someone in Slack", {
+                let mut p = post("acme/pay", 1);
+                p["claim"] = json!({"kind": "claimed", "reason": "assigned to someone in Slack"});
+                p
+            }, open_pr(), false),
+            ("the User's own :eyes: alone", claimed(post("acme/pay", 1), json!(true)), open_pr(), true),
+            ("tagged in the thread of a claimed post", tagged(claimed(post("acme/pay", 1), json!(false))), open_pr(), true),
+            ("tagged in the thread of a reviewed PR", tagged(post("acme/pay", 1)), reviewed_by("wes"), true),
+            ("tagged under a merged PR", tagged(post("acme/pay", 1)), GhPr { state: GhState::Merged, ..open_pr() }, false),
+            ("tagged under changes requested", tagged(post("acme/pay", 1)), GhPr { decision: Some("CHANGES_REQUESTED".to_owned()), ..open_pr() }, false),
+            ("tagged under a draft", tagged(post("acme/pay", 1)), GhPr { draft: true, ..open_pr() }, false),
+        ];
+        let mut f = fixture("dispatch");
+        for (rule, post, pr, opens) in cases {
+            let found = reviews(&mut f, &[post], &[("acme/pay", 1, pr)]);
+            assert_eq!(found.len(), usize::from(opens), "{rule}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn a_github_review_request_alone_opens_nothing() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 5, "none", "unknown", "none");
+        set(&mut f, 5, "authored = 0, review_requested = 1");
+        assert!(reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, reviewed_by("wes"))]).is_empty(), "posts of other PRs");
+        assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
+        std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
+        let none = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| panic!("no post, no call")))).unwrap();
+        assert!(none.is_empty(), "no cache: {none:?}");
+    }
+
+    #[test]
+    fn only_primary_posts_within_seven_days_are_read_and_asked_of_github() {
+        let mut f = fixture("dispatch");
+        let day = 24.0 * 3600.0;
+        let old = |n, age: f64| {
+            let mut p = post("acme/pay", n);
+            p["ts"] = json!(NOW.unix_timestamp() as f64 - age);
+            p
+        };
+        let mut mention = post("acme/pay", 3);
+        mention["primary"] = json!(false);
+        write_cache(&f, &[old(1, 6.9 * day), old(2, 7.1 * day), mention]);
+        let mut asked = Vec::new();
+        let answer = lookup(&[("acme/pay", 1, open_pr())]);
+        let all = conditions_with(
+            &mut f.store,
+            &f.home,
+            NOW,
+            Some(team(&mut |refs| {
+                asked = refs.to_vec();
+                Ok(answer.clone())
+            })),
+        )
+        .unwrap();
+        assert_eq!(asked, [("acme/pay".to_owned(), 1)]);
+        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["pr:acme/pay#1"]);
+    }
+
+    #[test]
+    fn with_the_rule_off_nothing_opens_and_open_items_close() {
+        let mut f = fixture("dispatch");
+        let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
+        reconcile(&mut f.store, &opened, T).unwrap();
+        let off = conditions_with(&mut f.store, &f.home, NOW, None).unwrap();
+        assert!(off.is_empty());
+        reconcile(&mut f.store, &off, T).unwrap();
+        assert!(f.store.read(open_items).unwrap().is_empty());
+    }
+
+    /// The open items after reconciling `conditions` over them.
+    fn open_subjects(f: &mut Fixture) -> Vec<String> {
+        f.store.read(open_items).unwrap().into_iter().map(|i| i.subject).collect()
+    }
+
+    #[test]
+    fn a_missing_cache_leaves_open_items_as_they_are_and_a_pull_request_that_leaves_it_closes_its_item() {
+        let mut f = fixture("dispatch");
+        let two = [post("acme/pay", 1), post("acme/pay", 2)];
+        let both = [("acme/pay", 1, open_pr()), ("acme/pay", 2, open_pr())];
+        let opened = reviews(&mut f, &two, &both);
+        reconcile(&mut f.store, &opened, T).unwrap();
+        assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
+
+        std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
+        let unknown = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| panic!("nothing to ask")))).unwrap();
+        assert_eq!(unknown.len(), 2, "no file is unknown, not empty: {unknown:?}");
+        reconcile(&mut f.store, &unknown, T).unwrap();
+        assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
+
+        let rest = reviews(&mut f, &[post("acme/pay", 2)], &[("acme/pay", 2, open_pr())]);
+        reconcile(&mut f.store, &rest, T).unwrap();
+        assert_eq!(open_subjects(&mut f), ["pr:acme/pay#2"], "#1 left the file");
+    }
+
+    #[test]
+    fn an_unreadable_cache_keeps_the_items_and_says_so() {
+        let mut f = fixture("dispatch");
+        let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
+        reconcile(&mut f.store, &opened, T).unwrap();
+        std::fs::write(f.home.run_dir().join("team-review.json"), "{ not json").unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| panic!("unreadable")))).unwrap();
+        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1);
+        let error = all.iter().find(|c| c.kind == Kind::EngineError).expect("an engine-error condition");
+        assert_eq!((error.urgency, error.subject.as_str(), error.label.as_str()), (Urgency::Red, "error:E8/team-review/store_failed", "team review: store_failed"));
+        std::fs::write(f.home.run_dir().join("team-review.json"), r#"{"version": 2, "posts": []}"#).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| panic!("unreadable")))).unwrap();
+        assert!(all.iter().any(|c| c.kind == Kind::EngineError), "another version is unreadable too");
+    }
+
+    #[test]
+    fn a_github_that_fails_keeps_the_items_and_says_so() {
+        let mut f = fixture("dispatch");
+        let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
+        reconcile(&mut f.store, &opened, T).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Err(CpdError::new(ErrorCode::GhFailed, "down"))))).unwrap();
+        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "kept");
+        assert_eq!(all.iter().find(|c| c.kind == Kind::EngineError).map(|c| c.subject.as_str()), Some("error:E8/team-review/gh_failed"));
+    }
+
+    #[test]
+    fn a_pull_request_github_cannot_read_is_dropped_and_all_unreadable_keeps_the_queue() {
+        let mut f = fixture("dispatch");
+        write_cache(&f, &[post("acme/pay", 1), post("acme/gone", 2)]);
+        let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
+        answer.prs.insert(("acme/gone".to_owned(), 2), None);
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(answer.clone())))).unwrap();
+        assert_eq!(all.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["pr:acme/pay#1"], "the readable one only, and no error");
+
+        let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
+        reconcile(&mut f.store, &opened, T).unwrap();
+        let blind = Lookup { me: ME_LOGIN.to_owned(), prs: [(("acme/pay".to_owned(), 1), None)].into() };
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(blind.clone())))).unwrap();
+        assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "every PR unreadable: the queue stays");
+        assert!(all.iter().any(|c| c.kind == Kind::EngineError));
+    }
+
     // ---- all together ----
 
     #[test]
@@ -1181,6 +1487,14 @@ mod tests {
         f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
                VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
         let tail: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).skip(3).collect();
-        assert_eq!(tail, [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
+        assert_eq!(tail, [Kind::PrFailing, Kind::PrChanges, Kind::PrReady]);
+        write_cache(&f, &[post("acme/pay", 812)]);
+        let lookup = lookup(&[("acme/pay", 812, open_pr())]);
+        let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(lookup.clone()))))
+            .unwrap()
+            .into_iter()
+            .map(|c| c.kind)
+            .collect();
+        assert_eq!(kinds[3..], [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
     }
 }

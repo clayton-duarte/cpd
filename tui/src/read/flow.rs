@@ -122,6 +122,9 @@ pub struct Pull {
     pub url: String,
     /// `pull_requests.mergeable = 'conflicting'` as of the last poll; `unknown` is not a conflict.
     pub conflicting: bool,
+    /// The Plan's Lead Session has `state = 'working'` (contract §3.6), read with the rest: the title shows the Lead's
+    /// working dot beside the state (hs-d335).
+    pub lead_working: bool,
 }
 
 /// Whether a `pull_requests.mergeable` value is a conflict; a value outside the column's set is an error.
@@ -230,8 +233,12 @@ pub fn flow(store: &mut Store, plan: &PlanId) -> Result<Flow, CpdError> {
 /// is read too (R34: `plan new` adds none).
 pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdError> {
     store.read(|conn| {
-        let (context, lead): (String, String) = conn
-            .query_row("SELECT context, lead_session FROM plans WHERE id = ?1", [plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))
+        let (context, lead, lead_working): (String, String, bool) = conn
+            .query_row(
+                "SELECT p.context, p.lead_session, s.state = 'working' FROM plans p JOIN sessions s ON s.id = p.lead_session WHERE p.id = ?1",
+                [plan.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()?
             .ok_or_else(|| plan_not_found(plan))?;
         let now: String = conn.query_row("SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now')", [], |r| r.get(0))?;
@@ -240,7 +247,7 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
             needs_user,
             review: latest_review(conn, plan, &plan_fingerprint(conn, plan)?)?,
             context: id("Context id", &context, ContextId::parse)?,
-            prs: pr_nodes(conn, plan)?,
+            prs: pr_nodes(conn, plan, lead_working)?,
             jobs: job_nodes(conn, plan)?,
             events_cursor: highest_id(conn)?,
             plan: plan.clone(),
@@ -248,8 +255,8 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
     })
 }
 
-/// The PRs of `plan` that are not `cancelled`, in key order, with their needs.
-fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
+/// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `lead_working`: the Plan's Lead is working.
+fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<PrNode>, CpdError> {
     let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
@@ -285,6 +292,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<PrNode>, CpdError> {
                     state: PrState::of(status == PrStatus::Merged, row_state.as_deref()),
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
+                    lead_working,
                 })
             })
             .transpose()?;

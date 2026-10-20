@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5 and E7–E10 (E6 was removed) every
+//! `watch-started`, then E1–E5 and E7–E11 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, titles, workers};
+use super::{SOURCE, completion, distill, escalations, inbox, liveness, pr, restart, schedule, team, titles, workers};
 use crate::config::{Catalog, Config, load_catalog};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -58,6 +58,8 @@ pub(super) struct Engine {
     pub distill_started: HashMap<ContextId, i64>,
     /// E10: the retitle runs this engine started and has not seen end.
     pub titles: titles::Runs,
+    /// E11: the helper's run in flight and when the last one ended.
+    pub team: team::State,
     /// When the engine last started the detached tmux restart (contract §6.1).
     pub restart_started: Option<Instant>,
 }
@@ -83,10 +85,10 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5 and E7–E10 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5 and E7–E11 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 11] = [
+        let steps: [fn(&mut Engine); 12] = [
             restart::drain,
             workers::run,
             escalations::run,
@@ -98,6 +100,7 @@ impl Engine {
             inbox::run,
             distill::run,
             titles::run,
+            team::run,
         ];
         for step in steps {
             if stopping() {
@@ -229,6 +232,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
         workers: None,
         distill_started: HashMap::new(),
         titles: titles::Runs::default(),
+        team: team::State::default(),
         restart_started: None,
     };
 

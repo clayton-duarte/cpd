@@ -144,7 +144,7 @@ fn render(width: u16, height: u16, w: &Widgets) -> Buffer {
 fn render_hits(width: u16, height: u16, w: &Widgets, note: &str) -> (Buffer, Vec<Hit>) {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     let mut hits = vec![];
-    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), note, 0).hits).unwrap();
+    terminal.draw(|f| hits = widgets::draw(f, f.area(), &w.prs, &machine(), note, 0, 0).hits).unwrap();
     (terminal.backend().buffer().clone(), hits)
 }
 
@@ -241,7 +241,7 @@ fn the_dispatch_sections_are_titled_with_a_separator_between_each_pair() {
     let w = read::widgets(&mut open(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(30, 20)).unwrap();
     let machine = Machine { name: "homeserver".to_owned(), load: ["0.1", "0.2", "0.3"].map(str::to_owned).to_vec() };
-    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0))).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine, "", 0, 0))).unwrap();
     let lines = rows(terminal.backend().buffer());
     let head = |title: &str| format!("── {title} {}", "─".repeat(30 - 4 - title.chars().count()));
     assert_eq!(lines[..3], ["", " homeserver", " load 0.1 0.2 0.3"]);
@@ -566,6 +566,33 @@ fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
     assert!([1, 2, 12, 45].iter().all(|x| !dim(*x, 10)) && [2, 20].iter().all(|x| !dim(*x, 11)));
 }
 
+/// The column drawn at spinner frame `frame`.
+fn render_at(width: u16, height: u16, w: &Widgets, frame: usize) -> Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|f| drop(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0, frame))).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn a_pr_whose_lead_works_shows_the_spinner_beside_its_state_and_the_frame_advances_with_the_clock() {
+    let env = TestEnv::new();
+    let mut store = prs_store(&env);
+    // `mine` owns acme/repo#20 (third row pair); `acme/web#4` and `acme/repo#9` have no owner.
+    let second = |w: &Widgets, frame: usize| row(&render_at(46, 25, w, frame), 11).trim_end().to_owned();
+    let idle = read::widgets(&mut store, 3, 0).unwrap();
+    assert_eq!(second(&idle, 0), "  open 󰦖 no review  Mine to review", "an idle Lead: no dot");
+    sql(&mut store, "UPDATE sessions SET state = 'working' WHERE id = 'l-mine'");
+    let working = read::widgets(&mut store, 3, 0).unwrap();
+    for frame in 0..palette::SPINNER.len() {
+        assert_eq!(second(&working, frame), format!("  open {} 󰦖 no review  Mine to review", palette::SPINNER[frame]), "frame {frame}");
+    }
+    // the unowned rows show none, whatever works
+    let buf = render_at(46, 25, &working, 3);
+    for y in [7, 9] {
+        assert!(!palette::SPINNER.iter().any(|g| row(&buf, y).contains(g)), "row {y}: {}", row(&buf, y));
+    }
+}
+
 #[test]
 fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
     let env = TestEnv::new();
@@ -861,7 +888,7 @@ fn the_merge_icon_is_drawn_and_hit_only_on_clean_pull_requests() {
     assert_eq!(w.prs.iter().map(|p| (p.number, p.clean)).collect::<Vec<_>>(), [(4, false), (9, true), (20, true)]);
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
     let mut drawn = None;
-    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0))).unwrap();
+    terminal.draw(|f| drawn = Some(widgets::draw(f, f.area(), &w.prs, &machine(), "", 0, 0))).unwrap();
     let widgets::Drawn { hits, icons, .. } = drawn.unwrap();
     let buf = terminal.backend().buffer().clone();
     for (y, icon) in [(7, false), (9, true), (11, true)] {

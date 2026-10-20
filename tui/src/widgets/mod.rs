@@ -18,11 +18,12 @@ pub mod legend;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{self, Event, MouseButton, MouseEventKind};
 use ratatui::layout::Position;
 
+use super::palette;
 use super::read::{self, OpenPr};
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
@@ -42,6 +43,8 @@ pub(crate) use column::{Window, dim, max_scroll, section_header, window};
 
 /// How often the view looks at the Events and at keys.
 const TICK: Duration = Duration::from_millis(200);
+/// How often the view redraws while a shown PR's Lead is working: one frame of the spinner (`palette::frame`, 100 ms).
+const FRAME: Duration = Duration::from_millis(100);
 /// At most one snapshot per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
 /// The load at least this often: the load average is no Event.
@@ -97,17 +100,20 @@ fn show(
     let mut note = String::new();
     let mut error = None::<String>;
     let mut redraw = true;
+    let mut drawn_frame = None::<usize>;
     // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
     let mut scroll = 0usize;
     loop {
-        if redraw {
+        // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
+        let frame = palette::frame(SystemTime::now());
+        if redraw || (spins(&prs) && Some(frame) != drawn_frame) {
             let shown = error.as_deref().unwrap_or(&note);
-            terminal.draw(|f| last = Some(draw(f, f.area(), &prs, &machine, shown, scroll)))?;
-            redraw = false;
+            terminal.draw(|f| last = Some(draw(f, f.area(), &prs, &machine, shown, scroll, frame)))?;
+            (redraw, drawn_frame) = (false, Some(frame));
         }
         let drawn = last.as_ref().expect("the terminal drew");
         scroll = scroll.min(drawn.max_scroll);
-        if event::poll(TICK)? {
+        if event::poll(tick(&prs))? {
             redraw = true; // a click, the wheel, a key or a resize
             match event::read()? {
                 Event::Mouse(m) if m.kind == MouseEventKind::Down(MouseButton::Left) => {
@@ -158,6 +164,16 @@ fn show(
             redraw |= error != shown;
         }
     }
+}
+
+/// How long the view waits for input before it draws again: one spinner frame while a PR's Lead works, else [`TICK`].
+fn tick(prs: &[OpenPr]) -> Duration {
+    if spins(prs) { FRAME } else { TICK }
+}
+
+/// A shown PR's Lead is working: its spinner turns.
+fn spins(prs: &[OpenPr]) -> bool {
+    prs.iter().any(|p| p.lead_working)
 }
 
 /// A click on a tab or on an owned PR row: `session open <id>`, which moves that Lead into the chat slot, then `select-pane`
@@ -336,6 +352,31 @@ pub(crate) fn newest_client(listing: &str) -> Option<(u16, u16)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pr(working: bool) -> read::OpenPr {
+        read::OpenPr {
+            repo: "acme/repo".to_owned(),
+            number: 1,
+            url: String::new(),
+            title: String::new(),
+            draft: false,
+            checks: read::Checks::Passed,
+            review_decision: read::ReviewDecision::None,
+            conflicting: false,
+            clean: false,
+            active: false,
+            lead: Some(SessionId::parse("l-a").unwrap()),
+            lead_working: working,
+        }
+    }
+
+    #[test]
+    fn the_view_redraws_every_spinner_frame_while_a_shown_leads_works_and_every_tick_otherwise() {
+        assert_eq!(tick(&[]), TICK);
+        assert_eq!(tick(&[pr(false), pr(false)]), TICK);
+        assert_eq!(tick(&[pr(false), pr(true)]), FRAME);
+        assert_eq!(FRAME, Duration::from_millis(100), "one frame of `palette::frame`");
+    }
 
     #[test]
     fn the_legend_popup_is_sized_by_the_most_recently_active_client() {
