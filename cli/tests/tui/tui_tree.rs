@@ -1427,7 +1427,7 @@ fn a_title_no_id_can_be_made_of_is_refused_in_a_text_dialog_and_runs_nothing() {
     type_in(&env, "!!");
     let pane = Pane::start(&env, 60, 22);
     pane.ready();
-    pane.right_click(5, 15); // the empty area
+    pane.right_click(5, 14); // the empty area, above the Inbox's margin row (row 15 is its upper margin, the widget's)
     pane.wait("the menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Enter"]);
     let popups = wait_for_popups(&env, 2);
@@ -1769,7 +1769,7 @@ fn with_no_engine_and_no_manager_the_inbox_leads_with_engine_down_and_only_a_cli
     // counted in the header, first of the rows
     let screen = pane.wait("the item", |s| s.iter().any(|r| r.contains("engine is down")));
     let first = screen.iter().position(|r| r.contains("engine is down")).unwrap();
-    assert!(screen[first - 1].contains("Inbox") && screen[first - 1].ends_with('5'), "{:?}", screen[first - 1]);
+    assert!(screen[first - 1].contains("Inbox") && screen[first - 1].ends_with("\u{E0B6}5\u{E0B4}"), "{:?}", screen[first - 1]);
     // hs-d363: the tree never restarts the engine by itself (the supervisor does), and says nothing of it
     // time-claim: the tree took its first snapshot before `ready`, and the old restart ran on it; none comes in 3 s; no per-poll signal from the view.
     std::thread::sleep(std::time::Duration::from_secs(3));
@@ -1870,8 +1870,8 @@ fn the_inbox_follows_an_engine_that_starts_and_a_snooze_that_ends_with_no_event(
     let _engine = Flock::lock(std::fs::File::create(path).unwrap(), FlockArg::LockExclusiveNonblock).map_err(|(_, e)| e).unwrap();
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
-    pane.wait("three stored items, one snoozed", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with('3')));
-    pane.wait("the snoozed item back", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with('4')));
+    pane.wait("three stored items, one snoozed", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with("\u{E0B6}3\u{E0B4}")));
+    pane.wait("the snoozed item back", |s| s.iter().any(|r| r.contains("Inbox") && r.ends_with("\u{E0B6}4\u{E0B4}")));
 }
 
 /// The `display-popup` calls of a fake tmux.
