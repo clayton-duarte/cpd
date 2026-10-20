@@ -292,7 +292,7 @@ impl Downtime {
     /// (its `at` is when it stopped), or `watch-started` with no stop (a crash, SIGKILL): then it was last
     /// alive at the lock file's modification time (the engine marks it every tick), or at its start when
     /// that engine did not mark it.
-    fn since_previous(store: &mut Store, lock: &WatchLock, marker: Option<i64>) -> Result<Option<Downtime>, CpdError> {
+    fn since_previous(store: &mut Store, lock: &WatchLock, lock_existed: bool, marker: Option<i64>) -> Result<Option<Downtime>, CpdError> {
         let last: Option<(String, String)> = store.read(|conn| {
             Ok(conn
                 .query_row(
@@ -313,7 +313,8 @@ impl Downtime {
         let at = OffsetDateTime::parse(&at, &Rfc3339)
             .map_err(|e| CpdError::new(ErrorCode::StoreFailed, format!("A {kind} Event has an `at` that is not RFC 3339: {e}.")))?;
         let said = kind == "watch-stopped";
-        let since = if said { at } else { at.max(OffsetDateTime::from(lock.last_alive()?)) };
+        // A lock file this engine created says nothing of the previous one: it is dated by its `watch-started`.
+        let since = if said || !lock_existed { at } else { at.max(OffsetDateTime::from(lock.last_alive()?)) };
         let down = (OffsetDateTime::now_utc() - since).max(time::Duration::ZERO);
         let quiet = down.as_seconds_f64() <= PLANNED_RESTART_QUIET_SECS;
         Ok(Some(Downtime { since, said, down, planned: marked && quiet, overdue: marked && !quiet }))
@@ -359,6 +360,7 @@ impl Downtime {
 pub(super) fn run() -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
+    let lock_existed = home.watch_lock().exists();
     let lock = WatchLock::take(&home)?;
     let mut log = Log::open(&home)?;
     // A tick's steps give up waiting when the engine is told to stop.
@@ -367,7 +369,7 @@ pub(super) fn run() -> Result<Output, CpdError> {
     let pid = std::process::id();
     // What the previous engine left, read before this one's `watch-started` hides it.
     let marker = consume_marker(&home, &mut log, OffsetDateTime::now_utc());
-    let down = Downtime::since_previous(&mut store, &lock, marker)?;
+    let down = Downtime::since_previous(&mut store, &lock, lock_existed, marker)?;
     let how_long = down.as_ref().map(|d| format!(" {}", d.sentence())).unwrap_or_default();
     watch_event(&mut store, NewEvent::watch_started(format!("The engine started (pid {pid}).{how_long} See: cpd doctor"), pid))?;
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));

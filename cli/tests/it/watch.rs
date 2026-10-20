@@ -2778,7 +2778,8 @@ fn install_with(env: &TestEnv, store: &str) -> (std::process::Output, Vec<Vec<St
             r#"case "$1" in
 --version) echo '{{"ok":true,"version":"0.0.0","store":{store}}}' ;;
 config) echo '{{"ok":true,"config":{{"tmux":{{"socket":"{socket}","cockpit_session":"cpd","work_session":"cpd-work"}}}}}}' ;;
-watch) tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
+watch) if [ "$2" = --mark-restart ]; then echo '{{"ok":true,"marked":true,"engine_pid":1}}'; exit 0; fi
+  tmux -L '{socket}' list-windows -t =cpd-work -F '#{{window_name}}' > '{windows}' 2>&1
   l="$CPD_HOME/locks/watch.lock"; mkdir -p "$CPD_HOME/locks"
   sh -c 'echo $$ > "$CPD_HOME/engine.pid"; exec flock "$1" sleep 120' sh "$l" </dev/null >/dev/null 2>&1 &
   until ! flock -n "$l" true; do :; done
@@ -2816,7 +2817,7 @@ fn install_restarts_a_running_engine_with_ensure_and_says_so() {
     let (stderr, calls) = install(&env);
 
     assert!(stderr.contains("restarting the running engine"), "{stderr}");
-    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--ensure"]]);
+    assert_eq!(calls, [vec!["--version"], vec!["config"], vec!["watch", "--mark-restart"], vec!["watch", "--ensure"]]);
     // The window was killed before --ensure ran; the other window is untouched.
     assert_eq!(fs::read_to_string(env.root().join("windows-at-ensure")).unwrap().trim(), "other");
 }
