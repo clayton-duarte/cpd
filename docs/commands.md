@@ -105,7 +105,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
 | `push_rejected` | 3 | `pr push` found the remote branch moved (§9.9); `details.stderr` is git's |
 | `base_not_found` | 4 | `pr add`, `pr edit` (§9.4): the base branch does not exist; `pr open` (§9.1): the base branch of a stacked PR, its base PR's Lead Branch, is not on the remote; `details` `{pr, base, base_pr}` (hs-d324) |
-| `base_behind` | 3 | `pr open` (§9.1, contract §7.6 step 1) found that `origin/<base>`, freshly fetched, is not an ancestor of the Lead Branch's head, or of the gated commit; `details` is `{pr, base, base_sha, sha, next}`, `next` the commands the Lead runs, as written (hs-d329) |
+| `base_behind` | 3 | `pr open` (§9.1, contract §7.6 step 1) or an `open` or `update` Job's submit (§6.1, contract §7.7) found that `origin/<base>`, freshly fetched, is not an ancestor of the Lead Branch's head, or of the gated commit; `details` is `{pr, base, base_sha, sha, next}`, `next` the commands the Lead runs, as written (hs-d329) |
 | `pr_not_closed` | 3 | `pr cancel` (§9.6) found the `open` PR's pull request not stored `closed`; `details` is `{pr, number, url, state}`, the stored row's `state` (`open` or `merged`) (hs-d329) |
 | `base_pr_unknown`, `base_pr_unavailable`, `base_pr_other_repo`, `pr_other_context` | 3 | `pr add` or `pr edit` (§9.4, §9.5) found a bad PR reference in `--base <plan>/<key>` or `--needs <plan>/<key>`: no such PR; a base PR that is `cancelled` or `merged`; a base PR of another repo; a PR of another Context (contract §2.2 "Validation of a reference", hs-d324); `details` as at §9.4 |
 | `stacked_rebase` | 3 | `pr rebase` (§9.3) found the PR stacked on a base PR; `details` is `{pr, base, base_pr, next}` (contract §3.8 "Stacked PRs" step 4, hs-d325) |
@@ -128,6 +128,16 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `illegal_transition` | 3 | a transition not in §3, refused by the command or by a trigger |
 | `locked_job_tampered` | 3 | a Locked Job's fingerprint does not match (§2.3) |
 | `pr_title_required` | 3 | `pr open` found a PR with no stored title, one that existed before migration `pr-title` (contract §7.6, hs-d285); the message says to run `cpd pr edit <key> --title "<text>"` |
+| `kind_reserved` | 3 | `job add --kind open` or `update` (§5.1): cpd adds those Jobs, never the Lead (contract §2.2 "Job kinds"); `details.kind` |
+| `test_job_required` | 3 | an `impl` Job that is not a draft, or a Plan review or lock over one (§5.1, §4.6, §4.8), needs no `test` Job of its PR; `details.jobs` lists the `impl` Jobs |
+| `tests_unconfigured` | 3 | `pr add --shape tdd` (§9.4), `job add --kind test` or `impl` (§5.1) or a `test` or `impl` Job's submit (§6.1) found no table `[tests]` in the repo's `.config/cpd.toml` (contract §7.7); the message names `--shape docs`, `--shape config` and the table |
+| `test_files_missing` | 3 | a `test` Job's submit (§6.1): `details.paths` lists the `test_files` entries that match no path the Job changed |
+| `tests_build_failed`, `tests_not_red`, `tests_failed` | 3 | a `test` or `impl` Job's submit (§6.1, contract §7.7): the repo's `build` failed; the named tests passed where they must fail (`test`); they failed where they must pass (`impl`). `details` `{job, tests, tail, log}` |
+| `tests_error` | 1 | a `test` or `impl` Job's submit: the repo's `[tests]` commands could not run (killed at `gate_minutes`, killed by a signal, `sh` not startable, `hook_invalid`); the Worker asks the Lead. `details` as above |
+| `tests_tampered` | 3 | an `impl` Job's submit (§6.1) changed a path the `test_files` of a `test` Job it needs guard and the Lead has not approved (§5.9); `details.paths`, `details.jobs` |
+| `lead_branch_moved` | 3 | an `open` or `update` Job's submit (§6.1) found the Lead Branch's tip not in HEAD; `details.next` is the merge to run (contract §7.7) |
+| `open_job_live` | 3 | `pr open` (§9.1) found the PR's `open` Job `queued` or `running`; `details.job` |
+| `not_an_impl_job`, `path_not_guarded` | 3 | `job approve-tests` (§5.9): the Job is not of kind `impl`; `details.paths` lists the paths no `test_files` entry of its test Jobs guards |
 | `git_failed`, `tmux_failed`, `gh_failed` | 1 | the tool exited non-zero where the command did not expect it; `details` has `argv`, `exit` and the last 60 lines of stderr. `pr poll` also returns `gh_failed` for an empty or non-JSON body, a search response with `errors`, and a lookup with no `data` (contract §7.6, hs-d96) |
 | `gh_rate_limited` | 1 | an `error` Event code of engine E5 (contract §3.7, §5.2; `details`: `remaining`, `reset_at`), reported while it skips polls because GitHub's rate limit is nearly used; never a command's refusal |
 | `adapter_missing` | 1 | an `error` Event code of the Lead wrapper `session run` (contract §6.7 "Adapter watchdog", §10.8; `details`: `session`, `state_since`, `seconds`), appended when it restarts a pi whose adapter never came back; never a command's refusal |
@@ -168,8 +178,9 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context owner` (§3.13) | Manager, Lead | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
+| `cpd job approve-tests` (§5.9) | Lead | no | no |
 
-`context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged.
+`context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
 ## 3. `context`
 
@@ -638,6 +649,8 @@ cpd plan render [--plan <id>]
 
 Effects: writes `run/<plan>/plan.md` (§1.4), nothing else. Content, kept from cpd 1 §11 `plan render` and grouped by PR (R34): title, Context and phase; a table of the PRs that are not `cancelled`, with key, repo, base and needs, and, when there are two or more, a Mermaid `graph LR` of their needs; then the section `## Overlaps` (below); then one section per PR, in the order of the needs graph (ties by key), headed `PR <key>`, with its repo, base and needs, a table of its Jobs that are not `cancelled` with key, title, Tier, status, needs and touches, a Mermaid `graph TD` of its Jobs' Dependencies, and one subsection per Job with its Spec (goal, context, touches, acceptance, out of scope). A Job's section is under its PR only. In a phase after `plan`, the Jobs that are not `draft` are Locked context: the render shows them as such, and marks every `draft` Job **under review** (in its table row and its section), because a review in these phases covers exactly the drafts (§4.6; User, hs-d173, hs-d174, hs-d179). In phase `plan` every Job is a draft and nothing is marked. A **stub draft** (no Tier or no Spec, §5.1) is shown as it is, visibly incomplete: `Tier: —` in its table row and section when it has no Tier, and `Spec: not written yet` in place of its Spec subsection's goal, context, touches, acceptance and out of scope when it has none. GitHub-flavoured Markdown only: tables, code and Mermaid, no footnotes, no raw HTML (t4). Output: the path, the plan fingerprint (§2.3: Jobs and PRs), the number of `draft` Jobs, the number of PRs that are not `cancelled` and the overlaps.
 
+**Kinds** (hs-d340, hs-d341). A Job's `kind` is a column of its row in the PR's table, and a line of its section when it is not `work`; a `test` Job's section lists its `tests` and `test_files`. The PR's `open` Job, once the PR has started, is a Job of its PR like any other, with its derived needs (contract §3.2); before the start it does not exist, so the review of a Plan shows the template's Jobs and not the `open` Job that every PR will get.
+
 **Overlaps** (B4-A3, hs-d78, hs-d172, hs-n201): the warning that another Plan is working on the same files. It is made here and so in the Plan review (§4.6), and nowhere else: `job add` does not warn. It looks at **open work** only, on both sides: the Jobs that are not `cancelled` (`draft`, `queued`, `running`, `failed`, or `merged` on its Lead Branch) of PRs that are not `merged` and not `cancelled`. A Job of a `merged` PR is on its base already and cannot clash with anyone's work any more, so the Jobs of this Plan's `merged` PRs are not checked. For each PR of this Plan that is not `merged` and not `cancelled`, every **other** active Plan (any Context; its phase is not `done` and it is not archived) is looked at when it has a PR in the same repo (the same `prs.repo` realpath as stored) that is not `merged` and not `cancelled`. A Job of that PR overlaps a Job of this PR when a path in the `touches` of the one overlaps a path in the `touches` of the other. Two paths overlap when they are equal, or when one is a directory (ends with `/`) that contains the other. Nothing else is compared (no globs, no normalisation). A Plan's own Jobs are never listed. The warning is only that: nothing is refused and no state changes.
 
 The overlaps are grouped: **one overlap per (this Job, other Plan, other PR)**. It lists every Job of that other PR that overlaps this Job, with its status, and the paths of this Job that overlap one of them, each path once, in the order of the Job's `touches`. A broad path (`core/src/`) or a shared file is one entry of a row, not a row of its own for every pair of paths and Jobs (hs-n201: on a busy Context that made thousands of rows, and nobody could read them in a Plan review).
@@ -676,6 +689,7 @@ Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `pl
 | the phase is `plan`, or any phase after it (not `grounding`) | `illegal_phase` | 3 |
 | at least one Job is `draft` (in a phase after `plan` too: the drafts are what is reviewed) | `no_draft_jobs` | 3 |
 | every `draft` Job has its Tier and its Spec (hs-d241, R1: no stub draft is approvable); `details.jobs` lists `[{key, missing}]`, `missing` being `["tier"]`, `["spec"]` or both | `draft_incomplete` | 3 |
+| every `impl` Job that is a `draft` needs at least one `test` Job of its PR (hs-d341; `details.jobs` lists the `impl` Jobs) | `test_job_required` | 3 |
 
 Effects:
 - **Files:** renders the plan to `run/<plan>/plan.md` and copies it to `run/<plan>/plan-<review>.md`, so a later render cannot change what the User reviews. The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other PR that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
@@ -728,6 +742,7 @@ cpd plan lock [--plan <id>]
 | the phase is `plan` (`dispatch`: `already`) | `illegal_transition` | 3 |
 | at least one Job is `draft` | `no_draft_jobs` | 3 |
 | every `draft` Job has its Tier and its Spec, as `plan review` requires (§4.6; `details.jobs` as there) | `draft_incomplete` | 3 |
+| every `impl` Job needs at least one `test` Job of its PR, as `plan review` requires (§4.6; `details.jobs` as there) | `test_job_required` | 3 |
 | the latest Plan review is `approved` for the current plan fingerprint (§2.3: Jobs and PRs) | `plan_not_approved` | 3 |
 | at least one PR is not `cancelled`, and each such PR has at least one `draft` Job; `details.prs` lists the empty PRs (none at all: `details.next` = `cpd pr add`) | `pr_empty` | 3 |
 | the Dependency graph of the draft Jobs is acyclic, and so is the graph of the PRs' needs and base PRs (`details.cycle`, qualified references) | `dependency_cycle` | 3 |
@@ -739,6 +754,7 @@ cpd plan lock [--plan <id>]
 Effects (§3.1, §3.8, §7.2; R34, A8): every PR's `draft` Jobs are approved at once, and the PRs with no needs and no base PR **start**, all or nothing; the PRs with needs, and the **stacked** PRs (contract §2.2 "The base PR"; a base PR of the same Plan included: the lock orders no worktrees), stay `waiting` until engine E7 (or `pr start`, §9.7) starts them once their needs are `merged` and their base PR has started.
 - **git**, for each PR with no needs and no base PR, in its repo (§7.2, R35 per PR branch, A5): `fetch origin <base>`; `ls-remote --exit-code --heads origin <lead branch>`. When it is on the remote and `origin/<base>` is its ancestor (`merge-base --is-ancestor`): reuse it, `fetch origin <lead branch>` and `worktree add --no-track -b <lead branch> <lead worktree> origin/<lead branch>`. When it is absent: `worktree add --no-track -b <lead branch> <lead worktree> origin/<base>`. A repo with no `origin` (A3): no remote check and no push, `worktree add --no-track` from `<base>`. `--no-track`: a Lead Branch has no upstream, so nothing writes `.git/config` (hs-d243, contract §7.2). Then `pre-start` in the worktree, output in `run/<plan>/logs/lead-<key>.pre-start.log`. Every started PR's worktree is created and its `pre-start` run before anything is pushed; if one fails, every worktree and branch the lock created is removed, nothing is pushed, nothing in the database changes, and the lock fails with that PR's refusal. When all have passed, each new Lead Branch is pushed, `push origin <lead branch>` from its Lead worktree (no `-u`, hs-d243). A failed push does not fail the lock: one `error` Event with code `push_failed` and `details.pr` is appended per failed PR, and the next merge or `pr open` pushes again.
 - **Rows**, one transaction, with a compare-and-swap on `phase = 'plan'` and on the review read: `plans.phase = dispatch`, `locked_at`; every `draft` Job of every PR `queued` with its Locked-Job fingerprint; for each started PR, with a compare-and-swap on `status = 'waiting'`: `status = dispatch`, `lead_worktree`, `started_at`. **Events** `plan-phase` `{from: "plan", to: "dispatch", jobs: [key], prs: [key]}` (`prs`: the PRs started) and one `pr-started` `{pr, repo, base, lead_branch, lead_worktree, base_sha, reused, pushed, by: "lock"}` per started PR. If the transaction fails, the worktrees and branches are removed.
+- **Open Jobs:** the lock adds none. Engine E4 adds each started PR's `open` Job in the first tick after the lock (contract §3.7, hs-d340).
 - **tmux:** `watch --ensure` (§12): starts `cpd watch` in `cpd-work:watch` when `locks/watch.lock` is free.
 
 `prs` lists every PR that is not `cancelled`, in key order: a started PR with its Lead worktree, `base_sha`, `reused` and `pushed` (R35); a `waiting` one with its `needs`, and null for the rest.
@@ -864,13 +880,22 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 
 `touches` and `acceptance` have at least one non-empty string; `out_of_scope` may be empty. Change: cpd 1's `outOfScope` is now `out_of_scope`, the column's name.
 
+**A `test` Job's Spec file** (kind `test`, hs-d341) has two more fields: `tests`, the named tests (one or more distinct one-line strings), and `test_files`, the files that hold the red tests (one or more repo-relative paths or, ending in `/`, directory prefixes; no `..`, no leading `/`, the rule of the `protected` list, contract §7.5):
+
+```json
+{"goal": "…", "context": "…", "touches": ["cli/tests/it/pr_open_job.rs", "core/src/pr/"], "acceptance": ["…"], "out_of_scope": ["…"],
+ "tests": ["pr_open_job::merges_the_base", "pr_open_job::opens_the_pull_request"], "test_files": ["cli/tests/it/pr_open_job.rs"]}
+```
+
+Both are required for a `test` Job that is not a stub, and refused for every other kind (`spec_invalid`, exit 2, with the JSON path in `details`). An `impl` Job names no tests: its tests are the union of its test Jobs' (contract §2.2 "Job kinds").
+
 **Tier flag** (`--tier`): `^(O|S|H)([0-5])$` with an effort the letter's model supports (§9), else `tier_invalid` (exit 2), with `details.efforts` listing the valid ones.
 
 ### 5.1 `job add`
 
 ```
-cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--needs <k1,k2> | --review] [--draft] [--urgent] [--plan <id>]
-cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key>] [--needs <k1,k2>] [--plan <id>]
+cpd job add <key> --title <text> --tier <T> --spec <file> [--pr <key>] [--kind <docs|test|impl>] [--needs <k1,k2> | --review] [--draft] [--urgent] [--plan <id>]
+cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key>] [--kind <docs|test|impl>] [--needs <k1,k2>] [--plan <id>]
 ```
 
 `--tier` and `--spec` are required, except with `--draft`: a **stub draft** (hs-d241, R1) needs only `--title`; either or both of `--tier` and `--spec` may be given too. A Job that is not a draft, and a `--review` Job, still needs both (`usage`, exit 2). The Lead registers planned work with a stub the moment it is planned (hs-d239) and completes it later with `cpd job edit <key> --tier <T> --spec <file>` (§5.2). A follow-up PR is added the same way: `pr add <key> --repo … --needs …` (§9.4) plus stub drafts in it.
@@ -882,7 +907,8 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 | `--needs <k1,k2>` | Dependencies, comma-separated, no duplicates (`usage`); Jobs of the same PR only (A7) |
 | `--draft` | add the Job as a `draft` in a phase after `plan` too (User, hs-d173, hs-d174, hs-d179: every planned batch is visible in the Plan view before it is approved): `status = draft`, `appended = 1`, no fingerprint; the engine never runs it, and it becomes `queued` only at the approval of a Plan review of the drafts (§4.7). In phase `plan` every Job is a draft, so `--draft` changes nothing there. Its needs may be drafts. Without `--tier` and `--spec` it is a stub (above); `--draft` is the only way to add a Job without them. A Job that only carries out a recorded User decision, with no open design choice, is added without `--draft` (User, hs-d301, amending hs-d173, hs-d174, hs-d179); drafts are for design the User has not decided, and when unsure it is a draft |
 | `--urgent` | add the Job with `urgent = 1` (contract §2.2): engine E3 starts it before every non-urgent Ready Job and may run it as one Attempt beyond `concurrency` (§3.7). Use it **only when the User explicitly asks**, usually for something that blocks all work or an incident. Not a Locked field and not in any fingerprint (§2.3); works with `--draft`, `--review` and in every phase `job add` works in. To mark an existing Job, see §5.8 |
-| `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
+| `--review` | a **review Job** (B2, contract §2.2): its Worker is a fork of the Plan's Lead, it commits nothing and writes `run/<plan>/reviews/<key>.md`. Its Dependencies are **set** to every Job of its PR that exists at that moment and is not `cancelled`, and is not an `open` or `update` Job, so `--needs` with `--review` is `usage` (exit 2). Jobs added later do not become its Dependencies. The Spec file is as for any Job; its `touches` is informational for a review Job (*decided*: the Lead lists `run/<plan>/reviews/<key>.md`) |
+| `--kind <docs\|test\|impl>` | the Job's kind (hs-d341, contract §2.2 "Job kinds"); default `work`. `open` and `update` are cpd's: `kind_reserved`. A `test` Job's Spec file has `tests` and `test_files` (§5), an `impl` Job needs a `test` Job of its PR, and both need the repo's `[tests]` (below). Not with `--review`, which is a `work` Job (`usage`) |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -893,13 +919,18 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 | every `needs` Job is in the same PR; `details.jobs` lists those that are not | `needs_other_pr` | 3 |
 | no `needs` Job is `cancelled` or `failed`; with `--review`, no Job of the PR is `failed` (retry or cancel it first; `details.jobs` lists them), because a Dependency on a `failed` Job is refused | `needs_unavailable` | 3 |
 | without `--draft`, in a phase after `plan`: no `needs` Job is a `draft`, and with `--review` no Job of the PR is a `draft` (`details.jobs` lists them; its message says to add this Job with `--draft`, or to approve the drafts first), because a `queued` Job could start before the draft it needs exists | `needs_unavailable` | 3 |
+| `--kind open` or `update`; `details.kind` | `kind_reserved` | 3 |
+| no `needs` Job is an `open` or `update` Job (nothing waits for them: contract §2.2 "Job kinds"); `details.jobs` | `needs_unavailable` | 3 |
+| `--kind test` or `impl`: the repo's `.config/cpd.toml` has `[tests]`, read from the PR's Lead Branch once the PR has started, else from `origin/<base>` (contract §7.7) | `tests_unconfigured` | 3 |
+| without `--draft`, an `impl` Job needs at least one `test` Job of its PR; `details.jobs` | `test_job_required` | 3 |
+| the Spec file has `tests` and `test_files` exactly when the kind is `test` and the Job is not a stub (§5); `--review` with a kind other than `work` | `spec_invalid`; `usage` | 2 |
 
 **A stub draft** stores `tier` and the Spec fields `goal`, `context`, `touches`, `acceptance` and `out_of_scope` as null for what was not given (a given `--spec` sets all five; `--tier` sets the Tier), and its `job-added` Event has `tier: null` when it has none. A draft that lacks its Spec or its Tier is **incomplete**: it is never queued or run (contract §3.2), a Plan review of it is refused `draft_incomplete` (§4.6) and so is `plan lock` (§4.8). `needs` and `pr` work as for any draft.
 
-Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `review` = 1 with `--review`; `urgent` = 1 with `--urgent` (else 0); `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, status, appended, tier, needs, review, urgent}`. **Re-arms `all-merged`** (hs-d140): the same transaction sets the PR's `all_merged_at` to null when it was set, so engine E4 appends `all-merged` for that PR again once its Jobs are all `merged` or `cancelled` (contract §3.7); a PR that never had it sent is unchanged. No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
+Effects: **rows**, one transaction: `jobs` (`pr` = the PR's key; `kind` (`work` by default); `tests` and `test_files` from the Spec file of a `test` Job; `review` = 1 with `--review`; `urgent` = 1 with `--urgent` (else 0); `status = draft`, `appended = 0`, no fingerprint, in phase `plan`; `status = draft`, `appended = 1`, no fingerprint, with `--draft` in any later phase; `status = queued`, `appended = 1`, fingerprint stored, in a later phase without `--draft`); one `dependencies` row per need (with `--review`, per Job of the PR, as the Dependencies are set in the same transaction). **Event** `job-added` `{pr, kind, status, appended, tier, needs, review, urgent}`. A Job appended to a PR keeps the PR's `open` Job waiting until it is `merged` or `cancelled`: that Job's Ready rule counts every Job of the PR (contract §3.2). (Before hs-d340 the add also re-armed `all-merged`; that step and Event are retired, contract §3.7 E4.) No cycle is possible: nothing needs a new Job yet. An appended Job of a `waiting` PR is not Ready until its PR starts (§3.2); an appended draft is not Ready at all until its review is approved; one of an `open` PR reaches its pull request through `pr rebase --pr <key>` (§9.3), or `pr push --pr <key>` (§9.9).
 
 ```json
-{"ok": true, "job": {"key": "api-schema", "pr": "api", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}}
+{"ok": true, "job": {"key": "api-schema", "pr": "api", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}}
 ```
 
 Idempotent: yes, as stated (`--draft` and `--urgent` are not Locked fields: the call that found an identical Job returns `already` whatever its status). `--review` is repeatable like any add: an identical call (same Locked fields, `review` included, same Dependencies) is `already`; a call after another Job was added to the PR differs in its Dependencies and is `job_key_exists`. `job edit` has no `--review` and refuses `--needs` and `--no-needs` on a review Job with `usage` (*decided*: its Dependencies are fixed by the add; to change them, cancel it and add a new one).
@@ -907,10 +938,12 @@ Idempotent: yes, as stated (`--draft` and `--urgent` are not Locked fields: the 
 ### 5.2 `job edit`
 
 ```
-cpd job edit <key> [--title <text>] [--tier <T>] [--spec <file>] [--pr <key>] [--needs <k1,k2> | --no-needs] [--plan <id>]
+cpd job edit <key> [--title <text>] [--tier <T>] [--spec <file>] [--pr <key>] [--kind <work|docs|test|impl>] [--needs <k1,k2> | --no-needs] [--plan <id>]
 ```
 
 **Completing a stub draft** (hs-d241, R1): `cpd job edit <key> --tier <T> --spec <file>` sets the Tier and the Spec of a draft that lacks them (a draft is editable, so this is an ordinary edit; `fields` lists `tier` and `spec`). Once the draft has both, it is complete and a Plan review may approve it (§4.6). The edit changes the plan fingerprint (contract §2.3), which covers a stub as it is.
+
+**`--kind`** (hs-d341) changes a draft's kind, never to `open` or `update` (`kind_reserved`); a Job that is not a draft is Locked. The Spec's `tests` and `test_files` must fit the new kind (`spec_invalid`: a `test` Job that is not a stub has both, every other kind neither), and the rules of §5.1 apply as there (`tests_unconfigured`; `test_job_required` where an `impl` Job stops being a draft, at the review or the lock). `fields` lists `kind`.
 
 A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), including one added after the lock, whose review may be pending: the edit changes the fingerprint of the drafts, so the pending review no longer matters (§4.6). `--needs` may name drafts. `--no-needs` removes every Dependency (cpd 1 had no way to). `--pr <key>` moves the draft Job to another PR (R34, A14); it is a field flag, so §1.3's default does not apply: without it the Job keeps its PR. Dependencies stay inside one PR (A7): a Job that changes PR keeps none of its old needs, so give `--needs` with Jobs of the new PR, or `--no-needs`, and no other Job may need it.
 
@@ -950,7 +983,7 @@ Effects (§3.2 "Cancel"):
 {"ok": true, "job": "worker", "status": "running", "cancel_requested": true}
 ```
 
-Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents stay blocked (cpd 1 §11, kept).
+Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents stay blocked (cpd 1 §11, kept). Cancelling a PR's `open` Job while the PR is `dispatch` makes engine E4 add a fresh one at the next tick (contract §3.7): it is how the Lead starts it over; `job retry` (§5.4) runs the same Job again at another Tier.
 
 ### 5.4 `job retry`
 
@@ -999,10 +1032,10 @@ Idempotent: no. A second call finds the Job `running` and is refused `job_not_re
 cpd job list [--status <status>] [--plan <id>]
 ```
 
-`--status` is one of §3.2's statuses and may repeat. Each Job carries `urgent` (a boolean). Effects: none.
+`--status` is one of §3.2's statuses and may repeat. Each Job carries `urgent` (a boolean) and `kind`. Effects: none.
 
 ```json
-{"ok": true, "jobs": [{"key": "api-schema", "pr": "api", "title": "…", "status": "merged", "tier": "S2", "appended": false, "review": false, "urgent": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
+{"ok": true, "jobs": [{"key": "api-schema", "pr": "api", "title": "…", "status": "merged", "tier": "S2", "appended": false, "kind": "work", "review": false, "urgent": false, "needs": [], "attempts": 1, "merged_sha": "c0ffee…"}]}
 ```
 
 ### 5.7 `job show`
@@ -1011,7 +1044,7 @@ cpd job list [--status <status>] [--plan <id>]
 cpd job show <key> [--plan <id>]
 ```
 
-Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
+Effects: none. Output: every field of the Job (§2.2; `review: true` for a review Job, B2; `urgent`, a boolean; `kind`, and `tests`, `test_files` and `test_approved` where the kind has them; the `needs` of an `open` or `update` Job is the derived list of contract §3.2), `needs`, `needed_by`, and every Attempt with all its fields (`check_tail`, `metrics`) and its Escalations (cpd 1 §11, kept).
 
 ```json
 {"ok": true, "job": {"key": "worker", "pr": "api", "status": "failed", "failed_cause": "timed_out", "tier": "S2", "review": false, "urgent": false, "fingerprint": "9f…", "retry_tier": null, "…": "…"}, "needs": ["api-schema"], "needed_by": ["ui"],
@@ -1041,6 +1074,36 @@ Effects: **rows**, one transaction: `jobs.urgent = 1`. **Event** `job-edited` `{
 
 Idempotent: yes; a Job that is already urgent writes nothing and returns `"already": true` with `"fields": []`.
 
+### 5.9 `job approve-tests`
+
+```
+cpd job approve-tests <job> --path <p> [--path <p> …] --reason <text> [--plan <id>]
+```
+
+The Lead's approval for an `impl` Job to change a red test (hs-d341; contract §2.2 "Job kinds", §7.5). The files of the `test` Jobs an `impl` Job needs are guarded: its submit is refused `tests_tampered` (§6.1) when it changes one. A Worker that needs a red test changed asks the Lead (`cpd ask`); the Lead decides and, to allow it, runs this. **The Lead only**: the command is refused `not_a_lead` when `CPD_ATTEMPT` is set, which cpd sets in every Worker's pane (§6.5).
+
+| Flag | Meaning |
+|---|---|
+| `<job>` | the `impl` Job |
+| `--path <p>` | repeated: a path or, ending in `/`, a directory prefix, that is guarded: equal to, or inside, an entry of the `test_files` of a `test` Job the `impl` Job needs |
+| `--reason <text>` | why (§1.5); it is in the Event's `text` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_ATTEMPT` is not set | `not_a_lead` | 3 |
+| the Job exists | `job_not_found` | 4 |
+| its kind is `impl` | `not_an_impl_job` | 3 |
+| its status is `queued`, `running` or `failed` | `illegal_transition` | 3 |
+| every `--path` is guarded; `details.paths` lists those that are not | `path_not_guarded` | 3 |
+
+Effects: **rows**, one transaction: `jobs.test_approved` becomes the union of its old value and the paths. **Event** `job-edited` `{fields: ["test_approved"]}`, its `text` naming the paths and the reason. It takes effect at the Job's next check, a running Attempt's included (contract §7.7). `test_approved` is not a Locked field and is in no fingerprint (§2.3).
+
+```json
+{"ok": true, "job": {"key": "api-impl", "status": "running", "kind": "impl"}, "approved": ["cli/tests/it/pr_open_job.rs"], "fields": ["test_approved"]}
+```
+
+Idempotent: yes; paths already approved write nothing, and a call with none new returns `"already": true`.
+
 ## 6. `attempt`
 
 ### 6.1 `attempt submit`
@@ -1056,16 +1119,33 @@ Run by the Worker, from its worktree. Preconditions are §7.3's list, in that or
 | the Attempt is `running` (already `merging` or later with `submitted_sha` = the worktree's HEAD: `already`) | `attempt_not_running` | 3 |
 | the caller's cwd is inside the Attempt worktree, on the Attempt branch | `wrong_worktree` | 3 |
 | clean tree, untracked files included | `dirty_tree` | 3 |
-| at least one commit ahead of `base_sha`; **for a review Job (B2) instead**: no commit ahead of `base_sha` | `no_commits`; `review_commits` | 3 |
+| at least one commit ahead of `base_sha`; **for a review Job (B2) instead**: no commit ahead of `base_sha`; **for an `open` or `update` Job none is required** (the base may not have moved, so there may be nothing to commit, hs-d340) | `no_commits`; `review_commits` | 3 |
 | (review Job only) `run/<plan>/reviews/<job>.md` exists and is not empty (contract §7.3, precondition 3) | `review_missing` | 3 |
 | the tamper check passes (§7.5; a protected path whose Attempt version equals the Lead tip's or `origin/<base>`'s, as a base merge brings it, is allowed); `details.paths` lists the protected paths touched that are not allowed | `gate_tampered` | 3 |
+| (kind `impl`) it changes no path guarded by the `test_files` of a `test` Job it needs, unless `job approve-tests` (§5.9) approved it; `details.paths`, `details.jobs` (contract §7.5, §7.7) | `tests_tampered` | 3 |
 | the quick check passes (skipped for a review Job, B2: nothing was changed to check; no `pre-commit` table: it passes without running, R20); `details.tail` is its last 60 lines, `details.log` the full log | `check_failed` | 3 |
 | the quick check ran (not killed, not `hook_invalid`) | `check_error` | 1 |
+| (kind `test`) every `test_files` entry matches a path the Job changed (`git diff --name-only --no-renames <lead branch>...HEAD`); `details.paths` lists the entries that match none | `test_files_missing` | 3 |
+| (kinds `test`, `impl`) the repo's `.config/cpd.toml`, read from the Lead Branch, has `[tests]` | `tests_unconfigured` | 3 |
+| (kinds `test`, `impl`) the repo's `build` exits zero; `details` `{job, tests, tail, log}` | `tests_build_failed` | 3 |
+| (kind `test`) the repo's `run` of the named tests exits non-zero: they fail, for a reason other than a build error | `tests_not_red` | 3 |
+| (kind `impl`) the repo's `run` of the derived tests exits zero | `tests_failed` | 3 |
+| (kinds `test`, `impl`) the commands ran (not killed, not `hook_invalid`) | `tests_error` | 1 |
+| (kind `open`) the PR has a stored title; the newest pull request of the Lead Branch is not closed without a merge (`details.number`, `details.url`) | `pr_title_required`; `pr_closed` | 3 |
+| (kind `update`) the PR is `open` | `illegal_transition` | 3 |
+| (kinds `open`, `update`) the PR's policy resolves (contract §8.3): its Context has an owner | `owner_unset` | 3 |
+| its owner has a policy file; its policy files are valid | `owner_unknown`, `policy_invalid` | 1 |
+| (kinds `open`, `update`) the Lead Branch's tip is an ancestor of HEAD; `details.next` is `git -C <worktree> merge --no-edit <lead branch>` | `lead_branch_moved` | 3 |
+| (kinds `open`, `update`; a stacked PR) the base PR's Lead Branch is on the remote; `details` `{pr, base, base_pr}` | `base_not_found` | 4 |
+| (kinds `open`, `update`) `origin/<base>`, freshly fetched, is an ancestor of HEAD; `details` `{pr, base, base_sha, sha, next}`, `next` = `["git -C <worktree> merge --no-edit origin/<base>", "cpd attempt submit <attempt>"]` | `base_behind` | 3 |
+| (kinds `open`, `update`; `pr.gate` `local`) the Gate's `pre-merge` passes on HEAD in a gate worktree; `details.tail`, `details.log` (`run/<plan>/logs/pr-<key>.pre-merge.log`) | `gate_failed` | 3 |
+| (the same) the gate worktree's `pre-start` passes and the Gate ran (not killed, not `hook_invalid`) | `gate_error` | 1 |
 
 Effects:
 - **Hooks:** `pre-commit` only, in the worktree (§7.3); output to `run/<plan>/logs/<attempt>.pre-commit.log`. With no `pre-commit` table nothing runs, no log is written and `check_tail` stays null; `pre-merge` never runs at submit (R20).
+- **Kind checks** (contract §7.7, hs-d340, hs-d341), after the quick check and only for the kinds that have one: a `test` or `impl` Job's `[tests]` commands (`build`, then `run`; output in `run/<plan>/logs/<attempt>.tests-build.log` and `<attempt>.tests-run.log`), or an `open` or `update` Job's lookup, base check and Gate (`git fetch origin <base>`; `gh pr list` for `open`; `run/<plan>/logs/pr-<key>.pre-start.log` and `pr-<key>.pre-merge.log`). They hold `locks/check-<plan>--<attempt>.lock` and one test slot (the pool of §23: the same wait, no cap), and append `attempt-status` with `check` `start` and `end` (contract §5.2), so the Attempt's timeout and the stall kill do not count them. A refusal changes nothing else: the Worker fixes, commits and submits again, and the checks run again.
 - **Rows**, one transaction with a compare-and-swap on `status = 'running'` and on the HEAD checked: Attempt `merging`, `submitted_sha`, `submitted_at`, `check_tail`; the Job stays `running`. **Event** `attempt-status` `{from: "running", to: "merging"}`.
-- The driver sees `merging` at A5 and starts the merge (A8, §7.4). For a review Job the merge changes nothing: the Attempt and the Job end `merged` with the Lead Branch unchanged and `merged_sha` its tip (contract §3.4, §7.4).
+- The driver sees `merging` at A5 and starts the merge (A8, §7.4). For a review Job the merge changes nothing: the Attempt and the Job end `merged` with the Lead Branch unchanged and `merged_sha` its tip (contract §3.4, §7.4). An `open` or `update` Job's merge does not rebase, pushes the Lead Branch and, for an `open` Job, opens the pull request and moves the PR in step 10's transaction (contract §7.4, §7.7): `pr-opened` and `plan-phase` follow its `job-merged`.
 
 ```json
 {"ok": true, "attempt": "api-schema-a1", "submitted": true, "sha": "a1b2c3d…", "next": "Stop now. Do not make more changes."}
@@ -1194,6 +1274,8 @@ A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6
 
 ### 9.1 `pr open`
 
+**The repair** (hs-d340). A PR is opened by its `open` Job (contract §7.7), not by the Lead: engine E4 adds the Job to every started PR, its Worker merges the base, and its submit runs the Gate, pushes, and opens the pull request in its merge. `pr open` stays for what that cannot cover: a PR whose `open` Job is `failed` (the Lead decides between `job retry <job> --tier <T>` (§5.4) and this command), or an engine that is down. It is refused `open_job_live` while the PR has an `open` Job that is `queued` or `running`, and its `jobs_not_done` counts every Job of the PR except its `open` and `update` Jobs. Nothing else here changes: the steps and refusals below are the ones the Job's submit and merge share (contract §7.6 steps 0, 1, 3, 4).
+
 `pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate. **The Gate runs only when the PR's `pr.gate` is `local`** (contract §8.3, hs-d292; the PR's policy key, `Repo(<owner>, <name>)`): with `ci`, cpd's default, `pr open` runs no Gate, the repo's CI is the check, and the two Gate rows below do not apply.
 
 ```
@@ -1202,12 +1284,13 @@ cpd pr open [--pr <key>] [--plan <id>]
 
 | Flag | Meaning |
 |---|---|
-| `--pr <key>` | the PR to open (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one. The Lead runs it on each PR's `all-merged` (`data.pr`) |
+| `--pr <key>` | the PR to open (R34, A14), selected by §1.3's rule: required when the Plan has two or more PRs that are not `cancelled`, defaulted to the one when it has one. Only as the repair above |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | the PR is `dispatch` (`open` or `merged`: `already`; `waiting` or `cancelled`) | `illegal_transition` | 3 |
-| every Job of the PR `merged` or `cancelled`, at least one `merged` | `jobs_not_done` | 3 |
+| the PR has no `open` Job that is `queued` or `running`; `details.job` (hs-d340) | `open_job_live` | 3 |
+| every Job of the PR but its `open` and `update` Jobs `merged` or `cancelled`, at least one `merged` | `jobs_not_done` | 3 |
 | the PR has a stored title (hs-d285): a PR that existed before migration `pr-title` has none, and there is no fallback to the Plan's title. The message says to run `cpd pr edit <key> --title "<text>"`. Checked before the Gate | `pr_title_required` | 3 |
 | the newest pull request of the Lead Branch is not closed without a merge (a merged one is adopted, below); `details.number`, `details.url` | `pr_closed` | 3 |
 | **stacked** (the PR's base PR, contract §2.2, is not `merged`): the base PR's Lead Branch, `<base>`, is on the remote (`git ls-remote --exit-code --heads origin <base>`), checked before the fetch and the Gate; `details` is `{pr, base, base_pr}` (hs-d324) | `base_not_found` | 4 |
@@ -1278,14 +1361,14 @@ Effects (contract §7.6 gives the query, the mapping and the caveats):
 - **Lock:** `flock` on `locks/pr-poll.lock`, held for the whole poll, so two polls never overlap.
 - **gh:** one `gh api graphql` call with two searches (`is:pr is:open author:@me archived:false sort:created-asc` and `review-requested:@me is:pr is:open archived:false sort:created-asc`, the oldest 100 each; every pull request is read with its `baseRefName`, for the base follow below), then, for the pull requests of `prs` rows in status `open` whose `pull_requests` row is `state` `open` and that neither search listed, one lookup call with one alias per pull request (a pull request closed without a merge is looked up once: its row then holds `closed`, and it is not looked up again until a search lists it). Stdout of the lookup is parsed whatever the exit code (gh exits 1 when one alias is `NOT_FOUND`). A lookup answering `OPEN` changes nothing.
 - **Rows**, one transaction for every change, none when nothing changed: `pull_requests` rows inserted or updated (`changed_at` = now) when a value changed (`mergeable`, `merge_state`, `authored` and `review_requested` included: `authored` is 1 when the pull request is in the `author:@me` search, `review_requested` when it is in the `review-requested:@me` search); a row is kept while it is in either search or a PR points to it, and deleted, when no PR points to it, once its pull request is in neither. The `authored` rows are what the Deploy column shows (§13.2, §17); the Inbox kinds read them all (§21).
-- **Events**, in that transaction, for the Plan whose PR points to the pull request only: **Event** `pr-feedback` (data of contract §5.2) when the checks became `failed` and the PR's `pr.feedback.checks` is `any` (contract §8.3, hs-d292; with `none` failing checks raise nothing), the review `changes_requested`, the state `closed` or `mergeable` `conflicting` (reason `conflict`; from anything else, once per transition). A pull request that became `merged`: the PR `status = merged`, `merged_at`, **Event** `pr-merged` `{pr, number, url, merged_at}`; when every PR that is not `cancelled` is then `merged`, the same transaction sets `plans.phase = done`, `done_at` and appends `plan-done` `{prs: [{key, number, url, merged_at}]}`, once each time the Plan reaches `done`: again when a reopened Plan's last PR merges (§3.1, D2). Pull requests no Plan owns get no Event, nor does one only in the review-request search: `pr-feedback` is unchanged, still only for the author's Plans.
-- **The base follow** (hs-d325, hs-d326; contract §3.8 "Stacked PRs" step 8, §7.6 step 6): for a PR whose status is `open` and whose pull request a search lists `OPEN`, when `baseRefName` differs from the PR's `base`, the same transaction sets the PR's `base` to it and appends **Event** `pr-base-changed` `{pr, from, to, from_pr, to_pr, by: "poll", number, url}`. This is what happens when a base PR merges: GitHub deletes its branch and repoints the stacked pull request to `main` (or to the base PR's own base); the poll learns it and **cpd follows GitHub, it never retargets** (no command edits a pull request's base). The PR is then unstacked, or stacked on the next PR when the new base is that PR's Lead Branch (contract §2.2 "The base PR"). **No Gate, no draft, no `pr-feedback`, no status change**: the pull request's tree is unchanged, so a ready PR stays ready (hs-d326); a conflict with the new base is the poll's usual `conflict` feedback. A base PR closed unmerged is not repointed by GitHub: nothing changes for the PR above it (contract §3.8 step 9). A poll that finds no base changed writes nothing for this.
+- **Events**, in that transaction, for the Plan whose PR points to the pull request only: **Event** `pr-feedback` (data of contract §5.2) when the checks became `failed` and the PR's `pr.feedback.checks` is `any` (contract §8.3, hs-d292; with `none` failing checks raise nothing), the review `changes_requested` or the state `closed` (from anything else, once per transition); a conflict is no longer a reason (hs-d340: it queues an `update` Job, below). A pull request that became `merged`: the PR `status = merged`, `merged_at`, **Event** `pr-merged` `{pr, number, url, merged_at}`; when every PR that is not `cancelled` is then `merged`, the same transaction sets `plans.phase = done`, `done_at` and appends `plan-done` `{prs: [{key, number, url, merged_at}]}`, once each time the Plan reaches `done`: again when a reopened Plan's last PR merges (§3.1, D2). Pull requests no Plan owns get no Event, nor does one only in the review-request search: `pr-feedback` is unchanged, still only for the author's Plans.
+- **The base follow** (hs-d325, hs-d326; contract §3.8 "Stacked PRs" step 8, §7.6 step 6): for a PR whose status is `open` and whose pull request a search lists `OPEN`, when `baseRefName` differs from the PR's `base`, the same transaction sets the PR's `base` to it and appends **Event** `pr-base-changed` `{pr, from, to, from_pr, to_pr, by: "poll", number, url}`. This is what happens when a base PR merges: GitHub deletes its branch and repoints the stacked pull request to `main` (or to the base PR's own base); the poll learns it and **cpd follows GitHub, it never retargets** (no command edits a pull request's base). The PR is then unstacked, or stacked on the next PR when the new base is that PR's Lead Branch (contract §2.2 "The base PR"). **No Gate, no draft, no `pr-feedback`, no status change**: the pull request's tree is unchanged, so a ready PR stays ready (hs-d326); a conflict with the new base queues an `update` Job (below). A base PR closed unmerged is not repointed by GitHub: nothing changes for the PR above it (contract §3.8 step 9). A poll that finds no base changed writes nothing for this.
 - **Starting the PRs that waited for it** (A9): `pr poll` does not start a PR itself. Engine E7, which runs after E5 in the same tick (§3.7), starts every `waiting` PR whose needs are now all `merged` (needs of other Plans too, hs-d324) and whose base PR, if any, has started, from a fresh `fetch origin <base>` (a stacked PR from its base PR's head, §9.7); when `pr poll` was run by hand, the next tick does, or the Lead runs `pr start <key>` (§9.7).
 - **A pull request closed without a merge** (A11, hs-d329): `pr-feedback` with `reasons: ["closed"]`, once; the poll never ends the PR: it stays `open` in cpd, every PR that needs it stays `waiting`, and the Lead decides. A Lead may have closed it itself, to reopen it on GitHub once it is ready again (contract §7.6 "Ready, never a draft"): reopened, the same pull request is in the search again and the poll writes its row `state` `open`, with no Event for the reopening; the PR was `open` throughout. To give it up the Lead runs `pr cancel <key>` (§9.6).
-- **A conflict** (hs-d329): `pr-feedback` with reason `conflict` when `mergeable` becomes `conflicting` (above); nothing becomes a draft. A pull request that is a draft anyway is only stored (`draft`, `merge_state` `draft`): no Event.
+- **A conflict or a moved base** (hs-d340; contract §3.7 E5, §7.6 step 6): in the same transaction, for the PR that is `open` and points to the pull request, when `mergeable` becomes `conflicting` or `merge_state` becomes `behind` (from anything else, once per transition), the row's `state` is `open`, the Plan is not archived, the PR's policy resolves and the PR has no `update` Job that is `queued` or `running`: one `update` Job is inserted, with the Event `job-added` `{kind: "update", by: "poll", reason}`, `reason` `conflict` or `behind`. No `pr-feedback`, no Gate here, nothing becomes a draft (hs-d329). A pull request that is a draft anyway is only stored (`draft`, `merge_state` `draft`): no Event.
 - **After a PR is merged** (§7.2; hs-d138, hs-d142): for each PR that became `merged` in this poll, kill that PR's Attempt windows; then, per Attempt of its Jobs whose worktree exists: `git worktree remove --force`, `git branch -D`; then its gate worktrees whose pid is dead (`git worktree remove --force --force`; one whose pid lives is left for a later poll); then its Lead worktree, first brought up to date by rule S (contract §7.4): kept when dirty (`git --no-optional-locks status --porcelain` not empty, untracked files included) or unpushed (`git rev-list HEAD --not --remotes=origin` not empty), else `git worktree remove` and `git -C <repo> branch -D <lead branch>`. No lock (hs-d243, contract §7.2): the removals of a PR wait until the PR is idle, i.e. every Attempt of its Jobs is `ended` and has its driver lock free (probed without creating the file); until then the poll skips that PR's removals with no Event and a later poll cleans it up, because the poll never waits and a Gate, a merge or an A9 must not lose its worktree (hs-n124). A Gate never runs in the Lead worktree, and a running Gate's worktree is never removed while its pid lives. Best effort per item: a failure does not stop the others. Remote branches are never touched. A kept or failed Lead worktree appends one **Event** `error` `{source: "pr poll", code: "cleanup_failed", details: {plan, pr, path, reason}}` (`reason`: `dirty`, `unpushed` or git's stderr tail), only from the poll that saw the merge. Every later poll retries the merged PRs that still have a path on disk, and those retries append no Event. It is per PR, not at `done`; PRs closed unmerged and abandoned Plans are not cleaned up here (G5).
 
-Output: `polled`, the number of distinct pull requests in either search; `changed`, one entry for each pull request whose row was inserted or updated; `removed`, the number of rows deleted; `base_changed`, the `{plan, pr, from, to}` of each PR whose `base` followed GitHub (empty when none); `feedback`, `merged` and `done`, the `{plan, pr}` pairs that got `pr-feedback` or `pr-merged`, and the Plans that became `done`; `rate_limit`, the search's `cost`, `remaining` and `reset_at` (E5 reads it, §3.7); and, only with a Plan, `prs`, one entry for each of its PRs in key order that is not `cancelled`, with its `status` and its `pull_request` row (or null).
+Output: `polled`, the number of distinct pull requests in either search; `changed`, one entry for each pull request whose row was inserted or updated; `removed`, the number of rows deleted; `base_changed`, the `{plan, pr, from, to}` of each PR whose `base` followed GitHub (empty when none); `feedback`, `merged` and `done`, the `{plan, pr}` pairs that got `pr-feedback` or `pr-merged`, and the Plans that became `done`; `update_jobs`, the `{plan, pr, job, reason}` of each `update` Job the poll queued (hs-d340); `rate_limit`, the search's `cost`, `remaining` and `reset_at` (E5 reads it, §3.7); and, only with a Plan, `prs`, one entry for each of its PRs in key order that is not `cancelled`, with its `status` and its `pull_request` row (or null).
 
 ```json
 {"ok": true, "polled": 3,
@@ -1293,6 +1376,7 @@ Output: `polled`, the number of distinct pull requests in either search; `change
  "removed": 1,
  "base_changed": [{"plan": "pay-4521", "pr": "ui", "from": "cpd/pay-4521/api", "to": "main"}],
  "feedback": [{"plan": "pay-4521", "pr": "ui"}],
+ "update_jobs": [{"plan": "pay-4521", "pr": "ui", "job": "up-ui", "reason": "conflict"}],
  "merged": [{"plan": "pay-4521", "pr": "api"}],
  "done": [],
  "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": "2026-10-20T11:00:00Z"},
@@ -1300,7 +1384,7 @@ Output: `polled`, the number of distinct pull requests in either search; `change
          {"key": "ui", "status": "open", "pull_request": {"repo": "acme/pay", "number": 813, "url": "https://github.com/acme/pay/pull/813", "title": "Retry failed payouts (ui)", "draft": false, "state": "open", "review_decision": "none", "checks": "failed", "mergeable": "conflicting", "merge_state": "dirty", "created_at": "…", "merged_at": null}}]}
 ```
 
-Idempotent: yes; the rows hold what was reported, so a rerun with no change on GitHub reports nothing new (`changed`, `base_changed`, `feedback`, `merged` and `removed` empty or 0) and writes nothing.
+Idempotent: yes; the rows hold what was reported, so a rerun with no change on GitHub reports nothing new (`changed`, `base_changed`, `feedback`, `update_jobs`, `merged` and `removed` empty or 0) and writes nothing.
 
 ### 9.3 `pr rebase`
 
@@ -1377,7 +1461,7 @@ Effects: no lock; guard U and the lease as `pr rebase` (the snapshot `S` is the 
 ### 9.4 `pr add`
 
 ```
-cpd pr add <key> --repo <path> --title <text> [--base <branch> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
+cpd pr add <key> --repo <path> --title <text> [--shape <tdd|docs|config>] [--base <branch> | --base <plan>/<key>] [--needs <r1,r2> | --no-needs] [--plan <id>]
 ```
 
 Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `plan` it is part of the plan fingerprint (§2.3), so the Plan needs a review that includes it; in `dispatch`, `deploy` and `done` it is **appended**, like `job add`, and engine E7 starts it once its needs are `merged` (at once when it has none, §3.7). In `deploy` and `done` it also **moves the Plan back to `dispatch`** (hs-d87: a merged PR can hold a bug or a regression, so a Plan takes follow-up work at any time; no Plan review of the PR itself, D4; the Jobs added to it as drafts are reviewed, §4.6). A follow-up PR is registered at once, even when it cannot run yet (hs-d239, hs-d241): `pr add <key> --repo … --needs …`, then one stub draft per planned Job (`job add --draft --title …`, §5.1). When the Plan has a `merged` PR on the legacy Lead Branch `cpd/<plan>`, it first **moves that branch** to `cpd/<plan>/<that PR's key>` (below).
@@ -1391,6 +1475,7 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | `--base <plan>/<key>` | **stack on a PR** (hs-d324, hs-d325): the PR `<key>` of Plan `<plan>` (this Plan's own included) becomes the **base PR**, and the stored `base` is its Lead Branch, so the PR starts from that branch's head and its pull request targets it (contract §3.8 "Stacked PRs"). The value is a PR when it has the form `<plan>/<key>` and a Plan `<plan>` exists, else a branch (contract §2.2 "A PR reference") |
 | `--needs <r1,r2>` | PR references (contract §2.2): bare keys of other PRs of the Plan, or `<plan>/<key>` of a PR of **another Plan of the Context** (hs-d324), that must be `merged` before this one starts, comma-separated, no duplicates (`usage`). Default: in phase `deploy` or `done` (the reopen, hs-d118), **every `merged` PR of the Plan**; in other phases none |
 | `--no-needs` | no needs, also in phase `deploy` or `done`; exclusive with `--needs` (`usage`) |
+| `--shape <tdd\|docs\|config>` | the template of stub drafts the PR starts with (hs-d341, contract §2.2 "Job kinds"), default `tdd`: `<key>-docs` (kind `docs`), `<key>-tests` (`test`, needs `<key>-docs`), `<key>-impl` (`impl`, needs `<key>-tests`). **`docs`**: only `<key>-docs`; **`config`**: only `<key>-config`, kind `work`: a docs-only or config-only PR says so here and has no test Job. Not stored: the Jobs are the record, and `pr_exists`'s comparison ignores it |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -1413,9 +1498,13 @@ Adds a PR to the Plan, `waiting` (R34, A13, §3.8). In phases `grounding` and `p
 | no need is `cancelled`; `details.needs` lists them | `needs_unavailable` | 3 |
 | the graph of PR needs and base PRs stays acyclic across every Plan (a PR stacked on `B` cannot be needed, directly or not, by `B`: it would wait for `B` to start while `B` waits for it to merge); `details.cycle` lists the references | `dependency_cycle` | 3 |
 | `refs/heads/cpd/<plan>/<key>` does not exist in the repo, and neither does `refs/heads/cpd/<plan>`, except the legacy branch of a PR of the Plan that is `merged` (moved below); `details.branch` names it | `branch_exists` | 3 |
+| (`--shape tdd`) the repo's `.config/cpd.toml` has `[tests]`, read from `origin/<base>` (`refs/heads/<base>` with no `origin`; contract §7.7); the message names `--shape docs`, `--shape config` and the table | `tests_unconfigured` | 3 |
+| none of the Job keys the shape lays out exists in the Plan; `details.jobs` | `job_key_exists` | 3 |
 | the legacy move's `git push origin --delete cpd/<plan>` succeeds; `details`: `branch`, `repo`, `stderr` | `push_failed` | 1 |
 
 Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so no `illegal_phase`. A new PR has no dependents, so it creates no cycle of its own; `dependency_cycle` is possible only through `pr edit` (§9.5).
+
+**The template** (hs-d341). The shape's Jobs are **stub drafts** (§5.1: a title, no Tier and no Spec): `jobs` rows with their `kind`, the titles `Docs: <PR title>`, `Red tests: <PR title>`, `Implement: <PR title>` and `Config: <PR title>`, `status = draft`, `appended` 0 before the lock and 1 after it (as `job add --draft` writes them), no fingerprint, and for `tdd` the `dependencies` rows `<key>-tests → <key>-docs` and `<key>-impl → <key>-tests`. The Lead completes each (`job edit --tier --spec`, §5.2) or cancels the ones it does not need, and adds the PR's other Jobs with `job add --pr`. The engine runs nothing of them until the batch is approved (§4.6, §4.8). The PR's `open` Job is not part of the template: engine E4 adds it once the PR has started (contract §3.7).
 
 **The repo's key** (contract §8.3, hs-d288). `pr add` parses the repo's `origin` once, at the boundary: `git -C <repo> remote get-url origin`, which must be `https://github.com/<owner>/<name>` or `git@github.com:<owner>/<name>`, each with or without `.git`, `<owner>` and `<name>` valid by contract §2.1 (stored lowercased). Nothing else is accepted: no `origin`, another host, or an SSH host alias (`git@github-work:<work-owner>/x.git`) is `repo_unkeyed`; cpd never asks the network to resolve one. `<owner>` must be the Context's (`owner_mismatch`): one GitHub owner per Context, and a Plan may span several repos of it. The PR stores `<name>` only; its owner is the Context's.
 
@@ -1426,10 +1515,10 @@ Any phase is allowed: `grounding`, `plan`, `dispatch`, `deploy` and `done`, so n
 
 A legacy branch of a PR that is not `merged` still refuses `branch_exists`.
 
-Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base` (the base PR's `lead_branch` when stacked), `title`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need (`needs_plan` the needed PR's Plan); and the legacy PR's `lead_branch` update (step 3). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, base_pr, title, needs, appended}`, `appended` true in phases `dispatch`, `deploy` and `done`. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
+Effects: **rows**, one transaction: in `deploy` or `done`, `plans` (`phase = dispatch`, `done_at = null`); `prs` (`status = waiting`, `repo`, `name`, `base` (the base PR's `lead_branch` when stacked), `title`, `lead_branch = cpd/<plan>/<key>`, `created_txn`, `created_at`; `lead_worktree` null); one `pr_needs` row per need (`needs_plan` the needed PR's Plan); the legacy PR's `lead_branch` update (step 3); and the shape's stub drafts (below). **Events**, in this order: in `deploy` or `done`, `plan-phase` `{from: "deploy"|"done", to: "dispatch"}`; then `pr-added` `{pr, repo, base, base_pr, title, needs, appended}`, `appended` true in phases `dispatch`, `deploy` and `done`; then one `job-added` (`kind`, `status` `draft`) per stub draft. Engine E7 then starts the PR like any appended PR (at once when it has no needs). No tmux and no other git write: the Lead Branch and Lead worktree are created when the PR starts (§3.8, §7.2).
 
 ```json
-{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "base_pr": null, "title": "Add the web client", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "appended": false}}
+{"ok": true, "pr": {"key": "web", "repo": "/home/clayton/projects/web", "name": "web", "base": "main", "base_pr": null, "title": "Add the web client", "needs": ["api"], "status": "waiting", "lead_branch": "cpd/pay-4521/web", "appended": false, "jobs": ["web-docs", "web-tests", "web-impl"]}}
 ```
 
 A PR stacked on another Plan's PR, needing a third (`--base ledger-9/api --needs ledger-9/schema`): `"base": "cpd/ledger-9/api", "base_pr": "ledger-9/api", "needs": ["ledger-9/schema"]`.
@@ -1485,14 +1574,14 @@ Three uses (contract §3.8). Before the lock it removes a `waiting` PR from the 
 | Precondition | Code | Exit |
 |---|---|---|
 | the PR is `open`, `dispatch`, `waiting` or `cancelled` (`cancelled`: `already`, in any phase; `merged`: `illegal_transition`); a `dispatch` PR only after the lock; an `open` PR is in phase `dispatch` or `deploy` | `illegal_transition` | 3 |
-| **`waiting`, `dispatch`**: every Job of the PR is `cancelled` (none `merged`, none live), and no PR that is not `cancelled`, of any Plan, needs it or is stacked on it (contract §3.8 "Stacked PRs"); `details.jobs` and `details.prs` list what holds it, the PRs as references (`<plan>/<key>` for another Plan's) | `pr_in_use` | 3 |
+| **`waiting`, `dispatch`**: every Job of the PR is `cancelled` (none `merged`, none live; a `queued` `open` or `update` Job excepted: this command cancels it, below), and no PR that is not `cancelled`, of any Plan, needs it or is stacked on it (contract §3.8 "Stacked PRs"); `details.jobs` and `details.prs` list what holds it, the PRs as references (`<plan>/<key>` for another Plan's) | `pr_in_use` | 3 |
 | **`open`**: the PR's `pull_requests` row is `state = closed`, as the last poll stored it (no `gh` call: run `pr poll` first); `details` is `{pr, number, url, state}` | `pr_not_closed` | 3 |
 | **`open`**: no PR that is not `cancelled`, of any Plan, needs it or is stacked on it (its Jobs are `merged` or `cancelled` and are not checked); `details.prs` lists the PRs as references | `pr_in_use` | 3 |
 | **`open`**: the PR is still `open` at the transaction | `cas_lost` | 3 |
 
-Effects, **`waiting`** and **`dispatch`**: **rows**, one transaction: the PR `status = cancelled`; a `dispatch` PR also loses its `lead_worktree` and `started_at` (the table allows neither on a `cancelled` PR). **Nothing is removed on disk**: a started PR's Lead worktree and local Lead Branch stay, because the clean-up of §7.2 runs at a merge only and the clean-up of a cancelled PR is not done yet. **Event** `pr-cancelled` `{pr}`. Before the lock the plan fingerprint changes (§2.3: it covers the PRs that are not `cancelled`). After the lock, when no PR of the Plan is left `waiting` or `dispatch` and one is not `cancelled`, the same transaction moves the Plan as `pr open` and the poll do: `dispatch → deploy` with `plan-phase`, and `deploy → done` with `plan-done` when every PR left is `merged` (§3.1); the output then has `phase`. A Plan whose PRs are all `cancelled` stays in `dispatch`.
+Effects, **`waiting`** and **`dispatch`**: **rows**, one transaction: the PR `status = cancelled`, and its `open` and `update` Jobs that are `queued` cancelled with the reason `pr cancelled` (one `job-cancelled` each: cpd's own Jobs go with the PR, contract §3.8; one that is `running` is a live Job and refuses `pr_in_use`); a `dispatch` PR also loses its `lead_worktree` and `started_at` (the table allows neither on a `cancelled` PR). **Nothing is removed on disk**: a started PR's Lead worktree and local Lead Branch stay, because the clean-up of §7.2 runs at a merge only and the clean-up of a cancelled PR is not done yet. **Event** `pr-cancelled` `{pr}`. Before the lock the plan fingerprint changes (§2.3: it covers the PRs that are not `cancelled`). After the lock, when no PR of the Plan is left `waiting` or `dispatch` and one is not `cancelled`, the same transaction moves the Plan as `pr open` and the poll do: `dispatch → deploy` with `plan-phase`, and `deploy → done` with `plan-done` when every PR left is `merged` (§3.1); the output then has `phase`. A Plan whose PRs are all `cancelled` stays in `dispatch`.
 
-Effects, **`open`** (contract §3.8): **rows**, one transaction: the PR `status = cancelled`, with `lead_worktree`, `started_at`, `pr_number`, `pr_url`, `pr_opened_at` and `pull_request` set to null (the table's checks tie them to the status; the old values stay in the history rows). **Events** `pr-cancelled` `{pr}`, its `text` naming the pull request, the Lead worktree and the Lead Branch, which cpd leaves for the Lead to remove by hand; then, when every PR that is not `cancelled` is now `merged` and at least one is, the Plan `deploy → done` with `done_at` and `plan-done` (§3.1); otherwise the phase stays. The plan fingerprint does not change after the lock (§2.3). The output also carries `phase` and `released`, `{number, url, lead_worktree, lead_branch}` as they were.
+Effects, **`open`** (contract §3.8): **rows**, one transaction: the PR `status = cancelled` (and its `update` Job that is `queued`, as above), with `lead_worktree`, `started_at`, `pr_number`, `pr_url`, `pr_opened_at` and `pull_request` set to null (the table's checks tie them to the status; the old values stay in the history rows). **Events** `pr-cancelled` `{pr}`, its `text` naming the pull request, the Lead worktree and the Lead Branch, which cpd leaves for the Lead to remove by hand; then, when every PR that is not `cancelled` is now `merged` and at least one is, the Plan `deploy → done` with `done_at` and `plan-done` (§3.1); otherwise the phase stays. The plan fingerprint does not change after the lock (§2.3). The output also carries `phase` and `released`, `{number, url, lead_worktree, lead_branch}` as they were.
 
 ```json
 {"ok": true, "pr": {"key": "web", "status": "cancelled"}, "phase": "done"}
@@ -2056,7 +2145,7 @@ cpd watch [--ensure]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5 and E7–E10 (E6 is removed; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194; E10, the Session titles, since hs-d257) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5 and E7–E10 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194; E10, the Session titles, since hs-d257) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
 
@@ -2454,10 +2543,10 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 
 | Kind | Plan Lead | Worker, side fork |
 |---|---|---|
-| `job-merged`, `job-failed`, `plan-done`, `error` | message, **turn**, `followUp` (an `error` with code `pr_unopened`, §3.7 E4: a PR unopened 10 minutes after `all-merged` and the Context has no Manager; the Lead runs `cpd pr open --pr <key>`) | |
-| `all-merged` | message, **turn**, **`steer`** (hs-d334). Carries the PR's key in `data.pr`; the Lead answers `all-merged` with `cpd pr open --pr <key>` (R34, A9) | |
+| `job-merged`, `job-failed`, `plan-done`, `error` | message, **turn**, `followUp`. The `job-merged` of an `open` Job is the Lead's word that the pull request is open (`data.number`, `data.url`, hs-d340) | |
+| `all-merged` | ignored: no longer appended (hs-d340, contract §3.7 E4); the adapter still knows the kind, because an old Event may be read | |
 | `error` with code `pr_start_failed` | the Lead answers with `cpd pr start <key>` once the cause is fixed | |
-| `pr-feedback` (every `reason`: checks failed, changes requested, closed, conflict) | message, **turn**, **`steer`**. Carries the PR's key in `data.pr` | |
+| `pr-feedback` (every `reason`: checks failed, changes requested, closed) | message, **turn**, **`steer`**. Carries the PR's key in `data.pr` | |
 | `attempt-retry`, `job-cancelled` | message, no turn, `followUp` | |
 | `pr-started`, `pr-merged` | message, no turn, `followUp` (R34: a started PR's Jobs are now scheduled; a merged PR may start the PRs that need it, §5.3) | |
 | `pr-base-changed` | message, no turn, `followUp` (informational, hs-d325: the PR's `base` followed GitHub, as after its base PR merged; no Gate is needed and the PR stays ready, hs-d326). `data` is in contract §5.2. Raises `protocol` to 5 | |
@@ -2791,6 +2880,11 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 | Finish | `cpd attempt submit <attempt>`; on success stop at once; on a refusal, what each code means: `wrong_worktree` (run it from the worktree), `dirty_tree`, `no_commits`, `gate_tampered` (revert the protected paths), `check_failed` (fix, commit, submit again; the tail is in `details`), `check_error` (the check could not run: ask the Lead), `attempt_not_running` (the Attempt was stopped: stop) |
 
 **A review Job's Spec** (B2) differs from the table in these rows: *Who you are* says it is a review Job and that it is a fork of the Lead; *Rules* replace "commit your work" and the quick check with **commit nothing**, and tell it to read the diff of the PR's Lead Branch against the PR's base (`<lead branch>` and `<base>` are given) and the Plan's Specs, to write its findings to `$CPD_HOME/run/<plan>/reviews/<job>.md` (absolute path given, non-empty), and not to edit the repo; *Finish* adds `review_commits` (you committed: undo it and submit again) and `review_missing` (write the findings file) to the refusal codes and drops `no_commits` and `check_failed`. The findings are Markdown; the Lead reads them and turns them into fix Jobs before `pr open`.
+
+**The kinds that have checks** (hs-d340, hs-d341; contract §2.2 "Job kinds", §7.7) differ from the table in these rows; a `docs` Job and a `work` Job have no row of their own.
+- **`test`**: *Who you are* says it writes red tests for the Job's named tests and that another Worker implements them later. *Rules* add: write the named tests, in the files of `test_files`, from the docs alone; add stubs (empty or panicking implementations) so that the branch builds; do not implement. *Job* lists `tests` and `test_files`. *Finish* adds the refusals `test_files_missing`, `tests_build_failed` (the stubs do not make it build), `tests_not_red` (a named test passes: make it fail for the right reason, for example against the stub) and `tests_error` (the check could not run: ask the Lead).
+- **`impl`**: *Who you are* names the `test` Jobs it builds on. *Rules* add: make the listed tests pass (the union of those Jobs' `tests`, derived); never change a guarded file (the `test_files` of those Jobs, listed, minus what the Lead approved); a test that is wrong is a question (`cpd ask`), not an edit. *Finish* adds `tests_build_failed`, `tests_failed`, `tests_tampered` (revert the guarded paths, or ask) and `tests_error`.
+- **`open`** and **`update`**: *Who you are* says it brings the PR's Lead Branch up to date with `<base>`, and that cpd runs the Gate, pushes and opens the pull request itself. *Rules* replace "commit your work" with: `git fetch origin <base>` and `git merge --no-edit origin/<base>` in the worktree; resolve every conflict keeping both sides' intent; commit the merge and the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration); run the quick check; submit, also when there was nothing to merge. It does not push, does not run `gh`, does not run the Gate and does not touch the pull request. *Job* is cpd's fixed text for the kind. *Finish* adds `base_behind` (merge the base again), `lead_branch_moved` (merge the Lead Branch), `pr_title_required` and `pr_closed` (ask the Lead), `base_not_found`, `gate_failed` (the tail is in `details`: fix it, commit, submit again), `gate_error` (ask the Lead) and the policy codes, and drops `no_commits`.
 
 The Worker is started as §6.5 says, with the first message `Read <spec path> and follow it exactly. Your attempt id is <attempt>.` and `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT` in its environment, and `PATH` with `$CPD_HOME/bin` first, where the `git` wrapper refuses `git stash` (contract §6.5, hs-d310).
 
