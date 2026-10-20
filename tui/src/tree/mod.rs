@@ -16,8 +16,9 @@
 //!   `running: <command>` meanwhile and then its result, and the loop keeps drawing and reading keys (tui-W7);
 //! - [`kinds`]: the Events it follows, in process ([`read::Follow`]), which tell it when to take a new snapshot.
 //!
-//! It is also the one view that restarts a stopped engine (`cpd watch --ensure`, at most once a minute) and tells the
-//! live Managers when that fails ([`view::View::restart_engine`], hs-d318).
+//! It never restarts a stopped engine (the supervisor does, contract §6.6); it tells the live Managers when the engine has
+//! been down for 60 s ([`view::View::watch_engine`], hs-d363). It writes nothing to its terminal outside the frame: its
+//! lines go to the note and to `run/tui/tree.log` ([`super::viewlog`]).
 //!
 //! Keys and clicks are the reference's (commands.md §13.2, `tui/README.md` "Context column" on `main`): arrows
 //! or `j`/`k` move the cursor between Sessions (shown after the first arrow key, while the pane has focus);
@@ -61,6 +62,7 @@ use actions::Runner;
 use folds::FoldsFile;
 use kinds::KINDS;
 use view::{Effect, View};
+use super::viewlog::ViewLog;
 
 /// A view takes at most one snapshot per this long, whatever the Event rate (commands.md §17).
 const SNAPSHOT_EVERY: Duration = Duration::from_millis(500);
@@ -106,6 +108,7 @@ fn event_loop(
     poll: Duration,
     runner: &Arc<Runner>,
 ) -> std::io::Result<()> {
+    let log = ViewLog::of(home, "tree");
     let mut dirty = false;
     let mut last_snapshot = Instant::now();
     let mut last_poll = Instant::now();
@@ -123,7 +126,7 @@ fn event_loop(
     loop {
         let error = view.error.clone();
         while let Some(result) = actions.finished() {
-            view.done(result);
+            said(&mut view, &log, result);
             redraw = true;
             // the tree shows the result on this loop's snapshot
             dirty = true;
@@ -158,11 +161,16 @@ fn event_loop(
             last_snapshot = Instant::now();
             view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone());
         }
-        // A stopped engine restarts itself, at most once a minute (commands.md §13.2, hs-d318): this view only, not every pane.
-        if let Some(line) = view.restart_engine(Instant::now(), &mut |action| actions::call(action), &mut || runner.live_managers()) {
-            eprintln!("{line}");
-            terminal.clear()?; // the line was written over the screen this view owns
-            redraw = true;
+        // An engine down for 60 s is told to the Managers (commands.md §13.2, hs-d363): this view only, not every pane. Its
+        // lines go to the log, never to the terminal; a log that cannot be written is the note.
+        let lines = view.watch_engine(Instant::now(), &mut |action| actions::call(action), &mut || runner.live_managers());
+        if !lines.is_empty() {
+            for line in lines {
+                if let Err(why) = log.append(&line) {
+                    view.note = why;
+                }
+            }
+            redraw = true; // the note
         }
         // the folds file follows every change of the folds (a write only when they changed)
         view.save_folds();
@@ -203,7 +211,7 @@ fn event_loop(
                 match runner.ask(question) {
                     Ok(None) => {}
                     Ok(Some(action)) => {
-                        view.done(runner.run(&action));
+                        said(&mut view, &log, runner.run(&action));
                         // the tree shows the result on this loop's snapshot
                         dirty = true;
                         last_snapshot = Instant::now() - SNAPSHOT_EVERY;
@@ -227,11 +235,23 @@ fn event_loop(
                 actions.submit(move || runner.run(&action));
             }
             Effect::Steps(steps) => {
-                view.done(runner.run_all(&steps));
+                said(&mut view, &log, runner.run_all(&steps));
                 dirty = true;
                 last_snapshot = Instant::now() - SNAPSHOT_EVERY;
             }
         }
+    }
+}
+
+/// The result of an action: the note, and a line of the log. A log that cannot be written is added to the note.
+fn said(view: &mut View, log: &ViewLog, result: Result<String, String>) {
+    let line = match &result {
+        Ok(note) => format!("ok: {note}"),
+        Err(why) => format!("failed: {why}"),
+    };
+    view.done(result);
+    if let Err(why) = log.append(&line) {
+        view.note = format!("{}; {why}", view.note);
     }
 }
 
