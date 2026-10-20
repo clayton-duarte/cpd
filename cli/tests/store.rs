@@ -1722,14 +1722,23 @@ fn a_marker_of_a_dead_process_does_not_block() {
 
 /// hs-n278, contract §1.4: the opener that migrates writes its marker while it migrates and empties the file
 /// when it is done; a second opener that finds the lock held waits it out, whatever its own `busy_ms`.
+///
+/// The test, not the clock, keeps the migration in progress: it holds the database's write lock (`BEGIN IMMEDIATE`)
+/// until the second opener has started, so the first opener, which has taken `store.lock` and written its marker,
+/// waits on SQLite for its own write transaction (its `busy_ms` is long enough for that).
 #[test]
 fn the_opener_that_migrates_writes_its_marker_and_clears_it() {
     let env = TestEnv::new();
     let h = home(&env);
     let lock = h.locks_dir().join("store.lock");
+    fs::create_dir_all(h.db().parent().unwrap()).unwrap();
+    // An empty database in WAL mode, as the opener leaves it before it migrates, with its write lock held.
+    let blocker = Connection::open(h.db()).unwrap();
+    blocker.pragma_update_and_check(None, "journal_mode", "WAL", |r| r.get::<_, String>(0)).unwrap();
+    blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
     let first = {
         let h = h.clone();
-        std::thread::spawn(move || Store::open(&h, 5000).map(drop))
+        std::thread::spawn(move || Store::open(&h, 60_000).map(drop))
     };
     let deadline = Instant::now() + Duration::from_secs(60);
     let seen: Value = loop {
@@ -1745,8 +1754,17 @@ fn the_opener_that_migrates_writes_its_marker_and_clears_it() {
     assert!(seen["to"].as_u64().unwrap() > 0, "{seen}");
     assert!(seen["started_unix_ms"].as_u64().unwrap() > 0 && seen["command"].is_string(), "{seen}");
     // A second opener, whose own bound is 1 ms, waits for the migration instead of giving up.
-    Store::open(&h, 1).expect("the second opener waits for the migration");
+    let second = {
+        let h = h.clone();
+        std::thread::spawn(move || Store::open(&h, 1).map(drop))
+    };
+    // The migration cannot end while the test holds the write lock: both openers are still waiting.
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(!first.is_finished() && !second.is_finished(), "an opener returned while the migration was held");
+    assert!(!fs::read_to_string(&lock).unwrap().is_empty(), "the marker was cleared while the migration was held");
+    blocker.execute_batch("ROLLBACK").unwrap();
     first.join().unwrap().unwrap();
+    second.join().unwrap().expect("the second opener waits for the migration");
     assert_eq!(fs::read_to_string(&lock).unwrap(), "", "the marker outlived the migration");
 }
 
