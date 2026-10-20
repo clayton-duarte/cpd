@@ -62,6 +62,22 @@ mod tests {
     }
 
     #[test]
+    fn a_note_or_a_decision_supersedes_a_note() {
+        let note = |s: &str, over: Option<&str>| match over {
+            Some(o) => record(s, Draft::NoteSupersedes { supersedes: id(o) }),
+            None => record(s, Draft::Note),
+        };
+        let records = indexed(vec![
+            note("hs-n1", None),
+            note("hs-n2", Some("hs-n1")),
+            note("hs-n3", None),
+            decision("hs-d1", Some("hs-n3")),
+        ]);
+        assert_eq!(ids(&in_force(&records, 4)), ["hs-n2", "hs-d1"]);
+        assert_eq!(ids(&in_force(&records, 3)), ["hs-n2", "hs-n3"], "a later supersede does not count");
+    }
+
+    #[test]
     fn a_chain_of_supersedes_leaves_only_its_last_link() {
         let records = indexed(vec![
             decision("hs-d1", None),
