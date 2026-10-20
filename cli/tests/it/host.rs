@@ -447,12 +447,13 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
             cpd_core::host::tmux::RESET_GLYPH,
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
-        ) + "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{client_width},11},\
-         #{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers_width},#{@cpd_workers_short_width}}}}\
+        ) + "#{?#{@cpd_preview}, #[fg=yellow]\u{e0b6}#[reverse] preview: #{@cpd_preview} #[noreverse]\u{e0b4}#[default],}\
+         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{client_width},11},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}},\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}}}}\
          #[default]#[align=right]\
          #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default] \
          #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]\
-         #{?#{e|>=:#{client_width},#{e|+:#{@cpd_workers_width},13}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},13},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},14},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]"
     );
 }
