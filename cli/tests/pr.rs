@@ -2887,3 +2887,128 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
     fx.poll_all();
     assert_eq!((fx.policy_errors().len(), fx.event_count()), (1, events));
 }
+
+// ---------- stacked PRs (contract §7.6 `pr open`, §3.8 "Stacked PRs") ----------
+
+/// Plan `ship`, in `dispatch`, with its one PR `web` stacked on `pay`'s PR `repo` (its Lead Branch `cpd/pay`, whose
+/// Lead worktree is `fx.lead`): started from that branch, one Merged Job's commit on it, its Lead Branch pushed.
+struct Stacked {
+    lead: PathBuf,
+}
+
+fn stacked(fx: &Fx) -> Stacked {
+    let ship = PlanId::parse("ship").unwrap();
+    let path = fx.repo.parent().unwrap().join("pay.ship.web");
+    let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("web.log") };
+    let prepared = cpd_core::git::prepare_lead_worktree(&fx.repo, &ship, &path, "cpd/ship/web", "cpd/pay", true, &setup).map_err(|f| f.error).unwrap();
+    assert_eq!(prepared.base_sha, fx.lead_sha(), "cut from the base PR's Lead Branch head");
+    prepared.push().unwrap();
+    fx.git(&path, &["config", "user.name", "cpd test"]);
+    fx.git(&path, &["config", "user.email", "test@cpd.invalid"]);
+    fs::write(path.join("web.txt"), "web\n").unwrap();
+    fx.git(&path, &["add", "-A"]);
+    fx.git(&path, &["commit", "-q", "-m", "web"]);
+    let merged = fx.git(&path, &["rev-parse", "HEAD"]);
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute_batch(&format!(
+                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                   VALUES ('lead2', 'lead', 'ctx', 'ship', 'Lead', '/', 'O3', 'idle', 't', 't');
+                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                   VALUES ('ship', 'ctx', 'Ship the web', 'dispatch', 'lead2', 't', 't');
+                 INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                   VALUES ('ship', 'web', '{repo}', 'cpd/pay', 'dispatch', 'cpd/ship/web', '{path}', cpd_txn(), 't', 't');",
+                repo = fx.repo.display(),
+                path = path.display()
+            ))?;
+            tx.execute(
+                "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                   status, appended, fingerprint, merged_sha, created_txn, created_at)
+                 VALUES ('ship', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
+                params!["f".repeat(64), merged, tx.id()],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    Stacked { lead: path }
+}
+
+impl Fx {
+    fn open_web(&self) -> Run {
+        self.env.cpd(&["pr", "open", "--pr", "web", "--plan", "ship"])
+    }
+}
+
+#[test]
+fn open_of_a_stacked_pr_gates_a_head_with_the_base_prs_work_and_targets_its_lead_branch() {
+    let fx = fx("dispatch");
+    let web = stacked(&fx);
+    // The Gate sees the base PR's work in the gated commit, and its `target` is the base PR's Lead Branch, whose
+    // worktree is `target_worktree_path`.
+    let marker = fx.env.root().join("gate-saw");
+    fs::create_dir_all(web.lead.join(".config")).unwrap();
+    fs::write(
+        web.lead.join(".config/wt.toml"),
+        format!("pre-merge = \"test -f api.txt && test -f web.txt && echo {{{{ target }}}} {{{{ target_worktree_path }}}} > {}\"\n", marker.display()),
+    )
+    .unwrap();
+    fx.git(&web.lead, &["add", "-A"]);
+    fx.git(&web.lead, &["commit", "-q", "-m", "hooks"]);
+
+    let out = fx.open_web().ok();
+
+    assert_eq!((&out["phase"], &out["pr"]["status"]), (&json!("deploy"), &json!("open")));
+    assert_eq!(fs::read_to_string(&marker).unwrap().trim(), format!("cpd/pay {}", fx.lead.display()));
+    // `gh pr create --base <the base PR's Lead Branch>`, never as a draft.
+    let calls = fx.gh_calls();
+    let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).expect("gh pr create ran");
+    let at = |flag: &str| create.iter().position(|a| a == flag).map(|i| create[i + 1].as_str());
+    assert_eq!((at("--base"), at("--head")), (Some("cpd/pay"), Some("cpd/ship/web")));
+    assert!(!create.iter().any(|a| a.contains("draft")), "{create:?}");
+    assert_eq!(fx.remote_branch("cpd/ship/web"), Some(fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/ship/web"])));
+}
+
+#[test]
+fn open_of_a_stacked_pr_is_refused_while_its_base_prs_branch_is_not_on_origin() {
+    let fx = fx("dispatch");
+    stacked(&fx);
+    let pushed = fx.remote_branch("cpd/ship/web");
+    fx.git(&fx.repo, &["push", "-q", "origin", "--delete", "cpd/pay"]);
+
+    let run = fx.open_web();
+
+    assert_eq!(code(&run), ("base_not_found".into(), 4));
+    assert_eq!(run.error()["details"], json!({"pr": "web", "base": "cpd/pay", "base_pr": "pay/repo"}));
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "no pull request was created: {:?}", fx.gh_calls());
+    assert_eq!(fx.remote_branch("cpd/ship/web"), pushed, "nothing was pushed");
+    // Its Lead pushes the base branch, and the PR opens.
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
+}
+
+#[test]
+fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_it_is_behind() {
+    let fx = fx("dispatch");
+    let web = stacked(&fx);
+    // A merge into the base PR's Lead Branch, pushed: the stacked head lacks it.
+    fs::write(fx.lead.join("more.txt"), "more\n").unwrap();
+    fx.git(&fx.lead, &["add", "-A"]);
+    fx.git(&fx.lead, &["commit", "-q", "-m", "more"]);
+    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    let base_sha = fx.lead_sha();
+
+    let run = fx.open_web();
+
+    assert_eq!(code(&run), ("base_behind".into(), 3));
+    let details = &run.error()["details"];
+    assert_eq!((&details["base"], &details["base_sha"]), (&json!("cpd/pay"), &json!(base_sha)));
+    assert_eq!(
+        details["next"],
+        json!([format!("git -C {} merge --no-edit origin/cpd/pay", web.lead.display()), "cpd pr open --pr web"])
+    );
+    assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
+
+    // The stacked Lead takes the new commits by merge, as `next` says, and opens.
+    fx.git(&web.lead, &["merge", "-q", "--no-edit", "origin/cpd/pay"]);
+    assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
+}
