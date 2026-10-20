@@ -322,3 +322,38 @@ fn a_tick_with_no_change_writes_no_transaction() {
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM txns"), txns, "no transaction of any step");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events"), events);
 }
+
+/// Re-fakes `gh` so the PR poll's search returns missionlane/cc-api-orc-apollo#2385 with the given review decision and merge state.
+fn gh_returns_2385(fx: &Fx, review_decision: &str, merge_state: &str) {
+    let node = format!(
+        r#"{{"repository":{{"nameWithOwner":"missionlane/cc-api-orc-apollo"}},"number":2385,"url":"https://github.com/missionlane/cc-api-orc-apollo/pull/2385","title":"T2385","isDraft":false,"state":"OPEN","createdAt":"2026-10-20T10:00:00Z","mergedAt":null,"baseRefName":"main","reviewDecision":"{review_decision}","mergeable":"MERGEABLE","mergeStateStatus":"{merge_state}","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{{"state":"SUCCESS"}}}}}}]}}}}"#
+    );
+    fx.env.fake_gh(&format!(
+        r#"echo '{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}}}}'"#
+    ));
+}
+
+const PR_READY_OPEN: &str = "SELECT count(*) FROM inbox_items WHERE kind = 'pr-ready' AND closed_at IS NULL";
+
+/// hs-d481: a pull request GitHub reports REVIEW_REQUIRED and BLOCKED is never `pr-ready`, through the poll.
+/// Red until ready-impl merges (E8's rule); `a_clean_approved_pull_request_is_ready` passes on both.
+#[test]
+fn a_review_required_blocked_pull_request_is_never_ready() {
+    let fx = fx();
+    gh_returns_2385(&fx, "REVIEW_REQUIRED", "BLOCKED");
+    let _engine = fx.start();
+    wait_until("the polled row", || {
+        fx.env.query::<i64>("SELECT count(*) FROM pull_requests WHERE number = 2385 AND merge_state = 'blocked'") == 1
+    });
+    fx.env.wait_whole_ticks(2);
+    assert_eq!(fx.env.query::<i64>(PR_READY_OPEN), 0, "{:?}", fx.open_items());
+}
+
+/// The positive control: the same pull request, approved and clean, opens one `pr-ready` item.
+#[test]
+fn a_clean_approved_pull_request_is_ready() {
+    let fx = fx();
+    gh_returns_2385(&fx, "APPROVED", "CLEAN");
+    let _engine = fx.start();
+    wait_until("the pr-ready item", || fx.env.query::<i64>(PR_READY_OPEN) == 1);
+}
