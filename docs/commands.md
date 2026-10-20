@@ -2712,6 +2712,32 @@ cpd: a Manager never blocks: a wait over 30 s runs in the background or is the o
 
 **Not affected:** a Lead or a Worker, whatever it runs; every other tool; every `cpd` command's own timeout.
 
+### 15.12 A Worker runs targeted tests
+
+Decision (User, 2026-10-19). A Worker runs only the tests its change touches; the full suite is the Gate's, at `pr open`. Several full suites and Gates at once loaded a host to 205 on 16 cores, and every Gate failed on timing. The Spec's acceptance names the targeted tests (the files and modules the Job changes plus its new tests), never a green full suite, and the adapter enforces the rule, as §15.11 does for the Manager.
+
+**When.** At pi's `tool_call`, for a `bash` call (`event.toolName` is `bash`, `event.input.command`), of a Session of role `worker` only. It is the same handler as §15.11's, which consults each guard by role (`pi/lib/testguard.ts`, `unfilteredTestRun`); for a Lead, a Manager, or before `session_start` has read the role, this guard returns nothing.
+
+**What is refused.** The call is refused when a command of it runs a full unfiltered test suite, that is:
+
+- `cargo test` or `cargo nextest run`, also through `scripts/cargo.sh`, with or without `timeout N` in front, when it has `--workspace`, or has none of `-p` / `--package`, `--test`, `--lib`, `--bin`, `-E` / `--filterset`, or a positional test-name filter (also after `--`);
+- `npm test` or `npm run test` with no file argument (a word after `--`, or after the script name, that is not an option);
+- `npm run verify` (the Gate), whatever its arguments.
+
+**Allowed**, for example: `scripts/cargo.sh nextest run -p cpd --test plan_overlap`, `cargo test -p cpd-core spec::`, `node --test pi/test/x.test.ts`, `npm test -- pi/test/x.test.ts`, `npm run typecheck`, `cargo build`.
+
+A pattern counts where a command runs, as in §15.11 (a command word of a simple command, not an argument or quoted text: `grep "cargo test" f` passes).
+
+**The refusal** is `{block: true, reason}`, with the reason on one line naming the rule:
+
+```
+cpd: a Worker runs only the tests its change touches; the full suite is the Gate's, at pr open; refused: <what matched>
+```
+
+`<what matched>` is the command word and its subcommand, with `--workspace` when it was given (`cargo.sh test --workspace`, `cargo nextest run`, `npm test`, `npm run verify`).
+
+**Not affected:** a Lead or a Manager, whatever it runs; every other tool; the Gate itself.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
@@ -2722,7 +2748,7 @@ Rendered by the driver at A3 to `run/<plan>/specs/<attempt>.md` from a template 
 |---|---|
 | Title | `# Worker Spec: <job>, Attempt <n>` |
 | Who you are | Attempt `<n>` of Job `<job>` (`<title>`) in Plan `<plan>` (was "Workflow"); attempt id, Tier, worktree path |
-| Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` from the worktree's `.config/wt.toml`, listed verbatim, or, when the file has no `pre-commit` table, the line `This repo defines no quick check.` (change: cpd 1 said `./verify.sh`; R20: no fallback to `pre-merge`); never edit the protected paths, listed: `.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, and each entry of the repo's protected list (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; tear down everything it started before it submits (private tmux servers, background processes, temporary homes, a `cpd watch` it started; hs-d34, hs-d39); if continuing would require guessing, `cpd ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); one blocker at a time; commit a skeleton within 10 minutes, then at least every 20 minutes; run only commands that exit: `timeout` around every test and measurement, no synthetic benchmarks, never `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit (hs-n97, hs-n107); do not stop until you have submitted |
+| Rules | work only in this worktree and touch only the listed files; commit your work; before submitting, run the quick check yourself: the commands of `pre-commit` from the worktree's `.config/wt.toml`, listed verbatim, or, when the file has no `pre-commit` table, the line `This repo defines no quick check.` (change: cpd 1 said `./verify.sh`; R20: no fallback to `pre-merge`); never edit the protected paths, listed: `.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, and each entry of the repo's protected list (§7.5; change: cpd 1 hard-coded `verify.sh`); never ask the User anything; tear down everything it started before it submits (private tmux servers, background processes, temporary homes, a `cpd watch` it started; hs-d34, hs-d39); if continuing would require guessing, `cpd ask <attempt> "<question>"`, which blocks until the Lead answers (change: no `--wf`, the pane has `CPD_PLAN`); one blocker at a time; commit a skeleton within 10 minutes, then at least every 20 minutes; run only commands that exit: `timeout` around every test and measurement, no synthetic benchmarks, never `cpd events follow`, `cpd watch`, `cpd tui`, `cpd session run` or any other command that does not exit (hs-n97, hs-n107); run only the tests the change touches, never the full suite (the Gate's); do not stop until you have submitted |
 | Job | Goal, Context, Files you may touch (`touches`), Acceptance, Out of scope (or "Nothing is listed. Still do only what the Goal and Acceptance require.") |
 | Previous Attempts | only when the Job has ended Attempts: for each, number, Tier, outcome and cause, and what explains it: the conflicting files (`merge_conflict`), or one sentence for every other cause (change: cpd 1 showed only feedback) |
 | Answers already given | new: every `answered` Escalation of earlier Attempts, question and answer, so a Worker does not ask again |
