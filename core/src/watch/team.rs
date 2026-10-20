@@ -1,4 +1,4 @@
-//! E10, the team review poll (contract §3.7, §2.2 "The team review rule"; commands.md §21.5, §21.6): reads the team
+//! E11, the team review poll (contract §3.7, §2.2 "The team review rule"; commands.md §21.5, §21.6): reads the team
 //! Slack channel through the helper `pi/lib/slack-channel.ts` and caches its posts in `run/team-review.json`, which E8
 //! reads. It only decides and hands over, like E9, and it never holds the tick: the helper runs on its own thread,
 //! under its own deadline, and a later tick collects its answer from a channel. A run starts `watch.team_review_seconds`
@@ -6,7 +6,7 @@
 //!
 //! The cache is replaced only by a helper that answered `ok` with its `posts` (the helper itself refuses a payload
 //! that parses into no message, `slack_unparseable`): every failure leaves the last good copy, and is reported once as
-//! an `error` Event (`engine-error` item `engine E10: <code>`) until a run succeeds.
+//! an `error` Event until a run succeeds: the engine tells the Manager of it (hs-d314), no Inbox item.
 
 use std::fs;
 use std::path::PathBuf;
@@ -35,7 +35,7 @@ pub fn cache_path(home: &CpdHome) -> PathBuf {
     home.run_dir().join("team-review.json")
 }
 
-/// What E10 remembers between ticks.
+/// What E11 remembers between ticks.
 #[derive(Default)]
 pub(super) struct State {
     /// The run in flight: its answer arrives here.
@@ -47,7 +47,7 @@ pub(super) struct State {
 pub(super) fn run(engine: &mut Engine) {
     if engine.config.inbox.team_channel.is_empty() {
         // Switched off: nothing runs and nothing it reported stays.
-        engine.clear(Step::E10, &About::Machine);
+        engine.clear(Step::E11, &About::Machine);
         return;
     }
     if let Some(running) = &engine.team.running {
@@ -62,10 +62,10 @@ pub(super) fn run(engine: &mut Engine) {
         engine.team.last_end = Some(Instant::now());
         match answer.and_then(|value| store(engine, &value)) {
             Ok(posts) => {
-                engine.log.line(&format!("E10: cached {posts} post(s) of the team channel"));
-                engine.clear(Step::E10, &About::Machine);
+                engine.log.line(&format!("E11: cached {posts} post(s) of the team channel"));
+                engine.clear(Step::E11, &About::Machine);
             }
-            Err(failure) => engine.fail(Step::E10, About::Machine, failure),
+            Err(failure) => engine.fail(Step::E11, About::Machine, failure),
         }
         return;
     }
@@ -78,7 +78,7 @@ pub(super) fn run(engine: &mut Engine) {
         Err(failure) => {
             // The next try is a period away, as after a run that failed.
             engine.team.last_end = Some(Instant::now());
-            engine.fail(Step::E10, About::Machine, failure);
+            engine.fail(Step::E11, About::Machine, failure);
         }
     }
 }

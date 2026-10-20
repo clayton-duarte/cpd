@@ -10,21 +10,13 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
 
-use super::{not_a_terminal, on_a_terminal};
-use cpd_core::error::{CpdError, ErrorCode};
+use super::{Capture, run_view};
+use cpd_core::error::CpdError;
 use cpd_core::host::layout::PLACEHOLDER_TEXT;
 use cpd_core::output::Output;
 
 pub(super) fn run() -> Result<Output, CpdError> {
-    if !on_a_terminal() {
-        return Err(not_a_terminal("tui view chat"));
-    }
-    // From here on this process owns the terminal (commands.md §1.2).
-    let mut terminal = ratatui::init();
-    let error = show(&mut terminal);
-    ratatui::restore();
-    Err(CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view chat failed: {error}."))
-        .with("command", "tui view chat"))
+    run_view("chat", Capture::Keys, || Ok(()), |terminal, ()| Err(show(terminal).into()))
 }
 
 /// Draws the placeholder until the terminal fails: any event, a resize

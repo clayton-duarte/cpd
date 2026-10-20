@@ -131,7 +131,7 @@ pub(super) fn reload_due(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result
 /// Whether a Lead whose pi runs reloads it now (hs-d49): it is idle, its last
 /// turn is finished and its session file is quiet (the rule of `session fork`),
 /// and it is parked, or in the chat slot and has been idle for [`CHAT_IDLE`] (so
-/// unsent typing is not lost). A `blocked` or `working` Lead never reloads.
+/// unsent typing is not lost). A `waiting`, `blocked` or `working` Lead never reloads.
 fn reload_now(state: State, place: &str, idle_for: Duration, turn_finished: bool, file_quiet: bool) -> bool {
     state == State::Idle && turn_finished && file_quiet && (place != "chat" || idle_for >= CHAT_IDLE)
 }
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn a_lead_that_is_not_idle_never_reloads() {
-        for state in [State::Working, State::Blocked, State::Stopped] {
+        for state in [State::Working, State::Waiting, State::Blocked, State::Stopped] {
             for place in ["parked", "chat", "none"] {
                 assert!(!reload_now(state, place, 60 * MINUTE, true, true), "{state:?} in {place}");
             }

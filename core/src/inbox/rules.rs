@@ -1,7 +1,8 @@
 //! The rules of the Inbox (contract §2.2 "Inbox item", step E8 in §3.7): from the
-//! store, the clock and the engine's active errors, the [`Condition`]s that need
+//! store, the [`Condition`]s that need
 //! the User right now. Each kind is one small function and one query; none writes.
-//! [`super::model::reconcile`] opens and closes the items.
+//! [`super::model::reconcile`] opens and closes the items. A stuck Job is no Inbox
+//! condition: [`stuck_jobs`] finds the ones the engine tells the Manager of (hs-d318).
 
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
@@ -17,24 +18,14 @@ use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::host::addr::review_host;
-use crate::ids::{ContextId, JobKey, OwnerLogin, PlanId, RecordId, RepoName, SessionId};
+use crate::ids::{ContextId, JobKey, OwnerLogin, PlanId, RepoName, SessionId};
 use crate::policy::{Checks, PolicyKey, owner_unset, resolve, resolve_unowned_row};
 use crate::plan::Phase;
 use crate::store::Store;
 
-/// An `error` the engine reported for a step of its own and has not cleared (§3.7).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EngineError {
-    pub step: String,
-    pub scope: String,
-    pub code: String,
-    /// The id of its `error` Event.
-    pub event: i64,
-}
-
-/// The `state_label`s of a `blocked` Session that are not a dialog: a Worker's
-/// question goes to its Lead, a plan review has its own kind.
-const NOT_A_DIALOG: [&str; 2] = ["cpd: Worker question", "cpd: plan review"];
+/// The `state_label` of a `blocked` Session that is not a dialog: a plan review has its own kind. A Worker's question
+/// goes to its Lead, and the Lead that waits for the Worker is `waiting`, not `blocked` (hs-d303).
+const PLAN_REVIEW: &str = "cpd: plan review";
 
 /// What the team review rule needs besides the cache (contract §2.2 "The team review rule"): `inbox.bot_reviewers` and
 /// the GitHub state of the posted pull requests, one call for all of them.
@@ -46,40 +37,27 @@ pub struct Team<'a> {
 /// The GitHub answer E8 reuses between ticks ([`team::GITHUB_TTL`]).
 static GITHUB: Mutex<Option<Memo>> = Mutex::new(None);
 
-/// Every condition of the kinds, in the order of the kinds. `now` and `stuck_after` decide `job-stuck`; `errors` are
-/// the engine's active ones. The team review rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub
-/// through `gh`; [`conditions_with`] takes both as arguments.
-pub fn conditions(
-    store: &mut Store,
-    home: &CpdHome,
-    now: OffsetDateTime,
-    stuck_after: Duration,
-    errors: &[EngineError],
-) -> Result<Vec<Condition>, CpdError> {
+/// Every condition of the kinds, in the order of the kinds. There is no `engine-error` (hs-d314: the engine's errors go to
+/// the Manager) and no `job-stuck` (hs-d318: a stuck Job goes to the Manager too, see [`stuck_jobs`]). The team review
+/// rule is on when `inbox.team_channel` is set (§8.2), and reads GitHub through `gh`; [`conditions_with`] takes the
+/// time and both as arguments.
+pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     let config = Config::load(home)?;
     let mut github = |refs: &[(String, u64)]| {
         let mut held = GITHUB.lock().unwrap_or_else(PoisonError::into_inner);
         held.get_or_insert_with(Memo::default).get(refs, Instant::now(), |refs| team::github_lookup(home, refs))
     };
     let team = (!config.inbox.team_channel.is_empty()).then_some(Team { bot_reviewers: &config.inbox.bot_reviewers, github: &mut github });
-    conditions_with(store, home, now, stuck_after, errors, team)
+    conditions_with(store, home, OffsetDateTime::now_utc(), team)
 }
 
-/// [`conditions`] with the team review rule's inputs given; `None` switches that kind off.
-pub fn conditions_with(
-    store: &mut Store,
-    home: &CpdHome,
-    now: OffsetDateTime,
-    stuck_after: Duration,
-    errors: &[EngineError],
-    team: Option<Team<'_>>,
-) -> Result<Vec<Condition>, CpdError> {
+/// [`conditions`] at `now` with the team review rule's inputs given; `None` switches that kind off.
+pub fn conditions_with(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team: Option<Team<'_>>) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
     all.extend(store.read(|conn| plan_reviews(conn, home))?);
     all.extend(store.read(unread)?);
-    all.extend(store.read(|conn| job_stuck(conn, now, stuck_after))?);
-    all.extend(engine_errors(errors));
-    all.extend(store.read(questions)?);
+    // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
+    // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
     all.extend(store.read(|conn| pr_failing(conn, home))?);
     all.extend(store.read(|conn| pr_changes(conn, home))?);
     all.extend(store.read(|conn| pr_ready(conn, home))?);
@@ -104,12 +82,12 @@ fn time_of(what: &str, value: &str) -> Result<OffsetDateTime, CpdError> {
 
 /// The id of a Session's latest `session-state` Event.
 const LATEST_STATE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state')";
-/// The id of its latest finished reply turn: its latest `session-state` Event from `working` or `blocked` to `idle`
+/// The id of its latest finished reply turn: its latest `session-state` Event from `working`, `waiting` or `blocked` to `idle`
 /// with `data.reply` true, a turn that answered the User (a start or reload, `stopped` to `idle`, is not one; a turn
 /// that answered an Event or another Session is not one either; hs-d242, hs-d278).
 const LATEST_IDLE: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-state'
                                 AND json_extract(e.data, '$.to') = 'idle'
-                                AND json_extract(e.data, '$.from') IN ('working', 'blocked')
+                                AND json_extract(e.data, '$.from') IN ('working', 'waiting', 'blocked')
                                 AND json_extract(e.data, '$.reply') = 1)";
 /// The id of its latest `session-moved` Event with `place: chat`.
 const LATEST_CHAT: &str = "(SELECT max(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-moved'
@@ -184,8 +162,7 @@ fn seat_condition(seat: Seat, kind: Kind, urgency: Urgency, label: String) -> Co
 
 /// `dialog`: a Lead, fork or Manager asks the User something. Red when its Plan is in `dispatch` or `deploy`, else magenta.
 fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let [worker_question, plan_review] = NOT_A_DIALOG;
-    let filter = format!("s.state = 'blocked' AND s.state_label NOT IN ('{worker_question}', '{plan_review}')");
+    let filter = format!("s.state = 'blocked' AND s.state_label <> '{PLAN_REVIEW}'");
     Ok(seats(conn, LATEST_STATE, &filter)?
         .into_iter()
         .map(|seat| {
@@ -200,7 +177,7 @@ fn dialogs(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 }
 
 /// `unread`: the rule of the tree's white dot. A Lead, fork or Manager is `idle`, not in the chat slot, and its
-/// latest finished reply turn (`working` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
+/// latest finished reply turn (`working`, `waiting` or `blocked` to `idle`, `data.reply` true) is newer than the last time its chat was in the slot
 /// (never in the slot counts as older than everything).
 fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let filter = format!("s.state = 'idle' AND {PLACE} IS NOT 'chat' AND {LATEST_IDLE} > COALESCE({LATEST_CHAT}, 0)");
@@ -213,7 +190,7 @@ fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
         .collect())
 }
 
-// ---- Plans and Jobs: plan-review and job-stuck -------------------------------------------------------------------
+// ---- Plans and Jobs: plan-review, and the stuck Jobs -------------------------------------------------------------
 
 /// The Plan's plannotator page, when its port file holds a port (the convention of `session::port`), on the review host
 /// ([`review_host`], hs-d264).
@@ -235,7 +212,7 @@ fn plannotator_url(home: &CpdHome, plan: &PlanId) -> Result<Option<String>, CpdE
 /// repeat across Plans.
 fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
-        "SELECT v.plan, v.id, p.context, p.lead_session
+        "SELECT v.plan, v.id, p.context, p.lead_session, v.title
            FROM plan_reviews v JOIN plans p ON p.id = v.plan
           WHERE v.status = 'pending' AND v.number = (SELECT max(w.number) FROM plan_reviews w WHERE w.plan = v.plan)
           ORDER BY v.requested_at, v.plan",
@@ -243,14 +220,18 @@ fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, Cpd
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
-        let (plan, review, context, lead): (String, String, String, String) =
-            (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?);
+        let (plan, review, context, lead, title): (String, String, String, String, Option<String>) =
+            (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?);
         let plan = id("Plan id", &plan, PlanId::parse)?;
         out.push(Condition {
             kind: Kind::PlanReview,
             urgency: Urgency::Magenta,
             subject: format!("review:{plan}/{review}"),
-            label: format!("{plan} plan review"),
+            // A review requested before `plan_reviews.title` has none (hs-d291, R3).
+            label: match title {
+                Some(title) => format!("{plan} plan review: {title}"),
+                None => format!("{plan} plan review"),
+            },
             url: plannotator_url(home, &plan)?,
             context: Some(id("Context id", &context, ContextId::parse)?),
             plan: Some(plan),
@@ -263,97 +244,55 @@ fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, Cpd
     Ok(out)
 }
 
-/// `job-stuck`: a Job is `failed` and its latest `job-failed` Event is at least `stuck_after` old.
-fn job_stuck(conn: &Connection, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT j.plan, j.key, p.context, p.lead_session, e.id, e.at
-           FROM jobs j
-           JOIN plans p ON p.id = j.plan
-           JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
-          WHERE j.status = 'failed'
-          ORDER BY e.id",
-    )?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let (plan, key, context, lead, event, at): (String, String, String, String, i64, String) =
-            (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
-        if now - time_of("Event time", &at)? < stuck_after {
-            continue;
+/// A stuck Job (hs-d318): what the engine tells its Context's Manager. Not an Inbox condition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StuckJob {
+    pub plan: PlanId,
+    pub job: JobKey,
+    /// The Plan's Context.
+    pub context: ContextId,
+    /// The id of the Job's latest `job-failed` Event: a new failure is a new one.
+    pub event: i64,
+    /// Whole minutes since that Event.
+    pub minutes: i64,
+    /// The Job's `failed_cause`.
+    pub cause: String,
+}
+
+/// The stuck Jobs, oldest failure first: a Job is `failed`, its latest `job-failed` Event is at least `stuck_after` old, and
+/// its Plan's Lead is not `working` (audit Q1: a working Lead is handling the failure; the Job is stuck from the next tick
+/// after it stops). Read only: E8 tells the Manager.
+pub fn stuck_jobs(store: &mut Store, now: OffsetDateTime, stuck_after: Duration) -> Result<Vec<StuckJob>, CpdError> {
+    store.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT j.plan, j.key, p.context, e.id, e.at, j.failed_cause
+               FROM jobs j
+               JOIN plans p ON p.id = j.plan
+               JOIN events e ON e.id = (SELECT max(f.id) FROM events f WHERE f.plan = j.plan AND f.job = j.key AND f.kind = 'job-failed')
+               JOIN sessions l ON l.id = p.lead_session
+              WHERE j.status = 'failed' AND l.state <> 'working'
+              ORDER BY e.id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let (plan, key, context, event, at, cause): (String, String, String, i64, String, String) =
+                (row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?);
+            let age = now - time_of("Event time", &at)?;
+            if age < stuck_after {
+                continue;
+            }
+            out.push(StuckJob {
+                plan: id("Plan id", &plan, PlanId::parse)?,
+                job: id("Job key", &key, JobKey::parse)?,
+                context: id("Context id", &context, ContextId::parse)?,
+                event,
+                minutes: age.whole_minutes(),
+                cause,
+            });
         }
-        let plan = id("Plan id", &plan, PlanId::parse)?;
-        out.push(Condition {
-            kind: Kind::JobStuck,
-            urgency: Urgency::Red,
-            subject: format!("job:{plan}/{key}"),
-            label: format!("{plan}/{key} failed"),
-            url: None,
-            context: Some(id("Context id", &context, ContextId::parse)?),
-            job: Some(id("Job key", &key, JobKey::parse)?),
-            plan: Some(plan),
-            session: Some(id("Session id", &lead, SessionId::parse)?),
-            record: None,
-            event: Some(event),
-        });
-    }
-    Ok(out)
-}
-
-// ---- The engine: engine-error ------------------------------------------------------------------------------------
-
-/// `engine-error`: one per error the engine reported and has not cleared.
-fn engine_errors(errors: &[EngineError]) -> Vec<Condition> {
-    errors
-        .iter()
-        .map(|e| Condition {
-            kind: Kind::EngineError,
-            urgency: Urgency::Red,
-            subject: format!("error:{}/{}/{}", e.step, e.scope, e.code),
-            label: format!("engine {}: {}", e.step, e.code),
-            url: None,
-            context: None,
-            plan: None,
-            job: None,
-            session: None,
-            record: None,
-            event: Some(e.event),
-        })
-        .collect()
-}
-
-// ---- Contexts: question ------------------------------------------------------------------------------------------
-
-/// `question`: a Context record of kind `question` with no `answer` record pointing at it. Read from the records'
-/// index, as `context list` counts its open questions (`repo` is private to the context area, and the index is one
-/// query per tick). Its subject is Context-qualified because record ids (`hs-q1`) repeat across Contexts.
-fn questions(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT q.context, q.id FROM context_records q
-          WHERE q.kind = 'question'
-            AND NOT EXISTS (SELECT 1 FROM context_records a
-                            WHERE a.context = q.context AND a.kind = 'answer' AND a.question = q.id)
-          ORDER BY q.seq",
-    )?;
-    let mut rows = stmt.query([])?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next()? {
-        let (context, record): (String, String) = (row.get(0)?, row.get(1)?);
-        let context = id("Context id", &context, ContextId::parse)?;
-        out.push(Condition {
-            kind: Kind::Question,
-            urgency: Urgency::Magenta,
-            subject: format!("record:{context}/{record}"),
-            label: format!("{record} open question"),
-            url: None,
-            context: Some(context),
-            plan: None,
-            job: None,
-            session: None,
-            record: Some(id("Record id", &record, RecordId::parse)?),
-            event: None,
-        });
-    }
-    Ok(out)
+        Ok(out)
+    })
 }
 
 // ---- Pull requests: pr-failing, pr-changes, pr-ready, review-requested -------------------------------------------
@@ -432,8 +371,9 @@ fn pull_request_conditions(
                 Ok(policy) => policy == Checks::Any,
                 Err(error) => {
                     // The row's checks are unknown. `pr-failing` tells the error of a failed row (its conflict still as
-                    // `kind`); `pr-ready` tells the others, since a failed row's error is already `pr-failing`'s.
-                    if rule == ChecksRule::Failing || checks != "failed" {
+                    // `kind`); `pr-ready` tells the others, since a failed row's error is already `pr-failing`'s, except
+                    // for a row a Plan owns, which `pr-failing` never reads (hs-d302).
+                    if rule == ChecksRule::Failing || checks != "failed" || plan.is_some() {
                         let code = error.code().as_str();
                         out.push(links(
                             Kind::EngineError,
@@ -510,15 +450,19 @@ fn checks_policy(home: &CpdHome, repo: &str, owned: Option<Owned<'_>>) -> Result
     Ok(resolved.map(|resolved| resolved.policy.pr.feedback.checks))
 }
 
-/// `pr-failing`: an authored open pull request has failed checks or a merge conflict (`unknown` is no conflict).
-/// The label names the conflict only when checks did not fail.
+/// A condition over `r`: no Plan's `prs` row points to the pull request (hs-d302: a Plan's Lead handles the feedback
+/// on the pull requests its Plan owns, so those open no `pr-failing` or `pr-changes` item).
+const UNOWNED: &str = "NOT EXISTS (SELECT 1 FROM prs o WHERE o.pull_request = r.id)";
+
+/// `pr-failing`: an authored open pull request no Plan owns has failed checks or a merge conflict (`unknown` is no
+/// conflict). The label names the conflict only when checks did not fail.
 fn pr_failing(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
         home,
         Kind::PrFailing,
         Urgency::Red,
-        "r.authored = 1 AND (r.checks = 'failed' OR r.mergeable = 'conflicting')",
+        &format!("r.authored = 1 AND {UNOWNED} AND (r.checks = 'failed' OR r.mergeable = 'conflicting')"),
         ChecksRule::Failing,
         |name, n, checks_failed| {
             if checks_failed { format!("{name}#{n} checks failed") } else { format!("{name}#{n} merge conflict") }
@@ -526,14 +470,14 @@ fn pr_failing(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdEr
     )
 }
 
-/// `pr-changes`: an authored open pull request has `changes_requested`.
+/// `pr-changes`: an authored open pull request no Plan owns has `changes_requested`.
 fn pr_changes(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
         home,
         Kind::PrChanges,
         Urgency::Red,
-        "r.authored = 1 AND r.review_decision = 'changes_requested'",
+        &format!("r.authored = 1 AND {UNOWNED} AND r.review_decision = 'changes_requested'"),
         ChecksRule::Ignore,
         |name, n, _| format!("{name}#{n} changes requested"),
     )
@@ -556,7 +500,7 @@ fn pr_ready(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdErro
 /// `review-requested`: a pull request posted in the team channel in the last 7 days that hermes' rule calls
 /// `NEEDS_REVIEW` (contract §2.2 "The team review rule", hs-d320). GitHub's own review requests open nothing.
 ///
-/// The posts are `run/team-review.json` (E10); a missing file is "unknown", not "empty", and so is a GitHub that
+/// The posts are `run/team-review.json` (E11); a missing file is "unknown", not "empty", and so is a GitHub that
 /// cannot be read (the call fails, or no pull request of the posts can be read, hermes `main`): the open items stay
 /// as they are, and a failure that is not just "not yet" is one `engine-error` condition beside them. A single
 /// pull request GitHub cannot find is dropped from this run, as hermes' `build` drops it.
@@ -641,14 +585,8 @@ mod tests {
     use crate::inbox::team::{GhState, Review};
 
     /// [`super::conditions_with`] with the team review rule off: these tests need no config file.
-    fn conditions(
-        store: &mut Store,
-        home: &CpdHome,
-        now: OffsetDateTime,
-        stuck_after: Duration,
-        errors: &[EngineError],
-    ) -> Result<Vec<Condition>, CpdError> {
-        conditions_with(store, home, now, stuck_after, errors, None)
+    fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+        conditions_with(store, home, NOW, None)
     }
 
     const NOW: OffsetDateTime = datetime!(2026-01-02 00:00 UTC);
@@ -762,7 +700,7 @@ mod tests {
         }
 
         fn of(&mut self, kind: Kind) -> Vec<Condition> {
-            let all = conditions(&mut self.store, &self.home, NOW, TEN, &[]).unwrap();
+            let all = conditions(&mut self.store, &self.home).unwrap();
             all.into_iter().filter(|c| c.kind == kind).collect()
         }
     }
@@ -824,11 +762,14 @@ mod tests {
     }
 
     #[test]
-    fn a_worker_question_and_a_plan_review_label_are_not_dialogs() {
+    fn a_lead_waiting_for_a_worker_and_a_plan_review_label_are_not_dialogs() {
         let mut f = fixture("dispatch");
-        f.state("l-pay", "blocked", Some("cpd: Worker question"));
+        f.state("l-pay", "waiting", Some("cpd: Worker question"));
         f.state("mgr", "blocked", Some("cpd: plan review"));
         assert!(f.of(Kind::Dialog).is_empty());
+        // `blocked` is the human's whatever its label: the Worker question is `waiting` now (hs-d303).
+        f.state("l-pay", "blocked", Some("cpd: Worker question"));
+        assert_eq!(f.of(Kind::Dialog).len(), 1);
     }
 
     #[test]
@@ -850,8 +791,8 @@ mod tests {
         assert!(f.of(Kind::Dialog).is_empty());
         f.state("wk", "idle", None);
         assert!(f.of(Kind::Unread).is_empty());
-        f.state("wk", "blocked", Some("cpd: Worker question"));
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
+        f.state("wk", "waiting", Some("cpd: question to the Lead"));
+        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
     }
 
     // ---- unread ----
@@ -917,13 +858,13 @@ mod tests {
     }
 
     #[test]
-    fn a_working_or_blocked_session_going_idle_after_the_visit_is_unread() {
-        for before in ["working", "blocked"] {
+    fn a_working_waiting_or_blocked_session_going_idle_after_the_visit_is_unread() {
+        for before in ["working", "waiting", "blocked"] {
             let mut f = fixture("dispatch");
             f.reply("l-pay");
             f.moved("l-pay", "chat");
             f.moved("l-pay", "parked");
-            f.state("l-pay", before, (before == "blocked").then_some("Which?"));
+            f.state("l-pay", before, (before != "working").then_some("Which?"));
             let idle = f.reply("l-pay");
             assert_eq!(one(f.of(Kind::Unread)).event, Some(idle), "{before} -> idle");
         }
@@ -938,6 +879,8 @@ mod tests {
         f.state("mgr", "working", None);
         f.state("mgr", "blocked", Some("Which?"));
         assert!(f.of(Kind::Unread).is_empty(), "blocked is a dialog, not unread");
+        f.state("mgr", "waiting", Some("cpd: Worker question"));
+        assert!(f.of(Kind::Unread).is_empty(), "waiting is not unread");
         f.state("mgr", "stopped", None);
         assert!(f.of(Kind::Unread).is_empty());
     }
@@ -959,8 +902,12 @@ mod tests {
     fn a_pending_review_is_a_plan_review_with_its_plannotator_page() {
         let mut f = fixture("plan");
         f.review("r1", "pending");
+        f.sql("UPDATE plan_reviews SET title = 'Add retries' WHERE id = 'r1'");
         let c = one(f.of(Kind::PlanReview));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Magenta, "review:pay/r1", "pay plan review"));
+        assert_eq!(
+            (c.urgency, c.subject.as_str(), c.label.as_str()),
+            (Urgency::Magenta, "review:pay/r1", "pay plan review: Add retries")
+        );
         assert_eq!(c.url, None, "no port file");
         assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Lead");
         assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")));
@@ -976,6 +923,13 @@ mod tests {
     }
 
     #[test]
+    fn a_review_without_a_title_keeps_the_plain_label() {
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        assert_eq!(one(f.of(Kind::PlanReview)).label, "pay plan review");
+    }
+
+    #[test]
     fn a_decided_review_is_no_plan_review_and_only_the_latest_counts() {
         let mut f = fixture("plan");
         f.review("r1", "rejected");
@@ -986,49 +940,78 @@ mod tests {
         assert!(f.of(Kind::PlanReview).is_empty());
     }
 
-    // ---- job-stuck ----
+    // ---- stuck Jobs (hs-d318: a message to the Manager, no Inbox condition) ----
+
+    impl Fixture {
+        fn stuck(&mut self) -> Vec<StuckJob> {
+            stuck_jobs(&mut self.store, NOW, TEN).unwrap()
+        }
+    }
 
     #[test]
-    fn a_job_failed_for_the_stuck_time_is_job_stuck_and_clears_on_retry() {
+    fn a_job_failed_for_the_stuck_time_is_stuck_and_clears_on_retry() {
         let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
         let latest = f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
-        let c = one(f.of(Kind::JobStuck));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "job:pay/a", "pay/a failed"));
-        assert_eq!(c.job.as_ref().map(|j| j.as_str()), Some("a"));
-        assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "the Plan's Lead");
-        assert_eq!(c.event, Some(latest), "the latest job-failed Event");
+        let stuck = f.stuck();
+        assert_eq!(
+            stuck,
+            [StuckJob {
+                plan: PlanId::parse("pay").unwrap(),
+                job: JobKey::parse("a").unwrap(),
+                context: ContextId::parse("ctx").unwrap(),
+                event: latest,
+                minutes: 10,
+                cause: "crashed".to_owned(),
+            }],
+            "the latest job-failed Event, 10 whole minutes ago, with the Job's cause"
+        );
 
         f.sql("UPDATE jobs SET status = 'queued', failed_cause = NULL WHERE key = 'a'");
-        assert!(f.of(Kind::JobStuck).is_empty(), "retried");
+        assert!(f.stuck().is_empty(), "retried");
+    }
+
+    #[test]
+    fn a_stuck_job_opens_no_inbox_condition() {
+        let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
+        f.job("a", "failed");
+        f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
+        assert_eq!(f.stuck().len(), 1);
+        assert!(f.of(Kind::JobStuck).is_empty());
+        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
     }
 
     #[test]
     fn a_job_failed_less_than_the_stuck_time_ago_is_not_yet_stuck() {
         let mut f = fixture("dispatch");
+        f.state("l-pay", "idle", None);
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), "2026-01-01T23:50:01.000Z", r#"{}"#);
-        assert!(f.of(Kind::JobStuck).is_empty(), "9 min 59 s");
+        assert!(f.stuck().is_empty(), "9 min 59 s");
         f.event("job-failed", None, Some("a"), "2026-01-01T23:50:00.000Z", r#"{}"#);
-        assert_eq!(f.of(Kind::JobStuck).len(), 1, "exactly the stuck time counts");
+        assert_eq!(f.stuck().len(), 1, "exactly the stuck time counts");
         f.job("b", "queued");
         f.event("job-failed", None, Some("b"), T, r#"{}"#);
-        assert_eq!(f.of(Kind::JobStuck).len(), 1, "a Job that is not failed is never stuck");
+        assert_eq!(f.stuck().len(), 1, "a Job that is not failed is never stuck");
     }
 
-    // ---- engine-error ----
-
     #[test]
-    fn each_engine_error_is_an_item_and_none_when_cleared() {
+    fn a_failed_job_is_not_stuck_while_its_lead_works_and_is_at_the_next_tick_after_it_stops() {
         let mut f = fixture("dispatch");
-        let error = EngineError { step: "E3".into(), scope: "plan:pay".into(), code: "store_failed".into(), event: 41 };
-        let found = conditions(&mut f.store, &f.home, NOW, TEN, std::slice::from_ref(&error)).unwrap();
-        let c = one(found);
-        assert_eq!(c.kind, Kind::EngineError);
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Red, "error:E3/plan:pay/store_failed", "engine E3: store_failed"));
-        assert_eq!((c.event, c.session, c.plan), (Some(41), None, None));
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
+        f.job("a", "failed");
+        f.event("job-failed", None, Some("a"), "2026-01-01T00:00:00.000Z", r#"{}"#);
+        assert!(f.stuck().is_empty(), "the Lead is working: it handles the failure (audit Q1)");
+        f.state("l-pay", "idle", None);
+        assert_eq!(f.stuck()[0].job.as_str(), "a", "the Lead stopped working");
+        f.state("l-pay", "working", None);
+        assert!(f.stuck().is_empty(), "working again");
+        for state in ["waiting", "blocked", "stopped"] {
+            f.state("l-pay", state, (state != "stopped").then_some("Which?"));
+            assert_eq!(f.stuck().len(), 1, "a {state} Lead is not working");
+        }
     }
 
     // ---- question ----
@@ -1044,28 +1027,29 @@ mod tests {
     }
 
     #[test]
-    fn a_question_without_an_answer_is_an_item_and_gone_when_answered() {
+    fn an_open_context_question_yields_no_condition() {
         let mut f = fixture("dispatch");
         record(&mut f, "ctx", "hs-q1", "question");
         record(&mut f, "ctx", "hs-d1", "decision");
-        let c = one(f.of(Kind::Question));
-        assert_eq!((c.urgency, c.subject.as_str(), c.label.as_str()), (Urgency::Magenta, "record:ctx/hs-q1", "hs-q1 open question"));
-        assert_eq!(c.record.as_ref().map(|r| r.to_string()), Some("hs-q1".to_owned()));
-        assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan, c.session), (Some("ctx"), None, None));
-
-        record(&mut f, "ctx", "hs-a1", "answer");
         assert!(f.of(Kind::Question).is_empty());
+        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
     }
 
+    /// hs-d306 (1): the `question` kind is dropped, so an item an older engine opened for an open question closes at the
+    /// next reconcile, its condition no longer holding. The kind stays in the table's check for such history rows.
     #[test]
-    fn the_same_record_id_in_two_contexts_is_two_questions_and_an_answer_clears_only_its_own() {
+    fn an_open_question_item_an_older_engine_opened_is_closed_by_the_next_reconcile() {
         let mut f = fixture("dispatch");
         record(&mut f, "ctx", "hs-q1", "question");
-        record(&mut f, "other", "hs-q1", "question");
-        let subjects: Vec<_> = f.of(Kind::Question).into_iter().map(|c| c.subject).collect();
-        assert_eq!(subjects, ["record:ctx/hs-q1", "record:other/hs-q1"]);
-        record(&mut f, "other", "hs-a1", "answer");
-        assert_eq!(one(f.of(Kind::Question)).subject, "record:ctx/hs-q1");
+        f.sql(&format!(
+            "INSERT INTO inbox_items (kind, urgency, subject, label, context, record, opened_at)
+             VALUES ('question', 'magenta', 'record:ctx/hs-q1', 'hs-q1 open question', 'ctx', 'hs-q1', '{T}')"
+        ));
+        let found = conditions(&mut f.store, &f.home).unwrap();
+        let changes = crate::inbox::model::reconcile(&mut f.store, &found, T).unwrap();
+        assert_eq!((changes.opened.len(), changes.closed.len()), (0, 1));
+        let open: i64 = f.store.read(|c| Ok(c.query_row("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL", [], |r| r.get(0))?)).unwrap();
+        assert_eq!(open, 0);
     }
 
     // ---- pull requests ----
@@ -1085,7 +1069,7 @@ mod tests {
     }
 
     fn pr_kinds(f: &mut Fixture) -> Vec<Kind> {
-        let all = conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap();
+        let all = conditions(&mut f.store, &f.home).unwrap();
         all.into_iter().map(|c| c.kind).collect()
     }
 
@@ -1195,29 +1179,71 @@ mod tests {
         assert!(pr_kinds(&mut f).is_empty());
     }
 
-    #[test]
-    fn a_pull_request_owned_by_a_plan_links_the_plan_its_context_and_its_lead() {
-        let mut f = fixture("dispatch");
-        pull_request(&mut f, 6, "failed", "mergeable", "changes_requested");
-        pull_request(&mut f, 7, "passed", "mergeable", "approved");
+    /// Makes the Plan's PR `p1` own the pull request numbered `n`. Its Context's owner keys the PR's policy (an unset
+    /// one is `owner_unset`, not these tests' subject), with an empty owner policy file.
+    fn own(f: &mut Fixture, n: i64) {
         f.job("a", "queued");
-        // A PR points to the row: its Context's owner keys it (an unset one is `owner_unset`, not this test's subject).
         f.sql("UPDATE contexts SET owner = 'acme'");
         let owners = f.home.root().join("policy/owners");
         std::fs::create_dir_all(&owners).unwrap();
         std::fs::write(owners.join("acme.toml"), "").unwrap();
-        f.sql("UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = 6),
-                              pr_number = 6, pr_url = 'https://github.com/acme/shop/pull/6', pr_opened_at = 't'");
-        for kind in [Kind::PrFailing, Kind::PrChanges] {
-            let c = one(f.of(kind));
+        f.sql(&format!(
+            "UPDATE prs SET status = 'open', pull_request = (SELECT id FROM pull_requests WHERE number = {n}),
+                            pr_number = {n}, pr_url = 'https://github.com/acme/shop/pull/{n}', pr_opened_at = 't'"
+        ));
+    }
+
+    #[test]
+    fn a_pull_request_owned_by_a_plan_links_the_plan_its_context_and_its_lead() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 6, "passed", "mergeable", "approved");
+        pull_request(&mut f, 7, "passed", "mergeable", "approved");
+        own(&mut f, 6);
+        for kind in [Kind::PrReady] {
+            let c = one(f.of(kind).into_iter().filter(|c| c.subject == "pr:acme/shop#6").collect());
             assert_eq!(
                 (c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str()), c.session.as_ref().map(|s| s.as_str())),
                 (Some("ctx"), Some("pay"), Some("l-pay")),
                 "{kind:?}"
             );
         }
-        let c = one(f.of(Kind::PrReady));
-        assert_eq!((c.subject.as_str(), c.plan, c.session), ("pr:acme/shop#7", None, None), "a pull request no PR owns");
+        let c = one(f.of(Kind::PrReady).into_iter().filter(|c| c.subject == "pr:acme/shop#7").collect());
+        assert_eq!((c.plan, c.session), (None, None), "a pull request no PR owns");
+    }
+
+    #[test]
+    fn a_pull_request_a_plan_owns_opens_no_pr_failing_or_pr_changes_item() {
+        for (checks, mergeable, review) in [
+            ("failed", "mergeable", "none"),
+            ("passed", "conflicting", "approved"),
+            ("pending", "mergeable", "changes_requested"),
+            ("failed", "conflicting", "changes_requested"),
+        ] {
+            let mut f = fixture("dispatch");
+            pull_request(&mut f, 6, checks, mergeable, review);
+            own(&mut f, 6);
+            assert!(pr_kinds(&mut f).is_empty(), "{checks} {mergeable} {review}");
+        }
+    }
+
+    #[test]
+    fn the_same_states_on_an_unowned_authored_pull_request_still_open_their_items() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 1, "failed", "mergeable", "none");
+        pull_request(&mut f, 2, "passed", "conflicting", "approved");
+        pull_request(&mut f, 3, "pending", "mergeable", "changes_requested");
+        pull_request(&mut f, 6, "failed", "conflicting", "changes_requested");
+        own(&mut f, 6);
+        let seen: Vec<_> = f.of(Kind::PrFailing).into_iter().chain(f.of(Kind::PrChanges)).map(|c| c.subject).collect();
+        assert_eq!(seen, ["pr:acme/shop#1", "pr:acme/shop#2", "pr:acme/shop#3"]);
+    }
+
+    #[test]
+    fn an_owned_pull_request_that_is_ready_still_opens_pr_ready() {
+        let mut f = fixture("dispatch");
+        pull_request(&mut f, 6, "passed", "mergeable", "approved");
+        own(&mut f, 6);
+        assert_eq!(pr_kinds(&mut f), [Kind::PrReady]);
     }
 
     // ---- review-requested: the team review rule (hs-d320) ----
@@ -1276,7 +1302,7 @@ mod tests {
     fn reviews(f: &mut Fixture, posts: &[Value], prs: &[(&str, u64, GhPr)]) -> Vec<Condition> {
         write_cache(f, posts);
         let lookup = lookup(prs);
-        let all = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| Ok(lookup.clone())))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(lookup.clone())))).unwrap();
         all.into_iter().filter(|c| c.kind == Kind::ReviewRequested).collect()
     }
 
@@ -1333,7 +1359,7 @@ mod tests {
         assert!(reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, reviewed_by("wes"))]).is_empty(), "posts of other PRs");
         assert!(f.of(Kind::ReviewRequested).is_empty(), "no rule at all");
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
-        let none = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| panic!("no post, no call")))).unwrap();
+        let none = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| panic!("no post, no call")))).unwrap();
         assert!(none.is_empty(), "no cache: {none:?}");
     }
 
@@ -1355,8 +1381,6 @@ mod tests {
             &mut f.store,
             &f.home,
             NOW,
-            TEN,
-            &[],
             Some(team(&mut |refs| {
                 asked = refs.to_vec();
                 Ok(answer.clone())
@@ -1372,7 +1396,7 @@ mod tests {
         let mut f = fixture("dispatch");
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
-        let off = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], None).unwrap();
+        let off = conditions_with(&mut f.store, &f.home, NOW, None).unwrap();
         assert!(off.is_empty());
         reconcile(&mut f.store, &off, T).unwrap();
         assert!(f.store.read(open_items).unwrap().is_empty());
@@ -1393,7 +1417,7 @@ mod tests {
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
 
         std::fs::remove_file(f.home.run_dir().join("team-review.json")).unwrap();
-        let unknown = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| panic!("nothing to ask")))).unwrap();
+        let unknown = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| panic!("nothing to ask")))).unwrap();
         assert_eq!(unknown.len(), 2, "no file is unknown, not empty: {unknown:?}");
         reconcile(&mut f.store, &unknown, T).unwrap();
         assert_eq!(open_subjects(&mut f), ["pr:acme/pay#1", "pr:acme/pay#2"]);
@@ -1409,12 +1433,12 @@ mod tests {
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
         std::fs::write(f.home.run_dir().join("team-review.json"), "{ not json").unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| panic!("unreadable")))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| panic!("unreadable")))).unwrap();
         assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1);
         let error = all.iter().find(|c| c.kind == Kind::EngineError).expect("an engine-error condition");
         assert_eq!((error.urgency, error.subject.as_str(), error.label.as_str()), (Urgency::Red, "error:E8/team-review/store_failed", "team review: store_failed"));
         std::fs::write(f.home.run_dir().join("team-review.json"), r#"{"version": 2, "posts": []}"#).unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| panic!("unreadable")))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| panic!("unreadable")))).unwrap();
         assert!(all.iter().any(|c| c.kind == Kind::EngineError), "another version is unreadable too");
     }
 
@@ -1423,7 +1447,7 @@ mod tests {
         let mut f = fixture("dispatch");
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
-        let all = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| Err(CpdError::new(ErrorCode::GhFailed, "down"))))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Err(CpdError::new(ErrorCode::GhFailed, "down"))))).unwrap();
         assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "kept");
         assert_eq!(all.iter().find(|c| c.kind == Kind::EngineError).map(|c| c.subject.as_str()), Some("error:E8/team-review/gh_failed"));
     }
@@ -1434,13 +1458,13 @@ mod tests {
         write_cache(&f, &[post("acme/pay", 1), post("acme/gone", 2)]);
         let mut answer = lookup(&[("acme/pay", 1, open_pr())]);
         answer.prs.insert(("acme/gone".to_owned(), 2), None);
-        let all = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| Ok(answer.clone())))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(answer.clone())))).unwrap();
         assert_eq!(all.iter().map(|c| c.subject.as_str()).collect::<Vec<_>>(), ["pr:acme/pay#1"], "the readable one only, and no error");
 
         let opened = reviews(&mut f, &[post("acme/pay", 1)], &[("acme/pay", 1, open_pr())]);
         reconcile(&mut f.store, &opened, T).unwrap();
         let blind = Lookup { me: ME_LOGIN.to_owned(), prs: [(("acme/pay".to_owned(), 1), None)].into() };
-        let all = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| Ok(blind.clone())))).unwrap();
+        let all = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(blind.clone())))).unwrap();
         assert_eq!(all.iter().filter(|c| c.kind == Kind::ReviewRequested).count(), 1, "every PR unreadable: the queue stays");
         assert!(all.iter().any(|c| c.kind == Kind::EngineError));
     }
@@ -1450,33 +1474,27 @@ mod tests {
     #[test]
     fn conditions_come_in_the_order_of_the_kinds_and_a_quiet_store_has_none() {
         let mut f = fixture("dispatch");
-        assert!(conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().is_empty());
+        assert!(conditions(&mut f.store, &f.home).unwrap().is_empty());
         f.state("l-pay", "blocked", Some("Which?"));
         f.review("r1", "pending");
         f.reply("mgr");
         f.job("a", "failed");
         f.event("job-failed", None, Some("a"), T, r#"{}"#);
-        record(&mut f, "ctx", "hs-q1", "question");
-        let error = EngineError { step: "E8".into(), scope: "machine".into(), code: "x".into(), event: 1 };
-        let kinds: Vec<_> =
-            conditions(&mut f.store, &f.home, NOW, TEN, &[error]).unwrap().into_iter().map(|c| c.kind).collect();
-        assert_eq!(
-            kinds,
-            [Kind::Dialog, Kind::PlanReview, Kind::Unread, Kind::JobStuck, Kind::EngineError, Kind::Question]
-        );
+        let kinds: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, [Kind::Dialog, Kind::PlanReview, Kind::Unread], "the failed Job is no item");
         pull_request(&mut f, 1, "failed", "mergeable", "changes_requested");
         pull_request(&mut f, 2, "passed", "mergeable", "approved");
         f.sql("INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, authored, review_requested)
                VALUES ('o/r', 3, 'u', 'T', 0, 'open', 'none', 'none', 't', 't', 0, 1)");
-        let tail: Vec<_> = conditions(&mut f.store, &f.home, NOW, TEN, &[]).unwrap().into_iter().map(|c| c.kind).skip(5).collect();
+        let tail: Vec<_> = conditions(&mut f.store, &f.home).unwrap().into_iter().map(|c| c.kind).skip(3).collect();
         assert_eq!(tail, [Kind::PrFailing, Kind::PrChanges, Kind::PrReady]);
         write_cache(&f, &[post("acme/pay", 812)]);
         let lookup = lookup(&[("acme/pay", 812, open_pr())]);
-        let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, TEN, &[], Some(team(&mut |_| Ok(lookup.clone()))))
+        let kinds: Vec<_> = conditions_with(&mut f.store, &f.home, NOW, Some(team(&mut |_| Ok(lookup.clone()))))
             .unwrap()
             .into_iter()
             .map(|c| c.kind)
             .collect();
-        assert_eq!(kinds[5..], [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
+        assert_eq!(kinds[3..], [Kind::PrFailing, Kind::PrChanges, Kind::PrReady, Kind::ReviewRequested]);
     }
 }

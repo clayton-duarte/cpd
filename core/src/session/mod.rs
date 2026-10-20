@@ -8,6 +8,7 @@
 //! - [`history`]: `session history`, an archived Session's history in the chat slot;
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
 //! - [`send`]: `session send`, one message to a Lead;
+//! - [`retitle`]: `session retitle`, a Lead's or a Manager's dynamic title;
 //! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7);
 //! - `reload`: when it restarts pi (reload on install, adapter watchdog);
@@ -20,6 +21,7 @@ mod moves;
 mod port;
 mod reload;
 mod resolve;
+mod retitle;
 mod row;
 pub(crate) mod run;
 mod send;
@@ -35,10 +37,11 @@ use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 
 pub use archive::{Blocker, archive_blocked, blockers};
-pub use moves::{Closed, Place, Placed, close_lead, placed, reopen};
+pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
+pub(crate) use send::tell_managers;
 pub(crate) use state::pane_gone;
 
 /// The program in every pane cpd starts, resolved on the tmux server's `PATH`
@@ -72,6 +75,9 @@ pub enum Command {
     /// Report a Session's agent state (pi adapter) (§10.6)
     #[command(hide = true)]
     State(StateArgs),
+    /// Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14)
+    #[command(hide = true)]
+    Retitle(RetitleArgs),
     /// The program in every Lead pane (internal; owns its terminal) (§10.8)
     #[command(hide = true)]
     Run(RunArgs),
@@ -190,7 +196,7 @@ pub struct StateArgs {
     /// The agent state
     #[arg(value_name = "state")]
     state: State,
-    /// Why it is blocked: required with `blocked`, refused otherwise
+    /// Why it is waiting or blocked: required with `waiting` and `blocked`, refused otherwise
     #[arg(long, value_name = "text")]
     label: Option<Label>,
     /// The run that ended answered a message the User wrote to this Session: allowed only with `idle`
@@ -198,6 +204,13 @@ pub struct StateArgs {
     reply: bool,
     #[command(flatten)]
     session: SessionArg,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RetitleArgs {
+    /// The Lead or Manager Session to title
+    #[arg(value_name = "session")]
+    id: SessionRef,
 }
 
 #[derive(clap::Args, Debug)]
@@ -228,6 +241,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Send(args) => send::send(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
+        Command::Retitle(args) => retitle::retitle(args),
         Command::Run(args) => run::run(args),
     }
 }

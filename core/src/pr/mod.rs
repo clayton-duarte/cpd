@@ -33,7 +33,7 @@ mod view;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::args::{PlanArg, PrArg};
+use crate::args::{PlanArg, PrArg, PrTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::git::{self, GateHooks, HookOutcome, Refused, Setup};
@@ -57,12 +57,12 @@ pub enum Command {
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
     Start(StartArgs),
-    /// Push the Lead Branch and open the PR (§9.1)
+    /// Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1)
     Open(Args),
     /// Poll every open pull request of the User (§9.2)
     Poll(PollArgs),
-    /// Rebase the Lead Branch onto the base and push (§9.3)
-    Rebase(Args),
+    /// Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3)
+    Rebase(RebaseArgs),
     /// Gate, then push the Lead Branch as it is, without a rebase (§9.9)
     Push(Args),
     /// Show the PR's checks, reviews and comments (§9.8)
@@ -80,6 +80,18 @@ pub struct Args {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct RebaseArgs {
+    #[command(flatten)]
+    args: Args,
+    /// Finish the rebase stopped at a conflict, then Gate and push
+    #[arg(long = "continue", conflicts_with = "abort")]
+    resume: bool,
+    /// Give up the rebase stopped at a conflict
+    #[arg(long)]
+    abort: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct PollArgs {
     #[command(flatten)]
     plan: PlanArg,
@@ -93,6 +105,9 @@ pub struct AddArgs {
     /// The PR's repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: PathBuf,
+    /// The PR's own title: names its change; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: PrTitle,
     /// The branch the pull request targets [default: origin's HEAD branch, else main]
     #[arg(long, value_name = "branch")]
     base: Option<String>,
@@ -123,6 +138,9 @@ pub struct EditArgs {
     /// Remove every need
     #[arg(long = "no-needs")]
     no_needs: bool,
+    /// The new title, in any phase while the PR is not merged or cancelled; 1-72 characters on one line
+    #[arg(long, value_name = "text")]
+    title: Option<PrTitle>,
     #[command(flatten)]
     plan: PlanArg,
 }

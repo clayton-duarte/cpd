@@ -7,14 +7,15 @@
 //! vertical bus per gap between columns, lines that skip columns riding a row free of cards.
 //!
 //! Hand-written drawing is only the line glyphs (`Mask`) and the window copy (`Chart::blit`): ratatui has no widget for
-//! box-drawing edges that merge into junctions, nor for copying a window of a `Buffer`. Positions come from ratatui's
-//! `Layout`; pills are `Line`s aligned left and right.
+//! box-drawing edges that merge into junctions, nor for copying a window of a `Buffer`. Positions are lengths laid end to
+//! end ([`starts`]), not ratatui's `Layout`, whose constraint solver takes seconds for a few hundred cards; pills are
+//! `Line`s aligned left and right.
 
 use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     buffer::Buffer,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Margin, Rect},
     style::{Modifier, Style},
     text::Line,
     widgets::Widget,
@@ -23,9 +24,11 @@ use ratatui::{
 use crate::palette::{self, Meaning};
 use cpd_core::config::Tier;
 use crate::read::{AttemptStatus, JobNode, JobStatus};
+use cpd_core::ids::JobKey;
 
 /// A Job's status as the chart draws it. A cancelled Job is not drawn, so it has none; a `running` Job whose Attempt is
-/// `merging` is `Merging` (the cockpit's `in_review`).
+/// `merging` is `Merging` (the cockpit's `in_review`); a `failed` Job is `Failed` while its Lead handles it (the waiting
+/// colour) and `Stuck` once `job-stuck` is open (red: it needs the User, audit Q3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Live {
     Draft,
@@ -34,6 +37,7 @@ pub enum Live {
     Merging,
     Merged,
     Failed,
+    Stuck,
 }
 
 impl Live {
@@ -46,17 +50,19 @@ impl Live {
             Live::Merging => palette::job_status(JobStatus::Running, true),
             Live::Merged => palette::job_status(JobStatus::Merged, false),
             Live::Failed => palette::job_status(JobStatus::Failed, false),
+            Live::Stuck => palette::JOB_STUCK,
         }
     }
 
-    /// `None` for a cancelled Job.
-    pub fn of(job: &JobNode) -> Option<Live> {
+    /// `None` for a cancelled Job. `stuck`: the Job has an open `job-stuck` item.
+    pub fn of(job: &JobNode, stuck: bool) -> Option<Live> {
         Some(match job.status {
             JobStatus::Draft => Live::Draft,
             JobStatus::Queued => Live::Queued,
             JobStatus::Running if job.active_attempt().is_some_and(|a| a.status == AttemptStatus::Merging) => Live::Merging,
             JobStatus::Running => Live::Running,
             JobStatus::Merged => Live::Merged,
+            JobStatus::Failed if stuck => Live::Stuck,
             JobStatus::Failed => Live::Failed,
             JobStatus::Cancelled => return None,
         })
@@ -81,9 +87,10 @@ pub struct Pill {
     pub column: usize,
 }
 
-/// Jobs (one PR's) as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them.
-pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>) -> Vec<FlowJob> {
-    let live: Vec<(&JobNode, Live)> = jobs.into_iter().filter_map(|j| Some((j, Live::of(j)?))).collect();
+/// Jobs (one PR's) as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them. `stuck`
+/// are the keys of the Jobs with an open `job-stuck` item.
+pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, stuck: &[JobKey]) -> Vec<FlowJob> {
+    let live: Vec<(&JobNode, Live)> = jobs.into_iter().filter_map(|j| Some((j, Live::of(j, stuck.contains(&j.key))?))).collect();
     live.iter()
         .map(|&(j, status)| FlowJob {
             key: j.key.to_string(),
@@ -274,6 +281,20 @@ pub(super) fn free_row(near: u16, cols: std::ops::Range<usize>, busy: &[HashSet<
 }
 
 /// The chart of `all`, a running Job's icon at spinner frame `frame` (every frame is one cell wide: the layout is the same).
+/// Where each of `lengths` starts, laid end to end from `start` with `gap` between: what ratatui's `Layout` gives for
+/// `Length` constraints that fill their area exactly. Not `Layout` itself: its constraint solver took 4.6 s for a column of
+/// 300 cards in a debug build, the plan view's first draw (cli/tests/tui_idle.rs).
+fn starts(start: u16, lengths: impl IntoIterator<Item = u16>, gap: u16) -> Vec<u16> {
+    lengths
+        .into_iter()
+        .scan(start, |at, len| {
+            let here = *at;
+            *at = at.saturating_add(len).saturating_add(gap);
+            Some(here)
+        })
+        .collect()
+}
+
 pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let jobs = all;
     let cards = cards_of(&reduced_needs(&jobs));
@@ -293,7 +314,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i)).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
-    let xs: Vec<u16> = Layout::horizontal(col_w.iter().map(|&w| Constraint::Length(w))).spacing(spacing).split(Rect::new(1, 0, inner_w, 1)).iter().map(|r| r.x).collect();
+    let xs: Vec<u16> = starts(1, col_w.iter().copied(), spacing);
     let width = if ncols == 0 { 0 } else { inner_w + 2 };
 
     // y: each column's cards stacked (one empty row between cards), centred in the tallest column, ordered by the mean
@@ -312,10 +333,9 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
         let stack = cols[l].iter().map(|&c| height_of(c)).sum::<u16>() + cols[l].len() as u16 - 1;
         // centred; the spare row of an odd difference goes below (ratatui's own centring would put it above, and the
         // accepted render has it below)
-        let column = Rect::new(0, (hmax - stack) / 2, 1, stack);
-        let rows = Layout::vertical(cols[l].iter().map(|&c| Constraint::Length(height_of(c)))).spacing(1).split(column);
-        for (&c, r) in cols[l].iter().zip(rows.iter()) {
-            (top[c], mid[c]) = (r.y, r.y + (r.height - 1) / 2);
+        let ys = starts((hmax - stack) / 2, cols[l].iter().map(|&c| height_of(c)), 1);
+        for (&c, y) in cols[l].iter().zip(ys) {
+            (top[c], mid[c]) = (y, y + (height_of(c) - 1) / 2);
         }
     }
 
@@ -553,7 +573,7 @@ mod tests {
 
     #[test]
     fn a_pill_has_the_icon_and_colour_of_its_status() {
-        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed];
+        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed, Live::Stuck];
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: *s, ..job(&format!("{s:?}"), &[]) }).collect();
         let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
@@ -562,6 +582,16 @@ mod tests {
             let cell = &c.buf[(p.rect.x, p.rect.y)];
             assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status:?}");
         }
+    }
+
+    #[test]
+    fn a_failed_pill_is_waiting_and_red_only_once_its_job_is_stuck() {
+        assert_eq!(Live::Failed.icon(0).1, Meaning::Waiting, "its Lead handles it");
+        assert_eq!(Live::Stuck.icon(0).1, Meaning::Failed, "job-stuck: it needs the User");
+        assert_eq!(Live::Stuck.icon(0).0, Live::Failed.icon(0).0, "the same glyph");
+        let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
+        let bg = |i: usize| c.buf[(c.pills[i].rect.x, c.pills[i].rect.y)].bg;
+        assert_eq!((bg(0), bg(1)), (palette::color(Meaning::Waiting), palette::color(Meaning::Failed)));
     }
 
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.

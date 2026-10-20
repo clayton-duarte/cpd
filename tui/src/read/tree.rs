@@ -11,9 +11,11 @@ use cpd_core::ids::ContextId;
 use cpd_core::home::CpdHome;
 use cpd_core::inbox::model::{self, Filter, Item, Kind, State, Urgency};
 use cpd_core::store::Store;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use super::dot::{self, Dot};
-use super::shared::{PlanHead, SessionNode, id, plan_heads, sessions};
+use super::shared::{PlanHead, SessionNode, bad_row, id, plan_heads, sessions};
 
 /// Every Context of the machine, by id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,10 +24,10 @@ pub struct Tree {
     /// The highest Event id in this snapshot's read transaction (§17).
     pub events_cursor: i64,
     /// The Inbox's open, visible items (not snoozed, not dismissed) in the order of `cpd inbox list`, as of this
-    /// snapshot (§17), `engine-down` first when no engine runs. Every dot of the tree comes from the stored ones.
+    /// snapshot (§17), `engine-down` first when no engine runs and no live Manager exists. Every dot of the tree comes from the stored ones.
     pub inbox: Vec<Item>,
-    /// Whether an engine holds `locks/watch.lock` (§1.4). `engine-down` is never stored: with none, `inbox` starts
-    /// with it (id 0, which no stored item has), as `cpd inbox list` does.
+    /// Whether an engine holds `locks/watch.lock` (§1.4). `engine-down` is never stored: with none and no live Manager,
+    /// `inbox` starts with it (id 0, which no stored item has), as `cpd inbox list` does.
     pub engine_running: bool,
 }
 
@@ -118,6 +120,22 @@ pub(super) fn fill_dots(visible: &[Item], sessions: &mut [SessionNode]) {
     }
 }
 
+/// When the earliest snooze of an open, undismissed Inbox item that has not ended yet ends; none when no item is
+/// snoozed. A snooze ends by the clock with no Event (§17): a view that shows the Inbox reads it again then. Read
+/// before the view's snapshot, so that a snooze that ends between the two reads is not missed.
+pub fn snooze_end(store: &mut Store) -> Result<Option<OffsetDateTime>, CpdError> {
+    let end: Option<String> = store.read(|conn| {
+        Ok(conn.query_row(
+            "SELECT min(snoozed_until) FROM inbox_items
+              WHERE closed_at IS NULL AND dismissed_at IS NULL AND snoozed_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')",
+            [],
+            |r| r.get(0),
+        )?)
+    })?;
+    end.map(|end| OffsetDateTime::parse(&end, &Rfc3339).map_err(|_| bad_row(format!("Inbox snoozed_until {end:?}"))))
+        .transpose()
+}
+
 pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
     let home = store_home(store)?;
     let engine_running = model::engine_running(&home)?;
@@ -186,7 +204,8 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
                 id: context,
             });
         }
-        if !engine_running {
+        // With a live Manager the tree restarts the engine and a failure goes to the Manager (hs-d318): no item.
+        if !engine_running && managers.is_empty() {
             inbox.insert(0, engine_down(now));
         }
         Ok(Tree { contexts, events_cursor: highest_id(conn)?, inbox, engine_running })

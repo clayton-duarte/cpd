@@ -16,7 +16,7 @@ use crate::store::WriteTxn;
 
 const COMMAND: &str = "ask";
 
-/// Why the Worker Session is `blocked` while it waits (commands.md §8.1).
+/// Why the Worker Session is `waiting` while it waits (commands.md §8.1): for its Lead, not for the User (hs-d303).
 const LABEL: &str = "cpd: question to the Lead";
 
 /// How often `ask` reads its row (§8.1).
@@ -64,7 +64,7 @@ pub(super) fn ask(args: AskArgs) -> Result<Output, CpdError> {
     }
 }
 
-/// Transaction 1: the Escalation, the Worker Session `blocked`, their Events.
+/// Transaction 1: the Escalation, the Worker Session `waiting`, their Events.
 fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -> Result<(Asker, EscalationId), CpdError> {
     let found: Option<(String, Option<String>)> = tx
         .query_row("SELECT status, worker_session FROM attempts WHERE plan = ?1 AND id = ?2", [plan.as_str(), &attempt.to_string()], |r| {
@@ -115,33 +115,33 @@ fn open(tx: &WriteTxn<'_>, plan: &PlanId, attempt: &AttemptId, question: &str) -
             .job(asker.job.clone())
             .attempt(attempt.clone()),
     )?;
-    block(tx, &asker)?;
+    wait(tx, &asker)?;
     Ok((asker, id))
 }
 
-/// The Worker Session `blocked` with [`LABEL`] (§3.6: from `working` or `idle`;
-/// a changed label on a `blocked` one). A `stopped` Session cannot ask.
-fn block(tx: &WriteTxn<'_>, asker: &Asker) -> Result<(), CpdError> {
+/// The Worker Session `waiting` with [`LABEL`] (§3.6: from `working` or `idle`;
+/// a changed label on a `waiting` one). A `stopped` Session cannot ask.
+fn wait(tx: &WriteTxn<'_>, asker: &Asker) -> Result<(), CpdError> {
     let (state, label, name) = session_row(tx, &asker.session)?;
     if state == "stopped" {
         return Err(CpdError::new(
             ErrorCode::IllegalTransition,
-            format!("Session {} is stopped: it cannot go to blocked (contract §3.6).", asker.session),
+            format!("Session {} is stopped: it cannot go to waiting (contract §3.6).", asker.session),
         )
         .with("session", asker.session.as_str())
         .with("from", "stopped")
-        .with("to", "blocked"));
+        .with("to", "waiting"));
     }
-    if state == "blocked" && label.as_deref() == Some(LABEL) {
+    if state == "waiting" && label.as_deref() == Some(LABEL) {
         return Ok(());
     }
-    set_state(tx, asker, &state, "blocked", Some(LABEL), &name)
+    set_state(tx, asker, &state, "waiting", Some(LABEL), &name)
 }
 
-/// The Worker Session `working` again, when it is `blocked`.
+/// The Worker Session `working` again, when it is `waiting`.
 fn resume(tx: &WriteTxn<'_>, asker: &Asker) -> Result<(), CpdError> {
     let (state, _, name) = session_row(tx, &asker.session)?;
-    if state != "blocked" {
+    if state != "waiting" {
         return Ok(());
     }
     set_state(tx, asker, &state, "working", None, &name)

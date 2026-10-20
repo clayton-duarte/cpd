@@ -2,16 +2,13 @@
 //! file under a top line, scrolled like the Worker view's (`worker/view.rs`).
 
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
-use crate::worker::render::wrap;
-
-/// The rows one turn of the mouse wheel scrolls.
-const WHEEL: usize = 3;
+use crate::scroll::Scroller;
 
 /// The top line: `<name> (archived, read-only)`, or `<name> (read-only)` for a Session that is not archived.
 pub(super) fn top_line(name: &str, archived: bool) -> String {
@@ -20,73 +17,31 @@ pub(super) fn top_line(name: &str, archived: bool) -> String {
 
 pub(super) struct View {
     title: String,
-    lines: Vec<Line<'static>>,
-    /// `lines` wrapped to the width they were last drawn at.
-    wrapped: Option<(u16, Vec<Line<'static>>)>,
-    /// The first row shown; [`usize::MAX`] follows the end.
-    scroll: usize,
-    /// The rows and the body height of the last draw.
-    rows: usize,
-    height: usize,
+    body: Scroller,
 }
 
 impl View {
     pub fn new(name: &str, archived: bool) -> View {
-        View { title: top_line(name, archived), lines: Vec::new(), wrapped: None, scroll: usize::MAX, rows: 0, height: 0 }
+        View { title: top_line(name, archived), body: Scroller::new() }
     }
 
     pub fn set_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.lines = lines;
-        self.wrapped = None;
+        self.body.set_lines(lines);
     }
 
-    /// Whether the view ends. Up and `k`, Down and `j`, PageUp, PageDown scroll; End and `G` follow the end again.
+    /// Whether the view ends (see [`Scroller::key`]).
     pub fn key(&mut self, key: KeyEvent) -> bool {
-        if key.kind != KeyEventKind::Press {
-            return false;
-        }
-        let page = self.height;
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return true,
-            KeyCode::Up | KeyCode::Char('k') => self.scroll_by(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.scroll_by(1),
-            KeyCode::PageUp => self.scroll_by(-(page as isize)),
-            KeyCode::PageDown => self.scroll_by(page as isize),
-            KeyCode::End | KeyCode::Char('G') => self.scroll = usize::MAX,
-            _ => {}
-        }
-        false
+        self.body.key(key)
     }
 
     pub fn mouse(&mut self, m: MouseEvent) {
-        match m.kind {
-            MouseEventKind::ScrollUp => self.scroll_by(-(WHEEL as isize)),
-            MouseEventKind::ScrollDown => self.scroll_by(WHEEL as isize),
-            _ => {}
-        }
-    }
-
-    fn max(&self) -> usize {
-        self.rows.saturating_sub(self.height)
-    }
-
-    /// Moves `by` rows from where the view is; reaching the end follows it.
-    fn scroll_by(&mut self, by: isize) {
-        let top = self.scroll.min(self.max()).saturating_add_signed(by);
-        self.scroll = if top >= self.max() { usize::MAX } else { top };
+        self.body.mouse(m);
     }
 
     pub fn draw(&mut self, f: &mut Frame) {
         let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(f.area());
-        if self.wrapped.as_ref().is_none_or(|(width, _)| *width != body.width) {
-            self.wrapped = Some((body.width, wrap(&self.lines, usize::from(body.width))));
-        }
-        let rows = &self.wrapped.as_ref().expect("wrapped above").1;
-        self.rows = rows.len();
-        self.height = usize::from(body.height);
-        let top = self.scroll.min(self.max());
         f.render_widget(Paragraph::new(Line::from(self.title.as_str()).bold()), head);
-        f.render_widget(Paragraph::new(rows.iter().skip(top).take(self.height).cloned().collect::<Vec<_>>()), body);
+        self.body.draw(f, body);
     }
 }
 
@@ -95,7 +50,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
-    use ratatui::crossterm::event::{KeyEventState, KeyModifiers};
+    use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers, MouseEventKind};
 
     use super::*;
     use crate::worker::render::render;

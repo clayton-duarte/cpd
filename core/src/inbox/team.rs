@@ -1,9 +1,9 @@
 //! The team review rule of the Inbox kind `review-requested` (contract §2.2 "The team review rule", hs-d320; commands.md
-//! §21.5): the posts E10 cached in `run/team-review.json`, the GitHub state of their pull requests, and hermes' own
+//! §21.5): the posts E11 cached in `run/team-review.json`, the GitHub state of their pull requests, and hermes' own
 //! classification of the two (hermes-config `plugins/cockpit/classify.py` `classify`, `refresh.py` `build`). Only
 //! `NEEDS_REVIEW` is the User's move; this module decides that, the rules in [`super::rules`] turn it into items.
 //!
-//! GitHub is read here, not in E10 (E10 calls no GitHub): one `gh api graphql` call for every primary post of the
+//! GitHub is read here, not in E11 (E11 calls no GitHub): one `gh api graphql` call for every primary post of the
 //! window, memoised ([`GITHUB_TTL`]) so the five-second E8 tick does not repeat it.
 
 use std::collections::BTreeMap;
@@ -20,14 +20,14 @@ use crate::host::deadline::{self, Failed};
 /// How long a post counts after its posting (hermes `refresh.RETAIN_DAYS`, 7; contract §2.2).
 pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 3600);
 
-/// How long a GitHub answer is reused while the posts are the same. E8 runs every tick and the posts change at E10's
+/// How long a GitHub answer is reused while the posts are the same. E8 runs every tick and the posts change at E11's
 /// 30-minute cadence; five minutes keeps a review that lands on GitHub visible soon, at one GraphQL point per query.
 pub const GITHUB_TTL: Duration = Duration::from_secs(300);
 
 /// The deadline of the GitHub call (the PR poll's, `pr::gh::POLL_TIMEOUT`).
 const GITHUB_DEADLINE: Duration = Duration::from_secs(15);
 
-/// `run/team-review.json` as E10 wrote it (commands.md §21.5).
+/// `run/team-review.json` as E11 wrote it (commands.md §21.5).
 #[derive(Debug, Deserialize)]
 pub struct Cache {
     pub version: u32,
@@ -57,7 +57,7 @@ pub struct Claim {
     pub reason: String,
 }
 
-/// The cache, `None` when there is no file (E10 has not run: "unknown", not "empty"). A file that cannot be read or
+/// The cache, `None` when there is no file (E11 has not run: "unknown", not "empty"). A file that cannot be read or
 /// parsed, or whose `version` is not 1, is `store_failed`.
 pub fn read_cache(home: &CpdHome) -> Result<Option<Cache>, CpdError> {
     let path = home.run_dir().join("team-review.json");

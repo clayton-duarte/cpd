@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crate::home::CpdHome;
 use crate::host::addr::URL_HOST;
+use crate::host::git_guard::path_with_bin;
 use crate::host::tmux::Spawn;
 use crate::ids::{AttemptId, PlanId, SessionId};
 
@@ -85,8 +86,14 @@ fn push_extensions(argv: &mut Vec<String>, extensions: &[String]) {
 /// Silences pi's own update banner in every pane cpd starts (contract §6.5).
 const SKIP_VERSION_CHECK: (&str, &str) = ("PI_SKIP_VERSION_CHECK", "1");
 
+/// `PATH` of a Session: `$CPD_HOME/bin`, where the `git` wrapper is, first, then the `PATH` of this process (contract §6.5, hs-d310).
+fn session_path(home: &CpdHome) -> (String, String) {
+    ("PATH".to_owned(), path_with_bin(home, std::env::var_os("PATH")))
+}
+
 fn base_env(home: &CpdHome, session: &SessionId, plan: &PlanId) -> BTreeMap<String, String> {
     BTreeMap::from([
+        session_path(home),
         ("CPD_HOME".to_owned(), home.root().display().to_string()),
         ("CPD_SESSION".to_owned(), session.to_string()),
         ("CPD_PLAN".to_owned(), plan.to_string()),
@@ -122,6 +129,7 @@ fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
     let Some(plan) = launch.plan else {
         // A Context's Manager (contract §6.5, "Manager").
         return BTreeMap::from([
+            session_path(launch.home),
             ("CPD_HOME".to_owned(), launch.home.root().display().to_string()),
             ("CPD_SESSION".to_owned(), launch.session.to_string()),
             ("PLANNOTATOR_UPDATE_CHECK".to_owned(), "0".to_owned()),
@@ -209,8 +217,11 @@ mod tests {
         v.iter().map(|s| (*s).to_owned()).collect()
     }
 
+    /// The env of a Session: the `pairs` and the `PATH` with `/cpd-home/bin` first (hs-d310).
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
+        let mut e: BTreeMap<String, String> = pairs.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
+        e.insert("PATH".to_owned(), path_with_bin(&home(), std::env::var_os("PATH")));
+        e
     }
 
     fn plannotator(port: Option<&str>) -> Plannotator {
@@ -243,6 +254,38 @@ mod tests {
         assert_eq!(manager.env["PI_SKIP_VERSION_CHECK"], "1");
         let plan = PlanId::parse("cpd2").unwrap();
         assert_eq!(base_env(&home, &session, &plan)["PI_SKIP_VERSION_CHECK"], "1");
+    }
+
+    #[test]
+    fn a_worker_a_lead_and_the_manager_start_path_with_the_wrapper_directory() {
+        let home = home();
+        let session = SessionId::parse(ID).unwrap();
+        let plan = PlanId::parse("cpd2").unwrap();
+        let attempt = AttemptId::new(JobKey::parse("rs-host").unwrap(), NonZeroU32::new(1).unwrap());
+        let worker = super::worker(&WorkerLaunch {
+            home: &home,
+            session: &session,
+            plan: &plan,
+            attempt: &attempt,
+            model: "p/m:high",
+            extensions: &[],
+            fork: None,
+        });
+        let lead = lead_launch(LeadStart::Resume { file: "/s/a.jsonl".into() }, &plannotator(None));
+        let manager = super::lead(&LeadLaunch {
+            home: &home,
+            session: &session,
+            plan: None,
+            extensions: &[],
+            plannotator: &plannotator(None),
+            start: LeadStart::Resume { file: "/s/a.jsonl".into() },
+        });
+        for (role, launch) in [("worker", worker), ("lead", lead), ("manager", manager)] {
+            let path = &launch.env["PATH"];
+            assert!(path.starts_with("/cpd-home/bin:") || path == "/cpd-home/bin", "{role}: {path}");
+        }
+        // The Distiller is no Session: it gets no PATH of its own.
+        assert!(!super::distiller("p/m:low", &[]).env.contains_key("PATH"));
     }
 
     #[test]

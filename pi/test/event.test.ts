@@ -32,6 +32,13 @@ test("every key of LEAD_MESSAGES is a known kind", () => {
   for (const k of Object.keys(LEAD_MESSAGES)) assert.ok((KINDS as readonly string[]).includes(k), k);
 });
 
+test("session-titled is a known kind the adapter delivers as no message and no turn (hs-d257)", () => {
+  const line = { id: 9, at: "t", kind: "session-titled", context: "ctx", plan: "p", job: null, attempt: null, session: "s", text: 'Session s titled "T".', data: { title: "T" } };
+  const parsed = parseLine(JSON.stringify(line));
+  assert.equal(parsed.type, "event", "a known kind: not unknown-kind, which costs an error turn (hs-n122)");
+  assert.ok(!("session-titled" in LEAD_MESSAGES), "no message, no turn");
+});
+
 const WELL_FORMED = { id: 7, at: "t", kind: "job-merged", context: null, plan: null, job: null, attempt: null, session: "s", text: "x", data: {} };
 
 test("parseLine: a well-formed Event of an unknown kind is unknown-kind, not invalid", () => {

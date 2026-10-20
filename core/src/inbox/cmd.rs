@@ -164,7 +164,7 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
     let Env { home, mut store, .. } = Env::open()?;
     let now = OffsetDateTime::now_utc();
     let filter = |state| Filter { context: args.context.clone(), state };
-    let (open, visible, closed, cursor) = store.read(|conn| {
+    let (open, visible, closed, cursor, manager) = store.read(|conn| {
         if let Some(context) = &args.context {
             context_exists(conn, context)?;
         }
@@ -174,15 +174,22 @@ fn list(args: ListArgs) -> Result<Output, CpdError> {
             true => model::list(conn, &filter(State::Closed { limit: args.limit.unwrap_or(DEFAULT_LIMIT) }))?,
             false => Vec::new(),
         };
-        Ok((open, visible, closed, events::highest_id(conn)?))
+        // A live Manager (role `manager`, not archived) handles a stopped engine: the tree restarts it and a failure goes to
+        // the Manager (hs-d318), so `engine-down` is the User's only when there is none.
+        let manager: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sessions WHERE role = 'manager' AND archived_at IS NULL)",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok((open, visible, closed, events::highest_id(conn)?, manager))
     })?;
     let is_visible = |item: &Item| visible.iter().any(|v| v.id == item.id);
     let hidden = |item: &Item| if item.dismissed_at.is_some() { "dismissed" } else { "snoozed" };
 
     let mut items = Vec::new();
-    // An absent engine is an open item with no Context: neither `--closed` nor `--context` lists it.
+    // An absent engine with no live Manager is an open item with no Context: neither `--closed` nor `--context` lists it.
     let running = model::engine_running(&home)?;
-    if !running && !args.closed && args.context.is_none() {
+    if !running && !manager && !args.closed && args.context.is_none() {
         items.push(engine_down(now));
     }
     let listed: &[Item] = if args.closed {

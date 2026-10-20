@@ -178,7 +178,7 @@ impl Serialize for TickSeconds {
 pub struct Watch {
     pub tick_seconds: TickSeconds,
     pub pr_poll_seconds: u32,
-    /// E10 reads the team channel this long after its previous read ended (§3.7, §8.2).
+    /// E11 reads the team channel this long after its previous read ended (§3.7, §8.2).
     pub team_review_seconds: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
@@ -188,7 +188,7 @@ pub struct Watch {
 pub struct Inbox {
     /// A failed Job becomes a `job-stuck` item after this (E8, §2.2).
     pub stuck_job_minutes: u32,
-    /// The Slack channel id of the team review channel; `""` switches E10 and the `review-requested` item off (§2.2, §8.2).
+    /// The Slack channel id of the team review channel; `""` switches E11 and the `review-requested` item off (§2.2, §8.2).
     pub team_channel: String,
     /// The User's Slack user id; set when `team_channel` is.
     pub slack_user_id: String,
