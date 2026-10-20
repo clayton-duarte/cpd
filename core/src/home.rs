@@ -159,6 +159,11 @@ impl CpdHome {
         self.locks_dir().join(format!("attempt-{plan}--{attempt}.lock"))
     }
 
+    /// `locks/check-<plan>--<attempt>.lock`: held by `attempt submit` while its checks run, a span (contract §7.7).
+    pub fn check_lock(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
+        self.locks_dir().join(format!("check-{plan}--{attempt}.lock"))
+    }
+
     /// `locks/plannotator-ports.lock`: held while a Plan's plannotator port is assigned (contract §6.5).
     pub fn plannotator_ports_lock(&self) -> PathBuf {
         self.locks_dir().join("plannotator-ports.lock")
@@ -347,6 +352,12 @@ impl CpdHome {
     /// `run/<plan>/logs/<attempt>.<hook>.log`: the full output of a hook run.
     pub fn hook_log(&self, plan: &PlanId, attempt: &AttemptId, hook: Hook) -> PathBuf {
         self.plan_dir(plan).join("logs").join(format!("{attempt}.{}.log", hook.as_str()))
+    }
+
+    /// `run/<plan>/logs/<attempt>.tests-<what>.log`: the full output of one of the repo's `[tests]` commands
+    /// (`what`: `build`, `list` or `run`, contract §7.7).
+    pub fn tests_log(&self, plan: &PlanId, attempt: &AttemptId, what: &str) -> PathBuf {
+        self.plan_dir(plan).join("logs").join(format!("{attempt}.tests-{what}.log"))
     }
 
     /// `run/<plan>/logs/lead.<hook>.log`: the full output of a hook run in the
