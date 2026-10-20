@@ -8,7 +8,7 @@ use crate::common;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{CPD, Run, SLEEP_SECONDS, TestEnv};
 use cpd_core::git::{Setup, create_attempt_worktree, create_lead_worktree};
@@ -397,11 +397,7 @@ fn paused_gate(root: &Path) -> String {
 
 /// Waits until the [`paused_gate`] has started.
 fn await_gate(root: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    while !root.join("gate-started").exists() {
-        assert!(Instant::now() < deadline, "the Gate never started");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until_for("the Gate to start", Duration::from_secs(120), || root.join("gate-started").exists());
 }
 
 /// Lets the [`paused_gate`] finish.
@@ -2141,11 +2137,7 @@ fn a_second_poll_waits_for_the_lock() {
     let child = Child(Some(fx.env.command(CPD).args(["pr", "poll"]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap()));
     let pid = child.pid();
     // The poll has the lock file open and waits for it: it has made no gh call.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while !has_open(pid, &path) {
-        assert!(Instant::now() < deadline, "the poll never opened {}", path.display());
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    common::wait_until(&format!("the poll to open {}", path.display()), || has_open(pid, &path));
     assert!(fx.gh_calls().is_empty(), "{:?}", fx.gh_calls());
 
     drop(held);

@@ -12,10 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 
 use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
-use cpd_core::home::CpdHome;
-use cpd_core::store::Store;
 use serde_json::{Value, json};
-
 
 struct Fx {
     env: TestEnv,
@@ -30,12 +27,13 @@ struct Repo {
 /// The poller's search answering no pull requests.
 const EMPTY_SEARCH: &str = r#"{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}"#;
 
-/// The env with its config (a one-second tick), a fake `cpd` whose `watch --ensure`
+/// The env with its config (a tick of `common::TICK_SECONDS`), a fake `cpd` whose `watch --ensure`
 /// succeeds, Context `ctx` and Plan `pay` in phase `plan`.
 fn fx() -> Fx {
     let env = TestEnv::new();
     let config = format!(
-        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = 1\npr_poll_seconds = 1\n[tmux]\nsocket = \"{}\"\n",
+        "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n[watch]\ntick_seconds = {}\n[tmux]\nsocket = \"{}\"\n",
+        common::TICK_SECONDS,
         env.tmux_socket()
     );
     fs::write(env.cpd_home().join("config.toml"), config).unwrap();
@@ -54,14 +52,6 @@ fn fx() -> Fx {
 }
 
 impl Fx {
-    fn store(&self) -> Store {
-        Store::open(&CpdHome::resolve(Some(self.env.cpd_home().into()), None).unwrap(), 5000).unwrap()
-    }
-
-    fn query<T: rusqlite::types::FromSql>(&self, sql: &str) -> T {
-        self.store().read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-    }
-
     fn events(&self, kind: &str) -> Vec<Value> {
         self.env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
     }
@@ -183,7 +173,7 @@ impl Fx {
     }
 
     fn ship_status(&self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM prs WHERE plan = 'ship' AND key = '{key}'"))
+        self.env.query(&format!("SELECT status FROM prs WHERE plan = 'ship' AND key = '{key}'"))
     }
 
     /// Where PR `key` of Plan `ship` has its Lead worktree in `repo`.
@@ -193,7 +183,7 @@ impl Fx {
     }
 
     fn pr_status(&self, key: &str) -> String {
-        self.query(&format!("SELECT status FROM prs WHERE plan = 'pay' AND key = '{key}'"))
+        self.env.query(&format!("SELECT status FROM prs WHERE plan = 'pay' AND key = '{key}'"))
     }
 
     /// Where PR `key`'s Lead worktree goes in `repo`.
@@ -225,9 +215,9 @@ impl Fx {
         self.env.git(&other, &["rev-parse", "HEAD"])
     }
 
-    /// A running `cpd watch`, killed when dropped.
+    /// A running `cpd watch`, polling every tick (`common::PR_POLL_EVERY_TICK`), killed when dropped.
     fn engine(&self) -> Engine {
-        let child = self.env.command(CPD).arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        let child = self.env.command(CPD).arg("watch").envs([common::PR_POLL_EVERY_TICK]).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
         let engine = Engine { child: Some(child) };
         wait_until("watch-started", || !self.events("watch-started").is_empty());
         engine
@@ -292,15 +282,15 @@ fn lock_starts_only_the_prs_without_needs() {
     assert_eq!(remote_branch(&fx, &api.path, "cpd/pay/api"), format!("{base}\trefs/heads/cpd/pay/api"));
     assert_eq!(branch_config(&fx, &api.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("api"), "dispatch");
-    assert_eq!(fx.query::<String>("SELECT lead_worktree FROM prs WHERE key = 'api'"), worktree.display().to_string());
+    assert_eq!(fx.env.query::<String>("SELECT lead_worktree FROM prs WHERE key = 'api'"), worktree.display().to_string());
     // The waiting one: nothing created anywhere.
     assert_eq!(fx.pr_status("web"), "waiting");
     assert!(!fx.lead_path(&web.path, "web").exists());
     assert_eq!(fx.env.git(&web.path, &["branch", "--list", "cpd/pay/*"]), "");
     assert_eq!(remote_branch(&fx, &web.path, "cpd/pay/web"), "");
     // Every Job is queued at once.
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"), 2);
-    assert_eq!(fx.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'queued' AND fingerprint IS NOT NULL"), 2);
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "dispatch");
 
     let phase = fx.events("plan-phase");
     assert_eq!(phase.last().unwrap()["data"], json!({"from": "plan", "to": "dispatch", "jobs": ["schema", "ui"], "prs": ["api"]}));
@@ -344,9 +334,9 @@ fn lock_is_all_or_nothing_when_a_pr_fails_to_start() {
         assert_eq!(fx.env.git(&repo.path, &["branch", "--list", "cpd/pay/*"]), "", "{key}'s branch");
         assert_eq!(remote_branch(&fx, &repo.path, &format!("cpd/pay/{key}")), "", "{key} on origin");
     }
-    assert_eq!(fx.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM prs WHERE status <> 'waiting'"), 0);
-    assert_eq!(fx.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'draft'"), 2);
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM prs WHERE status <> 'waiting'"), 0);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM jobs WHERE status = 'draft'"), 2);
     assert!(fx.events("pr-started").is_empty());
     assert!(fx.env.calls("cpd").iter().all(|c| c[0] != "watch"));
 }
@@ -363,7 +353,7 @@ fn lock_refuses_a_pr_without_a_draft_job() {
     let error = refused(&fx.lock(), "pr_empty", 3);
 
     assert_eq!(error["details"]["prs"], json!(["api"]));
-    assert_eq!(fx.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
     assert!(!fx.lead_path(&web.path, "web").exists());
 }
 
@@ -389,7 +379,7 @@ fn lock_refuses_a_remote_lead_branch_of_a_pr_that_lacks_the_base() {
     // All or nothing: api, started first, is not left behind or pushed.
     assert!(!fx.lead_path(&api.path, "api").exists());
     assert_eq!(remote_branch(&fx, &api.path, "cpd/pay/api"), "");
-    assert_eq!(fx.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
+    assert_eq!(fx.env.query::<String>("SELECT phase FROM plans WHERE id = 'pay'"), "plan");
 }
 
 // ---------- pr start ----------
@@ -443,7 +433,7 @@ fn pr_start_creates_pushes_and_records_the_start() {
     assert_eq!(remote_branch(&fx, &repo.path, "cpd/pay/a2"), format!("{tip}\trefs/heads/cpd/pay/a2"));
     assert_eq!(branch_config(&fx, &repo.path), "", "no upstream (hs-d243 G1)");
     assert_eq!(fx.pr_status("a2"), "dispatch");
-    assert!(fx.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
+    assert!(fx.env.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
     let started = fx.events("pr-started");
     assert_eq!((started.len(), &started[0]["data"]["by"], &started[0]["data"]["pr"]), (1, &json!("pr start"), &json!("a2")));
     assert!(fx.events("error").is_empty());
@@ -646,7 +636,7 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     assert_eq!((&data["code"], &data["source"]), (&json!("pr_start_failed"), &json!("watch")));
     assert_eq!((&data["details"]["pr"], &data["details"]["step"], &data["details"]["log"]), (&json!("a2"), &json!("pre-start"), &json!(fx.log("a2"))));
     assert_eq!(fx.pr_status("a2"), "waiting");
-    let failed_at: String = fx.query("SELECT start_failed_at FROM prs WHERE key = 'a2'");
+    let failed_at: String = fx.env.query("SELECT start_failed_at FROM prs WHERE key = 'a2'");
     assert!(!failed_at.is_empty());
     assert_eq!(fx.env.git(&repo.path, &["branch", "--list", "cpd/pay/*"]), "", "the branch is removed");
     assert!(!fx.lead_path(&repo.path, "a2").exists(), "the worktree is removed");
@@ -657,18 +647,18 @@ fn a_failed_start_marks_the_pr_and_appends_one_error_until_pr_start_retries() {
     assert!(fx.events("pr-started").is_empty());
 
     // `pr start` fails the same way and changes nothing.
-    let writes = (fx.query::<i64>("SELECT count(*) FROM txns"), fx.query::<i64>("SELECT count(*) FROM events"));
+    let writes = (fx.env.query::<i64>("SELECT count(*) FROM txns"), fx.env.query::<i64>("SELECT count(*) FROM events"));
     let error = refused(&fx.start("a2"), "setup_failed", 1);
     assert_eq!((&error["details"]["pr"], &error["details"]["step"], &error["details"]["log"]), (&json!("a2"), &json!("pre-start"), &json!(fx.log("a2"))));
-    assert_eq!(fx.query::<String>("SELECT start_failed_at FROM prs WHERE key = 'a2'"), failed_at);
-    assert_eq!((fx.query::<i64>("SELECT count(*) FROM txns"), fx.query::<i64>("SELECT count(*) FROM events")), writes);
+    assert_eq!(fx.env.query::<String>("SELECT start_failed_at FROM prs WHERE key = 'a2'"), failed_at);
+    assert_eq!((fx.env.query::<i64>("SELECT count(*) FROM txns"), fx.env.query::<i64>("SELECT count(*) FROM events")), writes);
 
     // The cause is fixed: `pr start` starts it and clears the mark.
     fs::write(&marker, "").unwrap();
     let out = fx.start("a2").ok();
     assert_eq!(out["pr"]["status"], "dispatch");
     assert_eq!(fx.pr_status("a2"), "dispatch");
-    assert!(fx.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
+    assert!(fx.env.query::<Option<String>>("SELECT start_failed_at FROM prs WHERE key = 'a2'").is_none());
     let started = fx.events("pr-started");
     assert_eq!((started.len(), &started[0]["data"]["by"]), (1, &json!("pr start")));
     assert_eq!(fx.events("error").len(), 1);

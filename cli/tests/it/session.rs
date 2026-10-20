@@ -112,10 +112,6 @@ fn exec_sql(env: &TestEnv, sql: &str) {
     store(env).write("test", |tx| exec(tx, sql)).unwrap();
 }
 
-fn query<T: rusqlite::types::FromSql>(env: &TestEnv, sql: &str) -> T {
-    store(env).read(|conn| Ok(conn.query_row(sql, [], |r| r.get(0))?)).unwrap()
-}
-
 fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", kind]).ok()["events"].as_array().unwrap().clone()
 }
@@ -136,10 +132,22 @@ fn fake_pi(env: &TestEnv, then: &str) {
     ));
 }
 
+/// The polls of `session run` as these tests set them (contract §1.2 "Test overrides"): the fork's wait for its
+/// source (`SOURCE_POLL`, 2 s) in every pane, the wrapper's loop (`FILE_POLL`, 0.5 s) with [`fast_wrapper`].
+const POLL: Duration = Duration::from_millis(100);
+
+/// Every `session run` started from now on runs its loop every [`POLL`], for a test that waits for what the loop
+/// sees (pi's exit, a new pi). Not the default: each pane's loop would cost the other tests CPU.
+fn fast_wrapper(env: &TestEnv) {
+    let out = env.tmux(&["set-environment", "-g", "CPD_TEST_FILE_POLL", &POLL.as_secs_f64().to_string()]);
+    assert!(out.status.success(), "tmux set-environment: {}", String::from_utf8_lossy(&out.stderr));
+}
+
 /// The cockpit: session `cpd`, window `main` with a tree pane and the
 /// placeholder in the chat slot, on a server started with cpd's
 /// [`SERVER_OPTIONS`] (contract §6.1), as cpd starts it: with `remain-on-exit`,
 /// a pane whose program exits stays, dead, instead of taking the chat slot with it.
+/// Every pane started later waits for a fork's source every [`POLL`].
 fn cockpit(env: &TestEnv) {
     let ok = |args: &[&str]| {
         let out = env.tmux(args);
@@ -153,6 +161,7 @@ fn cockpit(env: &TestEnv) {
     ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
     let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
     ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+    ok(&["set-environment", "-g", "CPD_TEST_SOURCE_POLL", &POLL.as_secs_f64().to_string()]);
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -339,10 +348,10 @@ fn state_follows_section_3_6() {
 
     // Unchanged: nothing written, no Event.
     let before = events(&env, "session-state").len();
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     assert_eq!(state(&["blocked", "--label", "cpd: Worker question"]).ok()["already"], true);
     assert_eq!(events(&env, "session-state").len(), before);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
 
     // A new label is a change.
     assert_eq!(state(&["blocked", "--label", "cpd: plan review"]).ok()["from"], "blocked");
@@ -385,13 +394,13 @@ fn state_waiting_takes_a_label_and_follows_section_3_6() {
     };
 
     // `waiting` needs a label, as `blocked` does; a refusal writes nothing.
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     let error = refused(&state(&["waiting"]), "usage", 2);
     assert_eq!(error["details"]["state"], "waiting");
     refused(&state(&["waiting", "--label", &"x".repeat(81)]), "usage", 2);
     refused(&state(&["idle", "--label", "x"]), "usage", 2);
     refused(&state(&["waiting", "--label", "x", "--reply"]), "usage", 2);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
 
     // `idle` and `working` go to `waiting` and come back; a new label is a change; the same one writes nothing.
     let out = state(&["waiting", "--label", "cpd: Worker question"]).ok();
@@ -429,11 +438,11 @@ fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
     };
 
     // Only `idle` takes `--reply`; a refusal writes nothing.
-    let txns: i64 = query(&env, "SELECT count(*) FROM txns");
+    let txns: i64 = env.query("SELECT count(*) FROM txns");
     for other in [&["working", "--reply"][..], &["blocked", "--label", "x", "--reply"], &["stopped", "--reply"]] {
         refused(&state(other), "usage", 2);
     }
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
 
     state(&["working"]).ok();
     state(&["idle", "--reply"]).ok();
@@ -444,10 +453,10 @@ fn state_idle_reply_writes_data_reply_and_only_idle_accepts_it() {
     state(&["working"]).ok();
     state(&["idle"]).ok();
     assert_eq!(events(&env, "session-state").last().unwrap()["data"], json!({"from": "working", "to": "idle", "label": null}));
-    let (events_before, txns) = (events(&env, "session-state").len(), query::<i64>(&env, "SELECT count(*) FROM txns"));
+    let (events_before, txns) = (events(&env, "session-state").len(), env.query::<i64>("SELECT count(*) FROM txns"));
     assert_eq!(state(&["idle", "--reply"]).ok()["already"], true);
     assert_eq!(events(&env, "session-state").len(), events_before);
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM txns"), txns);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns);
 }
 
 #[test]
@@ -490,7 +499,7 @@ fn fork_refusals_register_nothing() {
     // No tmux server, so no cockpit.
     let error = refused(&env.cpd(&["session", "fork", LEAD1, "--message-file", message]), "no_cockpit", 3);
     assert_eq!(error["details"]["next"], "cpd tui");
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), 4);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions"), 4);
 }
 
 #[test]
@@ -576,6 +585,7 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     env.fake_cpd_views();
     fake_pi(&env, "exit 1");
     cockpit(&env);
+    fast_wrapper(&env);
     env.cpd(&["session", "state", "working", "--session", LEAD1]).ok();
     let message = env.root().join("message.md");
     fs::write(&message, "Review the tests.").unwrap();
@@ -587,9 +597,9 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     wait_until("the waiting line", || capture().contains("Waiting for the source Lead to finish its turn, then forking it as \"side\""));
 
     // No file yet, and busy.
-    // time-claim: the fork does not happen while the source is busy and has no file, over a whole 2 s poll of the
+    // time-claim: the fork does not happen while the source is busy and has no file, over three polls of the
     // source; no per-poll signal from `session run` (it only reads the store and the file).
-    std::thread::sleep(Duration::from_secs(3));
+    std::thread::sleep(POLL * 3);
     assert!(env.calls("pi").is_empty());
     // A file with a finished turn, but still busy.
     let sessions = env.home().join(".pi/agent/sessions/g");
@@ -602,9 +612,9 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     .unwrap();
     // Quiet for long enough and finished: only the busy source is in the way.
     backdate(&source_file, Duration::from_secs(3600));
-    // time-claim: the fork does not happen while the source is busy, over a whole 2 s poll of the source;
+    // time-claim: the fork does not happen while the source is busy, over three polls of the source;
     // no per-poll signal from `session run`.
-    std::thread::sleep(Duration::from_secs(3));
+    std::thread::sleep(POLL * 3);
     assert!(env.calls("pi").is_empty(), "the source is still working");
 
     env.cpd(&["session", "state", "idle", "--session", LEAD1]).ok();
@@ -706,6 +716,8 @@ fn a_fork_with_a_message_file_over_128_kib_starts_pi_with_the_copied_file() {
     fake_pi(&env, &copy_last_file());
     cockpit(&env);
     pi_file(&env, LEAD2, true);
+    // Quiet for `fork_quiet_seconds` already: this test is about the message, not the wait.
+    backdate(&env.home().join(format!(".pi/agent/sessions/g/2026_{LEAD2}.jsonl")), Duration::from_secs(3600));
     let message = big_message();
     let file = env.root().join("message.md");
     fs::write(&file, &message).unwrap();
@@ -1014,7 +1026,7 @@ fn close_refusals_and_nothing_to_close() {
     // A pane that is gone, with E2 not having recorded it: nothing is written.
     exec_sql(&env, "UPDATE sessions SET tmux_pane = '%99' WHERE id = 'lead2'");
     assert_eq!(env.cpd(&["session", "close", LEAD2]).ok()["already"], true);
-    assert_eq!(query::<String>(&env, "SELECT tmux_pane FROM sessions WHERE id = 'lead2'"), "%99");
+    assert_eq!(env.query::<String>("SELECT tmux_pane FROM sessions WHERE id = 'lead2'"), "%99");
     assert_eq!(events(&env, "session-moved").len(), 0);
     assert_eq!(events(&env, "session-state").len(), 0);
 }
@@ -1315,7 +1327,7 @@ fn open_and_fork_of_an_archived_session_are_refused_before_any_tmux() {
         let error = refused(&env.cpd(&args), "archived", 3);
         assert_eq!(error["details"]["next"], "cpd session unarchive lead2");
     }
-    assert_eq!(query::<i64>(&env, "SELECT count(*) FROM sessions"), 4);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM sessions"), 4);
     assert_eq!(events(&env, "session-registered").len(), 1);
 }
 
@@ -1673,7 +1685,7 @@ fn quitting_pi_archives_a_side_fork_and_closes_its_pane() {
     for other in [LEAD1, LEAD2, "side2"] {
         assert!(!session_archived(&env, other), "{other}");
     }
-    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
 }
 
 #[test]
@@ -1687,12 +1699,12 @@ fn quitting_a_plan_s_own_lead_archives_the_plan_with_its_fork() {
     wait_until("the archive", || session_archived(&env, LEAD2));
     wait_until("both panes to go", || !pane_exists(&env, &lead) && !pane_exists(&env, &fork));
     assert!(session_archived(&env, "side2"));
-    assert!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'other'").is_some());
+    assert!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'other'").is_some());
     assert_eq!(events(&env, "plan-archived").len(), 1);
     assert_eq!(events(&env, "session-archived").len(), 2);
     // Another Plan is untouched.
     assert!(!session_archived(&env, LEAD1));
-    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
 }
 
 #[test]
@@ -1745,7 +1757,7 @@ fn a_refused_archive_prints_the_refusal_and_offers_the_resume_in_place() {
     assert!(shown.contains("Job api of Plan pay is running."), "{shown}");
     // Nothing was archived, and the Lead was not parked.
     assert!(!session_archived(&env, LEAD1));
-    assert_eq!(query::<Option<String>>(&env, "SELECT archived_at FROM plans WHERE id = 'pay'"), None);
+    assert_eq!(env.query::<Option<String>>("SELECT archived_at FROM plans WHERE id = 'pay'"), None);
     assert_eq!(events(&env, "session-archived").len() + events(&env, "plan-archived").len(), 0);
     assert_eq!((slot(&env).pane, slot(&env).session), (pane, LEAD1.to_owned()));
 }
@@ -1762,6 +1774,7 @@ fn a_reload_is_not_a_quit_even_though_pi_exits_0_on_sigterm() {
     let current = env.home().join(".pi/agent/install/current-version");
     fs::create_dir_all(current.parent().unwrap()).unwrap();
     fs::write(&current, "1.2.0\n").unwrap();
+    fast_wrapper(&env);
     let pane = run_lead_with_pane(&env, "side");
     wait_until("pi", || env.calls("pi").len() == 1);
 

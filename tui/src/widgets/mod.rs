@@ -2,19 +2,21 @@
 //! machine-wide right column of the cockpit. It takes one snapshot of the read
 //! model ([`read::open_prs`]: the one thing it draws), then follows the Events: it looks at the Events and at the pull
 //! request rows every [`TICK`] and re-reads when one concerns it (a pull request row changes with no Event), at most
-//! once per [`COALESCE`]; the load average is re-read every [`LOAD_EVERY`], since it is no Event. It draws when the
-//! pull requests, the load, the note, the size, a click or the wheel changed, not on every tick. It makes no write of
+//! once per [`COALESCE`]; the CPU, GPU and memory % are sampled every [`SAMPLE_EVERY`], since they are no Event. It draws when the
+//! pull requests, the CPU, GPU and memory, the note, the size, a click or the wheel changed, not on every tick. It makes no write of
 //! its own, but for what a click on an owned PR row asks of `cpd session open`, and the merge popup a click on a merge
 //! icon opens. A right click on a PR row opens its menu ([`crate::menu`]: Merge, Copy Link, Go to Lead), which then
 //! takes every key and click until it closes. Otherwise it has no key; mouse capture is on, for the clicks and the
 //! wheel over the PRs section.
 //!
-//! - [`column`]: the drawing of the machine, the PRs, git and Jira;
+//! - [`column`]: the drawing of the machine and the PRs;
+//! - [`host`]: the machine's CPU %, GPU % and memory %;
 //! - [`legend`]: the key legend, `cpd tui view legend`, which the tree's `?` and
 //!   the StatusBar's button (`cpd tui action legend`) open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::palette`]'s.
 
 mod column;
+mod host;
 pub mod legend;
 
 use std::collections::BTreeMap;
@@ -42,6 +44,8 @@ use cpd_core::output::Output;
 use cpd_core::store::Store;
 
 pub use column::{Drawn, Hit, Machine, MergeIcon, PrItem, PrRow, draw};
+pub use host::Usage;
+use host::Sampler;
 pub(crate) use column::{Window, dim, max_scroll, window};
 
 /// How often the view looks at the Events and at keys.
@@ -50,8 +54,8 @@ const TICK: Duration = Duration::from_millis(200);
 const FRAME: Duration = Duration::from_millis(100);
 /// At most one snapshot per this long, whatever the Event rate (§17).
 const COALESCE: Duration = Duration::from_millis(500);
-/// The load at least this often: the load average is no Event.
-const LOAD_EVERY: Duration = Duration::from_secs(2);
+/// The CPU, GPU and memory sample this often: they are no Event, and the CPU share is over the time since the last sample.
+const SAMPLE_EVERY: Duration = Duration::from_secs(2);
 
 pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
     run_view(
@@ -61,15 +65,16 @@ pub(super) fn run(run_command: RunCommand) -> Result<Output, CpdError> {
             let home = CpdHome::from_env()?;
             let config = Config::load(&home)?;
             let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-            let machine = Machine { name: hostname(), load: load_average() };
+            let mut sampler = Sampler::default();
+            let machine = Machine { name: hostname(), usage: sampler.sample() };
             let (prs, cursor) = read::open_prs(&mut store)?;
             let follow = read::Follow::new(&mut store, KINDS, cursor)?;
-            Ok((store, config, prs, machine, follow))
+            Ok((store, config, prs, machine, sampler, follow))
         },
-        |terminal, (mut store, config, prs, machine, follow)| {
+        |terminal, (mut store, config, prs, machine, sampler, follow)| {
             let tmux = Tmux::new(config.tmux.socket.clone());
             let lead = Opener { run_command, tmux: &tmux, cockpit: &config.tmux.cockpit_session };
-            show(terminal, &mut store, follow, prs, machine, &lead)
+            show(terminal, &mut store, follow, prs, machine, sampler, &lead)
         },
     )
 }
@@ -118,9 +123,10 @@ fn show(
     mut follow: read::Follow,
     mut prs: Vec<OpenPr>,
     mut machine: Machine,
+    mut sampler: Sampler,
     opener: &Opener,
 ) -> Result<(), ViewError> {
-    let (mut read_at, mut load_at) = (Instant::now(), Instant::now());
+    let (mut read_at, mut sampled_at) = (Instant::now(), Instant::now());
     let mut last = None::<Drawn>;
     let mut note = String::new();
     let mut error = None::<String>;
@@ -197,27 +203,28 @@ fn show(
             let read = (|| {
                 let moved = follow.poll_changes(store)?.any();
                 let prs = if moved || retry { Some(read::open_prs(store)?.0) } else { None };
-                let load = if load_at.elapsed() >= LOAD_EVERY || retry { Some(load_average()) } else { None };
-                Ok((prs, load))
+                Ok(prs)
             })();
             match kept(read, &mut error) {
-                Some((next, load)) => {
+                Some(next) => {
                     if let Some(next) = next.filter(|next| *next != prs) {
                         prs = next;
                         redraw = true;
-                    }
-                    if let Some(load) = load {
-                        load_at = Instant::now();
-                        if load != machine.load {
-                            machine.load = load;
-                            redraw = true;
-                        }
                     }
                     read_at = Instant::now();
                 }
                 None => read_at = Instant::now(), // retried after the next COALESCE
             }
             redraw |= error != shown;
+        }
+        // The CPU share is over the time since the last sample, so it is taken on its own timer, not at each Event.
+        if sampled_at.elapsed() >= SAMPLE_EVERY {
+            let usage = sampler.sample();
+            sampled_at = Instant::now();
+            if usage != machine.usage {
+                machine.usage = usage;
+                redraw = true;
+            }
         }
     }
 }
@@ -345,7 +352,7 @@ pub(crate) fn close_worker(tmux: &Tmux, cockpit: &str, job: &str) -> Result<(), 
     Ok(())
 }
 
-/// What the column draws for a load it could not read.
+/// What the column draws for a hostname it could not read.
 const UNKNOWN: &str = "?";
 
 /// The machine's name: the kernel's (`/proc/sys/kernel/hostname`), else `$HOSTNAME`, else what the `hostname` program
@@ -364,23 +371,6 @@ fn hostname() -> String {
 fn read_hostname(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     Some(text.lines().next()?.trim().to_owned()).filter(|n| !n.is_empty())
-}
-
-/// The first three fields of the load average: `/proc/loadavg` on Linux, `sysctl -n vm.loadavg` on macOS; `?` when
-/// it cannot be read (the view keeps running and reads it again).
-fn load_average() -> Vec<String> {
-    let text = if cfg!(target_os = "macos") {
-        Command::new("sysctl").args(["-n", "vm.loadavg"]).output().ok().map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    } else {
-        std::fs::read_to_string("/proc/loadavg").ok()
-    };
-    text.and_then(|text| parse_load(&text)).unwrap_or_else(|| vec![UNKNOWN.to_owned()])
-}
-
-/// The three numbers that open `text` (`16.89 24.21 25.00 6/3484 1221694`, or sysctl's `{ 0.52 0.58 0.59 }`).
-fn parse_load(text: &str) -> Option<Vec<String>> {
-    let fields: Vec<String> = text.split_whitespace().filter(|f| *f != "{").take(3).map(str::to_owned).collect();
-    (fields.len() == 3 && fields.iter().all(|f| f.parse::<f64>().is_ok())).then_some(fields)
 }
 
 /// The legend in a tmux popup over the cockpit, sized to it and at most the client's size.
@@ -441,7 +431,7 @@ mod tests {
         assert_eq!(newest_client("junk\n"), None);
     }
 
-    /// tui-W10: a name or a load that cannot be read is no error of the view.
+    /// tui-W10: a name that cannot be read is no error of the view (nor are the CPU, GPU and memory, `host::Sampler`).
     #[test]
     fn a_missing_hostname_file_or_load_is_not_an_error() {
         let dir = tempfile::tempdir().unwrap();
@@ -452,16 +442,5 @@ mod tests {
         std::fs::write(&file, "homeserver\n").unwrap();
         assert_eq!(read_hostname(&file).as_deref(), Some("homeserver"));
         assert!(!hostname().is_empty());
-        assert!(!load_average().is_empty(), "the numbers, or the `?`");
-    }
-
-    #[test]
-    fn the_load_is_the_first_three_numbers_of_proc_loadavg_or_sysctl() {
-        let load = |text| parse_load(text).map(|l| l.join(" "));
-        assert_eq!(load("16.89 24.21 25.00 6/3484 1221694\n").as_deref(), Some("16.89 24.21 25.00"));
-        assert_eq!(load("{ 0.52 0.58 0.59 }\n").as_deref(), Some("0.52 0.58 0.59"));
-        assert_eq!(load("1.0 2.0"), None);
-        assert_eq!(load("a b c"), None);
-        assert_eq!(load(""), None);
     }
 }

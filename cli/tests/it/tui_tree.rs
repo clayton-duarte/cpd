@@ -39,7 +39,7 @@ fn env() -> TestEnv {
 fn env_without_engine() -> TestEnv {
     let env = TestEnv::new();
     let config = format!(
-        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[tmux]\nsocket = \"{}\"\n",
+        "version = 1\nmachine = \"m1\"\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n[events]\npoll_ms = 50\n[tmux]\nsocket = \"{}\"\n",
         env.tmux_socket()
     );
     std::fs::write(env.cpd_home().join("config.toml"), config).unwrap();

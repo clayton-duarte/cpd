@@ -81,14 +81,23 @@ fn install_pi(env: &TestEnv, version: &str) {
 
 /// A machine where every check passes.
 fn healthy() -> TestEnv {
-    let env = TestEnv::new();
+    healthy_in(TestEnv::new())
+}
+
+/// [`healthy`] in `env`.
+fn healthy_in(env: TestEnv) -> TestEnv {
     write_config(&env, "");
+    healthy_tools(&env);
+    symlink(real_node(), env.bin().join("node")).unwrap();
+    env
+}
+
+/// The fake git, tmux, gh and pi of [`healthy`], (re)installed in `env`.
+fn healthy_tools(env: &TestEnv) {
     env.fake("git", "echo 'git version 2.43.0'");
     env.fake("tmux", "[ \"$1\" = -V ] && echo 'tmux 3.6'; exit 0");
     env.fake_gh("[ \"$1\" = auth ] && exit 0; echo 'gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)'");
-    install_pi(&env, "1.2.0");
-    symlink(real_node(), env.bin().join("node")).unwrap();
-    env
+    install_pi(env, "1.2.0");
 }
 
 /// `cpd doctor` with `PATH` = the test's `bin/` only, and `vars` added.
@@ -177,7 +186,7 @@ fn a_healthy_machine_passes_every_check_in_order() {
 
 #[test]
 fn doctor_is_idempotent_and_writes_nothing_but_the_migration() {
-    let env = healthy();
+    let env = healthy_in(TestEnv::empty());
     let first = doctor(&env);
     first.ok();
     let db = env.cpd_home().join("cpd.db");
@@ -250,8 +259,10 @@ fn each_tool_must_be_at_or_above_its_minimum() {
         ("gh", "gh version 2.44.9 (2025-01-01)", false, "2.44.9"),
         ("gh", "gh version 2.46.0 (2025-01-01)", true, "2.46.0"),
     ];
+    // One env: each case is the healthy machine with one tool changed (doctor runs every tool afresh).
+    let env = healthy();
     for (tool, output, passes, found) in cases {
-        let env = healthy();
+        healthy_tools(&env);
         if tool == "pi" {
             install_pi(&env, output);
         } else {
@@ -273,8 +284,9 @@ fn each_tool_must_be_at_or_above_its_minimum() {
 
 #[test]
 fn a_tool_that_is_not_on_path_fails() {
+    let env = healthy();
     for tool in ["git", "tmux", "pi", "gh"] {
-        let env = healthy();
+        healthy_tools(&env);
         fs::remove_file(env.bin().join(tool)).unwrap();
         let run = doctor(&env);
         assert_doctor_failed(&run);
@@ -708,11 +720,12 @@ fn link_sleep(env: &TestEnv) {
 
 const HANG: &str = "exec sleep 120";
 
-/// Asserts `name` failed with `tool_timeout` naming `tool`, and the other checks still ran.
-fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &str) {
+/// Asserts `name` failed with `tool_timeout` naming `tool` and its deadline of `seconds` (as the override set it),
+/// and the other checks still ran.
+fn assert_timed_out(run: &Run, name: &str, severity: &str, tool: &str, argv: &str, seconds: &str) {
     let c = assert_fails(run, name, severity, "tool_timeout");
     let message = c["message"].as_str().unwrap();
-    assert!(message.contains(&format!("{tool} ran past its deadline of 1s")), "{message}");
+    assert!(message.contains(&format!("{tool} ran past its deadline of {seconds}s")), "{message}");
     assert!(message.contains(argv), "{message}");
 }
 
@@ -723,7 +736,7 @@ fn a_hung_gh_auth_is_a_failed_warning_and_doctor_finishes() {
     env.fake_gh(&format!("[ \"$1\" = auth ] && {HANG}; echo 'gh version 2.45.0 (2025-07-18)'"));
     let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GH", "1")]);
     run.ok();
-    assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status");
+    assert_timed_out(&run, "gh_auth", "warn", "gh", "auth status", "1");
     assert_eq!(checks(&run).len(), NAMES.len());
 }
 
@@ -734,7 +747,7 @@ fn a_hung_tool_version_is_a_failed_error_check_and_doctor_goes_on() {
     env.fake("git", HANG);
     let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_GIT", "1")]);
     assert_doctor_failed(&run);
-    assert_timed_out(&run, "git", "error", "git", "--version");
+    assert_timed_out(&run, "git", "error", "git", "--version", "1");
     assert_passes(&run, "tmux");
     assert_passes(&run, "pi_node");
     assert_passes(&run, "tiers");
@@ -746,27 +759,29 @@ fn a_hung_pi_node_is_a_failed_check() {
     link_sleep(&env);
     fs::remove_file(env.bin().join("node")).unwrap();
     write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n{HANG}\n"));
-    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_NODE", "1")]);
+    // Both probes hang: a sub-second deadline (contract §1.2 "Test overrides") is all they wait.
+    let run = doctor_with(&env, &[("CPD_TEST_DEADLINE_NODE", "0.3")]);
     assert_doctor_failed(&run);
-    assert_timed_out(&run, "pi_node", "error", "node", "--version");
-    assert_timed_out(&run, "tiers", "error", "node", "--input-type=module");
+    assert_timed_out(&run, "pi_node", "error", "node", "--version", "0.3");
+    assert_timed_out(&run, "tiers", "error", "node", "--input-type=module", "0.3");
 }
 
-/// The catalog probe's deadline is doctor's 10 s (commands.md §14.1), not the 30 s of
+/// The catalog probe's deadline is doctor's (10 s, commands.md §14.1), not the 30 s of
 /// the catalog's own cache fill: a node that answers `--version` and hangs on the module.
+/// The test sets doctor's deadline to 1 s (`CPD_TEST_DOCTOR_DEADLINE`, contract §1.2), and the probe reports it.
 #[test]
-fn a_hung_catalog_probe_is_killed_at_10_seconds() {
+fn a_hung_catalog_probe_is_killed_at_doctors_deadline() {
     let env = healthy();
     link_sleep(&env);
     fs::remove_file(env.bin().join("node")).unwrap();
     write_executable(&env.bin().join("node"), &format!("#!/bin/sh\n[ \"$1\" = --version ] && {{ echo v22.0.0; exit 0; }}\n{HANG}\n"));
     let started = std::time::Instant::now();
-    let run = doctor(&env);
-    // time-claim: the probe is killed at doctor's 10 s deadline, not the cache fill's 30 s; no per-poll signal from
+    let run = doctor_with(&env, &[("CPD_TEST_DOCTOR_DEADLINE", "1")]);
+    // time-claim: the probe is killed at doctor's deadline, long before the cache fill's 30 s; no per-poll signal from
     // the deadline.
     assert!(started.elapsed() < std::time::Duration::from_secs(20), "took {:?}", started.elapsed());
     assert_doctor_failed(&run);
     assert_passes(&run, "pi_node");
     let c = assert_fails(&run, "tiers", "error", "tool_timeout");
-    assert_eq!(c["found"]["deadline_seconds"], 10, "{c}");
+    assert_eq!(c["found"]["deadline_seconds"], 1, "{c}");
 }

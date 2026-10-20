@@ -17,6 +17,7 @@ use super::state::scoped;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::host::exe::{Exe, Refusal};
+use crate::host::limit::limit;
 use crate::host::pi::PiDirs;
 use crate::ids::SessionId;
 
@@ -27,6 +28,7 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 const CHAT_IDLE: Duration = Duration::from_secs(10 * 60);
 /// How long a Session may stay `stopped` while its pi runs before the wrapper
 /// restarts pi: the adapter is missing (contract §6.7 "Adapter watchdog", hs-d141).
+/// Tests shorten it with `CPD_TEST_ADAPTER_WATCHDOG` ([`limit`]).
 const ADAPTER_WATCHDOG: Duration = Duration::from_secs(60);
 
 /// Whether the wrapper may `exec` the cpd at its path: nothing replaced it (a
@@ -76,7 +78,7 @@ pub(super) fn adapter_missing(env: &mut Env, id: &SessionId, running: Duration) 
         .map_err(|e| CpdError::bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
     // A `stopped` the wrapper set when the previous pi exited does not count while no pi ran.
     let stopped_for = Duration::try_from(OffsetDateTime::now_utc() - since).unwrap_or_default().min(running);
-    if stopped_for <= ADAPTER_WATCHDOG {
+    if stopped_for <= limit("ADAPTER_WATCHDOG", ADAPTER_WATCHDOG) {
         return Ok(false);
     }
     let seconds = stopped_for.as_secs();
