@@ -2789,7 +2789,7 @@ cpd: a Manager never blocks: a wait over 30 s runs in the background or is the o
 
 ### 15.12 A Worker runs targeted tests
 
-Decision (User, 2026-10-19). A Worker runs only the tests its change touches; the full suite is the Gate's, at `pr open`. Several full suites and Gates at once loaded a host to 205 on 16 cores, and every Gate failed on timing. The Spec's acceptance names the targeted tests (the files and modules the Job changes plus its new tests), never a green full suite, and the adapter enforces the rule, as §15.11 does for the Manager.
+Decision (User, 2026-10-19). A Worker runs only the tests its change touches; the full suite is the Gate's, at `pr open`. Several full suites and Gates at once loaded a host to 205 on 16 cores, and every Gate failed on timing. The Spec's acceptance names the targeted tests (the area binaries, `--test <area>` of docs/implementing.md's area table, and the modules the Job changes, plus its new tests), never a green full suite, and the adapter enforces the rule, as §15.11 does for the Manager.
 
 **When.** At pi's `tool_call`, for a `bash` call (`event.toolName` is `bash`, `event.input.command`), of a Session of role `worker` only. It is the same handler as §15.11's, which consults each guard by role (`pi/lib/testguard.ts`, `unfilteredTestRun`); for a Lead, a Manager, or before `session_start` has read the role, this guard returns nothing.
 
@@ -2799,7 +2799,7 @@ Decision (User, 2026-10-19). A Worker runs only the tests its change touches; th
 - `npm test` or `npm run test` with no file argument (a word after `--`, or after the script name, that is not an option);
 - `npm run verify` (the Gate), whatever its arguments.
 
-**Allowed**, for example: `scripts/cargo.sh nextest run -p cpd --test plan_overlap`, `cargo test -p cpd-core spec::`, `node --test pi/test/x.test.ts`, `npm test -- pi/test/x.test.ts`, `npm run typecheck`, `cargo build`.
+**Allowed**, for example: `scripts/cargo.sh nextest run -p cpd --test flow plan_overlap::`, `scripts/cargo.sh build -p cpd --test flow`, `cargo test -p cpd-core spec::`, `node --test pi/test/x.test.ts`, `npm test -- pi/test/x.test.ts`, `npm run typecheck`, `cargo build`.
 
 A pattern counts where a command runs, as in §15.11 (a command word of a simple command, not an argument or quoted text: `grep "cargo test" f` passes).
 
