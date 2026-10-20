@@ -310,6 +310,69 @@ pub fn wait_for_flock_waiter(path: &Path) {
     });
 }
 
+/// What [`answer_reads`] does after answering a read.
+pub enum Next {
+    /// Put the next FIFO in the file's place: the next read is answered too.
+    Hold,
+    /// Stop answering: the answer has put in the file's place what later reads find.
+    Done,
+}
+
+/// Holds `target`, a file the code under test reads, so that the test is there for each read of it: the rendezvous
+/// for "after the first read failed", where a sleep would be luck. Runs `run` and returns its result with the number
+/// of reads answered.
+///
+/// `target` is replaced by a FIFO (the caller has kept a copy of what it held, to put back). A read of a FIFO blocks
+/// in `open(2)` until a writer opens it: that is the observation of the read. Then `answer(n, file)` runs for the
+/// `n`th read (from 0) with the reader still blocked in the file's other end: what it writes is what the reader
+/// reads, and the reader reads the end of the file once `answer` returns and the file is dropped. After the answer
+/// [`Next::Hold`] puts the next FIFO in place **before** the reader is released, so a retry reads a file of its own
+/// and is answered in its turn: every FIFO is read once, which is what makes the count exact. At most `rounds` reads
+/// are answered; a read after the last gets an empty regular file. The FIFOs are `<target>.held-<n>`.
+pub fn answer_reads<R: Send>(
+    target: &Path,
+    rounds: usize,
+    mut answer: impl FnMut(usize, &mut fs::File) -> Next + Send,
+    run: impl FnOnce() -> R,
+) -> (R, usize) {
+    let held = |n: usize| target.with_extension(format!("held-{n}"));
+    for n in 0..rounds {
+        nix::unistd::mkfifo(&held(n), nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR).expect("make a FIFO");
+    }
+    fs::rename(held(0), target).expect("put the first FIFO in place");
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|s| {
+        let served = s.spawn(|| {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut n = 0;
+            while n < rounds && !stop.load(Ordering::SeqCst) {
+                // O_NONBLOCK: the open of a FIFO's write end fails (ENXIO) until a reader has the other end open.
+                let open = || fs::OpenOptions::new().write(true).custom_flags(nix::fcntl::OFlag::O_NONBLOCK.bits()).open(target).ok();
+                let Some(mut file) = poll(Duration::from_millis(100), open) else { continue };
+                let next = answer(n, &mut file);
+                n += 1;
+                if matches!(next, Next::Done) {
+                    break;
+                }
+                if n < rounds {
+                    fs::rename(held(n), target).expect("put the next FIFO in place");
+                } else {
+                    fs::write(held(n), "").expect("write the empty file");
+                    fs::rename(held(n), target).expect("put the empty file in place");
+                }
+            }
+            n
+        });
+        let result = run();
+        stop.store(true, Ordering::SeqCst);
+        let served = served.join().expect("the thread that answers the reads");
+        for n in 0..=rounds {
+            let _ = fs::remove_file(held(n));
+        }
+        (result, served)
+    })
+}
+
 /// Waits until `ready` gives a value, at most `timeout`. `Err(state)` is "not yet" and says
 /// where it is; the last `state` is in the panic message.
 pub fn wait_some<T>(what: &str, timeout: Duration, mut ready: impl FnMut() -> Result<T, String>) -> T {
