@@ -29,6 +29,8 @@ export class Run {
   /** Error codes already delivered since the last valid Event (commands.md §15.2, "The follower ends"). */
   followerReported = new Set<string>();
   failureLineThisRun = false;
+  /** `installedIdentity()` when the current follower process started. */
+  startedWith: string | undefined;
   /** Events are handled one after the other, in id order, though a handler may wait for `cpd`. */
   tail: Promise<void> = Promise.resolve();
   /** True while a failed read of Context updates is reported and no read has succeeded since (§15.7 "Failure"). */

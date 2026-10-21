@@ -32,6 +32,11 @@ async function follow() {
       let id;
       try { id = JSON.parse(line).id; } catch {}
       if (Number.isSafeInteger(id) && id <= since) continue;
+      // opt-in \`id-less-once\`: an id-less line is printed by the first follower to reach it only (a new binary that no longer fails)
+      if (id === undefined && read("id-less-once") !== undefined) {
+        if ((read("id-less-printed") || "").split("\\n").includes(line)) continue;
+        fs.appendFileSync(path.join(dir, "id-less-printed"), line + "\\n");
+      }
       process.stdout.write(line + "\\n");
     }
   };
