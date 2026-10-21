@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,20 @@ export function appendLog(path: string, line: string, now: () => Date = () => ne
 
 /** The adapter directory: the parent of `pi/lib/`, which is what `scripts/install-cpd.sh` replaces as a whole. */
 export const adapterDir = (): string => dirname(dirname(fileURLToPath(import.meta.url)));
+
+/**
+ * The path to watch (contract §3.7 "The adapter swap"): the `pi` link beside the running `pi.<id>` directory, which the install repoints,
+ * so a repointed link is a change of identity and a pruned old directory is not. Without such a link (a checkout), the directory itself.
+ */
+export function adapterPath(dir: string = adapterDir()): string {
+  const link = join(dirname(dir), "pi");
+  try {
+    if (lstatSync(link).isSymbolicLink()) return link;
+  } catch {
+    // no link beside it
+  }
+  return dir;
+}
 
 /** `(dev, ino, mtimeMs)` of the directory; `undefined` when it does not exist (the install's `rm` → `mv` window, not a change). */
 export function identityOf(dir: string): string | undefined {

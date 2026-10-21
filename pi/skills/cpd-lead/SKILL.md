@@ -56,7 +56,7 @@ Nothing from the Context is pushed into your turns. Read new records yourself, o
 Your Context may have a Manager: the Context's higher-level Lead, which splits the User's requirements into Plans and started yours with its brief. It may message you: the message arrives as `Message from <name> (<id>): <text>` (Event `session-message`) and starts no turn: it is in your context at your next turn. Answer it or report to it with:
 
 ```
-cpd session send <manager-id> "<text>"
+cpd session send <manager-id> "<text>" --unblocks "<reason>"
 ```
 
 Find its id with `cpd session list --role manager --context <c>` (`<c>` is your Plan's Context, in `cpd plan show`; `--context` is only a filter here). The Manager never answers for the User: you still ask the User directly, and a message from the Manager is not the User's decision unless it quotes one.
