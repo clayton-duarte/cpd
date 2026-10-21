@@ -18,6 +18,7 @@ mod tui_read;
 mod tui;
 mod tui_runner;
 mod tui_tree;
+mod tui_tree_archive_manager;
 mod tui_tree_asleep;
 mod tui_widgets;
 mod tui_titles;
