@@ -18,6 +18,7 @@ export class Facts {
   reply = false;
   private opened: Open[] = [];
   private prompts = 0;
+  private own = 0;
 
   open(key: string, label: string, kind: Kind): boolean {
     if (this.opened.some((o) => o.key === key)) return false;
@@ -32,8 +33,19 @@ export class Facts {
     return true;
   }
 
+  /** Runs one of the adapter's own prompts (the plan review's select and editor): the `ui_prompt_start` and `ui_prompt_end` that arrive meanwhile change no reason, the plan-review reason stands for it. */
+  async ownPrompt<T>(show: () => Promise<T>): Promise<T> {
+    this.own += 1;
+    try {
+      return await show();
+    } finally {
+      this.own -= 1;
+    }
+  }
+
   /** pi's `ui_prompt_start` (`active: true`) and `ui_prompt_end`: one reason, `dialog`, while any prompt is open. An end with nothing open changes nothing. */
   prompt(active: boolean): boolean {
+    if (this.own > 0) return false;
     if (active) {
       this.prompts += 1;
       return this.prompts === 1 && this.open("ui_prompt", "dialog", "human");

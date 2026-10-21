@@ -48,7 +48,7 @@ export async function runDialog(host: Host, r: Run, review: string, title: strin
   const waiting = () => host.run === r && !controller.signal.aborted && r.reviews.get(review)?.status === "pending";
   try {
     while (waiting()) {
-      const choice = await ui.select(title === undefined ? `Plan review ${review}` : `Plan review ${review}: ${title}`, OPTIONS, { signal: controller.signal });
+      const choice = await r.facts.ownPrompt(() => ui.select(title === undefined ? `Plan review ${review}` : `Plan review ${review}: ${title}`, OPTIONS, { signal: controller.signal }));
       if (!waiting()) return;
       if (choice === undefined) {
         ui.notify(stillWaiting(review));
@@ -56,7 +56,7 @@ export async function runDialog(host: Host, r: Run, review: string, title: strin
       }
       if (choice === APPROVE) await answers.decide(true, undefined);
       else if (choice === CHANGE) {
-        const note = await ui.editor("What should change?");
+        const note = await r.facts.ownPrompt(() => ui.editor("What should change?"));
         if (!waiting()) return; // decided elsewhere while the editor was open: its late note is ignored
         if (note === undefined || note.trim() === "") continue;
         await answers.decide(false, note);
