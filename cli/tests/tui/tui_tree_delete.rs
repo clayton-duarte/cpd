@@ -86,7 +86,13 @@ fn populate(env: &TestEnv) {
 
 /// `nap`'s Lead is asleep (contract §2.2, hs-d515): a timestamp of the Session, the Plan not archived. Needs the sleep PR's column.
 fn put_to_sleep(env: &TestEnv) {
-    sql(&mut open(env), "UPDATE sessions SET asleep_at = '2026-02-01T00:00:00.000Z' WHERE id = 'l-nap';");
+    // with the `session-asleep` Event that engine E13 writes in the same transaction (contract §3.7): it is what the tree follows
+    sql(
+        &mut open(env),
+        "UPDATE sessions SET asleep_at = '2026-02-01T00:00:00.000Z' WHERE id = 'l-nap';
+         INSERT INTO events (txn, at, kind, context, plan, session, text, data)
+         VALUES (cpd_txn(), '2026-02-01T00:00:00.000Z', 'session-asleep', 'alpha', 'nap', 'l-nap', 'Session nap is asleep and out of view.', '{}');",
+    );
 }
 
 // ---------- the pane ----------
@@ -225,9 +231,13 @@ fn delete_item_only_on_archived_or_asleep_rows() {
     assert!(has_item(&archived, "Unarchive") && has_item(&archived, "Delete"), "an archived Plan has Delete: {archived:?}");
     pane.close_menu();
     put_to_sleep(&env);
-    let asleep = pane.menu_of("nap");
+    // the tree reads the Event a moment after the write: a menu opened before that is of the old snapshot, so try again
+    let asleep = common::wait_some("the Delete item of the asleep Plan", common::WAIT, || {
+        let menu = pane.menu_of("nap");
+        pane.close_menu();
+        if has_item(&menu, "Delete") { Ok(menu) } else { Err(format!("the menu is {menu:?}")) }
+    });
     assert!(has_item(&asleep, "Delete"), "an asleep Plan has Delete: {asleep:?}");
-    pane.close_menu();
     assert!(calls(&env).is_empty(), "opening menus runs nothing: {:?}", calls(&env));
 }
 
