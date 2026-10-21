@@ -539,3 +539,65 @@ test("the tool: `already` with no pending entry opens the review in chat; with o
   assert.equal(summaries(f).length, 1);
   assert.equal(nSelects(f), 1);
 });
+
+// hs-d524: one ask, one Inbox item. The review's own dialogs open no `dialog` reason.
+const PROMPT = { reason: "ui_prompt", kind: "select" };
+const dialogCalls = (f: Fixture) => f.argvs().filter((a) => a[1] === "state" && a.includes("dialog"));
+
+test("hs-d524: the review's select opens no dialog reason; the state stays blocked on cpd: plan review", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await opens(f);
+  await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+  await f.pi.fire("ui_prompt_start", PROMPT);
+  await f.drain();
+  assert.equal(stateCalls(f).at(-1), REVIEW_LABEL);
+  assert.deepEqual(dialogCalls(f), []);
+  assert.equal(stateCalls(f).includes("blocked:dialog"), false);
+});
+
+test("hs-d524: the review's Change editor opens no dialog reason", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  const d = await opens(f);
+  d.answer("Change");
+  await waitFor("the editor", () => f.pi.openDialog("editor"));
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "editor" });
+  await f.drain();
+  assert.equal(stateCalls(f).at(-1), REVIEW_LABEL);
+  assert.deepEqual(dialogCalls(f), []);
+});
+
+test("hs-d524: the prompt end after an answer changes no reason", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  const d = await opens(f);
+  await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+  await f.pi.fire("ui_prompt_start", PROMPT);
+  f.respond("plan-decide", { ok: true, review: { id: "r1", status: "approved" }, current: true, next: "cpd plan lock" });
+  d.answer("Approve");
+  await waitFor("the decision message", () => decisions(f).length === 1);
+  await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
+  const before = stateCalls(f);
+  await f.pi.fire("ui_prompt_end");
+  await f.drain();
+  assert.deepEqual(stateCalls(f), before);
+  assert.deepEqual(dialogCalls(f), []);
+});
+
+test("hs-d524: a prompt with no review dialog open still opens the dialog reason", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  const d = await opens(f);
+  await f.pi.fire("ui_prompt_start", PROMPT); // the review's own select: no reason
+  f.respond("plan-decide", { ok: true, review: { id: "r1", status: "approved" }, current: true, next: "cpd plan lock" });
+  d.answer("Approve");
+  await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle");
+  await f.pi.fire("ui_prompt_end");
+  await f.drain();
+  assert.deepEqual(dialogCalls(f), [], "the review's prompt opened no dialog reason");
+  // no review dialog is open any more (the counter is back to 0): another prompt opens `dialog`
+  await f.pi.fire("ui_prompt_start", { reason: "ui_prompt", kind: "custom" });
+  await waitFor("blocked dialog", () => stateCalls(f).at(-1) === "blocked:dialog");
+  assert.equal(dialogCalls(f).length, 1);
+});
