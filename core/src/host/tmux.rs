@@ -89,12 +89,12 @@ pub const OPT_HISTORY: &str = "@cpd_history";
 /// puts the left cap at column 3 from the pane's edge (hs-d478, checked on a
 /// private server).
 pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}#{@cpd_title}#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}\
 #{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
 #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
-#[noreverse]\u{e0b4}}}}";
+#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4}}}}";
 
 /// What the supervising hooks run when the engine's pane died or its window is
 /// gone (contract §6.6): `watch --ensure --wait`, which starts the engine again
@@ -150,12 +150,12 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     &["set", "-g", "pane-border-lines", "heavy"],
     &["set", "-g", "pane-border-format", BORDER_FORMAT],
     // Unfocused borders are grey like their titles (hs-d489).
-    &["set", "-g", "pane-border-style", "fg=colour8"],
+    &["set", "-g", "pane-border-style", "fg=colour7"],
     &["set", "-g", "pane-active-border-style", "fg=blue"],
     // tmux 3.8 greys popups and menus by default (bg=themedarkgrey); the cockpit's dialogs keep the terminal's own
-    // background (User, hs-d353). `-q`: an older tmux does not know them.
+    // background (User, hs-d353); the popup frame is colour 7, a draggable line (§6.1.1 R4). `-q`: an older tmux does not know them.
     &["set", "-gq", "popup-style", "default"],
-    &["set", "-gq", "popup-border-style", "default"],
+    &["set", "-gq", "popup-border-style", "fg=colour7"],
     &["set", "-gq", "menu-style", "default"],
     &["set", "-g", "remain-on-exit", "on"],
     &["set", "-g", "set-titles", "on"],
@@ -203,6 +203,18 @@ macro_rules! long_fits {
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
 macro_rules! version_width { () => { "#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}" }; }
 // A join: one grey `─`, outside the click ranges.
+// An interactive pill (R2): a click range, bg 15, text 0, caps 15.
+macro_rules! button {
+    ($range:literal, $glyph:expr) => {
+        concat!("#[range=user|", $range, "]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]", $glyph, "#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]")
+    };
+}
+// A non-interactive pill (R1): bg 8, text 7, caps 8.
+macro_rules! pill {
+    ($($text:expr),+) => {
+        concat!("#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]", $($text,)+ "#[fg=colour8]#[bg=default]\u{e0b4}#[default]")
+    };
+}
 macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 
 /// The StatusBar (contract §6.1, hs-d479): the cockpit session's `status-format[0]`,
@@ -215,41 +227,38 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// Then the `\u{2500}` fill, `#{R:\u{2500},n}`, over the free width: `#{client_width}` minus
 /// the left group's 12, the preview pill and the right group in the form drawn (the
 /// engine's width plus the closing `\u{2500}`). At the right, each its own pill on
-/// `bg=colour236`, joined by a single `\u{2500}`: the Inbox counter the engine keeps in
+/// bg 8 (text 7), joined by a single `\u{2500}`: the Inbox counter the engine keeps in
 /// `@cpd_inbox`, then the workers counts (User, hs-d198): the long form in
 /// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
 /// least `@cpd_workers_width` plus 14), else the short form in `@cpd_workers_short`,
 /// whose width is `@cpd_workers_short_width`.
 ///
-/// While `@cpd_preview` is set (`scripts/preview-tui.sh on`, hs-n264), a yellow
+/// While `@cpd_preview` is set (`scripts/preview-tui.sh on`, hs-n264), a
 /// pill `preview: <value>` follows the buttons, joined by a single `\u{2500}`, and the
 /// fill is shorter by its width (`#{n:@cpd_preview}` + 12: the join, two caps and
 /// `preview: `). Styles inside a conditional are one attribute per `#[…]`, because a
 /// comma there would split the branch.
 ///
 /// While `@cpd_version` is set (`cpd tui` sets it to `cpd --version`'s `version`), a third
-/// right-hand pill, the version in dim text, follows the workers pill, joined by a single
+/// right-hand pill, the version, follows the workers pill, joined by a single
 /// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
 ///
-/// `push-default` makes `bg=colour236` the pill's default, so that the `#[default]`
-/// the engine's texts end their coloured parts with does not end the pill.
+/// Colours follow §6.1.1 (hs-d530): buttons bg 15 text 0, the other pills bg 8 text 7, lines colour 8.
 pub const STATUS_FORMAT: &str = concat!(
     join!(),
-    "#[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]", reset_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
+    button!("reset", reset_glyph!()),
     join!(),
-    "#[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]", legend_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
+    button!("legend", legend_glyph!()),
     join!(),
-    "#[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]", logs_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
-    "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}",
+    button!("logs", logs_glyph!()),
+    "#{?#{@cpd_preview},#[fg=colour8]\u{2500}", pill!("preview: #{@cpd_preview}"), ",}",
     "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},",
     "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}",
     "#[default]#[align=right]",
-    "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]",
+    pill!("#{@cpd_inbox}"),
     join!(),
-    "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]",
-    "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}",
-    "#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]",
-    "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour236]\u{e0b6}#[fg=colour8]#[bg=colour236]#{@cpd_version}#[fg=colour236]#[bg=default]\u{e0b4}#[default],}",
+    pill!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}"),
+    "#{?#{@cpd_version},#[fg=colour8]\u{2500}", pill!("#{@cpd_version}"), ",}",
     join!()
 );
 
@@ -976,15 +985,15 @@ mod tests {
     /// The version pill (§6.1): last on the right, after the workers pill, one `─` join, then the closing `─`, only while `@cpd_version` is set.
     #[test]
     fn the_version_pill_is_last_on_the_right_and_only_while_the_option_is_set() {
-        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour236]\u{e0b6}";
+        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}";
         let at = STATUS_FORMAT.find(pill).unwrap_or_else(|| panic!("no version pill in {STATUS_FORMAT}"));
         let workers = STATUS_FORMAT.rfind("#{@cpd_workers_short}}").expect("the workers pill");
         assert!(at > workers, "the version pill follows the workers pill: {STATUS_FORMAT}");
         let tail = &STATUS_FORMAT[at..];
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
-        assert!(tail.contains("fg=colour8") && tail.contains("bg=colour236") && tail.contains("\u{e0b4}"), "{tail}");
+        assert!(tail.contains("fg=colour8") && tail.contains("bg=colour8") && tail.contains("\u{e0b4}"), "{tail}");
         assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
-        assert_eq!(STATUS_FORMAT.matches("bg=colour236]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
+        assert_eq!(STATUS_FORMAT.matches("bg=colour8]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
     }
 
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.

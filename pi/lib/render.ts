@@ -150,9 +150,10 @@ type Rows = { head: (width: number) => string[]; body: (width: number) => string
 function rowsOf(summary: string, content: string, theme: Theme): Rows {
   const muted = (text: string) => theme.fg("muted", text);
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${muted(`${TOP}${CAP_LEFT}`)}`;
+  const lead = `${MARGIN}${muted(TOP)}\x1b[90m${CAP_LEFT}`;
   const indent = " ".repeat(visibleWidth(lead));
-  const pill = (line: string) => `\x1b[7m${muted(line)}\x1b[27m`;
+  // contract §6.1.1 R1: background 8, text 7, caps 8, by explicit SGR (pi's theme has no numbered colours).
+  const pill = (line: string) => `\x1b[100m\x1b[37m${line}\x1b[49m`;
   const rail = `${MARGIN}${muted(RAIL)}`;
   return {
     head: (width) => {
@@ -160,7 +161,7 @@ function rowsOf(summary: string, content: string, theme: Theme): Rows {
       let lines = hardWrap(`cpd ${summary}`, room);
       // The closing cap needs its own cell on the last row.
       if (visibleWidth(lines[lines.length - 1]) + visibleWidth(CAP_RIGHT) > room) lines = hardWrap(`cpd ${summary}`, room - visibleWidth(CAP_RIGHT));
-      return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? muted(CAP_RIGHT) : ""}`);
+      return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? `\x1b[90m${CAP_RIGHT}\x1b[39m` : ""}`);
     },
     body: text === "" ? () => [] : prefixedText(text, rail),
     toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE}${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`)}`],
