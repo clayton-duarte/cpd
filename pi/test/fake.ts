@@ -168,6 +168,13 @@ export class Fixture {
     return p;
   }
 
+  summaryFile(plan: string, review: string, content: string): string {
+    const p = join(this.cpdHome, "run", plan, `summary-${review}.md`);
+    mkdirSync(join(this.cpdHome, "run", plan), { recursive: true });
+    writeFileSync(p, content);
+    return p;
+  }
+
   calls(): Call[] {
     const f = join(this.dir, "calls.jsonl");
     return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
@@ -286,6 +293,8 @@ export const planShow = (over: Record<string, unknown> = {}) => ({ ok: true, pla
 export const ev = (id: number, kind: string, over: Record<string, unknown> = {}) => ({
   id, at: "2026-10-14T21:41:02.114Z", kind, context: "ctx", plan: "p1", job: null, attempt: null, session: null, text: `text of ${kind} ${id}`, data: {}, ...over,
 });
+
+export type FakeDialog = { kind: "select" | "editor"; title: string; options: string[] | undefined; signal: AbortSignal | undefined; settled: boolean; answer(value: string | undefined): void };
 
 export type Sent = { message: Message; options: SendOptions };
 
@@ -414,6 +423,30 @@ export class FakePi implements PiApi {
   /** What `ctx.isProjectTrusted()` answers. */
   trusted = false;
 
+  /** The dialogs the adapter opened with `ctx.ui.select` and `ctx.ui.editor`, in order. Like pi's, a select with a `signal` that aborts answers `undefined`; an editor has no signal. */
+  readonly dialogs: FakeDialog[] = [];
+
+  /** The oldest dialog of `kind` still waiting for an answer. */
+  openDialog(kind: "select" | "editor"): FakeDialog | undefined {
+    return this.dialogs.find((d) => d.kind === kind && !d.settled);
+  }
+
+  private dialog(kind: "select" | "editor", title: string, options: string[] | undefined, signal: AbortSignal | undefined): Promise<string | undefined> {
+    return new Promise((resolve) => {
+      const d: FakeDialog = {
+        kind, title, options, signal, settled: false,
+        answer: (value) => {
+          if (d.settled) return;
+          d.settled = true;
+          resolve(value);
+        },
+      };
+      this.dialogs.push(d);
+      if (signal?.aborted) d.answer(undefined);
+      else signal?.addEventListener("abort", () => d.answer(undefined), { once: true });
+    });
+  }
+
   /** The models `pi.setModel` was called with, in order (commands.md §15.3 `session-retiered`), and the levels `pi.setThinkingLevel` was called with. */
   readonly modelsSet: { provider: string; id: string }[] = [];
   readonly thinkingSet: string[] = [];
@@ -432,15 +465,21 @@ export class FakePi implements PiApi {
   }
 
   ctx(): Ctx {
+    const ui = {
+      notify: (m: string, level?: string) => {
+        this.notices.push(m);
+        if (level === "error") this.errorNotices.push(m);
+      },
+      getEditorText: () => this.editorText,
+      select: (title: string, options: string[], opts?: { signal?: AbortSignal }) => this.dialog("select", title, options, opts?.signal),
+      editor: (title: string) => this.dialog("editor", title, undefined, undefined),
+    };
     // `modelRegistry` is what the adapter reads to find a model (commands.md §15.3 `session-retiered`): pi's `ModelRegistry.find`.
     const ctx: Ctx & { modelRegistry: { find(provider: string, id: string): { provider: string; id: string } | undefined } } = {
       mode: this.mode,
       cwd: join(tmpdir(), "pi-test-no-such-project"),
       isProjectTrusted: () => this.trusted,
-      ui: { notify: (m, level) => {
-          this.notices.push(m);
-          if (level === "error") this.errorNotices.push(m);
-        }, getEditorText: () => this.editorText },
+      ui,
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]> },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,

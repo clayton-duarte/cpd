@@ -41,7 +41,7 @@ impl OpenPlaceholder<'_> {
 
 /// Inline text made safe for GFM: no HTML tags, no footnote syntax. Code
 /// spans (`` `…` `` on one line) are left alone.
-fn inline(text: &str) -> String {
+pub(super) fn inline(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
@@ -104,7 +104,7 @@ fn fence_marker(line: &str) -> Option<String> {
     (run >= 3).then(|| c.to_string().repeat(run))
 }
 
-fn cell(text: &str) -> String {
+pub(super) fn cell(text: &str) -> String {
     let lines: Vec<String> = inline(text).split('\n').map(|l| l.trim().to_owned()).collect();
     lines.join(" ").replace('|', "\\|")
 }

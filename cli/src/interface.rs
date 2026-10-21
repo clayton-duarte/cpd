@@ -39,6 +39,7 @@ pub const TABLE: &[Entry] = &[
     ("plan phase", &[Lead], false),
     ("plan render", &[Lead], false),
     ("plan review", &[Lead], false),
+    ("plan outline", &[Lead], false),
     ("plan lock", &[Lead], false),
     ("plan rename", &[], true),
     ("plan archive", &[], true),

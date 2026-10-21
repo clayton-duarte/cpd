@@ -10,12 +10,13 @@ import { policySection } from "./policy.ts";
 import { followerHooks } from "./handle.ts";
 import type { Host } from "./host.ts";
 import type { Ctx, ModelCtx } from "./pi.ts";
-import { ENTRY_TYPE, highestReview, REVIEW_LABEL, reviewsFromEntries } from "./plan-review.ts";
+import { ENTRY_TYPE, highestReview, plannotatorId, REVIEW_LABEL, reviewsFromEntries } from "./plan-review.ts";
+import { registerPlanReviewCommand } from "./plan-review-command.ts";
 import { createTracker, type Tracker } from "./pntrack.ts";
 import { parseResult } from "./plannotator.ts";
 import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage } from "./reload.ts";
 import { guardOf } from "./reload-command.ts";
-import { decide, QUESTION_LABEL, recover, registerTool } from "./review.ts";
+import { decide, QUESTION_LABEL, recover, registerTool, showDialog } from "./review.ts";
 import { Run, parseSession, type SessionInfo } from "./run.ts";
 import { Facts } from "./state.ts";
 import { registerUpdates } from "./turns.ts";
@@ -144,25 +145,39 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   if (info.role === "manager") registerUpdates(host);
 
   // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
+  let chatToReopen: { reviews: string[]; title: string | undefined } = { reviews: [], title: undefined };
   if (info.role !== "manager" && info.planLead && info.plan !== null) {
     const plan = info.plan;
     const folded = reviewsFromEntries(entries, plan);
     if (folded.invalid > 0) host.deliver("session entries", new CpdError("entry_invalid", `${folded.invalid} ${ENTRY_TYPE} entries of this session do not parse and were skipped`));
     r.reviews = folded.reviews;
     let latest: string | undefined = highestReview(r.reviews.keys()); // stands in when `plan show` fails (§15.5 "Latest only")
+    let latestStatus: unknown; // what `plan show` says of it; unknown when it failed
+    let latestTitle: string | undefined;
     try {
       const show = await host.call(["plan", "show", "--plan", plan]);
       latest = isObject(show.review) && typeof show.review.id === "string" ? show.review.id : undefined;
+      latestStatus = isObject(show.review) ? show.review.status : undefined;
+      latestTitle = isObject(show.review) && typeof show.review.title === "string" ? show.review.title : undefined;
       if (Array.isArray(show.escalations)) {
         for (const q of show.escalations) if (isObject(q) && typeof q.id === "string") facts.open(`escalation:${q.id}`, QUESTION_LABEL, "agent");
       }
     } catch (e) {
       host.deliver("plan show", e);
     }
+    // A chat review that cpd reports decided opens nothing: its Event, replayed from the cursor, is "Deciding elsewhere" (§15.5 "Recovery").
+    const reopen: string[] = [];
     for (const entry of r.reviews.values()) {
-      if (entry.status === "pending" && entry.review === latest) facts.open(`plan-review:${entry.review}`, REVIEW_LABEL, "human");
+      if (entry.status !== "pending" || entry.review !== latest) continue;
+      if (entry.surface === "chat") {
+        if (latestStatus !== undefined && latestStatus !== "pending") continue;
+        reopen.push(entry.review);
+      }
+      facts.open(`plan-review:${entry.review}`, REVIEW_LABEL, "human");
     }
+    chatToReopen = { reviews: reopen, title: latestTitle };
     registerTool(host);
+    registerPlanReviewCommand(host);
   }
   if (host.run !== r) return;
   host.refresh(r);
@@ -203,11 +218,14 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     pi.events.on("plannotator:review-result", (data) => {
       const result = parseResult(data);
       if (!result || host.run !== r) return;
-      const entry = [...r.reviews.values()].find((e) => e.status === "pending" && e.plannotator_id === result.reviewId);
+      const entry = [...r.reviews.values()].find((e) => e.status === "pending" && plannotatorId(e) === result.reviewId);
       if (entry) void decide(host, r, entry, result.approved, result.feedback).catch((e) => host.deliver("plan decision", e));
     }),
   );
-  for (const entry of r.reviews.values()) if (entry.status === "pending") void recover(host, r, entry.review).catch((e) => host.deliver("plan review recovery", e));
+  for (const entry of r.reviews.values()) {
+    if (entry.status === "pending" && entry.surface !== "chat") void recover(host, r, entry.review).catch((e) => host.deliver("plan review recovery", e));
+  }
+  for (const review of chatToReopen.reviews) showDialog(host, r, review, chatToReopen.title);
 }
 
 export async function stop(host: Host): Promise<void> {

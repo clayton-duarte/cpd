@@ -1543,6 +1543,7 @@ fn the_approval_of_a_review_queues_the_update_job_for_a_fix_draft_of_an_open_pr(
         })
     };
     assert_eq!(update_jobs(), Vec::<(String, String)>::new(), "a draft queues nothing");
+    fx.env.outline_for_review("pay");
     let review = fx.env.cpd(&["plan", "review", "--plan", "pay", "--title", "Fixes"]).ok();
 
     fx.env.cpd(&["plan", "decide", review["review"]["id"].as_str().unwrap(), "--approve", "--plan", "pay"]).ok();

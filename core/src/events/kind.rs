@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -80,6 +80,7 @@ kinds! {
     PlanCreated = "plan-created",
     PlanPhase = "plan-phase",
     PlanReview = "plan-review",
+    PlanOutlined = "plan-outlined",
     PlanDone = "plan-done",
     JobAdded = "job-added",
     JobEdited = "job-edited",
@@ -143,6 +144,7 @@ impl Kind {
             PlanCreated => spec([Y, Y, N, N, N], &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
             PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
             PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback", "jobs"]),
+            PlanOutlined => spec([Y, Y, N, N, N], &["replaced"], &[]),
             PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
             JobAdded => spec([Y, Y, Y, N, N], &["pr", "kind", "status", "appended", "tier", "needs", "review", "urgent"], &["by", "reason"]),
             JobEdited => spec([Y, Y, Y, N, N], &["fields"], &[]),
@@ -222,10 +224,10 @@ mod tests {
 
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
-    /// hs-d496 (two review kinds: 8) and hs-d506 (`session-retiered`: 9, the next free number on main).
+    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9) and hs-d502 (`plan-outlined`: 10).
     #[test]
-    fn the_protocol_is_9_with_session_retiered() {
-        assert_eq!(PROTOCOL, 9);
+    fn the_protocol_is_10_with_the_plan_outlined_kind() {
+        assert_eq!(PROTOCOL, 10);
     }
 
     #[test]

@@ -456,7 +456,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 
     // The moved and dropped columns are gone.
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 10);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 11); // `plan-outline` added `outline`
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('context_records') WHERE name = 'plan_repo'"), 0);
 
     // History: one insert per migrated PR (migration 4) and one per back-filled pull request
@@ -2778,8 +2778,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews` and the one of `event-session-retiered`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1])]);
+    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered` and the one of `plan-outline`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------
@@ -3170,4 +3170,44 @@ fn a_store_before_review_waiting_keeps_every_inbox_item_and_id_and_accepts_the_n
     drop(store);
     let err = crate::store::tests::open_named(&home, &NAMED[..waiting]).err().unwrap();
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+}
+
+// ---------- named migration `plan-outline` (§4.4, §4.5; hs-d502) ----------
+
+#[test]
+fn plan_outline_is_additive_and_adds_the_nullable_column_and_its_event_kind() {
+    let migration = NAMED.iter().find(|n| n.name.ends_with("-plan-outline")).expect("the migration plan-outline exists");
+    assert_eq!(migration.compat, Compat::Additive);
+    assert_eq!(migration.sql.lines().next().unwrap(), "-- cpd-migration: additive");
+
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-plan-outline")).collect();
+    let mut before = crate::store::tests::open_named(&home, &earlier).unwrap();
+    write(
+        &mut before,
+        "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('l', 'lead', 'ctx', 'pay', 'L', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pay', 'ctx', 'Pay', 'grounding', 'l', 't');",
+    )
+    .unwrap();
+    assert!(sqlite_message(&refused(&mut before, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'plan-outlined', 'x', '{}')"))
+        .contains("FOREIGN KEY constraint failed"));
+    drop(before);
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    // The Plan is kept, with a null outline, and its history lists the new column.
+    assert_eq!(rows(&mut store, "SELECT id, outline FROM plans"), vec![serde_json::json!(["pay", null])]);
+    write(&mut store, "UPDATE plans SET outline = '{\"goal\":\"G\"}' WHERE id = 'pay'").unwrap();
+    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'plans' AND json_extract(after, '$.outline') IS NOT NULL"), 1);
+    // The outline is a JSON object, or null.
+    for bad in ["not json", "[]", "\"text\""] {
+        let error = refused(&mut store, &format!("UPDATE plans SET outline = '{bad}' WHERE id = 'pay'"));
+        assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{bad}: {error:?}");
+    }
+    write(&mut store, "INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES (cpd_txn(), 't', 'plan-outlined', 'ctx', 'pay', 'x', '{\"replaced\":false}')").unwrap();
+    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
+    assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
 }

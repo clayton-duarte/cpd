@@ -1788,6 +1788,8 @@ fn plan_review_and_plan_lock_refuse_an_impl_draft_that_needs_no_test_job_of_its_
     // A draft is added; it is checked where it stops being one. It needs a Job of its PR that is no test Job.
     job_add(&env, "pl", "w", "S2", &[]).ok();
     add_needing(&env, "pl", "i", "impl", &["w"], "repo").ok();
+    // The outline review needs first (hs-d502, #205), so the refusal tested is the shape's.
+    env.outline_for_review("pl");
     let writes = (count(&env, "txns"), count(&env, "events"));
     let e = refused(&review(&env, "pl"), "test_job_required", 3);
     assert_eq!(e["details"]["jobs"], json!(["i"]));
@@ -1816,6 +1818,8 @@ fn plan_review_and_plan_lock_refuse_a_tdd_pr_with_no_test_or_no_impl_job() {
     add_needing(&env, "pl", "free-w", "work", &[], "repo").ok();
     // `api` has a docs Job only: it lacks both.
     add_kind(&env, "pl", "api-d", "docs", &spec_file(&env), "api").ok();
+    // The outline review needs first (hs-d502, #205), so the refusal tested is the shape's.
+    env.outline_for_review("pl");
     let writes = (count(&env, "txns"), count(&env, "events"));
     let e = refused(&review(&env, "pl"), "shape_incomplete", 3);
     assert_eq!((&e["details"]["pr"], &e["details"]["missing"]), (&json!("api"), &json!(["test", "impl"])));

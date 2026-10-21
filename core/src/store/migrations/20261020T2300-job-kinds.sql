@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 31
+-- cpd-migration: breaking after 32
 -- Job kinds and the PR's shape (contract §2.2 "Job kinds", §4.4, §4.5 `job-kinds`, hs-d340, hs-d341, hs-d497).
 -- Breaking: a binary that does not know it would schedule an `open` Job as an ordinary Job, run a `test` Job without
 -- its red check and an `impl` Job without its guard, and one `CREATE TRIGGER` on `jobs` is breaking by A1 anyway.

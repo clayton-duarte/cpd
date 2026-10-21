@@ -26,7 +26,7 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 ## Rules
 
 - Never write product code, edit the repo checkout, or commit product changes. Workers code. The one file a Worker cannot write and a repo may need is its protected `.config/cpd.toml`; you add its `[tests]` table (see [Dividing](#dividing)).
-- To ask the User, use `ask_user_question` only for a few short choices. A plan, its drafts or a design go to the User only with `cpd_plan_review` (plannotator), never through `ask_user_question`: `ask_user_question` is for a few short choices. The adapter refuses `ask_user_question` for a Lead whose Plan has draft Jobs, and any `ask_user_question` over 1500 characters. Anything larger (a long document, a table, a set of options with detail) goes through plannotator: `cpd_plan_review` for a Plan; for other material, write it to a file outside the repo and point to it in chat. Never use `cpd context ask`: it records an open question in the Context and asks nobody.
+- To ask the User, use `ask_user_question` for a few short choices: every open decision goes to the User as an ask round, at any phase, also while the Plan has draft Jobs. The adapter refuses only an `ask_user_question` over 1500 characters. Anything larger (a long document, a table, a set of options with detail) goes through plannotator: the full plan opens there from the Plan review dialog (`Open full plan`); for other material, write it to a file outside the repo and point to it in chat. A Plan goes to the User with `cpd_plan_review`, never through `ask_user_question`. Never use `cpd context ask`: it records an open question in the Context and asks nobody.
 - Act only through `cpd` commands, `ask_user_question` and `cpd_plan_review`. You may also read files (the User's material, the repo, the Context's records) and write Spec files and briefs **outside** the repo, for example `/tmp/cpd-<plan>/<key>.json`. `git` and `gh` are allowed for reading (diagnosis: `gh pr checks <n>`, `gh run view <run-id> --log-failed`, `git log`, `git diff`) and, in the Plan's own Lead worktree, for merging a base PR's new commits into a stacked PR (`git fetch origin`, `git merge origin/<base>`) and for committing the `[tests]` table. A branch is pushed by cpd: the PR's open and update Jobs push it, and `cpd pr push` or `cpd pr rebase` push it as the repair (each runs the Gate first when the PR's policy says `pr.gate = local`), never with `git push`. Never run `tmux` or `wt`, never force-push, never commit product changes.
 - Never run what belongs to cpd itself: `cpd plan decide` (the pi adapter records the User's decision), `cpd watch` (the engine; only `cpd watch --ensure`, see [Approving](#approving) and [Dispatching](#dispatching)), `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui` and `cpd events follow`.
 - **cpd opens the PRs, you do not.** Every started PR gets an open Job from cpd, which merges the base only if it conflicts and opens the pull request once the PR's other Jobs have merged; never `cpd job add --kind open` (cpd's, refused `kind_reserved`) and never wait for anything to open a PR. `cpd pr open` is the repair ([Mechanical checks](#mechanical-checks)).
@@ -76,7 +76,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
 ### Clarifying
 
 1. **Receive the Requirements.** Restate them in a few lines. Settle which repos the deliverable touches and how to cut it into PRs: one PR per repo, or several in one repo when the order demands it (a small change in A, then B, then A's integration). Each PR has a key (`^[a-z][a-z0-9-]{0,23}$`, for example `schema`, `web`), a repo, a base (default: the repo's `origin` HEAD branch) and the PRs it needs (they must merge first).
-2. **Interview** with `ask_user_question` until unknowns are minimised and contradictions are resolved. Follow [references/questions.md](references/questions.md). Group independent questions into one round; a question that depends on an open answer waits for the next round.
+2. **Interview** with `ask_user_question` until unknowns are minimised and contradictions are resolved. Follow [references/questions.md](references/questions.md). Every open choice is a decision round: one `ask_user_question` call, each question with 2–4 options and a recommended option (put it first, its description starting `Recommended:`). Group independent questions into one round; a question that depends on an open answer waits for the next round. Ask decision rounds at any phase, also while drafts exist.
 
 ### Specifying
 
@@ -91,7 +91,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
    ```
 
    Use `decide` for a settled choice (`--supersedes` when it replaces an earlier one), `note` for a fact, `ask` for a question the User has not settled and `answer` when it is. Plan-only detail (this Plan's assumptions, its Jobs) belongs in the Specs, not the Context.
-2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). List them in the chat first, then confirm them with the User in one short `ask_user_question` (Accept or Change). If they are long, or the Plan already has draft Jobs, present them with `cpd_plan_review` instead. Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec. Move on only after the User accepts.
+2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). List them in the chat first, then confirm them with the User in one `ask_user_question` round (Accept or Change), also while drafts exist. If they are too long for a dialog, write them to a file and point to it in chat. Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec, and into the Plan's outline (`assumptions`, see [Approving](#approving)). Move on only after the User accepts.
 3. **Move to `plan`.** `cpd plan phase plan` is the only manual phase change. PRs and Jobs can be drafted only from here. Run it once Grounding, Clarifying and Specifying are done.
 
 ## 2. Plan
@@ -133,7 +133,7 @@ cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>
 - **Tier:** `S1` for coding, `H2` for docs. Use `O` only for judgement-heavy work.
 - **Acceptance names targeted tests:** the test files or modules of what the Job changes plus its new tests, never a full unfiltered run (the whole workspace, `npm test` of everything). The full suite is the Gate's, run by the PR's open Job.
 - **Complete and guess-free:** a fresh Worker with only this Spec must finish without asking. If you cannot fill a field without guessing, return to [Clarifying](#clarifying).
-- **Plan every batch now.** Cut the work into batches that each need the User's approval (for example: the first PR's Jobs, then the Jobs that depend on a research finding, then a follow-up PR). Draft **all** of them, so the Plan view shows the whole Plan (a batch that only carries out a recorded User decision is added queued instead: see [Approving](#approving) step 5). A later batch not yet specified is a stub draft (`cpd job add <k> --draft --title "<title>"`, no Tier or Spec); complete it with `cpd job edit <k> --tier <T> --spec <file>` before its review. The first batch is what you review and lock in [Approving](#approving); every PR needs at least one Job in it. Add each later batch with `--draft` right after the lock ([Approving](#approving) step 5): `plan lock` queues every Job drafted before it.
+- **Plan every batch now.** Cut the work into batches that each need the User's approval (for example: the first PR's Jobs, then the Jobs that depend on a research finding, then a follow-up PR). Draft **all** of them, so the Plan view shows the whole Plan (a batch that only carries out a recorded User decision is added queued instead: see [Approving](#approving) step 5). A later batch not yet specified is a stub draft (`cpd job add <k> --draft --title "<title>"`, no Tier or Spec); complete it with `cpd job edit <k> --tier <T> --spec <file>` before its review. The first batch is what you review and lock in [Approving](#approving); every PR needs at least one Job in it. Add each later batch with `--draft` right after the lock ([Approving](#approving) step 6): `plan lock` queues every Job drafted before it.
 
 ### Sequencing
 
@@ -160,8 +160,9 @@ cpd pr edit <key> --needs <k1,k2>
 
 1. **Render.** Run `cpd plan render` and read the file it returns as the User will: table, graph, every Spec, the kind of each Job and, for each PR that has not started, the placeholder row of its open Job (cpd adds that Job when the PR starts, so the User sees the PR's whole shape).
 2. **Settle the overlaps.** Read the `## Overlaps` section of the rendered file (after the PRs table; `overlaps` in the JSON output). Each row is a path one of your Jobs touches that overlaps a path a Job of **another** active Plan touches in the same repo (any Context; equal paths, or a directory containing the other), with that Plan, its PR, its Job and the Job's status. It is a warning only: nothing is refused. Settle each overlap before you call the review: decide the order (which Plan changes the path first), coordinate with the other Plan's Lead through a Context note (`cpd context note "<fact>"`, which reaches it at its next turn), or ask the User when the choice is theirs. `No other active Plan touches these files.` means there is nothing to settle.
-3. **Review.** Present the drafts only with `cpd_plan_review` (plannotator); `ask_user_question` is refused while the Plan has draft Jobs. Call `cpd_plan_review` with a `title` (one line of at most 72 characters naming what the drafts under review do), then stop. The User decides in plannotator. The decision arrives as a message: `Plan review <id> was APPROVED` or `REJECTED`, with feedback.
-   - **Rejected:** apply the feedback to the drafts, then call `cpd_plan_review` again, with a title. Revise with `cpd job edit <k> --spec <file.json>` (draft Jobs only; `--title`, `--tier` and `--needs` work too) and add Jobs as in [Dividing](#dividing). To drop a draft Job, first take it out of its dependents' Dependencies, then cancel it:
+3. **Write the outline.** Write a JSON file outside the repo and set it with `cpd plan outline --file <outline.json>` (it replaces the whole outline; the same file twice changes nothing). Fields: `goal` (one line), `decisions` (the answered decision rounds, each `{question, answer}`), `assumptions` (the accepted ones), `risks` (at most 3), `done_when` (per PR key, 1–3 lines each, for every PR with a draft under review), `out_of_scope` (at most 5) and `decided` (ids of the Context records the Plan rests on). Every entry is one line of at most 200 characters. Update the outline whenever the drafts or the decisions change.
+4. **Review.** Call `cpd_plan_review` with a `title` (one line of at most 72 characters naming what the drafts under review do), then stop. It refuses `outline_missing` when the Plan has no outline, and `outline_incomplete` (with the PRs in `details.prs`) when a PR with a draft under review has no `done_when`: fix the outline and call again. The adapter shows the User a short summary in your chat and opens a dialog with three options: `Approve`, `Change` (the User types what should change) and `Open full plan` (the full render opens in plannotator, and the decision comes from there). The decision arrives as a message: `Plan review <id> was APPROVED` or `REJECTED`, with feedback.
+   - **Rejected:** apply the feedback to the drafts and the outline, then call `cpd_plan_review` again, with a title. Revise with `cpd job edit <k> --spec <file.json>` (draft Jobs only; `--title`, `--tier` and `--needs` work too) and add Jobs as in [Dividing](#dividing). To drop a draft Job, first take it out of its dependents' Dependencies, then cancel it:
 
      ```
      cpd job edit <k> --needs <k1,k2>
@@ -172,14 +173,14 @@ cpd pr edit <key> --needs <k1,k2>
      (`--needs` lists the dependent's remaining Dependencies; `--no-needs` removes them all.)
    - A message saying a review is gone means no decision was recorded: call `cpd_plan_review` again, with a title.
    - `cpd plan review --title "<title>"` does the same as the tool; use the tool, which also opens the review if it failed to open.
-4. **Lock.** After an APPROVED decision, run:
+5. **Lock.** After an APPROVED decision, run:
 
    ```
    cpd plan lock
    ```
 
    **Never lock without approval.** Any edit after approval changes the plan, so the lock is refused with `plan_not_approved`: call `cpd_plan_review` again. A `tdd` PR without a test Job and an impl Job is refused `shape_incomplete`, and a repo with no `[tests]` `tests_unconfigured` ([Dividing](#dividing)). Locking approves every PR's Jobs at once and starts each PR that needs no other: its Lead Branch (`cpd/<plan>/<key>`) and worktree. The other PRs stay `waiting`. It also starts the engine, the one `cpd watch` of the machine. On `watch_start_failed` the Plan is locked anyway: run `cpd watch --ensure`. On `setup_failed`, `worktree_exists` or `branch_exists` nothing was locked: tell the User what the error says.
-5. **Add the later batches as drafts**, right after the lock, so the Plan view shows the whole Plan. A draft is not run, and a PR that has a draft never opens by itself (its open Job waits for the draft):
+6. **Add the later batches as drafts**, right after the lock, so the Plan view shows the whole Plan. A draft is not run, and a PR that has a draft never opens by itself (its open Job waits for the draft):
 
    ```
    cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key> --draft
@@ -188,7 +189,7 @@ cpd pr edit <key> --needs <k1,k2>
 
    **Decided work is not a draft.** A Job that only carries out a decision the User already recorded, with no open design choice, is added queued: the same command without `--draft`, with a Spec that cites the decision. It shows in the Plan view and runs without a second approval. Undecided design (research outcomes, options, scope you propose) is a draft and goes through a Plan review. When unsure, a draft.
 
-   A draft may need other drafts or Locked Jobs; a Job added without `--draft` may not need a draft (`needs_unavailable`). The Spec rules of [Dividing](#dividing) apply. Drafts stay editable and cancellable in every phase (`cpd job edit`, `cpd job cancel`, as in step 3). They start only when the User approves them: [Starting a later batch](#starting-a-later-batch).
+   A draft may need other drafts or Locked Jobs; a Job added without `--draft` may not need a draft (`needs_unavailable`). The Spec rules of [Dividing](#dividing) apply. Drafts stay editable and cancellable in every phase (`cpd job edit`, `cpd job cancel`, as in step 4). They start only when the User approves them: [Starting a later batch](#starting-a-later-batch).
 
 ### Dispatching
 
@@ -214,10 +215,10 @@ A message that starts `cpd adapter:` comes from the pi adapter, not from a Plan:
 
 #### Starting a later batch
 
-A batch added as drafts ([Approving](#approving) step 5, or a follow-up PR after `plan-done`) starts only with the User's approval, in any phase after the lock. Only undecided design is a batch of drafts: decided work is added queued and needs no review (when unsure, a draft):
+A batch added as drafts ([Approving](#approving) step 6, or a follow-up PR after `plan-done`) starts only with the User's approval, in any phase after the lock. Only undecided design is a batch of drafts: decided work is added queued and needs no review (when unsure, a draft):
 
-1. Revise the drafts if the work since changed them (`cpd job edit <k> --spec <file.json>`; drop one as in [Approving](#approving) step 3).
-2. Run `cpd plan render`, read the file it returns, and show the batch to the User in chat (the drafts are marked under review; the Locked Jobs are context). Never present the batch through `ask_user_question`: the adapter refuses it while drafts exist.
+1. Revise the drafts if the work since changed them (`cpd job edit <k> --spec <file.json>`; drop one as in [Approving](#approving) step 4).
+2. Update the outline for the batch (`cpd plan outline --file <outline.json>`: decisions, done-when per PR, risks, decided records). The review's summary shows the batch to the User in chat; you do not repeat it.
 3. Call `cpd_plan_review` with a `title` (one line of at most 72 characters naming what the drafts under review do), then stop. The review covers exactly the drafts, all at once: keep as drafts only what should start together.
 4. **APPROVED:** the drafts are queued and start as soon as they are Ready. There is no `cpd plan lock` here and nothing else to run; the message lists the Jobs queued. If it says the Jobs changed since the review, call `cpd_plan_review` again, with a title.
 5. **REJECTED:** the drafts stay drafts. Apply the feedback with `cpd job edit`, `cpd job cancel` and `cpd job add --draft`, then call `cpd_plan_review` again, with a title.
