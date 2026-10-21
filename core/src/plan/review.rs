@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use super::display::Display;
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::prs::PrRow;
 use super::jobs::{self, Job};
@@ -92,6 +93,8 @@ struct Snapshot {
     base_prs: BTreeMap<String, String>,
     /// The needs of other Plans whose PR is `cancelled`.
     cancelled_needs: BTreeSet<String>,
+    /// What waits and what was superseded (hs-d518, hs-d521): shown, never counted.
+    display: Display,
     review: Option<Review>,
     fingerprint: String,
 }
@@ -105,6 +108,7 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
             open_tier,
             base_prs: base_prs(conn, id)?,
             cancelled_needs: cancelled_needs(conn, id)?,
+            display: Display::load(conn, id)?,
             plan: row::load(conn, id)?,
             review: latest(conn, id)?,
             fingerprint: plan_fingerprint(conn, id)?,
@@ -150,7 +154,7 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind, full_plan: &std::path::P
 }
 
 fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
-    render::markdown(heading, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps, &s.open_tier)
+    render::markdown(heading, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps, &s.open_tier, &s.display)
 }
 
 /// `plan render` (§4.5).

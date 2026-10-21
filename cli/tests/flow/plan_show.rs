@@ -182,7 +182,8 @@ fn render_with_one_pr_keeps_the_jobs_table_and_graph() {
     assert!(text.contains("```mermaid\ngraph TD\n  j1[\"a\"]\n  j2[\"b\"]\n  j1 --> j2\n```"), "{text}");
     assert!(text.contains("\n### `a`: Job a\n"), "{text}");
     assert!(text.contains("\n#### Goal\n\nGoal of b.\n"), "{text}");
-    assert!(!text.contains("gone"), "cancelled Jobs are left out: {text}");
+    // a cancelled Job is shown with its status, and drawn in no graph (hs-d518)
+    assert!(text.contains("| `gone` |") && !text.contains("[\"gone\"]"), "{text}");
     assert_eq!(fx.render().1, text, "idempotent");
 }
 
@@ -245,7 +246,10 @@ fn render_with_two_prs_has_a_section_per_pr_in_needs_order() {
     assert_eq!((&out["draft_jobs"], &out["prs"]), (&json!(3), &json!(2)), "the cancelled PR is not counted");
     assert!(text.contains("| `a-web` | `/r/a-web` | `main` | `z-api` |"), "{text}");
     assert!(text.contains("| `z-api` | `/r/z-api` | `main` | none |"), "{text}");
-    assert!(!text.contains("old"), "a cancelled PR and its Jobs are left out: {text}");
+    // the cancelled PR and its Job are shown, after the live PRs, and in no graph (hs-d518)
+    assert!(text.contains("| `old` | `/r/old` | `main` | none | cancelled |") && text.contains("| `old-1` |"), "{text}");
+    assert!(text.find("| `z-api` |").unwrap() < text.find("| `old` |").unwrap(), "{text}");
+    assert!(!text.contains("[\"old\"]"), "{text}");
     assert!(text.contains("```mermaid\ngraph LR\n  p1[\"z-api\"]\n  p2[\"a-web\"]\n  p1 --> p2\n```"), "{text}");
 
     let (api, web) = (at(&text, "\n## PR z-api\n"), at(&text, "\n## PR a-web\n"));

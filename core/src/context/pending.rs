@@ -11,7 +11,10 @@ use serde_json::{Value, json};
 use super::{ContextRow, Select};
 use crate::env::Env;
 use crate::error::CpdError;
-use crate::ids::ContextId;
+use crate::ids::{ContextId, PlanId};
+use crate::plan::display::Display;
+use crate::plan::jobs::{self as plan_jobs, Job};
+use crate::plan::fingerprint::load_prs;
 use crate::output::Output;
 
 #[derive(Args, Debug)]
@@ -59,8 +62,13 @@ fn plans(conn: &Connection, context: &ContextId) -> Result<Vec<Value>, CpdError>
         .collect()
 }
 
-/// The Plan's PRs not `merged` and not `cancelled`, in key order.
+/// The Plan's PRs not `merged` and not `cancelled`, in key order. A PR that cannot start yet has `waiting_on`: the keys of
+/// what it waits for, and so has each of its `queued` Jobs that cannot start, whose `status` is then `waiting` (hs-d521,
+/// hs-d523: a display status, the stored one is `queued`); see [`Display`].
 fn prs(conn: &Connection, plan: &str) -> Result<Vec<Value>, CpdError> {
+    let plan_id = PlanId::parse(plan)?;
+    let display = Display::load(conn, &plan_id)?;
+    let (all_prs, all_jobs) = (load_prs(conn, &plan_id)?, plan_jobs::load(conn, &plan_id)?);
     let mut stmt = conn.prepare(
         "SELECT p.key, p.repo, p.base, p.status, p.lead_branch, g.number, g.url, g.state
            FROM prs p LEFT JOIN pull_requests g ON g.id = p.pull_request
@@ -80,7 +88,10 @@ fn prs(conn: &Connection, plan: &str) -> Result<Vec<Value>, CpdError> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(key, mut pr)| {
-            pr["jobs"] = json!(jobs(conn, plan, &key)?);
+            pr["jobs"] = json!(jobs(conn, plan, &key, &display, &all_jobs)?);
+            if let Some(row) = all_prs.iter().find(|p| p.key.as_str() == key) {
+                add_waiting_on(&mut pr, display.pr_blockers(row));
+            }
             Ok(pr)
         })
         .collect()
@@ -88,7 +99,7 @@ fn prs(conn: &Connection, plan: &str) -> Result<Vec<Value>, CpdError> {
 
 /// The PR's Jobs not `cancelled`, in `seq` order. The PR is not merged, so a
 /// `merged` Job is on the Lead Branch and not yet on the base.
-fn jobs(conn: &Connection, plan: &str, pr: &str) -> Result<Vec<Value>, CpdError> {
+fn jobs(conn: &Connection, plan: &str, pr: &str, display: &Display, all: &[Job]) -> Result<Vec<Value>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT key, status, title, touches FROM jobs
           WHERE plan = ?1 AND pr = ?2 AND status <> 'cancelled' ORDER BY seq",
@@ -109,9 +120,30 @@ fn jobs(conn: &Connection, plan: &str, pr: &str) -> Result<Vec<Value>, CpdError>
                 })
                 .transpose()?
                 .unwrap_or_else(|| json!([]));
-            Ok(json!({"key": key, "status": status, "title": title, "touches": touches}))
+            let mut job = json!({"key": key, "status": status, "title": title, "touches": touches});
+            if let Some(row) = all.iter().find(|j| j.key == key) {
+                let blockers = display.job_blockers(all, row);
+                if !blockers.is_empty() {
+                    job["status"] = json!("waiting");
+                }
+                add_waiting_on(&mut job, blockers);
+            }
+            Ok(job)
         })
         .collect()
+}
+
+/// `waiting_on` of a Job or PR, only when it waits for something.
+fn add_waiting_on(item: &mut Value, blockers: Vec<String>) {
+    if !blockers.is_empty() {
+        item["waiting_on"] = json!(blockers);
+    }
+}
+
+/// What `waiting_on` of a Job or PR says, joined: none for work that waits for nothing.
+fn waiting_on(item: &Value) -> Option<String> {
+    let keys: Vec<&str> = item["waiting_on"].as_array()?.iter().filter_map(Value::as_str).collect();
+    Some(keys.join(", "))
 }
 
 /// The result as markdown (§3.11).
@@ -132,6 +164,9 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
                 text(&pr["base"]),
                 text(&pr["status"])
             );
+            if let Some(keys) = waiting_on(pr) {
+                let _ = write!(out, "waiting on {keys}\n\n");
+            }
             let pull = &pr["pull_request"];
             if pull.is_null() {
                 out.push_str("no pull request\n\n");
@@ -141,11 +176,14 @@ fn markdown(context: &ContextId, plans: &[Value]) -> String {
             for job in pr["jobs"].as_array().expect("jobs") {
                 let touches: Vec<String> =
                     job["touches"].as_array().expect("touches").iter().map(text).collect();
+                let status = match waiting_on(job) {
+                    Some(keys) => format!("{} on {keys}", text(&job["status"])),
+                    None => text(&job["status"]),
+                };
                 let _ = writeln!(
                     out,
-                    "- {} {}: {} ({})",
+                    "- {} {status}: {} ({})",
                     text(&job["key"]),
-                    text(&job["status"]),
                     text(&job["title"]),
                     touches.join(", ")
                 );
