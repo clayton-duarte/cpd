@@ -1467,29 +1467,29 @@ fn pr_needs_locked_refuses_a_need_after_the_lock_unless_the_pr_is_new() {
         )
     };
     write(&mut store, &add("old")).unwrap();
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('di', 'old', 'di', 'pr-2fa')");
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('di', 'old', 'pr-2fa')");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     // `pr add` in dispatch: the PR and its needs in one transaction.
-    write(&mut store, &format!("{} INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('di', 'new', 'di', 'pr-2fa');", add("new"))).unwrap();
+    write(&mut store, &format!("{} INSERT INTO pr_needs (plan, pr, needs) VALUES ('di', 'new', 'pr-2fa');", add("new"))).unwrap();
     // Before the lock, any time.
     write(&mut store, WEB).unwrap();
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay')").unwrap();
+    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay')").unwrap();
 }
 
 #[test]
 fn pr_needs_no_delete_refuses_after_the_lock_and_history_records_a_delete() {
     let dir = tempfile::tempdir().unwrap();
     let mut store = migrated(&dir);
-    write(&mut store, &format!("{WEB} INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay');")).unwrap();
+    write(&mut store, &format!("{WEB} INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay');")).unwrap();
     write(&mut store, "DELETE FROM pr_needs WHERE plan = 'gr'").unwrap();
     assert_eq!(
         rows(&mut store, "SELECT pk, op, before, after FROM history WHERE tbl = 'pr_needs' ORDER BY id"),
         vec![
-            serde_json::json!([r#"["gr","web","gr","pay"]"#, "insert", Value::Null, r#"{"plan":"gr","pr":"web","needs_plan":"gr","needs":"pay"}"#]),
-            serde_json::json!([r#"["gr","web","gr","pay"]"#, "delete", r#"{"plan":"gr","pr":"web","needs_plan":"gr","needs":"pay"}"#, Value::Null]),
+            serde_json::json!([r#"["gr","web","pay"]"#, "insert", Value::Null, r#"{"plan":"gr","pr":"web","needs":"pay"}"#]),
+            serde_json::json!([r#"["gr","web","pay"]"#, "delete", r#"{"plan":"gr","pr":"web","needs":"pay"}"#, Value::Null]),
         ]
     );
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('gr', 'web', 'gr', 'pay');
+    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('gr', 'web', 'pay');
                        UPDATE plans SET phase = 'plan' WHERE id = 'gr';
                        UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'gr'")
         .unwrap();
@@ -1788,12 +1788,6 @@ fn converts_keeping_every_row_and_id(n: usize) {
                 values.remove(at);
                 *row = Value::from(values).to_string();
             }
-        }
-        // `stacked-prs` rebuilt `pr_needs` with `needs_plan` third: every need was a need of its own Plan.
-        for row in rows_before.get_mut("pr_needs").unwrap() {
-            let mut cells: Vec<Value> = serde_json::from_str(row).unwrap();
-            cells.insert(2, cells[0].clone());
-            *row = Value::from(cells).to_string();
         }
         // `plannotator-reviews` made a table, and it is empty.
         assert_eq!(rows_after.remove("plannotator_reviews"), Some(Vec::new()));
@@ -2660,7 +2654,7 @@ fn stacked_prs_is_breaking_after_the_names_before_it() {
 }
 
 #[test]
-fn stacked_prs_keeps_every_pr_and_need_and_gives_pr_needs_its_plan() {
+fn stacked_prs_keeps_every_pr_and_need() {
     let (_dir, home) = crate::store::tests::tmp_home();
     let earlier = store_before_stacked_prs(&home);
     let before = dump(&connection(&home.db()));
@@ -2671,10 +2665,10 @@ fn stacked_prs_keeps_every_pr_and_need_and_gives_pr_needs_its_plan() {
     let violations: i64 = connection(&home.db()).query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap();
     assert_eq!(violations, 0);
 
-    // Every `pr_needs` row is a need of its own Plan; every `prs` row is as it was.
+    // Every `pr_needs` row is kept; every `prs` row is as it was.
     assert_eq!(
-        rows(&mut store, "SELECT plan, pr, needs_plan, needs FROM pr_needs"),
-        vec![serde_json::json!(["pl", "b", "pl", "c"])]
+        rows(&mut store, "SELECT plan, pr, needs FROM pr_needs"),
+        vec![serde_json::json!(["pl", "b", "c"])]
     );
     let after = dump(&connection(&home.db()));
     // `job-kinds` added `prs.shape`, last, `free` in every row.
@@ -2689,35 +2683,34 @@ fn stacked_prs_keeps_every_pr_and_need_and_gives_pr_needs_its_plan() {
     assert_eq!(without_shape, before["prs"]);
     assert_eq!(after["pr_needs"].len(), 1);
 
-    // A need of another Plan is stored; one naming no PR is refused by the foreign key.
-    write(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'pl', 'd')").unwrap();
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'pl', 'nope')");
+    // `local-needs`: a need names a PR of its own Plan; one naming no PR is refused.
+    write(
+        &mut store,
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('other', 'o2', '/r2', 'main', 'waiting', 'cpd/other/o2', cpd_txn(), 't');
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('other', 'o2', 'o')",
+    )
+    .unwrap();
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('other', 'o2', 'nope')");
     assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'nowhere', 'd')");
-    assert!(format!("{err:?}").contains("FOREIGN KEY"), "{err:?}");
-    // A PR does not need itself, in any Plan.
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('other', 'o', 'other', 'o')");
+    // A PR does not need itself.
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('other', 'o', 'o')");
     assert!(format!("{err:?}").contains("CHECK"), "{err:?}");
-    // The history key and the generated triggers list the new column.
     assert_eq!(
         rows(&mut store, "SELECT pk, after FROM history WHERE tbl = 'pr_needs' ORDER BY id DESC LIMIT 1"),
-        vec![serde_json::json!([r#"["other","o","pl","d"]"#, r#"{"plan":"other","pr":"o","needs_plan":"pl","needs":"d"}"#])]
+        vec![serde_json::json!([r#"["other","o2","o"]"#, r#"{"plan":"other","pr":"o2","needs":"o"}"#])]
     );
 
     // pr_needs_locked: after the lock only a PR's own insert may add needs; the Plan `pl` is locked.
-    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pl', 'a', 'other', 'o')");
+    let err = refused(&mut store, "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pl', 'a', 'c')");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
-    // pr_needs_no_delete: and its history row for a delete holds the key with `needs_plan`.
+    // pr_needs_no_delete: and its history row for a delete holds the key.
     let err = refused(&mut store, "DELETE FROM pr_needs WHERE plan = 'pl'");
     assert_eq!(err.code(), ErrorCode::PrLocked, "{err:?}");
     write(&mut store, "DELETE FROM pr_needs WHERE plan = 'other'").unwrap();
     assert_eq!(
         rows(&mut store, "SELECT pk, op, before FROM history WHERE tbl = 'pr_needs' ORDER BY id DESC LIMIT 1"),
-        vec![serde_json::json!([
-            r#"["other","o","pl","d"]"#,
-            "delete",
-            r#"{"plan":"other","pr":"o","needs_plan":"pl","needs":"d"}"#
-        ])]
+        vec![serde_json::json!([r#"["other","o2","o"]"#, "delete", r#"{"plan":"other","pr":"o2","needs":"o"}"#])]
     );
     drop(store);
 

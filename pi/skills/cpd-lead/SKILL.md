@@ -153,6 +153,7 @@ cpd pr edit <key> --needs <k1,k2>
 ```
 
 - **Parallel:** prefer many small Jobs that run in parallel. Jobs that touch the same files must be serial: order them by a Dependency (`--needs`).
+- **Within the Plan:** every need is a PR of the same Plan; cross-Plan needs are not allowed. If your Plan needs another Plan's result, ask the Manager to split the work or move it: tell the Manager with `cpd session send <manager-id> "<text>"`, and it handles the sequencing.
 - **PR shape:** plan each PR that changes behaviour as, in order: (1) a docs Job (the contract amended first); (2) a test Job, red tests written by a different Worker from the implementer, from the docs alone, that fail before the implementation exists; (3) the implementation Job, which makes them pass; (4) the open Job cpd adds to every PR. A bug or flake fix starts with a test that reproduces it (reproduce first). A visual change pins its exact rows (the rendered lines it expects). A docs-only or config-only PR skips the test Job: it says so with `--shape docs` or `--shape config`. `pr add` lays the first three out as stub drafts; by hand, the test Job `--needs` the docs Job and the implementation Job `--needs` the test Job:
 
   ```

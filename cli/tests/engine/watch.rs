@@ -1997,7 +1997,7 @@ fn e4_adds_no_open_job_to_a_waiting_pr_or_to_a_pr_of_an_archived_plan() {
     waiting.fixture(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, title, shape, created_txn, created_at)
            VALUES ('pay', 'web', '{}', 'main', 'waiting', 'cpd/pay/web', 'Show the receipt', 'config', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'web', 'pay', 'repo');",
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
         waiting.repo.display()
     ));
     let engine = waiting.start();
@@ -2631,7 +2631,7 @@ fn a_prerequisite_seen_merged_by_e5_still_lets_e7_start_its_dependent_in_the_sam
                 pull_request = (SELECT id FROM pull_requests WHERE number = 7) WHERE plan = 'pay' AND key = 'repo';
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay', 'web', '{repo}', 'main', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'web', 'pay', 'repo');",
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');",
         repo = web.display()
     ));
     // The real `pr poll`, against a `gh` that finds PR 7 merged: the search lists nothing, the lookup answers MERGED.
