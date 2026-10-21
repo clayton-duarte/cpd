@@ -113,7 +113,7 @@ fn seats(conn: &Connection, event: &str, filter: &str) -> Result<Vec<Seat>, CpdE
                 s.role = 'manager',
                 {event}
            FROM sessions s LEFT JOIN plans p ON p.id = s.plan
-          WHERE s.role <> 'worker' AND s.archived_at IS NULL AND {filter}
+          WHERE s.role <> 'worker' AND s.archived_at IS NULL AND p.deleted_at IS NULL AND {filter}
           ORDER BY s.created_at, s.id"
     ))?;
     let mut rows = stmt.query([])?;

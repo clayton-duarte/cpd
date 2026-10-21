@@ -1780,7 +1780,12 @@ fn converts_keeping_every_row_and_id(n: usize) {
         }
         // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
         // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
-        assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
+        // (`delete-tombstone`'s `deleted_at` comes after `owner`, so the column is found by its position.)
+        let owner = table_columns(&conn, "contexts").unwrap().iter().position(|(c, _)| c == "owner").unwrap();
+        assert_eq!(
+            rows_after["contexts"].iter().map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().remove(owner)).collect::<Vec<_>>(),
+            [Value::from("acme")]
+        );
         // The filled column is taken out by its position: a later additive migration (`pr-title`) adds a column after it.
         for (table, column) in [("contexts", "owner"), ("prs", "name")] {
             let at = table_columns(&conn, table).unwrap().iter().position(|(c, _)| c == column).unwrap();
@@ -3215,4 +3220,79 @@ fn plan_outline_is_additive_and_adds_the_nullable_column_and_its_event_kind() {
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
     assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
+}
+
+// ---------- named migration delete-tombstone ----------
+
+#[test]
+fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_context_go() {
+    let at = NAMED.iter().position(|n| n.name.ends_with("-delete-tombstone")).expect("the migration delete-tombstone exists");
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    let mut before = crate::store::tests::open_named(&home, &NAMED[..at]).unwrap();
+    write(
+        &mut before,
+        &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
+           ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
+           ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
+           ('lo', 'lead', 'other', 'live', NULL, 'LO', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
+           ('pay', 'ctx', 'Pay', 'grounding', 'l', 't'), ('live', 'other', 'Live', 'grounding', 'lo', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't'), ('live', 'r', '/r', 'main', 'waiting', 'cpd/live', cpd_txn(), 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+           VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't'),
+                  ('live', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');
+         INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES
+           (cpd_txn(), 't', 'plan-created', 'ctx', 'pay', 'x', '{}'), (cpd_txn(), 't', 'plan-created', 'other', 'live', 'x', '{}'),
+           (cpd_txn(), 't', 'context-created', 'ctx', NULL, 'x', '{}');"
+            .to_owned(),
+    )
+    .unwrap();
+    let rows_before = rows(&mut before, "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans");
+    drop(before);
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert_eq!(rows(&mut store, "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans"), rows_before);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM contexts WHERE deleted_at IS NOT NULL") + count(&mut store, "SELECT count(*) FROM plans WHERE deleted_at IS NOT NULL"), 0);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM event_kinds WHERE name IN ('plan-deleted', 'context-deleted')"), 2);
+
+    // A live Plan's rows stay undeletable, with the error each had.
+    for (sql, message) in [
+        ("DELETE FROM jobs WHERE plan = 'pay'", "append_only: jobs"),
+        ("DELETE FROM prs WHERE plan = 'pay'", "append_only: prs"),
+        ("DELETE FROM events WHERE plan = 'pay'", "append_only: events"),
+        ("DELETE FROM events WHERE context = 'ctx' AND plan IS NULL", "append_only: events"),
+        ("DELETE FROM sessions WHERE id = 'm'", "append_only: sessions"),
+        ("DELETE FROM plans WHERE id = 'pay'", "append_only: plans"),
+        ("DELETE FROM contexts WHERE id = 'ctx'", "append_only: contexts"),
+        ("DELETE FROM txns", "append_only: txns"),
+        ("DELETE FROM history", "append_only: history"),
+    ] {
+        assert_eq!(sqlite_message(&refused(&mut store, sql)), message, "{sql}");
+    }
+
+    // The tombstone is written once; the rows of the tombstoned Plan go, the others' not.
+    write(&mut store, "UPDATE plans SET deleted_at = 'd1' WHERE id = 'pay'").unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE plans SET deleted_at = NULL WHERE id = 'pay'")), "append_only: plans.deleted_at");
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE plans SET deleted_at = 'd2' WHERE id = 'pay'")), "append_only: plans.deleted_at");
+    write(&mut store, "UPDATE plans SET title = 'Pay 2' WHERE id = 'pay'").unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM jobs WHERE plan = 'live'")), "append_only: jobs");
+    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM plans WHERE id = 'pay'")), "append_only: plans");
+    write(&mut store, "DELETE FROM events WHERE plan = 'pay'; DELETE FROM jobs WHERE plan = 'pay'; DELETE FROM prs WHERE plan = 'pay';").unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT tbl, op, json_extract(before, '$.key') FROM history WHERE op = 'delete' ORDER BY id"),
+        [serde_json::json!(["jobs", "delete", "api"]), serde_json::json!(["prs", "delete", "r"])]
+    );
+    assert_eq!(count(&mut store, "SELECT count(*) FROM events WHERE plan = 'live'"), 1);
+
+    // A Context's own rows go by its tombstone alone.
+    write(&mut store, "UPDATE contexts SET deleted_at = 'd3' WHERE id = 'ctx'").unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE contexts SET deleted_at = NULL WHERE id = 'ctx'")), "append_only: contexts.deleted_at");
+    write(&mut store, "DELETE FROM events WHERE context = 'ctx' AND plan IS NULL; DELETE FROM sessions WHERE id = 'm';").unwrap();
+    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'sessions' AND op = 'delete'"), 1);
+    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM events WHERE context = 'other'")), "append_only: events");
+    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
 }

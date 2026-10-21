@@ -236,7 +236,10 @@ impl Row {
 
 /// Every Session matching `filter` (SQL after `WHERE`, with `params`), oldest first.
 fn query(conn: &Connection, filter: &str, params: Vec<Sql>) -> Result<Vec<Row>, CpdError> {
-    let sql = format!("{SELECT} WHERE {filter} ORDER BY s.created_at, s.id");
+    // The Lead of a deleted Plan stays in `sessions` and is hidden with its Plan (contract §2.2 "Deleted").
+    let sql = format!(
+        "{SELECT} WHERE ({filter}) AND NOT EXISTS (SELECT 1 FROM plans d WHERE d.id = s.plan AND d.deleted_at IS NOT NULL) ORDER BY s.created_at, s.id"
+    );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(params), raw)?
