@@ -17,7 +17,6 @@ use serde_json::json;
 
 /// The expected chart of the store `cpd_jobs()` makes: the fixture of the cockpit of branch `cpd/cpd-ui`
 /// (`tui/tests/fixtures/cpd-chart.txt`), kept beside the view.
-const CPD_CHART: &str = include_str!("../../../tui/src/plan/fixtures/cpd-chart.txt");
 
 /// The 27 Jobs of the cockpit's `cpd-jobs.json` fixture (cpd 1's `workflow show` of cpd-rust's `cpd` Workflow), as
 /// cpd 2 stores them: `(key, status, tier, needs, Attempts)`. cpd 1's `closed` is `merged`, and its `in_review` is a
@@ -267,20 +266,23 @@ fn plan_with(phase: &str, pr: Option<(i64, &str)>, jobs: &[(&str, &str, &str, &[
 // ---------- tests ----------
 
 #[test]
-fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_matches_it() {
+fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_has_all_its_jobs_in_one_box() {
     let env = env();
     env.sql(&plan_with("dispatch", None, CPD_JOBS));
-    let pane = start_view(&env);
-    let rows = CPD_CHART.lines().count();
-    // the screen is captured whenever it is: wait for a frame drawn to the box's right border on every row (a capture may fall in the middle of the first frame, which the view writes in pieces)
-    let screen = screen_when(&env, &pane, "the chart", |s| {
-        s.len() > 2 + rows && s[2].contains("contract-core") && s[2..2 + rows].iter().all(|l| l.ends_with('│') && l.chars().count() == s[1].chars().count()) && s.iter().any(|l| l.ends_with('╯'))
-    });
-    assert_eq!(chart_rows(&screen, rows), CPD_CHART.trim_end(), "{}", screen.join("\n"));
+    // The Jobs that cannot start yet say what they wait for (hs-d521), after their pills: the chart is no longer the cockpit's
+    // golden (`fixtures/cpd-chart.txt`, which the layout's own unit test still pins), and wider than 300 columns.
+    let pane = tmux_out(&env, &["new-session", "-d", "-s", "view", "-x", "1500", "-y", "40", "-P", "-F", "#{pane_id}", CPD, "tui", "view", "plan"]).trim().to_owned();
+    let screen = screen_when(&env, &pane, "the chart", |s| s.len() > 2 && s[2].contains("contract-core") && s.iter().any(|l| l.ends_with('╯')));
+    let text = screen.join("\n");
+    for (key, ..) in CPD_JOBS {
+        assert!(text.contains(key), "{key} is drawn:\n{text}");
+    }
+    assert!(text.contains(&format!("{MERGING} rs-workspace")), "the merging Job has its icon:\n{text}");
+    assert!(text.contains("waiting on rs-workspace"), "rs-store waits for rs-workspace:\n{text}");
     // a Plan of one PR is one box, titled on its top border
     assert!(screen[1].starts_with("  ╭ repo · repo 󱦰 main · dispatch ─"), "{:?}", screen[1]);
-    assert_eq!(screen.iter().filter(|l| l.trim().starts_with("╭ ") && l.contains(" · ") && l.trim_end().ends_with('╮')).count(), 1, "{}", screen.join("\n"));
-    assert!(screen.iter().all(|l| !l.contains(['┌', '┐', '└', '┘'])), "the corners are rounded:\n{}", screen.join("\n"));
+    assert_eq!(screen.iter().filter(|l| l.trim().starts_with("╭ ") && l.contains(" · ") && l.trim_end().ends_with('╮')).count(), 1, "{text}");
+    assert!(screen.iter().all(|l| !l.contains(['┌', '┐', '└', '┘'])), "the corners are rounded:\n{text}");
 }
 
 #[test]
@@ -307,19 +309,20 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the boxes", |s| s.len() > 8 && s[8].ends_with('╯'));
     // web below api, the arrow from api's bottom border into web's top border
+    // `web` waits for `api`, which has not merged (hs-d521): its title says on what
     let (merged_row, queued_row) = (
         format!("  │ \u{e0b6}{MERGED} a│O3\u{e0b4}─────\u{e0b6}{MERGED} b│S3\u{e0b4}                │"),
-        format!("  │ \u{e0b6}{QUEUED} c│S3\u{e0b4}                      │"),
+        format!("  │ \u{e0b6}{QUEUED} c│S3\u{e0b4}                             │"),
     );
     let want = [
         "  ╭ api · api-server 󱦰 main · #12 open 󰏌 ╮",
         merged_row.as_str(),
         "  ╰──────────────────┬───────────────────╯",
-        "                  ╭──╯",
-        "                  󱦳",
-        "  ╭ web · web 󱦰 develop · waiting ╮",
+        "                     │",
+        "                     󱦳",
+        "  ╭ web · web 󱦰 develop · waiting on api ╮",
         queued_row.as_str(),
-        "  ╰───────────────────────────────╯",
+        "  ╰──────────────────────────────────────╯",
     ];
     assert_eq!(screen[1..9], want, "{}", screen.join("\n"));
     // the selection crosses from one box down into the one below it
@@ -345,7 +348,7 @@ fn a_plan_with_no_pr_yet_says_so() {
 }
 
 #[test]
-fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
+fn each_job_status_has_its_icon_and_a_cancelled_job_is_drawn_muted_after_them() {
     let env = env();
     let jobs: &[(&str, &str, &str, &[&str], u32)] = &[
         ("draft", "draft", "S3", &[], 0),
@@ -376,7 +379,8 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_not_drawn() {
         SPINNER[0]
     );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
-    assert!(screen.iter().all(|l| !l.contains("gone")), "a cancelled Job is not drawn:\n{}", screen.join("\n"));
+    // the cancelled Job keeps its place, with its status (hs-d518; `tui_plan_cancelled` pins how)
+    assert!(screen.iter().any(|l| l.contains("gone") && l.contains("cancelled")), "a cancelled Job is drawn:\n{}", screen.join("\n"));
 }
 
 #[test]
@@ -613,7 +617,7 @@ fn the_view_follows_events_and_switches_plan_when_the_chat_slot_changes() {
             + &event("job-added", "ctx", Some("ship"), None, r#"{"status":"queued","appended":true,"tier":"S3","needs":["a"]}"#)),
     );
     let screen = screen_when(&env, &pane, "Job b", |s| s.len() > 2 && s[2].contains(" b│"));
-    assert_eq!(chart_rows(&screen, 1), format!(" \u{e0b6}{QUEUED} a│S3\u{e0b4}─────\u{e0b6}{QUEUED} b│S3\u{e0b4}"));
+    assert_eq!(chart_rows(&screen, 1), format!(" \u{e0b6}{QUEUED} a│S3\u{e0b4}─────\u{e0b6}{QUEUED} b│S3\u{e0b4} waiting on a"));
 
     // the other Lead moves into the chat slot: the view shows its Plan
     env.sql(&in_chat("ctx", "side", "lead-side"));

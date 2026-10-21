@@ -13,6 +13,8 @@ mod tui_idle;
 mod tui_logs;
 mod tui_merge;
 mod tui_plan;
+mod tui_plan_cancelled;
+mod tui_plan_waiting;
 mod tui_pulse;
 mod tui_read;
 mod tui;
