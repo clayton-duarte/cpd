@@ -270,13 +270,26 @@ impl Fx {
         let mut command = self.env.command(exe);
         command.envs(vars.iter().copied());
         let child = command.arg("watch").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        let engine = Engine { child: Some(child) };
+        let mut engine = Engine { child: Some(child) };
         let pid = engine.pid();
-        wait_until("watch-started", || {
-            self.env.query::<i64>(&format!(
+        let started = common::poll(common::WAIT, || {
+            let seen = self.env.query::<i64>(&format!(
                 "SELECT count(*) FROM events WHERE kind = 'watch-started' AND json_extract(data, '$.pid') = {pid}"
-            )) == 1
+            )) == 1;
+            // An engine that exited (`watch_running`, a failed start) never says it started: stop waiting for it.
+            (seen || engine.child.as_mut().unwrap().try_wait().unwrap().is_some()).then_some(seen)
         });
+        if started != Some(true) {
+            let mut child = engine.child.take().unwrap();
+            let exited = child.try_wait().unwrap();
+            let _ = child.kill();
+            let out = child.wait_with_output().unwrap();
+            panic!(
+                "engine {pid} did not append watch-started (exited: {exited:?})\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
         engine
     }
 
@@ -704,9 +717,19 @@ fn an_engine_that_died_without_a_watch_stopped_is_told_from_the_last_time_it_was
     first.signal(Signal::SIGKILL);
     let mut first = first;
     let _ = first.child.take().unwrap().wait();
+    // The kill may have come while the engine was spawning a child: between its fork and its exec the child still
+    // holds the engine's lock descriptor, and an engine started now is refused (`watch_running`). A start waits for
+    // the lock to be free, as `cpd install` does before it starts the new engine (contract §6.6), and the lock is
+    // free once the child has exec'd (close-on-exec).
+    wait_until("the killed engine's lock to be free", || {
+        let file = OpenOptions::new().read(true).write(true).open(&lock).unwrap();
+        Flock::lock(file, FlockArg::LockExclusiveNonblock).is_ok()
+    });
     assert_eq!(fx.count("watch-stopped"), 0);
 
     let second = fx.start();
+    // `watch-started` comes first, then the message to the Managers.
+    wait_until("the message to the Manager", || !fx.messages().is_empty());
     let messages = fx.messages();
     assert_eq!(messages.len(), 1, "{messages:?}");
     let text = messages[0].2["text"].as_str().unwrap();
