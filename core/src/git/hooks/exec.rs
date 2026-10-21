@@ -108,8 +108,11 @@ fn start(command: &Rendered, cwd: &Path, prefixed: bool, env: &[(&str, &str)], o
         Ok((r, w1, w2)) => (r, (w1, w2)),
         Err(e) => return not_started(format!("Cannot create a pipe: {e}.")),
     };
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
+    // hs-d528: every hook command runs at idle priority, whoever runs it.
+    let idle = crate::host::priority::idle_prefix();
+    let mut cmd = Command::new(idle[0]);
+    cmd.args(&idle[1..])
+        .args(["sh", "-c"])
         .arg(&command.command)
         .current_dir(cwd)
         .stdin(Stdio::piped())
