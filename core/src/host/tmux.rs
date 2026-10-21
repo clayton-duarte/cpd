@@ -987,6 +987,9 @@ fn strings(args: &[&str]) -> Vec<String> {
 }
 
 #[cfg(test)]
+mod palette;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

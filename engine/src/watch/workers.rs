@@ -64,6 +64,13 @@ impl Inbox {
         format!("inbox {}", self.count)
     }
 
+    /// The tier `@cpd_inbox_tier` holds (contract §6.1.1): the urgency of the most urgent item, `red`, `yellow`,
+    /// `magenta` or `white`, and `none` at 0. A stub: a fixed, wrong value.
+    #[allow(dead_code)]
+    fn tier(self) -> &'static str {
+        "stub"
+    }
+
     /// The visible width in cells.
     fn width(self) -> usize {
         format!("inbox {}", self.count).chars().count()
@@ -160,6 +167,9 @@ fn failed(engine: &mut Engine, error: &CpdError) {
     }
     engine.fail(Step::Workers, About::Machine, error);
 }
+
+#[cfg(test)]
+mod tier;
 
 #[cfg(test)]
 mod tests {
