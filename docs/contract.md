@@ -787,7 +787,7 @@ The concurrency slot is implicit: an Attempt holds one from `starting` until `en
 
 ### 3.6 Session states
 
-`working`, `waiting`, `blocked`, `idle`, `stopped`. A Session is created `stopped` (registered, pi not yet running).
+`working`, `waiting`, `blocked`, `idle`, `stopped`. A Session is created `stopped` (registered, pi not yet running). **Asleep is not a state**: `asleep_at` is a timestamp (§2.2 Session) set by engine E13 when the Session finishes and the User is not looking at it. A Session may be asleep while in any state, though in practice it happens only when `stopped`.
 
 **`blocked` means the User has to act; `waiting` means another agent has to** (hs-d303). `blocked` is for the human reasons only: a dialog (`dialog`), a pending Plan review (`cpd: plan review`). `waiting` is for an agent that waits for another agent: a Worker for its Lead's answer (`cpd: question to the Lead`, set by `cpd ask`) and a Lead for the answer a Worker waits for (`cpd: Worker question`). Both carry a label that says why; `state_label` is set exactly in these two states. Nothing an agent handles is `blocked`: it shows as `waiting` or `working`.
 
