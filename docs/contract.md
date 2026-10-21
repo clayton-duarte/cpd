@@ -2168,11 +2168,14 @@ Every message in the table that is not marked steered is a follow-up. The turn c
 | `pane-border-lines` | `heavy` | |
 | `remain-on-exit` | `on` | a dead pane stays, so cpd can read `#{pane_dead_status}` |
 | `focus-events` | `on` | the views are told when their pane gains or loses focus |
-| `pane-border-style` | `fg=colour7` | the unfocused panes' borders: interactive lines (they can be dragged) are colour 7 (hs-d530, hs-d531, §6.1.1; replacing hs-d489's colour 8) |
-| `pane-active-border-style` | `fg=blue` | the focused pane's border |
+| `pane-border-style` | `fg=colour7` | the unfocused panes' borders: interactive lines (they can be dragged) are colour 7 (hs-d531, hs-d534 rule (2), §6.1.1; replacing hs-d489's colour 8) |
+| `pane-active-border-style` | `fg=blue` | the focused pane's border (blue is 4, §6.1.1) |
 | `popup-style` | `default` | tmux 3.8 changed its default to `bg=themedarkgrey`, which greys every cpd dialog and menu instead of black (User, hs-d353). Set with `set -gq`, so an older tmux that does not know the option ignores it |
-| `popup-border-style` | `fg=colour7` | the frame of a popup or dialog that can be dragged is an interactive line, colour 7 (hs-d530, hs-d531, §6.1.1). It sets the foreground only, so the background stays the terminal's and not tmux 3.8's `bg=themedarkgrey` default, which greyed every cpd dialog and menu instead of black (User, hs-d353). Set with `set -gq`, so an older tmux that does not know the option ignores it |
-| `menu-style` | `default` | tmux 3.8 changed its default to `bg=themedarkgrey`, which greys every cpd dialog and menu instead of black (User, hs-d353). Set with `set -gq`, so an older tmux that does not know the option ignores it |
+| `popup-border-style` | `fg=colour7` | the frame of a popup or dialog that can be dragged is an interactive line, colour 7 (hs-d531, hs-d534 rule (2), §6.1.1). It sets the foreground only, so the background stays the terminal's and not tmux 3.8's `bg=themedarkgrey` default, which greyed every cpd dialog and menu instead of black (User, hs-d353). Set with `set -gq`, so an older tmux that does not know the option ignores it |
+| `menu-style` | `fg=colour15` | a menu's entries are clickable text, colour 15 (hs-d534 rule (2), §6.1.1). It sets the foreground only, so the background stays the terminal's and not tmux 3.8's `bg=themedarkgrey` default, which greys every cpd dialog and menu instead of black (User, hs-d353; it was `default` for that reason). Set with `set -gq`, so an older tmux that does not know the option ignores it |
+| `menu-border-style` | `fg=colour8` | tmux's own pane menu has a line that is no drag target: colour 8, a muted line (hs-d534 rule (2), §6.1.1); tmux 3.8's default is the theme name `themedarkgrey`, which is no number of the palette. Set with `set -gq` |
+| `menu-selected-style` | `bg=blue,fg=colour0` | the selected entry of tmux's menu is the blue block, background 4, text 0 (hs-d534, §6.1.1), not tmux 3.8's `bg=themeyellow,fg=themeblack`. Set with `set -gq` |
+| `mode-style` | `bg=blue,fg=colour0` | tmux's copy and view mode selection is the blue block, background 4, text 0 (hs-d534, §6.1.1), in place of tmux 3.8's `bg=themeyellow,fg=themeblack`. Set with `set -gq` |
 | `set-titles` | `on` | the terminal window attached to the cockpit is titled (User, hs-d300) |
 | `set-titles-string` | `cpd · #{?@cpd_machine,#{@cpd_machine},#{host_short}}` | the window reads `cpd · <machine>` (`cpd · hs`, `cpd · pro`), the config's `machine` name (§8.2), not the OS hostname; tmux's own option, no pane format, so it never changes per pane (hs-d300) |
 | `@cpd_machine` (user option) | the config's `machine` | set by the cockpit's build or repair (`cpd tui`, bare `cpd`), which has the config; `SERVER_OPTIONS` is static. A server another command started shows the host's short name until the cockpit is built |
@@ -2235,65 +2238,227 @@ Mockup: `━━━Context━━━━━━━━━━━━` (the first two `�
 
 **tmux >= 3.6 is required** (User, 2026-10-18). A tmux < 3.6 built with libutempter (e.g. Ubuntu 24.04's 3.4) can lose the `SIGCHLD` of a pane whose pty reaches EOF before the child's exit is signalled: on that EOF tmux calls `utempter_remove_record`, which sets `SIGCHLD` to `SIG_DFL` while it waits for its helper. The pane then shows dead, but tmux never reaps it, so `pane-died` does not fire and the hook above does not respawn the cockpit view until the server's next `SIGCHLD`. Fixed upstream in tmux 3.6 (commit `fa5f3cef3d`, tmux GitHub issue 4559). A running server keeps the version it started with, so after an upgrade it must be restarted. **Bare `cpd` does it, and the engine finishes it** (User, hs-d259 and hs-d294; commands.md §13.3): when the server's version (`tmux -L <socket> display -p '#{version}'`) is older than the installed client's (`tmux -V`), it restarts the server onto the installed tmux **when it is safe**, then reopens every Lead and Manager Session that had a pane (same pi session file, same place: the chat slot, its parked window, a Context's window) and attaches. **Safe** = no Attempt `starting`, `running` or `merging`, and no Lead or Manager Session in state `working` or `blocked` (a `blocked` one has a dialog open). **Not safe**: **hold, drain, restart** (hs-d294). It marks a restart **pending** (`$CPD_HOME/run/tmux-restart.pending`: JSON `{at, server, installed, failed}`; no store change, hs-d233's freeze), attaches at once with the server's own tmux binary (`/proc/<server pid>/exe`; a newer client cannot attach to an older server) and prints one line saying so and that the restart waits. **Hold:** while it is pending and has not failed, engine E3 starts no Attempt (§3.7); running ones finish. **Drain:** once no Attempt is `starting`, `running` or `merging` and no Lead or Manager is `working` or `blocked`, the engine starts the restart **detached** (`cpd watch --restart-tmux`, `setsid`, its log `run/tmux-restart.log`, §3.7 "The tmux restart's drain"), because the restart kills the server the engine runs in. **Restart:** under `locks/tmux-restart.lock` the detached process checks again that it is safe, records every Lead and Manager Session with a live pane **or** a pane its row records (a pane that is dead or lacks its `@cpd_session` is still a Session to bring back, hs-n285) and its place (the chat slot, or parked: a Lead's `park-<label>` window, a Manager's `ctx-<context>` window), **taking the list before the kill and every command to the old server (the list, `kill-server`) from the server's own binary** (`/proc/<server pid>/exe`, as the attach does: the installed tmux may be another version), kills the server and waits for it to be gone (a dying server's `server exited unexpectedly`, `lost server`, `no server running` and a refused connection all mean it is going or gone, never a failure), **writes the rows of each recorded Session as engine E2 does for a pane that is gone (§3.6: `stopped`, no pane), so no row keeps a pane id of the dead server (the new server hands them out again) and a Session says `stopped` until the adapter of its new pi reports `idle` at start-up (commands.md §15.2; the adapter watchdog, §6.7, restarts a pi whose adapter never does)**, runs `cpd tui` (the cockpit on the installed tmux, and `watch --ensure`, so the engine runs again), reopens each Session in the same place (the chat slot's as `session open` does, the others in a new window running `cpd session run <id>`, which resumes the same pi session file), clears the pending file and logs the result. **Once the server is killed nothing stops the restart**: a step that fails (the wait for the old engine, `cpd tui`, one Session's reopening) is kept and the next step runs, so the cockpit is rebuilt and every Session reopened whatever failed before; the failures are then reported together, as the `failed` below. A **failure** keeps the file with `failed` (`at`, `code`, `reason`) and the engine, once it runs again, appends one `error` Event for it; a failed restart holds nothing, and the next bare `cpd` tries again. Then the engine schedules as usual and the User reconnects with bare `cpd`. Never from inside the cockpit's own server (it would kill the pane it runs in). Nothing else restarts the server.
 
-### 6.1.1 Pill and line colours (hs-d530, hs-d531)
+### 6.1.1 Palette (hs-d534)
 
-One rule for every pill and every line of the cockpit (User, ui-design round 1, 2026-10-21; hs-d530, hs-d531; refines hs-d501). Colours are terminal colour numbers: 0 black, 4 blue, 7 grey, 8 dark grey, 15 white (ratatui `Black` 0, `Blue` 4, `Gray` 7, `DarkGray` 8, `White` 15; tmux `colour0`, `blue`, `colour7`, `colour8`, `colour15`). **Whether an element can be clicked decides its colour, not its meaning.**
+The one palette of the cockpit, the pi window included (User, tui-visuals, 2026-10-21; **hs-d534**, which replaces hs-d501's concept, hs-d530's and hs-d531's pill colours and hs-d352's blue escalation bar; hs-d351 and hs-d362 stand where they agree; hs-d531's colour 7 for interactive lines stands). Every other section of the docs says what an element is and refers here for its colour; none restates one.
 
-- **R1. A non-interactive pill is background 8, text 7, caps in colour 8 (as foreground).** Every title is one: in-pane section titles, the pane titles of unfocused panes, popup and dialog titles, the legend's titles and sample pills, the Inbox title and its count pill, the status line's Inbox counter pill, workers pill, version pill and preview pill, and cpd's message title pill in the pi chat. A pill has **one text colour**: the colours that carried state inside a pill (the Inbox counter's urgency colour, the workers' `N` green and `W` yellow, `dim` parts) are all 7 now, and the darker background of the status pills is gone. State shows in the words and numbers, not in the pill's colours.
-- **R2. An interactive pill is background 15, text 0, caps in colour 15.** One the User can click: the status line's three buttons, the Plan view's Job pills (the icon is part of the text, so 0 too), any dialog button drawn as a pill. The selected or active marking of a pill (today REVERSED or BOLD) is unchanged in kind and applies on top of these colours.
-- **R3. The focused pane's title pill is background 4 (blue), text 0, caps 4** (hs-d351, unchanged in look).
-- **R4. Lines are colour 8 when non-interactive (almost all) and colour 7 when interactive.** Plain lines: the `─` lines of titles, the status line's joins and fill, fold rails (`╭ ├─ │ ╰`) and their toggles' lines, separators, PR box and chart lines, menu borders. Interactive lines: tmux's `pane-border-style` (an unfocused border can be dragged) and `popup-border-style` (the frame of a popup or dialog that can be dragged) are `fg=colour7`. `pane-active-border-style` stays `fg=blue`.
-- **R5. Nothing else changes** (hs-d531 (3)): state glyph colours outside pills, `DIM` on non-pill text, reverse-video cursors, layout and text stay as they are.
+**The 16 colours, by number:** 0 black, 1 red, 2 green, 3 yellow, 4 blue, 5 magenta, 6 cyan, 7 grey, and 8 to 15 their bright pairs (8 dark grey, 9 bright red, 10 bright green, 11 bright yellow, 12 bright blue, 13 bright magenta, 14 bright cyan, 15 white). ratatui: `Black` 0, `Red` 1 … `Cyan` 6, `Gray` 7, `DarkGray` 8, `LightRed` 9 … `LightCyan` 14, `White` 15. tmux: `colour0` … `colour15` (`blue` is 4; tmux's `white` is **7**, never used here). **No other colour exists**: no 256-palette number (the status pills' `colour236` is gone), no hex, no theme name; **no `DIM`** (it becomes colour 8) and **no `REVERSED`** (a cursor or selection is a blue block, below); `BOLD` and `UNDERLINED` are not colours and stay.
 
-Where the colours live: the views take them from named functions in `tui/src/palette.rs` only (the test `no_colour_outside_the_palette` forbids `Color::` elsewhere under `tui/`): `palette::pill_static()` (background `DarkGray`, text `Gray`), `palette::pill_interactive()` (background `White`, text `Black`) and `palette::pill_focus()` (background `Blue`, text `Black`); the caps are drawn with the pill's background as foreground. tmux draws its own pills from the format strings below. pi has no numbered colours in its theme, so `pi/lib/render.ts` writes explicit SGR.
+**The rules.**
 
-| Element | Interactive | bg | fg (text) | caps | Where |
-|---|---|---|---|---|---|
-| In-pane section title (the Inbox, the Deploy column's `PRs`, logs, legend, dialog titles, the Plan view's in-pane titles) | no | 8 | 7 | 8 | `palette::pill_static()` |
-| Count pill at a title's end (Inbox, `PRs`) | no | 8 | 7 | 8 | `palette::pill_static()` |
-| Popup and dialog title pill (the kit's `title`) | no | 8 | 7 | 8 | `palette::pill_static()` |
-| Legend's titles and sample pills (Job, tier, state samples) | no | 8 | 7 | 8 | `palette::pill_static()` |
-| Pane title, unfocused | no | 8 | 7 | 8 | `pane-border-format`, below |
-| Pane title, focused | no | 4 | 0 | 4 | `pane-border-format`, below |
-| Status line button (`󰨝`, `󰨁`, `󰧭`) | yes | 15 | 0 | 15 | `status-format[0]`, below; `palette::pill_interactive()` has the same colours |
-| Status line Inbox counter pill | no | 8 | 7 | 8 | `status-format[0]`; the text has no style of its own |
-| Status line workers pill (long and short form) | no | 8 | 7 | 8 | `status-format[0]`; the text has no style of its own |
-| Status line version pill | no | 8 | 7 | 8 | `status-format[0]` |
-| Status line preview pill | no | 8 | 7 | 8 | `status-format[0]` (no longer yellow) |
-| Plan view Job pill, every status (draft, queued, running, merging, merged, failed) | yes | 15 | 0 (icon, key, tier, `aN` too) | 15 | `palette::pill_interactive()`; the selected pill keeps BOLD and REVERSED on top |
-| Dialog button drawn as a pill | yes | 15 | 0 | 15 | `palette::pill_interactive()` |
-| cpd message title pill in the pi chat | no | 8 | 7 | 8 | SGR in `pi/lib/render.ts`: left cap `ESC[90m` + U+E0B6, then `ESC[100m` `ESC[37m`, the title, then `ESC[49m` `ESC[90m` + U+E0B4, then `ESC[39m` (reset), replacing `theme.fg("muted")` with reverse |
-| Fold rails and toggle lines (`╭ ├─ │ ╰`, `╰󰁋 expand`), title lines, `─` leads | no | – | 8 | – | `palette::fg(Meaning::Nothing)`; in pi the muted chrome tone, as before |
-| Status line joins, fill, leading and closing `─` | no | – | 8 | – | `#[fg=colour8]` |
-| PR box and chart lines, menu borders, separators | no | – | 8 | – | `palette::fg(Meaning::Nothing)` |
-| Unfocused pane borders | yes (drag) | – | 7 | – | `pane-border-style fg=colour7` |
-| Focused pane border | yes (drag) | – | 4 | – | `pane-active-border-style fg=blue`, unchanged |
-| Popup and dialog frames (legend, logs, merge, dialogs) | yes (drag) | – | 7 | – | `popup-border-style fg=colour7` |
+- **(1) Base for read-only, bright for clickable.** A colour *n* (1-7) is *n* on what cannot be clicked and *n*+8 on what can. Clickable is the **whole hit target**, so every coloured mark inside a clickable area is bright: a red dot is 9 in the tree (the Plan row is clickable), while the status line's unclickable Inbox counter is 1. Blue is the exception hs-d534 itself states: it is **always 4** (the focus and selection colour, hs-d351), clickable or not; a blue block's text is 0.
+- **(2) Colourless text follows one hierarchy of attention: 15 > 7 > 8 > 0.** **15** is clickable text. **7** is read-only text, inactive (asleep) rows and the fold toggles (`╰󰁋 expand`, `╰󰁣 collapse`). **8** is muted: lines, rails, borders, separators, archived and cancelled rows, zero counts and secondary text (ages, times, scroll cues, placeholders, the former `DIM` text). **0** is the background (and the text on a block). **Interactive lines**, the draggable pane borders and popup frames, are **7** (hs-d531); every other line is 8.
+- **(3) Colour goes on the text or on the background, never both.** A block (a pill, a selection) is the colour its text would have, **inverted, with text 0**: a read-only title pill is background 7, text 0 (replacing hs-d531's 8 and 7); a clickable pill is 15, text 0; a coloured pill is its colour, text 0 (its bright pair when clickable); a selection is the blue block (background 4, text 0). **Coloured text never sits on a coloured block**: every mark inside a block is text 0, so a pill carries no coloured text and a cursor row shows no state colours. A pill's caps (U+E0B6, U+E0B4) are the block's colour as foreground, on the terminal's background.
+
+**What each colour means.**
+
+| Colour | Meaning |
+|---|---|
+| 0 black | the background, and the text on a block; no meaning |
+| red (1, 9) | **blocking, the User needs to act now**: a stuck failed Job, a PR no Lead owns with failing checks or a conflict, a closed PR its Lead asks the User about, a log error for the User, a view that cannot load its data (its error line), the Inbox's red tier, Pulse's error bars |
+| green (2, 10) | **success, completed**: merged Jobs and PRs, passed checks, Pulse's merge bars |
+| yellow (3, 11) | **urgent, not blocking** (delivery matters; only a blocker ranks higher): merging, ready to merge (a PR's `open` is yellow only when it is ready to merge, `merge_state` `clean`; otherwise it is colourless, 7 read-only or 15 clickable), the Inbox's yellow tier, a dialog's input refusal, the preview pill |
+| blue (4) | **focus and selection, purely informational**: the focused pane's border and title, the selected tree name, and every cursor and selection as a blue block (background 4, text 0) in place of reverse video: the tree's and the Inbox's cursor, the selected Job pill, the active PR row, the selected entry of a menu, the default dialog button, the Logs dialog's opened-at line, tmux's menus and copy mode |
+| magenta (5, 13) | **needs the User, not urgent**: plans, questions, decisions, draft Jobs, a pending Plan review, the Inbox's magenta tier, Pulse's plan and ask bars, cpd's own blocks in the pi chat |
+| cyan (6, 14) | **agent activity**: running Jobs, working dots and spinners, the Lead-working dot, what a Lead is handling (a failed Job, a closed PR, the conflict or failing checks of an owned PR, `updating`), escalations (Pulse's bar), pending checks, Pulse's activity and PR-opened bars, the waiting Workers count (the status line's `W`: its pill holds no colour by rule (3), so the cyan applies where the count is drawn as text outside a block; there is none today), the Worker pane's `agent` label, a log error addressed to a Lead. The Worker pane's `you` label is **7**, not cyan (hs-d362 amended) |
+| grey (7, 15) | the default when no meaning applies: 7 read-only, 15 clickable |
+
+**Job pills** (the Plan view's cards, the legend's samples, hs-d534): draft magenta, queued 15, running cyan, merging yellow, merged green, failed (its Lead handles it) cyan, failed and stuck (`job-stuck` open) red, cancelled 8; the block is the bright pair (13, 15, 14, 11, 10, 14, 9; cancelled stays 8, which has no pair) because a pill is clickable, text 0, caps the block's colour. The selected pill is the blue block. **The status line:** buttons 15, text 0; the Inbox counter pill takes its most urgent tier's colour inverted (red 1, yellow 3, magenta 5, 7 for replies only, 8 at zero), text 0; the workers pill and the version pill 7, text 0, with no colours inside; the preview pill yellow (background 3, text 0). **The pi chat** (hs-d508): cpd's blocks are magenta, tool pills follow their status in base colours (running cyan, done green, failed red), the Thinking pill is cyan, lines and rails are 8, toggles are 7; the pi window follows the palette through a **pi theme that cpd ships**, mapping pi's colour tokens to the indices 0-15 (pi themes accept indices). **Its owner is Plan `pi-pin`**: the rows below that say "pi theme" state the contract, and the Plan `tui-visuals` implements only `tui/` and the tmux options and formats.
+
+**Where the colours live.** The views take every colour from `tui/src/palette.rs` only (the test `no_colour_outside_the_palette` forbids `Color::` elsewhere under `tui/`): `palette::fg(Meaning)` for a meaning's colour (base, or the bright pair of it for a mark inside a clickable area), the colourless text of rule (2) (15, 7, 8), `palette::pill_static()` (background 7, text 0), `palette::pill_interactive()` (background 15, text 0), `palette::pill(…)` (a coloured pill: its colour, text 0), and `palette::pill_focus()` and `palette::selected()` (the blue block, background 4, text 0). tmux draws its own pills and lines from the format strings and the server options below, which hold the same numbers. pi draws from the theme of Plan `pi-pin`.
+
+**The elements.** One row per coloured element of the cockpit (the inventory of `docs/research/colour-audit.md`, decided by hs-d534). *Interactive* is whether the element is part of a hit target (click, key, or a terminal modifier-click on an OSC 8 link). For a block, *Colour* gives the background, the text and the caps; for text it gives the foreground; a mark inside a blue block is text 0.
+
+| Element | Interactive | Colour | Where |
+|---|---|---|---|
+| **The Context tree** | | | |
+| Fold lines `╭`, `├─`, `╰─`, `│`; the closing `╰─` (nothing to fold) | no | fg 8 | palette: muted |
+| Live Context title (its id), unselected | yes (opens its Manager) | fg 15, bold | palette: clickable text |
+| Context title, selected (its Manager is in the chat slot) | yes | fg 4 | palette: blue |
+| Archived Context row (dot and id) | no | fg 8 | palette: muted |
+| Live Plan or fork row name, unselected | yes (opens the Session) | fg 15 | palette: clickable text |
+| Plan or fork row name, selected (its Session is in the chat slot) | yes | fg 4 (beats the muted colour of archived and asleep rows) | palette: blue |
+| Archived Plan or fork row (dot, name, counters) | yes (opens its history) | fg 8 on every mark: archived wins over the clickable 15, and no mark is coloured | palette: muted |
+| Asleep Session row (dot, name, counters) | yes (resumes it) | fg 7 on every mark: inactive text, no mark is coloured | palette: read-only text |
+| Keyboard cursor row (only while the pane has focus) | yes | block: bg 4, fg 0, the whole row; its marks have no colour of their own | `palette::selected()` |
+| Dot: needs-you, red / yellow / magenta / white | part of the row | fg 9 / 11 / 13 / 15 | palette: bright meaning |
+| Dot: waiting (half circle) | part of the row | fg 14 | palette: bright meaning |
+| Dot: working (spinner) | part of the row | fg 14 | palette: bright meaning |
+| Dot: idle | part of the row | fg 15 | palette: clickable text |
+| Dot: stopped | part of the row | fg 8 | palette: muted |
+| Counter: queued | part of the row | fg 15 | palette: bright meaning |
+| Counter: draft (phase `plan`) | part of the row | fg 13 | palette: bright meaning |
+| Counter: zero | part of the row | fg 8 | palette: muted |
+| Counter: running | part of the row | fg 14 | palette: bright meaning |
+| Counter: merging | part of the row | fg 11 | palette: bright meaning |
+| Counter: merged | part of the row | fg 10 | palette: bright meaning |
+| Counter: failed, a Lead handles it | part of the row | fg 14 | palette: bright meaning |
+| Counter: failed, `job-stuck` open | part of the row | fg 9 | palette: bright meaning |
+| Counter separator `⋅` | no | fg 8 | palette: muted |
+| Closing toggle `╰󰁋 expand` / `╰󰁣 collapse` | yes (click) | fg 7 | palette: read-only text |
+| ` no Contexts` | no | fg 8 | palette: muted |
+| Scroll cues `▲ n more`, `▼ n more` (every view, popup and column) | no | fg 8 | `dialog/scroll.rs` through the palette: muted |
+| Footer: the snapshot's error (every view's error line) | no | fg 1 | palette: red |
+| **The Inbox** | | | |
+| Title pill `Inbox` and its count pill | no | bg 7, fg 0, caps 7 | `palette::pill_static()` |
+| Title lead `╭─` and the `─` line to the count | no | fg 8 | palette: muted |
+| Row branch `│` | no | fg 8 | palette: muted |
+| Tier glyph: red / yellow / magenta / white | yes (part of the item's row) | fg 9 / 11 / 13 / 15 | palette: bright meaning |
+| Merge spinner in the glyph cell (an item's PR merge runs) | part of the row | fg 11 | palette: bright meaning |
+| Item label (also when it is an OSC 8 link) | yes | fg 15 | palette: clickable text |
+| Age (`42s`, `5m`) | no | fg 8 | palette: muted |
+| Keyboard cursor on an item row | yes | block: bg 4, fg 0 | `palette::selected()` |
+| Closing toggle `╰󰁋 expand` / `╰󰁣 collapse` | yes | fg 7 | palette: read-only text |
+| Closing `╰─` and `╰󰁕 up to date, drink some water` | no | fg 8 | palette: muted |
+| **The Plan view** | | | |
+| Job pill: draft | yes | bg 13, fg 0, caps 13 | `palette::pill(…)`, bright |
+| Job pill: queued | yes | bg 15, fg 0, caps 15 | `palette::pill_interactive()` |
+| Job pill: running | yes | bg 14, fg 0, caps 14 | `palette::pill(…)`, bright |
+| Job pill: merging | yes | bg 11, fg 0, caps 11 | `palette::pill(…)`, bright |
+| Job pill: merged | yes | bg 10, fg 0, caps 10 | `palette::pill(…)`, bright |
+| Job pill: failed (its Lead handles it) | yes | bg 14, fg 0, caps 14 | `palette::pill(…)`, bright |
+| Job pill: failed and stuck | yes | bg 9, fg 0, caps 9 | `palette::pill(…)`, bright |
+| Job pill: cancelled | yes | bg 8, fg 0, caps 8 | `palette::pill(…)` |
+| Job pill text (icon, key, tier, `aN`) | part of the pill | fg 0 | pill |
+| Selected Job pill | yes | block: bg 4, fg 0, caps 4 | `palette::pill_focus()` |
+| Chart lines (`─`, `│`, junctions, arrows) | no | fg 8 | palette: muted |
+| PR box border and its `┬` exit and `󱦳` arrow | no | fg 8 | palette: muted |
+| PR box title: the key (bold), ` · repo 󱦰 base · ` | no | fg 7 | palette: read-only text |
+| PR box title: `#12` | yes (inside the link) | fg 15 | palette: clickable text |
+| PR box title: state `open` | yes (the link) | fg 15; fg 11 when the PR is ready to merge | palette: clickable text, bright meaning |
+| PR box title: `merged` | yes | fg 10 | palette: bright meaning |
+| PR box title: `closed`, its Lead handles it / asks the User | yes | fg 14 / fg 9 | palette: bright meaning |
+| PR box title: `conflict` and `updating` (every box PR has a Lead) | yes | fg 14 | palette: bright meaning |
+| PR box title: Lead-working dot | yes (inside the link) | fg 14 | palette: bright meaning |
+| PR box title: link cue `󰏌` | yes | fg 15 | palette: clickable text |
+| PR box title: PR status before a pull request exists (`waiting`, `dispatch`) | no | fg 8 | palette: muted |
+| ` no Jobs ` in an empty box | no | fg 8 | palette: muted |
+| Plan review row: ` Plan review r2 ` (linked) / unlinked | yes when the port is known | fg 15 / fg 7 | palette: clickable text, read-only text |
+| Plan review row: `pending` (linked) / unlinked | yes when the port is known | fg 13 / fg 5 | palette: meaning |
+| Foot lines: ` no Lead session in the centre`, `no PR yet: cpd pr add`, ` no Plans yet`, `no Plan yet` | no | fg 8 | palette: muted |
+| Foot line: the view's error | no | fg 1 | palette: red |
+| Pulse row: Plan id | yes (opens the Lead) | fg 15 | palette: clickable text |
+| Pulse bar: error, Job failed | part of the row | fg 9 | palette: bright meaning |
+| Pulse bar: Plan or ask Event | part of the row | fg 13 | palette: bright meaning |
+| Pulse bar: PR opened, escalation, any other activity | part of the row | fg 14 | palette: bright meaning |
+| Pulse bar: Job or PR merged | part of the row | fg 10 | palette: bright meaning |
+| Pulse: empty bucket `▁`, age (`12m`), `quiet 41m` | no | fg 8 | palette: muted |
+| Legend popup: title pill | no | bg 7, fg 0, caps 7 | `palette::pill_static()` |
+| Legend popup: section titles (`Inbox`, `Pulse`, …) | no | fg 7, bold, underlined | palette: read-only text |
+| Legend popup: column header, scroll position `1-20/60` | no | fg 8 | palette: muted |
+| Legend popup: swatches, Job sample pills, counters, Dots, PR states, checks, tiers, Pulse samples | no | the colour of the element they sample, as the view draws it (the same palette call, so the legend shows what the cockpit shows) | palette |
+| Legend popup: every other word (meanings, intro line) | no | fg 7 | palette: read-only text |
+| **The Deploy column** | | | |
+| Machine row: hostname (bold), CPU, GPU, memory line | no | fg 7 | palette: read-only text |
+| Section title ` ──PRs───…──3 `: lead, line | no | fg 8 | palette: muted |
+| Section title pill `PRs` and its count pill | no | bg 7, fg 0, caps 7 | `palette::pill_static()` |
+| PR first line ` owner/repo#12`, owned / not owned | owned yes; not owned no (right click only) | fg 15 / fg 7 | palette: clickable text, read-only text |
+| PR first line: `󰏌` | yes (modifier-click) | fg 15 | palette: clickable text |
+| PR second line: `open`, owned / not owned | as above | fg 15 / 7; fg 11 / 3 when the PR is ready to merge | palette: text, meaning |
+| PR second line: `draft`, owned / not owned | as above | fg 13 / 5 | palette: meaning |
+| PR second line: Lead-working dot | part of the row | fg 14 | palette: bright meaning |
+| PR second line: checks passed icon, owned / not owned | as above | fg 10 / 2 | palette: meaning |
+| PR second line: checks pending icon, owned / not owned | as above | fg 14 / 6 | palette: meaning |
+| PR second line: checks none icon | as above | fg 8 | palette: muted |
+| PR second line: checks failed icon, owned / not owned | as above | fg 14 (its Lead handles it) / fg 1 (no Lead owns it) | palette: meaning |
+| PR second line: review text (`no review`, `approved`, `changes requested`), owned / not owned | as above | fg 15 / 7 | palette: text |
+| PR second line: ` conflict`, owned / not owned | as above | fg 14 / fg 1 | palette: meaning |
+| PR second line: ` updating` (owned) | yes | fg 14 | palette: bright meaning |
+| PR second line: title | part of the row | fg 8 | palette: muted |
+| PR second line: merge icon `󰘭` | yes (opens the merge popup) | fg 15 | palette: clickable text |
+| Merge spinner (replaces the merge icon, the menu's Merge entry, the Inbox glyph) | part of a clickable area | fg 11 | palette: bright meaning |
+| Active PR row (its Plan is in the chat slot), both lines | yes | block: bg 4, fg 0 across both lines | `palette::selected()` |
+| ` no open PRs` | no | fg 8 | palette: muted |
+| The snapshot's error (last row) | no | fg 1 | palette: red |
+| PR menu (right click) border | no | fg 8 | palette: muted |
+| PR menu entries `Merge`, `Copy Link`, `Go to Lead` | yes | fg 15 | palette: clickable text |
+| PR menu selected entry | yes | block: bg 4, fg 0 | `palette::selected()` |
+| PR menu busy `Merge ⠿` | part of an entry | fg 11 | palette: bright meaning |
+| **The status line** (tmux, `status-format[0]`) | | | |
+| `─` line: leading, joins, fill, closing | no | fg 8 | `#[fg=colour8]` |
+| Button pills `󰨝 󰨁 󰧭` | yes (click ranges) | bg 15, fg 0, caps 15 | `status-format[0]`, `BTN` below |
+| Preview pill `preview: <path> <sha>` | no | bg 3, fg 0, caps 3 | `status-format[0]` |
+| Inbox counter pill `inbox <n>`, by `@cpd_inbox_tier` | no | bg 1 (`red`), 3 (`yellow`), 5 (`magenta`), 7 (`white`), 8 (`none`), fg 0, caps the bg | `status-format[0]`, `TIER` below |
+| Workers pill (long and short form), no colours inside | no | bg 7, fg 0, caps 7 | `status-format[0]` |
+| Version pill | no | bg 7, fg 0, caps 7 | `status-format[0]` |
+| **Pane borders and titles** (tmux) | | | |
+| Border lines, unfocused pane | yes (drag) | fg 7 | `pane-border-style` |
+| Border lines, focused pane | yes (drag) | fg 4 | `pane-active-border-style` |
+| Pane title pill, unfocused (the `━` before it, caps, block) | no | bg 7, fg 0, caps 7, the `━` 7 | `pane-border-format` |
+| Pane title pill, focused | no | bg 4, fg 0, caps 4, the `━` 4 | `pane-border-format` |
+| **Dialogs, popups and menus** | | | |
+| Popup frame (the single-line frame and its ` title `) | yes (drag) | fg 7 | `popup-border-style` |
+| Dialog title pill, Logs title pill | no | bg 7, fg 0, caps 7 | `palette::pill_static()` |
+| Dialog body text | no | fg 7 | palette: read-only text |
+| Input field text | yes | fg 15 | palette: clickable text |
+| Input field cursor | yes | block: bg 4, fg 0 | `palette::selected()` |
+| Validation refusal text | no | fg 3 | palette: yellow |
+| Button: the first (the default action) | yes | block: bg 4, fg 0 | `palette::selected()` |
+| Button: the others, as text / drawn as a pill | yes | fg 15 / bg 15, fg 0, caps 15 | palette: clickable text, `palette::pill_interactive()` |
+| Dialog position `1-5/12`, scroll cues | no | fg 8 | palette: muted |
+| Merge popup: `<owner>/<repo>#12`, title line, ` method: … ` | no | fg 7 | palette: read-only text |
+| Logs dialog: event time `12:03:41` | no | fg 8 | palette: muted |
+| Logs dialog: event text | no | fg 7 | palette: read-only text |
+| Logs dialog: `error` Event addressed to a Lead | no | fg 6 | palette: meaning |
+| Logs dialog: `error` Event for the User | no | fg 1 | palette: meaning |
+| Logs dialog: the Event the dialog opened at | no | block: bg 4, fg 0 across its line | `palette::selected()` |
+| Logs dialog: foot error | no | fg 1 | palette: red |
+| cpd's own menus (tree, PR): border | no | fg 8 | palette: muted |
+| cpd's own menus: entries / selected entry | yes | fg 15 / block bg 4, fg 0 | palette: clickable text, `palette::selected()` |
+| tmux's own pane menu | yes | text 15 (`menu-style`), border 8 (`menu-border-style`), selected entry bg 4, fg 0 (`menu-selected-style`) | server options, §6.1 |
+| **cpd's messages in the pi chat** (`pi/lib/render.ts`) | | | |
+| Title row lead `╭─` | no | fg 8 | pi theme (Plan `pi-pin`) |
+| Title pill (`cpd Message from pi-pin`) | no | bg 5, fg 0, caps 5 (cpd's blocks are magenta, rule (3)) | pi theme (Plan `pi-pin`) |
+| Rail `│ ` before each content line | no | fg 8 | pi theme (Plan `pi-pin`) |
+| Content lines | no | fg 7 | pi theme (Plan `pi-pin`) |
+| Toggle row `╰󰁋 expand` / `╰󰁣 collapse` | yes (click, Ctrl+O) | fg 7 | pi theme (Plan `pi-pin`) |
+| The message's background (every line) | no | 0: no tinted fill (the theme's `customMessageBg` is colour 0) | pi theme (Plan `pi-pin`) |
+| pi tool pills: running / done / failed | no | bg 6 / 2 / 1, fg 0 (base colours) | pi theme (Plan `pi-pin`) |
+| pi Thinking pill | no | bg 6, fg 0 | pi theme (Plan `pi-pin`) |
+| pi lines and rails, toggles | no / yes | fg 8 / fg 7 | pi theme (Plan `pi-pin`) |
+| **Other** | | | |
+| Worker pane: `you` label (bold) and the User's lines | no | fg 7 | palette: read-only text |
+| Worker pane: `agent` label (bold) | no | fg 6 | palette: meaning |
+| Worker pane: agent text | no | fg 7 | palette: read-only text |
+| Worker pane: `→ tool ` name | no | fg 6 | palette: meaning |
+| Worker pane: time `12:03:41`, tool result `󰘌 last`, foot status line, placeholder `No session file at …` | no | fg 8 | palette: muted |
+| Worker pane: foot note when the session file is unreadable | no | fg 1 | palette: red |
+| History pane: title line (bold) | no | fg 7 | palette: read-only text |
+| Chat pane placeholder (no Lead in the slot) | no | fg 8 | palette: muted |
+| tmux message line (`display-message`, a failed status-button click) | no | tmux's own default: a yellow block with text 0, which is the palette's yellow (a refusal) by look; cpd sets no `message-style` | tmux default |
+| tmux copy and view mode highlight | yes | block: bg 4, fg 0 | `mode-style`, §6.1 |
+| OSC 8 links (the `󰏌` cells, link labels) | yes (modifier-click) | the colour of the cell they sit on; cpd adds none | `tui/src/link.rs` |
 
 **The exact formats** (`core/src/host/tmux.rs`; tests pin them). `\u{e0b6}` and `\u{e0b4}` are the caps U+E0B6 and U+E0B4. Inside a `#{?…}` branch a comma would split the branch, so each `#[…]` there holds one attribute.
 
-`pane-border-format` is, with `T` for the title expression of the table in §6.1 (`#{@cpd_title}`, or `Context`, `Plan`, `Deploy`, `Worker · #{@cpd_job} (Read-Only)`, `#{pane_current_command}`):
+`pane-border-format` (`BORDER_FORMAT`) is, with `T` for the title expression of the table in §6.1 (`#{@cpd_title}`, or `Context`, `Plan`, `Deploy`, `Worker · #{@cpd_job} (Read-Only)`, `#{pane_current_command}`):
 
 ```
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}T#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4}
+#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[fg=colour0]#{?pane_active,#[bg=blue],#[bg=colour7]}T#{?pane_active,#[fg=blue],#[fg=colour7]}#[bg=default]\u{e0b4}
 ```
 
-that is, `BORDER_FORMAT` keeps its branches (Lead with `@cpd_title`, chat, history, the views) and replaces each `#[reverse]` … `#[noreverse]` pair around the title by the two `#{?pane_active,…}` selectors above: the title text is `fg=colour0` on `bg=blue` when focused, `fg=colour7` on `bg=colour8` when not; the caps and the leading `━` are `fg=blue` or `fg=colour8`; `#[bg=default]` ends the block before the right cap. No `reverse` is left in the format.
+that is, `BORDER_FORMAT` keeps its branches (Lead with `@cpd_title`, chat, history, the views): the title text is `fg=colour0` on `bg=colour7` (read-only title pill) or on `bg=blue` (the focused pane); the leading `━` and the caps are `fg=colour7` or `fg=blue`; `#[bg=default]` ends the block before the right cap. No `reverse` and no `colour8` is left in it.
 
-`status-format[0]` is the concatenation of these parts, in order (`JOIN` = `#[fg=colour8]─#[default]`; `BTN(range, glyph)` = `#[range=user|<range>]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]<glyph>#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]`; `PILL(text)` = `#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]<text>#[fg=colour8]#[bg=default]\u{e0b4}#[default]`):
+`status-format[0]` is the concatenation of these parts, in order. `JOIN` = `#[fg=colour8]─#[default]`. `PILL(c, text)` = `#[fg=c]\u{e0b6}#[fg=colour0]#[bg=c]<text>#[fg=c]#[bg=default]\u{e0b4}#[default]`: the one pill of the status line, its colour `c` a colour number (`colourN`) or the `TIER` expression, its text always `fg=colour0`. `BTN(range, glyph)` = `#[range=user|<range>]` `PILL(colour15, glyph)` `#[norange]`. `TIER` is the tmux expression of the Inbox counter's colour, from the option **`@cpd_inbox_tier`**:
+
+```
+#{?#{==:#{@cpd_inbox_tier},red},colour1,#{?#{==:#{@cpd_inbox_tier},yellow},colour3,#{?#{==:#{@cpd_inbox_tier},magenta},colour5,#{?#{==:#{@cpd_inbox_tier},white},colour7,colour8}}}}
+```
+
+**`@cpd_inbox_tier`** (hs-d534) is a global user option the engine sets **next to `@cpd_inbox`**, in the same `set -g` and only when it changed (commands.md §12, the `@cpd_workers` step): the urgency of the most urgent open, visible Inbox item, one of **`red`**, **`yellow`**, **`magenta`**, **`white`** (replies only, §2.2 "Inbox item") or **`none`** (no item, `inbox 0`). The format maps them to colours 1, 3, 5, 7 and 8; a value the engine does not set (the option is unset before the engine's first tick, or after a tmux restart) draws colour 8, the same as `none`. Like `@cpd_inbox` it is a display value only, up to one tick late, and nothing reads it back.
 
 ```
 JOIN BTN(reset, 󰨝) JOIN BTN(legend, 󰨁) JOIN BTN(logs, 󰧭)
-#{?#{@cpd_preview},#[fg=colour8]─PILL(preview: #{@cpd_preview}),}
+#{?#{@cpd_preview},#[fg=colour8]─PILL(colour3, preview: #{@cpd_preview}),}
 #[fg=colour8]#{R:─,<fill width, unchanged>}#[default]#[align=right]
-PILL(#{@cpd_inbox}) JOIN PILL(#{?<long fits>,#{@cpd_workers},#{@cpd_workers_short}})
-#{?#{@cpd_version},#[fg=colour8]─PILL(#{@cpd_version}),}
+PILL(TIER, #{@cpd_inbox}) JOIN PILL(colour7, #{?<long fits>,#{@cpd_workers},#{@cpd_workers_short}})
+#{?#{@cpd_version},#[fg=colour8]─PILL(colour7, #{@cpd_version}),}
 JOIN
 ```
 
-Written out, the Inbox counter part is `#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]#{@cpd_inbox}#[fg=colour8]#[bg=default]\u{e0b4}#[default]`, and the first button is `#[range=user|reset]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]󰨝#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]`. There is no second grey background, no `#[reverse]`, no `#[fg=yellow]`, and no `#[push-default]` / `#[pop-default]` left: the engine's texts (`@cpd_inbox`, `@cpd_workers`, `@cpd_workers_short`) carry **no style at all** (plain text, no `#[fg=…]`, no `dim`), so the pill's `fg=colour7` is the only text colour. Widths, the fill and the long or short choice are unchanged (R5: layout stays).
+Written out, the Inbox counter part is `#[fg=TIER]\u{e0b6}#[fg=colour0]#[bg=TIER]#{@cpd_inbox}#[fg=TIER]#[bg=default]\u{e0b4}#[default]` with `TIER` as above, the workers pill is `#[fg=colour7]\u{e0b6}#[fg=colour0]#[bg=colour7]#{…}#[fg=colour7]#[bg=default]\u{e0b4}#[default]`, and the first button is `#[range=user|reset]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]󰨝#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]`. The engine's texts (`@cpd_inbox`, `@cpd_workers`, `@cpd_workers_short`) carry **no style at all** (plain text, no `#[fg=…]`, no `dim`): the pill's `fg=colour0` is the only text colour. Widths, the fill and the long or short choice are unchanged (layout stays).
 
-The server options: `pane-border-style` `fg=colour7`, `pane-active-border-style` `fg=blue`, `popup-border-style` `fg=colour7`.
+The server options of the palette (§6.1 lists them all): `pane-border-style` `fg=colour7`, `pane-active-border-style` `fg=blue`, `popup-border-style` `fg=colour7`, `mode-style` `bg=blue,fg=colour0`, `menu-selected-style` `bg=blue,fg=colour0`, `menu-border-style` `fg=colour8`, `menu-style` `fg=colour15`.
 
 ### 6.2 Sessions, windows and panes
 
