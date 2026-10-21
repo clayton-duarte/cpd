@@ -1093,7 +1093,7 @@ fn a_locked_pr_with_a_merged_or_live_job_or_a_pr_that_needs_it_is_refused_and_a_
     fx.env.sql(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay-1', 'dependent', '{}', 'main', 'waiting', 'cpd/pay-1/dependent', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay-1', 'dependent', 'pay-1', 'base')",
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', 'dependent', 'base')",
         fx.web.display()
     ));
     let writes = fx.writes();
@@ -1209,7 +1209,7 @@ fn an_open_pr_that_another_pr_needs_is_refused_pr_in_use() {
     fx.env.sql(&format!(
         "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
            VALUES ('pay-1', 'dependent', '{}', 'main', 'waiting', 'cpd/pay-1/dependent', cpd_txn(), 't');
-         INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay-1', 'dependent', 'pay-1', 'base')",
+         INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay-1', 'dependent', 'base')",
         fx.web.display()
     ));
     let writes = fx.writes();
@@ -1293,42 +1293,7 @@ fn a_plan_review_goes_stale_when_a_pr_changes() {
     }
 }
 
-// ---------- stacked PRs and needs across Plans (contract §2.2, §3.8 "Stacked PRs"; commands.md §9.4, §9.5) ----------
-
-#[test]
-fn add_stacks_on_a_pr_of_another_plan_and_needs_a_third() {
-    let fx = fx("grounding");
-    fx.plan("ledger-9", "ctx", "grounding");
-    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
-    fx.pr_in("ledger-9", &["add", "schema", "--title", "Change schema", "--repo", fx.web.to_str().unwrap(), "--shape", "config"]).ok();
-    let out = fx.add("web", &fx.pay, &["--base", "ledger-9/api", "--needs", "ledger-9/schema"]).ok();
-    assert_eq!(
-        out["pr"],
-        json!({"key": "web", "repo": fx.pay.display().to_string(), "name": "pay", "base": "cpd/ledger-9/api", "base_pr": "ledger-9/api",
-               "title": "Change web", "needs": ["ledger-9/schema"], "status": "waiting", "lead_branch": "cpd/pay-1/web", "appended": false,
-               "shape": "config", "jobs": ["web-config"]})
-    );
-    // Stored as a base branch and a need with its Plan; shown as references.
-    let stored: (String, String) = fx
-        .store()
-        .read(|c| Ok(c.query_row("SELECT needs_plan, needs FROM pr_needs WHERE pr = 'web'", [], |r| Ok((r.get(0)?, r.get(1)?)))?))
-        .unwrap();
-    assert_eq!(stored, ("ledger-9".to_owned(), "schema".to_owned()));
-    assert_eq!(fx.shown("pay-1", "web"), json!(["cpd/ledger-9/api", "ledger-9/api", ["ledger-9/schema"]]));
-    assert_eq!(fx.shown("ledger-9", "api"), json!(["main", null, []]));
-    let added = fx.events("pr-added");
-    assert_eq!(added.last().unwrap()["data"]["base"], "cpd/ledger-9/api");
-    assert_eq!(added.last().unwrap()["data"]["needs"], json!(["ledger-9/schema"]));
-
-    // It is in the plan fingerprint; the same flags again are `already` and write nothing.
-    let writes = fx.writes();
-    let again = fx.add("web", &fx.pay, &["--base", "ledger-9/api", "--needs", "ledger-9/schema"]).ok();
-    assert_eq!((again["already"].clone(), again["pr"]["base_pr"].clone()), (json!(true), json!("ledger-9/api")));
-    assert_eq!(fx.writes(), writes);
-    let other_base = fx.fingerprint();
-    fx.pr(&["edit", "web", "--base", "main"]).ok();
-    assert_ne!(fx.fingerprint(), other_base, "the base PR is in the fingerprint through `base`");
-}
+// ---------- stacked PRs and needs of one Plan (contract §2.2, §3.8 "Stacked PRs"; commands.md §9.4, §9.5) ----------
 
 #[test]
 fn add_stacks_on_a_pr_of_its_own_plan_and_a_branch_that_is_a_lead_branch_is_stacked_all_the_same() {
@@ -1362,9 +1327,12 @@ fn a_base_that_is_not_a_pr_reference_is_a_branch() {
     // A branch that does not exist is `base_not_found`, also when its first segment is not a Plan.
     let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "feature/y"]), "base_not_found", 4, fx.writes());
     assert_eq!(error["details"]["base"], "feature/y");
-    // A first segment that is a Plan, but no PR in it, is `base_pr_unknown`, not a branch.
-    let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "ledger-9/ghost"]), "base_pr_unknown", 3, fx.writes());
+    // A first segment that is another Plan is `pr_other_plan`, not a branch; one that is the Plan itself, but no PR in it, `base_pr_unknown`.
+    let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "ledger-9/ghost"]), "pr_other_plan", 3, fx.writes());
     assert_eq!(error["details"]["plan"], "ledger-9");
+    assert_eq!(error["details"]["reference"], "ledger-9/ghost");
+    let error = fx.refused(&fx.add("b", &fx.pay, &["--base", "pay-1/ghost"]), "base_pr_unknown", 3, fx.writes());
+    assert_eq!(error["details"]["plan"], "pay-1");
     assert_eq!(error["details"]["pr"], "ghost");
     // A Lead Branch has two slashes and is never read as a reference.
     fx.refused(&fx.add("b", &fx.pay, &["--base", "cpd/ledger-9/api"]), "base_not_found", 4, fx.writes());
@@ -1373,125 +1341,91 @@ fn a_base_that_is_not_a_pr_reference_is_a_branch() {
 #[test]
 fn add_refuses_a_bad_reference_and_writes_nothing() {
     let fx = fx("grounding");
-    fx.plan("ledger-9", "ctx", "grounding");
-    fx.plan("billing-2", "ctx2", "grounding");
-    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
-    fx.pr_in("ledger-9", &["add", "web", "--title", "Change web", "--repo", fx.web.to_str().unwrap(), "--shape", "config"]).ok();
-    fx.pr_in("ledger-9", &["add", "gone", "--title", "Change gone", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
-    fx.pr_in("ledger-9", &["cancel", "gone"]).ok();
-    fx.pr_in("billing-2", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
-    fx.merged_pr("ledger-9", "old", &fx.pay, 21);
-    let writes = fx.writes();
-
-    // Another Context.
-    for flags in [&["--base", "billing-2/api"][..], &["--needs", "billing-2/api"]] {
-        let error = fx.refused(&fx.add("x", &fx.pay, flags), "pr_other_context", 3, writes);
-        assert_eq!(error["details"], json!({"pr": "billing-2/api", "context": "ctx", "other_context": "ctx2"}), "{flags:?}");
-    }
-    // A base PR that is cancelled or merged: name its base branch instead; a need that is cancelled.
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "ledger-9/gone"]), "base_pr_unavailable", 3, writes);
-    assert_eq!(error["details"]["pr"], "ledger-9/gone");
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "ledger-9/old"]), "base_pr_unavailable", 3, writes);
-    assert_eq!(error["details"]["pr"], "ledger-9/old");
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--needs", "ledger-9/gone"]), "needs_unavailable", 3, writes);
-    assert_eq!(error["details"]["needs"], json!(["ledger-9/gone"]));
-    // A base PR of another repo.
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "ledger-9/web"]), "base_pr_other_repo", 3, writes);
-    assert_eq!(
-        error["details"],
-        json!({"pr": "ledger-9/web", "repo": fx.pay.display().to_string(), "base_repo": fx.web.display().to_string()})
-    );
-    // A need of another Plan that is no PR.
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--needs", "ledger-9/ghost,ledger-9/api"]), "needs_unknown", 3, writes);
-    assert_eq!(error["details"]["needs"], json!(["ledger-9/ghost"]));
-    fx.refused(&fx.add("x", &fx.pay, &["--needs", "nowhere-1/api"]), "needs_unknown", 3, writes);
-    // The same PR twice, however it is written; a bad reference is a bad key.
-    fx.refused(&fx.add("x", &fx.pay, &["--needs", "ledger-9/api,ledger-9/api"]), "usage", 2, writes);
     fx.add("api", &fx.pay, &[]).ok();
+    fx.add("web", &fx.web, &[]).ok();
+    fx.add("gone", &fx.pay, &[]).ok();
+    fx.pr(&["cancel", "gone"]).ok();
+    fx.merged_pr("pay-1", "old", &fx.pay, 21);
     let writes = fx.writes();
+
+    // A base PR that is cancelled or merged: name its base branch instead; a need that is cancelled.
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/gone"]), "base_pr_unavailable", 3, writes);
+    assert_eq!(error["details"]["pr"], "gone");
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/old"]), "base_pr_unavailable", 3, writes);
+    assert_eq!(error["details"]["pr"], "old");
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--needs", "gone"]), "needs_unavailable", 3, writes);
+    assert_eq!(error["details"]["needs"], json!(["gone"]));
+    // A base PR of another repo.
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "pay-1/web"]), "base_pr_other_repo", 3, writes);
+    assert_eq!(error["details"], json!({"pr": "web", "repo": fx.pay.display().to_string(), "base_repo": fx.web.display().to_string()}));
+    // A need that is no PR.
+    let error = fx.refused(&fx.add("x", &fx.pay, &["--needs", "ghost,api"]), "needs_unknown", 3, writes);
+    assert_eq!(error["details"]["needs"], json!(["ghost"]));
+    // The same PR twice, however it is written; a bad reference is a bad key.
+    fx.refused(&fx.add("x", &fx.pay, &["--needs", "api,api"]), "usage", 2, writes);
     fx.refused(&fx.add("x", &fx.pay, &["--needs", "api,pay-1/api"]), "usage", 2, writes);
-    fx.refused(&fx.add("x", &fx.pay, &["--needs", "ledger-9/api/x"]), "invalid_pr_id", 2, writes);
-    // A merged PR of another Plan is a need all the same.
-    let out = fx.add("x", &fx.pay, &["--needs", "ledger-9/old"]).ok();
-    assert_eq!(out["pr"]["needs"], json!(["ledger-9/old"]));
+    fx.refused(&fx.add("x", &fx.pay, &["--needs", "pay-1/api/x"]), "invalid_pr_id", 2, writes);
+    // A merged PR is a need all the same.
+    let out = fx.add("x", &fx.pay, &["--needs", "old"]).ok();
+    assert_eq!(out["pr"]["needs"], json!(["old"]));
 }
 
 #[test]
-fn an_archived_plans_pr_is_a_need_only_when_merged() {
+fn a_cycle_of_needs_and_base_prs_is_refused() {
     let fx = fx("grounding");
-    fx.plan("ledger-9", "ctx", "grounding");
-    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
-    fx.merged_pr("ledger-9", "old", &fx.pay, 21);
-    fx.env.sql("UPDATE plans SET archived_at = 't' WHERE id = 'ledger-9'");
-    let writes = fx.writes();
-    for flags in [&["--base", "ledger-9/api"][..], &["--needs", "ledger-9/api"]] {
-        let error = fx.refused(&fx.add("x", &fx.pay, flags), "archived", 3, writes);
-        assert_eq!(error["details"]["plan"], "ledger-9", "{flags:?}");
-        assert_eq!(error["details"]["next"], "cpd plan unarchive --plan ledger-9");
-    }
-    let error = fx.refused(&fx.add("x", &fx.pay, &["--base", "ledger-9/old"]), "archived", 3, writes);
-    assert_eq!(error["details"]["plan"], "ledger-9");
-    assert_eq!(fx.add("x", &fx.pay, &["--needs", "ledger-9/old"]).ok()["pr"]["needs"], json!(["ledger-9/old"]));
-}
-
-#[test]
-fn a_cycle_of_needs_and_base_prs_across_plans_is_refused() {
-    let fx = fx("grounding");
-    fx.plan("ledger-9", "ctx", "grounding");
     fx.add("x", &fx.pay, &[]).ok();
     // y is stacked on x: x only has to start before y; so x may not need y, which would wait for x to merge.
-    fx.pr_in("ledger-9", &["add", "y", "--title", "Change y", "--repo", fx.pay.to_str().unwrap(), "--base", "pay-1/x", "--shape", "config"]).ok();
+    fx.add("y", &fx.pay, &["--base", "pay-1/x"]).ok();
     let writes = fx.writes();
-    let error = fx.refused(&fx.pr(&["edit", "x", "--needs", "ledger-9/y"]), "dependency_cycle", 3, writes);
-    assert_eq!(error["details"]["cycle"], json!(["x", "ledger-9/y", "x"]));
+    let error = fx.refused(&fx.pr(&["edit", "x", "--needs", "y"]), "dependency_cycle", 3, writes);
+    assert_eq!(error["details"]["cycle"], json!(["x", "y", "x"]));
     // Directly or not.
-    fx.pr_in("ledger-9", &["add", "z", "--title", "Change z", "--repo", fx.pay.to_str().unwrap(), "--needs", "y", "--shape", "config"]).ok();
-    let error = fx.refused(&fx.pr(&["edit", "x", "--needs", "ledger-9/z"]), "dependency_cycle", 3, fx.writes());
-    assert_eq!(error["details"]["cycle"], json!(["x", "ledger-9/z", "ledger-9/y", "x"]));
+    fx.add("z", &fx.pay, &["--needs", "y"]).ok();
+    let error = fx.refused(&fx.pr(&["edit", "x", "--needs", "z"]), "dependency_cycle", 3, fx.writes());
+    assert_eq!(error["details"]["cycle"], json!(["x", "z", "y", "x"]));
     // A PR cannot be stacked on itself.
     let error = fx.refused(&fx.pr(&["edit", "x", "--base", "pay-1/x"]), "dependency_cycle", 3, fx.writes());
     assert_eq!(error["details"]["cycle"], json!(["x", "x"]));
-    // y needing x is no cycle: x is merged before y starts, and y is stacked on it.
-    fx.pr_in("ledger-9", &["edit", "z", "--needs", "pay-1/x"]).ok();
-    assert_eq!(fx.shown("ledger-9", "z"), json!(["main", null, ["pay-1/x"]]));
+    // z needing x is no cycle: x is merged before z starts.
+    fx.pr(&["edit", "z", "--needs", "x"]).ok();
+    assert_eq!(fx.shown("pay-1", "z"), json!(["main", null, ["x"]]));
 }
 
 #[test]
 fn edit_stacks_and_unstacks_and_a_pr_something_is_stacked_on_keeps_its_repo() {
     let fx = fx("plan");
-    fx.plan("ledger-9", "ctx", "grounding");
-    fx.pr_in("ledger-9", &["add", "api", "--title", "Change api", "--repo", fx.pay.to_str().unwrap(), "--shape", "config"]).ok();
-    fx.pr_in("ledger-9", &["add", "schema", "--title", "Change schema", "--repo", fx.web.to_str().unwrap(), "--shape", "config"]).ok();
+    fx.add("api", &fx.pay, &[]).ok();
+    fx.add("schema", &fx.web, &[]).ok();
     fx.add("web", &fx.pay, &[]).ok();
 
-    let out = fx.pr(&["edit", "web", "--base", "ledger-9/api", "--needs", "ledger-9/schema"]).ok();
+    let out = fx.pr(&["edit", "web", "--base", "pay-1/api", "--needs", "schema"]).ok();
     assert_eq!(out["fields"], json!(["base", "needs"]));
-    assert_eq!(fx.shown("pay-1", "web"), json!(["cpd/ledger-9/api", "ledger-9/api", ["ledger-9/schema"]]));
+    assert_eq!(fx.shown("pay-1", "web"), json!(["cpd/pay-1/api", "pay-1/api", ["schema"]]));
     assert_eq!(fx.needs("web"), "schema");
     assert_eq!(fx.events("pr-edited").last().unwrap()["data"]["fields"], json!(["base", "needs"]));
     // The same again is `already`; a branch unstacks it.
-    assert_eq!(fx.pr(&["edit", "web", "--base", "ledger-9/api"]).ok()["already"], true);
+    assert_eq!(fx.pr(&["edit", "web", "--base", "pay-1/api"]).ok()["already"], true);
     let out = fx.pr(&["edit", "web", "--base", "main", "--no-needs"]).ok();
     assert_eq!(out["fields"], json!(["base", "needs"]));
     assert_eq!(fx.shown("pay-1", "web"), json!(["main", null, []]));
 
     // The refusals are `pr add`'s.
-    fx.pr(&["edit", "web", "--base", "ledger-9/api"]).ok();
+    fx.pr(&["edit", "web", "--base", "pay-1/api"]).ok();
     let writes = fx.writes();
-    fx.refused(&fx.pr(&["edit", "web", "--base", "ledger-9/ghost"]), "base_pr_unknown", 3, writes);
-    let error = fx.refused(&fx.pr(&["edit", "web", "--base", "ledger-9/schema"]), "base_pr_other_repo", 3, writes);
+    fx.refused(&fx.pr(&["edit", "web", "--base", "pay-1/ghost"]), "base_pr_unknown", 3, writes);
+    let error = fx.refused(&fx.pr(&["edit", "web", "--base", "pay-1/schema"]), "base_pr_other_repo", 3, writes);
     assert_eq!(error["details"]["base_repo"], fx.web.display().to_string());
-    fx.refused(&fx.pr(&["edit", "web", "--needs", "ledger-9/api"]), "usage", 2, writes);
-    fx.refused(&fx.pr(&["edit", "web", "--needs", "ledger-9/ghost"]), "needs_unknown", 3, writes);
+    fx.refused(&fx.pr(&["edit", "web", "--needs", "api"]), "usage", 2, writes);
+    fx.refused(&fx.pr(&["edit", "web", "--needs", "ghost"]), "needs_unknown", 3, writes);
     // A new repo is checked against its base PR: a stacked PR cannot move away from it.
-    fx.env.git(&fx.web, &["branch", "cpd/ledger-9/api"]);
-    fx.refused(&fx.pr(&["edit", "web", "--repo", fx.web.to_str().unwrap(), "--base", "ledger-9/api"]), "base_pr_other_repo", 3, writes);
+    fx.env.git(&fx.web, &["branch", "cpd/pay-1/api"]);
+    fx.refused(&fx.pr(&["edit", "web", "--repo", fx.web.to_str().unwrap(), "--base", "pay-1/api"]), "base_pr_other_repo", 3, writes);
 
-    // A PR that another PR is stacked on keeps its repo, of whichever Plan.
-    let error = fx.refused(&fx.pr_in("ledger-9", &["edit", "api", "--repo", fx.web.to_str().unwrap()]), "pr_in_use", 3, writes);
-    assert_eq!(error["details"]["prs"], json!(["pay-1/web"]));
+    // A PR that another PR is stacked on keeps its repo.
+    let error = fx.refused(&fx.pr(&["edit", "api", "--repo", fx.web.to_str().unwrap()]), "pr_in_use", 3, writes);
+    assert_eq!(error["details"]["prs"], json!(["web"]));
     // Its other fields, and the stacked PR's repo (it stays stacked only in its repo), are not blocked.
-    fx.pr_in("ledger-9", &["edit", "api", "--base", "main"]).ok();
+    fx.pr(&["edit", "api", "--base", "main"]).ok();
 }
 
 // ---------- pr cancel --superseded-by (hs-d301) ----------
@@ -1579,7 +1513,7 @@ fn superseding_is_refused_for_a_live_job_an_unknown_or_foreign_or_cancelled_or_o
     fx.refused(&by("other-1/nope"), "pr_not_found", 4, writes);
     fx.refused(&by("nope"), "pr_not_found", 4, writes);
     fx.refused(&by("nope-9/storefix"), "pr_not_found", 4, writes);
-    fx.refused(&by("alien-1/foreign"), "pr_other_context", 3, writes);
+    fx.refused(&by("alien-1/foreign"), "pr_not_found", 4, writes);
     fx.refused(&by("dead"), "illegal_transition", 3, writes);
     fx.refused(&by("busyfix"), "usage", 2, writes);
     fx.refused(&by("pay-1/busyfix"), "usage", 2, writes);

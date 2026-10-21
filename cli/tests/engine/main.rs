@@ -7,4 +7,5 @@ mod common;
 mod doctor;
 mod watch_inbox;
 mod watch;
+mod watch_worker_archive;
 mod watch_team;

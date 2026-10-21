@@ -99,34 +99,21 @@ impl FromStr for PrRef {
     }
 }
 
-/// A PR as `(plan, key)`.
-type Node = (String, String);
-
-/// A reference as the views print it (§2.2): the bare key in the Plan it is of, else `<plan>/<key>`.
-pub(super) fn reference(own: &str, node: &Node) -> String {
-    if node.0 == own { node.1.clone() } else { format!("{}/{}", node.0, node.1) }
-}
-
-/// `needs` as the sorted references of `own`'s Plan, a PR of the Plan in its bare form whichever way it was
-/// written, refusing a repeat with `usage` (§9.4).
+/// `needs` as the sorted references of `own`'s Plan: the bare key for a PR of the Plan however it was written, `<plan>/<key>`
+/// for another Plan's (which `resolve_refs` refuses, `pr_other_plan`); a repeat is refused with `usage` (§9.4).
 pub(super) fn needs_refs(own: &PlanId, needs: &[PrRef]) -> Result<Vec<String>, CpdError> {
     let mut refs: Vec<String> = needs
         .iter()
-        .map(|n| reference(own.as_str(), &(n.plan.as_ref().unwrap_or(own).to_string(), n.key.to_string())))
+        .map(|n| match &n.plan {
+            Some(plan) if plan != own => format!("{plan}/{}", n.key),
+            _ => n.key.to_string(),
+        })
         .collect();
     refs.sort();
     if let Some(pair) = refs.windows(2).find(|w| w[0] == w[1]) {
         return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("pr", pair[0].as_str()));
     }
     Ok(refs)
-}
-
-/// A stored reference of `own`'s Plan as `(plan, key)`.
-pub(super) fn node_of(own: &PlanId, reference: &str) -> Node {
-    match reference.split_once('/') {
-        Some((plan, key)) => (plan.to_owned(), key.to_owned()),
-        None => (own.to_string(), reference.to_owned()),
-    }
 }
 
 /// What `--base` names: a branch (`None`: the default branch), or a base PR.
@@ -167,43 +154,22 @@ pub(super) fn wanted_base(repo: &Path, arg: BaseArg) -> Result<BaseWanted, CpdEr
     }
 }
 
-/// A PR of any Plan, as the reference checks read it.
+/// A PR of the Plan, as the reference checks read it.
 #[derive(Clone, Debug)]
 pub(super) struct Known {
-    plan: String,
     key: String,
     repo: String,
     base: String,
     lead_branch: String,
     status: String,
-    context: String,
-    archived: bool,
 }
 
-impl Known {
-    fn node(&self) -> Node {
-        (self.plan.clone(), self.key.clone())
-    }
-}
-
-/// Every PR of every Plan.
-pub(super) fn known_prs(conn: &Connection) -> Result<Vec<Known>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT r.plan, r.key, r.repo, r.base, r.lead_branch, r.status, p.context, p.archived_at IS NOT NULL
-           FROM prs r JOIN plans p ON p.id = r.plan ORDER BY r.plan, r.key",
-    )?;
+/// Every PR of `plan`.
+pub(super) fn known_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<Known>, CpdError> {
+    let mut stmt = conn.prepare("SELECT key, repo, base, lead_branch, status FROM prs WHERE plan = ?1 ORDER BY key")?;
     let rows = stmt
-        .query_map([], |r| {
-            Ok(Known {
-                plan: r.get(0)?,
-                key: r.get(1)?,
-                repo: r.get(2)?,
-                base: r.get(3)?,
-                lead_branch: r.get(4)?,
-                status: r.get(5)?,
-                context: r.get(6)?,
-                archived: r.get(7)?,
-            })
+        .query_map([plan.as_str()], |r| {
+            Ok(Known { key: r.get(0)?, repo: r.get(1)?, base: r.get(2)?, lead_branch: r.get(3)?, status: r.get(4)? })
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
@@ -214,14 +180,9 @@ pub(super) fn derived_base_pr<'a>(known: &'a [Known], repo: &str, base: &str) ->
     known.iter().find(|q| q.repo == repo && q.lead_branch == base)
 }
 
-/// The PRs, not `cancelled`, of any Plan stacked on the PR whose Lead Branch is `lead_branch` in `repo`,
-/// as qualified references.
+/// The PRs of the Plan, not `cancelled`, stacked on the PR whose Lead Branch is `lead_branch` in `repo`.
 pub(super) fn stacked_on(known: &[Known], repo: &str, lead_branch: &str) -> Vec<String> {
-    known
-        .iter()
-        .filter(|p| p.status != "cancelled" && p.repo == repo && p.base == lead_branch)
-        .map(|p| format!("{}/{}", p.plan, p.key))
-        .collect()
+    known.iter().filter(|p| p.status != "cancelled" && p.repo == repo && p.base == lead_branch).map(|p| p.key.clone()).collect()
 }
 
 /// The PR being added or edited.
@@ -240,122 +201,97 @@ pub(super) struct Resolved {
     pub base_pr: Option<String>,
 }
 
-fn in_context(ctx: &str, pr: &Known, node: &Node) -> Result<(), CpdError> {
-    if pr.context == ctx {
-        return Ok(());
-    }
-    Err(CpdError::new(
-        ErrorCode::PrOtherContext,
-        format!("PR {}/{} is in Context {}, not in {ctx}: PRs reference only PRs of their Context.", node.0, node.1, pr.context),
+/// A reference naming another Plan (`pr_other_plan`): needs and base PRs are PRs of the PR's own Plan.
+fn other_plan(subject: &Subject<'_>, plan: &str, key: &str) -> CpdError {
+    CpdError::new(
+        ErrorCode::PrOtherPlan,
+        format!("PR {plan}/{key} is a PR of Plan {plan}, not of {}: needs and base PRs are PRs of the PR's own Plan.", subject.plan),
     )
-    .with("pr", format!("{}/{}", node.0, node.1))
-    .with("context", ctx)
-    .with("other_context", pr.context.as_str()))
-}
-
-fn archived(pr: &Known) -> CpdError {
-    CpdError::new(ErrorCode::Archived, format!("Plan {} is archived: its PR {} cannot be referenced.", pr.plan, pr.key))
-        .with("plan", pr.plan.as_str())
-        .with("next", format!("cpd plan unarchive --plan {}", pr.plan))
+    .with("pr", subject.key.as_str())
+    .with("reference", format!("{plan}/{key}"))
+    .with("plan", plan)
 }
 
 /// The validation of contract §2.2 "Validation of a reference" for the base and the needs of `subject`, and the
-/// base it makes: the references exist (`base_pr_unknown`, `needs_unknown`), are of the Plan's Context
-/// (`pr_other_context`), are not of an archived Plan unless a `merged` need (`archived`), are not `cancelled`
-/// (`needs_unavailable`), a base PR is not `merged` (`base_pr_unavailable`) and is of the PR's repo
-/// (`base_pr_other_repo`); no PR is both base and need (`usage`); the graph of needs and base PRs stays
-/// acyclic (`dependency_cycle`). `needs` are references of the Plan, as `needs_refs` makes them.
+/// base it makes: the references are PRs of the PR's own Plan (`pr_other_plan`), exist (`base_pr_unknown`,
+/// `needs_unknown`), are not `cancelled` (`needs_unavailable`), a base PR is not `merged` (`base_pr_unavailable`)
+/// and is of the PR's repo (`base_pr_other_repo`); no PR is both base and need (`usage`); the graph of needs and
+/// base PRs stays acyclic (`dependency_cycle`). `needs` are references of the Plan, as `needs_refs` makes them.
 pub(super) fn resolve_refs(conn: &Connection, subject: &Subject<'_>, base: &BaseWanted, needs: &[String]) -> Result<Resolved, CpdError> {
     let plan = subject.plan;
-    let known = known_prs(conn)?;
-    let context: String = conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
-    let find = |node: &Node| known.iter().find(|p| p.plan == node.0 && p.key == node.1);
+    if let BaseWanted::Pr(base_plan, base_key) = base
+        && base_plan != plan
+    {
+        return Err(other_plan(subject, base_plan.as_str(), base_key.as_str()));
+    }
+    for need in needs {
+        if let Some((need_plan, key)) = need.split_once('/') {
+            return Err(other_plan(subject, need_plan, key));
+        }
+    }
+    let known = known_prs(conn, plan)?;
+    let find = |key: &str| known.iter().find(|p| p.key == key);
 
     let (branch, base_pr) = match base {
-        BaseWanted::Pr(base_plan, base_key) => {
-            let node: Node = (base_plan.to_string(), base_key.to_string());
-            let Some(pr) = find(&node) else {
-                return Err(CpdError::new(ErrorCode::BasePrUnknown, format!("Plan {base_plan} has no PR {base_key} to stack on."))
-                    .with("plan", base_plan.as_str())
+        BaseWanted::Pr(_, base_key) => {
+            let Some(pr) = find(base_key.as_str()) else {
+                return Err(CpdError::new(ErrorCode::BasePrUnknown, format!("Plan {plan} has no PR {base_key} to stack on."))
+                    .with("plan", plan.as_str())
                     .with("pr", base_key.as_str()));
             };
-            in_context(&context, pr, &node)?;
-            if pr.archived {
-                return Err(archived(pr));
-            }
             check_base_pr_state(pr)?;
             if pr.repo != subject.repo {
                 return Err(CpdError::new(
                     ErrorCode::BasePrOtherRepo,
-                    format!("PR {}/{} is in {}, not in {}: a PR stacks only on a PR of its repo.", pr.plan, pr.key, pr.repo, subject.repo),
+                    format!("PR {} is in {}, not in {}: a PR stacks only on a PR of its repo.", pr.key, pr.repo, subject.repo),
                 )
-                .with("pr", format!("{}/{}", pr.plan, pr.key))
+                .with("pr", pr.key.as_str())
                 .with("repo", subject.repo)
                 .with("base_repo", pr.repo.as_str()));
             }
             (pr.lead_branch.clone(), Some(pr))
         }
         BaseWanted::Branch(branch) => {
-            // A branch that is already a Lead Branch of a PR of the repo is stacked all the same.
+            // A branch that is already a Lead Branch of a PR of the Plan is stacked all the same.
             let derived = derived_base_pr(&known, subject.repo, branch);
             if let Some(pr) = derived {
-                in_context(&context, pr, &pr.node())?;
-                if pr.archived {
-                    return Err(archived(pr));
-                }
                 check_base_pr_state(pr)?;
             }
             (branch.clone(), derived)
         }
     };
-    let base_node = base_pr.map(Known::node);
+    let base_key = base_pr.map(|p| p.key.clone());
 
-    let own = plan.to_string();
-    let need_nodes: Vec<Node> = needs.iter().map(|n| node_of(plan, n)).collect();
-    let unknown: Vec<String> = need_nodes
-        .iter()
-        .filter(|n| (n.0 == own && n.1 == subject.key.as_str()) || find(n).is_none())
-        .map(|n| reference(&own, n))
-        .collect();
+    let unknown: Vec<String> = needs.iter().filter(|n| n.as_str() == subject.key.as_str() || find(n).is_none()).cloned().collect();
     if !unknown.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no PR {} to need.", unknown.join(", ")))
             .with("plan", plan.as_str())
             .with("needs", unknown));
     }
-    for node in &need_nodes {
-        let pr = find(node).expect("known above");
-        in_context(&context, pr, node)?;
-        if pr.archived && pr.status != "merged" {
-            return Err(archived(pr));
-        }
-    }
-    let unavailable: Vec<String> =
-        need_nodes.iter().filter(|n| find(n).is_some_and(|p| p.status == "cancelled")).map(|n| reference(&own, n)).collect();
+    let unavailable: Vec<String> = needs.iter().filter(|n| find(n).is_some_and(|p| p.status == "cancelled")).cloned().collect();
     if !unavailable.is_empty() {
         return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A PR cannot need the cancelled PR {}.", unavailable.join(", ")))
             .with("plan", plan.as_str())
             .with("needs", unavailable));
     }
-    if let Some(node) = base_node.as_ref().filter(|b| need_nodes.contains(b)) {
-        let reference = reference(&own, node);
+    if let Some(key) = base_key.as_ref().filter(|b| needs.contains(b)) {
         return Err(CpdError::new(
             ErrorCode::Usage,
-            format!("{reference} is the base PR and a need: a need must be merged before this PR starts, a base PR only started."),
+            format!("{key} is the base PR and a need: a need must be merged before this PR starts, a base PR only started."),
         )
-        .with("pr", reference));
+        .with("pr", key.as_str()));
     }
 
-    let this: Node = (own.clone(), subject.key.to_string());
-    let edges = edges(conn, &known, &this)?;
-    let mut out: Vec<Node> = need_nodes;
-    out.extend(base_node);
+    let this = subject.key.to_string();
+    let edges = edges(conn, plan, &known, &this)?;
+    let mut out: Vec<String> = needs.to_vec();
+    out.extend(base_key);
     if let Some(cycle) = find_cycle(&this, &out, &edges) {
-        let cycle: Vec<String> = cycle.iter().map(|n| reference(&own, n)).collect();
         return Err(CpdError::new(ErrorCode::DependencyCycle, format!("The needs and base of {} make a cycle: {}.", subject.key, cycle.join(" → ")))
             .with("plan", plan.as_str())
             .with("cycle", cycle));
     }
-    Ok(Resolved { base: branch, base_pr: base_pr.map(|p| format!("{}/{}", p.plan, p.key)) })
+    Ok(Resolved { base: branch, base_pr: base_pr.map(|p| format!("{plan}/{}", p.key)) })
 }
 
 /// A base PR is not `cancelled` or `merged` (`base_pr_unavailable`).
@@ -363,39 +299,37 @@ fn check_base_pr_state(pr: &Known) -> Result<(), CpdError> {
     if matches!(pr.status.as_str(), "cancelled" | "merged") {
         return Err(CpdError::new(
             ErrorCode::BasePrUnavailable,
-            format!("PR {}/{} is {}: there is nothing to stack on, name its base branch instead.", pr.plan, pr.key, pr.status),
+            format!("PR {} is {}: there is nothing to stack on, name its base branch instead.", pr.key, pr.status),
         )
-        .with("pr", format!("{}/{}", pr.plan, pr.key))
+        .with("pr", pr.key.as_str())
         .with("status", pr.status.as_str()));
     }
     Ok(())
 }
 
-/// The edges of the graph of needs and base PRs of every PR that is not `cancelled` (an edge from a PR to
+/// The edges of the graph of needs and base PRs of every PR of the Plan that is not `cancelled` (an edge from a PR to
 /// each PR it needs and to its base PR), `except` the edges leaving that PR: they are the ones being set.
-fn edges(conn: &Connection, known: &[Known], except: &Node) -> Result<BTreeMap<Node, Vec<Node>>, CpdError> {
-    let live = |node: &Node| known.iter().any(|p| p.status != "cancelled" && p.plan == node.0 && p.key == node.1);
-    let mut graph: BTreeMap<Node, Vec<Node>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT plan, pr, needs_plan, needs FROM pr_needs")?;
-    let rows: Vec<(Node, Node)> = stmt
-        .query_map([], |r| Ok(((r.get(0)?, r.get(1)?), (r.get(2)?, r.get(3)?))))?
-        .collect::<rusqlite::Result<_>>()?;
+fn edges(conn: &Connection, plan: &PlanId, known: &[Known], except: &String) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
+    let live = |key: &String| known.iter().any(|p| p.status != "cancelled" && &p.key == key);
+    let mut graph: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1")?;
+    let rows: Vec<(String, String)> = stmt.query_map([plan.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
     for (from, to) in rows {
         if &from != except && live(&from) && live(&to) {
             graph.entry(from).or_default().push(to);
         }
     }
-    for p in known.iter().filter(|p| p.status != "cancelled" && &p.node() != except) {
+    for p in known.iter().filter(|p| p.status != "cancelled" && &p.key != except) {
         if let Some(q) = derived_base_pr(known, &p.repo, &p.base).filter(|q| q.status != "cancelled") {
-            graph.entry(p.node()).or_default().push(q.node());
+            graph.entry(p.key.clone()).or_default().push(q.key.clone());
         }
     }
     Ok(graph)
 }
 
 /// A path from `start` back to `start`, the PR's own `out` edges first and `edges` after, if there is one.
-fn find_cycle(start: &Node, out: &[Node], edges: &BTreeMap<Node, Vec<Node>>) -> Option<Vec<Node>> {
-    fn visit(node: &Node, start: &Node, edges: &BTreeMap<Node, Vec<Node>>, seen: &mut Vec<Node>, path: &mut Vec<Node>) -> bool {
+fn find_cycle(start: &String, out: &[String], edges: &BTreeMap<String, Vec<String>>) -> Option<Vec<String>> {
+    fn visit(node: &String, start: &String, edges: &BTreeMap<String, Vec<String>>, seen: &mut Vec<String>, path: &mut Vec<String>) -> bool {
         path.push(node.clone());
         if node == start && path.len() > 1 {
             return true;
@@ -552,7 +486,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, read_tests: bool) -
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?, r.get::<_, Option<String>>(2)?)),
         )?;
         if same(existing, title.as_deref(), wanted, &prs, &base_branch(conn, &wanted.base)?) {
-            let base_pr = derived_base_pr(&known_prs(conn)?, &existing.repo, &existing.base).map(|q| format!("{}/{}", q.plan, q.key));
+            let base_pr = derived_base_pr(&known_prs(conn, plan)?, &existing.repo, &existing.base).map(|q| format!("{plan}/{}", q.key));
             return Ok(Decision::Already {
                 status: existing.status.clone(),
                 lead_branch,
@@ -579,7 +513,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, read_tests: bool) -
     };
     let resolved = resolve_refs(conn, &Subject { plan, key: &wanted.key, repo: &wanted.repo }, &wanted.base, &needs)?;
     if read_tests && wanted.shape == "tdd" {
-        require_tests_table(conn, wanted, &resolved.base)?;
+        require_tests_table(conn, plan, wanted, &resolved.base)?;
     }
     check_template_keys_free(conn, plan, wanted)?;
     Ok(Decision::Insert { phase, base: resolved.base, base_pr: resolved.base_pr, needs })
@@ -588,9 +522,9 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, read_tests: bool) -
 /// A `tdd` PR needs the repo's `[tests]` (contract §7.7), read from `origin/<base>` (`<base>` with no `origin`): `tests_unconfigured`;
 /// a table that is not as documented is `config_invalid`. A stacked PR's base is its base PR's Lead Branch, which may not be on the
 /// remote yet: the table is then read from the base the stack lands on, followed through the base PRs.
-fn require_tests_table(conn: &Connection, wanted: &Wanted, base: &str) -> Result<(), CpdError> {
+fn require_tests_table(conn: &Connection, plan: &PlanId, wanted: &Wanted, base: &str) -> Result<(), CpdError> {
     let repo = Path::new(&wanted.repo);
-    let known = known_prs(conn)?;
+    let known = known_prs(conn, plan)?;
     let mut base = base.to_owned();
     let mut steps = 0;
     let at = loop {
@@ -646,9 +580,9 @@ fn check_template_keys_free(conn: &Connection, plan: &PlanId, wanted: &Wanted) -
 fn base_branch(conn: &Connection, base: &BaseWanted) -> Result<String, CpdError> {
     match base {
         BaseWanted::Branch(branch) => Ok(branch.clone()),
-        BaseWanted::Pr(plan, key) => known_prs(conn)?
+        BaseWanted::Pr(plan, key) => known_prs(conn, plan)?
             .into_iter()
-            .find(|p| p.plan == plan.as_str() && p.key == key.as_str())
+            .find(|p| p.key == key.as_str())
             .map(|p| p.lead_branch)
             .ok_or_else(|| {
                 CpdError::new(ErrorCode::BasePrUnknown, format!("Plan {plan} has no PR {key} to stack on."))
@@ -704,14 +638,10 @@ fn insert_stubs(tx: &Connection, plan: &PlanId, wanted: &Wanted, appended: bool)
     Ok(stubs)
 }
 
-/// One `pr_needs` row per need, `needs_plan` the needed PR's Plan.
+/// One `pr_needs` row per need.
 pub(super) fn insert_needs(tx: &Connection, plan: &PlanId, pr: &PrKey, needs: &[String]) -> Result<(), CpdError> {
     for need in needs {
-        let (needs_plan, needs_key) = node_of(plan, need);
-        tx.execute(
-            "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES (?1, ?2, ?3, ?4)",
-            [plan.as_str(), pr.as_str(), needs_plan.as_str(), needs_key.as_str()],
-        )?;
+        tx.execute("INSERT INTO pr_needs (plan, pr, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), pr.as_str(), need.as_str()])?;
     }
     Ok(())
 }

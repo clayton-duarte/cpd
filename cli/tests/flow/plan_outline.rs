@@ -54,7 +54,7 @@ fn pr(env: &TestEnv, plan: &str, key: &str, repo: &str, base: &str, status: &str
         q(title)
     ));
     for need in needs {
-        env.sql(&format!("INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('{plan}', '{key}', '{plan}', '{need}');"));
+        env.sql(&format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('{plan}', '{key}', '{need}');"));
     }
 }
 

@@ -68,6 +68,8 @@ struct Fx {
     merged_sha: String,
     /// What the lock pushed to `cpd/pay` on origin (R35, §7.2): the base.
     lock_pushed: String,
+    /// The Lead Branch of PR `repo`: `cpd/pay`, or `cpd/pay/repo` where a second PR of the Plan exists (`fx_stacked`).
+    branch: String,
 }
 
 fn fx(phase: &str) -> Fx {
@@ -80,6 +82,15 @@ fn fx_with(phase: &str, config_extra: &str) -> Fx {
 
 /// `job` is the status of the Plan's one Job, `merged` or `cancelled`.
 fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
+    fx_branch(phase, config_extra, job, "cpd/pay")
+}
+
+/// A Plan whose PR `repo` has the Lead Branch `cpd/pay/repo`: git cannot hold `cpd/pay` and `cpd/pay/web` both.
+fn fx_stacked(phase: &str) -> Fx {
+    fx_branch(phase, "", "merged", "cpd/pay/repo")
+}
+
+fn fx_branch(phase: &str, config_extra: &str, job: &str, branch: &str) -> Fx {
     let env = TestEnv::new();
     env.owner_policy("acme", "[pr]\ngate = \"local\"\n");
     let repo = env.keyed_repo("pay").canonicalize().unwrap();
@@ -88,8 +99,15 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     env.local_origin(&repo, &origin);
     env.git(&repo, &["push", "-q", "origin", "main"]);
     let setup = Setup { timeout: Duration::from_secs(30), log: env.root().join("lead.log") };
-    let created = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
-    let (lead, lock_pushed) = (created.path, created.base_sha);
+    let (lead, lock_pushed) = if branch == "cpd/pay" {
+        let created = create_lead_worktree(&repo, &plan(), "main", &setup).unwrap();
+        (created.path, created.base_sha)
+    } else {
+        let path = repo.parent().unwrap().join("pay.pay.repo");
+        let prepared = cpd_core::git::worktree::prepare_lead_worktree(&repo, &plan(), &path, branch, "main", &setup).map_err(|f| f.error).unwrap();
+        prepared.push().unwrap();
+        (prepared.path, prepared.base_sha)
+    };
     env.git(&lead, &["config", "user.name", "cpd test"]);
     env.git(&lead, &["config", "user.email", "test@cpd.invalid"]);
     fs::write(lead.join("api.txt"), "api\n").unwrap();
@@ -114,9 +132,9 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
     }
     env.fake_gh(GH);
 
-    let fx = Fx { env, home, repo, origin, lead, merged_sha, lock_pushed };
+    let fx = Fx { env, home, repo, origin, lead, merged_sha, lock_pushed, branch: branch.to_owned() };
     if phase == "deploy" {
-        fx.git(&fx.lead, &["push", "-q", "-u", "origin", "cpd/pay"]);
+        fx.git(&fx.lead, &["push", "-q", "-u", "origin", branch]);
     }
     let lead = format!("'{}'", fx.lead.display());
     let (locked, status, columns, values) = match phase {
@@ -147,8 +165,9 @@ fn fx_full(phase: &str, config_extra: &str, job: &str) -> Fx {
            VALUES ('pay', 'ctx', 'Pay the bills', '{phase}', 'lead1', 't', {locked}, {done});
          {pull_request}
          INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at{columns})
-           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', 'cpd/pay', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
+           VALUES ('pay', 'repo', '{repo}', 'main', '{status}', '{branch}', {worktree}, '{REPO_TITLE}', 'config', cpd_txn(), 't', {locked}{values});",
         repo = fx.repo.display(),
+        branch = branch,
     );
     fx.store()
         .write("fixture", |tx| {
@@ -204,7 +223,7 @@ impl Fx {
     }
 
     fn lead_sha(&self) -> String {
-        self.git(&self.repo, &["rev-parse", "refs/heads/cpd/pay"])
+        self.git(&self.repo, &["rev-parse", &format!("refs/heads/{}", self.branch)])
     }
 
     /// `(phase, pr_number, pr_url, pr_opened_at, pull_request, done_at)` of the Plan.
@@ -351,7 +370,7 @@ impl Fx {
                 "merged",
                 "",
             ),
-            Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'web', 'pay', 'repo');"),
+            Web::Waiting => ("waiting", "NULL".to_owned(), "NULL", "", String::new(), "queued", "INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'repo');"),
         };
         self.store()
             .write("fixture", |tx| {
@@ -1852,27 +1871,28 @@ fn poll_changes_nothing_for_a_pr_stacked_above_a_base_pr_closed_unmerged() {
     assert_eq!(fx.base_of("up"), ("open".to_owned(), "cpd/pay".to_owned()));
 }
 
-/// What PR `web` of Plan `ship` is told when its base PR `pay/repo` merged before `web` had a pull request (hs-d301): `by` is who
+/// What PR `web` of Plan `pay` is told when its base PR `pay/repo` merged before `web` had a pull request (hs-d301): `by` is who
 /// unstacked it, `number` and `url` are the poll's, both null.
-fn web_unstacked(by: &str) -> (String, Value) {
+fn web_unstacked(from: &str, by: &str) -> (String, Value) {
     let data = match by {
-        "poll" => json!({"pr": "web", "from": "cpd/pay", "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": "poll", "number": null, "url": null}),
-        _ => json!({"pr": "web", "from": "cpd/pay", "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": by}),
+        "poll" => json!({"pr": "web", "from": from, "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": "poll", "number": null, "url": null}),
+        _ => json!({"pr": "web", "from": from, "to": "main", "from_pr": "pay/repo", "to_pr": null, "by": by}),
     };
     (
-        "PR web of Plan ship now targets main (was cpd/pay): its base PR pay/repo merged before its pull request existed. \
-         Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan ship."
-            .to_owned(),
+        format!(
+            "PR web of Plan pay now targets main (was {from}): its base PR pay/repo merged before its pull request existed. \
+             Its tree is unchanged: no new Gate is needed and it stays ready. Read it with cpd plan show --plan pay."
+        ),
         data,
     )
 }
 
 #[test]
-fn poll_unstacks_a_dispatch_pr_of_another_plan_in_the_transaction_that_records_its_base_prs_merge() {
-    let fx = fx("deploy");
+fn poll_unstacks_a_dispatch_pr_in_the_transaction_that_records_its_base_prs_merge() {
+    let fx = fx_stacked("deploy");
     stacked_pr(&fx);
-    assert_eq!(fx.web_base(), "cpd/pay");
-    // pay/repo merged (a pull request the search no longer lists); web, in Plan `ship`, has no pull request.
+    assert_eq!(fx.web_base(), fx.branch);
+    // pay/repo merged (a pull request the search no longer lists); web has no pull request.
     fx.search(&[]);
     fx.lookup(&[Some(pay("MERGED", None, None))]);
 
@@ -1880,9 +1900,8 @@ fn poll_unstacks_a_dispatch_pr_of_another_plan_in_the_transaction_that_records_i
 
     assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
     assert_eq!(fx.web_base(), "main");
-    assert_eq!(fx.plan_events("ship", "pr-base-changed"), vec![web_unstacked("poll")], "told to web's own Plan, once");
-    assert!(fx.events("pr-base-changed").is_empty(), "not to the merged PR's Plan");
-    assert_eq!(fx.plan_events("ship", "pr-feedback"), vec![]);
+    assert_eq!(fx.plan_events("pay", "pr-base-changed"), vec![web_unstacked(&fx.branch, "poll")], "once");
+    assert_eq!(fx.plan_events("pay", "pr-feedback"), vec![]);
     assert_eq!(fx.web_status(), "dispatch", "nothing else about web changed: no Gate, no start, no pull request");
     assert!(fx.gh_calls().iter().all(|c| c[0] == "api"), "{:?}", fx.gh_calls());
 
@@ -3447,17 +3466,17 @@ fn a_pr_whose_owner_file_is_gone_is_reported_and_the_other_plans_pr_still_merges
 
 // ---------- stacked PRs (contract §7.6 `pr open`, §3.8 "Stacked PRs") ----------
 
-/// Plan `ship`, in `dispatch`, with its one PR `web` stacked on `pay`'s PR `repo` (its Lead Branch `cpd/pay`, whose
+/// PR `web` of Plan `pay`, stacked on its PR `repo` (its Lead Branch `fx.branch`, whose
 /// Lead worktree is `fx.lead`): started from that branch, one Merged Job's commit on it, its Lead Branch pushed.
 struct Stacked {
     lead: PathBuf,
 }
 
 fn stacked_pr(fx: &Fx) -> Stacked {
-    let ship = PlanId::parse("ship").unwrap();
-    let path = fx.repo.parent().unwrap().join("pay.ship.web");
+    let ship = PlanId::parse("pay").unwrap();
+    let path = fx.repo.parent().unwrap().join("pay.pay.web");
     let setup = Setup { timeout: Duration::from_secs(30), log: fx.env.root().join("web.log") };
-    let prepared = cpd_core::git::worktree::prepare_stacked_lead_worktree(&fx.repo, &ship, &path, "cpd/ship/web", "cpd/pay", &setup).map_err(|f| f.error).unwrap();
+    let prepared = cpd_core::git::worktree::prepare_stacked_lead_worktree(&fx.repo, &ship, &path, "cpd/pay/web", fx.branch.as_str(), &setup).map_err(|f| f.error).unwrap();
     assert_eq!(prepared.base_sha, fx.lead_sha(), "cut from the base PR's Lead Branch head");
     prepared.push().unwrap();
     fx.git(&path, &["config", "user.name", "cpd test"]);
@@ -3469,19 +3488,17 @@ fn stacked_pr(fx: &Fx) -> Stacked {
     fx.store()
         .write("fixture", |tx| {
             tx.execute_batch(&format!(
-                "INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
-                   VALUES ('lead2', 'lead', 'ctx', 'ship', 'Lead', '/', 'O3', 'idle', 't', 't');
-                 INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
-                   VALUES ('ship', 'ctx', 'Ship the web', 'dispatch', 'lead2', 't', 't');
+                "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pay' AND phase = 'done';
                  INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, created_txn, created_at, started_at)
-                   VALUES ('ship', 'web', '{repo}', 'cpd/pay', 'dispatch', 'cpd/ship/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
+                   VALUES ('pay', 'web', '{repo}', '{base}', 'dispatch', 'cpd/pay/web', '{path}', 'Ship the web', cpd_txn(), 't', 't');",
                 repo = fx.repo.display(),
+                base = fx.branch,
                 path = path.display()
             ))?;
             tx.execute(
                 "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                    status, appended, fingerprint, merged_sha, created_txn, created_at)
-                 VALUES ('ship', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
+                 VALUES ('pay', 'web', 'ui', 'The UI', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'merged', 0, ?1, ?2, ?3, 't')",
                 params!["f".repeat(64), merged, tx.id()],
             )?;
             Ok(())
@@ -3492,13 +3509,13 @@ fn stacked_pr(fx: &Fx) -> Stacked {
 
 impl Fx {
     fn open_web(&self) -> Run {
-        self.env.cpd(&["pr", "open", "--pr", "web", "--plan", "ship"])
+        self.env.cpd(&["pr", "open", "--pr", "web", "--plan", "pay"])
     }
 }
 
 #[test]
 fn open_of_a_stacked_pr_gates_a_head_with_the_base_prs_work_and_targets_its_lead_branch() {
-    let fx = fx("dispatch");
+    let fx = fx_stacked("dispatch");
     let web = stacked_pr(&fx);
     // The Gate sees the base PR's work in the gated commit, and its `target` is the base PR's Lead Branch, whose
     // worktree is `target_worktree_path`.
@@ -3514,32 +3531,32 @@ fn open_of_a_stacked_pr_gates_a_head_with_the_base_prs_work_and_targets_its_lead
 
     let out = fx.open_web().ok();
 
-    assert_eq!((&out["phase"], &out["pr"]["status"]), (&json!("deploy"), &json!("open")));
-    assert_eq!(fs::read_to_string(&marker).unwrap().trim(), format!("cpd/pay {}", fx.lead.display()));
+    assert_eq!((&out["phase"], &out["pr"]["status"]), (&json!("dispatch"), &json!("open")));
+    assert_eq!(fs::read_to_string(&marker).unwrap().trim(), format!("{} {}", fx.branch, fx.lead.display()));
     // `gh pr create --base <the base PR's Lead Branch>`, never as a draft.
     let calls = fx.gh_calls();
     let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).expect("gh pr create ran");
     let at = |flag: &str| create.iter().position(|a| a == flag).map(|i| create[i + 1].as_str());
-    assert_eq!((at("--base"), at("--head")), (Some("cpd/pay"), Some("cpd/ship/web")));
+    assert_eq!((at("--base"), at("--head")), (Some(fx.branch.as_str()), Some("cpd/pay/web")));
     assert!(!create.iter().any(|a| a.contains("draft")), "{create:?}");
-    assert_eq!(fx.remote_branch("cpd/ship/web"), Some(fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/ship/web"])));
+    assert_eq!(fx.remote_branch("cpd/pay/web"), Some(fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay/web"])));
 }
 
 #[test]
 fn open_of_a_stacked_pr_is_refused_while_its_base_prs_branch_is_not_on_origin() {
-    let fx = fx("dispatch");
+    let fx = fx_stacked("dispatch");
     stacked_pr(&fx);
-    let pushed = fx.remote_branch("cpd/ship/web");
-    fx.git(&fx.repo, &["push", "-q", "origin", "--delete", "cpd/pay"]);
+    let pushed = fx.remote_branch("cpd/pay/web");
+    fx.git(&fx.repo, &["push", "-q", "origin", "--delete", fx.branch.as_str()]);
 
     let run = fx.open_web();
 
     assert_eq!(code(&run), ("base_not_found".into(), 4));
-    assert_eq!(run.error()["details"], json!({"pr": "web", "base": "cpd/pay", "base_pr": "pay/repo"}));
+    assert_eq!(run.error()["details"], json!({"pr": "web", "base": fx.branch.as_str(), "base_pr": "pay/repo"}));
     assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "no pull request was created: {:?}", fx.gh_calls());
-    assert_eq!(fx.remote_branch("cpd/ship/web"), pushed, "nothing was pushed");
+    assert_eq!(fx.remote_branch("cpd/pay/web"), pushed, "nothing was pushed");
     // Its Lead pushes the base branch, and the PR opens.
-    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    fx.git(&fx.lead, &["push", "-q", "origin", fx.branch.as_str()]);
     assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
 }
 
@@ -3548,13 +3565,13 @@ fn base_pr_moves_on(fx: &Fx, path: &str, content: &str) -> String {
     fs::write(fx.lead.join(path), content).unwrap();
     fx.git(&fx.lead, &["add", "-A"]);
     fx.git(&fx.lead, &["commit", "-q", "-m", "more"]);
-    fx.git(&fx.lead, &["push", "-q", "origin", "cpd/pay"]);
+    fx.git(&fx.lead, &["push", "-q", "origin", fx.branch.as_str()]);
     fx.lead_sha()
 }
 
 #[test]
 fn open_of_a_stacked_pr_opens_as_it_is_when_its_base_pr_moved_on_without_a_conflict() {
-    let fx = fx("dispatch");
+    let fx = fx_stacked("dispatch");
     let web = stacked_pr(&fx);
     base_pr_moves_on(&fx, "more.txt", "more\n");
     let head = fx.git(&web.lead, &["rev-parse", "HEAD"]);
@@ -3563,31 +3580,31 @@ fn open_of_a_stacked_pr_opens_as_it_is_when_its_base_pr_moved_on_without_a_confl
 
     assert_eq!(out["pr"]["status"], "open");
     assert_eq!(fx.git(&web.lead, &["rev-parse", "HEAD"]), head, "no merge of the base PR's new commits");
-    assert_eq!(fx.remote_branch("cpd/ship/web"), Some(head));
+    assert_eq!(fx.remote_branch("cpd/pay/web"), Some(head));
 }
 
 #[test]
 fn open_of_a_stacked_pr_says_to_merge_the_base_prs_new_commits_when_they_conflict() {
-    let fx = fx("dispatch");
+    let fx = fx_stacked("dispatch");
     let web = stacked_pr(&fx);
     // The base PR's Lead Branch writes `web.txt` too, differently.
     let base_sha = base_pr_moves_on(&fx, "web.txt", "base pr web\n");
-    let pushed = fx.remote_branch("cpd/ship/web");
+    let pushed = fx.remote_branch("cpd/pay/web");
 
     let run = fx.open_web();
 
     assert_eq!(code(&run), ("base_conflict".into(), 3));
     let details = &run.error()["details"];
-    assert_eq!((&details["base"], &details["base_sha"], &details["files"]), (&json!("cpd/pay"), &json!(base_sha), &json!(["web.txt"])));
+    assert_eq!((&details["base"], &details["base_sha"], &details["files"]), (&json!(fx.branch.as_str()), &json!(base_sha), &json!(["web.txt"])));
     assert_eq!(
         details["next"],
-        json!([format!("git -C {} merge --no-edit origin/cpd/pay", web.lead.display()), "cpd pr open --pr web"])
+        json!([format!("git -C {} merge --no-edit origin/{}", web.lead.display(), fx.branch), "cpd pr open --pr web"])
     );
     assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
-    assert_eq!(fx.remote_branch("cpd/ship/web"), pushed, "nothing was pushed");
+    assert_eq!(fx.remote_branch("cpd/pay/web"), pushed, "nothing was pushed");
 
     // The stacked Lead takes the new commits by merge, as `next` says, and opens.
-    fx.git(&web.lead, &["merge", "-q", "--no-edit", "-X", "ours", "origin/cpd/pay"]);
+    fx.git(&web.lead, &["merge", "-q", "--no-edit", "-X", "ours", &format!("origin/{}", fx.branch)]);
     assert_eq!(fx.open_web().ok()["pr"]["status"], "open");
 }
 
@@ -3596,29 +3613,29 @@ impl Fx {
     /// no Lead worktree, no local branch `cpd/pay`, none on origin.
     fn delete_base_branch(&self) {
         self.git(&self.repo, &["worktree", "remove", "--force", self.lead.to_str().unwrap()]);
-        self.git(&self.repo, &["branch", "-D", "cpd/pay"]);
-        self.git(&self.repo, &["push", "-q", "origin", "--delete", "cpd/pay"]);
-        assert_eq!(self.remote_branch("cpd/pay"), None);
-        assert_eq!(self.git(&self.repo, &["branch", "--list", "cpd/pay"]), "");
+        self.git(&self.repo, &["branch", "-D", self.branch.as_str()]);
+        self.git(&self.repo, &["push", "-q", "origin", "--delete", self.branch.as_str()]);
+        assert_eq!(self.remote_branch(self.branch.as_str()), None);
+        assert_eq!(self.git(&self.repo, &["branch", "--list", self.branch.as_str()]), "");
     }
 
-    /// The `base` of PR `web` of Plan `ship`.
+    /// The `base` of PR `web` of Plan `pay`.
     fn web_base(&self) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT base FROM prs WHERE plan = 'ship' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+        self.store().read(|c| Ok(c.query_row("SELECT base FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
     }
 
     fn web_status(&self) -> String {
-        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'ship' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
+        self.store().read(|c| Ok(c.query_row("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'", [], |r| r.get(0))?)).unwrap()
     }
 }
 
 #[test]
 fn open_of_a_pr_stacked_on_a_merged_base_pr_whose_branch_is_gone_opens_on_the_base_prs_base() {
     // pay/repo merged (#164 in the field) and its branch is deleted everywhere; web, stacked on it, never had a pull request.
-    let fx = fx("done");
+    let fx = fx_stacked("done");
     stacked_pr(&fx);
     fx.delete_base_branch();
-    assert_eq!(fx.web_base(), "cpd/pay");
+    assert_eq!(fx.web_base(), fx.branch.as_str());
     // `pr open` reads `createdAt` of the pull request it just opened (store-W5).
     fx.gh("lookup.json", &lookup_answer(&[Some(node("acme/web", 813, "OPEN", None, None))]));
 
@@ -3628,16 +3645,16 @@ fn open_of_a_pr_stacked_on_a_merged_base_pr_whose_branch_is_gone_opens_on_the_ba
     let calls = fx.gh_calls();
     let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).expect("gh pr create ran");
     let at = |flag: &str| create.iter().position(|a| a == flag).map(|i| create[i + 1].as_str());
-    assert_eq!((at("--base"), at("--head")), (Some("main"), Some("cpd/ship/web")), "{create:?}");
+    assert_eq!((at("--base"), at("--head")), (Some("main"), Some("cpd/pay/web")), "{create:?}");
     assert_eq!(fx.web_base(), "main");
-    assert_eq!(fx.plan_events("ship", "pr-base-changed"), vec![web_unstacked("pr open")], "one Event, for web's own Plan");
-    assert_eq!(fx.remote_branch("cpd/ship/web"), Some(fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/ship/web"])));
-    assert_eq!(fx.remote_branch("cpd/pay"), None, "the deleted branch is not pushed again either");
+    assert_eq!(fx.plan_events("pay", "pr-base-changed"), vec![web_unstacked(&fx.branch, "pr open")], "one Event, for web's own Plan");
+    assert_eq!(fx.remote_branch("cpd/pay/web"), Some(fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay/web"])));
+    assert_eq!(fx.remote_branch(fx.branch.as_str()), None, "the deleted branch is not pushed again either");
 }
 
 #[test]
 fn open_unstacks_a_merged_base_pr_before_every_check_and_keeps_the_unstack_when_a_later_step_refuses() {
-    let fx = fx("done");
+    let fx = fx_stacked("done");
     stacked_pr(&fx);
     fx.delete_base_branch();
     // Step 0: the Lead Branch has a closed pull request, which is a refusal after the unstack.
@@ -3647,7 +3664,7 @@ fn open_unstacks_a_merged_base_pr_before_every_check_and_keeps_the_unstack_when_
 
     assert_eq!(code(&run), ("pr_closed".into(), 3));
     assert_eq!(fx.web_base(), "main", "the unstack is a fact about the base PR: written although the opening was refused");
-    assert_eq!(fx.plan_events("ship", "pr-base-changed"), vec![web_unstacked("pr open")]);
+    assert_eq!(fx.plan_events("pay", "pr-base-changed"), vec![web_unstacked(&fx.branch, "pr open")]);
     assert_eq!(fx.web_status(), "dispatch");
     assert!(fx.gh_calls().iter().all(|c| c[1] == "list"), "{:?}", fx.gh_calls());
 

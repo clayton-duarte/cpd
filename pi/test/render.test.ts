@@ -120,20 +120,19 @@ test("an `error` Event (it has an id) is an Event: its text", () => {
 // ---- cpd-context ----
 
 const record = (n: number): ContextRecord => ({ seq: 40 + n, id: `hs-n${n}`, kind: "note", at: "2026-10-17T09:00:00.000Z", by: OTHER, text: `note ${n}` });
-const planEvent = (n: number): PlanEvent => ({ event: 300 + n, at: "2026-10-18T09:00:00Z", plan: "pay-4521", text: `Plan phase ${n}.` });
+const planEvent = (n: number): PlanEvent => ({ event: 300 + n, at: "2026-10-18T09:00:00Z", plan: "pay-4521", text: `Plan phase ${n}.`, kind: "plan-phase", data: {} });
 const pending: PendingPlan[] = [{ id: "pay-4521", phase: "dispatch", prs: [{ key: "api", status: "dispatch", number: 212, jobs: [{ key: "j1", status: "queued", title: "T" }] }] }];
 const context = () => contextUpdate("ctx", ID, [1, 2].map((n) => ({ event: 200 + n, record: `hs-n${n}`, seq: 40 + n })), [record(1), record(2)], [planEvent(1), planEvent(2), planEvent(3)], pending)!;
 const FULL = [
   "Context ctx: 2 new records since your last turn.",
   "- hs-n1 note (2026-10-17): note 1",
   "- hs-n2 note (2026-10-17): note 2",
+  "",
   "Plans:",
-  "- 2026-10-18T09:00:00Z pay-4521: Plan phase 1.",
-  "- 2026-10-18T09:00:00Z pay-4521: Plan phase 2.",
-  "- 2026-10-18T09:00:00Z pay-4521: Plan phase 3.",
+  "- pay-4521: 3 phase changes",
+  "",
   "Pending work:",
-  "- pay-4521 (dispatch), PR api dispatch #212: 0 merged on its Lead Branch, 1 queued, 0 running, 0 failed, 0 draft",
-  "  - j1 queued: T",
+  "- pay-4521 (dispatch): PR api 1 queued",
 ];
 
 test("cpd-context, collapsed: its counts line is the summary", () => {
