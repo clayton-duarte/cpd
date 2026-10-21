@@ -305,3 +305,14 @@ fn a_pr_of_a_context_with_no_owner_opens_no_engine_error_and_pr_ready_follows_th
     // No policy is read (hs-d481): an unset owner opens no engine-error, and no pr-failing (hs-d470).
     assert_eq!(kinds(&items), [(Kind::PrReady, "pr:acme/shop#5".to_owned())]);
 }
+
+#[test]
+fn an_unstable_pull_request_opens_no_pr_ready_item_hs_d525() {
+    let env = TestEnv::new();
+    setup(&env);
+    pull_request(&env, 1, "merge_state = 'unstable'");
+    pull_request(&env, 2, "merge_state = 'has_hooks', review_decision = 'approved'");
+    pull_request(&env, 3, "merge_state = 'clean', review_decision = 'approved'");
+    let ready: Vec<String> = found(&env).into_iter().filter(|c| c.kind == Kind::PrReady).map(|c| c.subject).collect();
+    assert_eq!(ready, ["pr:acme/shop#3"], "only a CLEAN pull request is ready to merge (hs-d525)");
+}

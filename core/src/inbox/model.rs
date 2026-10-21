@@ -281,6 +281,19 @@ pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
     }
 }
 
+/// Closes the open `pr-ready` item of the pull request `repo#number` (hs-n404), in the caller's transaction, at its time, as
+/// [`reconcile`] does (`closed_at`, `inbox-closed`): every path that stores a pull request as merged calls it, so the item
+/// never waits for E8's next pass. Nothing is written when no such item is open.
+pub fn close_pr_ready(tx: &crate::store::WriteTxn<'_>, repo: &str, number: i64) -> Result<(), CpdError> {
+    let subject = format!("pr:{repo}#{number}");
+    for item in open_items(tx)?.into_iter().filter(|i| i.kind == Kind::PrReady && i.subject == subject) {
+        tx.execute("UPDATE inbox_items SET closed_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1", params![item.id])?;
+        let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());
+        events::append(tx, scope(event, &item.context, &item.plan, &item.job, &item.session))?;
+    }
+    Ok(())
+}
+
 /// What a [`reconcile`] changed: the ids of the items it opened and closed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Changes {

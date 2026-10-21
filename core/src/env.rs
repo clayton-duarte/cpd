@@ -80,6 +80,7 @@ mod tests {
             ("doctor/mod.rs", "must run when the config is invalid"),
             ("watch/engine.rs", "takes the engine lock between the config and the store"),
             ("watch/ensure.rs", "checks the engine lock between the config and the store"),
+            ("pr/merge.rs", "needs no config: opens the store alone with the default busy timeout"),
         ];
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut sites = Vec::new();
