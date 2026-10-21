@@ -153,7 +153,7 @@ pub(super) fn archive_lead(env: &mut Env, lead: &Row, keep: bool) -> Result<Outp
             return Err(archive_blocked(&live, None));
         }
         let changed = tx.execute(
-            "UPDATE sessions SET archived_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND archived_at IS NULL",
+            "UPDATE sessions SET archived_at = (SELECT at FROM txns WHERE id = cpd_txn()), asleep_at = NULL WHERE id = ?1 AND archived_at IS NULL",
             [lead.id.as_str()],
         )?;
         if changed == 0 {
@@ -263,7 +263,7 @@ pub(super) fn unarchive(args: UnarchiveArgs) -> Result<Output, CpdError> {
         return Err(parent_archived(&lead, format!("Plan {plan} is archived"), format!("cpd plan unarchive --plan {plan}")));
     }
     let changed = env.store.write("session unarchive", |tx| {
-        let changed = tx.execute("UPDATE sessions SET archived_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL", [lead.id.as_str()])?;
+        let changed = tx.execute("UPDATE sessions SET archived_at = NULL, asleep_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL", [lead.id.as_str()])?;
         if changed == 0 {
             return Ok(false);
         }

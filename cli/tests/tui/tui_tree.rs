@@ -1027,9 +1027,9 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
         "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰁣 collapse`; alpha has nothing to fold: its last row ends it with `╰─`, and `gamma`, with no row, closes with a plain `╰─`; no `󰇘` row"
     );
     assert!(screen.iter().all(|r| !r.contains('\u{F01D8}')), "no `󰇘` row: {screen:?}");
-    // a click on the archived Plan shows its history; the archived Context's title and its plain closing row do nothing
+    // a click on the archived Plan unarchives it and opens its Lead; one on the archived Context's title unarchives it and opens its Manager; its plain closing row does nothing
     pane.click(10, 9);
-    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "l-old"])]);
+    assert_eq!(wait_for_calls(&env, 2), [words(&["plan", "unarchive", "--plan=old"]), words(&["session", "open", "l-old"])]);
     pane.click(5, 12);
     pane.click(1, 13);
     pane.settled();
@@ -1041,7 +1041,16 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
     assert!(screen[8].starts_with(&format!(" ├─{NEEDS_YOU} rel")), "the live row stays: {screen:?}");
     assert!(!screen.iter().any(|r| r.contains(" old")), "the archived row is hidden: {screen:?}");
     assert_eq!((screen[11].as_str(), screen[12].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰─"));
-    assert_eq!(calls(&env), [words(&["session", "history", "l-old"])], "only the click on the archived Session ran a command");
+    assert_eq!(
+        calls(&env),
+        [
+            words(&["plan", "unarchive", "--plan=old"]),
+            words(&["session", "open", "l-old"]),
+            words(&["context", "unarchive", "gamma"]),
+            words(&["context", "manager", "--context=gamma"])
+        ],
+        "only the clicks on the archived Plan and the archived Context's title ran commands"
+    );
 }
 
 #[test]
@@ -1263,7 +1272,7 @@ fn archive_on_the_only_live_lead_in_the_chat_slot_parks_it_first() {
 }
 
 #[test]
-fn a_click_on_an_archived_fork_runs_session_history() {
+fn a_click_on_an_archived_fork_unarchives_and_opens_it() {
     let env = env();
     populate(&env);
     sql(&mut open(&env), "UPDATE sessions SET archived_at = '2026-02-01T00:00:00.000Z' WHERE id = 'f-blocked';");
@@ -1273,9 +1282,9 @@ fn a_click_on_an_archived_fork_runs_session_history() {
     let shown = [format!(" ├─{IDLE} ship·f-bl"), collapse()];
     assert_eq!(pane.rows_are(5, &shown)[5..7], shown, "the archived fork is inside alpha's block, after the live rows");
     pane.click(10, 5);
-    assert_eq!(wait_for_calls(&env, 1), [words(&["session", "history", "f-blocked"])]);
+    assert_eq!(wait_for_calls(&env, 2), [words(&["session", "unarchive", "f-blocked"]), words(&["session", "open", "f-blocked"])]);
     pane.click(8, 4); // a live fork still opens
-    assert_eq!(wait_for_calls(&env, 2)[1], words(&["session", "open", "f-idle"]));
+    assert_eq!(wait_for_calls(&env, 3)[2], words(&["session", "open", "f-idle"]));
 }
 
 #[test]

@@ -351,6 +351,10 @@ impl NewEvent {
         make(Kind::SessionRetiered, text, json!({"from": from, "to": to}))
     }
 
+    pub fn session_asleep(text: impl Into<String>) -> NewEvent {
+        make(Kind::SessionAsleep, text, json!({}))
+    }
+
     pub fn context_owner(text: impl Into<String>, owner: &str) -> NewEvent {
         make(Kind::ContextOwner, text, json!({"owner": owner}))
     }
@@ -485,6 +489,7 @@ mod tests {
             Kind::SessionRenamed => vec![NewEvent::session_renamed(T, s)],
             Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::SessionRetiered => vec![NewEvent::session_retiered(T, s, s)],
+            Kind::SessionAsleep => vec![NewEvent::session_asleep(T)],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],
             Kind::ContextOwner => vec![NewEvent::context_owner(T, s)],
             Kind::PlanRenamed => vec![NewEvent::plan_renamed(T, s)],

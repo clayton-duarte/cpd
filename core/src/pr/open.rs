@@ -326,6 +326,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
             .map_or(Membership { authored: true, review_requested: false }, |row| row.membership());
         merged_at = polled.merged_at.clone();
         pulls::upsert(tx, &Listed { pr: polled, membership })?;
+        crate::inbox::model::close_pr_ready(tx, &pulled.row.repo, pulled.row.number)?;
         pulls::find(tx, &pulled.row.repo, pulled.row.number)?.expect("the row was just written").id
     } else {
         pulls::ensure(tx, &pulled.row)?

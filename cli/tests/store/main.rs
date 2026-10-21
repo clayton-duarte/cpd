@@ -7,4 +7,5 @@ mod common;
 mod events;
 mod store;
 mod store_local_needs;
+mod store_asleep;
 mod store_window;

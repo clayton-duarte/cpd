@@ -56,6 +56,7 @@ use crate::widgets::{Window, max_scroll, window};
 use cpd_core::plan::Phase;
 use crate::read::{ContextNode, Dot, JobStatus, Place, PlanNode, SessionNode, Tree};
 use cpd_core::inbox::model::Kind;
+use super::actions::{Action, Subject};
 
 /// Tree identifiers: a Context's id, a Plan's id, a Session's id.
 pub type Id = String;
@@ -169,6 +170,38 @@ impl<'a> Row<'a> {
             Row::Fork(c, p, s) => c.is_archived() || p.head.is_archived() || s.is_archived(),
             Row::Toggle => false,
         }
+    }
+
+    /// The row is drawn muted: archived, or the row of an asleep Session (contract §2.2 "Asleep"). An asleep row is live:
+    /// the cursor rests on it and Enter resumes it.
+    pub fn muted(&self) -> bool {
+        self.archived()
+            || match *self {
+                Row::Context(c) => c.manager_asleep,
+                Row::Plan(_, p) => p.lead().is_some_and(SessionNode::is_asleep),
+                Row::Fork(_, _, s) => s.is_asleep(),
+                Row::Toggle => false,
+            }
+    }
+
+    /// What a click on an archived Session, Plan or fork row does first: `unarchive` of the outermost archived object of
+    /// the row (its Context, else its Plan, else the Session), and the Open of its Session. None when the row is not archived.
+    pub fn resume(&self) -> Option<(Subject, Action)> {
+        let (context, plan, session) = match *self {
+            Row::Plan(c, p) => (c, p, p.lead()?),
+            Row::Fork(c, p, s) => (c, p, s),
+            Row::Context(_) | Row::Toggle => return None,
+        };
+        let subject = if context.is_archived() {
+            Subject::Context(context.id.clone())
+        } else if plan.head.is_archived() {
+            Subject::Plan(plan.head.id.clone())
+        } else if session.is_archived() {
+            Subject::Session(session.id.clone())
+        } else {
+            return None;
+        };
+        Some((subject, Action::Open(session.id.clone())))
     }
 
     /// The cursor may rest on it: a live Plan or fork.
@@ -305,12 +338,12 @@ fn selectable_name(name: String, selected: bool) -> Span<'static> {
 /// archived) and id, blue when its Manager is in the chat slot. The fold makes it bold.
 fn context_text(c: &ContextNode, frame: usize) -> Line<'static> {
     let selected = c.manager_place == Some(Place::Chat);
-    Line::from(vec![palette::dot_span(c.dot, frame, c.is_archived()), " ".into(), selectable_name(c.id.to_string(), selected)])
+    Line::from(vec![palette::dot_span(c.dot, frame, c.is_archived() || c.manager_asleep), " ".into(), selectable_name(c.id.to_string(), selected)])
 }
 
 /// A Plan's row text, one level under its Context.
 fn plan_row(c: &ContextNode, p: &PlanNode, width: u16, frame: usize) -> (Id, Line<'static>) {
-    let muted = c.is_archived() || p.head.is_archived();
+    let muted = c.is_archived() || p.head.is_archived() || p.lead().is_some_and(SessionNode::is_asleep);
     let text = row_text(
         RowText { session: p.lead(), name: p.head.id.to_string(), depth: 1, frame, counters_width: counters(p, false).width() /* the width is the same in any colour */, muted },
         width,
@@ -337,7 +370,7 @@ fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: 
     let k = kids(c);
     let expanded = opened.contains(&vec![close.clone()]);
     let mut rows: Vec<(Id, Line<'static>)> = k.direct.iter().map(|p| plan_row(c, p, width, frame)).collect();
-    rows.extend(k.forks.iter().map(|(_, s)| fork_row(s, width, frame, false)));
+    rows.extend(k.forks.iter().map(|(_, s)| fork_row(s, width, frame, s.is_asleep())));
     if expanded {
         rows.extend(k.archived.iter().map(|p| plan_row(c, p, width, frame)));
         rows.extend(k.strays.iter().map(|(_, s)| fork_row(s, width, frame, true)));
@@ -482,7 +515,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         if let Row::Plan(_, plan) = row {
             counters(plan, has_stuck_job(tree, plan)).right_aligned().render(rect, buf);
         }
-        if row.archived() {
+        if row.muted() {
             // muted, except the selected name: selection beats the muted colour
             for x in rect.x..rect.right() {
                 if buf[(x, y)].fg != palette::selected().fg.unwrap_or_default() {

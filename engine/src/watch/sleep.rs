@@ -1,0 +1,111 @@
+//! E13, Sleep (contract §3.7, §2.2 "Asleep"; hs-d515, hs-d520): puts to sleep each Lead and Manager Session that is
+//! finished and out of the User's view. Its pane is closed as `session close` does (pi stops, files kept), then one
+//! transaction sets `sessions.asleep_at` and appends `session-asleep`. A tick with nothing ready writes nothing.
+
+use time::OffsetDateTime;
+
+use super::SOURCE;
+use super::engine::Engine;
+use super::report::{About, Step};
+use cpd_core::clock::timestamp;
+use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::events::{self, NewEvent};
+use cpd_core::host::chat_slot;
+use cpd_core::ids::{ContextId, PlanId, SessionId};
+use cpd_core::session::close_lead;
+
+/// A Lead is finished when its Plan is `done` and nothing of the Plan is live or open; a Manager when every Plan of
+/// its Context is `done` or archived (and one is done). `?1` is `now`, `?2` the cut-off: what happened after it is
+/// recent. Times are §1.3's, so they compare as text.
+const READY: &str = "
+SELECT s.id, s.context, s.plan FROM sessions s LEFT JOIN plans p ON p.id = s.plan
+ WHERE s.role IN ('lead', 'manager') AND s.archived_at IS NULL AND s.asleep_at IS NULL
+   AND NOT EXISTS (SELECT 1 FROM inbox_items i WHERE i.session = s.id AND i.closed_at IS NULL AND i.dismissed_at IS NULL
+                      AND (i.snoozed_until IS NULL OR i.snoozed_until <= ?1))
+   AND CASE s.role
+     WHEN 'lead' THEN p.phase = 'done'
+       AND NOT EXISTS (SELECT 1 FROM prs r WHERE r.plan = p.id AND r.status NOT IN ('merged', 'cancelled'))
+       AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.plan = p.id AND j.status IN ('draft', 'queued', 'running'))
+       AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.plan = p.id AND e.status = 'open')
+       AND NOT EXISTS (SELECT 1 FROM plan_reviews v WHERE v.plan = p.id AND v.status = 'pending')
+     ELSE EXISTS (SELECT 1 FROM plans q WHERE q.context = s.context AND q.phase = 'done')
+       AND NOT EXISTS (SELECT 1 FROM plans q WHERE q.context = s.context AND q.phase <> 'done' AND q.archived_at IS NULL)
+     END
+   AND max(
+         CASE s.role WHEN 'lead' THEN coalesce(p.done_at, '')
+                     ELSE coalesce((SELECT max(q.done_at) FROM plans q WHERE q.context = s.context AND q.phase = 'done'), '') END,
+         s.state_at,
+         coalesce((SELECT max(i.closed_at) FROM inbox_items i WHERE i.session = s.id), '')) <= ?2
+ ORDER BY s.created_at, s.id";
+
+struct Ready {
+    session: SessionId,
+    context: ContextId,
+    plan: Option<PlanId>,
+}
+
+pub(super) fn run(engine: &mut Engine) {
+    match ready(engine) {
+        Ok(ready) => {
+            engine.clear(Step::E13, &About::Machine);
+            for r in ready {
+                let about = About::Session(r.session.clone());
+                match sleep(engine, &r) {
+                    Ok(true) => {
+                        engine.log.line(&format!("E13: put Session {} to sleep", r.session));
+                        engine.clear(Step::E13, &about);
+                    }
+                    Ok(false) => {}
+                    Err(e) => engine.fail(Step::E13, about, &e),
+                }
+            }
+        }
+        Err(e) => engine.fail(Step::E13, About::Machine, &e),
+    }
+}
+
+fn ready(engine: &mut Engine) -> Result<Vec<Ready>, CpdError> {
+    let now = OffsetDateTime::now_utc();
+    let cutoff = now - time::Duration::seconds(i64::from(engine.config.timeouts.sleep_seconds));
+    let (now, cutoff) = (timestamp(now), timestamp(cutoff));
+    engine.store.read(|conn| {
+        let mut stmt = conn.prepare(READY)?;
+        let rows = stmt
+            .query_map([&now, &cutoff], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.into_iter()
+            .map(|(session, context, plan)| {
+                Ok(Ready { session: SessionId::parse(&session)?, context: ContextId::parse(&context)?, plan: plan.map(|p| PlanId::parse(&p)).transpose()? })
+            })
+            .collect()
+    })
+}
+
+/// Puts one Session to sleep. False when the User is looking at it (the chat slot) or it changed meanwhile.
+fn sleep(engine: &mut Engine, r: &Ready) -> Result<bool, CpdError> {
+    let cockpit = engine.config.tmux.cockpit_session.clone();
+    let panes = engine.tmux.list_panes()?;
+    if chat_slot(&panes, &cockpit).is_some_and(|p| p.cpd_session.as_ref() == Some(&r.session)) {
+        return Ok(false);
+    }
+    match close_lead(&mut engine.store, &engine.tmux, &cockpit, &r.session, SOURCE) {
+        Ok(_) => {}
+        Err(e) if e.code() == ErrorCode::InChatSlot => return Ok(false),
+        Err(e) => return Err(e),
+    }
+    engine.store.write(SOURCE, |tx| {
+        let changed = tx.execute(
+            "UPDATE sessions SET asleep_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND asleep_at IS NULL AND archived_at IS NULL",
+            [r.session.as_str()],
+        )?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        let mut event = NewEvent::session_asleep(format!("Session {} is asleep and out of view.", r.session)).session(r.session.clone()).context(r.context.clone());
+        if let Some(plan) = &r.plan {
+            event = event.plan(plan.clone());
+        }
+        events::append(tx, event)?;
+        Ok(true)
+    })
+}
