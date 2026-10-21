@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "f79a8c7b6824b3470575ce8c00a81311a7964df11779513c7b0b679b04c6d7f9";
+pub const SCHEMA_HASH: &str = "f396d962bbfd5f8cc486c9739d57104c9abe50bfb986752c0b02036f0bc8223b";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -419,7 +419,7 @@ enum UpdateRow {
 /// The legacy migrations that add or rename columns drop these and call this
 /// again; named migrations never create them: [`reconcile`] does (§4.5 K4).
 fn create_history_triggers(conn: &Connection, table: &str, no_delete: bool) -> Result<()> {
-    for (_, sql) in history_triggers(conn, table, no_delete, UpdateRow::Whole)? {
+    for (_, sql) in history_triggers(conn, table, no_delete, UpdateRow::Whole, false)? {
         conn.execute_batch(&format!("{sql};"))?;
     }
     Ok(())
@@ -431,9 +431,43 @@ fn table_columns(conn: &Connection, table: &str) -> Result<Vec<(String, i64)>> {
     stmt.query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))?.collect()
 }
 
+/// `P(x)` of contract §4.4 "The delete exception": the Plan `x` is deleted.
+fn plan_deleted(plan: &str) -> String {
+    format!("(SELECT deleted_at FROM plans WHERE id = {plan}) IS NOT NULL")
+}
+
+/// `C(x)` of §4.4: the Context `x` is deleted.
+fn context_deleted(context: &str) -> String {
+    format!("(SELECT deleted_at FROM contexts WHERE id = {context}) IS NOT NULL")
+}
+
+/// The `<owner>` of the delete exception of `table` (§4.4 "The delete exception"): true when the row's
+/// owner is deleted. `None` for a table no delete reaches.
+fn delete_owner(table: &str) -> Option<String> {
+    let plan_row = || format!("{} OR (OLD.plan IS NULL AND {})", plan_deleted("OLD.plan"), context_deleted("OLD.context"));
+    let session_row = |column: &str| {
+        format!(
+            "EXISTS (SELECT 1 FROM sessions s WHERE s.id = OLD.{column} AND ({} OR (s.plan IS NULL AND {})))",
+            plan_deleted("s.plan"),
+            context_deleted("s.context")
+        )
+    };
+    Some(match table {
+        "prs" | "pr_needs" | "plan_reviews" | "jobs" | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
+        "context_records" => context_deleted("OLD.context"),
+        "events" | "inbox_items" | "sessions" => plan_row(),
+        "plannotator_reviews" => session_row("session"),
+        "board_posts" => session_row("to_session"),
+        _ => return None,
+    })
+}
+
 /// The generated triggers of `table` as `(name, sql)`, `sql` as `sqlite_schema`
-/// stores it (no closing `;`), with `_hist_upd` in the shape `update`.
-fn history_triggers(conn: &Connection, table: &str, no_delete: bool, update: UpdateRow) -> Result<Vec<(String, String)>> {
+/// stores it (no closing `;`), with `_hist_upd` in the shape `update`. With
+/// `tombstone` (the generator since `delete-tombstone`, §4.4 "Triggers") the
+/// `_no_delete` trigger holds the table's delete exception and `_hist_del` is
+/// written; the legacy migrations create neither.
+fn history_triggers(conn: &Connection, table: &str, no_delete: bool, update: UpdateRow, tombstone: bool) -> Result<Vec<(String, String)>> {
     let columns = table_columns(conn, table)?;
     if columns.is_empty() {
         return Err(rusqlite::Error::InvalidParameterName(format!("no table {table}")));
@@ -494,11 +528,27 @@ fn history_triggers(conn: &Connection, table: &str, no_delete: bool, update: Upd
             ),
         ),
     ];
+    if no_delete && tombstone {
+        triggers.push((
+            format!("{table}_hist_del"),
+            format!(
+                "CREATE TRIGGER {table}_hist_del AFTER DELETE ON {table} BEGIN\n  \
+                 INSERT INTO history(txn, tbl, pk, op, before, after) VALUES (cpd_txn(), '{table}',\n    \
+                 {}, 'delete',\n    {}, NULL);\nEND",
+                pk("OLD"),
+                object("OLD"),
+            ),
+        ));
+    }
     if no_delete {
+        let when = match delete_owner(table).filter(|_| tombstone) {
+            Some(owner) => format!("\nWHEN NOT ({owner})\nBEGIN\n"),
+            None => " BEGIN\n  ".to_owned(),
+        };
         triggers.push((
             format!("{table}_no_delete"),
             format!(
-                "CREATE TRIGGER {table}_no_delete BEFORE DELETE ON {table} BEGIN\n  \
+                "CREATE TRIGGER {table}_no_delete BEFORE DELETE ON {table}{when}\
                  SELECT RAISE(ABORT, 'append_only: {table}');\nEND"
             ),
         ));
@@ -561,7 +611,7 @@ fn history_tables(conn: &Connection) -> Result<Vec<(String, bool)>> {
 /// order in which additive migrations added them.
 pub(super) fn reconcile(conn: &Connection) -> Result<()> {
     for (table, no_delete) in history_tables(conn)? {
-        for (name, sql) in history_triggers(conn, &table, no_delete, UpdateRow::Changed)? {
+        for (name, sql) in history_triggers(conn, &table, no_delete, UpdateRow::Changed, true)? {
             let stored = stored_trigger(conn, &name)?;
             if stored.as_deref() == Some(sql.as_str()) {
                 continue;
@@ -757,7 +807,10 @@ pub(super) fn canonical_entries(conn: &Connection) -> Result<Vec<Value>> {
     let generated: std::collections::HashSet<String> = history_tables(conn)?
         .into_iter()
         .flat_map(|(t, no_delete)| {
-            [format!("{t}_hist_ins"), format!("{t}_hist_upd")].into_iter().chain(no_delete.then(|| format!("{t}_no_delete")))
+            [format!("{t}_hist_ins"), format!("{t}_hist_upd")]
+                .into_iter()
+                .chain(no_delete.then(|| format!("{t}_hist_del")))
+                .chain(no_delete.then(|| format!("{t}_no_delete")))
         })
         .collect();
     let mut stmt = conn
@@ -801,7 +854,7 @@ pub(super) fn generated_mismatch(conn: &Connection) -> Result<Option<(String, St
         if table_columns(conn, &table)?.is_empty() {
             return Ok(Some((format!("{table}_hist_ins"), format!("a table {table}"), None)));
         }
-        for (name, sql) in history_triggers(conn, &table, no_delete, UpdateRow::Changed)? {
+        for (name, sql) in history_triggers(conn, &table, no_delete, UpdateRow::Changed, true)? {
             let stored = stored_trigger(conn, &name)?;
             if stored.as_deref() != Some(sql.as_str()) {
                 return Ok(Some((name, sql, stored)));

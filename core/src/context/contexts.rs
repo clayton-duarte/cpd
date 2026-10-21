@@ -47,7 +47,7 @@ impl ContextRow {
 
     pub fn find(conn: &Connection, id: &ContextId) -> rusqlite::Result<Option<ContextRow>> {
         conn.query_row(
-            &format!("SELECT {} FROM contexts WHERE id = ?1", ContextRow::COLUMNS),
+            &format!("SELECT {} FROM contexts WHERE id = ?1 AND deleted_at IS NULL", ContextRow::COLUMNS),
             [id.as_str()],
             ContextRow::from_row,
         )
@@ -103,6 +103,15 @@ impl<'a> Contexts<'a> {
         owner: &OwnerLogin,
     ) -> Result<(ContextRow, bool), CpdError> {
         let existing = |conn: &Connection| -> Result<Option<ContextRow>, CpdError> {
+            // A deleted Context keeps its row, and so its id: never reused (contract §2.2 "Deleted").
+            let deleted: bool = conn
+                .query_row("SELECT deleted_at IS NOT NULL FROM contexts WHERE id = ?1", [id.as_str()], |r| r.get(0))
+                .optional()?
+                .unwrap_or(false);
+            if deleted {
+                return Err(CpdError::new(ErrorCode::ContextExists, format!("Context {id} was deleted: its id is not reused."))
+                    .with("context", id.as_str()));
+            }
             let Some(row) = ContextRow::find(conn, id)? else { return Ok(None) };
             if row.title == title.as_str()
                 && row.jira.as_deref() == jira.map(Jira::as_str)

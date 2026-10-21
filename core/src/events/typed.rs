@@ -24,6 +24,16 @@ pub enum BasePull<'a> {
     Null,
 }
 
+/// What a delete removed (`plan-deleted`, `context-deleted`, contract §5.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub jobs: u64,
+    pub attempts: u64,
+    pub sessions: u64,
+    pub worktrees: u64,
+    pub disk_freed_mb: u64,
+}
+
 /// An Event about `kind`: only this file calls it.
 fn make(kind: Kind, text: impl Into<String>, data: Value) -> NewEvent {
     NewEvent::new(kind, text, data)
@@ -355,6 +365,22 @@ impl NewEvent {
         make(Kind::SessionAsleep, text, json!({}))
     }
 
+    pub fn plan_deleted(text: impl Into<String>, counts: &Counts) -> NewEvent {
+        make(
+            Kind::PlanDeleted,
+            text,
+            json!({"jobs": counts.jobs, "attempts": counts.attempts, "sessions": counts.sessions, "worktrees": counts.worktrees, "disk_freed_mb": counts.disk_freed_mb}),
+        )
+    }
+
+    pub fn context_deleted(text: impl Into<String>, plans: u64, counts: &Counts) -> NewEvent {
+        make(
+            Kind::ContextDeleted,
+            text,
+            json!({"plans": plans, "jobs": counts.jobs, "attempts": counts.attempts, "sessions": counts.sessions, "worktrees": counts.worktrees, "disk_freed_mb": counts.disk_freed_mb}),
+        )
+    }
+
     pub fn context_owner(text: impl Into<String>, owner: &str) -> NewEvent {
         make(Kind::ContextOwner, text, json!({"owner": owner}))
     }
@@ -490,6 +516,8 @@ mod tests {
             Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::SessionRetiered => vec![NewEvent::session_retiered(T, s, s)],
             Kind::SessionAsleep => vec![NewEvent::session_asleep(T)],
+            Kind::PlanDeleted => vec![NewEvent::plan_deleted(T, &Counts::default())],
+            Kind::ContextDeleted => vec![NewEvent::context_deleted(T, 0, &Counts::default())],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],
             Kind::ContextOwner => vec![NewEvent::context_owner(T, s)],
             Kind::PlanRenamed => vec![NewEvent::plan_renamed(T, s)],

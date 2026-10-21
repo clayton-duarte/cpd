@@ -13,7 +13,7 @@ pub(super) fn list() -> Result<Output, CpdError> {
     let Env { mut store, .. } = Env::open()?;
     let (contexts, cursor) = store.read(|conn| {
         let mut contexts = Vec::new();
-        let mut stmt = conn.prepare(&format!("SELECT {} FROM contexts ORDER BY id", ContextRow::COLUMNS))?;
+        let mut stmt = conn.prepare(&format!("SELECT {} FROM contexts WHERE deleted_at IS NULL ORDER BY id", ContextRow::COLUMNS))?;
         let rows = stmt.query_map([], ContextRow::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         for row in rows {
             let records: i64 =
@@ -26,7 +26,7 @@ pub(super) fn list() -> Result<Output, CpdError> {
                 |r| r.get(0),
             )?;
             let mut stmt =
-                conn.prepare("SELECT id, title, phase, lead_session, archived_at FROM plans WHERE context = ?1 ORDER BY created_at, id")?;
+                conn.prepare("SELECT id, title, phase, lead_session, archived_at FROM plans WHERE context = ?1 AND deleted_at IS NULL ORDER BY created_at, id")?;
             let plans = stmt
                 .query_map([&row.id], |r| {
                     Ok(json!({"id": r.get::<_, String>(0)?, "title": r.get::<_, String>(1)?,

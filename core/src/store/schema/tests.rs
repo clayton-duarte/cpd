@@ -456,7 +456,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 
     // The moved and dropped columns are gone.
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 11); // `plan-outline` added `outline`
+    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 12); // `plan-outline` added `outline`, `delete-tombstone` `deleted_at`
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('context_records') WHERE name = 'plan_repo'"), 0);
 
     // History: one insert per migrated PR (migration 4) and one per back-filled pull request
@@ -948,14 +948,15 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     let (store, before) = migrated_5(&dir);
     drop(store);
     // `prs_shape_fixed` is `job-kinds`': it is not one of migration 5's.
-    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed").collect();
+    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed" && name != "prs_hist_del").collect();
     let names = |t: &[(String, String)]| t.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
         // The history triggers list the rebuilt table's columns; every other keeps its text.
         // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started` and `open>cancelled` since `pr-cancel-open`.
         // `prs_locked` has a second exception since `stacked-prs`: a stacked or an open PR's `base` follows GitHub.
-        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" && name != "prs_locked" {
+        // `prs_no_delete` has the delete exception since `delete-tombstone`.
+        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" && name != "prs_locked" && name != "prs_no_delete" {
             assert_eq!(new, old, "{name}");
         }
     }
@@ -1371,8 +1372,8 @@ fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks
     // The triggers of §4.4 on `jobs` are back: the Locked guard, the legal transitions, the history and no delete.
     assert_eq!(
         rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'jobs' ORDER BY name"),
-        // `jobs_kind_spec_ins` and `_upd` are `job-kinds`'.
-        ["jobs_hist_ins", "jobs_hist_upd", "jobs_kind_spec_ins", "jobs_kind_spec_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"]
+        // `jobs_kind_spec_ins` and `_upd` are `job-kinds`'; `jobs_hist_del` is `delete-tombstone`'s (the generator's).
+        ["jobs_hist_del", "jobs_hist_ins", "jobs_hist_upd", "jobs_kind_spec_ins", "jobs_kind_spec_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"]
             .map(|name| serde_json::json!([name]))
     );
     assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tier = 'S1' WHERE key = 'c'")), "job_locked");
@@ -1975,7 +1976,7 @@ fn store_before_history_changed(home: &CpdHome) -> Vec<Named> {
     drop(crate::store::tests::open_named(home, &earlier).unwrap());
     let conn = connection(&home.db());
     for (table, no_delete) in history_tables(&conn).unwrap() {
-        let (name, sql) = history_triggers(&conn, &table, no_delete, UpdateRow::Whole).unwrap().remove(1);
+        let (name, sql) = history_triggers(&conn, &table, no_delete, UpdateRow::Whole, false).unwrap().remove(1);
         conn.execute_batch(&format!("DROP TRIGGER {name}; {sql};")).unwrap();
     }
     conn.execute_batch(
@@ -2018,6 +2019,8 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
     // `policy-keys`, which sorts after `history-changed`, added `contexts.owner`: the old whole row predates it,
     // and this Context has no pull request to fill it from.
     replayed.insert("owner".into(), Value::Null);
+    // and `delete-tombstone` added `contexts.deleted_at`.
+    replayed.insert("deleted_at".into(), Value::Null);
     let conn = connection(&home.db());
     let columns = table_columns(&conn, "contexts").unwrap();
     let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
@@ -2780,8 +2783,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline` and the one of `session-asleep`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1])]);
+    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep` and the two of `delete-tombstone`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2])]);
 }
 
 // ---------- named migration session-titles ----------

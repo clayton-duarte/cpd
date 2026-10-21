@@ -48,6 +48,13 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     if context.owner.is_none() {
         return Err(crate::policy::owner_unset(&args.context));
     }
+    // A deleted Plan keeps its row, and so its id: never reused (contract §2.2 "Deleted").
+    let deleted: Option<bool> = env.store.read(|conn| {
+        Ok(conn.query_row("SELECT deleted_at IS NOT NULL FROM plans WHERE id = ?1", [id.as_str()], |r| r.get(0)).optional()?)
+    })?;
+    if deleted == Some(true) {
+        return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} was deleted: its id is not reused.")).with("plan", id.as_str()));
+    }
     if let Some(plan) = env.store.read(|conn| find(conn, &id))? {
         // The caller's cwd is not a flag: a rerun from another directory is still `already`.
         let same = plan.plan.context == args.context && plan.plan.title == args.title.as_str() && plan.plan.jira == jira && plan.name == name;
