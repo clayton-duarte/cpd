@@ -184,6 +184,18 @@ impl<'a> Row<'a> {
             }
     }
 
+    /// The row is of a Plan or a Context that `plan delete` or `context delete` may delete: archived, or asleep (a Plan whose
+    /// Lead is asleep; a Context whose every Plan is asleep or archived), contract §2.2 "Deleted". The command says whether
+    /// the rest holds (nothing running, no open PR); the menu offers Delete on this much.
+    pub fn deletable(&self) -> bool {
+        let quiet = |p: &PlanNode| p.head.is_archived() || p.lead().is_some_and(SessionNode::is_asleep);
+        match *self {
+            Row::Context(c) => c.is_archived() || (!c.plans.is_empty() && c.plans.iter().all(quiet)),
+            Row::Plan(c, p) => c.is_archived() || quiet(p),
+            Row::Fork(..) | Row::Toggle => false,
+        }
+    }
+
     /// What a click on an archived Session, Plan or fork row does first: `unarchive` of the outermost archived object of
     /// the row (its Context, else its Plan, else the Session), and the Open of its Session. None when the row is not archived.
     pub fn resume(&self) -> Option<(Subject, Action)> {

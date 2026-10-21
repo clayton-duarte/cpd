@@ -109,7 +109,7 @@ impl Objects {
     /// The Context, its Plans, and every Lead and Manager Session of it.
     /// The caller has checked that the Context exists.
     pub fn of_context(conn: &Connection, context: &ContextId) -> Result<Objects, CpdError> {
-        let mut stmt = conn.prepare("SELECT id FROM plans WHERE context = ?1 ORDER BY created_at, id")?;
+        let mut stmt = conn.prepare("SELECT id FROM plans WHERE context = ?1 AND deleted_at IS NULL ORDER BY created_at, id")?;
         let plans = stmt
             .query_map([context.as_str()], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?
@@ -148,7 +148,7 @@ fn result(changed: &[Object], closed: Vec<String>) -> Output {
 
 /// `in_chat_slot` when a Lead of `sessions` holds the chat slot: checked
 /// before any pane is closed, so a refusal leaves everything as it was.
-pub(super) fn refuse_chat_slot(store: &mut Store, tmux: &Tmux, cockpit: &str, sessions: &[SessionId]) -> Result<(), CpdError> {
+pub(crate) fn refuse_chat_slot(store: &mut Store, tmux: &Tmux, cockpit: &str, sessions: &[SessionId]) -> Result<(), CpdError> {
     // The rows are read first, then the panes, as `close_lead` does.
     let leads = store.read(|conn| {
         let mut found = Vec::new();

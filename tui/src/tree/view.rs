@@ -21,7 +21,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use time::OffsetDateTime;
 use tui_tree_widget::TreeState;
 
-use super::actions::{Action, Failure, Free, IN_CHAT_SLOT, Subject, Until};
+use super::actions::{Action, Deletable, Failure, Free, IN_CHAT_SLOT, Subject, Until};
 use super::cursor::{self, Input};
 use super::folds::{Folds, FoldsFile};
 use super::inbox::{self, Hit, Jump, Shape};
@@ -87,6 +87,16 @@ fn subject_of(row: &Row<'_>) -> Option<Subject> {
         Row::Plan(_, p) => Some(Subject::Plan(p.head.id.clone())),
         Row::Fork(_, _, s) => Some(Subject::Session(s.id.clone())),
         Row::Toggle => None,
+    }
+}
+
+/// What a delete of `row` is about: its Plan or Context; none for a fork or a toggle row, or a row that `plan delete` and
+/// `context delete` would not take yet (they refuse the rest with `archive_blocked`).
+fn deletable_of(row: &Row<'_>) -> Option<Deletable> {
+    match *row {
+        Row::Context(c) if row.deletable() => Some(Deletable::Context(c.id.clone())),
+        Row::Plan(_, p) if row.deletable() => Some(Deletable::Plan(p.head.id.clone())),
+        _ => None,
     }
 }
 
@@ -511,7 +521,8 @@ impl View {
     fn open_menu(&mut self, at: Position) {
         let path = self.row_at(at);
         let row = path.as_deref().and_then(|p| rows::row(&self.tree, p));
-        self.menu = Kind::of(row).map(|kind| Menu::new(kind, path.unwrap_or_default(), at));
+        let deletable = row.as_ref().is_some_and(Row::deletable);
+        self.menu = Kind::of(row).map(|kind| Menu::new(kind, path.unwrap_or_default(), at, deletable));
     }
 
     /// The item picked in the menu, which is closed: the command to run, a popup to ask first, or the refusal.
@@ -547,6 +558,10 @@ impl View {
                 }
             }
             Item::Unarchive => subject_of(&row).map_or(Effect::None, |subject| Effect::Run(Action::Unarchive(subject))),
+            Item::Delete => match deletable_of(&row) {
+                Some(what) => Effect::Ask(Question::delete(what, &row.label())),
+                None => Effect::None,
+            },
             Item::Rename => self.ask(rename_of(&row).map(Ok)),
             Item::Fork | Item::NewSession => {
                 let title = if item == Item::Fork { "Fork" } else { "New session" };
@@ -896,6 +911,9 @@ mod tests {
             }
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
                 Ok(self.0.is_some())
+            }
+            fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
+                Ok(serde_json::json!({}))
             }
         }
         question.ask(&Answer(text))
@@ -1343,8 +1361,10 @@ mod tests {
     fn a_right_click_on_an_archived_row_offers_rename_copy_id_and_unarchive_and_on_a_closing_row_nothing() {
         let mut view = archived_open();
         // the archived Plan, its fork, an archived Context and its Plan and fork
-        for (column, row) in [(8, 5), (8, 6), (8, 15), (8, 16), (8, 17)] {
-            assert_eq!(menu_at(&mut view, column, row), ["Rename…", "Copy id", "Unarchive"], "({column}, {row})");
+        // (a Plan or a Context row also offers Delete, hs-d527; a fork does not)
+        for (column, row, delete) in [(8, 5, true), (8, 6, false), (8, 15, true), (8, 16, true), (8, 17, false)] {
+            let items: &[&str] = if delete { &["Rename…", "Copy id", "Unarchive", "Delete"] } else { &["Rename…", "Copy id", "Unarchive"] };
+            assert_eq!(menu_at(&mut view, column, row), items, "({column}, {row})");
             press(&mut view, KeyCode::Esc);
         }
         // the closing rows have none, the empty area has one
@@ -1722,6 +1742,9 @@ mod tests {
             }
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, cpd_core::error::CpdError> {
                 Ok(false)
+            }
+            fn preview(&self, _: &Deletable) -> Result<serde_json::Value, String> {
+                Ok(serde_json::json!({}))
             }
         }
         let typed = Typed(Default::default(), "other");

@@ -11,6 +11,7 @@
 
 pub mod archive;
 mod cancel;
+pub(crate) mod delete;
 pub mod display;
 pub mod fingerprint;
 pub mod jobs;
@@ -76,6 +77,8 @@ pub enum Command {
     Unarchive(UnarchiveArgs),
     /// Cancel the Plan's Jobs and pull requests, close its Lead, archive it (§4.12)
     Cancel(CancelArgs),
+    /// Delete an archived or asleep Plan: its rows, files, worktrees and local branches (§4.14)
+    Delete(DeleteArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -205,6 +208,16 @@ pub struct CancelArgs {
     reason: Option<Text>,
 }
 
+#[derive(clap::Args, Debug)]
+pub struct DeleteArgs {
+    /// The Plan
+    #[arg(value_name = "id")]
+    id: PlanId,
+    /// Delete: without it the command deletes nothing and prints what would go
+    #[arg(long)]
+    yes: bool,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new::new(args),
@@ -220,6 +233,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Archive(args) => archive::plan_archive(args),
         Command::Unarchive(args) => archive::plan_unarchive(args),
         Command::Cancel(args) => cancel::plan_cancel(args),
+        Command::Delete(args) => delete::plan_delete(args),
     }
 }
 

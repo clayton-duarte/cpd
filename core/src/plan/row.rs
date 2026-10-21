@@ -93,16 +93,16 @@ impl PlanRow {
     }
 }
 
-/// Every Plan matching `filter` (SQL after `WHERE`), oldest first.
+/// Every Plan matching `filter` (SQL after `WHERE`), oldest first; a deleted Plan is no Plan (contract §2.2 "Deleted").
 pub(super) fn query(conn: &Connection, filter: &str, params: &[&dyn rusqlite::ToSql]) -> Result<Vec<PlanRow>, CpdError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM plans WHERE {filter} ORDER BY created_at, id"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM plans WHERE deleted_at IS NULL AND ({filter}) ORDER BY created_at, id"))?;
     let rows = stmt.query_map(params, raw)?.collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter().map(PlanRow::parse).collect()
 }
 
-/// The Plan `id`, if it exists.
+/// The Plan `id`, if it exists and is not deleted.
 pub fn find(conn: &Connection, id: &PlanId) -> Result<Option<PlanRow>, CpdError> {
-    let raw = conn.query_row(&format!("SELECT {COLUMNS} FROM plans WHERE id = ?1"), [id.as_str()], raw).optional()?;
+    let raw = conn.query_row(&format!("SELECT {COLUMNS} FROM plans WHERE id = ?1 AND deleted_at IS NULL"), [id.as_str()], raw).optional()?;
     raw.map(PlanRow::parse).transpose()
 }
 

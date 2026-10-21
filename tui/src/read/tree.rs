@@ -180,7 +180,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
             .collect();
 
         let mut stmt = conn
-            .prepare("SELECT id, title, jira, archived_at FROM contexts ORDER BY id")?;
+            .prepare("SELECT id, title, jira, archived_at FROM contexts WHERE deleted_at IS NULL ORDER BY id")?;
         let mut rows = stmt.query([])?;
         let mut contexts = Vec::new();
         while let Some(r) = rows.next()? {

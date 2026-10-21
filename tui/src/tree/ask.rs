@@ -8,7 +8,8 @@
 //! new Plan's id (§2.1), so the popup refuses one that is no Plan id; a title no id can be derived from is refused
 //! after the popup, in a `text` dialog (commands.md §17 "No notes").
 
-use super::actions::Action;
+use super::actions::{Action, Deletable};
+use serde_json::Value;
 use super::slug::{self, CONTEXT_MAX, PLAN_MAX};
 use crate::dialog::validate::Validator;
 use cpd_core::error::CpdError;
@@ -105,6 +106,10 @@ pub enum Question {
     Input { title: &'static str, ask: Ask, initial: String },
     /// A `confirm` popup, `[<yes_label>] [Cancel]`; `then` runs when confirmed.
     Confirm { title: &'static str, text: String, yes_label: &'static str, then: Action },
+    /// A `confirm` popup `[Delete] [Cancel]` listing what the delete of `what` (`label` is the row's) removes: the list
+    /// is the command's own preview, so it is asked first ([`Dialogs::preview`]); `plan delete <id> --yes` runs when
+    /// confirmed.
+    Delete { what: Deletable, label: String },
 }
 
 /// The popups of the dialog kit, as the tree opens them: `crate::dialog::{input, confirm}` for the cockpit, a stub in a
@@ -114,6 +119,8 @@ pub trait Dialogs {
     fn input(&self, title: &str, prompt: &str, initial: &str, validator: Validator) -> Result<Option<String>, CpdError>;
     /// Whether a `confirm` popup was confirmed.
     fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError>;
+    /// What the delete of `what` would remove: the reply of the command without `--yes`, or why it is refused.
+    fn preview(&self, what: &Deletable) -> Result<Value, String>;
 }
 
 impl Question {
@@ -133,6 +140,11 @@ impl Question {
         Question::Confirm { title: "Archive", text: format!("Archive {label}?"), yes_label: "Archive", then }
     }
 
+    /// `Delete <label>?`, with the counts of the preview.
+    pub fn delete(what: Deletable, label: &str) -> Question {
+        Question::Delete { what, label: label.to_owned() }
+    }
+
     pub fn input(title: &'static str, ask: Ask, initial: String) -> Question {
         Question::Input { title, ask, initial }
     }
@@ -141,6 +153,7 @@ impl Question {
     pub fn title(&self) -> &'static str {
         match self {
             Question::Input { title, .. } | Question::Confirm { title, .. } => title,
+            Question::Delete { .. } => "Delete",
         }
     }
 
@@ -163,8 +176,30 @@ impl Question {
                 }
             }
             Question::Confirm { title, text, yes_label, then } => Ok(dialogs.confirm(title, &text, yes_label).map_err(failed)?.then_some(then)),
+            Question::Delete { what, label } => {
+                let preview = dialogs.preview(&what)?;
+                let text = delete_text(&label, &what, &preview);
+                Ok(dialogs.confirm("Delete", &text, "Delete").map_err(failed)?.then_some(Action::Delete { what, yes: true }))
+            }
         }
     }
+}
+
+/// The popup's text: what goes, with the counts of the command's preview (Plans only for a Context's), and that it cannot be undone.
+fn delete_text(label: &str, what: &Deletable, preview: &Value) -> String {
+    let count = |key: &str| preview[key].as_u64().unwrap_or(0);
+    let plans = match what {
+        Deletable::Context(_) => format!("{} Plans, ", preview["plans"].as_array().map_or(0, Vec::len)),
+        Deletable::Plan(_) => String::new(),
+    };
+    format!(
+        "Delete {label}? {plans}{} Jobs, {} Attempts, {} Sessions, {} worktrees and ~{} MB of disk go. This cannot be undone.",
+        count("jobs"),
+        count("attempts"),
+        count("sessions"),
+        count("worktrees"),
+        count("disk_freed_mb"),
+    )
 }
 
 #[cfg(test)]
@@ -203,6 +238,10 @@ mod tests {
         fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError> {
             self.opened.borrow_mut().push(format!("confirm {title} | {text} | {yes_label}"));
             Ok(self.yes)
+        }
+
+        fn preview(&self, _: &Deletable) -> Result<Value, String> {
+            Ok(serde_json::json!({"jobs": 47, "attempts": 121, "sessions": 3, "worktrees": 11, "disk_freed_mb": 342, "plans": [{}, {}]}))
         }
     }
 
@@ -320,6 +359,22 @@ mod tests {
     }
 
     #[test]
+    fn a_delete_lists_the_previews_counts_and_runs_the_yes_command_only_when_confirmed() {
+        let plan = || Question::delete(Deletable::Plan(PlanId::parse("old").unwrap()), "Plan old");
+        let stub = Stub::confirming(true);
+        assert_eq!(plan().ask(&stub), Ok(Some(Action::Delete { what: Deletable::Plan(PlanId::parse("old").unwrap()), yes: true })));
+        assert_eq!(
+            stub.opened.into_inner(),
+            ["confirm Delete | Delete Plan old? 47 Jobs, 121 Attempts, 3 Sessions, 11 worktrees and ~342 MB of disk go. This cannot be undone. | Delete"]
+        );
+        assert_eq!(plan().ask(&Stub::confirming(false)), Ok(None));
+        let context = Question::delete(Deletable::Context(cpd()), "alpha");
+        let stub = Stub::confirming(false);
+        assert_eq!(context.ask(&stub), Ok(None));
+        assert!(stub.opened.into_inner()[0].starts_with("confirm Delete | Delete alpha? 2 Plans, 47 Jobs"));
+    }
+
+    #[test]
     fn a_failed_popup_is_an_error_never_a_cancel_or_a_confirm() {
         struct Failing;
         impl Dialogs for Failing {
@@ -328,6 +383,9 @@ mod tests {
             }
             fn confirm(&self, _: &str, _: &str, _: &str) -> Result<bool, CpdError> {
                 Err(CpdError::new(cpd_core::error::ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit."))
+            }
+            fn preview(&self, _: &Deletable) -> Result<Value, String> {
+                Err("refused".to_owned())
             }
         }
         let why = "No tmux client is attached to the cockpit.".to_owned();

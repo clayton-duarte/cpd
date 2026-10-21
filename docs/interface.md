@@ -19,6 +19,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context pending` | List the in-flight work of the Context's active Plans (§3.11) | Lead, Manager | |
 | `cpd context distill` | Build the Context's digest with one-shot pi (§3.12) | Lead | |
 | `cpd context owner` | Set the owner of a Context that has none (§3.13) | Lead, Manager | |
+| `cpd context delete` | Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14) | | yes |
 | `cpd plan` | Plans and their phases (commands.md §4) | | |
 | `cpd plan new` | Create a Plan and start its Lead (§4.1) | Lead, Manager | yes |
 | `cpd plan list` | List the Plans (§4.2) | Lead, Manager | |
@@ -33,6 +34,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd plan archive` | Archive the Plan, its Lead and its side forks (§4.10) | | yes |
 | `cpd plan unarchive` | Unarchive the Plan, its Lead and its side forks (§4.11) | | yes |
 | `cpd plan cancel` | Cancel the Plan's Jobs and pull requests, close its Lead, archive it (§4.12) | Lead | |
+| `cpd plan delete` | Delete an archived or asleep Plan: its rows, files, worktrees and local branches (§4.14) | | yes |
 | `cpd job` | Jobs, Specs and Dependencies (commands.md §5) | | |
 | `cpd job add` | Add a Job (§5.1) | Lead | |
 | `cpd job edit` | Edit a draft Job (§5.2) | Lead | |

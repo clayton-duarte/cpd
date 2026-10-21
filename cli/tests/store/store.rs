@@ -218,7 +218,7 @@ fn schema_sql(conn: &Connection) -> Vec<(String, String)> {
 #[test]
 fn the_schema_is_contract_4_4_as_written() {
     let blocks = contract_ddl_blocks();
-    assert_eq!(blocks.len(), 9, "§4.4 changed shape");
+    assert_eq!(blocks.len(), 10, "§4.4 changed shape"); // `delete-tombstone` (hs-d527) added the block of `plans_deleted_once`
     assert!(blocks[2].contains("CREATE TRIGGER escalations_hist_ins"), "block 3 is the generated example");
     // The contract's DDL, every block but the generated example, run as written.
     let contract = Connection::open_in_memory().unwrap();
@@ -256,6 +256,10 @@ fn every_table_index_and_trigger_of_4_4_exists() {
     for (table, no_delete) in history_tables(&env) {
         expected.insert(format!("{table}_hist_ins"));
         expected.insert(format!("{table}_hist_upd"));
+        // `delete-tombstone` (hs-d527): a generated `_hist_del` for every table that refuses a delete.
+        if no_delete {
+            expected.insert(format!("{table}_hist_del"));
+        }
         // `pull_requests` has no `_no_delete`: an unowned row may be deleted (`pull_requests_owned` is in the DDL).
         // `dependencies` and `pr_needs` write their own (in the DDL).
         if no_delete || ["dependencies", "pr_needs"].contains(&table.as_str()) {

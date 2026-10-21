@@ -10,6 +10,7 @@
 //! for the store's migration 0007 only.
 
 mod archive;
+mod delete;
 mod contexts;
 pub mod digest;
 pub mod distill;
@@ -73,6 +74,8 @@ pub enum Command {
     Distill(distill::DistillArgs),
     /// Set the owner of a Context that has none (§3.13)
     Owner(owner::OwnerArgs),
+    /// Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14)
+    Delete(DeleteArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -239,6 +242,15 @@ pub struct UnarchiveArgs {
     id: ContextId,
 }
 
+#[derive(Args, Debug)]
+pub struct DeleteArgs {
+    /// The Context
+    id: ContextId,
+    /// Delete: without it the command deletes nothing and prints what would go
+    #[arg(long)]
+    yes: bool,
+}
+
 pub fn run(command: Command) -> Result<Output, CpdError> {
     match command {
         Command::New(args) => new(args),
@@ -266,6 +278,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Pending(args) => pending::pending(args),
         Command::Distill(args) => distill::distill(args),
         Command::Owner(args) => owner::owner(args),
+        Command::Delete(args) => delete::delete(args),
     }
 }
 

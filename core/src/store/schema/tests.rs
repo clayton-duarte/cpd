@@ -456,7 +456,7 @@ fn a_version_2_database_migrates_through_3_4_and_5_to_6_with_one_pr_per_plan() {
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
 
     // The moved and dropped columns are gone.
-    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 11); // `plan-outline` added `outline`
+    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('plans')"), 12); // `plan-outline` added `outline`, `delete-tombstone` `deleted_at`
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_table_info('context_records') WHERE name = 'plan_repo'"), 0);
 
     // History: one insert per migrated PR (migration 4) and one per back-filled pull request
@@ -948,14 +948,15 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     let (store, before) = migrated_5(&dir);
     drop(store);
     // `prs_shape_fixed` is `job-kinds`': it is not one of migration 5's.
-    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed").collect();
+    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed" && name != "prs_hist_del").collect();
     let names = |t: &[(String, String)]| t.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
         // The history triggers list the rebuilt table's columns; every other keeps its text.
         // `prs_status` also has `dispatch>cancelled` since `pr-cancel-started` and `open>cancelled` since `pr-cancel-open`.
         // `prs_locked` has a second exception since `stacked-prs`: a stacked or an open PR's `base` follows GitHub.
-        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" && name != "prs_locked" {
+        // `prs_no_delete` has the delete exception since `delete-tombstone`.
+        if name != "prs_hist_ins" && name != "prs_hist_upd" && name != "prs_status" && name != "prs_locked" && name != "prs_no_delete" {
             assert_eq!(new, old, "{name}");
         }
     }
@@ -1371,8 +1372,8 @@ fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks
     // The triggers of §4.4 on `jobs` are back: the Locked guard, the legal transitions, the history and no delete.
     assert_eq!(
         rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'jobs' ORDER BY name"),
-        // `jobs_kind_spec_ins` and `_upd` are `job-kinds`'.
-        ["jobs_hist_ins", "jobs_hist_upd", "jobs_kind_spec_ins", "jobs_kind_spec_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"]
+        // `jobs_kind_spec_ins` and `_upd` are `job-kinds`'; `jobs_hist_del` is `delete-tombstone`'s (the generator's).
+        ["jobs_hist_del", "jobs_hist_ins", "jobs_hist_upd", "jobs_kind_spec_ins", "jobs_kind_spec_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"]
             .map(|name| serde_json::json!([name]))
     );
     assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tier = 'S1' WHERE key = 'c'")), "job_locked");
@@ -1779,7 +1780,12 @@ fn converts_keeping_every_row_and_id(n: usize) {
         }
         // `policy-keys` added `contexts.owner` and `prs.name`, last, and filled them (the fixture's
         // pull requests are `acme/…`), writing an `update` history row per filled row in the migrating transaction.
-        assert_eq!(rows_after["contexts"].iter().map(|r| r.rsplit(',').next().unwrap()).collect::<Vec<_>>(), ["\"acme\"]"]);
+        // (`delete-tombstone`'s `deleted_at` comes after `owner`, so the column is found by its position.)
+        let owner = table_columns(&conn, "contexts").unwrap().iter().position(|(c, _)| c == "owner").unwrap();
+        assert_eq!(
+            rows_after["contexts"].iter().map(|r| serde_json::from_str::<Vec<Value>>(r).unwrap().remove(owner)).collect::<Vec<_>>(),
+            [Value::from("acme")]
+        );
         // The filled column is taken out by its position: a later additive migration (`pr-title`) adds a column after it.
         for (table, column) in [("contexts", "owner"), ("prs", "name")] {
             let at = table_columns(&conn, table).unwrap().iter().position(|(c, _)| c == column).unwrap();
@@ -1975,7 +1981,7 @@ fn store_before_history_changed(home: &CpdHome) -> Vec<Named> {
     drop(crate::store::tests::open_named(home, &earlier).unwrap());
     let conn = connection(&home.db());
     for (table, no_delete) in history_tables(&conn).unwrap() {
-        let (name, sql) = history_triggers(&conn, &table, no_delete, UpdateRow::Whole).unwrap().remove(1);
+        let (name, sql) = history_triggers(&conn, &table, no_delete, UpdateRow::Whole, false).unwrap().remove(1);
         conn.execute_batch(&format!("DROP TRIGGER {name}; {sql};")).unwrap();
     }
     conn.execute_batch(
@@ -2018,6 +2024,8 @@ fn history_changed_keeps_the_whole_update_rows_and_writes_the_changed_columns_fr
     // `policy-keys`, which sorts after `history-changed`, added `contexts.owner`: the old whole row predates it,
     // and this Context has no pull request to fill it from.
     replayed.insert("owner".into(), Value::Null);
+    // and `delete-tombstone` added `contexts.deleted_at`.
+    replayed.insert("deleted_at".into(), Value::Null);
     let conn = connection(&home.db());
     let columns = table_columns(&conn, "contexts").unwrap();
     let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
@@ -2780,8 +2788,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline` and the one of `session-asleep`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1])]);
+    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline`, the one of `session-asleep` and the two of `delete-tombstone`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1 + 2])]);
 }
 
 // ---------- named migration session-titles ----------
@@ -3212,4 +3220,79 @@ fn plan_outline_is_additive_and_adds_the_nullable_column_and_its_event_kind() {
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
     assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
+}
+
+// ---------- named migration delete-tombstone ----------
+
+#[test]
+fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_context_go() {
+    let at = NAMED.iter().position(|n| n.name.ends_with("-delete-tombstone")).expect("the migration delete-tombstone exists");
+    let dir = tempfile::tempdir().unwrap();
+    let home = home(&dir);
+    let mut before = crate::store::tests::open_named(&home, &NAMED[..at]).unwrap();
+    write(
+        &mut before,
+        &"INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1'), ('other', 'Other', 't', 'm1');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at) VALUES
+           ('m', 'manager', 'ctx', NULL, NULL, 'M', '/', 'O5', 'idle', 't', 't'),
+           ('l', 'lead', 'ctx', 'pay', NULL, 'L', '/', 'O3', 'idle', 't', 't'),
+           ('lo', 'lead', 'other', 'live', NULL, 'LO', '/', 'O3', 'idle', 't', 't');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES
+           ('pay', 'ctx', 'Pay', 'grounding', 'l', 't'), ('live', 'other', 'Live', 'grounding', 'lo', 't');
+         INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+           VALUES ('pay', 'r', '/r', 'main', 'waiting', 'cpd/pay', cpd_txn(), 't'), ('live', 'r', '/r', 'main', 'waiting', 'cpd/live', cpd_txn(), 't');
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+           VALUES ('pay', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't'),
+                  ('live', 'r', 'api', 'Api', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 0, cpd_txn(), 't');
+         INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES
+           (cpd_txn(), 't', 'plan-created', 'ctx', 'pay', 'x', '{}'), (cpd_txn(), 't', 'plan-created', 'other', 'live', 'x', '{}'),
+           (cpd_txn(), 't', 'context-created', 'ctx', NULL, 'x', '{}');"
+            .to_owned(),
+    )
+    .unwrap();
+    let rows_before = rows(&mut before, "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans");
+    drop(before);
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert!(store.schema_mismatch().is_none(), "{:?}", store.schema_mismatch());
+    assert_eq!(rows(&mut store, "SELECT id, title FROM contexts UNION ALL SELECT id, title FROM plans"), rows_before);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM contexts WHERE deleted_at IS NOT NULL") + count(&mut store, "SELECT count(*) FROM plans WHERE deleted_at IS NOT NULL"), 0);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM event_kinds WHERE name IN ('plan-deleted', 'context-deleted')"), 2);
+
+    // A live Plan's rows stay undeletable, with the error each had.
+    for (sql, message) in [
+        ("DELETE FROM jobs WHERE plan = 'pay'", "append_only: jobs"),
+        ("DELETE FROM prs WHERE plan = 'pay'", "append_only: prs"),
+        ("DELETE FROM events WHERE plan = 'pay'", "append_only: events"),
+        ("DELETE FROM events WHERE context = 'ctx' AND plan IS NULL", "append_only: events"),
+        ("DELETE FROM sessions WHERE id = 'm'", "append_only: sessions"),
+        ("DELETE FROM plans WHERE id = 'pay'", "append_only: plans"),
+        ("DELETE FROM contexts WHERE id = 'ctx'", "append_only: contexts"),
+        ("DELETE FROM txns", "append_only: txns"),
+        ("DELETE FROM history", "append_only: history"),
+    ] {
+        assert_eq!(sqlite_message(&refused(&mut store, sql)), message, "{sql}");
+    }
+
+    // The tombstone is written once; the rows of the tombstoned Plan go, the others' not.
+    write(&mut store, "UPDATE plans SET deleted_at = 'd1' WHERE id = 'pay'").unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE plans SET deleted_at = NULL WHERE id = 'pay'")), "append_only: plans.deleted_at");
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE plans SET deleted_at = 'd2' WHERE id = 'pay'")), "append_only: plans.deleted_at");
+    write(&mut store, "UPDATE plans SET title = 'Pay 2' WHERE id = 'pay'").unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM jobs WHERE plan = 'live'")), "append_only: jobs");
+    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM plans WHERE id = 'pay'")), "append_only: plans");
+    write(&mut store, "DELETE FROM events WHERE plan = 'pay'; DELETE FROM jobs WHERE plan = 'pay'; DELETE FROM prs WHERE plan = 'pay';").unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT tbl, op, json_extract(before, '$.key') FROM history WHERE op = 'delete' ORDER BY id"),
+        [serde_json::json!(["jobs", "delete", "api"]), serde_json::json!(["prs", "delete", "r"])]
+    );
+    assert_eq!(count(&mut store, "SELECT count(*) FROM events WHERE plan = 'live'"), 1);
+
+    // A Context's own rows go by its tombstone alone.
+    write(&mut store, "UPDATE contexts SET deleted_at = 'd3' WHERE id = 'ctx'").unwrap();
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE contexts SET deleted_at = NULL WHERE id = 'ctx'")), "append_only: contexts.deleted_at");
+    write(&mut store, "DELETE FROM events WHERE context = 'ctx' AND plan IS NULL; DELETE FROM sessions WHERE id = 'm';").unwrap();
+    assert_eq!(count(&mut store, "SELECT count(*) FROM history WHERE tbl = 'sessions' AND op = 'delete'"), 1);
+    assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM events WHERE context = 'other'")), "append_only: events");
+    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
 }

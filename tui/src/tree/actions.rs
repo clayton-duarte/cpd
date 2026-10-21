@@ -52,6 +52,28 @@ impl Subject {
     }
 }
 
+/// What a delete is about: only a Plan and a Context are deleted (a Lead goes with its Plan).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Deletable {
+    Context(ContextId),
+    Plan(PlanId),
+}
+
+impl Deletable {
+    /// `plan delete <id>` or `context delete <id>`, then `--yes`: without it the command only says what would go.
+    fn command(&self, yes: bool) -> Vec<String> {
+        let (area, id) = match self {
+            Deletable::Context(id) => ("context", id.to_string()),
+            Deletable::Plan(id) => ("plan", id.to_string()),
+        };
+        let mut argv = vec![area.to_owned(), "delete".to_owned(), id];
+        if yes {
+            argv.push("--yes".to_owned());
+        }
+        argv
+    }
+}
+
 /// How long an Inbox item is snoozed: the words of `inbox snooze` (§21.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Until {
@@ -130,6 +152,9 @@ pub enum Action {
     Snooze { item: i64, until: Until },
     /// `inbox dismiss <id>` (§21.4): the Inbox menu's Dismiss and `d`.
     Dismiss(i64),
+    /// `plan delete <id>` or `context delete <id>` (§4.14, §3.14): the menu's Delete. Without `yes` the command deletes
+    /// nothing and lists what would go, for the popup ([`super::ask::Question::Delete`]); with it, it deletes.
+    Delete { what: Deletable, yes: bool },
 }
 
 /// The refusal of `x` on the Session in the chat slot (the reference's), also when `session close` refuses it
@@ -175,6 +200,7 @@ impl Action {
             ],
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
+            Action::Delete { what, yes } => what.command(*yes),
         }
     }
 
@@ -237,6 +263,8 @@ impl Action {
             Action::Tell { manager, .. } => format!("told {manager}"),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),
+            Action::Delete { .. } if reply["already"] == true => "already deleted".into(),
+            Action::Delete { .. } => "deleted".into(),
         }
     }
 
@@ -350,6 +378,10 @@ impl Dialogs for Runner {
 
     fn confirm(&self, title: &str, text: &str, yes_label: &str) -> Result<bool, CpdError> {
         dialog::confirm(&self.tmux, title, text, yes_label)
+    }
+
+    fn preview(&self, what: &Deletable) -> Result<Value, String> {
+        command(&Action::Delete { what: what.clone(), yes: false })
     }
 }
 
