@@ -4,6 +4,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 
+mod board;
 mod host;
 mod session_reload;
 mod session_retier;
