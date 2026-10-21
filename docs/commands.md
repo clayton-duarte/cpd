@@ -185,6 +185,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
+| `cpd session retier` (§10.15) | Manager | no | no |
 
 `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -1773,10 +1774,12 @@ Effects: none; one read transaction.
 cpd session show [<id>]
 ```
 
-`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
+`<id>` defaults to the selected Session (`CPD_SESSION`); it accepts the short forms of §1.3. Output: the fields of `session list` plus `created_at`, `registered_event` (the id of its `session-registered` Event, the pi adapter's first cursor, §15.2), `model` and `thinking` (the row's `tier` as pi is told it, below: hs-d506) and, for a Plan's Lead, `open_escalations` (ids). Effects: none.
+
+`model` is `tiers.<letter>` of the config (`<provider>/<model-id>`, contract §8.2) for the letter of the row's `tier`, and `thinking` is the level of its digit (`off`, `low`, `medium`, `high`, `xhigh`, `max`, contract §9): the two halves of the `--model <model>:<thinking>` argument `session run` passes (§10.8), computed by the one function both use. They are read at each call, so a config edit shows at once.
 
 ```json
-{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
+{"ok": true, "session": {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "idle", "state_label": null, "place": "chat", "tmux_pane": "%12", "file": "…", "forked_from": null, "plan_lead": true, "tier": "O3", "model": "github-copilot/claude-opus-5.5", "thinking": "high", "cwd": "/home/clayton/projects/cpd", "title": null, "titled_at": null, "created_at": "…", "registered_event": 40117},
  "open_escalations": ["contract-commands-a1-q1"]}
 ```
 
@@ -1908,9 +1911,9 @@ cpd session run <id> [--adopt <pid>]
 ```
 
 The program in every Lead pane (§6.2): owns its terminal (§1.2). Steps of §6.7:
-1. If the Session's file exists, resume: `pi --session <file>` with the Lead's `[-e …]` (§6.5).
+1. If the Session's file exists, resume: `pi --model <model>:<thinking> --session <file>` with the Lead's `[-e …]` (§6.5). **The model is the row's current `tier`'s** (hs-d506): pi, given `--model`, uses it instead of the model its session file recorded (pi 1.3.0 `core/sdk.js`: the file's model is restored only when none is given) and applies the `:<thinking>` level (`main.js` `buildSessionOptions`); so a Session `session retier` moved (§10.15) and then restarted (a reload for a new pi, the watchdog, Enter after pi exited, `session open`) runs on its new Tier, with its whole conversation.
 2. Else, if `forked_from` is set, wait until the source is idle (§6.7 step 1, every 2 s, showing the waiting line), then `pi … --fork <source file> --session-id <id> -n <name> [-- @<first message file>]`.
-3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- @<first message file>`.
+3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- @<first message file>`. Steps 2 and 3 take `--model` from the row's `tier` **when pi starts**, not from the `tier` the row had at registration (hs-d506).
 
 Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (§6.5 "The Plan's plannotator port"): `PLANNOTATOR_PORT=<port>` replaces the value in the pane's environment. When the range is full the pane shows `no_port` and names the Plans that hold it, and Enter retries; pi is not started. A Manager gets no port.
 
@@ -2108,6 +2111,50 @@ pi failing to start or exiting non-zero, or an answer that is empty or does not 
 ```
 
 (`"already"` is not used here: it means the same value was already stored, and a retitle never compares.) Idempotent: yes: rerunning is safe and writes a new title each time (it never answers `"already"`).
+
+### 10.15 `session retier`
+
+```
+cpd session retier [--all | <id>]
+```
+
+Moves live Leads and Managers to the Tier the config names now (hs-d506: the User sets `lead_tier` and `manager_tier` and every running Session must follow, not only those registered later). **A Session's `tier` is not fixed at registration** (contract §2.2 Session): this command is the one that changes it. Workers are not touched: a Worker's Tier is its Job's (contract §9).
+
+| Argument | Meaning |
+|---|---|
+| `<id>` | one Session (the short forms of §1.3) |
+| `--all` | every Lead and Manager that is not archived |
+
+Exactly one of the two: neither, or both, is `usage` (exit 2).
+
+**The target.** A Session of role `lead` (a Plan's Lead and a side fork alike) moves to the config's `lead_tier`; one of role `manager` to `manager_tier` (contract §8.2).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists (`<id>`) | `session_not_found` | 4 |
+| it is a `lead` or a `manager`; a Worker is refused, its Tier is its Job's | `not_a_lead` | 3 |
+| it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
+
+`--all` refuses nothing for a Session it passes over: archived Sessions and Workers are not part of it and are not listed.
+
+**Effects**, one transaction for the whole command:
+- **Rows:** for each selected Session whose `tier` differs from its target, `sessions.tier` = the target (the store's history trigger records the old row).
+- **Event** `session-retiered` `{from, to}` for each such Session, one each, addressed to it (`session` set, with its `context` and `plan` when it has one), appended in the same transaction. `from` and `to` are Tier strings (`O3`, `O2`). `text`: `Session <id> moved from O3 to O2.`
+- A Session already on its target is **unchanged**: no row write, no Event. When no Session changes, nothing is written at all.
+- **No tmux call and no pi restart.** A running pi switches itself (below); a Session with no pi keeps the new `tier` for its next start (§10.8).
+
+**The adapter's switch** (contract §5.3, §6.5; commands §15.3 `session-retiered`). The Event reaches the adapter of the Session it names. **At the Session's next idle** (right away when it already is) the adapter reads `cpd session show` for the Session's `model` and `thinking` (§10.2), finds the model in pi's registry (`ctx.modelRegistry.find(<provider>, <model-id>)`, the provider being the part of `model` before its first `/`) and calls `pi.setModel(<that model>)` and `pi.setThinkingLevel(<thinking>)`, once per change and never while the Session works, waits or is blocked: no turn is interrupted and nothing is restarted, and the conversation stays whole (docs: pi 1.3.0 `extensions.md`, `ExtensionAPI.setModel` "for the current session without changing the configured default"). Several Events before one idle make one switch, to what the row says at that idle.
+
+```json
+{"ok": true, "retiered": [
+  {"session": "596d007f-…", "role": "lead", "from": "O3", "to": "O2", "event": 48214},
+  {"session": "9a41c0de-…", "role": "manager", "from": "O5", "to": "O4", "event": 48215}],
+ "unchanged": ["0c77e1b2-…"]}
+```
+
+`unchanged` lists the ids of the selected Sessions already on their target. `"already": true` is added (and `retiered` is `[]`) when nothing changed. Per Session: `session` (id), `role`, `from`, `to` and `event` (the id of its Event).
+
+Idempotent: yes; run again, nothing changes (`"already": true`).
 
 ## 11. `events`
 
@@ -2331,7 +2378,7 @@ The lines (`╭`, `│`, `╰`), the arrows and the words are muted; the pill an
   | Kind | A left click on the row |
   |---|---|
   | `dialog`, `unread` | `session open <the item's Session>`, then `select-pane` on the chat slot: as a click on that Session's tree row (an archived Session: `session history`, as there) |
-  | `plan-review` | `session open <the Lead of the item's Plan>` (`plans.lead_session`), then `select-pane` on the chat slot, then copies the item's `url` (the review page) as below, and says nothing; with no `url` (no port file yet) the Lead opens and nothing else happens. If the Lead cannot be opened, nothing is copied and the failure is a `text` dialog (§17 "No notes") |
+  | `plan-review` | `session open <the Lead of the item's Plan>` (`plans.lead_session`), then `select-pane` on the chat slot, then copies the item's `url` (the review page) as below when it is present, and says nothing; with no `url` (no open `plannotator_reviews` row of kind `plan` for the Lead, contract §2.2, hs-d502) the Lead opens and nothing else happens. If the Lead cannot be opened, nothing is copied and the failure is a `text` dialog (§17 "No notes") |
   | `pr-failing`, `pr-changes` (history rows only: hs-d470 dropped the kind, E8 opens none; no check or review state opens an Inbox item, hs-d470), and `review-requested` | copies the item's `url` to the clipboard as the tree's Copy id does (`tmux set-buffer -w`, OSC 52), and says nothing (the OSC 8 link stays for the terminal's modifier-click) |
   | `pr-ready` (a pull request a Plan owns or not) | the merge popup of its pull request, the one of the Deploy column's merge icon (`cpd tui view merge <owner>/<repo>#<n> --client <name>`, from the item's subject `pr:<owner>/<repo>#<n>`; a subject of another shape opens nothing); while that pull request's merge is running (the merge marker, below, hs-d495) its glyph cell shows the spinner instead and a click does nothing |
   | `engine-down` (shown only when no live Manager exists, below) | `cpd watch --ensure` (§12; idempotent), and says nothing (the result goes to the log only, never stderr; a failure is a `text` dialog); no popup (the StatusBar's `󰧭` button still opens the logs) |
@@ -2339,7 +2386,7 @@ The lines (`╭`, `│`, `╰`), the arrows and the words are muted; the pill an
   | `job-stuck` (history rows only: hs-d318 dropped the kind, E8 opens none; a stuck Job goes to the Context's Manager as a message, contract §3.7 "A stuck Job") | nothing: no jump, no popup |
   | `question` (history rows only: hs-d306 (1) dropped the kind, E8 opens none) | `session open` of the Context's Manager Session (`cpd context manager --context <c>`, then `session open <manager>`, as a click on a Context row) |
 
-  These three kinds (`plan-review`, `pr-ready`, `review-requested`) are also an **OSC 8 link** to the item's `url`, which stays for the terminal's modifier-click (hs-n265: a plain click always acts, the link is the way to open the page). The link is written with `tui/src/link.rs` over the cells already drawn (Links, below), so the terminal opens it with its modifier-click. For `plan-review` the page is plannotator's, `http://<review host>:<port>/`, the review host being `cpd_core::host::addr::review_host` (`PLANNOTATOR_URL_HOST` from cpd's environment, else the primary IPv4, else `localhost`; hs-d264) and the port being the one line of `run/<plan>/plannotator-port` (as the Plan view's pending-review row, above); for the other kinds the pull request's GitHub page. An item with no `url` (the port file missing or not a number) is drawn with no link, and a plain click acts as above |
+  These three kinds (`plan-review`, `pr-ready`, `review-requested`) are also an **OSC 8 link** to the item's `url`, which stays for the terminal's modifier-click (hs-n265: a plain click always acts, the link is the way to open the page). The link is written with `tui/src/link.rs` over the cells already drawn (Links, below), so the terminal opens it with its modifier-click. For `plan-review` the page is plannotator's, `http://<review host>:<port>/`, the review host being `cpd_core::host::addr::review_host` (`PLANNOTATOR_URL_HOST` from cpd's environment, else the primary IPv4, else `localhost`; hs-d264), only when the item has a `url`: the Plan's Lead Session has an open `plannotator_reviews` row of kind `plan` (contract §2.2, hs-d502), and the port is the one line of `run/<plan>/plannotator-port` in that row; for the other kinds the pull request's GitHub page. An item with no `url` (the port file missing or not a number for `pr-*`, or no open `plannotator_reviews` row of kind `plan` for `plan-review`) is drawn with no link, and a plain click acts as above (§13.2, hs-d502) |
 
   Whether the terminal opens an OSC 8 link on a row of this view through tmux is **unverified**; the cockpit Job tests it by hand with the User, as hs-d187, hs-d191 did for the PR links.
 - **A stopped engine restarts itself** (hs-d328, hs-d363, replacing hs-d318's restart by the tree; contract §3.7 "Who restarts a stopped engine"). **The supervisor restarts it** (contract §6.6: the `pane-died` and `window-unlinked` hooks, a failed start retried and logged to `run/watch.log`); **the tree runs no `cpd watch --ensure` by itself**, because the supervisor covers every case a tree running in the same tmux server could see, and the tree's own restart raced it (it found the engine already running and left `engine was down: … found it running` on screen). A snapshot (§17) that reads the engine running, or a restart that `found it running`, shows nothing. The tree only **speaks**, and only when the engine **stays down past the supervisor's window**: when `locks/watch.lock` has been free on **every** snapshot for **60 s** (view state: the time of the first free read, forgotten at the first held one), the view sends, once per downtime, to the **live Manager of every Context** (a Session with role `manager`, not archived) `cpd session send <manager> "The cpd engine has been down for 60 s and its supervisor has not restarted it; see run/watch.log, start it with cpd watch --ensure."`: the view has no `CPD_SESSION`, so `from` is null (the User's side), and no `--wake`; with no live Manager nothing is sent. It shows no note (hs-d469, replacing hs-d364 (2)'s "short note"): the message to the Managers is the whole of it, and the view logs it. **The `engine-down` item shows in the Inbox section only when no live Manager exists** (with one, the message handles it: no red for what an agent handles, hs-d303); its click, the User's own explicit action (`Action::EnsureWatch`), is the one of the table above, and its reply goes to the log only, never to stderr (§17: a view never writes to its terminal outside its frame).
@@ -2659,6 +2706,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `session-renamed` (`session` = itself) | `pi.setSessionName(name)` and `ctx.ui.notify("cpd: session renamed to \"<name>\"")`; no message, no turn | same |
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
 | `session-message` (`session` = itself) | message, `followUp`, **turn only when `data.wake` is true** (`triggerTurn: false` otherwise, hs-d209 D3); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. With `data.wake`, an idle Lead starts a turn at once; a working, waiting or blocked one gets it after its running turn, never interrupted. Without it, the message is in the Lead's context at its next turn and starts none | |
+| `session-retiered` (`session` = itself) | **the switch** (hs-d506, §10.15): no message, no turn. The adapter notes that its Session's Tier changed; at its next idle (right away when it already is idle, as `agent_settled` and `ctx.isIdle()` say it) it reads `cpd session show` for `model` and `thinking`, finds the model with `ctx.modelRegistry.find(provider, id)` and calls `pi.setModel(model)` and `pi.setThinkingLevel(thinking)`, once. Not while `working`, `waiting` or `blocked`. A model the registry lacks, or a `setModel` that answers false (no authentication for its provider), is one error message (§15.1, delivered as every adapter error is, with a turn: the Session tells the User; code `model_unavailable`, `details: {model, thinking}`) and sets nothing, not even the level; the next `session-retiered` tries again. The same for a failed `session show`. The adapter names no record id and reads no config: the mapping is `session show`'s. For every Lead and a Manager (a Worker never gets one). Adding the kind raises `protocol` | same |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | `session-titled` | ignored: **no message, no turn** (hs-d257): the pane header is set by `session retitle` itself, through tmux (§10.14), so the adapter has nothing to do; it only **learns the kind** (the list of kinds in `pi/lib/event.ts`, with delivery `none`), because an unknown kind costs an error turn (hs-n122). Adding the kind raises `protocol` (contract §5.2, "The protocol number") | ignored |
 | every other kind | ignored | ignored |

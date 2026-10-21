@@ -273,11 +273,13 @@ fn a_stopped_manager_without_a_pane_is_started_again_on_its_file() {
     assert_eq!(window_names(&env), ["ctx-ctx", "main"]);
     assert_eq!(slot(&env), slot_before);
 
-    // pi resumes the Session's file: no model, no first message.
+    // pi resumes the Session's file on the row's Tier's model (hs-d506): no first message.
     pi_envs(&env, &id, 2);
     let calls = env.calls("pi");
     assert_eq!(calls.len(), 2);
-    assert_eq!(calls[1][..2], ["--session".to_owned(), file.display().to_string()], "{calls:?}");
+    assert_eq!(calls[1][0], "--model", "{calls:?}");
+    assert!(calls[1][1].ends_with(":max"), "O5's level: {calls:?}");
+    assert_eq!(calls[1][2..4], ["--session".to_owned(), file.display().to_string()], "{calls:?}");
     assert!(!calls[1].contains(&"--".to_owned()), "no first message: {calls:?}");
 
     // And a third call changes nothing.

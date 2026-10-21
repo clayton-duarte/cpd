@@ -39,6 +39,9 @@ export class Run {
   reporting = false;
   /** Watches the adapter directory for an install (§15 "Reload after an install"). */
   reload: Poll | undefined;
+  /** §15.3 `session-retiered`: the Session's Tier changed and pi's model is not yet switched; `retiering` while a switch is being made. */
+  retierDue = false;
+  retiering = false;
   /** §15.8: the last run ended on a message that spoke of further work and named no registered key; the next `before_agent_start` adds the reminder once. */
   reminderDue = false;
   /** The text of the `cpd-policy` section (§15.10), or undefined: none, or `cpd policy show` failed. */
