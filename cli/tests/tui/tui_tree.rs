@@ -1864,6 +1864,7 @@ fn engine_down_wakes_only_the_most_recently_active_manager() {
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 20);
     pane.ready();
+    // time-claim: the engine-down message is sent after 60 s of a free engine lock; no signal from the view says it is due.
     std::thread::sleep(std::time::Duration::from_secs(66));
     wait_for_calls(&env, 1);
     pane.settled();

@@ -112,7 +112,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   | `engine` | `watch*`, `doctor` |
   | `pr` | `pr*`, `merge`, `git*` |
   | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy`, `config` |
-  | `session` | `session*`, `host` |
+  | `session` | `session*`, `host`, `board` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |
   | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version` |

@@ -22,6 +22,7 @@ pub enum Command {
     /// List the posts to a Session
     List(ListArgs),
     /// Return and mark as read the unread posts to a Session (internal)
+    #[command(hide = true)]
     Take(TakeArgs),
 }
 

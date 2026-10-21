@@ -60,6 +60,8 @@ pub const TABLE: &[Entry] = &[
     ("attempt list", &[Lead], false),
     ("ask", &[Worker], false),
     ("answer", &[Lead], false),
+    ("board post", &[Lead, Manager], false),
+    ("board list", &[Lead, Manager], false),
     ("pr add", &[Lead], false),
     ("pr edit", &[Lead], false),
     ("pr cancel", &[Lead], false),
