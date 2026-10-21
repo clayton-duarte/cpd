@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,7 +10,8 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-const temp = (): string => mkdtempSync(join(tmpdir(), "pi-check-test-"));
+// Under /tmp, not the caller's TMPDIR: the Gate's TMPDIR is nested and long, and pi-check's tmux socket path under it would pass the 107 bytes a socket path allows.
+const temp = (): string => mkdtempSync(join("/tmp", "pi-check-test-"));
 const write = (file: string, text: string): string => {
   writeFileSync(file, text);
   chmodSync(file, 0o755);
@@ -104,7 +104,7 @@ test("pi-check passes against the current adapter and the pinned pi, run as the 
 });
 
 /** Names pi-check allows pi to see: what the caller may pass, and what pi-check sets itself. */
-const ALLOWED = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "HOME", "TMPDIR", "PI_CODING_AGENT_DIR", "PI_OFFLINE", "PI_SKIP_VERSION_CHECK", "CPD_SESSION", "CPD_HOME"]);
+const ALLOWED = new Set(["PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "HOME", "TMPDIR", "PI_CODING_AGENT_DIR", "TMUX_TMPDIR", "GATE_RUN", "PI_OFFLINE", "PI_SKIP_VERSION_CHECK", "CPD_SESSION", "CPD_HOME"]);
 const SHELL_ADDS = new Set(["PWD", "SHLVL", "_"]);
 
 test("no provider credential, cloud credential, proxy or base URL reaches any pi command of pi-check, whatever the caller's environment holds", () => {
