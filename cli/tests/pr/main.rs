@@ -9,6 +9,7 @@ mod git_guard;
 mod merge;
 mod pr_cleanup;
 mod pr_crud;
+mod pr_local_needs;
 mod pr_merge;
 mod pr_push;
 mod pr;
