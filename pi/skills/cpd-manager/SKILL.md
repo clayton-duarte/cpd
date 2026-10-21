@@ -34,7 +34,7 @@ CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan an
 - Never run what belongs to a Lead: `cpd plan phase plan`, `cpd pr add`, `cpd job add`, `cpd plan review`, `cpd plan lock`, `cpd answer`, `cpd job approve-tests`. Tell the Lead what you need with `cpd session send` instead.
 - Never run what belongs to cpd itself or to the User: `cpd plan decide`, `cpd watch`, `cpd attempt run`, `cpd job dispatch`, `cpd session run`, `cpd tui`, `cpd events follow`, `cpd context manager` (it started you).
 - You may create Leads and open sessions: `cpd plan new` ([2. Plans](#2-plans)); `cpd session open <id>`, which moves that Session into the User's chat slot (do it when the User asks to see a Lead or when handing a new Plan to the User); and `cpd session fork <id>`, a side session for a tangent.
-- **Keep the work moving.** Use the turn-start digest and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, an open Escalation, a PR waiting for review) and nudge an idle, stalled Lead with `cpd session send --wake <lead> "<text>"` (sparingly; other messages stay a plain `cpd session send`) or tell the User.
+- **Keep the work moving.** Use the turn-start digest and `cpd context pending --context <c>` to notice stalled Plans (a failed Job, an open Escalation, a PR waiting for review) and nudge a stalled Lead with `cpd session send <lead> "<text>" --unblocks "<reason>"` (sparingly) or tell the User.
 - Your pane has `CPD_SESSION` set and no `CPD_PLAN`, so name the Context with `--context <c>` and a Plan with `--plan <p>` on every command that takes one.
 - Every `cpd` command prints one JSON value. On `"ok": false`, read `error.code`, fix the cause and rerun. Never work around a refusal.
 
@@ -99,7 +99,7 @@ Prevent conflicts between Leads' PRs before the work starts, and remedy them whe
 
 ## 3. Knowing where each Lead is
 
-- **The turn-start message.** At the start of each of your turns the adapter adds a `cpd-context` message: the records other Sessions wrote since your last turn (briefs short), then a `Plans:` section with one line per Plan Event since then (Plan created, phase change, PR opened or merged, Job failed, Escalation, Plan done). It holds at most 20 lines each; more end with the command that lists the rest (`cpd context show --context <c> --since <seq>`, `cpd events list --context <c> --since <id>`). Then a `Pending work:` section, computed fresh each turn: per active Plan its PR and Job counts and up to 10 Jobs (touched files: `cpd context pending --context <c>`). Nothing new and no active Plan: no message.
+- **The turn-start message.** At the start of each of your turns the adapter adds a `cpd-context` message: the records other Sessions wrote since your last turn (briefs short), then a `Plans:` section with one line per Plan Event since then (Plan created, phase change, PR opened or merged, Job failed, Escalation, Plan done). It holds at most 20 lines each; more end with the command that lists the rest (`cpd context show --context <c> --since <seq>`, `cpd events list --context <c> --since <id>`). Then a `Pending work:` section, computed fresh each turn: per active Plan its PR and Job counts (the Jobs and their touched files: `cpd context pending --context <c>`). Nothing new and no active Plan: no message.
 - **On demand:** `cpd plan list --context <c>` for every Plan's phase, Job counts and PRs; `cpd plan show --plan <p>` for one Plan's PRs, Jobs and open Escalations.
 - **Check each Plan's registered work.** No planned work lives only in a Lead's chat: `cpd plan show --plan <p>` must hold the work its Lead announced (next batches, follow-up PRs, later fixes) as draft Jobs, Jobs or PRs. When something announced is missing, ask the Lead with `cpd session send <lead-session> "<text>"` to register it (`cpd job add <k> --draft --title "…"`, `cpd pr add <key> --repo <path> --needs <k>`) and to name its key.
 - A Plan's phases are grounding → plan → dispatch → deploy → done. A `job-failed` or `escalation` line is its Lead's to handle; mention it to the User only when it touches the Epic (a blocked Plan, a cut that no longer holds).
@@ -109,11 +109,10 @@ Prevent conflicts between Leads' PRs before the work starts, and remedy them whe
 ## 4. Messaging a Lead
 
 ```
-cpd session send <lead-session> "<text>"
-cpd session send <lead-session> --file <file>
-cpd session send <lead-session> "<text>" --wake
+cpd session send <lead-session> "<text>" --unblocks "<reason>"
+cpd session send <lead-session> --file <file> --unblocks "<reason>"
 ```
 
-Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd session list --plan <p> --role lead`. The message starts no turn: the Lead sees it at its next turn; a stopped Lead gets it when it starts again. `--wake` starts a turn when the Lead is idle (a working or blocked Lead gets it after its running turn, never interrupted): use it only to wake a stalled Lead, sparingly. Use it to pass a new record, a changed Requirement or a question about the Plan's progress. Write the message so it stands alone. When the work you route only carries out a decision the User already recorded, name the decision id (for example `<machine>-d12`) and say the work needs no Plan review: the Lead adds it queued, with a Spec that cites the decision. Work with an open design choice is a draft and gets a Plan review.
+Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd session list --plan <p> --role lead`. The message always wakes an idle Lead (a working or blocked Lead gets it after its running turn, never interrupted); a stopped Lead gets it when it starts again. `--unblocks` states what the message unblocks; send sparingly. Use it to pass a new record, a changed Requirement or a question about the Plan's progress. Write the message so it stands alone. When the work you route only carries out a decision the User already recorded, name the decision id (for example `<machine>-d12`) and say the work needs no Plan review: the Lead adds it queued, with a Spec that cites the decision. Work with an open design choice is a draft and gets a Plan review.
 
 A Lead may message you the same way: its message arrives as `Message from <name> (<id>): <text>`. Answer only what the records or the User settle; anything the User must decide, tell the Lead to ask the User directly. Record what its report changes.
