@@ -54,21 +54,21 @@ impl By {
 }
 
 /// What holds a `waiting` PR `r` back (§3.7 E7, §3.8), as the `WHERE` conditions over the aliases `r` (the PR),
-/// `n` and `q` (a need and the PR it names, any Plan) and `b` (the PR's base PR): the one definition of "not ready",
+/// `n` and `q` (a need and the PR it names) and `b` (the PR's base PR): the one definition of "not ready",
 /// which engine E7's query, `pr start`'s refusal and its details are all built from.
 macro_rules! needs_unmerged {
     () => {
-        "n.plan = r.plan AND n.pr = r.key AND q.plan = n.needs_plan AND q.key = n.needs AND q.status <> 'merged'"
+        "n.plan = r.plan AND n.pr = r.key AND q.plan = n.plan AND q.key = n.needs AND q.status <> 'merged'"
     };
 }
 /// The base PR of `r` (§2.2 "The base PR": the PR of its repo whose Lead Branch is its base) has not started.
 macro_rules! base_pr_waiting {
     () => {
-        "b.repo = r.repo AND b.lead_branch = r.base AND b.status = 'waiting'"
+        "b.plan = r.plan AND b.repo = r.repo AND b.lead_branch = r.base AND b.status = 'waiting'"
     };
 }
 
-/// E7's condition over `prs r`: every need `merged` (a need of another Plan too) and the base PR, when the PR is
+/// E7's condition over `prs r`: every need `merged` and the base PR, when the PR is
 /// stacked, started (`dispatch`, `open`; a `merged` one is not waited for).
 pub const READY: &str = concat!(
     "NOT EXISTS (SELECT 1 FROM pr_needs n, prs q WHERE ",
@@ -78,15 +78,10 @@ pub const READY: &str = concat!(
     ")"
 );
 
-/// A PR reference (§2.2): the bare key of a PR of `plan`, `<plan>/<key>` of another's.
-fn reference(plan: &PlanId, of_plan: &str, key: &str) -> String {
-    if of_plan == plan.as_str() { key.to_owned() } else { format!("{of_plan}/{key}") }
-}
-
 /// What holds PR `key` of `plan` back, read in the database (the same conditions as [`READY`]).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct NotReady {
-    /// The needs that are not `merged`, as PR references.
+    /// The needs that are not `merged`, as keys.
     pub needs: Vec<String>,
     /// The base PR as `<plan>/<key>` when it has not started.
     pub base_pr: Option<String>,
@@ -100,12 +95,12 @@ impl NotReady {
 
 fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<NotReady, CpdError> {
     let mut stmt = conn.prepare(concat!(
-        "SELECT n.needs_plan, n.needs FROM prs r, pr_needs n, prs q WHERE r.plan = ?1 AND r.key = ?2 AND ",
+        "SELECT n.needs FROM prs r, pr_needs n, prs q WHERE r.plan = ?1 AND r.key = ?2 AND ",
         needs_unmerged!(),
-        " ORDER BY n.needs_plan, n.needs"
+        " ORDER BY n.needs"
     ))?;
     let needs = stmt
-        .query_map([plan.as_str(), key.as_str()], |r| Ok(reference(plan, &r.get::<_, String>(0)?, &r.get::<_, String>(1)?)))?
+        .query_map([plan.as_str(), key.as_str()], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut stmt = conn.prepare(concat!("SELECT b.plan, b.key FROM prs r, prs b WHERE r.plan = ?1 AND r.key = ?2 AND ", base_pr_waiting!()))?;
     let base_pr = stmt
@@ -117,10 +112,10 @@ fn not_ready(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Result<
 
 /// The PR's base PR as `<plan>/<key>` (§2.2 "The base PR": derived, the PR of its repo whose Lead Branch is its
 /// `base`), `None` when it is not stacked.
-pub(super) fn base_pr(conn: &rusqlite::Connection, pr: &PrRow) -> Result<Option<String>, CpdError> {
+pub(super) fn base_pr(conn: &rusqlite::Connection, plan: &PlanId, pr: &PrRow) -> Result<Option<String>, CpdError> {
     use rusqlite::OptionalExtension;
     Ok(conn
-        .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))
+        .query_row("SELECT plan || '/' || key FROM prs WHERE plan = ?1 AND repo = ?2 AND lead_branch = ?3", [plan.as_str(), pr.repo.as_str(), pr.base.as_str()], |r| r.get(0))
         .optional()?)
 }
 
@@ -141,7 +136,7 @@ fn merged_base(conn: &rusqlite::Connection, plan: &PlanId, key: &PrKey) -> Resul
         .query_row(
             "SELECT r.repo, r.base, b.plan || '/' || b.key, b.base FROM prs r, prs b
               WHERE r.plan = ?1 AND r.key = ?2 AND r.status IN ('waiting', 'dispatch')
-                AND b.repo = r.repo AND b.lead_branch = r.base AND b.status = 'merged'",
+                AND b.plan = r.plan AND b.repo = r.repo AND b.lead_branch = r.base AND b.status = 'merged'",
             [plan.as_str(), key.as_str()],
             |r| Ok(MergedBase { repo: r.get(0)?, from: r.get(1)?, from_pr: r.get(2)?, to: r.get(3)? }),
         )
@@ -378,7 +373,7 @@ pub fn record(tx: &WriteTxn<'_>, plan: &PlanId, pushed: &Pushed, by: By) -> Resu
 pub fn start(home: &CpdHome, config: &Config, store: &mut Store, plan: &PlanId, pr: &PrRow, by: By) -> Result<Pushed, Failed> {
     // A base PR that merged unstacks the PR first: its branch is gone, the Lead Branch is cut from the new base (hs-d301).
     let pr = &unstack_stored(store, by.source(), plan, &pr.key, by.as_str()).map_err(Failed::Other)?;
-    let stacked = store.read(|conn| base_pr(conn, pr)).map_err(Failed::Other)?.is_some();
+    let stacked = store.read(|conn| base_pr(conn, plan, pr)).map_err(Failed::Other)?.is_some();
     let pushed = prepare_as(home, config, plan, pr, stacked)?.push();
     match store.write(by.source(), |tx| record(tx, plan, &pushed, by)) {
         Ok(()) => Ok(pushed),
