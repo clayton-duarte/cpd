@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextCursorFrom, contextUpdate, countsOf, parsePending, parsePlanEvents, parseRecords, pendingSection, summaryLine, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
+import { contextCursorFrom, contextUpdate, parsePending, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
 import { Fixture, ID, OTHER, sessionShow, waitFor } from "./fake.ts";
 
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
@@ -127,7 +127,9 @@ test("a Manager's run with 3 new records by others gets one cpd-context message,
   assert.equal(m.customType, "cpd-context");
   assert.equal(m.display, true);
   assert.equal(m.content, ["Context ctx: 3 new records since your last turn.", ...range(3).map((n) => `- hs-n${n} note (2026-10-17): note ${n}`)].join("\n"));
-  assert.deepEqual(m.details, { event: 204, delivered_to: ID, records: ["hs-n1", "hs-n2", "hs-n3"], plan_events: 0, plans_pending: 0 });
+  assert.equal(m.details.event, 204);
+  assert.equal(m.details.delivered_to, ID);
+  assert.deepEqual(m.details.records, ["hs-n1", "hs-n2", "hs-n3"]);
   assert.deepEqual(recordCalls(f), [
     ["events", "list", "--context", "ctx", "--kind", "context-record", "--since", "100"],
     ["context", "show", "--context", "ctx", "--since", String(SEQ0)],
@@ -220,23 +222,6 @@ test("a failed context show is a failed read too", async (t) => {
   assert.equal(f.pi.errors().length, 1);
 });
 
-test("a Lead (the Plan's, or a side fork) gets no cpd-context message and reads nothing, even with new records (hs-d209, D1)", async (t) => {
-  for (const over of [{}, { plan_lead: false }]) {
-    const f = new Fixture();
-    t.after(() => f.close());
-    await lead(f, over);
-    f.respond("events-list", eventsList([1, 2, 3]));
-    f.respond("events-list@plan-created", planEventsList([1]));
-    f.respond("context-show", contextShow([record(1), record(2), record(3)]));
-    f.respond("context-pending", pendingJson(twoPlans));
-    assert.deepEqual(await f.pi.fireWith("before_agent_start", { messageType: "user", prompt: "go" }), []);
-    await f.quiet();
-    assert.deepEqual(updatesCalls(f), []);
-    assert.deepEqual(f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => a[1] === "pending"), []);
-    assert.deepEqual(f.pi.sent, []);
-  }
-});
-
 test("a Worker never gets updates", async (t) => {
   const worker = new Fixture();
   t.after(() => worker.close());
@@ -253,82 +238,10 @@ test("a Worker never gets updates", async (t) => {
 const planEvent = (n: number, over: Partial<PlanEvent> = {}): PlanEvent => ({ event: 300 + n, at: `2026-10-18T09:${String(n).padStart(2, "0")}:00Z`, plan: "pay-4521", text: `Plan phase ${n}.`, ...over });
 const planEventsList = (ns: number[]) => ({ ok: true, events: ns.map((n) => ({ id: 300 + n, at: planEvent(n).at, kind: "plan-phase", context: "ctx", plan: "pay-4521", text: `Plan phase ${n}.`, data: {} })), next: 300 + Math.max(...ns, 0) });
 
-test("digest: records, then Plans:, one line per Event; details.event is the highest of either read", () => {
-  const m = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [record(1), record(2)], [planEvent(1), planEvent(2, { plan: "pay-4522", text: "Job api-1 failed." })])!;
-  assert.equal(
-    m.content,
-    [
-      "Context ctx: 2 new records since your last turn.",
-      "- hs-n1 note (2026-10-17): note 1",
-      "- hs-n2 note (2026-10-17): note 2",
-      "Plans:",
-      "- 2026-10-18T09:01:00Z pay-4521: Plan phase 1.",
-      "- 2026-10-18T09:02:00Z pay-4522: Job api-1 failed.",
-    ].join("\n"),
-  );
-  assert.deepEqual(m.details, { event: 302, delivered_to: ID, records: ["hs-n1", "hs-n2"], plan_events: 2, plans_pending: 0 });
-});
-
-test("digest: Plan Events alone, or records alone, or none", () => {
-  const plansOnly = contextUpdate("ctx", ID, [], [], [planEvent(1)])!;
-  assert.equal(plansOnly.content, "Plans:\n- 2026-10-18T09:01:00Z pay-4521: Plan phase 1.");
-  assert.deepEqual(plansOnly.details, { event: 301, delivered_to: ID, records: [], plan_events: 1, plans_pending: 0 });
-  assert.ok(!contextUpdate("ctx", ID, [recordEvent(1)], [record(1)], [])!.content.includes("Plans:"));
-  assert.equal(contextUpdate("ctx", ID, [], [], []), undefined);
-  assert.equal(contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { by: ID })], []), undefined, "only own records, no Plan Events");
-  const ownAndPlans = contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { by: ID })], [planEvent(1)])!;
-  assert.equal((ownAndPlans.details as any).event, 301);
-});
-
-test("digest: 25 Plan Events list 20 and name the 5 more with the id of the last one listed", () => {
-  const m = contextUpdate("ctx", ID, [], [], range(25).map((n) => planEvent(n)))!;
-  const lines = m.content.split("\n");
-  assert.equal(lines.length, 1 + 20 + 1);
-  assert.equal(lines[20], "- 2026-10-18T09:20:00Z pay-4521: Plan phase 20.");
-  assert.equal(lines[21], "and 5 more: cpd events list --context ctx --since 320");
-  assert.equal((m.details as any).event, 325, "the highest id read, listed or not");
-});
-
-test("parsePlanEvents: id, at, plan and text; anything else is bad_output", () => {
-  assert.deepEqual(parsePlanEvents(planEventsList([1])), [planEvent(1)]);
-  assert.throws(() => parsePlanEvents({ events: [{ id: 1, at: "x", plan: null, text: "t" }] }), { code: "bad_output" });
-  assert.throws(() => parsePlanEvents({}), { code: "bad_output" });
-});
-
 async function manager(f: Fixture, over: Record<string, unknown> = {}) {
   await lead(f, { role: "manager", plan: null, plan_lead: false, ...over });
 }
 const planCalls = (f: Fixture) => updatesCalls(f).filter((a) => a[1] === "list" && !a.includes("context-record"));
-
-test("a Manager's run with 2 new records and 3 Plan Events gets one cpd-context message with both sections", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await manager(f);
-  f.respond("events-list@context-record", eventsList([1, 2]));
-  f.respond("context-show", contextShow([record(1), record(2)]));
-  f.respond("events-list@plan-created", planEventsList([1, 2, 3]));
-
-  const [result] = await f.pi.fireWith("before_agent_start", { messageType: "user", prompt: "go" });
-  const m = (result as any).message;
-  assert.equal(m.customType, "cpd-context");
-  assert.equal(m.content.split("\n").filter((l: string) => l === "Plans:").length, 1);
-  assert.deepEqual(m.content.split("\n").slice(0, 3), ["Context ctx: 2 new records since your last turn.", "- hs-n1 note (2026-10-17): note 1", "- hs-n2 note (2026-10-17): note 2"]);
-  assert.deepEqual(m.content.split("\n").slice(3), ["Plans:", ...range(3).map((n) => `- ${planEvent(n).at} pay-4521: Plan phase ${n}.`)]);
-  assert.deepEqual(m.details, { event: 303, delivered_to: ID, records: ["hs-n1", "hs-n2"], plan_events: 3, plans_pending: 0 });
-  assert.deepEqual(planCalls(f), [["events", "list", "--context", "ctx", ...["plan-created", "plan-phase", "pr-opened", "pr-merged", "job-failed", "escalation", "plan-done"].flatMap((k) => ["--kind", k]), "--since", "100"]]);
-  assert.deepEqual(f.pi.sent, [], "it never starts a turn");
-});
-
-test("a Manager's digest alone: no records, Plan Events only", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await manager(f);
-  f.respond("events-list@context-record", eventsList([]));
-  f.respond("events-list@plan-created", planEventsList([1]));
-  const [result] = await f.pi.fireWith("before_agent_start");
-  assert.equal((result as any).message.content, `Plans:\n- ${planEvent(1).at} pay-4521: Plan phase 1.`);
-  assert.deepEqual(updatesCalls(f).map((a) => a[0] + " " + a[1]), ["events list", "events list"], "no records to read");
-});
 
 test("a Manager gets nothing when nothing is new", async (t) => {
   const f = new Fixture();
@@ -337,19 +250,6 @@ test("a Manager gets nothing when nothing is new", async (t) => {
   f.respond("events-list@context-record", eventsList([]));
   f.respond("events-list@plan-created", planEventsList([]));
   assert.deepEqual(await f.pi.fireWith("before_agent_start"), [undefined]);
-});
-
-test("a Manager's 25 Plan Events show 20 and the command for the rest", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await manager(f);
-  f.respond("events-list@context-record", eventsList([]));
-  f.respond("events-list@plan-created", planEventsList(range(25)));
-  const [result] = await f.pi.fireWith("before_agent_start");
-  const lines = (result as any).message.content.split("\n");
-  assert.equal(lines.length, 22);
-  assert.equal(lines[21], "and 5 more: cpd events list --context ctx --since 320");
-  assert.equal((result as any).message.details.event, 325);
 });
 
 test("the Manager's cursor is the one for both sections: the next read starts after the highest id read", async (t) => {
@@ -395,41 +295,6 @@ const pendingJson = (plans: PendingPlan[]) => ({
   })),
 });
 
-test("pendingSection: one line per PR with the counts, then its Jobs in order", () => {
-  const lines = pendingSection([pplan("pay-4521", [ppr([pjob(1, "merged"), pjob(2, "queued"), pjob(3, "running"), pjob(4, "failed"), pjob(5, "draft"), pjob(6, "queued")])])]);
-  assert.deepEqual(lines, [
-    "Pending work:",
-    "- pay-4521 (dispatch), PR api dispatch #212: 1 merged on its Lead Branch, 2 queued, 1 running, 1 failed, 1 draft",
-    "  - job-1 merged: Title 1",
-    "  - job-2 queued: Title 2",
-    "  - job-3 running: Title 3",
-    "  - job-4 failed: Title 4",
-    "  - job-5 draft: Title 5",
-    "  - job-6 queued: Title 6",
-  ]);
-});
-
-test("pendingSection: no ` #<n>` before the pull request exists; a PR with no Jobs is one line", () => {
-  assert.deepEqual(pendingSection([pplan("p", [ppr([], { number: null, status: "plan" })], "plan")]), ["Pending work:", "- p (plan), PR api plan: 0 merged on its Lead Branch, 0 queued, 0 running, 0 failed, 0 draft"]);
-});
-
-test("pendingSection: 10 Jobs are all listed, 13 list 10 and say 3 more; the counts cover all 13", () => {
-  const ten = pendingSection([pplan("p", [ppr(range(10).map((n) => pjob(n, "queued")))])]);
-  assert.equal(ten.length, 1 + 1 + 10);
-  assert.ok(!ten.some((l) => l.includes("more")));
-  const jobs = range(13).map((n) => pjob(n, "queued"));
-  const lines = pendingSection([pplan("p", [ppr(jobs)])]);
-  assert.equal(lines.length, 1 + 1 + 10 + 1);
-  assert.ok(lines[1]!.includes("13 queued"));
-  assert.equal(lines[10 + 1]!, "  - job-10 queued: Title 10");
-  assert.equal(lines.at(-1), "  and 3 more");
-});
-
-test("pendingSection: nothing when no Plan is active or no Plan has a PR", () => {
-  assert.deepEqual(pendingSection([]), []);
-  assert.deepEqual(pendingSection([pplan("p", [])]), []);
-});
-
 test("parsePending: Plans, PRs and Jobs; anything else is bad_output", () => {
   const plans = [pplan("p", [ppr([pjob(1, "queued")]), ppr([], { key: "ui", number: null })])];
   assert.deepEqual(parsePending(pendingJson(plans)), plans);
@@ -439,62 +304,10 @@ test("parsePending: Plans, PRs and Jobs; anything else is bad_output", () => {
   assert.throws(() => parsePending({ plans: [{ id: "p", phase: "x", prs: [{ key: "a", status: "s", jobs: [] }] }] }), { code: "bad_output" }, "pull_request is required");
 });
 
-test("message: Pending work alone is a message; it does not move details.event; it follows Plans:", () => {
-  const pending = [pplan("p", [ppr([pjob(1, "queued")])])];
-  const alone = contextUpdate("ctx", ID, [], [], [], pending)!;
-  assert.equal(alone.content.split("\n")[0], "Pending work:");
-  assert.deepEqual(alone.details, { event: 0, delivered_to: ID, records: [], plan_events: 0, plans_pending: 1 });
-  const ownOnly = contextUpdate("ctx", ID, [recordEvent(1)], [record(1, { by: ID })], [], pending)!;
-  assert.deepEqual(ownOnly.details, { event: 201, delivered_to: ID, records: [], plan_events: 0, plans_pending: 1 });
-  const all = contextUpdate("ctx", ID, [recordEvent(1)], [record(1)], [planEvent(1)], pending)!;
-  assert.deepEqual(all.content.split("\n").filter((l) => !l.startsWith(" ") && !l.startsWith("- ")), ["Context ctx: 1 new records since your last turn.", "Plans:", "Pending work:"]);
-  assert.ok(all.content.indexOf("Plans:") < all.content.indexOf("Pending work:"));
-  assert.equal((all.details as any).event, 301);
-  assert.equal(contextUpdate("ctx", ID, [], [], [], []), undefined);
-});
-
 const twoPlans = [
   pplan("pay-4521", [ppr([pjob(1, "merged"), pjob(2, "queued"), pjob(3, "running")])]),
   pplan("pay-4522", [ppr(range(12).map((n) => pjob(n, "draft")), { key: "web", status: "plan", number: null })], "plan"),
 ];
-
-test("a Manager's turn start with two active Plans gets a Pending work section, one line per Plan, capped at 10 Jobs", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await manager(f);
-  f.respond("events-list@context-record", eventsList([]));
-  f.respond("events-list@plan-created", planEventsList([]));
-  f.respond("context-pending", pendingJson(twoPlans));
-  const [result] = await f.pi.fireWith("before_agent_start");
-  const m = (result as any).message;
-  assert.equal(m.customType, "cpd-context");
-  const lines = m.content.split("\n");
-  assert.deepEqual(lines.filter((l: string) => l.startsWith("- ")), [
-    "- pay-4521 (dispatch), PR api dispatch #212: 1 merged on its Lead Branch, 1 queued, 1 running, 0 failed, 0 draft",
-    "- pay-4522 (plan), PR web plan: 0 merged on its Lead Branch, 0 queued, 0 running, 0 failed, 12 draft",
-  ]); // Job lines are indented, so they do not match
-  assert.equal(lines[0], "Pending work:");
-  assert.equal(lines.length, 1 + 1 + 3 + 1 + 10 + 1);
-  assert.equal(lines.at(-1), "  and 2 more");
-  assert.deepEqual(m.details, { event: 0, delivered_to: ID, records: [], plan_events: 0, plans_pending: 2 });
-  assert.deepEqual(f.calls().filter((c) => c.phase === "start").map((c) => c.argv).filter((a) => a[1] === "pending"), [["context", "pending", "--context", "ctx"]]);
-  assert.deepEqual(f.pi.sent, []);
-});
-
-test("Pending work follows Plans: and the records in one message", async (t) => {
-  const f = new Fixture();
-  t.after(() => f.close());
-  await manager(f);
-  f.respond("events-list@context-record", eventsList([1]));
-  f.respond("context-show", contextShow([record(1)]));
-  f.respond("events-list@plan-created", planEventsList([1]));
-  f.respond("context-pending", pendingJson(twoPlans));
-  const [result] = await f.pi.fireWith("before_agent_start");
-  const lines = (result as any).message.content.split("\n");
-  assert.deepEqual(lines.filter((l: string) => /^[A-Z]/.test(l) && !l.startsWith("Context")), ["Plans:", "Pending work:"]);
-  assert.ok(lines.indexOf("Plans:") < lines.indexOf("Pending work:"));
-  assert.equal((result as any).message.details.event, 301);
-});
 
 test("a Manager with no active Plan gets no Pending work section", async (t) => {
   const f = new Fixture();
@@ -524,21 +337,140 @@ test("a failed Pending work read omits the message and is reported once without 
 });
 
 
-test("summaryLine: 0, 1 and many of each part; a zero part is left out; nothing else", () => {
-  const line = (records: number, plan_events: number, plans_pending: number) => summaryLine({ records: range(records), plan_events, plans_pending });
-  assert.equal(line(6, 17, 10), "cpd-context: 6 records · 17 Plan Events · 10 Plans pending");
-  assert.equal(line(1, 1, 1), "cpd-context: 1 record · 1 Plan Event · 1 Plan pending");
-  assert.equal(line(0, 17, 10), "cpd-context: 17 Plan Events · 10 Plans pending");
-  assert.equal(line(6, 0, 10), "cpd-context: 6 records · 10 Plans pending");
-  assert.equal(line(6, 17, 0), "cpd-context: 6 records · 17 Plan Events");
-  assert.equal(line(0, 0, 2), "cpd-context: 2 Plans pending");
-  assert.equal(line(0, 1, 0), "cpd-context: 1 Plan Event");
-  assert.equal(line(1, 0, 0), "cpd-context: 1 record");
+
+// ---- Leads: the short update (§15.7, hs-d514) ----
+
+const decision = (n: number, text: string, over: Partial<ContextRecord> = {}) => record(n, { kind: "decision", text, ...over });
+const eventsOf = (kind: string, evs: Record<string, unknown>[]) => ({ ok: true, events: evs.map((e) => ({ kind, context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", ...e })), next: Math.max(0, ...evs.map((e) => e.id as number)) });
+const prOpened = (id: number, pr: string, number: number) => ({ id, plan: "p1", data: { pr, number, url: `https://github.com/o/r/pull/${number}` } });
+const take = (...posts: { id: number; from_session: string | null; text: string; at?: string }[]) => ({ ok: true, session: ID, taken: posts.map((p) => ({ at: "2026-10-21T15:30:00Z", ...p })) });
+const nothingNew = (f: Fixture) => {
+  f.respond("events-list@context-record", eventsList([]));
+  f.respond("events-list@pr-opened", eventsOf("pr-opened", []));
+  f.respond("board-take", take());
+};
+const beforeTurn = async (f: Fixture) => ((await f.pi.fireWith("before_agent_start", { messageType: "user", prompt: "go" })) as any[]).find((r) => r !== undefined)?.message;
+const takeCalls = (f: Fixture) => f.calls().filter((c) => c.phase === "start" && c.argv[0] === "board" && c.argv[1] === "take").map((c) => c.argv);
+
+test("a Lead gets one cpd-context message with new decisions, board posts and opened PRs", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  f.respond("events-list@context-record", eventsList([1, 2, 3, 4]));
+  f.respond("context-show", contextShow([decision(1, "Use one table. The rest is in the record."), record(2, { text: "Just a note." }), decision(3, "Mine.", { by: ID }), decision(4, "Cut the wake.")]));
+  f.respond("events-list@pr-opened", eventsOf("pr-opened", [prOpened(350, "api", 211)]));
+  f.respond("board-take", take({ id: 1, from_session: null, text: "PR #207 opened" }));
+  const m = await beforeTurn(f);
+  assert.equal(m.customType, "cpd-context");
+  assert.equal(m.display, true);
+  assert.equal(
+    m.content,
+    [
+      "Context ctx: 2 decisions · 1 board post · 1 PR opened",
+      "- hs-n1: Use one table.",
+      "- hs-n4: Cut the wake.",
+      "",
+      "Board:",
+      "- User (2026-10-21T15:30:00Z): PR #207 opened",
+      "",
+      "PRs:",
+      "- PR api opened: https://github.com/o/r/pull/211",
+    ].join("\n"),
+  );
+  assert.equal(m.details.delivered_to, ID);
+  assert.equal(m.details.event, 350);
+  assert.deepEqual(f.pi.sent, [], "it only returns the message: no turn");
+  assert.deepEqual(takeCalls(f), [["board", "take", "--session", ID]]);
 });
 
-test("message: details carry the counts: records read, every Plan Event (listed or not), Plans with a PR", () => {
-  const plans = [pplan("a", [ppr([pjob(1, "queued")]), ppr([pjob(2, "queued")], { key: "web" })]), pplan("b", []), pplan("c", [ppr([])])];
-  const m = contextUpdate("ctx", ID, [recordEvent(1), recordEvent(2)], [record(1), record(2, { by: ID })], range(25).map((n) => planEvent(n)), plans)!;
-  assert.deepEqual(m.details, { event: 325, delivered_to: ID, records: ["hs-n1"], plan_events: 25, plans_pending: 2 });
-  assert.equal(summaryLine(countsOf(m.details)!), "cpd-context: 1 record · 25 Plan Events · 2 Plans pending");
+test("a Lead gets no message when nothing is new", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  nothingNew(f);
+  assert.equal(await beforeTurn(f), undefined);
+  assert.equal(takeCalls(f).length, 1, "it looked: the board is taken at every turn start");
+  assert.deepEqual(f.pi.sent, []);
+});
+
+test("a Lead's decision line is its id and first sentence", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  nothingNew(f);
+  f.respond("events-list@context-record", eventsList([1]));
+  f.respond("context-show", contextShow([decision(1, "Quiet agents, the design in full (User, 2026-10-20). (1) Direct messages only to unblock. (2) The board.")]));
+  const m = await beforeTurn(f);
+  assert.deepEqual(m.content.split("\n").slice(1), ["- hs-n1: Quiet agents, the design in full (User, 2026-10-20)."]);
+  assert.ok(!m.content.includes("board."));
+});
+
+test("board posts are taken at turn start and shown in full", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await lead(f);
+  nothingNew(f);
+  const long = "Rebase api on main before you start, because quiet-core changed the table and the test files moved, then say so on the board when the test Job is merged and wait for the Manager's answer before the open Job.";
+  f.respond("board-take", take({ id: 1, from_session: null, text: long }, { id: 2, from_session: null, text: "Second post" }));
+  const m = await beforeTurn(f);
+  assert.equal(m.content.split("\n")[0], "Context ctx: 2 board posts");
+  assert.deepEqual(m.content.split("\n").slice(1), ["", "Board:", `- User (2026-10-21T15:30:00Z): ${long}`, "- User (2026-10-21T15:30:00Z): Second post"]);
+  assert.deepEqual(takeCalls(f), [["board", "take", "--session", ID]]);
+  assert.deepEqual(f.pi.sent, [], "a post never starts a turn");
+});
+
+// ---- the Manager's compressed digest (§15.7, hs-d514) ----
+
+const planKind = (id: number, plan: string, kind: string, data: Record<string, unknown> = {}) => ({ id, plan, data, kind });
+
+test("the Manager's Plans section has one line per Plan with counts by kind", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  nothingNew(f);
+  const events = [
+    { id: 301, plan: "cross-repo", kind: "pr-opened", data: { pr: "a", number: 210, url: "u" } },
+    { id: 302, plan: "cross-repo", kind: "pr-opened", data: { pr: "b", number: 211, url: "u" } },
+    { id: 303, plan: "cross-repo", kind: "job-failed", data: { cause: "x", detail: "d", tier: "O3", attempts: 1 } },
+    { id: 304, plan: "inbox", kind: "job-failed", data: { cause: "x", detail: "d", tier: "O3", attempts: 1 } },
+    { id: 305, plan: "cross-repo", kind: "escalation", data: { escalation: "e1", question: "q" } },
+    { id: 306, plan: "cross-repo", kind: "plan-done", data: { prs: [] } },
+  ];
+  f.respond("events-list@plan-created", { ok: true, events: events.map((e) => ({ context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", ...e })), next: 306 });
+  const m = await beforeTurn(f);
+  assert.deepEqual(m.content.split("\n"), ["Plans:", "- cross-repo: 2 PRs opened (#210, #211), 1 Job failed, 1 Escalation, done", "- inbox: 1 Job failed"]);
+  assert.equal(m.details.event, 306);
+});
+
+test("the Manager's Pending work has one line per Plan and no Job lines", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  nothingNew(f);
+  f.respond("events-list@plan-created", planEventsList([]));
+  const jobs = (...statuses: string[]) => statuses.map((s, i) => pjob(i + 1, s));
+  f.respond("context-pending", pendingJson([
+    pplan("inbox", [ppr(jobs("running", "running", "queued"), { key: "mainfix" }), ppr([], { key: "prlink", status: "open", number: 207 })]),
+    pplan("agent-comms", [ppr(jobs("running"), { key: "quiet-core" })], "plan"),
+  ]));
+  const m = await beforeTurn(f);
+  assert.deepEqual(m.content.split("\n"), [
+    "Pending work:",
+    "- inbox (dispatch): PR mainfix 2 running, 1 queued; PR prlink open #207",
+    "- agent-comms (plan): PR quiet-core 1 running",
+  ]);
+});
+
+test("the Manager's digest counts engine errors by code", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await manager(f);
+  nothingNew(f);
+  f.respond("events-list@plan-created", planEventsList([]));
+  const err = (id: number, code: string) => ({ id, kind: "error", context: "ctx", at: "2026-10-21T15:00:00Z", text: "t", data: { source: "watch", code, message: "m", details: {} } });
+  f.respond("events-list@error", { ok: true, events: [err(401, "gh_failed"), err(402, "pr_start_failed")], next: 402 });
+  f.respond("events-list@error@machine", { ok: true, events: [err(403, "gh_failed")], next: 403 });
+  const m = await beforeTurn(f);
+  assert.equal(m.content, "Errors: 3 (gh_failed x2, pr_start_failed x1): cpd events list --kind error --since 100");
+  assert.equal(m.details.event, 403);
 });
