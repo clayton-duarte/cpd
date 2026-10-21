@@ -136,6 +136,54 @@ pub fn selected() -> Style {
     Style::new().fg(FOCUS)
 }
 
+/// STUB (hs-d534, §6.1.1 rule (1)): the bright pair of a base colour, n+8 (`Red` -> `LightRed`, `Gray` -> `White`); blue stays 4
+/// and 8 has no pair. Returns its argument until implemented.
+pub fn bright(c: Color) -> Color {
+    c
+}
+
+/// STUB (hs-d534, §6.1.1 rule (1)): the colour of a meaning on a clickable mark, its bright pair. Returns the base colour until implemented.
+pub fn color_clickable(m: Meaning) -> Color {
+    color(m)
+}
+
+/// STUB (hs-d534, §6.1.1 rule (2)): clickable text, colour 15.
+pub fn clickable_text() -> Style {
+    Style::new()
+}
+
+/// STUB (hs-d534, §6.1.1 rule (2)): read-only text, colour 7.
+pub fn read_only_text() -> Style {
+    Style::new()
+}
+
+/// STUB (hs-d534, §6.1.1 rule (2)): an asleep Session's row, colour 7.
+pub fn asleep_text() -> Style {
+    Style::new()
+}
+
+/// STUB (hs-d534, §6.1.1 rule (2)): the fold toggles `╰󰁋 expand` / `╰󰁣 collapse`, colour 7.
+pub fn toggle_text() -> Style {
+    Style::new()
+}
+
+/// STUB (hs-d534, §6.1.1 rule (2)): muted text and lines (separators, ages, times, scroll cues, placeholders), colour 8; replaces `DIM`.
+pub fn muted_text() -> Style {
+    Style::new()
+}
+
+/// STUB (hs-d534, §6.1.1 rule (2)): an archived row, colour 8.
+pub fn archived_text() -> Style {
+    Style::new()
+}
+
+/// STUB (hs-d534, §6.1.1 "Job pills"): the pill of a Job: its status colour's bright pair (queued 15, cancelled 8), text 0.
+/// `merging` is a running Job whose Attempt is merging; `stuck` a failed Job whose `job-stuck` item is open.
+/// Returns today's pill until implemented.
+pub fn job_pill(status: JobStatus, merging: bool, stuck: bool) -> Style {
+    if stuck && status == JobStatus::Failed { pill(JOB_STUCK.1) } else { pill(job_status(status, merging).1) }
+}
+
 /// Notes and prompts at the foot of a view.
 pub fn note() -> Style {
     Style::new().fg(ui(Ui::Note))
@@ -166,9 +214,19 @@ pub fn pill_focus() -> Style {
 pub(crate) mod numbered {
     use ratatui::style::Color;
     pub(crate) const C0: Color = Color::Black;
+    pub(crate) const C1: Color = Color::Red;
+    pub(crate) const C2: Color = Color::Green;
+    pub(crate) const C3: Color = Color::Yellow;
     pub(crate) const C4: Color = Color::Blue;
+    pub(crate) const C5: Color = Color::Magenta;
+    pub(crate) const C6: Color = Color::Cyan;
     pub(crate) const C7: Color = Color::Gray;
     pub(crate) const C8: Color = Color::DarkGray;
+    pub(crate) const C9: Color = Color::LightRed;
+    pub(crate) const C10: Color = Color::LightGreen;
+    pub(crate) const C11: Color = Color::LightYellow;
+    pub(crate) const C13: Color = Color::LightMagenta;
+    pub(crate) const C14: Color = Color::LightCyan;
     pub(crate) const C15: Color = Color::White;
 }
 
@@ -377,6 +435,9 @@ pub fn checks(c: Checks) -> (&'static str, Meaning) {
 /// The checks the legend lists, with the name shown.
 pub const CHECKS_LEGEND: [(&str, Checks); 4] =
     [("passed", Checks::Passed), ("failed", Checks::Failed), ("pending", Checks::Pending), ("none", Checks::None)];
+
+#[cfg(test)]
+mod colours;
 
 #[cfg(test)]
 mod tests {
