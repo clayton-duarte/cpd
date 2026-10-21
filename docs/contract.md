@@ -1028,7 +1028,7 @@ The **tamper report** (`plan show`'s `tamper` list, `doctor`): the schema check;
 
 ### 4.4 DDL
 
-The schema after migration `plan-outline`, the latest named migration (§4.5), and so after every migration that exists today. Migration `0001-initial` created these tables as they were at its version (`core/src/store/migrations/0001-initial.sql`); `0002-cockpit-parity` to `0004-cross-repo` (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); `0005-plan-reopen` changed the triggers `plans_phase` and `prs_locked` (hs-d118); `0006-pr-poller` created `pull_requests` and rebuilt `prs` (hs-d96); `0007-context-records` dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.6); `0008-phase-deploy` renamed the Plan phase `pr` to `deploy`; `0009-session-message` added the Event kind `session-message`; `0010-manager` added the role `manager` and the record kind `brief` and dropped `contexts.lead_session` and `grounded_seq`; `0011-pr-mergeable` added `pull_requests.mergeable` and `merge_state` (hs-n152); `0012-inbox` created `inbox_items` (the Inbox, hs-d168) and added the four `inbox-*` Event kinds; `0013-pr-inbox` added `pull_requests.authored` and `review_requested` and the four pull request kinds to `inbox_items` (hs-d165); `kind-tables` created `schema_migrations`, `event_kinds`, `record_kinds` and `history_tables` and replaced the two kind checks by foreign keys (below, §4.5); `read-indexes` added the indexes `jobs_plan_status` and `sessions_live` (§4.5); `job-urgent` added `jobs.urgent`; `history-changed` changed the `_hist_upd` triggers; `waiting-state` rebuilt `sessions` for the state `waiting` (§3.6, §4.5). Every later change is a named migration (§4.5) and amends this section in the same PR. Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
+The schema after migration `board-posts`, the latest named migration (§4.5), and so after every migration that exists today. Migration `0001-initial` created these tables as they were at its version (`core/src/store/migrations/0001-initial.sql`); `0002-cockpit-parity` to `0004-cross-repo` (§4.5) brought `plans`, `jobs`, `events` and `context_records` to the shape below and created `prs` and `pr_needs` (R34); `0005-plan-reopen` changed the triggers `plans_phase` and `prs_locked` (hs-d118); `0006-pr-poller` created `pull_requests` and rebuilt `prs` (hs-d96); `0007-context-records` dropped `contexts.sync_failing` and made `context_records` the only store of Context records (§4.6); `0008-phase-deploy` renamed the Plan phase `pr` to `deploy`; `0009-session-message` added the Event kind `session-message`; `0010-manager` added the role `manager` and the record kind `brief` and dropped `contexts.lead_session` and `grounded_seq`; `0011-pr-mergeable` added `pull_requests.mergeable` and `merge_state` (hs-n152); `0012-inbox` created `inbox_items` (the Inbox, hs-d168) and added the four `inbox-*` Event kinds; `0013-pr-inbox` added `pull_requests.authored` and `review_requested` and the four pull request kinds to `inbox_items` (hs-d165); `kind-tables` created `schema_migrations`, `event_kinds`, `record_kinds` and `history_tables` and replaced the two kind checks by foreign keys (below, §4.5); `read-indexes` added the indexes `jobs_plan_status` and `sessions_live` (§4.5); `job-urgent` added `jobs.urgent`; `history-changed` changed the `_hist_upd` triggers; `waiting-state` rebuilt `sessions` for the state `waiting` (§3.6, §4.5); `board-posts` created `board_posts` for the message board, with an index for message delivery to Sessions and an Event kind `board-message` removed (replaced by direct posts, hs-d514). Every later change is a named migration (§4.5) and amends this section in the same PR. Check constraints that need regular expressions are enforced in the binary at the boundary (§2.1), and the database checks shapes and lengths.
 
 ```sql
 -- ---------- audit ----------
@@ -1394,6 +1394,18 @@ CREATE TABLE plannotator_reviews (
   PRIMARY KEY (session, pn_id),
   CHECK ((closed_at IS NULL) = (ended IS NULL))
 ) STRICT, WITHOUT ROWID;
+
+-- ---------- Message board (hs-d514) ----------
+CREATE TABLE board_posts (
+  id        INTEGER PRIMARY KEY,
+  at        TEXT    NOT NULL,
+  context   TEXT    NOT NULL REFERENCES contexts(id),
+  from_session TEXT,                                              -- null = the User; otherwise a Session id
+  to_session  TEXT    NOT NULL REFERENCES sessions(id),
+  text      TEXT    NOT NULL CHECK (length(text) BETWEEN 1 AND 2000),
+  read_at   TEXT
+) STRICT;
+CREATE INDEX board_posts_delivery ON board_posts(to_session, read_at);   -- query unread posts to a Session
 
 -- ---------- Tier catalog cache (section 9) ----------
 CREATE TABLE tier_catalog (

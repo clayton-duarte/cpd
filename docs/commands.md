@@ -20,6 +20,7 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 8. [`ask` and `answer`](#8-ask-and-answer)
 9. [`pr`](#9-pr)
 10. [`session`](#10-session)
+10a. [`board`](#10a-board)
 11. [`events`](#11-events)
 12. [`watch`](#12-watch)
 13. [`tui`](#13-tui)
@@ -2171,17 +2172,17 @@ Effects, in this order:
 ### 10.13 `session send`
 
 ```
-cpd session send <id> (<text> | --file <f>) [--wake]
+cpd session send <id> (<text> | --file <f>) --unblocks <reason>
 ```
 
-Sends one message to a Lead or a Manager Session (hs-d92, hs-d133). It appends an Event; the target's adapter delivers it (§15.3). The command is not the User's only way to write one: the engine writes the same Event, from the User's side (`from` null, `wake` false), to a Context's Manager for each of its own step errors (contract §3.7, hs-d314) and for each stuck Job (contract §3.7 "A stuck Job", hs-d318). **By default it never starts a turn** (hs-d209, D3): the target holds the message in its context at its next turn.
+Sends one message to a Lead or a Manager Session (hs-d92, hs-d133, hs-d514). It appends an Event; the target's adapter delivers it (§15.3). The message always wakes: when the target is idle it starts a turn at once; a working, waiting or blocked target gets it after its running turn, never interrupted. It carries a required statement of what it unblocks (hs-d507, hs-d514). The command is not the User's only way to write one: the engine writes the same Event, from the User's side (`from` null), to a Context's Manager for each of its own step errors (contract §3.7, hs-d314) and for each stuck Job (contract §3.7 "A stuck Job", hs-d318).
 
 | Argument | Meaning |
 |---|---|
 | `<id>` | the target Session (the short forms of §1.3 are accepted) |
 | `<text>` | the message, a `Text` (1–20 000 characters) |
 | `--file <f>` | the message read from a file, same limits |
-| `--wake` | the message starts a turn when the target is idle (a working, waiting or blocked target gets it after its running turn, never interrupted). For a Manager waking a stalled Lead; use it sparingly. Default: off |
+| `--unblocks <reason>` | what the message unblocks, 1–200 characters, one line (hs-d514); shown in the message as `Message from <sender> (unblocks: <reason>): <text>` |
 
 Exactly one of `<text>` and `--file` (else `usage`).
 
@@ -2190,18 +2191,21 @@ Exactly one of `<text>` and `--file` (else `usage`).
 | the Session exists | `session_not_found` | 4 |
 | it is a `lead` or a `manager`; a Worker is refused with "Session <id> is a worker, not a Lead or a Manager." | `not_a_lead` | 3 |
 | it is not archived; `details.next` = `cpd session unarchive <id>` | `archived` | 3 |
+| only if the sender is an agent ($CPD_SESSION set; User exempt, hs-d514): the target is not a Lead of a Plan in phase `done` or `archived` (hs-d507); `details: {plan, phase}` | `plan_inactive` | 3 |
+| only if the sender is an agent: the sender has not sent the exact same text (trimmed) to a different Session in the last 60 minutes (no broadcasts, hs-d507); `details: {session, at}` | `broadcast` | 3 |
+| only if the sender is an agent: the sender has not sent the exact same text (trimmed) to this Session in the last 60 minutes (no duplicates, hs-d507); `details: {at}` | `duplicate` | 3 |
 
 A `stopped` Lead or Manager is accepted: it gets the message when its pi starts (its follower replays from its cursor, §15.2).
 
 Effects:
-- **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, wake}`; `wake` is true only with `--wake`. `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User). The Event's `text` is the message text; the adapter composes the delivered content (§15.3).
+- **Rows**, one transaction: **Event** `session-message` with `session` = the target, `context` and `plan` = the target's, `data` = `{from, text, unblocks}`; `from` is `CPD_SESSION`, else `PI_SESSION_ID`, else null (the User).
 - **tmux:** none. No pane is started or typed into.
 
 ```json
-{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "wake": false}
+{"ok": true, "event": 4812, "session": "a41b…", "from": "596d007f-…", "unblocks": "PR #210 opened"}
 ```
 
-`from` is null when neither variable is set. `wake` echoes the flag. Idempotent: no; each call is one message.
+`from` is null when neither variable is set. `unblocks` echoes the reason. Idempotent: no; each call is one message.
 
 ### 10.14 `session retitle` (internal)
 
@@ -2282,6 +2286,95 @@ Exactly one of the two: neither, or both, is `usage` (exit 2).
 `unchanged` lists the ids of the selected Sessions already on their target. `"already": true` is added (and `retiered` is `[]`) when nothing changed. Per Session: `session` (id), `role`, `from`, `to` and `event` (the id of its Event).
 
 Idempotent: yes; run again, nothing changes (`"already": true`).
+
+## 10a. `board` (hs-d514)
+
+The message board: a SQLite table whose posts name who they are for (to), read by `cpd board list` and picked up at an agent's turn start by `cpd board take`. Posts are written by `cpd board post`, and never start a turn (hs-d514). Important facts stay Context records.
+
+### 10a.1 `board post`
+
+```
+cpd board post <text> --to <ref>
+```
+
+Post a message to the board. It appends no Event and never starts a turn (hs-d514). The message is addressed to a Session (the target's context is the message's context).
+
+| Argument | Meaning |
+|---|---|
+| `<text>` | the message, a `Text` (1–2000 characters) |
+| `--to <ref>` | the target: `manager` (the live Manager of the sender's Context, else `no_manager`), a Plan id (its live Lead Session; a Plan in phase `done` or `archived` is refused `plan_inactive`), or a Session id |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<text>` is 1–2000 characters | `usage` | 2 |
+| the target Session exists (resolved from `<ref>`); when `<ref>` is `manager` and there is no live Manager, refusal `no_manager` | `session_not_found` | 4 |
+| when `<ref>` is a Plan id, the Plan is not in phase `done` or `archived` (hs-d514); `details: {plan, phase}` | `plan_inactive` | 3 |
+
+Effects:
+- **Rows**, one transaction: **Row** `board_posts`: `at`, `context` (target's), `from_session` (sender's Session or null), `to_session` (target), `text`, `read_at` (null); `id` is auto-incremented.
+- **Events:** none. It does not append any Event.
+- **tmux:** none.
+
+```json
+{"ok": true, "session": "a41b…", "context": "inbox", "posted_at": "2026-10-21T15:30:00.000Z"}
+```
+
+Idempotent: no; each call is one post.
+
+### 10a.2 `board list`
+
+```
+cpd board list [--session <id>] [--all]
+```
+
+List posts to a Session. By default, unread posts only (`read_at` null), oldest first (hs-d514).
+
+| Argument | Meaning |
+|---|---|
+| `--session <id>` | the target Session (default: `$CPD_SESSION`); accepts short forms of §1.3 |
+| `--all` | show all posts, including read ones (`read_at` is not null) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+
+Effects:
+- **Rows:** none.
+- **Events:** none.
+- **tmux:** none.
+
+```json
+{"ok": true, "session": "a41b…", "posts": [{"id": 142, "at": "2026-10-21T15:30:00.000Z", "from_session": "596d…", "text": "PR #207 opened", "read_at": null}, {"id": 143, "at": "2026-10-21T15:31:00.000Z", "from_session": null, "text": "Inbox item closed", "read_at": null}]}
+```
+
+Idempotent: yes; the same list each run.
+
+### 10a.3 `board take` (internal)
+
+```
+cpd board take --session <id>
+```
+
+Return and mark as read the unread posts to a Session (internal, the adapter's message picker at turn start, commands.md §15.7, hs-d514). In the same transaction, the rows' `read_at` are set to `now`.
+
+| Argument | Meaning |
+|---|---|
+| `--session <id>` | the target Session; accepts short forms of §1.3 |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+
+Effects:
+- **Rows**, one transaction: **update** every `board_posts` row with `to_session` = the target and `read_at` null, setting `read_at = now`.
+- **Events:** none.
+- **tmux:** none.
+
+```json
+{"ok": true, "session": "a41b…", "taken": [{"id": 142, "at": "2026-10-21T15:30:00.000Z", "from_session": "596d…", "text": "PR #207 opened"}, {"id": 143, "at": "2026-10-21T15:31:00.000Z", "from_session": null, "text": "Inbox item closed"}]}
+```
+
+Idempotent: yes; the second call returns an empty list and updates nothing.
 
 ## 11. `events`
 
@@ -2969,60 +3062,55 @@ When a step fails: **no reload**; the recorded identity stays, so the check runs
 
 ### 15.7 Context updates at turn start
 
-Batch B2 (hs-d79, hs-d132; narrowed by hs-d209, D1). A Manager sees what other Sessions wrote to its Context, and what its Plans did, without polling.
+Batch B2 (hs-d79, hs-d132; narrowed by hs-d209, D1; redesigned by hs-d514). A Manager sees what other Sessions wrote to its Context, and what its Plans did, without polling. A Lead gets one short update with new records and pending board posts, not Jobs or other Events.
 
-**Leads get none** (hs-d209, D1, D2; this supersedes hs-d79 for Leads). Nothing from the Context is pushed into a Lead's turn: a Session of role `lead` (a Plan Lead, a side fork) gets no `cpd-context` message. A Lead reads the Context on demand, `cpd context show --since <seq>`, at the points the cpd-lead skill names: grounding; before drafting each batch; before answering an Escalation from the records; before `pr open`.
+**Leads: short update with no turn start** (hs-d514, hs-d507). At pi's `before_agent_start`, for a Session of role `lead` (a Plan Lead, a side fork), one `cpd-context` message when anything is new since its cursor, holding only: (1) new decision records in force by other Sessions (`by.session` ≠ this Session), each as `- <id>: <first sentence>` (the rest: `cpd context show --record <id>`); (2) the pending board posts to it (from `cpd board take`), each in full with its sender; (3) the PRs of its Plan opened since, each as `PR <key> opened: <url>`. Nothing about Jobs merged or other Events. No turn is started. The cursor is the highest Event id of a new `context-record`, a new `board_posts`, or a new `pr-opened` Event of the Plan.
 
-**When.** At pi's `before_agent_start`, for every run of a Session whose role is `manager`; never a Lead, never a Worker. It never starts or interrupts a turn: it only adds a message to the run that is starting.
+Format:
 
-**What.** The adapter returns one message, `customType: "cpd-context"`, `display: true`, listing the Context records written **by other Sessions** (`by.session` ≠ this Session) since its cursor, oldest first, each in full, except a `brief`, which is shown short: its id and first line, with its Plan (§3.3; the whole text is `cpd context show --record <id>`). Nothing is returned when there are none. Format:
+```
+Context building-cpd: 2 decisions · 1 board post · 1 PR opened
+- hs-d514: Quiet agents, the design in full.
+
+Board:
+- Manager (2026-10-21T15:30:00Z): PR #207 opened
+
+PRs:
+- PR rebase opened: https://github.com/earendil-works/cpd/pull/211
+```
+
+Summary of the collapsed row (§15.9): `cpd-context: <n> decisions · <n> board posts · <n> PRs opened`, zero parts omitted; every part always shown.
+
+**Managers: compressed digest** (hs-d514, hs-d86; narrowed by hs-d507). At pi's `before_agent_start`, for a Session of role `manager`, one `cpd-context` message holding: (1) records (as Leads see them, in full); (2) pending board posts (from `cpd board take`), each in full with sender; (3) a `Plans:` section, one line per Plan with Event counts by kind in a fixed order (no per-Job lines), e.g. `- cross-repo: 2 PRs opened (#210, #211), 1 Job failed, 1 Escalation, done`; (4) a `Pending work:` section, one line per active Plan with Job counts, e.g. `- inbox (dispatch): PR mainfix 2 running, 1 queued; PR prlink open #207`; (5) a new line `Errors: <n> (<code> x<k>, ...): cpd events list --kind error --since <id>` counting error Events since the cursor, for its Context and the machine-wide ones.
+
+Format:
 
 ```
 Context building-cpd: 2 new records since your last turn.
-- hs-d41 decision (2026-10-17): Use one table for sessions, supersedes hs-d12.
-- hs-q9 answer (2026-10-17): Yes, keep it. Answers hs-q8.
-```
+- hs-d514 decision (2026-10-21): Quiet agents, the design in full.
 
-Header `Context <c>: <N> new records since your last turn.`; each line `- <id> <kind> (<date>): <text>`; an answer names its question, a superseding decision names what it supersedes. At most 20 records are listed; more end with `and <K> more: cpd context show --context <c> --since <seq>`, with `<seq>` the `seq` before the first record not listed.
+Board:
+- User (2026-10-21T15:30:00Z): Inbox item closed
 
-**Display** (hs-d221, restyled by hs-d286, §15.9). The message's `content` is the full text and goes to the model whole. In the chat window the adapter shows the counts line below as the one-line summary of a collapsed row (§15.9), never the full text, unless the User expands the message, which then shows the full `content`. The adapter registers a pi message renderer for `cpd-context` once at load (`pi.registerMessageRenderer`; it only changes the display). The counts line, as the summary, is `cpd-context: ` and then the parts below in this order, joined by ` · `; a part whose count is 0 is omitted and nothing else is shown:
-
-```
-cpd-context: 6 records · 17 Plan Events · 10 Plans pending
-cpd-context: 1 record · 1 Plan Event · 1 Plan pending
-```
-
-`<n> record(s)` is the number of new records of the message (the length of `details.records`), `<n> Plan Event(s)` the number of Events of the `Plans:` section (all of them, listed or not), `<n> Plan(s) pending` the number of Plans with a line in `Pending work:`. The counts come from the message's `details`, which carries `plan_events` and `plans_pending` besides `records`. A message whose `details` lack either (one written before this) is shown in full (§15.9 "No summary").
-
-**Cursor**, in `context-record` Event ids (not the Event cursor of §15.2):
-1. Start = the Session's `registered_event` (its first message already held the records up to then).
-2. Then the greatest `details.event` of the session file's `cpd-context` messages whose `details.delivered_to` is this Session: the fork-safe rule of §15.2 step 4, for the same reason.
-
-**Reading.** `cpd events list --context <c> --kind context-record --since <cursor>` gives the new `context-record` Events (each `data.seq`); then `cpd context show --context <c> --since <smallest seq - 1>` gives the records with `by`. The adapter skips its own records (`by.session` = this Session). The message's `details` is `{event: <highest context-record Event id read>, delivered_to: <id>, records: [ids], plan_events: <n>, plans_pending: <n>}`; `event` counts own records too, so they are not read again. If every record read is its own, no message is added and the cursor stays (the next read passes them again and skips them again). No schema change.
-
-**Failure.** A failed read adds no message and leaves the cursor, so the next run reads again. It is reported once as an error message (§15.1, no turn: `triggerTurn: false`), and again only after a read has succeeded.
-
-**The Manager's digest** (B3-A5, hs-d86). For a Session of role `manager` the message adds, after the records, a section:
-
-```
 Plans:
-- 2026-10-18T09:12:00Z pay-4521: Plan phase dispatch.
-- 2026-10-18T09:40:00Z pay-4522: Job api-1 failed.
-```
+- cross-repo: 1 PR opened (#212), 1 Job failed, done
 
-One line per Event of kinds `plan-created`, `plan-phase`, `pr-opened`, `pr-merged`, `job-failed`, `escalation` and `plan-done` for the Manager's Context (`events list --context <c> --since <cursor>`, filtered by kind), oldest first, `- <at> <plan>: <event text>`. At most 20 lines; more end with `and <K> more: cpd events list --context <c> --since <id>`, `<id>` the id of the last Event listed. **One cursor** serves both sections, in Event ids: the records are read as above, the section from the same `--since`, and `details.event` is the highest Event id of either read (`context-record` or a listed kind). The message is returned when either section has something and carries nothing else when neither has. A failed read of the section fails the whole message as in "Failure". The Manager's follower is not involved (§15.3): the digest is the only way a Plan's Events reach it, and it never starts a turn.
-
-**Pending work** (hs-d159, P2). After `Plans:`, the Manager's message adds a section, computed fresh at every Manager turn start from `cpd context pending --context <c>` (§3.11), not from the cursor:
-
-```
 Pending work:
-- pay-4521 (dispatch), PR api dispatch #212: 1 merged on its Lead Branch, 1 queued, 1 running, 0 failed, 0 draft
-  - retry-core merged: Retry policy
-  - retry-cli queued: Retry flag
-  - retry-ui running: Retry button
+- inbox (dispatch): PR mainfix 2 running, 1 queued; PR prlink open #207
+- agent-comms (plan): PR quiet-core 1 running
+
+Errors: 3 (gh_failed x2, pr_start_failed x1): cpd events list --kind error --since 4800
 ```
 
-Per active Plan (not `done`, not archived), one line `- <plan> (<phase>), PR <key> <status>[ #<n>]: <m> merged on its Lead Branch, <q> queued, <r> running, <f> failed, <d> draft` (one line per PR that is not `merged` and not `cancelled`; ` #<n>` only once the pull request exists), each followed by up to 10 lines `  - <job> <status>: <title>` for that PR's Jobs in `seq` order, then `  and <K> more` when there are more. Touched files are not listed: the Manager runs `cpd context pending` for them. The section is omitted when no Plan is active. Because it is not cursor-based it alone does not make the message appear when `Plans:` and the records have nothing new: the message is returned when either of them has something, or when `Pending work:` is not empty; `details.event` is unchanged by it. A failed read of the section fails the message as in "Failure".
+Summary of the collapsed row (§15.9): `cpd-context: <n> records · <n> board posts · <n> Plans · <n> errors`, zero parts omitted.
+
+**Cursor**, in Event ids (the highest of all reads, `context-record` or board or Plan Events or errors): 
+1. Start = the Session's `registered_event` (its first message already held the records up to then).
+2. Then the greatest `details.event` of the session file's `cpd-context` messages whose `details.delivered_to` is this Session: the fork-safe rule of §15.2 step 4.
+
+**Reading.** For records: `cpd events list --context <c> --kind context-record --since <cursor>`, then `cpd context show --context <c> --since <seq>` for the full text. The adapter skips its own records. For board posts: `cpd board take --session <id>` (internal, not a Lead command). For Plan Events: `cpd events list --context <c> --kind plan-created,plan-phase,pr-opened,pr-merged,job-failed,escalation,plan-done --since <cursor>`. For errors: `cpd events list --context <c> --kind error --since <cursor>` and `cpd events list --kind error --since <cursor>` (the machine-wide ones). The message's `details` is `{event: <highest Event id read>, delivered_to: <id>, records: [ids], posts: <n>, plans: <n>, errors: <n>, error_codes: {<code>: <count>}}`. The message is returned when any section has something; nothing is added if none do. No schema change.
+
+**Failure.** A failed read adds no message and leaves the cursor. It is reported once as an error message (§15.1, no turn), and again only after a read has succeeded.
 
 ### 15.8 Turn-end reminder
 
