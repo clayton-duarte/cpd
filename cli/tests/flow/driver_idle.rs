@@ -3,7 +3,7 @@
 //! `driver.rs`'s (its items are private to that module).
 
 #![cfg(target_os = "linux")]
-#![allow(dead_code)]
+#![allow(dead_code)] // the trimmed driver.rs fixture carries helpers this file does not call
 
 use crate::common;
 
