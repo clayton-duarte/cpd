@@ -137,6 +137,7 @@ impl Fx {
     /// Two ticks of the engine after now: the tick count is the number of `watch` heartbeats the test cannot see,
     /// so it waits a few ticks of wall time.
     fn some_ticks(&self) {
+        // time-claim: no further `session-archived` Event over a few engine ticks; no per-poll signal from the engine (an absence).
         std::thread::sleep(std::time::Duration::from_millis(1500));
     }
 }
