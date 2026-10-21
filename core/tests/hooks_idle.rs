@@ -25,24 +25,28 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
 }
 
-#[test]
-fn a_hook_command_runs_at_nice_19_and_io_class_idle_and_the_caller_keeps_its_nice() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path().join("repo");
-    fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-q", "-b", "main"]);
-    git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"]);
-    let out = dir.path().join("out.txt");
-    let log = dir.path().join("hook.log");
+mod hooks_idle {
+    use super::*;
 
-    let before = own_nice();
-    let command = format!("{{ {NICE_OF_SHELL}; ionice -p $$; }} > '{}' 2>&1", out.display());
-    let result = run_command(&command, &[], &repo, &Operation { branch: "main" }, Duration::from_secs(60), &log, Log::Truncate).unwrap();
-    assert_eq!(result.outcome, HookOutcome::Passed, "{:?}", result.tail);
+    #[test]
+    fn a_hook_command_runs_at_nice_19_and_io_class_idle_and_the_caller_keeps_its_nice() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"]);
+        let out = dir.path().join("out.txt");
+        let log = dir.path().join("hook.log");
 
-    let text = fs::read_to_string(&out).unwrap();
-    let mut lines = text.lines();
-    assert_eq!(lines.next().map(str::trim), Some("19"), "nice of the hook's shell; output: {text:?}");
-    assert!(text.contains("idle"), "ionice of the hook's shell: {text:?}");
-    assert_eq!(own_nice(), before, "the caller keeps its nice");
+        let before = own_nice();
+        let command = format!("{{ {NICE_OF_SHELL}; ionice -p $$; }} > '{}' 2>&1", out.display());
+        let result = run_command(&command, &[], &repo, &Operation { branch: "main" }, Duration::from_secs(60), &log, Log::Truncate).unwrap();
+        assert_eq!(result.outcome, HookOutcome::Passed, "{:?}", result.tail);
+
+        let text = fs::read_to_string(&out).unwrap();
+        let mut lines = text.lines();
+        assert_eq!(lines.next().map(str::trim), Some("19"), "nice of the hook's shell; output: {text:?}");
+        assert!(text.contains("idle"), "ionice of the hook's shell: {text:?}");
+        assert_eq!(own_nice(), before, "the caller keeps its nice");
+    }
 }
