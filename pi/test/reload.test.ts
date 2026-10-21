@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, renameSync, symlinkSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { type Options } from "../lib/adapter.ts";
+import { fileURLToPath } from "node:url";
 import { identityOf, LONG_REFUSAL_NOTICE, LOAD_TIMEOUT_MS, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, validatePackage, type Guard } from "../lib/reload.ts";
 import { Fixture, ID, planShow, waitFor } from "./fake.ts";
 
@@ -91,6 +92,47 @@ test("a changed adapter directory triggers its command once, with expandPromptTe
   assert.ok(watching[1]!.includes(`(${identityOf(f.adapterDir)})`), "which records the new identity as its baseline: no second reload");
   assert.deepEqual(f.pi.commandErrors, [], "nothing used the context after reload()");
   assert.deepEqual(f.pi.sent.filter((s) => s.message.customType !== "cpd"), [], "nothing reaches the model");
+});
+
+test("the poll watches the adapter symlink: repointing it to a new directory and pruning the old one is a change, not an install in progress", async (t) => {
+  // contract §3.7 "The adapter swap": the adapter runs from `share/pi.<id>`; the installed path is the `pi` link beside it.
+  const root = mkdtempSync(join(tmpdir(), "pi-swap-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const repo = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  symlinkSync(join(repo, "node_modules"), join(root, "node_modules")); // so the copy resolves pi-tui as the checkout does
+  const share = join(root, "share");
+  mkdirSync(share);
+  const copy = (id: string) => {
+    mkdirSync(join(share, id));
+    for (const n of ["extension.ts", "package.json", "lib", "compact-tools"]) cpSync(join(repo, "pi", n), join(share, id, n), { recursive: true });
+  };
+  copy("pi.1");
+  symlinkSync("pi.1", join(share, "pi"));
+  const { adapter } = (await import(join(share, "pi.1", "lib", "adapter.ts"))) as typeof import("../lib/adapter.ts");
+
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", planShow());
+  f.pi.onReload = async () => {
+    await f.pi.fire("session_shutdown", { reason: "reload" });
+    await f.pi.fire("session_start", { reason: "reload" });
+  };
+  f.load({ reload: { dir: undefined } }, f.pi, adapter); // no `dir`: the adapter's own default path
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+
+  // The install: a new version, the link renamed over `pi`, the old version pruned.
+  copy("pi.2");
+  symlinkSync("pi.2", join(share, "pi.link"));
+  renameSync(join(share, "pi.link"), join(share, "pi"));
+  rmSync(join(share, "pi.1"), { recursive: true });
+
+  await waitFor("the reload", () => f.pi.reloads > 0, 5000);
+  assert.ok(
+    logLines(f).some((l) => l.includes("poll: watching") && l.includes(join(share, "pi")) && !l.includes("pi.1")),
+    "the poll watches the link",
+  );
+  assert.equal(logLines(f).some((l) => l.endsWith("the adapter directory is missing (an install in progress); waiting")), false);
 });
 
 test("ENOENT is the install in progress, not a change", async (t) => {
