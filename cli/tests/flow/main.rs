@@ -11,6 +11,7 @@ mod context_delete;
 mod context_distill;
 mod context_manager;
 mod context_pending;
+mod context_pending_waiting;
 mod context;
 // Wrapped so the test names read `flow::driver_idle::...`; `#[path = "."]` keeps the file here, in this directory.
 #[path = "."]
@@ -23,6 +24,8 @@ mod job;
 mod metrics;
 mod plan_cancel;
 mod plan_delete;
+mod plan_render_cancelled;
+mod plan_render_waiting;
 mod plan_outline;
 mod plan_overlap;
 mod plan;

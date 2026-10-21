@@ -1,4 +1,5 @@
-//! The plan view's PR boxes (commands.md §13.2, R34 A15, hs-d115): one bordered box per PR that is not `cancelled`,
+//! The plan view's PR boxes (commands.md §13.2, R34 A15, hs-d115): one bordered box per PR (a `cancelled` one muted, below
+//! the others, hs-d518),
 //! holding the chart of that PR's Jobs ([`flow::layout`]) with its title on the top border; the boxes top to bottom by
 //! the PRs' needs (the PRs not merged below the merged ones, [`levels`]), one row of boxes per level, each need an arrow from the needed box's bottom border to the needing
 //! box's top border.
@@ -26,7 +27,7 @@ use crate::read::{Dot, JobNode, NeedsUser, PrNode, PrState, PrStatus, Pull};
 
 /// Rows between two rows of boxes: the run of lines, then the arrowheads.
 const GAP: u16 = 2;
-/// What the box of a PR with no Jobs (none that is not cancelled) says.
+/// What the box of a PR with no Jobs says.
 const NO_JOBS: &str = " no Jobs ";
 /// The head of an arrow, just above the needing box's top border: `nf-md-arrow_down_thin` (U+F19B3).
 const ARROW: &str = "\u{F19B3}";
@@ -46,6 +47,7 @@ pub struct Boxes {
 /// among its needs. A PR that is not merged is at max(1 + the highest level among its needs, M + 1), M the highest level
 /// of any merged PR (no floor when none is merged): every box that is not merged is below every merged box, so the work
 /// in progress sits together (User, 2026-10-18). A need that is not one of `prs`, or that closes a cycle, is ignored.
+/// The `cancelled` PRs are all one level below the last of the others (the first when there is none); their needs count for nothing.
 pub fn levels(prs: &[PrNode]) -> Vec<usize> {
     fn level(i: usize, floor: usize, needs: &[Vec<usize>], memo: &mut [Option<usize>], open: &mut HashSet<usize>) -> usize {
         if let Some(l) = memo[i] {
@@ -62,16 +64,29 @@ pub fn levels(prs: &[PrNode]) -> Vec<usize> {
         memo[i] = Some(l);
         l
     }
-    let needs: Vec<Vec<usize>> =
-        prs.iter().map(|p| p.needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n)).collect()).collect();
+    let needs: Vec<Vec<usize>> = (0..prs.len()).map(|i| live_needs(prs, i)).collect();
     // by the needs alone
     let mut memo = vec![None; prs.len()];
     let base: Vec<usize> = (0..prs.len()).map(|i| level(i, 0, &needs, &mut memo, &mut HashSet::new())).collect();
     let merged = |i: usize| prs[i].status == PrStatus::Merged;
-    let Some(m) = (0..prs.len()).filter(|&i| merged(i)).map(|i| base[i]).max() else { return base };
-    // the merged keep their level; the others are floored below them
-    let mut memo: Vec<Option<usize>> = (0..prs.len()).map(|i| merged(i).then_some(base[i])).collect();
-    (0..prs.len()).map(|i| level(i, m + 1, &needs, &mut memo, &mut HashSet::new())).collect()
+    let by_needs = match (0..prs.len()).filter(|&i| merged(i)).map(|i| base[i]).max() {
+        None => base,
+        Some(m) => {
+            // the merged keep their level; the others are floored below them
+            let mut memo: Vec<Option<usize>> = (0..prs.len()).map(|i| merged(i).then_some(base[i])).collect();
+            (0..prs.len()).map(|i| level(i, m + 1, &needs, &mut memo, &mut HashSet::new())).collect()
+        }
+    };
+    let below = (0..prs.len()).filter(|&i| prs[i].status != PrStatus::Cancelled).map(|i| by_needs[i] + 1).max().unwrap_or(0);
+    (0..prs.len()).map(|i| if prs[i].status == PrStatus::Cancelled { below } else { by_needs[i] }).collect()
+}
+
+/// The needs of `prs[i]` that are boxes of `prs` (indices): none of a `cancelled` PR, and none on one.
+fn live_needs(prs: &[PrNode], i: usize) -> Vec<usize> {
+    if prs[i].status == PrStatus::Cancelled {
+        return Vec::new();
+    }
+    prs[i].needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n && q.status != PrStatus::Cancelled)).collect()
 }
 
 /// A PR state's word.
@@ -112,13 +127,21 @@ pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
             }
             spans.push(format!(" {CUE}").into());
         }
-        None => spans.push(pr.status.as_str().dim()),
+        None => spans.push(match (pr.status, &pr.superseded_by) {
+            (PrStatus::Cancelled, Some(by)) => format!("cancelled · superseded by {by}").into(),
+            (PrStatus::Waiting, _) if !pr.waiting_on.is_empty() => format!("waiting on {}", pr.waiting_on.join(", ")).dim(),
+            (status, _) => status.as_str().dim(),
+        }),
     }
     spans.push(" ".into());
+    if pr.status == PrStatus::Cancelled {
+        // the whole title is muted: the PR is shown, counted nowhere
+        spans.iter_mut().for_each(|s| s.style = s.style.patch(palette::fg(Meaning::Nothing)));
+    }
     Line::from(spans)
 }
 
-/// The whole canvas of boxes: one per PR of `prs` (the PRs that are not `cancelled`), each holding the chart of its
+/// The whole canvas of boxes: one per PR of `prs`, each holding the chart of its
 /// `jobs`. The pills are in the order of `prs`, then of each PR's Jobs. A running Job's icon is the spinner's `frame`.
 /// `needs_user` says which failed Jobs and closed pull requests are red, the rest waiting.
 pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: usize) -> Boxes {
@@ -166,7 +189,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
 
     // the arrows: needs that do not point down (a cycle) are not drawn
     let edges: Vec<(usize, usize)> = (0..prs.len())
-        .flat_map(|c| prs[c].needs.iter().filter_map(|n| prs.iter().position(|q| &q.key == n)).map(move |p| (p, c)))
+        .flat_map(|c| live_needs(prs, c).into_iter().map(move |p| (p, c)))
         .filter(|&(p, c)| level[p] < level[c])
         .collect();
     // a line that skips rows keeps a column clear of their boxes and of the columns beside them
@@ -312,6 +335,8 @@ mod tests {
             status: PrStatus::Dispatch,
             needs: needs.iter().map(|n| PrKey::parse(n).unwrap()).collect(),
             pull: None,
+            waiting_on: Vec::new(),
+            superseded_by: None,
         }
     }
 
@@ -333,6 +358,7 @@ mod tests {
             failed_cause: None,
             cancel_reason: None,
             merged_sha: None,
+            waiting_on: Vec::new(),
             attempts: Vec::new(),
         }
     }
@@ -383,6 +409,15 @@ mod tests {
         assert!(first_other > last_merged, "{first_other} > {last_merged}");
         assert_eq!(y("cleanup"), y("flake"), "the others sit together, side by side");
         assert!(y("status") > y("cleanup"), "and still by needs");
+    }
+
+    #[test]
+    fn a_cancelled_pr_is_one_level_below_every_other_and_has_no_needs() {
+        let cancelled = |key: &str, needs: &[&str]| PrNode { status: PrStatus::Cancelled, ..pr(key, needs) };
+        // `aaa` sorts first and needs `web`; `web` needs the cancelled `old`, which counts for nothing
+        let prs = [cancelled("aaa", &["web"]), cancelled("old", &[]), pr("web", &["old"]), pr("z", &["web"])];
+        assert_eq!(levels(&prs), [2, 2, 0, 1]);
+        assert_eq!(levels(&[cancelled("old", &[])]), [0]);
     }
 
     #[test]

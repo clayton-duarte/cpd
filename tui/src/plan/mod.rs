@@ -139,7 +139,7 @@ struct Centre {
 impl Centre {
     /// A Job runs: its pill's icon is the spinner, which turns with the clock.
     fn spins(&self) -> bool {
-        self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == Some(flow::Live::Running))
+        self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == flow::Live::Running)
     }
 
     /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
@@ -644,6 +644,8 @@ mod tests {
             base: "main".into(),
             status: PrStatus::Open,
             needs: Vec::new(),
+            waiting_on: Vec::new(),
+            superseded_by: None,
             pull: Some(Pull {
                 number: 12,
                 state: read::PrState::Open,
@@ -802,6 +804,8 @@ mod tests {
             status: PrStatus::Dispatch,
             needs: Vec::new(),
             pull: None,
+            waiting_on: Vec::new(),
+            superseded_by: None,
         };
         let job = |n: usize| JobNode {
             key: JobKey::parse(&format!("job-{n}")).unwrap(),
@@ -816,6 +820,7 @@ mod tests {
             failed_cause: None,
             cancel_reason: None,
             merged_sha: None,
+            waiting_on: Vec::new(),
             attempts: Vec::new(),
         };
         let plan = PlanBoxes {

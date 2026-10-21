@@ -12,6 +12,8 @@ use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
 use cpd_core::inbox::model::{Item, Kind};
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
+use cpd_core::plan::display::Display;
+use cpd_core::plan::fingerprint::load_prs;
 use cpd_core::plan::{jobs, plan_fingerprint};
 use cpd_core::session::State;
 use cpd_core::store::Store;
@@ -36,13 +38,13 @@ pub struct Flow {
     pub events_cursor: i64,
 }
 
-/// A Plan as the plan view draws it (commands.md §13.2, §17): its PRs that are not `cancelled`, each a box, and the Jobs
+/// A Plan as the plan view draws it (commands.md §13.2, §17): its PRs, each a box, `cancelled` ones too, and the Jobs
 /// inside them. A Plan with no PR yet has none, and no Jobs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanBoxes {
     pub plan: PlanId,
     pub context: ContextId,
-    /// The PRs that are not `cancelled`, in key order.
+    /// The PRs, in key order.
     pub prs: Vec<PrNode>,
     /// Every Job of the Plan, in creation order; each names its PR.
     pub jobs: Vec<JobNode>,
@@ -78,13 +80,14 @@ impl NeedsUser {
     }
 }
 
-/// A PR's status (contract §3.8). A `cancelled` PR is not drawn, so it is never read.
+/// A PR's status (contract §3.8).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrStatus {
     Waiting,
     Dispatch,
     Open,
     Merged,
+    Cancelled,
 }
 
 impl PrStatus {
@@ -95,6 +98,7 @@ impl PrStatus {
             PrStatus::Dispatch => "dispatch",
             PrStatus::Open => "open",
             PrStatus::Merged => "merged",
+            PrStatus::Cancelled => "cancelled",
         }
     }
 }
@@ -111,6 +115,10 @@ pub struct PrNode {
     pub needs: Vec<PrKey>,
     /// Its pull request, once it has one.
     pub pull: Option<Pull>,
+    /// What a PR that has not started waits for, sorted (PR references): empty when it can start (hs-d521).
+    pub waiting_on: Vec<String>,
+    /// For a `cancelled` PR, the PR that carried its work (a reference), from its `pr-cancelled` Event.
+    pub superseded_by: Option<String>,
 }
 
 /// A PR's pull request, for its box's title.
@@ -154,6 +162,8 @@ pub struct JobNode {
     pub failed_cause: Option<String>,
     pub cancel_reason: Option<String>,
     pub merged_sha: Option<String>,
+    /// What a `queued` Job that cannot start yet waits for, sorted (Job keys, PR references): empty when it is Ready (hs-d521).
+    pub waiting_on: Vec<String>,
     /// Oldest first.
     pub attempts: Vec<AttemptNode>,
 }
@@ -257,6 +267,8 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
 
 /// The PRs of `plan` that are not `cancelled`, in key order, with their needs; `lead_working`: the Plan's Lead is working.
 fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<PrNode>, CpdError> {
+    let display = Display::load(conn, plan)?;
+    let pr_rows = load_prs(conn, plan)?;
     let mut needs: BTreeMap<String, Vec<PrKey>> = BTreeMap::new();
     let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
@@ -266,7 +278,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
     let mut stmt = conn.prepare(
         "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable
            FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
-          WHERE r.plan = ?1 AND r.status <> 'cancelled' ORDER BY r.key",
+          WHERE r.plan = ?1 ORDER BY r.key",
     )?;
     let mut rows = stmt.query([plan.as_str()])?;
     let mut out = Vec::new();
@@ -280,6 +292,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
             "dispatch" => PrStatus::Dispatch,
             "open" => PrStatus::Open,
             "merged" => PrStatus::Merged,
+            "cancelled" => PrStatus::Cancelled,
             _ => return Err(bad_row(format!("{what} has status {status:?}"))),
         };
         // `pr_number` is set with `pull_request` (contract §2.5), so a pull request has its row's url
@@ -300,7 +313,10 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or_else(|| bad_row(format!("{what} has repo {repo:?}")))?;
+        let row = pr_rows.iter().find(|p| p.key.as_str() == key);
         out.push(PrNode {
+            waiting_on: row.map(|p| display.pr_blockers(p)).unwrap_or_default(),
+            superseded_by: display.superseded_by(&key).map(str::to_owned),
             needs: needs.remove(&key).unwrap_or_default(),
             key: id("PR key", &key, PrKey::parse)?,
             repo_name,
@@ -315,9 +331,12 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
 /// Every Job of `plan` in creation order, with its Attempts.
 fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError> {
     let rows = jobs::load(conn, plan)?;
+    let display = Display::load(conn, plan)?;
+    let waiting_on: Vec<Vec<String>> = rows.iter().map(|j| display.job_blockers(&rows, j)).collect();
     let mut attempts = attempts(conn, plan)?;
     rows.into_iter()
-        .map(|j| {
+        .zip(waiting_on)
+        .map(|(j, waiting_on)| {
             let what = format!("Job {plan}/{}", j.key);
             let key = id("Job key", &j.key, JobKey::parse)?;
             Ok(JobNode {
@@ -328,6 +347,7 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
                 retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),
                 seq: j.seq,
+                waiting_on,
                 title: j.title,
                 appended: j.appended,
                 failed_cause: j.failed_cause,

@@ -20,7 +20,8 @@ covered="install-cpd.sh pi-check.sh check-portable.sh check-migrations-frozen.sh
 # Linux-only, not covered, each with its reason; a script in neither list fails.
 linux_only="release.sh: hs only, its header says so
 prune-worktrees.sh: a one-time cleanup run on hs
-test-time.sh: measures the Gate's run on hs (a fractional-second clock, uptime)"
+test-time.sh: measures the Gate's run on hs (a fractional-second clock, uptime)
+gate-run.sh: finds a run's processes in /proc on Linux; its macOS branch (ps -E) is unverified (hygiene.md, The Gate leak check)"
 
 tbl=$(mktemp "${TMPDIR:-/tmp}/check-portable.XXXXXX")
 trap 'rm -f "$tbl"' EXIT

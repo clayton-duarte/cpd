@@ -11,7 +11,8 @@
     "pretypecheck": "scripts/npm-fresh.sh",
     "typecheck": "tsc --noEmit -p .",
     "preverify": "scripts/npm-fresh.sh",
-    "verify": "scripts/check-migrations-frozen.sh && scripts/check-portable.sh && npm run typecheck && npm test && scripts/pi-check.sh node_modules/.bin/pi && export CPD_COMMIT=$(git rev-parse --short HEAD) && scripts/cargo.sh nextest run --workspace"
+    "verify": "scripts/gate-run.sh npm run verify:steps",
+    "verify:steps": "scripts/check-migrations-frozen.sh && scripts/check-portable.sh && npm run typecheck && (t=$(mktemp -d) && TMPDIR=$t npm test; s=$?; rm -rf \"$t\"; exit $s) && scripts/pi-check.sh node_modules/.bin/pi && export CPD_COMMIT=$(git rev-parse --short HEAD) && scripts/cargo.sh nextest run --workspace"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.3.0",

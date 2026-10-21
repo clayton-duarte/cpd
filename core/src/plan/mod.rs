@@ -1,6 +1,7 @@
 //! Plans and their phases (contract §2.2, §2.3, §3.1; commands.md §4).
 //!
 //! - [`jobs`]: a Plan's Jobs as read, the Locked-Job fingerprint of §2.3, the cycle check;
+//! - [`display`]: what the views show of cancelled work and of work that waits (one derivation for all of them);
 //! - [`fingerprint`]: the plan fingerprint of §2.3, over the draft Jobs and the PRs;
 //! - [`render`]: the plan markdown of `plan render` and `plan review`;
 //! - [`lead`]: Lead windows in the cockpit (`plan new`, `plan phase plan`);
@@ -11,6 +12,7 @@
 pub mod archive;
 mod cancel;
 pub(crate) mod delete;
+pub mod display;
 pub mod fingerprint;
 pub mod jobs;
 mod lead;
