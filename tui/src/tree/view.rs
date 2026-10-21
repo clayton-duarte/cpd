@@ -576,7 +576,8 @@ impl View {
             Row::Fork(_, _, s) => vec![s],
             Row::Toggle => return Some(None),
         };
-        if !archiving.iter().any(|s| s.is_active()) {
+        let manager_in_chat = matches!(*row, Row::Context(c) if c.manager_place == Some(crate::read::Place::Chat));
+        if !manager_in_chat && !archiving.iter().any(|s| s.is_active()) {
             return Some(None);
         }
         let items = rows::items(&self.tree, self.state.opened(), 0, 0);
