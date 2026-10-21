@@ -35,7 +35,7 @@ impl Fx {
 
     /// `gate-run.sh sh -c <body>`, with `TMPDIR` the env's `tmp`.
     fn gate_run(&self, body: &str) -> Run {
-        let out = common::output(self.env.command("sh").arg(script()).args(["sh", "-c", body]).env("TMPDIR", &self.tmp)).unwrap();
+        let out = common::output(self.env.command(script()).args(["sh", "-c", body]).env("TMPDIR", &self.tmp)).unwrap();
         Run {
             exit: out.status.code().expect("gate-run was killed by a signal"),
             stdout: String::from_utf8(out.stdout).unwrap(),
@@ -154,7 +154,7 @@ fn another_runs_leftovers_do_not_fail_this_run() {
     // A second gate run, still running its command, which has left a directory and holds a process: its own id.
     let other_id = fx.file("other-id");
     let body = format!("echo \"$GATE_RUN\" > '{}'; mkdir \"$TMPDIR/other-left\"; exec sleep {SLEEP_SECONDS}", other_id.display());
-    let mut other = common::spawn(fx.env.command("sh").arg(script()).args(["sh", "-c", &body]).env("TMPDIR", &fx.tmp).stderr(std::process::Stdio::null()))
+    let mut other = common::spawn(fx.env.command(script()).args(["sh", "-c", &body]).env("TMPDIR", &fx.tmp).stderr(std::process::Stdio::null()))
         .unwrap();
     let _stop = StopChild(&mut other);
     common::wait_some("the other run's command to start", WAIT, || {
