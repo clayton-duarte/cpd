@@ -1059,6 +1059,7 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 | `--kind open` or `update`; `details.kind` | `kind_reserved` | 3 |
 | no `needs` Job is an `open` or `update` Job (nothing waits for them: contract §2.2 "Job kinds"); `details.jobs` | `needs_unavailable` | 3 |
 | `--kind test` or `impl`: the repo's `.config/cpd.toml` has `[tests]`, read from the PR's Lead Branch once the PR has started, else from `origin/<base>` (contract §7.7) | `tests_unconfigured` | 3 |
+| every `touches` entry of the Spec is checked against the tree the Job will start from (the PR's Lead Branch head once the PR started, else its base, contract §2.1): a literal path must exist in that tree, or its parent directory must (a new file); a glob must match a file, or its fixed prefix directory must exist; cpd's own `open` and `update` Jobs are not checked (contract §3.7 E4, hs-d512); `details: {missing: [entries], tree: <ref>}` | `touches_missing` | 3 |
 | without `--draft`, an `impl` Job needs at least one `test` Job of its PR; `details.jobs` | `test_job_required` | 3 |
 | the PR's stored shape allows the kind, while the PR is `waiting` or `dispatch` (hs-d497, contract §2.2 "Job kinds"): `tdd` allows `docs`, `test`, `impl`; `docs` allows `docs`; `config` allows `work`; `--review` (kind `work`) is allowed in every shape; `free` allows every kind; `details` `{pr, shape, kind, allowed}`. An `open` PR is not checked: a feedback fix is whatever it is | `shape_violation` | 3 |
 | the Spec file has `tests` and `test_files` exactly when the kind is `test` and the Job is not a stub (§5); `--review` with a kind other than `work` | `spec_invalid`; `usage` | 2 |
@@ -1096,6 +1097,7 @@ A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), includ
 | the needs exist and are usable | `needs_unknown`, `needs_unavailable` | 3 |
 | every Dependency after the edit links two Jobs of the same PR: the needs are in the Job's PR (the new one with `--pr`), and with `--pr` the Job keeps no old needs and no Job needs it; `details.jobs` lists the Jobs on the other side (§4.4 `dependencies_same_pr`, `jobs_pr_dependencies`) | `needs_other_pr` | 3 |
 | the new needs make no cycle | `dependency_cycle` | 3 |
+| with `--spec`: every `touches` entry is checked as in `job add` (§5.1), against the tree the Job will start from (contract §2.1, hs-d512); `details: {missing: [entries], tree: <ref>}` | `touches_missing` | 3 |
 
 Effects: **rows**, one transaction: the changed `jobs` columns; `dependencies` rows deleted and inserted to match (§4.4 allows deletion only for `draft`); with `--pr`, in the order §4.4 states: delete the old Dependencies, update `pr`, insert the new ones. **Event** `job-edited` `{fields: [name]}`, listing only the fields whose value changed (`pr` among them).
 
@@ -3302,6 +3304,10 @@ Removed by R19 (no Job-level Reviewer).
 ### 16.3 The verdict
 
 Removed by R19 (no Job-level Reviewer).
+
+### 16.4 Worker latitude
+
+A Worker may change a file outside its `touches` when a test named in its acceptance cannot pass without it (hs-d512, contract §16 "The Worker contract"). The Worker lists each such file and why in its commit message, instead of escalating with `cpd ask`. Examples: a migration that only this Job should create, a helper script the test uses, a stub of a new module. The Lead reads the commit message at the Worker's submit and approves or escalates; the test must pass without editing the guide.
 
 ## 17. What the TUI reads
 
