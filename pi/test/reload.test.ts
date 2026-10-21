@@ -255,7 +255,7 @@ for (const [name, files, reasonOf] of refused) {
     assert.equal(f.pi.reloads, 0);
     assert.deepEqual(f.pi.userMessages, []);
     assert.equal(f.pi.notices.includes("cpd: adapter updated, reloading"), false);
-    assert.deepEqual(f.argvs().filter((a) => a[0] !== "plan" && a[0] !== "session"), [], "no cpd command for it");
+    assert.deepEqual(f.argvs().filter((a) => a[0] !== "plan" && a[0] !== "session" && a[0] !== "review"), [], "no cpd command for it");
     assert.deepEqual(f.pi.sent.filter((s) => s.message.customType !== "cpd"), []);
     // The same directory, repaired: the new identity is checked again and reloaded once.
     for (const [file, content] of Object.entries({ "extension.ts": GOOD, "package.json": "{}" })) writeFileSync(join(f.adapterDir, file), content);

@@ -27,6 +27,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd plan render` | Render the Plan to run/<plan>/plan.md (§4.5) | Lead | |
 | `cpd plan review` | Request the User's approval of the draft Jobs (§4.6) | Lead | |
 | `cpd plan decide` | Record the User's decision on a Plan review (§4.7) | internal | |
+| `cpd plan outline` | Set the Plan's outline: what its review summary says (§4.13) | Lead | |
 | `cpd plan lock` | Lock the Plan and start dispatching (§4.8) | Lead | |
 | `cpd plan rename` | Change the Plan's title (§4.9) | | yes |
 | `cpd plan archive` | Archive the Plan, its Lead and its side forks (§4.10) | | yes |
@@ -38,6 +39,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd job cancel` | Cancel a Job (§5.3) | Lead | |
 | `cpd job retry` | Queue a failed Job again at a Tier (§5.4) | Lead | |
 | `cpd job urgent` | Mark a Job urgent, only when the User asks (§5.8) | Lead, Manager | |
+| `cpd job approve-tests` | The Lead approves an impl Job to change red tests (§5.9) | Lead | |
 | `cpd job dispatch` | Start one Ready Job now (§5.5) | | |
 | `cpd job list` | List the Jobs (§5.6) | Lead | |
 | `cpd job show` | Show a Job and its Attempts (§5.7) | Lead | |
@@ -52,14 +54,18 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd pr` | Pull requests (commands.md §9) | | |
 | `cpd pr add` | Add a PR to the Plan (§9.4) | Lead | |
 | `cpd pr edit` | Change a waiting PR before the lock (§9.5) | Lead | |
-| `cpd pr cancel` | Remove a PR from the Plan before the lock (§9.6) | Lead | |
+| `cpd pr cancel` | Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6) | Lead | |
 | `cpd pr start` | Start a waiting PR whose needs are merged, after a failed start (§9.7) | Lead | |
-| `cpd pr open` | Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1) | Lead | |
+| `cpd pr open` | Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1) | Lead | |
 | `cpd pr poll` | Poll every open pull request of the User (§9.2) | Lead | |
 | `cpd pr rebase` | Rebase the Lead Branch onto the base and push; --continue or --abort a rebase stopped at a conflict (§9.3) | Lead | |
 | `cpd pr push` | Gate, then push the Lead Branch as it is, without a rebase (§9.9) | Lead | |
 | `cpd pr view` | Show the PR's checks, reviews and comments (§9.8) | Lead | |
 | `cpd pr merge` | Squash-merge a clean pull request on GitHub and delete its branch (§9.10) | | yes |
+| `cpd review` | Plannotator sessions a Session has open (hs-d496) | | |
+| `cpd review open` | Record an open plannotator session | Lead, Manager | |
+| `cpd review close` | Close one or every open plannotator session | Lead, Manager | |
+| `cpd review list` | List the open plannotator sessions of a Session | Lead, Manager | |
 | `cpd policy` | Policies (commands.md §22) | | |
 | `cpd policy show` | Show the resolved policy of a key (§22.1) | Lead, Manager, Worker | |
 | `cpd session` | Sessions and their tmux panes (commands.md §10) | | |
@@ -73,6 +79,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session archive` | Archive a Lead Session (§10.10) | | yes |
 | `cpd session unarchive` | Unarchive a Lead Session (§10.11) | | yes |
 | `cpd session send` | Send a message to a Lead (§10.13) | Lead, Manager | |
+| `cpd session retier` | Move live Leads and Managers to the Tier the config names now (§10.15) | Manager | |
 | `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
 | `cpd session state` | Report a Session's agent state (pi adapter) (§10.6) | internal | |
 | `cpd session retitle` | Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14) | internal | |
@@ -101,7 +108,8 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view dialog input` | A one-line text field | internal | |
 | `cpd tui view dialog text` | Scrollable read-only text | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
-| `cpd tui action` | A click on a StatusBar button (internal; prints nothing) (§13.2) | internal | |
+| `cpd tui action` | A click on a StatusBar button, or the merge popup's confirm (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
+| `cpd slot` | Run a command inside a test slot (commands.md §23) | Manager, Lead, Worker | |

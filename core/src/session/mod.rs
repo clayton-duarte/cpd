@@ -7,6 +7,7 @@
 //! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
 //! - [`history`]: `session history`, an archived Session's history in the chat slot;
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
+//! - [`retier`]: `session retier`, a live Lead's or Manager's Tier set to the config's;
 //! - [`send`]: `session send`, one message to a Lead;
 //! - [`retitle`]: `session retitle`, a Lead's or a Manager's dynamic title;
 //! - [`port`]: a Plan's plannotator port;
@@ -21,6 +22,7 @@ mod moves;
 mod port;
 mod reload;
 mod resolve;
+mod retier;
 mod retitle;
 mod row;
 pub(crate) mod run;
@@ -41,7 +43,8 @@ pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
-pub(crate) use state::pane_gone;
+pub use send::tell_managers;
+pub use state::pane_gone;
 
 /// The program in every pane cpd starts, resolved on the tmux server's `PATH`
 /// (Escalation `rs-session-a1-q2`): a pane must outlive any one build.
@@ -69,6 +72,8 @@ pub enum Command {
     Unarchive(UnarchiveArgs),
     /// Send a message to a Lead (§10.13)
     Send(SendArgs),
+    /// Move live Leads and Managers to the Tier the config names now (§10.15)
+    Retier(RetierArgs),
     /// Rename a Session (§10.7)
     Rename(RenameArgs),
     /// Report a Session's agent state (pi adapter) (§10.6)
@@ -195,7 +200,7 @@ pub struct StateArgs {
     /// The agent state
     #[arg(value_name = "state")]
     state: State,
-    /// Why it is blocked: required with `blocked`, refused otherwise
+    /// Why it is waiting or blocked: required with `waiting` and `blocked`, refused otherwise
     #[arg(long, value_name = "text")]
     label: Option<Label>,
     /// The run that ended answered a message the User wrote to this Session: allowed only with `idle`
@@ -203,6 +208,17 @@ pub struct StateArgs {
     reply: bool,
     #[command(flatten)]
     session: SessionArg,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(group(clap::ArgGroup::new("target").required(true).multiple(false).args(["id", "all"])))]
+pub struct RetierArgs {
+    /// The Lead or Manager Session to move
+    #[arg(value_name = "id")]
+    id: Option<SessionRef>,
+    /// Every Lead and Manager that is not archived
+    #[arg(long)]
+    all: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -238,6 +254,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Send(args) => send::send(args),
+        Command::Retier(args) => retier::retier(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
         Command::Retitle(args) => retitle::retitle(args),

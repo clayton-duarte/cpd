@@ -159,6 +159,11 @@ impl CpdHome {
         self.locks_dir().join(format!("attempt-{plan}--{attempt}.lock"))
     }
 
+    /// `locks/check-<plan>--<attempt>.lock`: held by `attempt submit` while its checks run, a span (contract §7.7).
+    pub fn check_lock(&self, plan: &PlanId, attempt: &AttemptId) -> PathBuf {
+        self.locks_dir().join(format!("check-{plan}--{attempt}.lock"))
+    }
+
     /// `locks/plannotator-ports.lock`: held while a Plan's plannotator port is assigned (contract §6.5).
     pub fn plannotator_ports_lock(&self) -> PathBuf {
         self.locks_dir().join("plannotator-ports.lock")
@@ -179,6 +184,11 @@ impl CpdHome {
         self.root.join("run")
     }
 
+    /// `run/test-<i>.lock`: the machine-wide test slot `i`, for `i` in `0..test_concurrency` (contract §1.4, §7.6).
+    pub fn test_slot(&self, i: u32) -> PathBuf {
+        self.run_dir().join(format!("test-{i}.lock"))
+    }
+
     /// `run/watch.log`: the engine's stderr.
     pub fn watch_log(&self) -> PathBuf {
         self.run_dir().join("watch.log")
@@ -194,6 +204,11 @@ impl CpdHome {
         self.run_dir().join("tmux-restart.log")
     }
 
+    /// `run/tmux-restart.pid`: the pid of the detached tmux restart the engine started, while it runs.
+    pub fn tmux_restart_pid(&self) -> PathBuf {
+        self.run_dir().join("tmux-restart.pid")
+    }
+
     /// `run/context-digests/<context>/`: a Context's digest files (contract §1.4, §4.6).
     pub fn context_digest_dir(&self, context: &ContextId) -> PathBuf {
         self.run_dir().join("context-digests").join(context.as_str())
@@ -207,6 +222,11 @@ impl CpdHome {
     /// `run/context-digests/<context>/<upto_seq>.md.tmp`: the distiller's output before it is validated.
     pub fn context_digest_tmp(&self, context: &ContextId, upto_seq: u64) -> PathBuf {
         self.context_digest_dir(context).join(format!("{upto_seq}.md.tmp"))
+    }
+
+    /// `run/context-digests/<context>/distill.pid`: the pid of the distill run the engine started (§3.7 E9), while it runs.
+    pub fn distill_pid(&self, context: &ContextId) -> PathBuf {
+        self.context_digest_dir(context).join("distill.pid")
     }
 
     /// `run/<plan>/`.
@@ -334,6 +354,12 @@ impl CpdHome {
         self.plan_dir(plan).join("logs").join(format!("{attempt}.{}.log", hook.as_str()))
     }
 
+    /// `run/<plan>/logs/<attempt>.tests-<what>.log`: the full output of one of the repo's `[tests]` commands
+    /// (`what`: `build`, `list` or `run`, contract §7.7).
+    pub fn tests_log(&self, plan: &PlanId, attempt: &AttemptId, what: &str) -> PathBuf {
+        self.plan_dir(plan).join("logs").join(format!("{attempt}.tests-{what}.log"))
+    }
+
     /// `run/<plan>/logs/lead.<hook>.log`: the full output of a hook run in the
     /// Lead worktree (`pre-start` at `plan lock`; Escalation `rs-plan-a1-q4`).
     pub fn lead_hook_log(&self, plan: &PlanId, hook: Hook) -> PathBuf {
@@ -412,6 +438,7 @@ mod tests {
         assert_eq!(h.tmux_restart_lock(), p("/h/.cpd/locks/tmux-restart.lock"));
         assert_eq!(h.tmux_restart_pending(), p("/h/.cpd/run/tmux-restart.pending"));
         assert_eq!(h.tmux_restart_log(), p("/h/.cpd/run/tmux-restart.log"));
+        assert_eq!(h.tmux_restart_pid(), p("/h/.cpd/run/tmux-restart.pid"));
         assert_eq!(h.plan_md(&plan()), p("/h/.cpd/run/pay-4521/plan.md"));
         assert_eq!(h.worker_spec(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/specs/api-schema-a2.md"));
         assert_eq!(h.review_brief(&plan(), &attempt()), p("/h/.cpd/run/pay-4521/reviews/api-schema-a2.md"));
@@ -461,6 +488,7 @@ mod tests {
         assert_eq!(h.context_digest(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.md"));
         assert_eq!(h.context_digest_tmp(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.md.tmp"));
         assert_eq!(h.distill_lock(&ctx), p("/h/.cpd/locks/distill-building-cpd.lock"));
+        assert_eq!(h.distill_pid(&ctx), p("/h/.cpd/run/context-digests/building-cpd/distill.pid"));
     }
 
     #[test]

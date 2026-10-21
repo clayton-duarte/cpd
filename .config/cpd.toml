@@ -1,0 +1,9 @@
+# cpd's own repo configuration (contract §7.5, §7.7). Protected: only a Lead commits it.
+
+# The test commands of the TDD checks (hs-d341, hs-d497): a `test` Job's named tests must
+# fail at submit, an `impl` Job's must pass. Named runs take no test slot (hs-d464).
+# Names: a Rust test as nextest filters it, or pi/test/<file>.test.ts::<node:test title> (scripts/tests.sh).
+[tests]
+build = "scripts/tests.sh build"
+list  = "scripts/tests.sh list {{ test }}"
+run   = "scripts/tests.sh run {{ tests }}"

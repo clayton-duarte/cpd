@@ -1,0 +1,27 @@
+//! The `flow` integration-test binary of `cpd` (docs/implementing.md, Tests: the area table): every file of this
+//! directory is a module. The harness, `cli/tests/common/`, is shared by every area's binary.
+
+#[path = "../common/mod.rs"]
+mod common;
+
+mod ask;
+mod attempt;
+mod config;
+mod context_distill;
+mod context_manager;
+mod context_pending;
+mod context;
+mod driver_reload;
+mod driver;
+mod job;
+mod metrics;
+mod plan_cancel;
+mod plan_outline;
+mod plan_overlap;
+mod plan;
+mod plan_show;
+mod review_plannotator;
+mod policy;
+mod review_job;
+mod review;
+mod spec;

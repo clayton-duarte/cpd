@@ -36,6 +36,7 @@ use std::time::Duration;
 use crate::args::{PlanArg, PrArg, PrTitle};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
+use crate::git::gate::Slots;
 use crate::git::{self, GateHooks, HookOutcome, Refused, Setup};
 use crate::home::{CpdHome, Hook};
 use crate::ids::{ContextId, OwnerLogin, PlanId, PrKey, RepoName};
@@ -46,6 +47,7 @@ use crate::plan::PrRow;
 use row::PlanPrs;
 
 pub use gh::close_pr;
+pub use open::{Pulled, is_merged_on_github, pull_request, record as record_pull, submit_checks};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -53,11 +55,11 @@ pub enum Command {
     Add(AddArgs),
     /// Change a waiting PR before the lock (§9.5)
     Edit(EditArgs),
-    /// Remove a PR from the Plan before the lock (§9.6)
+    /// Remove a PR from the Plan before the lock; after it, end a PR with nothing to open, or whose work another PR carried (`--superseded-by`) (§9.6)
     Cancel(CancelArgs),
     /// Start a waiting PR whose needs are merged, after a failed start (§9.7)
     Start(StartArgs),
-    /// Push the Lead Branch and open the PR, only when it contains its base, never as a draft (§9.1)
+    /// Push the Lead Branch and open the PR, refused only when it conflicts with its base, never as a draft (§9.1)
     Open(Args),
     /// Poll every open pull request of the User (§9.2)
     Poll(PollArgs),
@@ -108,15 +110,18 @@ pub struct AddArgs {
     /// The PR's own title: names its change; 1-72 characters on one line
     #[arg(long, value_name = "text")]
     title: PrTitle,
-    /// The branch the pull request targets [default: origin's HEAD branch, else main]
+    /// The branch the pull request targets [default: origin's HEAD branch, else main], or <plan>/<key> to stack on that PR
     #[arg(long, value_name = "branch")]
     base: Option<String>,
-    /// PRs of the Plan that must be merged before this one starts, comma-separated
-    #[arg(long, value_name = "k1,k2", value_delimiter = ',', conflicts_with = "no_needs")]
-    needs: Vec<PrKey>,
+    /// PRs that must be merged before this one starts, comma-separated: a key of the Plan, or <plan>/<key> of another Plan of the Context
+    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
+    needs: Vec<add::PrRef>,
     /// No needs, even on a reopened Plan (default there: every merged PR of the Plan)
     #[arg(long = "no-needs")]
     no_needs: bool,
+    /// The template of stub drafts the PR starts with, and the kinds its Jobs may have: tdd (docs, red tests, implementation), docs or config (§9.4)
+    #[arg(long, value_name = "shape", value_parser = clap::builder::PossibleValuesParser::new(add::SHAPES), default_value = "tdd")]
+    shape: String,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -129,12 +134,12 @@ pub struct EditArgs {
     /// The new repo: a path inside it
     #[arg(long, value_name = "path")]
     repo: Option<PathBuf>,
-    /// The new base branch
+    /// The new base branch, or <plan>/<key> to stack on that PR
     #[arg(long, value_name = "branch")]
     base: Option<String>,
-    /// The new needs, replacing the list, comma-separated
-    #[arg(long, value_name = "k1,k2", value_delimiter = ',', conflicts_with = "no_needs")]
-    needs: Option<Vec<PrKey>>,
+    /// The new needs, replacing the list, comma-separated: keys of the Plan or <plan>/<key>
+    #[arg(long, value_name = "r1,r2", value_delimiter = ',', conflicts_with = "no_needs")]
+    needs: Option<Vec<add::PrRef>>,
     /// Remove every need
     #[arg(long = "no-needs")]
     no_needs: bool,
@@ -150,6 +155,9 @@ pub struct CancelArgs {
     /// The PR key
     #[arg(value_name = "key")]
     key: PrKey,
+    /// Cancel a dispatch PR whose merged work another PR carried: that PR, as <plan>/<key> (a bare <key> is of the Plan)
+    #[arg(long = "superseded-by", value_name = "ref")]
+    superseded_by: Option<add::PrRef>,
     #[command(flatten)]
     plan: PlanArg,
 }
@@ -262,35 +270,6 @@ fn find_pr<'a>(prs: &'a [PrRow], plan: &PlanId, key: &PrKey) -> Result<&'a PrRow
     })
 }
 
-/// `needs` as the sorted keys, refusing a repeat with `usage` (§9.4).
-fn sorted_needs(needs: &[PrKey]) -> Result<Vec<String>, CpdError> {
-    let mut keys: Vec<String> = needs.iter().map(|k| k.as_str().to_owned()).collect();
-    keys.sort();
-    if let Some(pair) = keys.windows(2).find(|w| w[0] == w[1]) {
-        return Err(CpdError::new(ErrorCode::Usage, format!("--needs lists {} twice.", pair[0])).with("pr", pair[0].as_str()));
-    }
-    Ok(keys)
-}
-
-/// Every key of `needs` is a PR of the Plan other than `own` (`needs_unknown`)
-/// and none is `cancelled` (`needs_unavailable`) (§9.4, §9.5).
-fn check_needs(prs: &[PrRow], plan: &PlanId, own: Option<&PrKey>, needs: &[String]) -> Result<(), CpdError> {
-    let unknown: Vec<String> =
-        needs.iter().filter(|n| own.is_some_and(|o| o.as_str() == n.as_str()) || !prs.iter().any(|p| p.key.as_str() == n.as_str())).cloned().collect();
-    if !unknown.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnknown, format!("Plan {plan} has no PR {} to need.", unknown.join(", ")))
-            .with("plan", plan.as_str())
-            .with("needs", unknown));
-    }
-    let unavailable: Vec<String> = needs.iter().filter(|n| prs.iter().any(|p| p.key.as_str() == n.as_str() && p.status == "cancelled")).cloned().collect();
-    if !unavailable.is_empty() {
-        return Err(CpdError::new(ErrorCode::NeedsUnavailable, format!("A PR cannot need the cancelled PR {}.", unavailable.join(", ")))
-            .with("plan", plan.as_str())
-            .with("needs", unavailable));
-    }
-    Ok(())
-}
-
 /// How the Gate runs for PR `pr` (contract §7.3, §7.6): `pre-start` with
 /// `setup_minutes`, `pre-merge` with `gate_minutes`, `branch` the Lead Branch.
 fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
@@ -300,6 +279,7 @@ fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
         base: &pr.base,
         pre_start: Setup { timeout: minutes(env.config.timeouts.setup_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreStart) },
         pre_merge: Setup { timeout: minutes(env.config.timeouts.gate_minutes), log: pr_log(&env.home, plan, &pr.key, Hook::PreMerge) },
+        slots: Slots::new(&env.home, env.config.test_concurrency),
     }
 }
 
@@ -308,17 +288,23 @@ fn gate_hooks<'a>(env: &Env, plan: &PlanId, pr: &'a PrRow) -> GateHooks<'a> {
 /// in it, the gate worktree removed. `again` is the command the Lead runs after fixing it.
 /// Nothing runs when the PR's policy says `pr.gate` is not `local` (§8.3).
 fn gate(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, again: &str) -> Result<(), CpdError> {
+    gate_then(env, policy, plan, pr, sha, &format!("Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged."))
+}
+
+/// [`gate`] where `then` is what a refused Gate tells the caller to do next: the Lead's (`pr open`, `pr push`, `pr rebase`) or a Worker's
+/// (an `open` or `update` Job's submit, contract §7.7, which fixes what the Gate reports and submits again).
+fn gate_then(env: &Env, policy: &Policy, plan: &PlanId, pr: &PrRow, sha: &str, then: &str) -> Result<(), CpdError> {
     if policy.pr.gate != Gate::Local {
         return Ok(());
     }
-    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, again))
+    git::gate(std::path::Path::new(&pr.repo), plan, &pr.key, sha, &gate_hooks(env, plan, pr))?.map_err(|r| refusal(plan, pr, sha, r, then))
 }
 
 /// A Gate that did not pass (contract §7.3, §7.6 step 3): a `pre-merge` that failed
 /// is `gate_failed` (exit 3); a `pre-merge` that could not be judged, or a
 /// `pre-start` that did not pass in any way, is `gate_error` (exit 1). Both carry
-/// the hook's last 60 lines in `details.tail` and its log in `details.log`.
-fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, again: &str) -> CpdError {
+/// the hook's last 60 lines in `details.tail` and its log in `details.log`. `then` follows a failed `pre-merge` in its message.
+fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, then: &str) -> CpdError {
     let tail = refused.tail.unwrap_or_default();
     let log = refused.log.display().to_string();
     let hook = refused.hook.as_str();
@@ -326,7 +312,7 @@ fn refusal(plan: &PlanId, pr: &PrRow, sha: &str, refused: Refused, again: &str) 
         (Hook::PreMerge, HookOutcome::Failed { exit }) => CpdError::new(
             ErrorCode::GateFailed,
             format!(
-                "The Gate failed on {} at {} (exit {exit}): nothing was pushed. Append fix Jobs (cpd job add), then run cpd {again} again once they are Merged.",
+                "The Gate failed on {} at {} (exit {exit}): nothing was pushed. {then}",
                 pr.lead_branch,
                 short(sha)
             ),

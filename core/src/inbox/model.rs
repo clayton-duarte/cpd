@@ -21,12 +21,16 @@ use crate::store::Store;
 pub enum Kind {
     Dialog,
     PlanReview,
+    /// A tracked plannotator session is open (hs-d496); E8 computes none yet.
+    ReviewWaiting,
     Unread,
     JobStuck,
     EngineError,
     EngineDown,
     Question,
+    /// No longer opened, hs-d470; only history rows an older engine wrote.
     PrFailing,
+    /// No longer opened, hs-d470; only history rows an older engine wrote.
     PrChanges,
     PrReady,
     ReviewRequested,
@@ -38,6 +42,7 @@ impl Kind {
         match self {
             Kind::Dialog => "dialog",
             Kind::PlanReview => "plan-review",
+            Kind::ReviewWaiting => "review-waiting",
             Kind::Unread => "unread",
             Kind::JobStuck => "job-stuck",
             Kind::EngineError => "engine-error",
@@ -52,7 +57,7 @@ impl Kind {
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested]
+        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested]
             .into_iter()
             .find(|k| k.as_str() == s)
     }
@@ -131,6 +136,25 @@ pub struct Item {
 impl Item {
     fn identity(&self) -> (Kind, &str, Urgency) {
         (self.kind, &self.subject, self.urgency)
+    }
+}
+
+impl From<&Item> for Condition {
+    /// The condition that keeps `item` as it is: the rules re-emit an open item whose cause they cannot read now.
+    fn from(item: &Item) -> Condition {
+        Condition {
+            kind: item.kind,
+            urgency: item.urgency,
+            subject: item.subject.clone(),
+            label: item.label.clone(),
+            url: item.url.clone(),
+            context: item.context.clone(),
+            plan: item.plan.clone(),
+            job: item.job.clone(),
+            session: item.session.clone(),
+            record: item.record.clone(),
+            event: item.event,
+        }
     }
 }
 
@@ -281,7 +305,7 @@ fn diff<'a>(open: &'a [Item], conditions: &'a [Condition]) -> (Vec<&'a Item>, Ve
     (gone, new)
 }
 
-fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
+pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
     items(conn, &format!("SELECT {COLUMNS} FROM inbox_items WHERE closed_at IS NULL ORDER BY id"), [])
 }
 

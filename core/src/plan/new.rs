@@ -264,6 +264,7 @@ mod tests {
             locked_at: None,
             done_at: None,
             archived_at: None,
+            outline: None,
         };
         assert_eq!(
             header(&plan),

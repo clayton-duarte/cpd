@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::hooks::{HookOutcome, Operation, run_hook};
-use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run};
+use super::run::{branch_exists, fetch, has_origin, ok, rev_parse, run, worktree_list};
 use super::{TAIL_LINES, tail};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::Hook;
@@ -67,7 +67,7 @@ pub struct Worktree {
 
 /// Every worktree of the repo `dir` belongs to; the first is the main one.
 pub fn list(dir: &Path) -> Result<Vec<Worktree>, CpdError> {
-    let text = ok(dir, &["worktree", "list", "--porcelain"])?;
+    let text = worktree_list(dir)?;
     let mut found = Vec::new();
     for block in text.split("\n\n") {
         let mut path = None;
@@ -252,47 +252,113 @@ pub enum Remote {
     None,
     /// `origin` has no such branch: create it and push it.
     Absent,
-    /// `origin/<branch>` exists and has `origin/<base>` as an ancestor.
+    /// `origin/<branch>` exists and does not conflict with `origin/<base>`.
     Reusable,
 }
 
+/// Whether `origin` has branch `name`: `ls-remote --exit-code --heads` exits 0 (it has) or 2 (it has not);
+/// any other result is `setup_failed`.
+fn on_remote(repo: &Path, name: &str) -> Result<bool, CpdError> {
+    let listed = run(repo, &["ls-remote", "--exit-code", "--heads", "origin", name])?;
+    match listed.code {
+        0 => Ok(true),
+        2 => Ok(false),
+        code => Err(CpdError::new(ErrorCode::SetupFailed, format!("Cannot tell whether {name} is on origin: git ls-remote exited {code}."))
+            .with("exit", code)
+            .with("stderr", tail(&listed.stderr, TAIL_LINES))),
+    }
+}
+
+/// `git merge-tree --write-tree --name-only <onto> <sha>` (contract §7.6 `pr open` step 1, `pr rebase` step 3, §7.2):
+/// `Some(files)`, the conflicted paths, when `sha` conflicts with `onto`; `None` when they merge cleanly, whether or not
+/// `sha` contains `onto`; any other result is `git_failed`. One call, no worktree.
+pub fn merge_conflicts(repo: &Path, onto: &str, sha: &str) -> Result<Option<Vec<String>>, CpdError> {
+    let merge = run(repo, &["merge-tree", "--write-tree", "--name-only", onto, sha])?;
+    match merge.code {
+        0 => Ok(None),
+        // The tree's id, the conflicted files, a blank line, then git's messages.
+        1 => Ok(Some(merge.stdout.lines().skip(1).take_while(|l| !l.is_empty()).map(str::to_owned).collect())),
+        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-tree exited {code}."))
+            .with("exit", code)
+            .with("stderr", tail(&merge.stderr, TAIL_LINES))),
+    }
+}
+
+/// Fetches `origin/<branch>` and refuses `branch_exists` when it conflicts with `origin/<base>` (hs-d490: a base that
+/// merely moved ahead of the branch is no conflict); `details.files` are the conflicted paths.
+fn require_no_conflict(repo: &Path, branch: &str, base: &str) -> Result<(), CpdError> {
+    fetch(repo, &["origin", branch])?;
+    let remote_branch = format!("origin/{branch}");
+    let remote_base = format!("origin/{base}");
+    match merge_conflicts(repo, &remote_base, &remote_branch)? {
+        None => Ok(()),
+        Some(files) => Err(CpdError::new(
+            ErrorCode::BranchExists,
+            format!("Branch {branch} already exists on origin and conflicts with {remote_base} in {}: cpd does not reset or force-push it.", files.join(", ")),
+        )
+        .with("branch", branch)
+        .with("remote", remote_branch)
+        .with("base", remote_base)
+        .with("files", files)),
+    }
+}
+
 /// `fetch origin <base>` and the remote check of the Lead Branch. Refuses
-/// `branch_exists` when `origin/<branch>` does not contain `origin/<base>`.
+/// `branch_exists` when `origin/<branch>` conflicts with `origin/<base>`.
 fn check_remote(repo: &Path, branch: &str, base: &str) -> Result<Remote, CpdError> {
     if !has_origin(repo)? {
         return Ok(Remote::None);
     }
     fetch(repo, &["origin", base])?;
-    let listed = run(repo, &["ls-remote", "--exit-code", "--heads", "origin", branch])?;
-    match listed.code {
-        0 => {}
-        2 => return Ok(Remote::Absent),
-        code => {
-            return Err(CpdError::new(
-                ErrorCode::SetupFailed,
-                format!("Cannot tell whether {branch} is on origin: git ls-remote exited {code}."),
-            )
-            .with("exit", code)
-            .with("stderr", tail(&listed.stderr, TAIL_LINES)));
+    if !on_remote(repo, branch)? {
+        return Ok(Remote::Absent);
+    }
+    require_no_conflict(repo, branch, base)?;
+    Ok(Remote::Reusable)
+}
+
+/// The remote check and the start point of a **stacked** PR's Lead Branch (contract §7.2 "A stacked PR"): `base`
+/// is its base PR's Lead Branch, and the branch starts from that branch's head `S`, the local `refs/heads/<base>`
+/// (which the base PR's merges move), else `origin/<base>` when the local branch is gone, else `setup_failed`
+/// (`step` `base_pr_branch`). `origin/<base>` is fetched only when `origin` has it; a Lead Branch on the remote is
+/// reused when it does not conflict with `origin/<base>`, or at once when `origin` has no `base` (nothing to be behind).
+fn check_stacked(repo: &Path, branch: &str, base: &str) -> Result<(Remote, String), StartFailure> {
+    let at = |step| move |error| StartFailure { step, error };
+    let origin = has_origin(repo).map_err(at(Step::Remote))?;
+    let base_on_remote = if origin {
+        let found = on_remote(repo, base).map_err(at(Step::Remote))?;
+        if found {
+            fetch(repo, &["origin", base]).map_err(at(Step::Remote))?;
         }
-    }
-    fetch(repo, &["origin", branch])?;
-    let remote_branch = format!("origin/{branch}");
-    let remote_base = format!("origin/{base}");
-    let ancestor = run(repo, &["merge-base", "--is-ancestor", &remote_base, &remote_branch])?;
-    match ancestor.code {
-        0 => Ok(Remote::Reusable),
-        1 => Err(CpdError::new(
-            ErrorCode::BranchExists,
-            format!("Branch {branch} already exists on origin and does not contain {remote_base}: cpd does not reset or force-push it."),
+        found
+    } else {
+        false
+    };
+    let local = format!("refs/heads/{base}");
+    let start = if run(repo, &["rev-parse", "--verify", "--quiet", &local]).map_err(at(Step::BasePrBranch))?.code == 0 {
+        rev_parse(repo, &local).map_err(at(Step::BasePrBranch))?
+    } else if base_on_remote {
+        rev_parse(repo, &format!("origin/{base}")).map_err(at(Step::BasePrBranch))?
+    } else {
+        let error = CpdError::new(
+            ErrorCode::SetupFailed,
+            format!("The base PR's Lead Branch {base} is neither a local branch of this repo nor on origin: the stacked PR has nothing to start from."),
         )
-        .with("branch", branch)
-        .with("remote", remote_branch)
-        .with("base", remote_base)),
-        code => Err(CpdError::new(ErrorCode::GitFailed, format!("git merge-base --is-ancestor exited {code}."))
-            .with("exit", code)
-            .with("stderr", tail(&ancestor.stderr, TAIL_LINES))),
+        .with("base", base);
+        return Err(StartFailure { step: Step::BasePrBranch, error });
+    };
+    if !origin {
+        return Ok((Remote::None, start));
     }
+    if !on_remote(repo, branch).map_err(at(Step::Remote))? {
+        return Ok((Remote::Absent, start));
+    }
+    if base_on_remote {
+        require_no_conflict(repo, branch, base).map_err(at(Step::Remote))?;
+    } else {
+        fetch(repo, &["origin", branch]).map_err(at(Step::Remote))?;
+    }
+    Ok((Remote::Reusable, format!("origin/{branch}")))
 }
 
 /// The part of a Lead worktree's start that failed (contract §3.8 "A failed
@@ -303,6 +369,8 @@ pub enum Step {
     Worktree,
     /// `fetch origin`, `ls-remote`, the ancestor check.
     Remote,
+    /// A stacked PR's start point: its base PR's Lead Branch, local or on `origin` (§7.2).
+    BasePrBranch,
     /// The `pre-start` hook.
     PreStart,
 }
@@ -312,6 +380,7 @@ impl Step {
         match self {
             Step::Worktree => "worktree",
             Step::Remote => "remote",
+            Step::BasePrBranch => "base_pr_branch",
             Step::PreStart => "pre-start",
         }
     }
@@ -367,7 +436,7 @@ impl Prepared {
 /// the path is `worktree_exists`, any other `branch` (or a local `cpd/<plan>`
 /// under a `cpd/<plan>/<key>` branch, which would make it impossible) is
 /// `branch_exists`. With an `origin`, the branch on the remote is reused when
-/// it contains `origin/<base>`, refused `branch_exists` when it does not, and
+/// it does not conflict with `origin/<base>`, refused `branch_exists` when it does, and
 /// cut from `origin/<base>` when absent (R35). On failure the worktree and
 /// branch are removed.
 pub fn prepare_lead_worktree(
@@ -376,6 +445,32 @@ pub fn prepare_lead_worktree(
     path: &Path,
     branch: &str,
     base: &str,
+    setup: &Setup,
+) -> Result<Prepared, StartFailure> {
+    prepare(repo, plan, path, branch, base, false, setup)
+}
+
+/// [`prepare_lead_worktree`] of a **stacked** PR: `base` is its base PR's Lead Branch, and the branch is cut from
+/// that branch's head, not from `origin/<base>` (contract §7.2 "A stacked PR", [`check_stacked`]); everything else
+/// is the same.
+pub fn prepare_stacked_lead_worktree(
+    repo: &Path,
+    plan: &PlanId,
+    path: &Path,
+    branch: &str,
+    base: &str,
+    setup: &Setup,
+) -> Result<Prepared, StartFailure> {
+    prepare(repo, plan, path, branch, base, true, setup)
+}
+
+fn prepare(
+    repo: &Path,
+    plan: &PlanId,
+    path: &Path,
+    branch: &str,
+    base: &str,
+    stacked: bool,
     setup: &Setup,
 ) -> Result<Prepared, StartFailure> {
     let at = |step| move |error| StartFailure { step, error };
@@ -401,11 +496,16 @@ pub fn prepare_lead_worktree(
         }
     }
 
-    let remote = check_remote(repo, branch, base).map_err(at(Step::Remote))?;
-    let start = match remote {
-        Remote::None => base.to_owned(),
-        Remote::Absent => format!("origin/{base}"),
-        Remote::Reusable => format!("origin/{branch}"),
+    let (remote, start) = if stacked {
+        check_stacked(repo, branch, base)?
+    } else {
+        let remote = check_remote(repo, branch, base).map_err(at(Step::Remote))?;
+        let start = match remote {
+            Remote::None => base.to_owned(),
+            Remote::Absent => format!("origin/{base}"),
+            Remote::Reusable => format!("origin/{branch}"),
+        };
+        (remote, start)
     };
 
     let created = (|| {
@@ -491,7 +591,8 @@ pub fn remove_merged_attempt(lead_worktree: &Path, path: &Path, branch: &str) ->
 pub enum Kept {
     /// `git status --porcelain` is not empty (untracked files included).
     Dirty,
-    /// `git rev-list HEAD --not --remotes=origin` is not empty.
+    /// `git rev-list HEAD --not --remotes=origin` is not empty, and `HEAD` is not the pull request's recorded head or
+    /// an ancestor of it.
     Unpushed,
 }
 
@@ -515,17 +616,24 @@ pub enum LeadRemoval {
 
 /// Removes the Lead worktree of a merged PR and its local Lead Branch (contract
 /// §7.2, hs-d142). A worktree with uncommitted changes or commits not on
-/// `origin` is kept untouched; the check is `git --no-optional-locks status`,
+/// `origin` is kept untouched, unless `HEAD` is the pull request's head commit or an ancestor of it (`recorded_head`,
+/// called only when `rev-list` is not empty and `None` when GitHub's answer is unavailable; after a squash merge the
+/// head branch is deleted and `origin/<branch>` pruned, so the PR's own commits look unpushed); the check is `git --no-optional-locks status`,
 /// which takes no `index.lock` (hs-d243). Otherwise `git -C <repo> worktree remove` (no
 /// `--force`: git does not count ignored files as changes) and `git -C <repo>
 /// branch -D`, because a squash merge never makes the branch an ancestor.
 /// Idempotent for what is already gone.
-pub fn remove_merged_lead(repo: &Path, path: &Path, branch: &str) -> Result<LeadRemoval, CpdError> {
+pub fn remove_merged_lead(
+    repo: &Path,
+    path: &Path,
+    branch: &str,
+    recorded_head: impl FnOnce() -> Option<String>,
+) -> Result<LeadRemoval, CpdError> {
     if path.exists() {
         if !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
             return Ok(LeadRemoval::Kept(Kept::Dirty));
         }
-        if !ok(path, &["rev-list", "HEAD", "--not", "--remotes=origin"])?.trim().is_empty() {
+        if !ok(path, &["rev-list", "HEAD", "--not", "--remotes=origin"])?.trim().is_empty() && !head_is_recorded(path, recorded_head)? {
             return Ok(LeadRemoval::Kept(Kept::Unpushed));
         }
     } else {
@@ -534,6 +642,17 @@ pub fn remove_merged_lead(repo: &Path, path: &Path, branch: &str) -> Result<Lead
     }
     remove(repo, path, branch, false, true)?;
     Ok(LeadRemoval::Removed)
+}
+
+/// Whether `HEAD` of `worktree` equals the pull request's head commit `oid`, or the object is local and `HEAD` is its
+/// ancestor (contract §7.2 "The recorded head"); no `oid`, or an object this repo does not have, is not.
+fn head_is_recorded(worktree: &Path, recorded_head: impl FnOnce() -> Option<String>) -> Result<bool, CpdError> {
+    let Some(oid) = recorded_head() else { return Ok(false) };
+    if rev_parse(worktree, "HEAD")? == oid {
+        return Ok(true);
+    }
+    let local = run(worktree, &["cat-file", "-e", &format!("{oid}^{{commit}}")])?.code == 0;
+    Ok(local && run(worktree, &["merge-base", "--is-ancestor", "HEAD", &oid])?.code == 0)
 }
 
 /// `force` is `--force` on the worktree; `delete` is `branch -D` rather than `-d`.

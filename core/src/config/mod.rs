@@ -5,8 +5,9 @@
 //! and use Tiers through [`Tier`] and [`Catalog`] (from [`load_catalog`]).
 
 mod cache;
-pub(crate) mod catalog;
+pub mod catalog;
 mod file;
+mod repo;
 mod tier;
 
 use serde_json::json;
@@ -17,6 +18,7 @@ use crate::output::Output;
 
 pub use catalog::{PiInstall, load as load_catalog, locate_pi};
 pub use file::{Config, Events, Inbox, Source, Sources, Tiers, TickSeconds, Timeouts, Tmux, Watch};
+pub use repo::RepoTests;
 pub use tier::{Catalog, Letter, Tier, TierModel};
 
 /// `cpd config` takes no arguments.

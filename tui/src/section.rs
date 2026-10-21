@@ -1,58 +1,107 @@
-//! The in-pane section title (commands.md §17, "Section titles"; hs-d298, hs-d308): the one helper every view draws
-//! its section titles with. A heavy `━` line, full width with no horizontal margin: the title left, an optional count
-//! right, for example `━━ PRs ━━━━━━━━ 3 ━━`. A title joined to a fold block (the Inbox's) starts with `┯`:
-//! `┯━━ Inbox ━━━━━━ 32 ━━`.
+//! The in-pane section title (commands.md §17, "Section titles"; hs-d298, hs-d308, hs-d475, hs-d476): the one helper every
+//! view draws its section titles with, as a **grey pill** on a line, inside the panel's padding of one column on each
+//! side: a blank cell, `╭─`, the title as a pill (its text inverted, between the powerline semicircle caps `` and
+//! ``), a muted `─` line up to the optional count (a grey pill too, hs-d480) and a blank cell: ` ╭─Inbox────…────35 `; a non-collapsible title starts ` ──` instead of ` ╭─` (hs-d478). The title is as the
+//! caller gives it, in Title Case, with no padding spaces inside the pill. It is never clickable (the helper draws a line,
+//! it is no hit target).
 //!
-//! The spacing is the caller's layout, in rows: one empty row above and one below, and none below a joined title.
-//! The section's body keeps one space of margin on each side.
+//! The spacing is the caller's layout, in rows: one empty row above and one below a title outside a collapsible widget
+//! (`crate::fold` has its own margins); the body has no vertical spacing.
 //!
-//! Pure: it only builds a line. The rules are muted (`palette::fg(Meaning::Nothing)`), the title is bold and the count
-//! is not.
+//! Pure: it only builds a line. The pill is grey: the corner, the lines and the caps are muted
+//! (`palette::fg(Meaning::Nothing)`), the pill's text is the muted block with the background colour on it (reverse video).
 
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::palette::{self, Meaning};
 
-/// The heavy rule.
-const RULE: &str = "━";
-/// The start of a title.
-const LEAD: &str = "━━";
-/// The start of a title joined to the block under it: the `┯` sits over the block's `│`.
-const JOINED: &str = "┯━━";
-/// The rule after the count.
-const TAIL: &str = "━━";
+/// The start of a collapsible title's row: the corner and one line.
+const LEAD: &str = "╭─";
+/// The start of a non-collapsible title's row: two lines, no corner.
+const PLAIN_LEAD: &str = "──";
+/// The line to the right edge.
+const RULE: &str = "─";
+/// U+E0B6: the pill's left cap.
+const CAP_LEFT: &str = "\u{E0B6}";
+/// U+E0B4: the pill's right cap.
+const CAP_RIGHT: &str = "\u{E0B4}";
+/// The padding: one blank column on each side.
+const PAD: &str = " ";
 
-/// A title: `━━ <title> ━━━…` with, when `count` is given and fits, ` <count> ━━` at the right edge. A title wider than
-/// `width` is cut and the count is left out when it does not fit after at least one `━`; the line never wraps.
+/// The **non-collapsible** section title (hs-d478): a title `width` cells wide whose left cap sits three columns from the edge,
+/// ` ──<pill>───…` (the padding, a muted `──`, the pill), for every in-pane title that is no collapsible widget's (logs, legend,
+/// the Deploy column's sections, dialog titles).
 pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    line(LEAD, title, count, width)
+    row(PLAIN_LEAD, title, count, width)
 }
 
-/// The same, joined to the block under it with a `┯`: `┯━━ <title> ━━━…`.
-pub fn joined(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    line(JOINED, title, count, width)
+/// The **collapsible** section title (hs-d478): a title `width` cells wide, its first and last cell the padding: ` ╭─<pill>───…`
+/// with, when `count` is given and fits after at least one `─`, the count against the padding on the right. For a title that heads a
+/// collapsible widget (the Inbox's); its left cap sits three columns from the edge, as [`title`]'s does. A title wider than the room
+/// is cut (a pill narrower than 3 cells is left out); the line never wraps. The count is a grey pill too (hs-d480).
+pub fn collapsible_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
+    row(LEAD, title, count, width)
 }
 
-fn line(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'static> {
+/// The row both forms share: `lead` (two cells) is all that differs.
+fn row(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'static> {
     let muted = palette::fg(Meaning::Nothing);
+    let pad = usize::from(width >= 2);
+    let width = width - 2 * pad;
     let lead: String = lead.chars().take(width).collect();
     let left = width - lead.chars().count();
-    let block: String = format!(" {title} ").chars().take(left).collect();
-    let left = left - block.chars().count();
-    let count = count.map(|n| format!(" {n} ")).filter(|c| 1 + c.chars().count() + TAIL.chars().count() <= left);
-    let (count, tail) = match &count {
-        Some(c) => (c.clone(), TAIL),
-        None => (String::new(), ""),
-    };
-    let fill = left - count.chars().count() - tail.chars().count();
-    Line::from(vec![
-        Span::styled(lead, muted),
-        Span::styled(block, Style::new().add_modifier(Modifier::BOLD)),
-        Span::styled(RULE.repeat(fill), muted),
-        Span::raw(count),
-        Span::styled(tail, muted),
-    ])
+    let text: String = title.chars().take(left.saturating_sub(2)).collect();
+    let pill = left >= 3 && !text.is_empty();
+    let left = if pill { left - text.chars().count() - 2 } else { left };
+    let count = count.map(|n| n.to_string()).filter(|c| pill && 1 + c.chars().count() + 2 <= left).unwrap_or_default();
+    let fill = left - if count.is_empty() { 0 } else { count.chars().count() + 2 };
+    let mut spans = vec![Span::raw(PAD.repeat(pad)), Span::styled(lead, muted)];
+    if pill {
+        spans.push(Span::styled(CAP_LEFT, muted));
+        spans.push(Span::styled(text, muted.add_modifier(Modifier::REVERSED)));
+        spans.push(Span::styled(CAP_RIGHT, muted));
+    }
+    spans.push(Span::styled(RULE.repeat(fill), muted));
+    if !count.is_empty() {
+        spans.push(Span::styled(CAP_LEFT, muted));
+        spans.push(Span::styled(count, muted.add_modifier(Modifier::REVERSED)));
+        spans.push(Span::styled(CAP_RIGHT, muted));
+    }
+    spans.push(Span::raw(PAD.repeat(pad)));
+    Line::from(spans)
+}
+
+/// What the tests of every view check of a section title's pill (hs-d475): one place, not a copy per view.
+#[cfg(test)]
+pub(crate) mod check {
+    use ratatui::buffer::Buffer;
+    use ratatui::buffer::Cell;
+    use ratatui::style::Modifier;
+
+    use super::{CAP_LEFT, CAP_RIGHT};
+    use crate::palette::{self, Meaning};
+
+    /// The pill whose left cap is at (`x`, `y`) of `buf` reads `text` between its two caps, with no padding spaces, and is grey:
+    /// the caps are muted; the text is the block inverted (reverse video of the muted colour: the block is muted and the text is the
+    /// background colour).
+    pub(crate) fn grey_pill(buf: &Buffer, x: u16, y: u16, text: &str) {
+        let grey = palette::color(Meaning::Nothing);
+        let reset = Cell::EMPTY.bg; // the terminal's own background, which no colour names (no colour outside the palette)
+        let width = u16::try_from(text.chars().count()).unwrap();
+        let drawn: String = (x..x + width + 2).map(|x| buf[(x, y)].symbol()).collect();
+        assert_eq!(drawn, format!("{CAP_LEFT}{text}{CAP_RIGHT}"), "the pill at ({x}, {y})");
+        for cap in [x, x + width + 1] {
+            let cell = &buf[(cap, y)];
+            assert_eq!((cell.fg, cell.bg), (grey, reset), "the cap at ({cap}, {y}) is muted: {cell:?}");
+            assert!(!cell.modifier.contains(Modifier::REVERSED), "a cap is not inverted: {cell:?}");
+        }
+        for at in x + 1..=x + width {
+            let cell = &buf[(at, y)];
+            assert!(cell.modifier.contains(Modifier::REVERSED), "the text at ({at}, {y}) is inverted: {cell:?}");
+            assert_eq!((cell.fg, cell.bg), (grey, reset), "the block is muted, the text is the background colour: {cell:?}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -63,40 +112,145 @@ mod tests {
         line.spans.iter().map(|s| s.content.to_string()).collect()
     }
 
-    #[test]
-    fn a_title_without_a_count_fills_to_the_edge() {
-        assert_eq!(text(title("PRs", None, 20)), "━━ PRs ━━━━━━━━━━━━━");
-        assert_eq!(text(title("PRs", None, 12)), "━━ PRs ━━━━━");
+    /// `n` as a pill: the caps around the digits, no padding spaces (hs-d480).
+    fn count_pill(n: &str) -> String {
+        format!("{CAP_LEFT}{n}{CAP_RIGHT}")
+    }
+
+    // ---- the collapsible title's layout (hs-d478, hs-d480): a corner, a line, the capped text, a line to the edge and the count pill, inside the padding ----
+
+    fn cells(line: &Line<'static>) -> usize {
+        text(line.clone()).chars().count()
+    }
+
+    fn muted(span: &Span<'_>) -> bool {
+        span.style.fg == palette::fg(Meaning::Nothing).fg
     }
 
     #[test]
-    fn a_title_with_a_count_ends_in_the_count_and_two_rules() {
-        assert_eq!(text(title("PRs", Some(3), 20)), "━━ PRs ━━━━━━━━ 3 ━━");
-        assert_eq!(text(title("PRs", Some(12), 14)), "━━ PRs ━ 12 ━━");
+    fn the_collapsible_title_is_a_corner_a_line_the_capped_text_a_line_to_the_edge_and_the_count_pill() {
+        let got = text(collapsible_title("Inbox", Some(35), 22));
+        assert_eq!(got, format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{} ", "─".repeat(7), count_pill("35")));
+        assert_eq!(got.chars().count(), 22, "full width, the padding included");
+        assert_eq!(text(collapsible_title("PRs", Some(3), 26)), format!(" ╭─{CAP_LEFT}PRs{CAP_RIGHT}{}{} ", "─".repeat(26 - 1 - 2 - 5 - 3 - 1), count_pill("3")));
+        assert_eq!(text(collapsible_title("Inbox", Some(0), 16)), format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{} ", "─".repeat(2), count_pill("0")));
     }
 
     #[test]
-    fn a_joined_title_starts_with_the_join() {
-        assert_eq!(text(joined("Inbox", Some(32), 22)), "┯━━ Inbox ━━━━━━ 32 ━━");
-        assert_eq!(text(joined("Inbox", Some(32), 30)), "┯━━ Inbox ━━━━━━━━━━━━━━ 32 ━━");
-        assert_eq!(text(joined("Inbox", Some(0), 16)), "┯━━ Inbox ━ 0 ━━");
-        assert_eq!(text(joined("Inbox", None, 16)), "┯━━ Inbox ━━━━━━");
+    fn the_collapsible_title_without_a_count_fills_to_the_right_padding() {
+        let got = text(collapsible_title("Git", None, 20));
+        assert_eq!(got, format!(" ╭─{CAP_LEFT}Git{CAP_RIGHT}{} ", "─".repeat(20 - 2 - 2 - 5)));
+        assert_eq!(got.chars().count(), 20);
+        assert_eq!(text(collapsible_title("Jira", None, 14)), format!(" ╭─{CAP_LEFT}Jira{CAP_RIGHT}{} ", "─".repeat(14 - 2 - 2 - 6)));
     }
 
     #[test]
-    fn a_narrow_width_drops_the_count_then_cuts_the_title() {
-        assert_eq!(text(title("PRs", Some(3), 11)), "━━ PRs ━━━━");
-        assert_eq!(text(title("Jira", None, 5)), "━━ Ji");
-        assert_eq!(text(title("Jira", None, 1)), "━");
-        assert_eq!(text(title("Jira", Some(1), 0)), "");
+    fn the_non_collapsible_title_is_the_padding_two_lines_the_pill_and_a_line_to_the_edge() {
+        let got = text(title("Logs", None, 20));
+        assert_eq!(got, format!(" ──{CAP_LEFT}Logs{CAP_RIGHT}{} ", "─".repeat(20 - 2 - 2 - 6)));
+        assert_eq!(got.chars().count(), 20);
+        let got = text(title("PRs", Some(3), 26));
+        assert_eq!(got, format!(" ──{CAP_LEFT}PRs{CAP_RIGHT}{}{} ", "─".repeat(26 - 1 - 2 - 5 - 3 - 1), count_pill("3")));
+        assert_eq!(got.chars().count(), 26);
     }
 
     #[test]
-    fn the_rules_are_muted_the_title_is_bold_and_the_count_is_plain() {
-        let l = title("PRs", Some(3), 20);
-        assert_eq!(l.spans[0].style.fg, palette::fg(Meaning::Nothing).fg);
-        assert!(l.spans[1].style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(l.spans[3].style, Style::new());
-        assert_eq!(l.spans[4].style.fg, palette::fg(Meaning::Nothing).fg);
+    fn every_title_form_has_its_left_cap_at_column_3_and_the_non_collapsible_has_no_corner() {
+        for (line, lead) in [(collapsible_title("Inbox", None, 22), " ╭─"), (title("Logs", None, 22), " ──")] {
+            let got = text(line.clone());
+            assert!(got.starts_with(lead), "{got:?}");
+            assert_eq!(got.chars().nth(3), Some('\u{E0B6}'), "the left cap sits three columns from the edge: {got:?}");
+        }
+        assert!(!text(title("Logs", None, 22)).contains('╭'), "a non-collapsible title has no corner");
+    }
+
+    #[test]
+    fn the_pills_text_the_caps_and_the_lines_are_all_muted_and_only_the_text_is_inverted() {
+        for l in [collapsible_title("Inbox", Some(35), 22), title("Inbox", Some(35), 22)] {
+            let find = |what: &str| l.spans.iter().find(|s| s.content.contains(what)).unwrap_or_else(|| panic!("no span with {what:?}: {:?}", l.spans));
+            let pill = find("Inbox");
+            assert!(pill.style.add_modifier.contains(Modifier::REVERSED), "the title text is reverse video: {pill:?}");
+            assert!(muted(pill), "{pill:?}");
+            for cap in [CAP_LEFT, CAP_RIGHT] {
+                let cap = find(cap);
+                assert!(muted(cap) && !cap.style.add_modifier.contains(Modifier::REVERSED), "a cap is muted, not inverted: {cap:?}");
+            }
+            let lines: Vec<_> = l.spans.iter().filter(|s| !s.content.is_empty() && s.content.chars().all(|c| c == '╭' || c == '─')).collect();
+            assert!(lines.iter().any(|s| s.content.contains('─')), "the lines: {:?}", l.spans);
+            assert!(lines.iter().all(|s| muted(s)), "the corner and every line are muted: {lines:?}");
+            assert_eq!(cells(&l), 22);
+        }
+    }
+
+    #[test]
+    fn a_narrow_width_drops_the_count_then_cuts_the_title_then_the_pill() {
+        assert_eq!(text(collapsible_title("PRs", Some(3), 9)), format!(" ╭─{CAP_LEFT}PRs{CAP_RIGHT} "), "no room for a line and the count");
+        assert_eq!(text(collapsible_title("PRs", Some(3), 11)), format!(" ╭─{CAP_LEFT}PRs{CAP_RIGHT}── "), "a line fits, the count pill does not");
+        assert_eq!(text(collapsible_title("Jira", None, 8)), format!(" ╭─{CAP_LEFT}Ji{CAP_RIGHT} "));
+        assert_eq!(text(collapsible_title("Jira", None, 5)), " ╭── ");
+        assert_eq!(text(collapsible_title("Jira", None, 3)), " ╭ ");
+        assert_eq!(text(collapsible_title("Jira", None, 2)), "  ");
+        assert_eq!(text(collapsible_title("Jira", None, 1)), "╭");
+        assert_eq!(text(collapsible_title("Jira", Some(1), 0)), "");
+        assert_eq!(text(title("PRs", Some(3), 9)), format!(" ──{CAP_LEFT}PRs{CAP_RIGHT} "), "the non-collapsible title drops its count the same way");
+    }
+
+    // ---- section look v4 (commands.md §17, "Section titles"; hs-d475 to hs-d480): red until `title` and `collapsible_title` draw it ----
+
+    /// `line` drawn alone in a row `width` cells wide.
+    fn buffer_of(line: Line<'static>, width: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 1)).unwrap();
+        terminal.draw(|f| f.render_widget(ratatui::widgets::Paragraph::new(line), f.area())).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn the_collapsible_pill_is_grey_its_block_muted_its_text_the_background_colour_and_its_caps_muted() {
+        let buf = buffer_of(collapsible_title("Inbox", Some(35), 22), 22);
+        let row: String = (0..22).map(|x| buf[(x, 0)].symbol()).collect();
+        assert!(row.starts_with(" ╭─"), "{row:?}");
+        check::grey_pill(&buf, 3, 0, "Inbox");
+    }
+
+    #[test]
+    fn the_non_collapsible_pill_is_grey_and_its_left_cap_is_at_column_3() {
+        let buf = buffer_of(title("Logs", None, 22), 22);
+        let row: String = (0..22).map(|x| buf[(x, 0)].symbol()).collect();
+        assert!(row.starts_with(" ──"), "{row:?}");
+        for x in [1, 2] {
+            assert_eq!((buf[(x, 0)].symbol(), buf[(x, 0)].fg), ("─", palette::color(Meaning::Nothing)), "the muted `──` at column {x}");
+        }
+        check::grey_pill(&buf, 3, 0, "Logs");
+    }
+
+    #[test]
+    fn a_count_is_a_grey_pill_at_the_rows_end_inside_the_right_padding() {
+        for (line, name) in [(collapsible_title("Inbox", Some(35), 22), "collapsible"), (title("Inbox", Some(35), 22), "non-collapsible")] {
+            let buf = buffer_of(line, 22);
+            check::grey_pill(&buf, 17, 0, "35"); // caps at columns 17 and 20, the padding at 21
+            assert_eq!(buf[(21, 0)].symbol(), " ", "the right padding, {name}");
+            assert_eq!(buf[(16, 0)].symbol(), "─", "a muted line before the count pill, {name}");
+        }
+        let buf = buffer_of(title("PRs", Some(3), 26), 26);
+        check::grey_pill(&buf, 22, 0, "3");
+    }
+
+    #[test]
+    fn a_title_row_starts_at_column_1_and_ends_one_column_before_the_edge() {
+        let got = text(collapsible_title("Inbox", Some(35), 22));
+        assert_eq!(got, format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{} ", "─".repeat(7), count_pill("35")));
+        assert_eq!(got.chars().count(), 22, "the row is as wide as it is told, its first and last cells blank");
+        let got = text(title("Git", None, 18));
+        assert_eq!(got, format!(" ──{CAP_LEFT}Git{CAP_RIGHT}{} ", "─".repeat(9)));
+        assert_eq!(got.chars().count(), 18);
+    }
+
+    #[test]
+    fn a_title_of_several_words_is_drawn_as_it_is_given_with_no_padding_spaces() {
+        let got = text(title("Section Or Panel Title", None, 40));
+        assert_eq!(got, format!(" ──{CAP_LEFT}Section Or Panel Title{CAP_RIGHT}{} ", "─".repeat(12)));
+        assert!(!got.contains(&format!("{CAP_LEFT} ")) && !got.contains(&format!(" {CAP_RIGHT}")), "{got:?}");
+        let got = text(collapsible_title("Section Or Panel Title", None, 40));
+        assert_eq!(got, format!(" ╭─{CAP_LEFT}Section Or Panel Title{CAP_RIGHT}{} ", "─".repeat(12)));
     }
 }

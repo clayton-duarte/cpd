@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use super::{Env, ListArgs, ShowArgs, session_not_found};
 use crate::args::SessionArg;
+use crate::config::{Config, Letter, Tier};
 use crate::error::CpdError;
 use crate::events::highest_id;
 use crate::ids::{ContextId, PlanId, SessionId};
@@ -34,10 +35,11 @@ impl Role {
     }
 }
 
-/// A Session's agent state (§3.6).
+/// A Session's agent state (§3.6): `blocked` needs the User, `waiting` needs another agent (hs-d303).
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
     Working,
+    Waiting,
     Blocked,
     Idle,
     Stopped,
@@ -47,14 +49,20 @@ impl State {
     pub fn as_str(self) -> &'static str {
         match self {
             State::Working => "working",
+            State::Waiting => "waiting",
             State::Blocked => "blocked",
             State::Idle => "idle",
             State::Stopped => "stopped",
         }
     }
 
+    /// The states that say why: `waiting` and `blocked` have a label, no other state has one (§3.6).
+    pub fn has_label(self) -> bool {
+        matches!(self, State::Waiting | State::Blocked)
+    }
+
     fn parse(s: &str) -> Option<State> {
-        [State::Working, State::Blocked, State::Idle, State::Stopped].into_iter().find(|v| v.as_str() == s)
+        [State::Working, State::Waiting, State::Blocked, State::Idle, State::Stopped].into_iter().find(|v| v.as_str() == s)
     }
 }
 
@@ -230,6 +238,25 @@ fn query(conn: &Connection, filter: &str, params: Vec<Sql>) -> Result<Vec<Row>, 
     rows.into_iter().map(Row::parse).collect()
 }
 
+/// Every Lead and Manager that is not archived, oldest first.
+pub(super) fn live(conn: &Connection) -> Result<Vec<Row>, CpdError> {
+    query(conn, "s.role IN ('lead', 'manager') AND s.archived_at IS NULL", Vec::new())
+}
+
+/// The model and thinking level pi is told for `tier` (commands.md §10.2, §10.8): `tiers.<letter>` of the config and
+/// the level of the Tier's digit. The one function `session show` and `session run` share, so a Session retiered and a
+/// Session started later are on the same model.
+pub(super) fn model_and_level(config: &Config, id: &SessionId, tier: &str) -> Result<(String, &'static str), CpdError> {
+    let tier = Tier::parse(tier).map_err(|_| CpdError::bad_row(format!("{id} has tier {tier:?}")))?;
+    let models = &config.tiers;
+    let model = match tier.letter() {
+        Letter::O => &models.o,
+        Letter::S => &models.s,
+        Letter::H => &models.h,
+    };
+    Ok((model.clone(), tier.level()))
+}
+
 /// The Session `id`, if it exists.
 pub(super) fn find(conn: &Connection, id: &SessionId) -> Result<Option<Row>, CpdError> {
     Ok(query(conn, "s.id = ?", vec![Sql::Text(id.to_string())])?.pop())
@@ -295,6 +322,9 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let mut session = row.list_json();
     session["created_at"] = json!(row.created_at);
     session["registered_event"] = json!(row.registered_event);
+    let (model, thinking) = model_and_level(&env.config, &row.id, &row.tier)?;
+    session["model"] = json!(model);
+    session["thinking"] = json!(thinking);
     let mut out = json!({"session": session});
     if let Some(escalations) = escalations {
         out["open_escalations"] = json!(escalations);

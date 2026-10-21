@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["core", "cli", "tui"]
+members = ["core", "engine", "cli", "tui"]
 
 [workspace.package]
 version = "0.0.5"
@@ -24,8 +24,25 @@ tui-tree-widget = "0.24"
 uuid = { version = "1.28", features = ["v4"] }
 tempfile = "3.27"
 
-# Deviation from the default (full debuginfo): tests-build-F2. Line tables keep
-# backtraces and panics readable; a clean `test --workspace --no-run` (N=3)
-# took 48-62 s and 4.7G of target/ with `true`, 33-40 s and 2.4G with this.
+# Deviation from the default (full debuginfo): no debuginfo at all. It costs
+# build time and target/ space and the tests never read it (tests-build-F2: full
+# debuginfo 48-62 s and 4.7G, line tables 33-40 s and 2.4G, for a clean test
+# build; measurement for 0 against line tables: the commit that set it). A panic
+# still prints its message and file:line:col (compiled in, not debuginfo); a
+# backtrace lists function names without `at file:line` (docs/implementing.md
+# "Debuginfo"). Back for one session, no edit:
+# CARGO_PROFILE_DEV_DEBUG=line-tables-only. `test` inherits `dev`.
 [profile.dev]
-debug = "line-tables-only"
+debug = 0
+
+# Deviation from the default (opt-level 0 for everything): dependencies only,
+# at opt-level 1. The tests spend their time in dependency code (rusqlite's
+# bundled SQLite creating, migrating and checking a store at every `cpd` command
+# and every `Store::open`; serde, toml, time, minijinja), and unoptimised that is
+# about twice as slow (docs/research/test-speed.md §7.1, #159). Level 1 keeps
+# that whole gain: the tests run as fast as at 3, and a clean test build is
+# about 35 % cheaper (wall and CPU) than at 3 (docs/implementing.md "Dependency
+# opt-level": the paired numbers). Only dependencies change: the workspace's own
+# crates (cli, core, engine, tui) stay at opt-level 0, so editing them recompiles as before.
+[profile.dev.package."*"]
+opt-level = 1

@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::config::Config;
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
-use crate::ids::PlanId;
+use crate::ids::{ContextId, PlanId};
 use crate::lock;
 use crate::store::Store;
 
@@ -20,15 +20,25 @@ use crate::store::Store;
 /// written to the file. `no_port` when none is free. Idempotent. Waits for
 /// the lock without a limit: the holder only reads and writes a few small files.
 pub fn assign(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId) -> Result<u16, CpdError> {
+    assign_key(home, store, config, plan.as_str())
+}
+
+/// A Context's Manager's port (hs-d496): the same range and rules, the file `run/<context>/plannotator-port`.
+pub fn assign_manager(home: &CpdHome, store: &mut Store, config: &Config, context: &ContextId) -> Result<u16, CpdError> {
+    assign_key(home, store, config, context.as_str())
+}
+
+/// `key` is a Plan's id or a Context's id: the directory of `run/` holding the port file.
+fn assign_key(home: &CpdHome, store: &mut Store, config: &Config, key: &str) -> Result<u16, CpdError> {
     let range = config.plannotator_ports;
     let _lock = lock(&home.plannotator_ports_lock())?;
-    let file = home.plannotator_port(plan);
-    let holders = holders(home, store, config, plan)?;
+    let file = port_file(home, key);
+    let holders = holders(home, store, config, key)?;
     let recorded = read_port(&file)?.filter(|p| range.contains(*p));
     if let Some(port) = recorded {
         match holders.iter().find(|(_, held)| *held == port) {
             None => return Ok(port),
-            Some((other, _)) => eprintln!("cpd: plannotator port {port} of Plan {plan} is held by Plan {other}; assigning another."),
+            Some((other, _)) => eprintln!("cpd: plannotator port {port} of {key} is held by Plan {other}; assigning another."),
         }
     }
     let Some(port) = range.ports().find(|p| !holders.iter().any(|(_, held)| held == p)) else {
@@ -44,20 +54,28 @@ pub fn assign(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId)
     Ok(port)
 }
 
-/// The other Plans, neither `done` nor archived, whose file holds a port inside the range, by Plan id.
-fn holders(home: &CpdHome, store: &mut Store, config: &Config, plan: &PlanId) -> Result<Vec<(String, u16)>, CpdError> {
+/// `run/<key>/plannotator-port`.
+fn port_file(home: &CpdHome, key: &str) -> std::path::PathBuf {
+    home.run_dir().join(key).join("plannotator-port")
+}
+
+/// The other holders of a port inside the range, by id: Plans neither `done` nor archived, and the Contexts
+/// of Managers neither archived nor `stopped`. `key` itself holds nothing against itself.
+fn holders(home: &CpdHome, store: &mut Store, config: &Config, key: &str) -> Result<Vec<(String, u16)>, CpdError> {
     let others = store.read(|conn| {
-        let mut stmt = conn.prepare("SELECT id FROM plans WHERE id != ?1 AND phase != 'done' AND archived_at IS NULL ORDER BY id")?;
-        let ids = stmt.query_map(params![plan.as_str()], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare(
+            "SELECT id FROM plans WHERE id != ?1 AND phase != 'done' AND archived_at IS NULL
+             UNION
+             SELECT context FROM sessions WHERE role = 'manager' AND context != ?1 AND archived_at IS NULL AND state != 'stopped'
+             ORDER BY 1",
+        )?;
+        let ids = stmt.query_map(params![key], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
         Ok(ids)
     })?;
     let range = config.plannotator_ports;
     let mut held = Vec::new();
     for id in others {
-        let id_parsed = PlanId::parse(&id).map_err(|e| {
-            CpdError::new(ErrorCode::StoreFailed, format!("The database holds a Plan with an invalid id {id:?}: {}", e.message()))
-        })?;
-        if let Some(port) = read_port(&home.plannotator_port(&id_parsed))?.filter(|p| range.contains(*p)) {
+        if let Some(port) = read_port(&port_file(home, &id))?.filter(|p| range.contains(*p)) {
             held.push((id, port));
         }
     }
@@ -232,5 +250,55 @@ mod tests {
         assert_eq!(err.details()["range"], json!("19432-19433"));
         assert_eq!(err.details()["holders"], json!([{"plan": "aa", "port": 19432}, {"plan": "bb", "port": 19433}]));
         assert!(!f.home.plannotator_port(&plan("cc")).exists());
+    }
+
+    /// A live Manager of Context `ctx` (hs-d496): its port file is `run/<context>/plannotator-port`, the path
+    /// `plannotator_port` gives for an id, here the Context's.
+    fn add_manager(f: &mut Fixture) {
+        f.store
+            .write("manager", |tx| {
+                Ok(tx.execute_batch(
+                    "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('m1', 'manager', 'ctx', 'ctx-manager', '/', 'O5', 'idle', 't', 't');",
+                )?)
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn a_live_managers_port_is_held_against_a_plans_allocation() {
+        let mut f = fixture(&[("aa", "grounding")]);
+        add_manager(&mut f);
+        write_port(&f.home.plannotator_port(&plan("ctx")), 19432).unwrap();
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19433);
+    }
+
+    #[test]
+    fn a_plan_holding_a_live_managers_port_moves() {
+        let mut f = fixture(&[("aa", "grounding")]);
+        add_manager(&mut f);
+        write_port(&f.home.plannotator_port(&plan("ctx")), 19432).unwrap();
+        write_port(&f.home.plannotator_port(&plan("aa")), 19432).unwrap();
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19433);
+    }
+
+    #[test]
+    fn a_managers_port_is_never_one_a_live_plan_holds() {
+        let mut f = fixture(&[("aa", "grounding")]);
+        add_manager(&mut f);
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
+        // The Manager's allocation, keyed by its Context (`ctx`, never a Plan's id).
+        assert_eq!(assign_to(&mut f, "19432-19441", "ctx").unwrap(), 19433);
+        assert_eq!(fs::read_to_string(f.home.plannotator_port(&plan("ctx"))).unwrap(), "19433\n");
+        assert!(f.home.plannotator_port(&plan("ctx")).ends_with("ctx/plannotator-port"));
+    }
+
+    #[test]
+    fn a_stopped_and_archived_managers_port_is_reused() {
+        let mut f = fixture(&[("aa", "grounding")]);
+        add_manager(&mut f);
+        write_port(&f.home.plannotator_port(&plan("ctx")), 19432).unwrap();
+        f.store.write("archive", |tx| Ok(tx.execute("UPDATE sessions SET archived_at = 't' WHERE id = 'm1'", [])?)).unwrap();
+        assert_eq!(assign_to(&mut f, "19432-19441", "aa").unwrap(), 19432);
     }
 }

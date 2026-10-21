@@ -10,6 +10,8 @@ use crate::error::{CpdError, ErrorCode};
 use crate::plan::jobs::JobSpec;
 
 const FIELDS: [&str; 5] = ["goal", "context", "touches", "acceptance", "out_of_scope"];
+/// The two more of a `test` Job's Spec (contract §2.2 "Job kinds"), refused for every other kind.
+const TEST_FIELDS: [&str; 2] = ["tests", "test_files"];
 
 /// A Spec as the file gives it, valid.
 #[derive(Clone, Debug, PartialEq)]
@@ -19,9 +21,26 @@ pub struct Spec {
     pub touches: Vec<String>,
     pub acceptance: Vec<String>,
     pub out_of_scope: Vec<String>,
+    /// `tests` of a `test` Job: the named tests (one or more distinct one-line strings).
+    pub tests: Option<Vec<String>>,
+    /// `test_files` of a `test` Job: the files that hold them (repo-relative paths or `dir/` prefixes).
+    pub test_files: Option<Vec<String>>,
 }
 
 impl Spec {
+    /// The Spec fits `kind` (commands.md §5): a `test` Job's Spec has `tests` and `test_files`, every other kind's
+    /// neither, else `spec_invalid` with the JSON path of the field.
+    pub fn check_kind(&self, kind: &str) -> Result<(), CpdError> {
+        for (name, given) in [("tests", self.tests.is_some()), ("test_files", self.test_files.is_some())] {
+            match (kind == "test", given) {
+                (true, false) => return Err(invalid(&format!("$.{name}"), format!("missing field: a `test` Job's Spec names its {name}"))),
+                (false, true) => return Err(invalid(&format!("$.{name}"), format!("unknown field: only a `test` Job's Spec has {name}, and this Job is `{kind}`"))),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// The Spec as a Job holds it.
     pub fn stored(&self) -> JobSpec {
         JobSpec {
@@ -52,16 +71,49 @@ pub fn parse(text: &str) -> Result<Spec, CpdError> {
     let Value::Object(mut fields) = value else {
         return Err(invalid("$", "expected an object"));
     };
-    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str())) {
+    if let Some(unknown) = fields.keys().find(|k| !FIELDS.contains(&k.as_str()) && !TEST_FIELDS.contains(&k.as_str())) {
         return Err(invalid(&format!("$.{unknown}"), "unknown field"));
     }
+    let tests = fields.contains_key("tests").then(|| tests_field(&mut fields)).transpose()?;
+    let test_files = fields.contains_key("test_files").then(|| test_files_field(&mut fields)).transpose()?;
     Ok(Spec {
+        tests,
+        test_files,
         goal: text_field(&mut fields, "goal", true)?,
         context: text_field(&mut fields, "context", false)?,
         touches: list_field(&mut fields, "touches", true)?,
         acceptance: list_field(&mut fields, "acceptance", true)?,
         out_of_scope: list_field(&mut fields, "out_of_scope", false)?,
     })
+}
+
+/// `tests`: one or more distinct one-line strings.
+fn tests_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError> {
+    let tests = list_field(fields, "tests", true)?;
+    for (i, test) in tests.iter().enumerate() {
+        if test.contains(['\n', '\r']) {
+            return Err(invalid(&format!("$.tests[{i}]"), "must be one line"));
+        }
+        if tests[..i].contains(test) {
+            return Err(invalid(&format!("$.tests[{i}]"), "repeats an earlier test"));
+        }
+    }
+    Ok(tests)
+}
+
+/// `test_files`: one or more repo-relative paths or, ending in `/`, directory prefixes: no `..`, no leading `/`
+/// (the rule of the `protected` list, contract §7.5).
+fn test_files_field(fields: &mut Map<String, Value>) -> Result<Vec<String>, CpdError> {
+    let files = list_field(fields, "test_files", true)?;
+    for (i, file) in files.iter().enumerate() {
+        if file.starts_with('/') {
+            return Err(invalid(&format!("$.test_files[{i}]"), "must be a path relative to the repo, not absolute"));
+        }
+        if file.split('/').any(|part| part == "..") {
+            return Err(invalid(&format!("$.test_files[{i}]"), "must not contain .."));
+        }
+    }
+    Ok(files)
 }
 
 fn take(fields: &mut Map<String, Value>, name: &str) -> Result<Value, CpdError> {
@@ -129,5 +181,50 @@ mod tests {
         assert_eq!(path_of(r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": [2], "out_of_scope": []}"#), "$.acceptance[0]");
         assert_eq!(path_of(r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"], "out_of_scope": "x"}"#), "$.out_of_scope");
         assert_eq!(path_of(r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"]}"#), "$.out_of_scope");
+    }
+
+    const TEST_SPEC: &str = r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"], "out_of_scope": [],
+                                "tests": ["pr_open_job::merges_the_base", "pr_open_job::opens"], "test_files": ["cli/tests/pr_open_job.rs", "core/src/pr/"]}"#;
+
+    #[test]
+    fn a_test_spec_has_named_tests_and_the_files_that_hold_them() {
+        let spec = parse(TEST_SPEC).unwrap();
+        assert_eq!(spec.tests.as_deref(), Some(&["pr_open_job::merges_the_base".to_owned(), "pr_open_job::opens".to_owned()][..]));
+        assert_eq!(spec.test_files.as_deref(), Some(&["cli/tests/pr_open_job.rs".to_owned(), "core/src/pr/".to_owned()][..]));
+        spec.check_kind("test").unwrap();
+        assert_eq!(parse(GOOD).unwrap().tests, None);
+    }
+
+    #[test]
+    fn the_spec_fits_its_kind_and_the_fault_names_its_json_path() {
+        let plain = parse(GOOD).unwrap();
+        for kind in ["work", "docs", "impl"] {
+            plain.check_kind(kind).unwrap();
+        }
+        let err = plain.check_kind("test").unwrap_err();
+        assert_eq!((err.code(), err.details()["path"].as_str()), (ErrorCode::SpecInvalid, Some("$.tests")));
+        let test = parse(TEST_SPEC).unwrap();
+        for kind in ["work", "docs", "impl"] {
+            let err = test.check_kind(kind).unwrap_err();
+            assert_eq!((err.code(), err.details()["path"].as_str()), (ErrorCode::SpecInvalid, Some("$.tests")), "{kind}");
+        }
+        let only_tests = parse(r#"{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"], "out_of_scope": [], "tests": ["t"]}"#).unwrap();
+        assert_eq!(only_tests.check_kind("test").unwrap_err().details()["path"], "$.test_files");
+    }
+
+    #[test]
+    fn the_named_tests_and_files_are_checked_where_they_are_read() {
+        let with = |tests: &str, files: &str| {
+            format!(r#"{{"goal": "g", "context": "c", "touches": ["a"], "acceptance": ["b"], "out_of_scope": [], "tests": {tests}, "test_files": {files}}}"#)
+        };
+        assert_eq!(path_of(&with("[]", r#"["f"]"#)), "$.tests");
+        assert_eq!(path_of(&with(r#"["a", "a"]"#, r#"["f"]"#)), "$.tests[1]");
+        assert_eq!(path_of(&with(r#"["a\nb"]"#, r#"["f"]"#)), "$.tests[0]");
+        assert_eq!(path_of(&with(r#"[1]"#, r#"["f"]"#)), "$.tests[0]");
+        assert_eq!(path_of(&with(r#"["a"]"#, "[]")), "$.test_files");
+        assert_eq!(path_of(&with(r#"["a"]"#, r#"["f", "/abs"]"#)), "$.test_files[1]");
+        assert_eq!(path_of(&with(r#"["a"]"#, r#"["../f"]"#)), "$.test_files[0]");
+        assert_eq!(path_of(&with(r#"["a"]"#, r#"["d/../f"]"#)), "$.test_files[0]");
+        parse(&with(r#"["a"]"#, r#"["d/", "f..g"]"#)).unwrap();
     }
 }

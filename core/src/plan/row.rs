@@ -3,6 +3,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
+use super::outline::Outline;
 use crate::error::CpdError;
 use crate::ids::{ContextId, PlanId, SessionId};
 
@@ -49,26 +50,29 @@ pub struct PlanRow {
     pub done_at: Option<String>,
     /// When it was archived (contract §2.2 "Archived"), else none.
     pub archived_at: Option<String>,
+    /// The Plan's outline (§2.2, commands.md §4.13), parsed from `plans.outline`; none until `plan outline`.
+    pub outline: Option<Outline>,
 }
 
-const COLUMNS: &str = "id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at";
+const COLUMNS: &str = "id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at, outline";
 
 /// The columns as SQLite returns them, before parsing.
-type Raw = (String, String, String, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>);
+type Raw = (String, String, String, Option<String>, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>);
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?))
+    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?))
 }
 
 impl PlanRow {
     fn parse(raw: Raw) -> Result<PlanRow, CpdError> {
-        let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at) = raw;
+        let (id, context, title, jira, phase, lead_session, created_at, locked_at, done_at, archived_at, outline) = raw;
         let id = PlanId::parse(&id).map_err(|_| CpdError::bad_row(format!("Plan id {id:?}")))?;
         let field = |name: &str, value: &str| CpdError::bad_row(format!("Plan {id} has {name} {value:?}"));
         Ok(PlanRow {
             context: ContextId::parse(&context).map_err(|_| field("context", &context))?,
             phase: Phase::parse(&phase).ok_or_else(|| field("phase", &phase))?,
             lead_session: SessionId::parse(&lead_session).map_err(|_| field("lead_session", &lead_session))?,
+            outline: outline.map(|text| Outline::stored(id.as_str(), &text)).transpose()?,
             title,
             jira,
             created_at,
@@ -84,7 +88,7 @@ impl PlanRow {
         json!({
             "id": self.id, "context": self.context, "title": self.title, "jira": self.jira, "phase": self.phase.as_str(),
             "lead_session": self.lead_session, "created_at": self.created_at, "locked_at": self.locked_at, "done_at": self.done_at,
-            "archived_at": self.archived_at,
+            "archived_at": self.archived_at, "outline": self.outline.as_ref().map(Outline::to_value),
         })
     }
 }
@@ -137,7 +141,7 @@ mod tests {
         assert_eq!(
             plan.to_json(),
             json!({"id": "pay", "context": "ctx", "title": "Pay", "jira": "PAY-1", "phase": "grounding", "lead_session": "lead1",
-                   "created_at": "t", "locked_at": null, "done_at": null, "archived_at": null})
+                   "created_at": "t", "locked_at": null, "done_at": null, "archived_at": null, "outline": null})
         );
         let all = store.read(|conn| query(conn, "context = ?1", &[&"ctx"])).unwrap();
         assert_eq!(all.len(), 1);

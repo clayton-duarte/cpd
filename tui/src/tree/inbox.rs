@@ -1,15 +1,18 @@
-//! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a title
-//! `┯━━ Inbox ━━━…━━ <n> ━━`, up to [`SHOWN`] item rows `│  <label>` (no dots) with the age right-aligned, and, with more
-//! items, the fold widget's muted `╰─ expand` row (`crate::fold`) that expands the list inline and becomes `╰─ collapse`.
-//! Only that row toggles. Whether it is expanded is view state only. Expanded, it is
-//! capped at half the column and its items scroll inside the cap, with ` ▲ <n> more` / ` ▼ <n> more` cue rows ([`Shape`]).
+//! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
+//! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
+//! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│  <glyph> <label>` (each with
+//! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
+//! the muted `╰󰁋 expand` that expands the list inline and becomes `╰󰁣 collapse`, with fewer a plain `╰─`, with none no
+//! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
+//! column's split gives it (the tree has two thirds, hs-d307; `View::draw_at`) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
+//! (`dialog::scroll::cue`, [`Shape`]).
 //!
-//! A click on an item row jumps to its cause ([`jump`]): a command, the logs popup at the item's Event, or the copy of its
-//! `url`. The label of a link kind is also an OSC 8 link to the `url` (`crate::link`, which the terminal opens with its
+//! A click on an item row jumps to its cause ([`jump`]): a command, the merge popup of
+//! its pull request, or the copy of its `url`. The label of a link kind is also an OSC 8 link to the `url` (`crate::link`, which the terminal opens with its
 //! modifier-click). Everything here is pure but [`draw`], which only writes to the frame.
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Margin, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -20,31 +23,39 @@ use super::actions::Action;
 use super::rows::truncate;
 use crate::fold;
 use crate::link::link;
+use crate::merge::Pull;
 use crate::palette::{self, Meaning};
 use crate::read::Tree;
 use crate::section;
-use crate::widgets::{Window, dim, max_scroll, window};
+use crate::dialog::scroll::{Cue, cue};
+use crate::widgets::{Window, max_scroll, window};
 use cpd_core::ids::{PlanId, SessionId};
 use cpd_core::inbox::model::{Item, Kind};
 
-/// How many item rows the section shows before the `╰─ expand` row.
+/// How many item rows the section shows before the `╰󰁋 expand` row.
 pub const SHOWN: usize = 3;
 
-/// The columns before the label: the fold's `│` and two spaces.
-const LEAD_WIDTH: usize = 3;
+/// The columns before the label: the fold's `│`, two spaces, the item's tier glyph and a space.
+const LEAD_WIDTH: usize = 5;
 
-/// What a row of the section is, by its offset from the header's row.
+/// The rows above the items: the empty row (hs-d346) and the title.
+const TOP: usize = 2;
+
+/// The rows below the closing row: the empty row (hs-d476).
+const BOTTOM: usize = 1;
+
+/// What a row of the section is, by its offset from the section's first row (the empty one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     Header,
     /// The item at this index of the snapshot's Inbox.
     Item(usize),
-    /// `╰─ expand` or `╰─ collapse`.
+    /// `╰󰁋 expand` or `╰󰁣 collapse`.
     Toggle,
 }
 
 /// The rows of the section for `count` visible items. Expanded, its height is capped at `cap` rows (never below the
-/// collapsed section's) and the items scroll in it from the item `scroll`, with a ` ▲ <n> more` and a ` ▼ <n> more` cue row
+/// collapsed section's) and the items scroll in it from the item `scroll`, with a `▲ <n> more` and a `▼ <n> more` cue row
 /// where some are hidden; the scrolling is the Deploy column's PR list's ([`window`]), one row an item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shape {
@@ -79,17 +90,20 @@ impl Shape {
         self.count > SHOWN
     }
 
-    /// The rows the section wants: the header, the items, the toggle; expanded, at most the cap, but not less than collapsed.
+    /// The rows the section wants: the empty row, the title, the items, the closing row (the toggle, a plain `╰─`, or
+    /// with no item the up-to-date row, hs-d487) and the empty row below; expanded, at most the cap, but not less than
+    /// collapsed.
     pub fn height(self) -> u16 {
-        let collapsed = 1 + self.count.min(SHOWN) + usize::from(self.has_toggle());
-        let full = 1 + self.count + usize::from(self.has_toggle());
+        let close = 1;
+        let collapsed = TOP + self.count.min(SHOWN) + close + BOTTOM;
+        let full = TOP + self.count + close + BOTTOM;
         let height = if self.expanded { full.min(usize::from(self.cap)).max(collapsed) } else { collapsed };
         u16::try_from(height).unwrap_or(u16::MAX)
     }
 
-    /// The rows between the header and the toggle: the items and their cues.
+    /// The rows between the title and the closing row: the items and their cues.
     fn list_rows(self) -> usize {
-        usize::from(self.height()) - 1 - usize::from(self.has_toggle())
+        usize::from(self.height()) - TOP - 1 - BOTTOM
     }
 
     /// The items drawn and the cues: all of the first three when collapsed, else the window at the scroll offset.
@@ -106,10 +120,10 @@ impl Shape {
         if self.expanded { max_scroll(self.count, self.list_rows(), 1) } else { 0 }
     }
 
-    /// The row, below the header's, of the item `i`, when it is drawn.
+    /// The row, below the section's first, of the item `i`, when it is drawn.
     pub fn row_of(self, i: usize) -> Option<u16> {
         let win = self.window();
-        (win.first..win.first + win.shown).contains(&i).then(|| (1 + usize::from(win.cue_above) + i - win.first) as u16)
+        (win.first..win.first + win.shown).contains(&i).then(|| (TOP + usize::from(win.cue_above) + i - win.first) as u16)
     }
 
     /// The scroll offset nearest `scroll` at which the item `i` is drawn.
@@ -124,19 +138,19 @@ impl Shape {
         scroll
     }
 
-    /// The row `row` rows below the header's; a cue row is none.
+    /// The row `row` rows below the section's first; the empty rows, a cue row and a plain closing row are none.
     pub fn hit(self, row: u16) -> Option<Hit> {
         let row = usize::from(row);
         let win = self.window();
         let list = self.list_rows();
         match row {
-            0 => Some(Hit::Header),
-            r if r <= list => {
-                let at = r - 1;
+            1 => Some(Hit::Header),
+            r if (TOP..TOP + list).contains(&r) => {
+                let at = r - TOP;
                 (at >= usize::from(win.cue_above) && at - usize::from(win.cue_above) < win.shown)
                     .then(|| Hit::Item(win.first + at - usize::from(win.cue_above)))
             }
-            r if r == list + 1 && self.has_toggle() => Some(Hit::Toggle),
+            r if r == TOP + list && self.has_toggle() => Some(Hit::Toggle),
             _ => None,
         }
     }
@@ -162,8 +176,10 @@ fn age_of(opened_at: &str, now: OffsetDateTime) -> String {
 pub enum Jump {
     /// Run this command and focus the chat slot (a click on a Session row).
     Run(Action),
-    /// The logs popup, at this Event; at the bottom with none.
-    Logs(Option<i64>),
+    /// These actions in order, each stopping the flow when it is refused: `plan-review` opens its Lead, then copies its page.
+    Steps(Vec<Action>),
+    /// The merge popup of this pull request (`pr-ready`).
+    Merge(Pull),
 }
 
 /// `session open <id>`, or `session history <id>` for an archived Session (as a click on its tree row).
@@ -178,20 +194,36 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
     if archived { Action::History(id.clone()) } else { Action::Open(id.clone()) }
 }
 
-/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts. A Plan's Lead for
-/// `plan-review` and a pull request a Plan owns; the `url` copied for the others that are a link (its OSC 8 link stays
-/// for the terminal's modifier-click). `None` only for an item without what its jump needs.
+/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318). `engine-down`
+/// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
+/// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
+/// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (their OSC 8 link stays for the
+/// terminal's modifier-click). `None` only for an item without what its jump needs.
 pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
     match item.kind {
         Kind::Dialog | Kind::Unread => item.session.as_ref().map(|s| Jump::Run(open_or_history(tree, s))),
-        Kind::JobStuck => Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?)),
-        Kind::EngineError | Kind::EngineDown => Some(Jump::Logs(item.event)),
+        // no click: the engine's errors, the stuck Jobs and PR check/review state reach no Inbox (hs-d314, hs-d318, hs-d470); only a row an older engine opened remains
+        Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
+        Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
-        Kind::PlanReview => Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?)),
-        Kind::PrFailing | Kind::PrChanges | Kind::PrReady if item.plan.is_some() => {
-            Some(Jump::Run(open_lead(tree, item.plan.as_ref()?)?))
+        Kind::PlanReview => {
+            let open = open_lead(tree, item.plan.as_ref()?)?;
+            // with no port file yet there is no page to copy: the Lead opens, and nothing else happens
+            Some(match item.url.as_ref() {
+                Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
+                None => Jump::Run(open),
+            })
         }
-        Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested => {
+        // hs-d496: the Session that opened the plannotator session, then the review page's url (when known)
+        Kind::ReviewWaiting => {
+            let open = open_or_history(tree, item.session.as_ref()?);
+            Some(match item.url.as_ref() {
+                Some(url) => Jump::Steps(vec![open, Action::CopyUrl(url.clone())]),
+                None => Jump::Run(open),
+            })
+        }
+        Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
+        Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
         }
     }
@@ -205,18 +237,25 @@ fn open_lead(tree: &Tree, plan: &PlanId) -> Option<Action> {
 
 /// The kinds whose label is an OSC 8 link to the item's `url`.
 fn is_link(kind: Kind) -> bool {
-    matches!(kind, Kind::PlanReview | Kind::PrFailing | Kind::PrChanges | Kind::PrReady | Kind::ReviewRequested)
+    matches!(kind, Kind::PlanReview | Kind::ReviewWaiting | Kind::PrReady | Kind::ReviewRequested)
 }
 
-/// An item's row: the fold's muted `│`, two spaces, the label cut with `…` so that it never reaches the age, and the
-/// age. Returns the line and the number of cells of the label.
-fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
+/// An item's row: the fold's muted `│`, two spaces, the item's tier glyph in its urgency's colour, a space, the label cut with
+/// `…` so that it never reaches the age, and the age. Returns the line and the number of cells of the label.
+/// A merge of the item's pull request runs (hs-d495): `spin` is the spinner's frame, and the glyph cell shows it.
+fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line<'static>, usize) {
     let room = width.saturating_sub(LEAD_WIDTH + 1 + age.chars().count());
     let label = truncate(&item.label, room);
     let label_width = label.chars().count();
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
+    let mut glyph = palette::tier_span(item.urgency);
+    if let Some(frame) = spin {
+        glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();
+    }
     let line = fold::content(fold::BRANCH, Line::from(vec![
         "  ".into(),
+        glyph,
+        " ".into(),
         label.into(),
         " ".repeat(gap).into(),
         Span::styled(age.to_owned(), palette::fg(Meaning::Nothing)),
@@ -224,21 +263,31 @@ fn item_line(item: &Item, age: &str, width: usize) -> (Line<'static>, usize) {
     (line, label_width)
 }
 
-/// Draws the section into `area` (its first row is the header; rows that do not fit are cut): `items` are the
+/// A scroll cue row: the fold's muted `│` on the left, the cue right-aligned after it.
+fn cue_line(which: Cue, n: usize, width: usize) -> Line<'static> {
+    fold::content(fold::BRANCH, cue(which, n, width.saturating_sub(1)))
+}
+
+/// Draws the section into `area`, the panel's full width (its first row is the empty one; rows that do not fit are cut;
+/// the title keeps the padding of one column on each side, the rows are drawn inside it): `items` are the
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
-/// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled.
-pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime) {
+/// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled. `spinning` says, of an
+/// item whose merge runs, the frame of the spinner its glyph cell shows instead of its tier glyph (hs-d495).
+pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) {
     let win = shape.window();
-    let list = usize::from(shape.height()) - 1 - usize::from(shape.has_toggle());
+    let list = shape.list_rows();
     for dy in 0..area.height.min(shape.height()) {
-        let row = Rect::new(area.x, area.y + dy, area.width, 1);
+        let full = Rect::new(area.x, area.y + dy, area.width, 1);
+        let row = full.inner(Margin::new(1, 0));
+        let width = usize::from(row.width);
+        let at = usize::from(dy);
         match shape.hit(dy) {
             Some(Hit::Header) => {
-                f.render_widget(Paragraph::new(section::joined("Inbox", Some(items.len()), usize::from(row.width))), row);
+                f.render_widget(Paragraph::new(section::collapsible_title("Inbox", Some(items.len()), usize::from(full.width))), full);
             }
             Some(Hit::Item(i)) => {
                 let item = &items[i];
-                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), usize::from(row.width));
+                let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), width, spinning(item));
                 f.render_widget(Paragraph::new(line), row);
                 if cursor == Some(i) {
                     f.buffer_mut().set_style(row, Modifier::REVERSED);
@@ -251,11 +300,15 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
             Some(Hit::Toggle) => {
                 f.render_widget(Paragraph::new(fold::toggle(shape.expanded)), row);
             }
-            None if win.cue_above && dy == 1 => {
-                f.render_widget(Paragraph::new(dim(format!(" ▲ {} more", win.first))), row);
+            None if win.cue_above && at == TOP => {
+                f.render_widget(Paragraph::new(cue_line(Cue::Above, win.first, width)), row);
             }
-            None if win.below > 0 && usize::from(dy) == list => {
-                f.render_widget(Paragraph::new(dim(format!(" ▼ {} more", win.below))), row);
+            None if win.below > 0 && at == TOP + list - 1 => {
+                f.render_widget(Paragraph::new(cue_line(Cue::Below, win.below, width)), row);
+            }
+            None if at == TOP + list => {
+                let close = if items.is_empty() { fold::done("up to date, drink some water") } else { fold::plain() };
+                f.render_widget(Paragraph::new(close), row);
             }
             None => {}
         }
@@ -296,7 +349,7 @@ mod tests {
 
     use super::super::fixture::{archived, sample};
     use super::*;
-    use cpd_core::ids::{ContextId, PlanId};
+    use cpd_core::ids::{ContextId, JobKey, PlanId};
     use cpd_core::inbox::model::Urgency;
 
     const OPENED: &str = "2026-01-01T00:00:00.000Z";
@@ -339,55 +392,37 @@ mod tests {
     }
 
     #[test]
-    fn the_rows_are_the_header_up_to_three_items_and_a_toggle_only_with_more() {
-        let rows = |count, expanded| {
-            let shape = Shape::new(count, expanded);
-            (0..shape.height() + 1).map(|r| shape.hit(r)).collect::<Vec<_>>()
-        };
-        assert_eq!(rows(0, false), [Some(Hit::Header), None]);
-        assert_eq!(rows(2, false), [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None]);
-        assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
-        assert_eq!(rows(5, false), [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
-        let expanded: Vec<_> = (0..7).map(|r| Shape::new(5, true).hit(r)).collect();
-        assert_eq!(
-            expanded,
-            [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle)]
-        );
-        assert_eq!((Shape::new(0, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (1, 5, 7));
-    }
-
-    #[test]
     fn expanded_the_section_is_capped_but_never_below_the_collapsed_one_and_its_items_scroll_between_cues() {
         let shape = |count, cap, scroll| Shape::new(count, true).capped(cap).scrolled(scroll);
-        // 50 items in a 40-row column: 20 rows, the header, 18 list rows, the toggle
+        // 50 items in a 40-row column: 20 rows, the empty row, the title, 16 list rows, the toggle, the empty row
         assert_eq!(shape(50, 20, 0).height(), 20);
-        assert_eq!(shape(5, 20, 0).height(), 7, "a short list is not padded to the cap");
-        assert_eq!(shape(50, 2, 0).height(), 5, "never less than the collapsed section");
-        assert_eq!(Shape::new(50, false).capped(20).height(), 5);
+        assert_eq!(shape(5, 20, 0).height(), 9, "a short list is not padded to the cap");
+        assert_eq!(shape(50, 2, 0).height(), 7, "never less than the collapsed section");
+        assert_eq!(Shape::new(50, false).capped(20).height(), 7);
         let rows = |s: Shape| (0..s.height() + 1).map(|r| s.hit(r)).collect::<Vec<_>>();
-        let top = rows(shape(50, 8, 0));
-        // the header, 6 list rows (5 items and the ▼ cue), the toggle
-        assert_eq!(top, [Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), None, Some(Hit::Toggle), None]);
-        let middle = rows(shape(50, 8, 10));
-        assert_eq!(middle, [Some(Hit::Header), None, Some(Hit::Item(10)), Some(Hit::Item(11)), Some(Hit::Item(12)), Some(Hit::Item(13)), None, Some(Hit::Toggle), None]);
+        let top = rows(shape(50, 9, 0));
+        // the empty row, the title, 5 list rows (4 items and the ▼ cue), the toggle, the empty row
+        assert_eq!(top, [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), None, Some(Hit::Toggle), None, None]);
+        let middle = rows(shape(50, 9, 10));
+        assert_eq!(middle, [None, Some(Hit::Header), None, Some(Hit::Item(10)), Some(Hit::Item(11)), Some(Hit::Item(12)), None, Some(Hit::Toggle), None, None]);
         // the offset clamps: the last item reaches the bottom, under the ▲ cue
-        let bottom = rows(shape(50, 8, 999));
-        assert_eq!(bottom, [Some(Hit::Header), None, Some(Hit::Item(45)), Some(Hit::Item(46)), Some(Hit::Item(47)), Some(Hit::Item(48)), Some(Hit::Item(49)), Some(Hit::Toggle), None]);
-        assert_eq!(shape(50, 8, 0).max_scroll(), 45);
+        let bottom = rows(shape(50, 9, 999));
+        assert_eq!(bottom, [None, Some(Hit::Header), None, Some(Hit::Item(46)), Some(Hit::Item(47)), Some(Hit::Item(48)), Some(Hit::Item(49)), Some(Hit::Toggle), None, None]);
+        assert_eq!(shape(50, 9, 0).max_scroll(), 46);
         assert_eq!(Shape::new(50, false).max_scroll(), 0);
         assert_eq!(shape(5, 20, 3).max_scroll(), 0, "nothing to scroll when all fit");
     }
 
     #[test]
     fn an_items_row_is_none_while_it_is_hidden_and_scroll_to_brings_it_in() {
-        let shape = Shape::new(50, true).capped(8);
-        assert_eq!((shape.row_of(0), shape.row_of(4), shape.row_of(5)), (Some(1), Some(5), None));
-        assert_eq!(shape.scrolled(10).row_of(10), Some(2), "under the ▲ cue");
-        assert_eq!(shape.scroll_to(4), 0, "already in view");
+        let shape = Shape::new(50, true).capped(9);
+        assert_eq!((shape.row_of(0), shape.row_of(3), shape.row_of(4)), (Some(2), Some(5), None));
+        assert_eq!(shape.scrolled(10).row_of(10), Some(3), "under the ▲ cue");
+        assert_eq!(shape.scroll_to(3), 0, "already in view");
         let down = shape.scroll_to(20);
-        assert_eq!((down, shape.scrolled(down).row_of(20)), (17, Some(5)), "the last row above the ▼ cue");
+        assert_eq!((down, shape.scrolled(down).row_of(20)), (18, Some(5)), "the last row above the ▼ cue");
         assert_eq!(shape.scrolled(30).scroll_to(29), 29, "above the window: it becomes the first");
-        assert_eq!(shape.scroll_to(49), 45);
+        assert_eq!(shape.scroll_to(49), 46);
     }
 
     #[test]
@@ -401,13 +436,17 @@ mod tests {
         let session = |item: &mut Item| item.session = Some(sid("m-alpha"));
         let plan = |item: &mut Item| item.plan = Some(PlanId::parse("ship").unwrap());
         let context = |item: &mut Item| item.context = Some(ContextId::parse("alpha").unwrap());
-        let event = |item: &mut Item| item.event = Some(7);
         let open = |id: &str| Some(Jump::Run(Action::Open(sid(id))));
         assert_eq!(jump(&tree, &with(Kind::Dialog, &session)), open("m-alpha"));
         assert_eq!(jump(&tree, &with(Kind::Unread, &session)), open("m-alpha"));
-        assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), open("l-ship"), "the Lead of the item's Plan");
-        assert_eq!(jump(&tree, &with(Kind::EngineError, &event)), Some(Jump::Logs(Some(7))));
-        assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Logs(None)), "engine-down has no Event: the bottom");
+        let job = |item: &mut Item| {
+            plan(item);
+            item.job = Some(JobKey::parse("c").unwrap());
+        };
+        assert_eq!(jump(&tree, &with(Kind::JobStuck, &job)), None, "job-stuck: no click, a stuck Job goes to the Manager (hs-d318)");
+        assert_eq!(jump(&tree, &with(Kind::JobStuck, &plan)), None, "not even with no Job: the Lead of the item's Plan stays closed");
+        assert_eq!(jump(&tree, &with(Kind::EngineError, &|_| {})), None, "engine-error: no click (hs-d314)");
+        assert_eq!(jump(&tree, &with(Kind::EngineDown, &|_| {})), Some(Jump::Run(Action::EnsureWatch)), "engine-down starts the engine");
         assert_eq!(jump(&tree, &with(Kind::Question, &context)), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
         let url = |item: &mut Item| item.url = Some("https://example.com".into());
         let owned = |item: &mut Item| {
@@ -415,27 +454,45 @@ mod tests {
             url(item);
         };
         let copy = Some(Jump::Run(Action::CopyUrl("https://example.com".into())));
-        assert_eq!(jump(&tree, &with(Kind::PlanReview, &owned)), open("l-ship"), "the Lead of the review's Plan");
-        for kind in [Kind::PrFailing, Kind::PrChanges, Kind::PrReady] {
-            assert_eq!(jump(&tree, &with(kind, &owned)), open("l-ship"), "{kind:?} of a Plan's pull request");
-            assert_eq!(jump(&tree, &with(kind, &url)), copy, "{kind:?} no Plan owns copies its url");
+        let steps = |action| Some(Jump::Steps(vec![Action::Open(sid("l-ship")), action]));
+        assert_eq!(
+            jump(&tree, &with(Kind::PlanReview, &owned)),
+            steps(Action::CopyUrl("https://example.com".into())),
+            "the Lead of the review's Plan, then the page's url"
+        );
+        assert_eq!(
+            jump(&tree, &with(Kind::PlanReview, &plan)),
+            Some(Jump::Run(Action::Open(sid("l-ship")))),
+            "no port file: the Lead opens and nothing else happens"
+        );
+        let merge = |subject: &str| Pull::from_subject(subject).map(Jump::Merge);
+        let ready = |subject: &'static str| move |item: &mut Item| item.subject = subject.to_owned();
+        assert!(merge("pr:acme/api#3").is_some());
+        assert_eq!(jump(&tree, &with(Kind::PrReady, &ready("pr:acme/api#3"))), merge("pr:acme/api#3"), "a pull request no Plan owns");
+        let owned_ready = |item: &mut Item| {
+            plan(item);
+            ready("pr:acme/api#3")(item);
+        };
+        assert_eq!(jump(&tree, &with(Kind::PrReady, &owned_ready)), merge("pr:acme/api#3"), "a Plan's pull request");
+        assert_eq!(jump(&tree, &with(Kind::PrReady, &|i| i.url = Some("https://example.com".into()))), None, "subject:1 is no pull request");
+        for subject in ["acme/api#3", "pr:api#3", "pr:acme/api", "pr:acme/api#x", "pr:acme/api#0", "session:l-ship", "pr:"] {
+            assert_eq!(jump(&tree, &with(Kind::PrReady, &ready(subject))), None, "{subject:?} gives no merge popup");
+        }
+        for kind in [Kind::PrFailing, Kind::PrChanges] {
+            assert_eq!(jump(&tree, &with(kind, &owned)), None, "{kind:?} (an old row, hs-d470): no click, a Plan's or not");
+            assert_eq!(jump(&tree, &with(kind, &url)), None, "{kind:?} (an old row, hs-d470): no url copy");
         }
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &url)), copy);
         assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &owned)), copy, "a review request is never a Plan's");
-        assert_eq!(jump(&tree, &with(Kind::PrFailing, &|_| {})), None, "a link without a url has nothing to copy");
+        assert_eq!(jump(&tree, &with(Kind::ReviewRequested, &|_| {})), None, "a link without a url has nothing to copy");
         assert_eq!(jump(&tree, &with(Kind::PlanReview, &|_| {})), None);
         // an item without what its jump needs jumps nowhere
         assert_eq!(jump(&tree, &with(Kind::Dialog, &|_| {})), None);
-        assert_eq!(jump(&tree, &with(Kind::JobStuck, &|i| i.plan = Some(PlanId::parse("nope").unwrap()))), None);
         assert_eq!(jump(&tree, &with(Kind::Question, &|_| {})), None);
         // an archived Session shows its history, as a click on its tree row
         assert_eq!(
             jump(&archived(), &with(Kind::Unread, &|i| i.session = Some(sid("f-blocked")))),
             Some(Jump::Run(Action::History(sid("f-blocked"))))
-        );
-        assert_eq!(
-            jump(&archived(), &with(Kind::JobStuck, &|i| i.plan = Some(PlanId::parse("old").unwrap()))),
-            Some(Jump::Run(Action::History(sid("l-old"))))
         );
     }
 
@@ -479,32 +536,156 @@ mod tests {
         let sink = Sink::default();
         let mut terminal = Terminal::with_options(
             CrosstermBackend::new(sink.clone()),
-            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 2)) },
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
         )
         .unwrap();
         let url = "https://github.com/acme/api/pull/12";
-        let mut linked = item(1, Kind::PrFailing, Urgency::Red, "api#12 failing", OPENED);
+        let mut linked = item(1, Kind::ReviewRequested, Urgency::Red, "api#12 failing", OPENED);
         linked.url = Some(url.into());
-        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[linked], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         let bytes = sink.0.borrow().clone();
         let pieces: String = ["ap", "i#", "12", " f", "ai", "li", "ng"]
             .iter()
             .map(|p| format!("\x1b]8;;{url}\x07{p}\x1b]8;;\x07"))
             .collect();
         let text = printed(&bytes);
-        assert!(text.contains(&format!("│{pieces}3m")), "the branch (the two spaces after it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
-        assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead or the age");
+        assert!(text.contains(&format!("│{}{pieces}3m", palette::TIER_RED)), "the branch, the icon (the spaces around it are blank cells, not printed), the label in pieces of two cells, the age: {text:?}");
+        assert_eq!(text.matches("\x1b]8;;https").count(), 7, "one link per piece, none around the lead (branch and icon) or the age");
         // an item with no url, or of a kind that jumps, has no link
         let sink = Sink::default();
         let mut terminal = Terminal::with_options(
             CrosstermBackend::new(sink.clone()),
-            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 3)) },
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 6)) },
         )
         .unwrap();
         let mut dialog = item(2, Kind::Dialog, Urgency::Red, "dialog", OPENED);
         dialog.url = Some(url.into());
         let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
-        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"))).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
+    }
+
+    // ---- review-waiting (hs-d496): the click opens the item's Session then copies its url; the label is an OSC 8 link ----
+
+    #[test]
+    fn a_review_waiting_click_opens_its_session_then_copies_its_url() {
+        let tree = sample();
+        let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "pn:m-alpha/pn-0a1b2c", OPENED);
+        waiting.session = Some(sid("m-alpha"));
+        waiting.url = Some("http://review.example:20000/".into());
+        assert_eq!(
+            jump(&tree, &waiting),
+            Some(Jump::Steps(vec![Action::Open(sid("m-alpha")), Action::CopyUrl("http://review.example:20000/".into())])),
+            "the Session first, then the page's url"
+        );
+        waiting.url = None;
+        assert_eq!(jump(&tree, &waiting), Some(Jump::Run(Action::Open(sid("m-alpha")))), "no url: the Session opens and nothing else happens");
+        waiting.session = None;
+        assert_eq!(jump(&tree, &waiting), None, "no Session: nowhere to go");
+        let mut archived_session = item(2, Kind::ReviewWaiting, Urgency::Magenta, "pn:f-blocked/pn-0a1b2c", OPENED);
+        archived_session.session = Some(sid("f-blocked"));
+        assert_eq!(jump(&archived(), &archived_session), Some(Jump::Run(Action::History(sid("f-blocked")))), "an archived Session shows its history");
+    }
+
+    #[test]
+    fn a_review_waiting_label_is_written_as_an_osc_8_link() {
+        let sink = Sink::default();
+        let mut terminal = Terminal::with_options(
+            CrosstermBackend::new(sink.clone()),
+            TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
+        )
+        .unwrap();
+        let url = "http://review.example:20000/";
+        let mut waiting = item(1, Kind::ReviewWaiting, Urgency::Magenta, "ab", OPENED);
+        waiting.url = Some(url.into());
+        terminal.draw(|f| draw(f, f.area(), &[waiting], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
+        let text = printed(&sink.0.borrow());
+        assert!(text.contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "the label is a link to the review page: {text:?}");
+    }
+
+    // ---- plan-review with an optional url (hs-d502) ----
+
+    #[test]
+    fn a_plan_review_with_no_url_opens_the_lead_and_copies_nothing_hs_d502() {
+        let tree = sample();
+        let mut review = item(1, Kind::PlanReview, Urgency::Magenta, "ship plan review", OPENED);
+        review.plan = Some(PlanId::parse("ship").unwrap());
+        assert_eq!(jump(&tree, &review), Some(Jump::Run(Action::Open(sid("l-ship")))));
+        review.url = Some("http://review.example:20000/".into());
+        assert_eq!(
+            jump(&tree, &review),
+            Some(Jump::Steps(vec![Action::Open(sid("l-ship")), Action::CopyUrl("http://review.example:20000/".into())]))
+        );
+    }
+
+    #[test]
+    fn a_plan_review_label_is_an_osc_8_link_only_with_a_url_hs_d502() {
+        let drawn = |url: Option<&str>| {
+            let sink = Sink::default();
+            let mut terminal = Terminal::with_options(
+                CrosstermBackend::new(sink.clone()),
+                TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 41, 5)) },
+            )
+            .unwrap();
+            let mut review = item(1, Kind::PlanReview, Urgency::Magenta, "ab", OPENED);
+            review.url = url.map(Into::into);
+            terminal.draw(|f| draw(f, f.area(), &[review], Shape::new(1, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
+            printed(&sink.0.borrow())
+        };
+        let url = "http://review.example:20000/";
+        assert!(drawn(Some(url)).contains(&format!("\x1b]8;;{url}\x07ab\x1b]8;;\x07")), "with a url: a link");
+        assert!(!drawn(None).contains("\x1b]8;;"), "with no url: no link");
+    }
+
+    // ---- spacing v2 (hs-d476): the section is a collapsible widget with an empty row above and one below; red until `Shape` has the row below ----
+
+    #[test]
+    fn the_section_is_an_empty_row_the_title_the_items_the_closing_row_and_an_empty_row() {
+        let rows = |count, expanded| {
+            let shape = Shape::new(count, expanded);
+            (0..shape.height()).map(|r| shape.hit(r)).collect::<Vec<_>>()
+        };
+        assert_eq!(rows(0, false), [None, Some(Hit::Header), None, None], "no item: the up-to-date closing row (no hit, hs-d487), then the empty row");
+        assert_eq!(rows(2, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), None, None], "a plain closing row, then the empty row");
+        assert_eq!(rows(3, true), rows(3, false), "three items have nothing to expand");
+        assert_eq!(rows(5, false), [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Toggle), None]);
+        assert_eq!(
+            rows(5, true),
+            [None, Some(Hit::Header), Some(Hit::Item(0)), Some(Hit::Item(1)), Some(Hit::Item(2)), Some(Hit::Item(3)), Some(Hit::Item(4)), Some(Hit::Toggle), None]
+        );
+        assert_eq!((Shape::new(0, false).height(), Shape::new(3, false).height(), Shape::new(5, false).height(), Shape::new(5, true).height()), (4, 7, 7, 9));
+    }
+
+    #[test]
+    fn capped_the_section_is_never_below_the_folded_one_empty_rows_included() {
+        assert_eq!(Shape::new(50, true).capped(20).height(), 20);
+        assert_eq!(Shape::new(50, true).capped(2).height(), 7, "the empty row, the title, three items, the closing row, the empty row");
+        assert_eq!(Shape::new(50, false).capped(20).height(), 7);
+        let bottom = Shape::new(50, true).capped(20);
+        assert_eq!(bottom.hit(18), Some(Hit::Toggle), "the closing row is the last but one");
+        assert_eq!(bottom.hit(19), None, "and the last is the empty row");
+    }
+
+    // ---- the empty Inbox (hs-d487): the title with count 0, then one muted closing row, no toggle ----
+
+    #[test]
+    fn with_no_item_the_section_is_the_title_with_count_0_then_the_one_closing_row_and_it_is_no_click() {
+        use ratatui::backend::TestBackend;
+        let mut terminal = Terminal::new(TestBackend::new(41, 6)).unwrap();
+        terminal.draw(|f| draw(f, f.area(), &[], Shape::new(0, false), None, at("2026-01-01T00:00:00.000Z"), &|_| None)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row = |y: u16| (0..41).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_owned();
+        let title = format!(" ╭─\u{E0B6}Inbox\u{E0B4}{}\u{E0B6}0\u{E0B4}", "─".repeat(39 - 2 - 2 - "Inbox".len() - 3));
+        let close = " ╰\u{F005A} up to date, drink some water";
+        let rows: Vec<String> = (0..6).map(row).collect();
+        assert_eq!(rows[..3], ["".to_owned(), title, close.to_owned()], "the empty row, the title with count 0, the closing row: {rows:?}");
+        assert!(rows[3..].iter().all(String::is_empty), "no other row: {rows:?}");
+        let muted = palette::fg(Meaning::Nothing).fg.unwrap();
+        for x in 1..close.chars().count() as u16 {
+            assert_eq!(buffer[(x, 2)].fg, muted, "cell {x} of the closing row is muted");
+        }
+        for y in 0..4 {
+            assert_eq!(Shape::new(0, false).hit(y), if y == 1 { Some(Hit::Header) } else { None }, "row {y}: only the title is a hit, the closing row is no toggle");
+        }
     }
 }

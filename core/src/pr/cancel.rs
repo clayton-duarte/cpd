@@ -2,11 +2,13 @@
 //! the lock; after it, a `waiting` or `dispatch` PR whose Jobs are all
 //! `cancelled` (or that has none) too; and an `open` PR whose pull request is
 //! stored `closed` (hs-d329). The PR keeps its key; before the lock the plan
-//! fingerprint changes, after it the Plan may move on.
+//! fingerprint changes, after it the Plan may move on. With `--superseded-by <plan>/<key>` a `dispatch` PR whose
+//! `merged` Jobs were carried by another PR is cancelled too, the Event naming that PR (hs-d301).
 
 use rusqlite::Connection;
 use serde_json::json;
 
+use super::add::{needs_refs, node_of};
 use super::open::{merged_prs, opened_prs};
 use super::{CancelArgs, Env, find_pr, plan_phase, pulls};
 use crate::error::{CpdError, ErrorCode};
@@ -31,7 +33,7 @@ struct Released {
 
 enum Decision {
     /// Cancel it from `from` (`waiting`, `dispatch` or `open`); `released` only for `open`.
-    Cancel { from: &'static str, released: Option<Released> },
+    Cancel { from: &'static str, released: Option<Released>, superseded_by: Option<String> },
     /// It was already `cancelled`.
     Already,
 }
@@ -39,14 +41,17 @@ enum Decision {
 pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let key = args.key;
+    // The superseding PR as a reference of the Plan (§2.2): the bare key in the Plan itself, else `<plan>/<key>`.
+    let superseded = args.superseded_by.map(|r| Ok::<_, CpdError>(needs_refs(&plan, &[r])?.remove(0))).transpose()?;
+    let superseded = superseded.as_deref();
     let mut env = Env::open()?;
     let mut moved_to = None;
     let mut released = None;
-    let already = match env.store.read(|conn| decide(conn, &plan, &key))? {
+    let already = match env.store.read(|conn| decide(conn, &plan, &key, superseded))? {
         Decision::Already => true,
-        Decision::Cancel { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key)? {
+        Decision::Cancel { .. } => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, superseded)? {
             Decision::Already => Ok(true),
-            Decision::Cancel { from, released: gave } => {
+            Decision::Cancel { from, released: gave, superseded_by } => {
                 // `prs` ties the Lead worktree, the start time and the pull request to the status: a `cancelled` PR has
                 // none (the worktree on disk stays, §3.8). They are null already but for the status's own.
                 let moved = tx.execute(
@@ -60,15 +65,24 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
                         .with("plan", plan.as_str())
                         .with("pr", key.as_str()));
                 }
-                let text = match &gave {
-                    None => format!("PR {key} of Plan {plan} was cancelled. Next: cpd plan show --plan {plan}"),
-                    Some(r) => format!(
+                cancel_own_jobs(tx, &plan, &key)?;
+                let text = match (&gave, &superseded_by) {
+                    (None, Some(by)) => format!(
+                        "PR {key} of Plan {plan} was cancelled: its work was superseded by PR {by}. cpd removes nothing; remove its Lead worktree \
+                         and Lead Branch by hand. Next: cpd plan show --plan {plan}"
+                    ),
+                    (None, None) => format!("PR {key} of Plan {plan} was cancelled. Next: cpd plan show --plan {plan}"),
+                    (Some(r), _) => format!(
                         "PR {key} of Plan {plan} was cancelled: its pull request #{} ({}) was closed without a merge. cpd removes nothing; \
                          remove the Lead worktree {} and the Lead Branch {} by hand. Next: cpd plan show --plan {plan}",
                         r.number, r.url, r.lead_worktree, r.lead_branch
                     ),
                 };
-                append(tx, NewEvent::pr_cancelled(text, &key).plan(plan.clone()))?;
+                let event = match &superseded_by {
+                    Some(by) => NewEvent::pr_cancelled_superseded(text, &key, by),
+                    None => NewEvent::pr_cancelled(text, &key),
+                };
+                append(tx, event.plan(plan.clone()))?;
                 moved_to = if gave.is_some() { finish(tx, &plan, &key)? } else { advance(tx, &plan, &key)? };
                 released = gave;
                 Ok(false)
@@ -86,6 +100,32 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
         out["released"] = json!({"number": r.number, "url": r.url, "lead_worktree": r.lead_worktree, "lead_branch": r.lead_branch});
     }
     Ok(Output::success(out))
+}
+
+/// A Job cpd adds itself (§2.2 "Job kinds"): the PR's `open` or `update` Job.
+fn is_cpd_job(job: &jobs::Job) -> bool {
+    matches!(job.kind.as_str(), "open" | "update")
+}
+
+/// cpd's own Jobs go with the PR (contract §3.8): in the transaction that cancels a `waiting` or `dispatch` PR, its `open` and `update` Jobs that are
+/// `queued` are `cancelled` (`reason` `pr cancelled`, `job-cancelled`); so are the `update` Jobs `queued` on an `open` PR whose pull request is given up.
+fn cancel_own_jobs(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    let own: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind IN ('open', 'update') AND status = 'queued' ORDER BY seq")?;
+        stmt.query_map([plan.as_str(), key.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+    };
+    let reason = "pr cancelled";
+    for job in own {
+        tx.execute(
+            "UPDATE jobs SET status = 'cancelled', failed_cause = NULL, cancel_reason = ?3,
+                    cancel_requested_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE plan = ?1 AND key = ?2 AND status = 'queued'",
+            [plan.as_str(), job.as_str(), reason],
+        )?;
+        let text = format!("Job {job} of Plan {plan} was cancelled: {reason}: PR {key} was cancelled. Next: cpd plan show --plan {plan}");
+        append(tx, NewEvent::job_cancelled(text, reason).plan(plan.clone()).job(crate::ids::JobKey::parse(&job)?))?;
+    }
+    Ok(())
 }
 
 /// After the lock, the cancelled PR may have been the last one `waiting` or `dispatch`: the Plan then moves on as
@@ -140,17 +180,19 @@ fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase>
     Ok(Some(Phase::Done))
 }
 
-fn decide(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<Decision, CpdError> {
+fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str>) -> Result<Decision, CpdError> {
     let prs = load_prs(conn, plan)?;
     let pr = find_pr(&prs, plan, key)?;
     let phase = plan_phase(conn, plan)?;
     let locked = !matches!(phase, Phase::Grounding | Phase::Plan);
-    let needing: Vec<String> =
+    let mut needing: Vec<String> =
         prs.iter().filter(|p| p.status != "cancelled" && p.needs.iter().any(|n| n == key.as_str())).map(|p| p.key.to_string()).collect();
+    // A base PR cannot be cancelled while a PR is stacked on it (contract §3.8 "Stacked PRs" step 9).
+    needing.extend(stacked_on(conn, plan, pr)?);
     let in_use = |jobs: Vec<String>| {
         CpdError::new(
             ErrorCode::PrInUse,
-            format!("PR {key} is in use: cancel its Jobs (cpd job cancel) and edit away the needs on it (cpd pr edit) first."),
+            format!("PR {key} is in use: cancel its Jobs (cpd job cancel) and edit away the needs and the PRs stacked on it (cpd pr edit) first."),
         )
         .with("plan", plan.as_str())
         .with("pr", key.as_str())
@@ -159,6 +201,16 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<Decision, Cpd
     };
     let from = match (pr.status.as_str(), locked) {
         ("cancelled", _) => return Ok(Decision::Already),
+        (status, _) if superseded.is_some() && !(status == "dispatch" && locked) => {
+            return Err(CpdError::new(
+                ErrorCode::IllegalTransition,
+                format!("PR {key} is {status}: --superseded-by cancels only a dispatch PR, after the lock."),
+            )
+            .with("plan", plan.as_str())
+            .with("pr", key.as_str())
+            .with("from", status)
+            .with("to", "cancelled"));
+        }
         ("waiting", _) => "waiting",
         ("dispatch", true) => "dispatch",
         ("open", true) if matches!(phase, Phase::Dispatch | Phase::Deploy) => return decide_open(conn, plan, key, pr, &needing),
@@ -175,12 +227,70 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey) -> Result<Decision, Cpd
                 .with("to", "cancelled"));
         }
     };
-    let live_jobs: Vec<String> =
-        jobs::load(conn, plan)?.into_iter().filter(|j| j.pr == key.as_str() && j.status != "cancelled").map(|j| j.key).collect();
+    // A superseded PR's `merged` Jobs are work another PR carried: only a live Job holds it. cpd's own `open` and `update` Jobs that are
+    // `queued` go with the PR (`cancel_own_jobs`): they hold nothing (contract §3.8); one that is `running` is a live Job.
+    let holds = |j: &jobs::Job| j.status != "cancelled" && !(superseded.is_some() && j.status == "merged") && !(is_cpd_job(j) && j.status == "queued");
+    let live_jobs: Vec<String> = jobs::load(conn, plan)?.into_iter().filter(|j| j.pr == key.as_str() && holds(j)).map(|j| j.key).collect();
     if !live_jobs.is_empty() || !needing.is_empty() {
         return Err(in_use(live_jobs));
     }
-    Ok(Decision::Cancel { from, released: None })
+    if let Some(by) = superseded {
+        check_superseding(conn, plan, key, by)?;
+    }
+    Ok(Decision::Cancel { from, released: None, superseded_by: superseded.map(str::to_owned) })
+}
+
+/// The superseding PR `by` (a reference of `plan`, §2.2): a PR of a Plan of the same Context (`pr_not_found`,
+/// `pr_other_context`), not `key` itself (`usage`), not `cancelled` (`illegal_transition`). Any other status will do:
+/// cpd cannot know where the work went (contract §3.8).
+fn check_superseding(conn: &Connection, plan: &PlanId, key: &PrKey, by: &str) -> Result<(), CpdError> {
+    let (by_plan, by_key) = node_of(plan, by);
+    if by_plan == plan.as_str() && by_key == key.as_str() {
+        return Err(CpdError::new(ErrorCode::Usage, format!("--superseded-by names PR {key} itself.")).with("pr", key.as_str()));
+    }
+    let found: Option<(String, String)> = conn
+        .query_row(
+            "SELECT r.status, p.context FROM prs r JOIN plans p ON p.id = r.plan WHERE r.plan = ?1 AND r.key = ?2",
+            [by_plan.as_str(), by_key.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map(Some)
+        .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(None) } else { Err(e) })?;
+    let Some((status, context)) = found else {
+        return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {by_key} in Plan {by_plan} to be superseded by."))
+            .with("plan", by_plan.as_str())
+            .with("pr", by_key.as_str()));
+    };
+    let own: String = conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    if context != own {
+        return Err(CpdError::new(
+            ErrorCode::PrOtherContext,
+            format!("PR {by_plan}/{by_key} is in Context {context}, not in {own}: PRs reference only PRs of their Context."),
+        )
+        .with("pr", format!("{by_plan}/{by_key}"))
+        .with("context", own.as_str())
+        .with("other_context", context.as_str()));
+    }
+    if status == "cancelled" {
+        return Err(CpdError::new(ErrorCode::IllegalTransition, format!("PR {by_plan}/{by_key} is cancelled: its work cannot supersede PR {key}'s."))
+            .with("plan", by_plan.as_str())
+            .with("pr", by_key.as_str())
+            .with("from", "cancelled")
+            .with("to", "superseding"));
+    }
+    Ok(())
+}
+
+/// The PRs that are not `cancelled` and stacked on `pr`, of any Plan: those of its repo whose `base` is its Lead Branch
+/// (§2.2 "The base PR"), as a bare key in its own Plan and `<plan>/<key>` in another.
+fn stacked_on(conn: &Connection, plan: &PlanId, pr: &PrRow) -> Result<Vec<String>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT plan, key FROM prs WHERE repo = ?1 AND base = ?2 AND status <> 'cancelled' AND NOT (plan = ?3 AND key = ?4) ORDER BY plan, key",
+    )?;
+    let found = stmt
+        .query_map([pr.repo.as_str(), pr.lead_branch.as_str(), plan.as_str(), pr.key.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(found.into_iter().map(|(p, k)| if p == plan.as_str() { k } else { format!("{p}/{k}") }).collect())
 }
 
 /// An `open` PR: its pull request must be stored `closed` (`pr_not_closed`, no `gh` call: the row is what the last poll
@@ -204,7 +314,7 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &PrKey, pr: &PrRow, needin
     if !needing.is_empty() {
         return Err(CpdError::new(
             ErrorCode::PrInUse,
-            format!("PR {key} is in use: PRs that need it would wait for a merge that cannot come; edit away the needs on it (cpd pr edit) first."),
+            format!("PR {key} is in use: PRs that need it, or are stacked on it, would wait for a merge that cannot come; edit away the needs and the stacked PRs on it (cpd pr edit) first."),
         )
         .with("plan", plan.as_str())
         .with("pr", key.as_str())
@@ -217,5 +327,63 @@ fn decide_open(conn: &Connection, plan: &PlanId, key: &PrKey, pr: &PrRow, needin
         lead_worktree: worktree.display().to_string(),
         lead_branch: pr.lead_branch.clone(),
     };
-    Ok(Decision::Cancel { from: "open", released: Some(released) })
+    Ok(Decision::Cancel { from: "open", released: Some(released), superseded_by: None })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::home::CpdHome;
+    use crate::store::Store;
+
+    fn fixture() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        store
+            .write("fixture", |tx| {
+                tx.execute_batch(
+                    "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+                     INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+                       VALUES ('lead1', 'lead', 'ctx', 'pay', 'Lead', '/', 'O3', 'idle', 't', 't');
+                     INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+                       VALUES ('pay', 'ctx', 'Pay', 'dispatch', 'lead1', 't', 't');
+                     INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, created_txn, created_at, started_at)
+                       VALUES ('pay', 'api', '/r/api', 'main', 'dispatch', 'cpd/pay/api', '/w/api', cpd_txn(), 't', 't');
+                     INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind,
+                                       fingerprint, created_txn, created_at)
+                       VALUES ('pay', 'api', 'open-api', 'Open', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'open', hex(zeroblob(32)), cpd_txn(), 't');",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        (dir, store)
+    }
+
+    /// cpd's own `open` Job that is `queued` goes with its PR (contract §3.8): it does not hold the cancel, and the cancel's transaction cancels it with
+    /// `job-cancelled`. One that is `running` is a live Job, which holds the cancel as any does.
+    #[test]
+    fn a_queued_open_job_goes_with_its_pr_and_a_running_one_holds_it() {
+        let (_dir, mut store) = fixture();
+        let (plan, key) = (PlanId::parse("pay").unwrap(), PrKey::parse("api").unwrap());
+        assert!(matches!(store.read(|conn| decide(conn, &plan, &key, None)).unwrap(), Decision::Cancel { from: "dispatch", .. }));
+
+        store.write("fixture", |tx| cancel_own_jobs(tx, &plan, &key)).unwrap();
+        let (status, reason, events): (String, String, i64) = store
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT status, cancel_reason, (SELECT count(*) FROM events WHERE kind = 'job-cancelled' AND job = 'open-api') FROM jobs WHERE key = 'open-api'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?)
+            })
+            .unwrap();
+        assert_eq!((status.as_str(), reason.as_str(), events), ("cancelled", "pr cancelled", 1));
+
+        let (_dir, mut store) = fixture();
+        store.write("fixture", |tx| Ok(tx.execute_batch("UPDATE jobs SET status = 'running' WHERE key = 'open-api';")?)).unwrap();
+        let held = store.read(|conn| decide(conn, &plan, &key, None)).map(|_| ()).unwrap_err();
+        assert_eq!(held.code(), ErrorCode::PrInUse);
+        assert_eq!(held.details()["jobs"], json!(["open-api"]));
+    }
 }

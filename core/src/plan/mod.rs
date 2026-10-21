@@ -16,6 +16,7 @@ mod lead;
 mod list;
 mod lock;
 mod new;
+mod outline;
 mod overlap;
 mod phase;
 mod prs;
@@ -23,7 +24,9 @@ mod render;
 mod rename;
 mod review;
 pub mod row;
+pub(crate) mod shape;
 mod show;
+mod summary;
 #[cfg(test)]
 mod sql_trace;
 
@@ -37,6 +40,7 @@ use crate::ids::{ContextId, PlanId, ReviewId};
 use crate::output::Output;
 
 pub use fingerprint::plan_fingerprint;
+pub use outline::Outline;
 pub use jobs::locked_fingerprint;
 pub use prs::{PrRow, Pull};
 pub use row::{Phase, PlanRow};
@@ -58,6 +62,8 @@ pub enum Command {
     /// Record the User's decision on a Plan review (§4.7)
     #[command(hide = true)]
     Decide(DecideArgs),
+    /// Set the Plan's outline: what its review summary says (§4.13)
+    Outline(OutlineArgs),
     /// Lock the Plan and start dispatching (§4.8)
     Lock(LockArgs),
     /// Change the Plan's title (§4.9)
@@ -153,6 +159,15 @@ pub struct DecideArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct OutlineArgs {
+    /// The outline, a JSON file (commands.md §4.13)
+    #[arg(long, value_name = "outline.json")]
+    file: PathBuf,
+    #[command(flatten)]
+    plan: PlanArg,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct LockArgs {
     #[command(flatten)]
     plan: PlanArg,
@@ -197,6 +212,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Render(args) => review::render(args),
         Command::Review(args) => review::review(args),
         Command::Decide(args) => review::decide(args),
+        Command::Outline(args) => outline::outline(args),
         Command::Lock(args) => lock::lock(args),
         Command::Rename(args) => rename::rename(args),
         Command::Archive(args) => archive::plan_archive(args),

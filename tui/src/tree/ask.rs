@@ -6,7 +6,7 @@
 //!
 //! The questions and the texts are the former inline prompt's, verbatim (commands.md §13.2). The name of `n` is the
 //! new Plan's id (§2.1), so the popup refuses one that is no Plan id; a title no id can be derived from is refused
-//! after the popup, as the note.
+//! after the popup, in a `text` dialog (commands.md §17 "No notes").
 
 use super::actions::Action;
 use super::slug::{self, CONTEXT_MAX, PLAN_MAX};
@@ -135,6 +135,13 @@ impl Question {
 
     pub fn input(title: &'static str, ask: Ask, initial: String) -> Question {
         Question::Input { title, ask, initial }
+    }
+
+    /// The title of the popup: what the dialog is about, and what a failure after it is said to be about.
+    pub fn title(&self) -> &'static str {
+        match self {
+            Question::Input { title, .. } | Question::Confirm { title, .. } => title,
+        }
     }
 
     /// Opens the popup: the command to run, or `None` when the User cancelled; an error says why the popup failed or

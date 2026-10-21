@@ -15,7 +15,7 @@ pub type Repos = HashMap<String, Vec<String>>;
 
 /// The Context as markdown: title and Jira key; Plans; active decisions;
 /// superseded decisions, each naming its successor; open questions; answered
-/// questions with their answers; notes. Each item shows its id and date.
+/// questions with their answers; notes (those in force, then the superseded ones, each naming its successor). Each item shows its id and date.
 ///
 /// A Plan record lists `repos[<record id>]`: the repos of its PRs, from the
 /// database (commands.md §3.3; the record itself has none).
@@ -112,7 +112,15 @@ pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64
         answered.push(entry);
     }
     section(&mut out, "Answered questions", answered.into_iter());
-    section(&mut out, "Notes", of_kind(RecordKind::Note).map(|(_, r)| item(r, &r.text)));
+    // Notes in force first, then the superseded ones, each naming its successor (a note or a decision).
+    let active = of_kind(RecordKind::Note).filter(|(_, r)| !successor.contains_key(&r.id.to_string())).map(|(_, r)| {
+        let replaces = r.supersedes().map(|s| format!(" (supersedes {s})")).unwrap_or_default();
+        item(r, &format!("{}{replaces}", r.text))
+    });
+    let superseded = of_kind(RecordKind::Note).filter_map(|(_, r)| {
+        successor.get(&r.id.to_string()).map(|next| item(r, &format!("{} (superseded by {})", r.text, next.id)))
+    });
+    section(&mut out, "Notes", active.chain(superseded));
     out
 }
 
@@ -198,6 +206,20 @@ mod tests {
         assert!(md.contains("- hs-q2 (2026-10-14): When?"));
         assert!(md.contains("- hs-q1 (2026-10-14): Why?\n  - answer hs-a1 (2026-10-14): Because."));
         assert!(md.contains("Line one\n  line two"));
+    }
+
+    #[test]
+    fn a_superseded_note_follows_the_notes_in_force_naming_its_successor() {
+        let records = vec![
+            (1, rec("hs-n1", "Old fact.", Draft::Note)),
+            (2, rec("hs-n2", "New fact.", Draft::NoteSupersedes { supersedes: RecordId::parse("hs-n1").unwrap() })),
+            (3, rec("hs-n3", "Other fact.", Draft::Note)),
+        ];
+        let md = markdown("Building", None, &records, 0, &Repos::new());
+        let notes = md.split("## Notes").nth(1).unwrap();
+        let at = |needle: &str| notes.find(needle).unwrap_or_else(|| panic!("{needle} in\n{notes}"));
+        assert!(at("- hs-n2 (2026-10-14): New fact. (supersedes hs-n1)") < at("- hs-n3"));
+        assert!(at("- hs-n3") < at("- hs-n1 (2026-10-14): Old fact. (superseded by hs-n2)"));
     }
 
     #[test]

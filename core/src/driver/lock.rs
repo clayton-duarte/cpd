@@ -134,11 +134,21 @@ fn try_take(path: &Path, create: bool) -> Result<Option<Free>, CpdError> {
 /// for an Attempt that is still running: ids are never reused, so after the
 /// end nobody opens this path again (E2's [`probe`] never creates it).
 pub fn remove(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<(), CpdError> {
-    let path = home.attempt_lock(plan, attempt);
-    match fs::remove_file(&path) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(lock_failed(&path, e)),
-        _ => Ok(()),
+    // The Attempt's check lock (§7.7) goes with its driver lock: nothing submits for an ended Attempt.
+    for path in [home.attempt_lock(plan, attempt), home.check_lock(plan, attempt)] {
+        match fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(lock_failed(&path, e)),
+            _ => {}
+        }
     }
+    Ok(())
+}
+
+/// Whether a check span of the Attempt is open (contract §7.7): a live `attempt submit` holds `locks/check-<plan>--<attempt>.lock`.
+/// Opens the lock file without creating it; a missing file is no span. A4's stall check does not run while this is true.
+pub fn check_span_open(home: &CpdHome, plan: &PlanId, attempt: &AttemptId) -> Result<bool, CpdError> {
+    // `try_take` locks the file when it is free, and the guard it returns lets it go at once.
+    Ok(try_take(&home.check_lock(plan, attempt), false)?.is_none())
 }
 
 /// The driver's descriptor of its lock, checked at A1. Keep it alive for the

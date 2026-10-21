@@ -29,11 +29,19 @@ pub struct PrRow {
     pub lead_worktree: Option<PathBuf>,
     /// `waiting`, `dispatch`, `open`, `merged` or `cancelled` (§3.8).
     pub status: String,
-    /// Keys of the PRs it needs, sorted.
+    /// The PRs it needs, sorted, as PR references (contract §2.2): the bare key of a PR of its Plan,
+    /// `<plan>/<key>` of a PR of another.
     pub needs: Vec<String>,
     pub pull: Option<Pull>,
     /// The id of the PR's `pull_requests` row: set exactly when the status is `open` or `merged` (`prs` CHECK).
     pub pull_request: Option<i64>,
+    /// The repo's GitHub name (`prs.name`); null for a PR added before it existed.
+    pub name: Option<String>,
+    /// The PR's title (`prs.title`, hs-d285): what the summary says of it; null until set.
+    pub title: Option<String>,
+    /// The PR's stored shape (`prs.shape`, hs-d497): `tdd`, `docs`, `config`, or `free` for a PR that existed before
+    /// migration `job-kinds`.
+    pub shape: String,
 }
 
 #[cfg(test)]
@@ -50,38 +58,51 @@ impl PrRow {
             needs: needs.iter().map(|n| (*n).to_owned()).collect(),
             pull: None,
             pull_request: None,
+            name: None,
+            title: None,
+            shape: "free".to_owned(),
         }
     }
 }
 
-type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>);
+type Raw = (String, String, String, String, Option<String>, String, (Option<i64>, Option<String>, Option<String>), Option<i64>, (Option<String>, Option<String>, String));
 
-/// Every PR of `plan` in key order, `cancelled` ones included.
-pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError> {
+/// The needs of every PR of `plan` by PR key, each list sorted, as PR references (contract §2.2): the
+/// bare key of a need of the Plan, `<plan>/<key>` of a need of another Plan.
+pub fn load_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, Vec<String>>, CpdError> {
     let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
+    let mut stmt = conn.prepare(
+        "SELECT pr, CASE WHEN needs_plan = plan THEN needs ELSE needs_plan || '/' || needs END FROM pr_needs WHERE plan = ?1",
+    )?;
     for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
         let (pr, need) = row?;
         needs.entry(pr).or_default().push(need);
     }
+    needs.values_mut().for_each(|list| list.sort());
+    Ok(needs)
+}
+
+/// Every PR of `plan` in key order, `cancelled` ones included.
+pub fn load_prs(conn: &Connection, plan: &PlanId) -> Result<Vec<PrRow>, CpdError> {
+    let mut needs = load_needs(conn, plan)?;
     let mut stmt = conn.prepare(
-        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request
+        "SELECT key, repo, base, lead_branch, lead_worktree, status, pr_number, pr_url, pr_opened_at, pull_request, name, title, shape
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
     let raw: Vec<Raw> = stmt
         .query_map([plan.as_str()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, (r.get(6)?, r.get(7)?, r.get(8)?), r.get(9)?, (r.get(10)?, r.get(11)?, r.get(12)?)))
         })?
         .collect::<rusqlite::Result<_>>()?;
     raw.into_iter()
-        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request)| {
+        .map(|(key, repo, base, lead_branch, lead_worktree, status, pull, pull_request, (name, title, shape))| {
             let needs = needs.remove(&key).unwrap_or_default();
             let key = PrKey::parse(&key).map_err(|_| CpdError::bad_row(format!("Plan {plan} has a PR key {key:?}")))?;
             let pull = match pull {
                 (Some(number), Some(url), Some(opened_at)) => Some(Pull { number, url, opened_at }),
                 _ => None,
             };
-            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request })
+            Ok(PrRow { key, repo, base, lead_branch, lead_worktree: lead_worktree.map(PathBuf::from), status, needs, pull, pull_request, name, title, shape })
         })
         .collect()
 }
@@ -111,7 +132,7 @@ mod tests {
                      INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
                        VALUES ('pay', 'api', '/r/api', 'main', 'waiting', 'cpd/pay/api', cpd_txn(), 't'),
                               ('pay', 'web', '/r/web', 'dev', 'waiting', 'cpd/pay/web', cpd_txn(), 't');
-                     INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', 'web', 'api');
+                     INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', 'web', 'pay', 'api');
                      UPDATE prs SET status = 'dispatch', lead_worktree = '/w/api', started_at = 't' WHERE key = 'api';
                      INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at)
                        VALUES ('acme/api', 7, 'https://x/7', 'T', 0, 'open', 'none', 'none', 't', 't');

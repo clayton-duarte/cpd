@@ -1,5 +1,6 @@
 import { callCpd, CpdError, isObject } from "./cpd.ts";
 import type { Host } from "./host.ts";
+import { switchModel } from "./retier.ts";
 import { POLICY_SECTION } from "./policy.ts";
 import { isTyped, startsReply } from "./reply.ts";
 import { type Facts, Reporter, stateArgs, type Wanted } from "./state.ts";
@@ -50,10 +51,11 @@ export function registerAgentState(host: Host): void {
     host.refresh(r);
   });
 
-  // pi's dialogs (`ctx.ui.select/confirm/input/editor/custom`).
+  // pi's dialogs (`ctx.ui.select/confirm/input/editor/custom`). A Worker never talks to the human (commands.md §15.4):
+  // its dialog opens no reason; it asks its Lead with `cpd ask`.
   const onPrompt = (active: boolean) => {
     const r = host.run;
-    if (!r) return;
+    if (!r || r.info.role === "worker") return;
     if (r.facts.prompt(active)) host.refresh(r);
   };
   pi.on("ui_prompt_start", () => onPrompt(true));
@@ -64,6 +66,7 @@ export function registerAgentState(host: Host): void {
     if (!r) return;
     if (ctx.isIdle()) r.facts.active = false;
     host.refresh(r);
+    if (r.retierDue) void switchModel(host, r); // §15.3 `session-retiered`: the Session's next idle
     r.reload?.nudge(); // a busy Lead's idle gaps can be shorter than the poll interval (§15.6 "Retries")
   });
 

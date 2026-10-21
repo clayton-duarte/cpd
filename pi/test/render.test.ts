@@ -28,6 +28,8 @@ const tagged = (line: string): string =>
     .replace(/\x1b\[48;5;0m|\x1b\[49m/g, "")
     .replace(/\x1b\[38;5;(\d+)m/g, (_m, n) => `<${COLORS[Number(n)]}>`)
     .replace(/\x1b\[39m/g, "</>")
+    .replace(/\x1b\[7m/g, "<inv>")
+    .replace(/\x1b\[27m/g, "</inv>")
     .replace(/\x1b\[1m/g, "<b>")
     .replace(/\x1b\[22m/g, "</b>")
     .trimEnd();
@@ -39,9 +41,16 @@ const show = (message: RenderedMessage, expanded: boolean, opts: { style?: Style
   draw(rendering(opts.style).render(message, { expanded, outputPad: opts.outputPad ?? 1 }, theme), opts.width);
 const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z]*>/g, ""));
 
-const HEAD = (summary: string) => ` <muted>╭</><customMessageLabel>⦁</> <b>cpd ${summary}</b>`;
+const CAP_L = "\u{E0B6}";
+const CAP_R = "\u{E0B4}";
+const DOT = "\u{2981}";
+// hs-d486: `╭─` and the caps muted; the title muted then reversed (pi's theme has no inverse); no dot.
+const HEAD = (summary: string) => ` <muted>╭─${CAP_L}</><inv><muted>cpd ${summary}</></inv><muted>${CAP_R}</>`;
+const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd ${summary}${CAP_R}`;
 const rail = (line: string) => ` <muted>│ </>${line}`;
-const closing = (word: string) => ` <muted>╰─ ${word}</>`;
+const FOLDED = "\u{F004B}";
+const OPEN = "\u{F0063}";
+const closing = (word: string) => ` <muted>╰${word === "expand" ? FOLDED : OPEN} ${word}</>`;
 
 const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
 const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev(7, kind, over) as unknown as CpdEvent;
@@ -49,19 +58,19 @@ const deep = <T>(m: T): T => structuredClone(m);
 
 // ---- Event ----
 
-test("an Event, collapsed: ╭⦁, the bold title, a muted ╰─ expand", () => {
+test("an Event, collapsed: ╭⦁, the bold title, a muted ╰󰁋 expand", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
   assert.deepEqual(show(m, false), [HEAD("Job api-1 merged."), closing("expand")]);
 });
 
-test("an Event, expanded: the title stays, the full content behind a muted │ , then a muted ╰─ collapse", () => {
+test("an Event, expanded: the title stays, the full content behind a muted │ , then a muted ╰󰁣 collapse", () => {
   const m = eventMessage(event("job-merged", { text: "Job api-1 merged.\nsecond line" }), ID);
   assert.deepEqual(show(m, true), [HEAD("Job api-1 merged."), rail("Job api-1 merged."), rail("second line"), closing("collapse")]);
 });
 
 test("a long summary is cut to 160 characters, 159 and `…`", () => {
   const m = eventMessage(event("escalation", { text: `${"word ".repeat(60)}` }), ID);
-  const summary = plain(show(m, false))[0]!.slice(" ╭⦁ cpd ".length);
+  const summary = plain(show(m, false))[0]!.slice(` ╭─${CAP_L}cpd `.length, -CAP_R.length);
   assert.equal(summary.length, 160);
   assert.ok(summary.endsWith("…"));
 });
@@ -69,9 +78,9 @@ test("a long summary is cut to 160 characters, 159 and `…`", () => {
 test("a head wider than the pane wraps under the title, it is never cut", () => {
   const m = eventMessage(event("job-merged", { text: "alpha beta gamma delta epsilon zeta" }), ID);
   const lines = plain(show(m, false, { width: 24 }));
-  assert.equal(lines[0], " ╭⦁ cpd alpha beta gamma");
-  assert.equal(lines[1], "    delta epsilon zeta");
-  assert.equal(lines.at(-1), " ╰─ expand");
+  assert.equal(lines[0], ` ╭─${CAP_L}cpd alpha beta gamma`);
+  assert.equal(lines[1], `    delta epsilon zeta${CAP_R}`);
+  assert.equal(lines.at(-1), ` ╰${FOLDED} expand`);
 });
 
 test("an empty content shows no body", () => {
@@ -169,6 +178,18 @@ test("a customType the adapter starts to display later: the first line of its co
   assert.equal(show(m, false)[0], HEAD("first"));
 });
 
+// ---- cpd-plan-summary ----
+
+test("cpd-plan-summary: `Plan review <id> summary`, always open with its Markdown content in full, no closing row and no toggle", () => {
+  const content = "# Review title\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change | Open full plan (/x/plan-r1.md)";
+  const m: Message = { customType: "cpd-plan-summary", content, display: true, details: { plan: "p1", review: "r1" } };
+  const expected = [HEAD("Plan review r1 summary"), rail("# Review title"), rail("Plan p1: Plan · review r1"), rail(""), rail("Goal: Show a review in chat"), rail(""), rail("Approve | Change | Open full plan (/x/plan-r1.md)")];
+  assert.deepEqual(show(m, false), expected);
+  assert.deepEqual(show(m, true), expected);
+  const component = rendering().render(m, { expanded: false, outputPad: 1 }, theme) as Component & { handleMouse?: unknown };
+  assert.equal(component.handleMouse, undefined, "no toggle");
+});
+
 // ---- display only ----
 
 test("the message handed to the model is unchanged, whatever the display", () => {
@@ -215,7 +236,7 @@ test("Ctrl+O (options.expanded) opens and closes the message both ways, a click 
 
 // ---- the other styles and the pane ----
 
-test("Click to expand is gone; only the ╰─ line names the toggle, muted", () => {
+test("Click to expand is gone; only the closing ╰ row names the toggle, muted", () => {
   const m = eventMessage(event("job-merged", { text: "A\nB" }), ID);
   for (const style of ["compact", "claude", "codex"] as const) {
     for (const expanded of [false, true]) {
@@ -228,7 +249,7 @@ test("Click to expand is gone; only the ╰─ line names the toggle, muted", ()
 
 test("outputPad 0 gives the margin column back", () => {
   const m = eventMessage(event("job-merged", { text: "A" }), ID);
-  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), ["╭⦁ cpd A", "╰─ expand"]);
+  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}cpd A${CAP_R}`, `╰${FOLDED} expand`]);
 });
 
 test("style off: no component, so pi draws its own box", () => {
@@ -237,7 +258,7 @@ test("style off: no component, so pi draws its own box", () => {
 
 // ---- reading the extension's config, once ----
 
-function scratch<T>(fn: (dirs: { agent: string; cwd: string; env: Record<string, string>; config: (dir: string, text: string) => string }) => T): T {
+function scratch<T>(fn: (dirs: { agent: string; cwd: string; config: (dir: string, text: string) => string }) => T): T {
   const root = mkdtempSync(join(tmpdir(), "render-test-"));
   try {
     const agent = join(root, "agent");
@@ -248,41 +269,49 @@ function scratch<T>(fn: (dirs: { agent: string; cwd: string; env: Record<string,
       writeFileSync(join(dir, "compact-tools.json"), text);
       return join(dir, "compact-tools.json");
     };
-    return fn({ agent, cwd, env: { PI_CODING_AGENT_DIR: agent }, config });
+    // pi's getAgentDir() reads PI_CODING_AGENT_DIR (as pi/test/fake.ts sets it).
+    const before = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agent;
+    try {
+      return fn({ agent, cwd, config });
+    } finally {
+      if (before === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = before;
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 }
 
 test("no compact-tools.json: the extension's default, compact", () => {
-  scratch(({ cwd, env }) => assert.equal(loadStyle(env, { cwd, trusted: true }), "compact"));
+  scratch(({ cwd }) => assert.equal(loadStyle({ cwd, trusted: true }), "compact"));
 });
 
 test("the agent directory's style, then a trusted project's over it; an untrusted project's is not read", () => {
-  scratch(({ agent, cwd, env, config }) => {
+  scratch(({ agent, cwd, config }) => {
     config(agent, '{"style": "claude", "mode": "silent"}');
-    assert.equal(loadStyle(env, { cwd, trusted: false }), "claude");
+    assert.equal(loadStyle({ cwd, trusted: false }), "claude");
     config(join(cwd, ".pi"), '{"style": "codex"}');
-    assert.equal(loadStyle(env, { cwd, trusted: false }), "claude");
-    assert.equal(loadStyle(env, { cwd, trusted: true }), "codex");
+    assert.equal(loadStyle({ cwd, trusted: false }), "claude");
+    assert.equal(loadStyle({ cwd, trusted: true }), "codex");
     config(join(cwd, ".pi"), '{"tools": []}');
-    assert.equal(loadStyle(env, { cwd, trusted: true }), "claude", "a file without `style` keeps the one before it");
+    assert.equal(loadStyle({ cwd, trusted: true }), "claude", "a file without `style` keeps the one before it");
   });
 });
 
 test("a file that does not parse, and a style that is not one of the four, are reported as the extension reports them and the value before kept", () => {
-  scratch(({ agent, cwd, env, config }) => {
+  scratch(({ agent, cwd, config }) => {
     const errors = mock.method(console, "error", () => {});
     try {
       const bad = config(agent, "{nope");
-      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(loadStyle({ cwd, trusted: false }), "compact");
       assert.equal(errors.mock.callCount(), 1);
       assert.match(String(errors.mock.calls[0]!.arguments[0]), new RegExp(`^\\[compact-tools\\] ${bad.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: `));
       config(agent, '{"style": "fancy"}');
-      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(loadStyle({ cwd, trusted: false }), "compact");
       assert.equal(errors.mock.calls[1]!.arguments[0], `[compact-tools] ${join(agent, "compact-tools.json")}: style must be one of compact, claude, codex, off; using previous value`);
       config(agent, "[1]");
-      assert.equal(loadStyle(env, { cwd, trusted: false }), "compact");
+      assert.equal(loadStyle({ cwd, trusted: false }), "compact");
       assert.equal(errors.mock.calls[2]!.arguments[0], `[compact-tools] ${join(agent, "compact-tools.json")}: expected a JSON object; using previous values`);
     } finally {
       errors.mock.restore();
@@ -296,7 +325,7 @@ test("the adapter registers one renderer per displayed customType once at load, 
   const f = new Fixture();
   try {
     f.load();
-    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision"]);
+    assert.deepEqual([...f.pi.renderers.keys()], ["cpd", "cpd-context", "cpd-plan-decision", "cpd-plan-summary"]);
     assert.deepEqual([...f.pi.renderers.keys()], [...RENDERED_TYPES]);
     mkdirSync(f.agentDir);
     f.file("agent/compact-tools.json", '{"style": "codex"}');
@@ -309,5 +338,15 @@ test("the adapter registers one renderer per displayed customType once at load, 
     assert.deepEqual(render(), [HEAD("Job done."), closing("expand")], "every style but off draws the one fold");
   } finally {
     await f.close();
+  }
+});
+
+test("the title row is ╭─, the title as a pill between U+E0B6 and U+E0B4, no U+2981, folded and expanded alike", () => {
+  const m = eventMessage(event("job-merged", { text: "Job api-1 merged." }), ID);
+  for (const expanded of [false, true]) {
+    const lines = show(m, expanded);
+    assert.equal(lines[0], HEAD("Job api-1 merged."));
+    assert.equal(plain(lines)[0], PLAIN_HEAD("Job api-1 merged."));
+    assert.ok(!lines.join("\n").includes(DOT), "no dot glyph");
   }
 });

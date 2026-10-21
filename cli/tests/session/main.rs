@@ -1,0 +1,13 @@
+//! The `session` integration-test binary of `cpd` (docs/implementing.md, Tests: the area table): every file of this
+//! directory is a module. The harness, `cli/tests/common/`, is shared by every area's binary.
+
+#[path = "../common/mod.rs"]
+mod common;
+
+mod host;
+mod session_reload;
+mod session_retier;
+mod session;
+mod session_send;
+mod session_titles;
+mod session_watchdog;

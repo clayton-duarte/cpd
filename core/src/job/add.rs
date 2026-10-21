@@ -6,8 +6,12 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+use super::open;
 use super::spec::{self, Spec};
-use super::{AddArgs, Env, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, plan_phase, sorted_needs};
+use super::{
+    AddArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows,
+    check_test_job_required, plan_phase, sorted_needs,
+};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
@@ -34,6 +38,8 @@ struct Wanted {
     draft: bool,
     /// `--urgent` (§2.2): not a Locked field, so a rerun without it is `already`.
     urgent: bool,
+    /// `--kind` (§2.2 "Job kinds"), `work` by default.
+    kind: String,
 }
 
 enum Decision {
@@ -45,12 +51,21 @@ enum Decision {
 pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let needs = sorted_needs(&args.needs)?;
+    let kind = args.kind.clone().unwrap_or_else(|| "work".to_owned());
+    check_kind_not_reserved(&kind)?;
+    if args.review && kind != "work" {
+        return Err(CpdError::new(ErrorCode::Usage, format!("--review is a work Job: it cannot be --kind {kind}.")).with("kind", kind));
+    }
     require_tier_and_spec(&args)?;
     let spec = args.spec.as_deref().map(spec::read).transpose()?;
+    if let Some(spec) = &spec {
+        spec.check_kind(&kind)?;
+    }
     let mut env = Env::open()?;
     if let Some(tier) = args.tier {
         env.check_tier(tier)?;
     }
+    let open_tier = env.config.open_tier;
     let wanted = Wanted {
         key: args.key,
         pr: args.pr,
@@ -61,6 +76,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         review: args.review,
         draft: args.draft,
         urgent: args.urgent,
+        kind,
     };
 
     let decision = env.store.read(|conn| decide(conn, &plan, &wanted))?;
@@ -76,6 +92,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     NewEvent::job_added(
                         text,
                         &job.pr,
+                        &job.kind,
                         &job.status,
                         job.appended,
                         job.tier.as_deref(),
@@ -86,11 +103,18 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     .plan(plan.clone())
                     .job(wanted.key.clone()),
                 )?;
+                // One path for every change to an open PR (hs-d497): a fix Job queued on it queues the PR's `update` Job.
+                if job.status == "queued" {
+                    let prs = load_prs(tx, &plan)?;
+                    if let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr && p.status == "open") {
+                        open::queue_update(tx, &plan, pr, open_tier, COMMAND, open::Cause::Feedback)?;
+                    }
+                }
                 Ok((job, false))
             }
         })?,
     };
-    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review, "urgent": job.urgent}});
+    let mut out = json!({"job": {"key": job.key, "pr": job.pr, "kind": job.kind, "status": job.status, "appended": job.appended, "tier": job.tier, "needs": job.needs, "review": wanted.review, "urgent": job.urgent}});
     if already {
         out["already"] = json!(true);
     }
@@ -124,6 +148,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     let prs = load_prs(conn, plan)?;
     let pr = wanted.pr.select(plan, &prs)?.key.to_string();
     check_pr_live(&prs, plan, &pr)?;
+    check_shape_allows(&prs, plan, &pr, &wanted.kind, wanted.review)?;
     let all = jobs::load(conn, plan)?;
     let needs = if wanted.review { review_needs(&all, plan, &pr, wanted.key.as_str())? } else { wanted.needs.clone() };
     let appended = phase != "plan";
@@ -139,6 +164,10 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         status: if draft { "draft" } else { "queued" }.to_owned(),
         appended,
         review: wanted.review,
+        kind: wanted.kind.clone(),
+        tests: wanted.spec.as_ref().and_then(|s| s.tests.as_ref()).map(|t| json!(t)),
+        test_files: wanted.spec.as_ref().and_then(|s| s.test_files.as_ref()).map(|t| json!(t)),
+        test_approved: None,
         urgent: wanted.urgent,
         fingerprint: None,
         retry_tier: None,
@@ -164,6 +193,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
     check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
     check_needs_available(&all, plan, &job.needs)?;
     if !draft {
+        check_test_job_required(&all, plan, &job)?;
         check_needs_not_draft(&all, plan, &job)?;
         job.fingerprint = Some(locked_fingerprint(&job));
     }
@@ -192,10 +222,10 @@ fn check_needs_not_draft(all: &[Job], plan: &PlanId, job: &Job) -> Result<(), Cp
 }
 
 /// A review Job's Dependencies (B2): every Job of its PR that exists now and is
-/// not `cancelled`, itself excepted (a rerun of the same add). A `failed` Job
+/// not `cancelled` nor an `open` or `update` Job (nothing waits for them), itself excepted (a rerun of the same add). A `failed` Job
 /// refuses with `needs_unavailable` and `details.jobs`: retry or cancel it first.
 fn review_needs(all: &[Job], plan: &PlanId, pr: &str, key: &str) -> Result<Vec<String>, CpdError> {
-    let of_pr = || all.iter().filter(|j| j.pr == pr && j.key != key && j.status != "cancelled");
+    let of_pr = || all.iter().filter(|j| j.pr == pr && j.key != key && j.status != "cancelled" && !matches!(j.kind.as_str(), "open" | "update"));
     let failed: Vec<&str> = of_pr().filter(|j| j.status == "failed").map(|j| j.key.as_str()).collect();
     if !failed.is_empty() {
         return Err(CpdError::new(
@@ -211,9 +241,11 @@ fn review_needs(all: &[Job], plan: &PlanId, pr: &str, key: &str) -> Result<Vec<S
     Ok(needs)
 }
 
-/// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`) and the needs; `review` is compared by the caller.
+/// The Locked fields (§2.2: the Spec, `title`, `tier`, `pr`, `kind`, `tests`, `test_files`) and the needs; `review` is
+/// compared by the caller.
 fn same_locked_fields(a: &Job, b: &Job) -> bool {
-    (&a.pr, &a.title, &a.tier, &a.spec, &a.needs) == (&b.pr, &b.title, &b.tier, &b.spec, &b.needs)
+    (&a.pr, &a.title, &a.tier, &a.spec, &a.needs, &a.kind, &a.tests, &a.test_files)
+        == (&b.pr, &b.title, &b.tier, &b.spec, &b.needs, &b.kind, &b.tests, &b.test_files)
 }
 
 fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(), CpdError> {
@@ -221,8 +253,8 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
     let spec = job.spec.as_ref();
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
-                           status, appended, fingerprint, review, urgent, created_txn, created_at)
-         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, cpd_txn(),
+                           status, appended, fingerprint, review, urgent, kind, tests, test_files, created_txn, created_at)
+         VALUES (?1, ?13, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?14, ?15, ?16, ?17, ?18, cpd_txn(),
                  (SELECT at FROM txns WHERE id = cpd_txn()))",
         rusqlite::params![
             plan.as_str(),
@@ -240,10 +272,11 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
             job.pr,
             review,
             job.urgent,
+            job.kind,
+            array(job.tests.as_ref()),
+            array(job.test_files.as_ref()),
         ],
     )?;
-    // An appended Job reopens its PR for E4: `all-merged` is sent again once the Jobs are all merged or cancelled.
-    tx.execute("UPDATE prs SET all_merged_at = NULL WHERE plan = ?1 AND key = ?2 AND all_merged_at IS NOT NULL", [plan.as_str(), job.pr.as_str()])?;
     for need in &job.needs {
         tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), job.key.as_str(), need.as_str()])?;
     }

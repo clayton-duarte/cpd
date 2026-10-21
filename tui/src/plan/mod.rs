@@ -11,6 +11,9 @@
 //! [`COALESCE`] after an Event that concerns the view.
 //! The User's keys and clicks run commands ([`actions`]); nothing else starts a process.
 //!
+//! The Plans' scroll offsets survive a restart of the view, in `run/tui/plan-scroll.json` ([`Offsets`], hs-d254): the
+//! one file a view writes, its own state.
+//!
 //! Keys: ←→↑↓/hjkl select (←→ within a row of boxes, ↑↓ across rows too), Enter opens or closes the Worker, Esc clears; the wheel scrolls; clicks select a pill. There is no `q`: a layout pane that
 //! dies is started again by the `pane-died` hook (contract §6.1), so the view never exits on a key.
 
@@ -19,8 +22,10 @@ mod boxes;
 mod flow;
 pub(crate) mod pulse;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -38,6 +43,7 @@ use self::flow::{Dir, Selection};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
 use super::background::Background;
+use super::viewlog::ViewLog;
 use super::read::{self, ChatSlot, PlanBoxes, Pulse, ReviewStatus};
 use super::runner::{ViewError, kept};
 use super::{Capture, RunCommand, run_view};
@@ -69,7 +75,7 @@ fn pulse_due(stale: bool, since: Duration) -> bool {
     since >= if stale { COALESCE } else { PULSE_REFRESH }
 }
 
-/// While a spinner is on screen ([`Centre::spins`], [`pulse_spins`]) the view redraws this often (one frame:
+/// While a spinner is on screen ([`Centre::spins`]; Pulse has none since hs-d327) the view redraws this often (one frame:
 /// palette.rs); a redraw reads nothing from the store. With none, it draws only when something changed.
 const FRAME: Duration = Duration::from_millis(100);
 
@@ -133,7 +139,7 @@ struct Centre {
 impl Centre {
     /// A Job runs: its pill's icon is the spinner, which turns with the clock.
     fn spins(&self) -> bool {
-        self.plan.jobs.iter().any(|j| flow::Live::of(j) == Some(flow::Live::Running))
+        self.plan.jobs.iter().any(|j| flow::Live::of(j, false) == Some(flow::Live::Running))
     }
 
     /// Draw the boxes again at spinner frame `frame`, from the Plan already read, when a spinner is on screen and the
@@ -141,16 +147,11 @@ impl Centre {
     fn turn(&mut self, frame: usize) -> bool {
         let turned = frame != self.frame && self.spins();
         if turned {
-            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, frame).with_margin(MARGIN);
+            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, &self.plan.needs_user, frame).with_margin(MARGIN);
             self.frame = frame;
         }
         turned
     }
-}
-
-/// A Lead of Pulse is working: its dot is the spinner, which turns with the clock.
-fn pulse_spins(pulse: &Pulse) -> bool {
-    pulse.rows.iter().any(|r| r.dot == read::Dot::Working)
 }
 
 /// One read of the store: the Pulse of the Manager in the chat slot, or the Plan of the Lead there, if any, and the
@@ -174,7 +175,7 @@ fn snapshot(store: &mut Store, home: &CpdHome, width: u16, now_ms: i64) -> Resul
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, frame).with_margin(MARGIN);
+    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(MARGIN);
     let review = ReviewRow::of(&plan, home, || review_host(&mut std::io::sink()));
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, review, boxes, frame }), pulse: None })
 }
@@ -189,17 +190,14 @@ fn concerns(event: &Event, centre: Option<&Centre>, pulse: Option<&Pulse>) -> bo
 }
 
 /// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
-/// or `no Plan yet`, then the note of the last action.
-fn message(error: Option<&str>, note: &str, centre: Option<&Centre>) -> Option<Line<'static>> {
+/// or `no Plan yet`: lasting states of the view (commands.md §17 "No notes", rule (b)).
+fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>> {
     let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::note())).collect();
     match centre {
         None => parts.push(" no Lead session in the centre".dim()),
         Some(c) if c.plan.prs.is_empty() => parts.push("no PR yet: cpd pr add".dim()),
         Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::note())),
         Some(_) => {}
-    }
-    if !note.is_empty() {
-        parts.push(Span::styled(note.to_owned(), palette::note()));
     }
     (!parts.is_empty()).then(|| Line::from(spaced(parts)))
 }
@@ -222,12 +220,11 @@ struct Ui {
     selected: Selection,
     /// The window's top-left in the chart.
     scroll: (u16, u16),
-    /// The scroll offset each Plan was left at, kept while the view runs only (hs-d197). Not clamped: the chart may
-    /// have changed size by the time it comes back, and a draw clamps.
+    /// The scroll offset each Plan was left at (hs-d197), read from [`Offsets`] at the view's start. Not clamped: the
+    /// chart may have changed size by the time it comes back, and a draw clamps.
     remembered: HashMap<PlanId, (u16, u16)>,
     /// The first Pulse row shown (reset whenever the Context of the Pulse changes).
     pulse_offset: usize,
-    note: String,
     error: Option<String>,
     /// The area clicks and the wheel use: the chart's window, or the Pulse rows inside the margin.
     body: Rect,
@@ -242,19 +239,23 @@ impl Ui {
         }
         self.selected.reset();
         self.scroll = to.and_then(|plan| self.remembered.get(plan).copied()).unwrap_or((0, 0));
-        self.note.clear();
     }
 
-    /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`, the note).
-    fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse, frame: usize) {
+    /// Records the offset of `plan`, the Plan on show, once it differs from the one remembered (a Plan never scrolled
+    /// is at its corner). Called after a draw, so the offset is clamped.
+    fn remember(&mut self, plan: &PlanId) {
+        if self.remembered.get(plan).copied().unwrap_or((0, 0)) != self.scroll {
+            self.remembered.insert(plan.clone(), self.scroll);
+        }
+    }
+
+    /// Draws Pulse: the rows inside the margin, then the message row (an error, ` no Plans yet`).
+    fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse) {
         let mut window = f.area();
         let mut parts: Vec<Span<'static>> =
             self.error.iter().map(|e| Span::styled(e.clone(), palette::note())).collect();
         if pulse.rows.is_empty() {
             parts.push(" no Plans yet".dim());
-        }
-        if !self.note.is_empty() {
-            parts.push(Span::styled(self.note.clone(), palette::note()));
         }
         if !parts.is_empty() {
             let [rows, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
@@ -265,7 +266,7 @@ impl Ui {
             window = rows;
         }
         self.body = window.inner(MARGIN);
-        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset, frame);
+        self.pulse_offset = pulse::draw(f.buffer_mut(), self.body, pulse, self.pulse_offset);
     }
 
     fn draw(&mut self, f: &mut Frame, centre: Option<&Centre>) {
@@ -276,7 +277,7 @@ impl Ui {
             row.draw(f.buffer_mut(), row_area);
             window = below;
         }
-        if let Some(text) = message(self.error.as_deref(), &self.note, centre) {
+        if let Some(text) = message(self.error.as_deref(), centre) {
             let [chart_area, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
             // the pane's last row, indented like the chart's content at scroll (0, 0)
             f.render_widget(Paragraph::new(text), message_area.inner(Margin { horizontal: MARGIN.horizontal, vertical: 0 }));
@@ -290,6 +291,65 @@ impl Ui {
             self.selected.follow = false;
         }
         self.scroll = c.boxes.chart.blit(f.buffer_mut(), window, self.scroll, sel);
+    }
+}
+
+/// The Plans' scroll offsets in `$CPD_HOME/run/tui/plan-scroll.json` (commands.md §13.2, hs-d254): a JSON object
+/// `{"<plan id>": [x, y]}`. The view's own state, not Ledger state: the one file a view writes.
+struct Offsets {
+    path: PathBuf,
+    /// What the file holds, as far as this view knows; a write is due when the offsets differ from it.
+    saved: HashMap<PlanId, (u16, u16)>,
+    /// When the file was last written, or tried.
+    written: Option<Instant>,
+}
+
+/// A write is due at most this often (an offset that changes more often waits).
+const SAVE_EVERY: Duration = Duration::from_secs(1);
+
+impl Offsets {
+    fn at(home: &CpdHome) -> Offsets {
+        // Not in `CpdHome` (contract §1.4): the layout's one source of truth lists this file there.
+        let path = home.run_dir().join("tui").join("plan-scroll.json");
+        Offsets { path, saved: HashMap::new(), written: None }
+    }
+
+    /// The offsets in the file: none when it is missing; `Err` with the reason when it cannot be read or is not
+    /// `{"<plan id>": [x, y]}`.
+    fn load(&mut self) -> Result<HashMap<PlanId, (u16, u16)>, String> {
+        let text = match fs::read(&self.path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(HashMap::new()),
+            Err(e) => return Err(format!("{}: {e}", self.path.display())),
+        };
+        let offsets: HashMap<PlanId, (u16, u16)> =
+            serde_json::from_slice(&text).map_err(|e| format!("{}: {e}", self.path.display()))?;
+        self.saved = offsets.clone();
+        Ok(offsets)
+    }
+
+    /// Writes `offsets` when they differ from the file and, unless `now` (the Plan changed), a second has passed
+    /// since the last write. A failure is returned and leaves the offsets unsaved, so the next call retries.
+    fn save(&mut self, offsets: &HashMap<PlanId, (u16, u16)>, now: bool) -> Result<(), String> {
+        if *offsets == self.saved || (!now && self.written.is_some_and(|at| at.elapsed() < SAVE_EVERY)) {
+            return Ok(());
+        }
+        self.written = Some(Instant::now());
+        self.write(offsets).map_err(|e| format!("scroll positions not saved: {}: {e}", self.path.display()))?;
+        self.saved.clone_from(offsets);
+        Ok(())
+    }
+
+    /// Replaces the file: a temporary file beside it, then a rename.
+    fn write(&self, offsets: &HashMap<PlanId, (u16, u16)>) -> io::Result<()> {
+        let sorted: BTreeMap<&str, (u16, u16)> = offsets.iter().map(|(plan, at)| (plan.as_str(), *at)).collect();
+        let text = serde_json::to_vec(&sorted).map_err(io::Error::other)?;
+        let dir = self.path.parent().unwrap_or(Path::new("."));
+        fs::create_dir_all(dir)?;
+        let tmp = self.path.with_extension(format!("json.tmp{}", std::process::id()));
+        fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &self.path)).inspect_err(|_| {
+            let _ = fs::remove_file(&tmp);
+        })
     }
 }
 
@@ -341,6 +401,16 @@ fn now_ms() -> i64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
+/// Starts `ui` from the offsets file: an unreadable or invalid file starts empty and is replaced at the next write. Returns
+/// the lines for the view's log (`run/tui/plan.log`).
+/// A reset draws nothing (commands.md §17 "No notes").
+fn begin(ui: &mut Ui, offsets: &mut Offsets, plan: Option<&PlanId>) -> Vec<String> {
+    let loaded = offsets.load();
+    ui.remembered = loaded.clone().unwrap_or_default();
+    ui.switch(None, plan);
+    loaded.err().map(|reason| format!("scroll positions reset: {reason}")).into_iter().collect()
+}
+
 /// Draws, follows Events and takes input until the terminal fails.
 fn show(
     terminal: &mut ratatui::DefaultTerminal,
@@ -352,35 +422,48 @@ fn show(
     actions: &Arc<Actions>,
 ) -> Result<(), ViewError> {
     let mut ui = Ui::default();
+    let mut offsets = Offsets::at(home);
+    let log = ViewLog::of(home, "plan");
+    // a log that cannot be written is the view's error line: a lasting state
+    let write = |ui: &mut Ui, line: &str| {
+        if let Err(why) = log.append(line) {
+            ui.error = Some(why);
+        }
+    };
+    for line in begin(&mut ui, &mut offsets, snap.centre.as_ref().map(|c| &c.plan.plan)) {
+        write(&mut ui, &line);
+    }
     // a failed poll is made again at the next one, a failed snapshot at the next refresh (`stale`); both are shown
     // (runner::kept), the snapshot's error first
     let (mut snapshot_error, mut follow_error) = (None, None);
     let (mut stale, mut taken, mut fetched) = (false, Instant::now(), Instant::now());
     // the pane is written to only when something changed: a snapshot, an error, a spinner's frame, input
     let mut redraw = true;
-    // the spinner frame Pulse was last drawn at
-    let mut pulse_frame = palette::frame(SystemTime::now());
-    // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); a result is the note to show, or none
-    // to leave it
-    let mut worker = Background::<Option<String>>::new();
+    // the Worker pane's and the Lead's tmux calls run off this thread (tui-W7); one that fails opens the error dialog
+    // from there ([`Actions::report`]), so the view only draws again
+    let mut worker = Background::<()>::new();
     loop {
-        while let Some(result) = worker.finished() {
-            if let Some(note) = result {
-                ui.note = note;
-            }
+        while worker.finished().is_some() {
             redraw = true;
         }
         let frame = palette::frame(SystemTime::now());
         if let Some(c) = snap.centre.as_mut() {
             redraw |= c.turn(frame);
         }
-        redraw |= snap.pulse.as_ref().is_some_and(pulse_spins) && frame != pulse_frame;
+        // the scroll offsets file follows the chart's offset (a write only when they changed, at most every SAVE_EVERY)
+        if let Some(c) = snap.centre.as_ref() {
+            ui.remember(&c.plan.plan);
+            if let Err(e) = offsets.save(&ui.remembered, false) {
+                redraw |= ui.error.as_deref() != Some(e.as_str());
+                ui.error = Some(e);
+            }
+        }
         if redraw {
             terminal.draw(|f| match snap.pulse.as_ref() {
-                Some(pulse) => ui.draw_pulse(f, pulse, frame),
+                Some(pulse) => ui.draw_pulse(f, pulse),
                 None => ui.draw(f, snap.centre.as_ref()),
             })?;
-            (redraw, pulse_frame) = (false, frame);
+            redraw = false;
         }
         if !event::poll(poll.min(FRAME))? {
             // idle: look for Events, every `poll`
@@ -411,6 +494,9 @@ fn show(
                     }
                     if before.as_ref().map(|b| &b.0) != after.as_ref().map(|a| &a.0) {
                         ui.switch(before.as_ref().map(|b| &b.1), after.as_ref().map(|a| &a.1));
+                        if let Err(e) = offsets.save(&ui.remembered, true) {
+                            ui.error = Some(e);
+                        }
                     }
                 }
                 taken = Instant::now();
@@ -481,20 +567,30 @@ fn show(
         }
         if let Some(lead) = lead {
             let actions = Arc::clone(actions);
-            worker.submit(move || Some(actions.open_lead(&lead).err().map_or_else(String::new, |e| e.message().to_owned())));
+            worker.submit(move || {
+                if let Err(e) = actions.open_lead(&lead) {
+                    actions.report("Open Lead", &e);
+                }
+            });
         }
         let Some(centre) = snap.centre.as_ref() else { continue };
         if let Some(key) = unselect {
             let actions = Arc::clone(actions);
-            worker.submit(move || actions.close_worker(&key).err().map(|e| e.message().to_owned()));
+            worker.submit(move || {
+                if let Err(e) = actions.close_worker(&key) {
+                    actions.report("Close Worker", &e);
+                }
+            });
         }
         if let Some(key) = open {
             match attempt_of(centre, &key) {
-                None => ui.note = format!("{key} has not started yet"),
+                None => write(&mut ui, &format!("{key} has not started yet")),
                 Some(attempt) => {
                     let (actions, plan) = (Arc::clone(actions), centre.plan.plan.clone());
                     worker.submit(move || {
-                        Some(actions.toggle_worker(&plan, &key, &attempt).err().map_or_else(String::new, |e| e.message().to_owned()))
+                        if let Err(e) = actions.toggle_worker(&plan, &key, &attempt) {
+                            actions.report("Open Worker", &e);
+                        }
                     });
                 }
             }
@@ -553,6 +649,7 @@ mod tests {
                 state: read::PrState::Open,
                 url: "https://github.com/acme/api/pull/12".into(),
                 conflicting: false,
+                lead_working: false,
             }),
         }];
         let plan = PlanBoxes {
@@ -561,9 +658,10 @@ mod tests {
             prs,
             jobs: Vec::new(),
             review: None,
+            needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, 0).with_margin(MARGIN);
+        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("lead-ship").unwrap(),
             name: "lead".into(),
@@ -630,7 +728,7 @@ mod tests {
         assert_eq!(rows[0], "   Plan review r2 pending 󰏌");
         assert_eq!(rows[1], "", "the boxes' own margin row");
         assert_eq!(rows[2], without.1[1], "the first border, one row lower");
-        assert_eq!(rows[2], "  ┌ api · api 󱦰 main · #12 open 󰏌 ┐");
+        assert_eq!(rows[2], "  ╭ api · api 󱦰 main · #12 open 󰏌 ╮");
         assert_eq!(without.1[0], "");
         assert_eq!((ui.body.y, ui.body.height), (1, 6), "clicks and scrolling use the area between the row and the message row");
         assert_eq!(without.2.body.y, 0);
@@ -726,9 +824,10 @@ mod tests {
             prs: vec![node],
             jobs: (0..jobs).map(job).collect(),
             review: None,
+            needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, 0).with_margin(MARGIN);
+        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
             name: "lead".into(),
@@ -812,13 +911,117 @@ mod tests {
     }
 
     #[test]
-    fn a_view_that_restarts_starts_at_the_top() {
+    fn a_fresh_ui_starts_at_the_top_with_nothing_remembered() {
         assert_eq!(Ui::default().scroll, (0, 0));
         assert!(Ui::default().remembered.is_empty());
     }
 
+    #[test]
+    fn a_plan_never_scrolled_is_not_remembered_and_a_scrolled_one_is() {
+        let a = plan("plan-a");
+        let mut ui = Ui::default();
+        ui.remember(&a);
+        assert!(ui.remembered.is_empty(), "at its corner: nothing to keep");
+        ui.scroll = (0, 4);
+        ui.remember(&a);
+        ui.scroll = (0, 0);
+        ui.remember(&a);
+        assert_eq!(ui.remembered.get(&a), Some(&(0, 0)), "back at the corner is a change too");
+    }
+
+    fn offsets_in(dir: &tempfile::TempDir) -> Offsets {
+        Offsets::at(&CpdHome::resolve(Some(dir.path().into()), None).unwrap())
+    }
+
+    fn map(entries: &[(&str, (u16, u16))]) -> HashMap<PlanId, (u16, u16)> {
+        entries.iter().map(|(id, at)| (plan(id), *at)).collect()
+    }
+
+    #[test]
+    fn the_offsets_round_trip_through_the_file_which_is_a_json_object_of_plan_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let offsets = map(&[("plan-b", (4, 9)), ("plan-a", (0, 7))]);
+        let mut writer = offsets_in(&dir);
+        writer.save(&offsets, true).unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        assert_eq!(fs::read_to_string(&path).unwrap(), r#"{"plan-a":[0,7],"plan-b":[4,9]}"#);
+        assert_eq!(offsets_in(&dir).load().unwrap(), offsets);
+    }
+
+    #[test]
+    fn a_missing_file_is_an_empty_map() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), HashMap::new());
+    }
+
+    #[test]
+    fn an_invalid_file_is_refused_with_its_reason_and_replaced_by_the_next_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for bad in ["", "{not json", "[]", r#"{"Bad Id":[0,1]}"#, r#"{"plan-a":[0]}"#, r#"{"plan-a":[0,-1]}"#, r#"{"plan-a":"top"}"#] {
+            fs::write(&path, bad).unwrap();
+            let reason = offsets_in(&dir).load().unwrap_err();
+            assert!(reason.contains("plan-scroll.json"), "{bad:?}: {reason}");
+        }
+        let mut offsets = offsets_in(&dir);
+        offsets.load().unwrap_err();
+        offsets.save(&map(&[("plan-a", (0, 3))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 3))]));
+    }
+
+    #[test]
+    fn an_unreadable_file_is_refused_with_its_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("run/tui/plan-scroll.json")).unwrap(); // reading a directory fails
+        let reason = offsets_in(&dir).load().unwrap_err();
+        assert!(reason.contains("plan-scroll.json"), "{reason}");
+    }
+
+    #[test]
+    fn a_write_leaves_no_temporary_file_and_creates_the_parents() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut offsets = offsets_in(&dir);
+        offsets.save(&map(&[("plan-a", (1, 2))]), true).unwrap();
+        offsets.save(&map(&[("plan-a", (3, 4))]), true).unwrap();
+        let names: Vec<_> = fs::read_dir(dir.path().join("run/tui")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["plan-scroll.json"]);
+    }
+
+    #[test]
+    fn a_failed_write_is_reported_leaves_no_temporary_file_and_is_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let tui = dir.path().join("run/tui");
+        fs::create_dir_all(tui.join("plan-scroll.json")).unwrap(); // a directory cannot be replaced by a file
+        let mut offsets = offsets_in(&dir);
+        let want = map(&[("plan-a", (0, 5))]);
+        let error = offsets.save(&want, true).unwrap_err();
+        assert!(error.starts_with("scroll positions not saved: "), "{error}");
+        assert_eq!(fs::read_dir(&tui).unwrap().count(), 1, "only the directory is there");
+        fs::remove_dir(tui.join("plan-scroll.json")).unwrap();
+        offsets.save(&want, true).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), want);
+    }
+
+    #[test]
+    fn a_write_waits_a_second_after_the_last_unless_the_plan_changed_and_unchanged_offsets_write_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        let mut offsets = offsets_in(&dir);
+        offsets.save(&HashMap::new(), false).unwrap();
+        assert!(!path.exists(), "nothing changed: nothing written");
+        offsets.save(&map(&[("plan-a", (0, 1))]), false).unwrap();
+        offsets.save(&map(&[("plan-a", (0, 2))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 1))]), "the second change waits");
+        offsets.save(&map(&[("plan-a", (0, 2))]), true).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 2))]), "a Plan change writes at once");
+        offsets.written = Some(Instant::now() - SAVE_EVERY);
+        offsets.save(&map(&[("plan-a", (0, 3))]), false).unwrap();
+        assert_eq!(offsets_in(&dir).load().unwrap(), map(&[("plan-a", (0, 3))]), "a second later it writes");
+    }
+
     fn pulse_of(rows: &[&str]) -> Pulse {
-        let bucket = |count| read::Bucket { count, job_merged: false, pr_merged: false, worker_ran: false };
+        let bucket = |count| read::Bucket { count, kind: Some(read::Kind::Other), job_merged: false, pr_merged: false, worker_ran: false };
         let rows = rows
             .iter()
             .map(|id| read::PulseRow {
@@ -836,7 +1039,7 @@ mod tests {
 
     fn pulse_screen(ui: &mut Ui, pulse: &Pulse, height: u16) -> (Buffer, Vec<String>) {
         let mut terminal = Terminal::new(TestBackend::new(60, height)).unwrap();
-        terminal.draw(|f| ui.draw_pulse(f, pulse, 0)).unwrap();
+        terminal.draw(|f| ui.draw_pulse(f, pulse)).unwrap();
         let buf = terminal.backend().buffer().clone();
         let rows = (0..height)
             .map(|y| (0..60).map(|x| buf[(x, y)].symbol().to_owned()).collect::<String>().trim_end().to_owned())
@@ -850,8 +1053,7 @@ mod tests {
         let mut ui = Ui::default();
         let (_, rows) = pulse_screen(&mut ui, &pulse, 5); // margin row, then 3 rows, then the margin row
         assert_eq!(rows[0], "");
-        let idle = palette::dot_span(read::Dot::Idle, 0, false).content;
-        assert!(rows[1].starts_with(&format!("  {idle} aa  ")), "{:?}", rows[1]);
+        assert!(rows[1].starts_with("  aa  "), "{:?}", rows[1]);
         assert!(rows[1].ends_with("         3m"), "{:?}", rows[1]);
         assert_eq!(ui.body, Rect::new(2, 1, 56, 3));
         let lead = |ui: &Ui, y| {
@@ -862,7 +1064,7 @@ mod tests {
         ui.pulse_offset = pulse::scroll(ui.pulse_offset, true, 6, 3);
         assert_eq!(ui.pulse_offset, 3, "clamped at the last row");
         let (_, rows) = pulse_screen(&mut ui, &pulse, 5);
-        assert!(rows[1].starts_with(&format!("  {idle} dd  ")), "{:?}", rows[1]);
+        assert!(rows[1].starts_with("  dd  "), "{:?}", rows[1]);
         assert_eq!(lead(&ui, 1).as_deref(), Some("lead-dd"));
         assert_eq!(lead(&ui, 3).as_deref(), Some("lead-ff"));
     }
@@ -951,11 +1153,41 @@ mod tests {
         assert!(snap.centre.is_none());
         assert_eq!(pulse.context.as_str(), "ctx");
         assert_eq!(pulse.rows.iter().map(|r| r.plan.as_str()).collect::<Vec<_>>(), ["p1"]);
-        assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 21, "as wide as the pane allows for ids of any width");
+        assert_eq!(pulse.rows[0].buckets.len(), 125 - 4 - 13, "as wide as the pane allows for ids of any width");
 
         fixture(&mut store, &moved("lead"));
         let snap = snapshot(&mut store, &home, 125, now).unwrap();
         assert!(snap.pulse.is_none());
         assert_eq!(snap.centre.expect("the Lead is in the slot").plan.plan.as_str(), "p1");
+    }
+
+    /// The pane `ui` draws for `centre`, as the buffer.
+    fn frame_of(ui: &mut Ui, centre: &Centre) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(PANE.0, PANE.1)).unwrap();
+        terminal.draw(|f| ui.draw(f, Some(centre))).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn a_scroll_file_that_is_reset_draws_nothing_and_logs() {
+        // commands.md §17 "No notes": no `scroll positions reset: …` line; the reason goes to run/tui/plan.log
+        let centre = scroll_centre("plan-a", 3);
+        let plan_id = plan("plan-a");
+        let clean = tempfile::tempdir().unwrap();
+        let mut plain = Ui::default();
+        begin(&mut plain, &mut offsets_in(&clean), Some(&plan_id));
+        let plain = frame_of(&mut plain, &centre);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run/tui/plan-scroll.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{not json").unwrap();
+        let mut ui = Ui::default();
+        let lines = begin(&mut ui, &mut offsets_in(&dir), Some(&plan_id));
+        assert_eq!(frame_of(&mut ui, &centre), plain, "the frame is the one of a start with no file");
+        assert!(
+            lines.iter().any(|l| l.starts_with("scroll positions reset: ") && l.contains("plan-scroll.json")),
+            "logged: {lines:?}"
+        );
     }
 }

@@ -13,21 +13,28 @@ use super::feedback;
 use super::gh::{self, Listed};
 use super::pulls::{self, Change, Reason};
 use super::row::PlanPrs;
+use super::start::unstack;
 use super::status::PrState;
 use super::{Env, PollArgs};
 use crate::error::{CpdError, ErrorCode};
-use crate::events::{NewEvent, append};
+use crate::events::{BasePull, NewEvent, append};
 use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, JobKey, PlanId, PrKey};
+use crate::config::Tier;
+use crate::job::open::{self, Cause};
+use crate::plan::fingerprint::load_prs;
 use crate::lock;
 use crate::output::Output;
 use crate::policy::Checks;
 use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr poll";
+
+/// The `by` of the `pr-base-changed` Event the poll appends (§5.2).
+const COMMAND_BY: &str = "poll";
 
 /// How long `pr poll` waits for `locks/pr-poll.lock` (`lock_timeout`).
 const LOCK_WAIT: Duration = Duration::from_secs(60);
@@ -46,12 +53,25 @@ struct Unresolved {
     error: CpdError,
 }
 
+/// A PR whose pull request GitHub repointed: the PR's `base` follows it (§7.6 step 6, hs-d325).
+struct Follow {
+    plan: PlanId,
+    pr: PrKey,
+    from: String,
+    to: String,
+    number: i64,
+    url: String,
+}
+
 /// What the transaction did.
 #[derive(Default)]
 struct Outcome {
     changed: Vec<Value>,
+    base_changed: Vec<Value>,
     removed: usize,
     feedback: Vec<(PlanId, PrKey)>,
+    /// The `update` Jobs the poll queued, for a conflict (§3.7 E5).
+    update_jobs: Vec<(PlanId, PrKey, JobKey)>,
     merged: Vec<(PlanId, PrKey)>,
     done: Vec<PlanId>,
 }
@@ -93,7 +113,10 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     // `OPEN` is "not decided yet", `None` a pull request GitHub cannot find: nothing changes.
     seen.extend(looked_up.into_iter().flatten().filter(|p| p.state != PrState::Open).map(|pr| Listed { pr, membership: Default::default() }));
 
-    let dirty = env.store.read(|conn| {
+    // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
+    let follows = env.store.read(|conn| follows(conn, &owned, &search.bases))?;
+
+    let dirty = !follows.is_empty() || env.store.read(|conn| {
         for listed in &seen {
             match pulls::find(conn, &listed.pr.repo, listed.pr.number)? {
                 Some(row) if row.holds(listed)? => {}
@@ -105,8 +128,9 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         let unowned = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(unowned.iter().any(|row| !present.contains(row)))
     })?;
+    let open_tier = env.config.open_tier;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
 
     report_unresolved(&mut env, &unresolved)?;
 
@@ -124,8 +148,10 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let mut out = json!({
         "polled": search.prs.len(),
         "changed": outcome.changed,
+        "base_changed": outcome.base_changed,
         "removed": outcome.removed,
         "feedback": outcome.feedback.iter().map(pair).collect::<Vec<_>>(),
+        "update_jobs": outcome.update_jobs.iter().map(|(plan, pr, job)| json!({"plan": plan, "pr": pr, "job": job, "reason": Cause::Conflict.as_str()})).collect::<Vec<_>>(),
         "merged": outcome.merged.iter().map(pair).collect::<Vec<_>>(),
         "done": outcome.done,
         "rate_limit": {"cost": search.rate.cost, "remaining": search.rate.remaining, "reset_at": search.rate.reset_at},
@@ -165,7 +191,15 @@ fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
 
 /// The one write transaction (D5, D7): every changed row, the Events of the
 /// owning Plans, the rows that left the search.
-fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &[Owned], checks: &[(PlanId, PrKey, Checks)]) -> Result<Outcome, CpdError> {
+fn apply(
+    tx: &WriteTxn<'_>,
+    seen: &[Listed],
+    present: &[(String, i64)],
+    owned: &[Owned],
+    checks: &[(PlanId, PrKey, Checks)],
+    follows: &[Follow],
+    open_tier: Tier,
+) -> Result<Outcome, CpdError> {
     let mut out = Outcome::default();
     for listed in seen {
         // A merged row needs a merge time: GitHub's, else this poll's.
@@ -187,15 +221,68 @@ fn apply(tx: &WriteTxn<'_>, seen: &[Listed], present: &[(String, i64)], owned: &
                 if merge(tx, plan, key, after)? {
                     out.done.push(plan.clone());
                 }
-            } else if let Some(checks) = checks_of(checks, plan, key)
-                && tell(tx, plan, key, checks, &change)?
-            {
-                out.feedback.push((plan.clone(), key.clone()));
+                unstack_stacked_on(tx, plan, key)?;
+            } else if let Some(checks) = checks_of(checks, plan, key) {
+                if tell(tx, plan, key, checks, &change)? {
+                    out.feedback.push((plan.clone(), key.clone()));
+                }
+                if let Some(job) = update_for_conflict(tx, plan, key, &change, open_tier)? {
+                    out.update_jobs.push((plan.clone(), key.clone(), job));
+                }
             }
         }
     }
+    for follow in follows {
+        out.base_changed.push(follow_base(tx, follow)?);
+    }
     out.removed = pulls::delete_unowned_absent(tx, present)?;
     Ok(out)
+}
+
+/// Each `open` PR of `owned` whose pull request a search lists (as `OPEN`) with a `baseRefName` that is not the PR's
+/// `base` (§7.6 step 6): a repoint by GitHub, or a base retargeted by hand. A PR with no entry in `bases` is not followed.
+fn follows(conn: &rusqlite::Connection, owned: &[Owned], bases: &[((String, i64), String)]) -> Result<Vec<Follow>, CpdError> {
+    let mut stored = conn.prepare("SELECT base FROM prs WHERE plan = ?1 AND key = ?2 AND status = 'open'")?;
+    let mut found = Vec::new();
+    for (plan, key, row) in owned {
+        let Some((_, to)) = bases.iter().find(|((repo, number), _)| (repo, number) == (&row.repo, &row.number)) else { continue };
+        let from: Option<String> = stored.query_row([plan.as_str(), key.as_str()], |r| r.get(0)).optional()?;
+        if let Some(from) = from.filter(|from| from != to) {
+            found.push(Follow { plan: plan.clone(), pr: key.clone(), from, to: to.clone(), number: row.number, url: row.url.clone() });
+        }
+    }
+    Ok(found)
+}
+
+/// Sets the PR's `base` to the one GitHub reports and appends `pr-base-changed` for its Plan (§5.2). Nothing else
+/// changes: no Gate, no status, no `pr-feedback`, no `gh` call (hs-d326: the tree is unchanged, a ready PR stays ready).
+fn follow_base(tx: &WriteTxn<'_>, follow: &Follow) -> Result<Value, CpdError> {
+    let Follow { plan, pr, from, to, number, url } = follow;
+    let repo: String = tx.query_row("SELECT repo FROM prs WHERE plan = ?1 AND key = ?2", [plan.as_str(), pr.as_str()], |r| r.get(0))?;
+    let base_pr = |branch: &str| -> Result<Option<String>, CpdError> {
+        Ok(tx
+            .query_row("SELECT plan || '/' || key FROM prs WHERE repo = ?1 AND lead_branch = ?2", [repo.as_str(), branch], |r| r.get(0))
+            .optional()?)
+    };
+    let (from_pr, to_pr) = (base_pr(from)?, base_pr(to)?);
+    let moved = tx.execute(
+        "UPDATE prs SET base = ?3 WHERE plan = ?1 AND key = ?2 AND status = 'open' AND base = ?4",
+        [plan.as_str(), pr.as_str(), to.as_str(), from.as_str()],
+    )?;
+    if moved == 0 {
+        return Err(cas_lost(plan, pr));
+    }
+    let reason = match (&from_pr, &to_pr) {
+        (Some(base), None) => format!("its base PR {base} merged and GitHub repointed the pull request"),
+        _ => "the base changed on GitHub".to_owned(),
+    };
+    let text = format!(
+        "PR {pr} of Plan {plan} now targets {to} (was {from}): {reason}. Its tree is unchanged: no new Gate is needed and it stays ready. \
+         Read it with cpd plan show --plan {plan}."
+    );
+    let event = NewEvent::pr_base_changed(text, pr, (from, to), (from_pr.as_deref(), to_pr.as_deref()), COMMAND_BY, BasePull::Of(*number, url));
+    append(tx, event.plan(plan.clone()))?;
+    Ok(json!({"plan": plan, "pr": pr, "from": from, "to": to}))
 }
 
 /// The PR's resolved `pr.feedback.checks`; `None` when its policy did not resolve: it is told nothing.
@@ -260,6 +347,24 @@ fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &
     Ok(true)
 }
 
+/// The `update` Job of a conflict (§3.7 E5, §7.6 step 6): when `mergeable` became `conflicting` (from anything else, so once per
+/// transition: `unknown` is no conflict and a base that merely moved, `merge_state` `behind`, is no cause), the row's `state` is `open`
+/// and the Plan is not archived, the PR's `update` Job is queued unless one is `queued` or `running`. The caller has resolved the
+/// PR's policy. The Job's key when one was inserted.
+fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change, tier: Tier) -> Result<Option<JobKey>, CpdError> {
+    let became = change.after.mergeable == "conflicting" && change.before.as_ref().is_none_or(|b| b.mergeable != "conflicting");
+    if !became || change.after.state != "open" {
+        return Ok(None);
+    }
+    let archived: bool = tx.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    if archived {
+        return Ok(None);
+    }
+    let prs = load_prs(tx, plan)?;
+    let Some(pr) = prs.iter().find(|p| p.key == *key) else { return Ok(None) };
+    open::queue_update(tx, plan, pr, tier, COMMAND_BY, Cause::Conflict)
+}
+
 /// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
 /// `pr-merged`, and, when it was the last PR, the Plan `done` with `plan-done`
 /// (§3.1). Whether the Plan became `done`.
@@ -292,6 +397,24 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
     let text = format!("Every PR of Plan {id} is merged: the Plan is done. See cpd plan show --plan {id}");
     append(tx, NewEvent::plan_done(text, &merged).plan(id.clone()))?;
     Ok(true)
+}
+
+/// The unstack of the PRs with no pull request yet that were stacked on the PR `key` of `plan`, which this transaction
+/// merged (§7.6 step 6, hs-d301): every `waiting` or `dispatch` PR of any Plan whose `base` is its Lead Branch, told to
+/// its own Plan, so that engine E7 of the same tick already sees the new base.
+fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    let mut stmt = tx.prepare(
+        "SELECT r.plan, r.key FROM prs r, prs m
+          WHERE m.plan = ?1 AND m.key = ?2 AND r.repo = m.repo AND r.base = m.lead_branch AND r.status IN ('waiting', 'dispatch')
+          ORDER BY r.plan, r.key",
+    )?;
+    let stacked = stmt
+        .query_map([plan.as_str(), key.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (plan, key) in stacked {
+        unstack(tx, &PlanId::parse(&plan)?, &PrKey::parse(&key)?, COMMAND_BY)?;
+    }
+    Ok(())
 }
 
 /// `[{key, status, pull_request}]` of the Plan's PRs that are not `cancelled`, in key order.
@@ -335,6 +458,8 @@ struct Merged {
     repo: String,
     lead_branch: String,
     lead_worktree: Option<String>,
+    /// The PR's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
+    pull_request: Option<(String, i64)>,
     attempts: Vec<Attempt>,
 }
 
@@ -414,10 +539,13 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
 
 /// Every PR in status `merged`, with its Attempts.
 fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
-    let mut prs = conn.prepare("SELECT plan, key, repo, lead_branch, lead_worktree FROM prs WHERE status = 'merged' ORDER BY plan, key")?;
+    let mut prs = conn.prepare("SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number
+           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status = 'merged' ORDER BY p.plan, p.key",
+    )?;
     let rows = prs
         .query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?))
+            let pull_request = r.get::<_, Option<String>>(5)?.zip(r.get::<_, Option<i64>>(6)?);
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, pull_request))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
@@ -425,14 +553,14 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdEr
           WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
     )?;
     let mut found = Vec::new();
-    for (plan, pr, repo, lead_branch, lead_worktree) in rows {
+    for (plan, pr, repo, lead_branch, lead_worktree, pull_request) in rows {
         let list = attempts
             .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .map(|(id, branch, worktree, ended)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
             .collect::<Result<Vec<_>, CpdError>>()?;
-        found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, attempts: list });
+        found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, pull_request, attempts: list });
     }
     Ok(found)
 }
@@ -490,7 +618,13 @@ fn clean(merged: &Merged) -> Vec<Failure> {
                 }
             }
         }
-        match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch) {
+        // The pull request's head commit, asked of GitHub only when `HEAD` has commits outside every `origin/*` ref:
+        // a squash merge deletes the head branch, so the PR's own commits look unpushed (contract §7.2).
+        let recorded_head = || {
+            let (gh_repo, number) = merged.pull_request.as_ref()?;
+            super::gh::head_ref_oid(repo, gh_repo, *number).ok()
+        };
+        match git::remove_merged_lead(repo, Path::new(lead), &merged.lead_branch, recorded_head) {
             Ok(git::LeadRemoval::Removed) => {}
             Ok(git::LeadRemoval::Kept(why)) => failures.push((lead.clone(), why.as_str().to_owned())),
             Err(e) => failures.push((lead.clone(), reason(&e))),

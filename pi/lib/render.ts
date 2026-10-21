@@ -1,66 +1,31 @@
 import { type Component, MouseRegion, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { loadConfig } from "../compact-tools/extensions/compact-tools-config.ts";
+import type { DisplayStyle } from "../compact-tools/extensions/compact-tools-types.ts";
 import { isObject } from "./cpd.ts";
-import { DECISION_TYPE } from "./plan-review.ts";
+import { DECISION_TYPE, SUMMARY_TYPE } from "./plan-review.ts";
 import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
 /**
- * Every cpd message in a pi pane is one fold, drawn like every block that folds: a bold title led by a muted `╭` and `⦁`; expanded, each
- * content line led by a muted `│ ` and a muted `╰─ collapse` line; folded, a muted `╰─ expand` line. Colours come from pi's theme (`muted`, bold).
+ * Every cpd message in a pi pane is one fold, drawn like every block that folds: a title row, `╭─` then the title as a pill: U+E0B6, the title, U+E0B4, no padding inside, no dot (contract §15, the fold language). It matches the cockpit's pill title, `title` in `tui/src/section.rs` (what `tui/src/dialog/view.rs` and `tui/src/logs/view.rs` test): the lead `╭─` muted, the text REVERSED. pi's theme has no inverse, so the caps are `theme.fg("muted")` and the text is muted then SGR-reversed (the muted colour becomes its background). Expanded, each
+ * content line led by a muted `│ ` and a muted `╰󰁣 collapse` line; folded, a muted `╰󰁋 expand` line (U+F0063 and U+F004B, the
+ * cockpit's own toggle, `toggle` in `tui/src/fold.rs`; glyphs `UP` / `DOWN` in `tui/src/tree/look.rs`; contract §5.3). Colours come from pi's theme (`muted`, bold).
  * Expanding is pi's own mechanism, the renderer's `expanded` option (Ctrl+O), plus a left click anywhere on the message: pi gives the
- * renderer one mouse region per message, so the click cannot be limited to the `╰─` line. Display only: the message's `content` and
+ * renderer one mouse region per message, so the click cannot be limited to the toggle line. Display only: the message's `content` and
  * `details` are read, never changed. The style `off` (pi-compact-tools' config) still hands the message to pi's own box.
  */
 
 /** Every `customType` the adapter sends with `display: true`. */
-export const RENDERED_TYPES: readonly string[] = ["cpd", CONTEXT_TYPE, DECISION_TYPE];
+export const RENDERED_TYPES: readonly string[] = ["cpd", CONTEXT_TYPE, DECISION_TYPE, SUMMARY_TYPE];
 
-// ---- the style: the extension's `compact-tools.json`, read once ----
+// ---- the style: the extension's effective config, read once ----
 
-/** `DISPLAY_STYLES` of `compact-tools-types.ts`. */
-const STYLES = ["compact", "claude", "codex", "off"] as const;
-export type Style = (typeof STYLES)[number];
-/** `DEFAULT_CONFIG.style` of `compact-tools-config.ts`. */
-const DEFAULT_STYLE: Style = "compact";
-const CONFIG_FILE = "compact-tools.json";
+/** The extension's `DisplayStyle`: one source of truth, so a file, a default and a warning exist once (contract §6.9). */
+export type Style = DisplayStyle;
 
-/** `compact-tools-config.ts` `warn`: one line on stderr. */
-const warn = (path: string, message: string): void => console.error(`[compact-tools] ${path}: ${message}`);
-
-/** `compact-tools-config.ts` `readJson` + `mergeConfig`, for the one key that matters: a file that is bad is reported and the value before it kept. */
-function styleFrom(path: string, before: Style): Style {
-  if (!existsSync(path)) return before;
-  let value: unknown;
-  try {
-    value = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    warn(path, error instanceof Error ? error.message : String(error));
-    return before;
-  }
-  if (!isObject(value)) {
-    warn(path, "expected a JSON object; using previous values");
-    return before;
-  }
-  if (value.style === undefined) return before;
-  if ((STYLES as readonly unknown[]).includes(value.style)) return value.style as Style;
-  warn(path, `style must be one of ${STYLES.join(", ")}; using previous value`);
-  return before;
-}
-
-/** pi's `getAgentDir()`: `PI_CODING_AGENT_DIR` (a leading `~` is the home directory), else `~/.pi/agent`. */
-function agentDirOf(env: Record<string, string | undefined>): string {
-  const dir = env.PI_CODING_AGENT_DIR;
-  if (!dir) return join(homedir(), ".pi", "agent");
-  return dir === "~" ? homedir() : dir.startsWith("~/") ? join(homedir(), dir.slice(2)) : dir;
-}
-
-/** `loadConfig` of the extension: pi's agent directory, then (a trusted project only) `<cwd>/.pi/`, which overrides it. */
-export function loadStyle(env: Record<string, string | undefined>, project: { cwd: string; trusted: boolean }): Style {
-  const global = styleFrom(join(agentDirOf(env), CONFIG_FILE), DEFAULT_STYLE);
-  return project.trusted ? styleFrom(join(project.cwd, ".pi", CONFIG_FILE), global) : global;
+/** `loadConfig` of `compact-tools-config.ts`: pi's agent directory (`getAgentDir()`, `PI_CODING_AGENT_DIR`), then (a trusted project only) `<cwd>/.pi/`, over its defaults. */
+export function loadStyle(project: { cwd: string; trusted: boolean }): Style {
+  return loadConfig(project.cwd, project.trusted).style;
 }
 
 // ---- what a message says ----
@@ -100,6 +65,9 @@ function summaryOf(message: RenderedMessage, content: string): string | undefine
   if (message.customType === CONTEXT_TYPE) {
     const counts = countsOf(message.details);
     return counts === undefined ? undefined : summaryLine(counts);
+  }
+  if (message.customType === SUMMARY_TYPE) {
+    return typeof d.review === "string" ? `Plan review ${d.review} summary` : oneLine(content);
   }
   if (message.customType === DECISION_TYPE) {
     if (typeof d.review === "string" && typeof d.approved === "boolean") return `Plan review ${d.review} ${d.approved ? "approved" : "rejected"}`;
@@ -164,11 +132,14 @@ const withinWidth = (lines: string[], width: number): string[] => lines.map((l) 
 
 // ---- the fold ----
 
-const INDICATOR = "⦁";
+const CAP_LEFT = "\u{E0B6}";
+const CAP_RIGHT = "\u{E0B4}";
 const MARGIN = " ";
-const TOP = "╭";
+const TOP = "╭─";
 const RAIL = "│ ";
-const CLOSE = "╰─";
+const CLOSE = "╰";
+const DOWN = "\u{F004B}";
+const UP = "\u{F0063}";
 const EXPAND = "expand";
 const COLLAPSE = "collapse";
 
@@ -178,13 +149,20 @@ type Rows = { head: (width: number) => string[]; body: (width: number) => string
 function rowsOf(summary: string, content: string, theme: Theme): Rows {
   const muted = (text: string) => theme.fg("muted", text);
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${muted(TOP)}${theme.fg("customMessageLabel", INDICATOR)} `;
+  const lead = `${MARGIN}${muted(`${TOP}${CAP_LEFT}`)}`;
   const indent = " ".repeat(visibleWidth(lead));
+  const pill = (line: string) => `\x1b[7m${muted(line)}\x1b[27m`;
   const rail = `${MARGIN}${muted(RAIL)}`;
   return {
-    head: (width) => hardWrap(theme.bold(`cpd ${summary}`), width - visibleWidth(lead)).map((l, i) => `${i === 0 ? lead : indent}${l}`),
+    head: (width) => {
+      const room = width - visibleWidth(lead);
+      let lines = hardWrap(`cpd ${summary}`, room);
+      // The closing cap needs its own cell on the last row.
+      if (visibleWidth(lines[lines.length - 1]) + visibleWidth(CAP_RIGHT) > room) lines = hardWrap(`cpd ${summary}`, room - visibleWidth(CAP_RIGHT));
+      return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? muted(CAP_RIGHT) : ""}`);
+    },
     body: text === "" ? () => [] : prefixedText(text, rail),
-    toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE} ${expanded ? COLLAPSE : EXPAND}`)}`],
+    toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE}${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`)}`],
   };
 }
 
@@ -193,12 +171,12 @@ type OpenState = { expanded: boolean; host: boolean };
 
 /** The one renderer of every cpd `customType`, with the style read at `session_start`. */
 export class Rendering {
-  style: Style = DEFAULT_STYLE;
+  style: Style = "compact";
   private readonly states = new WeakMap<RenderedMessage, OpenState>();
 
   /** The extension's `loadConfig`, once per `session_start` (§15.9 "Which style"). */
-  load(env: Record<string, string | undefined>, project: { cwd: string; trusted: boolean }): void {
-    this.style = loadStyle(env, project);
+  load(project: { cwd: string; trusted: boolean }): void {
+    this.style = loadStyle(project);
   }
 
   /** §15.9 `off`: no component, so pi draws its own default box with the full `content`. */
@@ -207,8 +185,8 @@ export class Rendering {
     const content = contentOf(message);
     const summary = summaryOf(message, content);
     const rows = rowsOf(summary ?? CONTEXT_TYPE, content, theme);
-    // No summary: the row is always open, with no closing row and no toggle (§15.9 "No summary").
-    const open = summary === undefined;
+    // No summary, and always the Plan review's summary, which the User reads to decide: the row is always open, with no closing row and no toggle (§15.9 "No summary").
+    const open = summary === undefined || message.customType === SUMMARY_TYPE;
     const state = this.states.get(message) ?? { expanded, host: expanded };
     this.states.set(message, state);
     // Ctrl+O hands the renderer `expanded`; the message follows it both ways (the extension's group rule).

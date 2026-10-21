@@ -1,17 +1,19 @@
-import { toCpdError } from "./cpd.ts";
+import { tooLong } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
 import { createHost, type Options } from "./host.ts";
 import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
+import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
-import { start, stop } from "./startup.ts";
+import { start, stop, trackers } from "./startup.ts";
+import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
 import { registerReminderCheck } from "./turns.ts";
 
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
 
-/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`. */
+/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`; refused `ask_user_question` calls: `askguard.ts`. */
 export function adapter(pi: PiApi, options: Options = {}): void {
   const host = createHost(pi, options);
 
@@ -36,12 +38,32 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   });
 
-  // §15.11: a Manager never blocks. Registered once (pi has no unsubscribe); the role is read at each call.
-  pi.on("tool_call", (event) => {
-    if (host.run?.info.role !== "manager" || event.toolName !== "bash") return undefined;
+  // §15.11, §15.12: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
+  pi.on("tool_call", async (event) => {
+    const role = host.run?.info.role;
+    const pn = pnVerdict({ env: host.env, live: host.run !== undefined, store: globalThis as Record<string, unknown> }, event);
+    if (pn) return pn;
+    if (host.run && event.toolName === "ask_user_question") {
+      const long = tooLong(event.input);
+      return long === undefined ? undefined : { block: true, reason: long };
+    }
+    if ((role !== "manager" && role !== "worker") || event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown; timeout?: unknown };
-    const matched = blockingReason(typeof input.command === "string" ? input.command : "", typeof input.timeout === "number" ? input.timeout : undefined);
-    return matched === undefined ? undefined : { block: true, reason: reasonText(matched) };
+    const command = typeof input.command === "string" ? input.command : "";
+    if (role === "manager") {
+      const matched = blockingReason(command, typeof input.timeout === "number" ? input.timeout : undefined);
+      return matched === undefined ? undefined : { block: true, reason: reasonText(matched) };
+    }
+    const matched = unfilteredTestRun(command);
+    return matched === undefined ? undefined : { block: true, reason: testReasonText(matched) };
+  });
+
+  // commands.md §15 "Every plannotator session is tracked": a plannotator result may have opened or closed a review.
+  pi.on("tool_result", async (event) => {
+    if (event.toolName !== "plannotator" && event.toolName !== "plannotator_submit_plan") return;
+    const r = host.run;
+    const tracker = r && trackers.get(r);
+    if (tracker) await tracker.poll().catch((e) => host.deliver("plannotator tracker", e));
   });
 
   registerAgentState(host);

@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 10;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -80,6 +80,7 @@ kinds! {
     PlanCreated = "plan-created",
     PlanPhase = "plan-phase",
     PlanReview = "plan-review",
+    PlanOutlined = "plan-outlined",
     PlanDone = "plan-done",
     JobAdded = "job-added",
     JobEdited = "job-edited",
@@ -98,6 +99,7 @@ kinds! {
     PrEdited = "pr-edited",
     PrCancelled = "pr-cancelled",
     PrStarted = "pr-started",
+    PrBaseChanged = "pr-base-changed",
     PrOpened = "pr-opened",
     PrMerged = "pr-merged",
     Escalation = "escalation",
@@ -108,6 +110,7 @@ kinds! {
     SessionMoved = "session-moved",
     SessionRenamed = "session-renamed",
     SessionTitled = "session-titled",
+    SessionRetiered = "session-retiered",
     ContextRenamed = "context-renamed",
     ContextOwner = "context-owner",
     PlanRenamed = "plan-renamed",
@@ -122,6 +125,8 @@ kinds! {
     WatchStarted = "watch-started",
     WatchStopped = "watch-stopped",
     Error = "error",
+    ReviewOpened = "review-opened",
+    ReviewClosed = "review-closed",
 }
 
 impl Kind {
@@ -139,28 +144,30 @@ impl Kind {
             PlanCreated => spec([Y, Y, N, N, N], &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
             PlanPhase => spec([Y, Y, N, N, N], &["from", "to"], &["jobs", "pr", "prs"]),
             PlanReview => spec([Y, Y, N, N, N], &["review", "fingerprint", "status"], &["feedback", "jobs"]),
+            PlanOutlined => spec([Y, Y, N, N, N], &["replaced"], &[]),
             PlanDone => spec([Y, Y, N, N, N], &["prs"], &[]),
-            JobAdded => spec([Y, Y, Y, N, N], &["pr", "status", "appended", "tier", "needs", "review", "urgent"], &[]),
+            JobAdded => spec([Y, Y, Y, N, N], &["pr", "kind", "status", "appended", "tier", "needs", "review", "urgent"], &["by", "reason"]),
             JobEdited => spec([Y, Y, Y, N, N], &["fields"], &[]),
-            JobMerged => spec([Y, Y, Y, Y, N], &["sha", "tier"], &["cancel_too_late"]),
+            JobMerged => spec([Y, Y, Y, Y, N], &["sha", "tier", "kind"], &["cancel_too_late", "pr", "number", "url"]),
             JobFailed => spec([Y, Y, Y, M, N], &["cause", "detail", "tier", "attempts"], &[]),
             JobRetried => spec([Y, Y, Y, N, N], &["tier"], &[]),
             JobCancelRequested => spec([Y, Y, Y, Y, N], &["reason"], &[]),
             JobCancelled => spec([Y, Y, Y, M, N], &["reason"], &[]),
             AttemptStarted => spec([Y, Y, Y, Y, N], &["number", "tier", "origin"], &[]),
-            AttemptStatus => spec([Y, Y, Y, Y, N], &["from", "to"], &[]),
+            AttemptStatus => spec([Y, Y, Y, Y, N], &["from", "to"], &["check", "what", "died"]),
             AttemptRetry => spec([Y, Y, Y, Y, N], &["outcome", "cause", "next_tier"], &["feedback"]),
             AttemptNudge => spec([Y, Y, Y, Y, Y], &["prompt"], &["turns"]),
             AllMerged => spec([Y, Y, N, N, N], &["pr", "merged", "cancelled"], &[]),
             PrFeedback => spec([Y, Y, N, N, N], &["pr", "number", "url", "state", "checks", "review_decision", "mergeable", "merge_state", "conflict", "reasons"], &[]),
             PrAdded => spec([Y, Y, N, N, N], &["pr", "repo", "base", "needs", "appended"], &["title"]),
             PrEdited => spec([Y, Y, N, N, N], &["pr", "fields"], &[]),
-            PrCancelled => spec([Y, Y, N, N, N], &["pr"], &[]),
+            PrCancelled => spec([Y, Y, N, N, N], &["pr"], &["superseded_by"]),
             PrStarted => spec(
                 [Y, Y, N, N, N],
                 &["pr", "repo", "base", "lead_branch", "lead_worktree", "base_sha", "reused", "pushed", "by"],
                 &[],
             ),
+            PrBaseChanged => spec([Y, Y, N, N, N], &["pr", "from", "to", "from_pr", "to_pr", "by"], &["number", "url"]),
             PrOpened => spec([Y, Y, N, N, N], &["pr", "number", "url"], &[]),
             PrMerged => spec([Y, Y, N, N, N], &["pr", "number", "url", "merged_at"], &[]),
             Escalation => spec([Y, Y, Y, Y, N], &["escalation", "question"], &[]),
@@ -171,18 +178,21 @@ impl Kind {
             SessionMoved => spec([Y, M, N, N, Y], &["pane", "window", "place"], &[]),
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
             SessionTitled => spec([Y, M, N, N, Y], &["title"], &[]),
+            SessionRetiered => spec([Y, M, N, N, Y], &["from", "to"], &[]),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
             ContextOwner => spec([Y, N, N, N, N], &["owner"], &[]),
             PlanRenamed => spec([Y, Y, N, N, N], &["title"], &[]),
             ContextArchived => spec([Y, N, N, N, N], &["archived"], &[]),
             PlanArchived => spec([Y, Y, N, N, N], &["archived"], &[]),
             SessionArchived => spec([Y, M, N, N, Y], &["archived"], &[]),
-            SessionMessage => spec([Y, M, N, N, Y], &["from", "text", "wake"], &["escalation", "plan", "pr", "minutes"]),
+            SessionMessage => spec([Y, M, N, N, Y], &["from", "text", "wake"], &[]),
             InboxOpened => spec([M, M, M, N, M], &["item", "kind", "urgency", "label"], &[]),
             InboxClosed => spec([M, M, M, N, M], &["item", "kind"], &[]),
             InboxSnoozed => spec([M, M, M, N, M], &["item", "until"], &[]),
             InboxDismissed => spec([M, M, M, N, M], &["item"], &[]),
             WatchStarted | WatchStopped => spec([N, N, N, N, N], &["pid"], &[]),
+            ReviewOpened => spec([Y, M, N, N, Y], &["pn_id", "kind", "subject", "port"], &[]),
+            ReviewClosed => spec([Y, M, N, N, Y], &["pn_id", "ended"], &[]),
             Error => spec([M, M, M, M, M], &["source", "code", "message", "details"], &[]),
         }
     }
@@ -209,25 +219,50 @@ impl FromStr for Kind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha2::{Digest, Sha256};
+    use crate::home::CpdHome;
+    use crate::store::Store;
 
-    /// The protocol and the `sha256` of the sorted kinds, joined by `\n`, they were last raised for.
-    const PINNED: (u32, &str) = (5, "67500a68aefd137727dd10402fc7387d7bb9c182c2f92431439acb282040b29f");
+    const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
-    fn kinds_hash() -> String {
-        let mut names: Vec<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
-        names.sort_unstable();
-        format!("{:x}", Sha256::digest(names.join("\n").as_bytes()))
+    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9) and hs-d502 (`plan-outlined`: 10).
+    #[test]
+    fn the_protocol_is_10_with_the_plan_outlined_kind() {
+        assert_eq!(PROTOCOL, 10);
     }
 
     #[test]
-    fn the_event_kinds_are_pinned_to_the_protocol() {
-        assert_eq!(
-            (PROTOCOL, kinds_hash().as_str()),
-            PINNED,
-            "The Event kinds or PROTOCOL changed. Raise PROTOCOL (core/src/events/kind.rs) when the kinds changed, \
-             then set PINNED to ({PROTOCOL}, {:?}) and update `PROTOCOL` and `KINDS` in pi/lib/event.ts.",
-            kinds_hash()
-        );
+    fn session_retiered_is_about_a_session_and_carries_from_and_to() {
+        let spec = Kind::SessionRetiered.spec();
+        assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y));
+        assert_eq!(spec.required, ["from", "to"]);
+    }
+
+    #[test]
+    fn the_review_kinds_exist_and_are_about_a_session() {
+        for name in REVIEW_KINDS {
+            let kind: Kind = name.parse().unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(kind.as_str(), name);
+            let spec = kind.spec();
+            assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y), "{name}");
+        }
+        let data = |name: &str| Kind::from_str(name).unwrap().spec().required;
+        assert_eq!(data("review-opened"), ["pn_id", "kind", "subject", "port"]);
+        assert_eq!(data("review-closed"), ["pn_id", "ended"]);
+    }
+
+    /// A kind exists when its `event_kinds` row does (§4.4 K1): one additive migration of one statement per kind.
+    #[test]
+    fn a_fresh_store_lists_the_review_kinds_in_event_kinds() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        let listed: Vec<String> = store
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT name FROM event_kinds WHERE name LIKE 'review-%' ORDER BY name")?;
+                let names = stmt.query_map([], |r| r.get(0))?.collect::<Result<Vec<String>, _>>()?;
+                Ok(names)
+            })
+            .unwrap();
+        assert_eq!(listed, ["review-closed", "review-opened"]);
     }
 }

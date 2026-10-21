@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
-import { PROTOCOL } from "../lib/event.ts";
+import { answers, ID, policyShow, sessionShow } from "./answers.ts";
 import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
@@ -85,7 +85,7 @@ import(entry).then((m) => {
 });
 `;
 
-export const ID = "596d007f-6775-4134-b77a-b356cc523842";
+export { ID, policyShow, sessionShow };
 export const OTHER = "11111111-2222-4333-8444-555555555555";
 
 export type Call = { phase: "start" | "end"; argv: string[]; since?: string; feedback?: string; t: number };
@@ -116,10 +116,7 @@ export class Fixture {
     process.env.PI_CODING_AGENT_DIR = this.agentDir; // pi's agent directory: where the adapter reads `compact-tools.json` (commands.md §15.9)
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
-    this.respond("session-show", sessionShow());
-    this.respond("context-pending", { ok: true, context: "ctx", plans: [] }); // a Manager reads it at every turn start (§15.7)
-    this.respond("policy-show", policyShow()); // no text anywhere: no section
-    this.respond("--version", { ok: true, version: "0.0.0", schema: 6, store_schema: 6, protocol: PROTOCOL });
+    for (const [key, answer] of Object.entries(answers())) this.respond(key, answer); // the same answers as pi-check's fake (answers.ts)
   }
 
   /** A new install of the fake `cpd`: the same program in a file of another size and mtime. */
@@ -166,6 +163,13 @@ export class Fixture {
 
   planFile(plan: string, review: string, content: string): string {
     const p = join(this.cpdHome, "run", plan, `plan-${review}.md`);
+    mkdirSync(join(this.cpdHome, "run", plan), { recursive: true });
+    writeFileSync(p, content);
+    return p;
+  }
+
+  summaryFile(plan: string, review: string, content: string): string {
+    const p = join(this.cpdHome, "run", plan, `summary-${review}.md`);
     mkdirSync(join(this.cpdHome, "run", plan), { recursive: true });
     writeFileSync(p, content);
     return p;
@@ -284,26 +288,13 @@ function alive(pid: number): boolean {
   }
 }
 
-export const sessionShow = (over: Record<string, unknown> = {}) => ({
-  ok: true,
-  session: { id: ID, role: "lead", context: "ctx", plan: "p1", attempt: null, name: "the lead", state: "stopped", plan_lead: true, grounded_lead: false, registered_event: 100, ...over },
-  open_escalations: [],
-});
-
-/** A `cpd policy show` output (commands.md §22.1): the domains of contract §8.3, each with its audience; `texts` sets a domain's text and `source`. */
-export const policyShow = (role = "lead", texts: Record<string, string> = {}, source = "owner:/p/o.toml") => {
-  const audience: Record<string, string[]> = {
-    pr: ["lead", "worker"], deploy: ["lead"], code: ["lead", "worker"], tests: ["lead", "worker"], monitor: ["lead", "worker"], instructions: ["manager", "lead", "worker"],
-  };
-  const policy = Object.fromEntries(Object.entries(audience).map(([d, a]) => [d, { source: d in texts ? source : "default", audience: a, keys: {}, text: texts[d] ?? "" }]));
-  return { ok: true, key: { owner: "o", repo: null }, role, files: [], policy };
-};
-
 export const planShow = (over: Record<string, unknown> = {}) => ({ ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null, ...over });
 
 export const ev = (id: number, kind: string, over: Record<string, unknown> = {}) => ({
   id, at: "2026-10-14T21:41:02.114Z", kind, context: "ctx", plan: "p1", job: null, attempt: null, session: null, text: `text of ${kind} ${id}`, data: {}, ...over,
 });
+
+export type FakeDialog = { kind: "select" | "editor"; title: string; options: string[] | undefined; signal: AbortSignal | undefined; settled: boolean; answer(value: string | undefined): void };
 
 export type Sent = { message: Message; options: SendOptions };
 
@@ -432,19 +423,69 @@ export class FakePi implements PiApi {
   /** What `ctx.isProjectTrusted()` answers. */
   trusted = false;
 
+  /** The dialogs the adapter opened with `ctx.ui.select` and `ctx.ui.editor`, in order. Like pi's, a select with a `signal` that aborts answers `undefined`; an editor has no signal. */
+  readonly dialogs: FakeDialog[] = [];
+
+  /** The oldest dialog of `kind` still waiting for an answer. */
+  openDialog(kind: "select" | "editor"): FakeDialog | undefined {
+    return this.dialogs.find((d) => d.kind === kind && !d.settled);
+  }
+
+  private dialog(kind: "select" | "editor", title: string, options: string[] | undefined, signal: AbortSignal | undefined): Promise<string | undefined> {
+    return new Promise((resolve) => {
+      const d: FakeDialog = {
+        kind, title, options, signal, settled: false,
+        answer: (value) => {
+          if (d.settled) return;
+          d.settled = true;
+          resolve(value);
+        },
+      };
+      this.dialogs.push(d);
+      if (signal?.aborted) d.answer(undefined);
+      else signal?.addEventListener("abort", () => d.answer(undefined), { once: true });
+    });
+  }
+
+  /** The models `pi.setModel` was called with, in order (commands.md §15.3 `session-retiered`), and the levels `pi.setThinkingLevel` was called with. */
+  readonly modelsSet: { provider: string; id: string }[] = [];
+  readonly thinkingSet: string[] = [];
+  /** What `setModel` answers: false is pi's "no authentication for the model's provider". */
+  modelAccepted = true;
+  /** The models `ctx.modelRegistry.find(provider, id)` knows, as `provider/id`. */
+  readonly knownModels = new Set<string>(["p/opus", "p/sonnet", "p/haiku"]);
+
+  async setModel(model: { provider: string; id: string }): Promise<boolean> {
+    this.modelsSet.push(model);
+    return this.modelAccepted;
+  }
+
+  setThinkingLevel(level: string): void {
+    this.thinkingSet.push(level);
+  }
+
   ctx(): Ctx {
-    return {
+    const ui = {
+      notify: (m: string, level?: string) => {
+        this.notices.push(m);
+        if (level === "error") this.errorNotices.push(m);
+      },
+      getEditorText: () => this.editorText,
+      select: (title: string, options: string[], opts?: { signal?: AbortSignal }) => this.dialog("select", title, options, opts?.signal),
+      editor: (title: string) => this.dialog("editor", title, undefined, undefined),
+    };
+    // `modelRegistry` is what the adapter reads to find a model (commands.md §15.3 `session-retiered`): pi's `ModelRegistry.find`.
+    const ctx: Ctx & { modelRegistry: { find(provider: string, id: string): { provider: string; id: string } | undefined } } = {
       mode: this.mode,
       cwd: join(tmpdir(), "pi-test-no-such-project"),
       isProjectTrusted: () => this.trusted,
-      ui: { notify: (m, level) => {
-          this.notices.push(m);
-          if (level === "error") this.errorNotices.push(m);
-        }, getEditorText: () => this.editorText },
+      ui,
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]> },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
+      modelRegistry: { find: (provider, id) => (this.knownModels.has(`${provider}/${id}`) ? { provider, id } : undefined) },
     };
+    return ctx;
   }
 
   /** A command context that, like pi's, throws on any use once `reload()` has resolved. */
@@ -507,6 +548,6 @@ export async function waitFor<T>(what: string, fn: () => T | undefined | null | 
   }
 }
 
-/** `session state` argvs, without the session id, as `idle` or `blocked:<label>`. */
+/** `session state` argvs, without the session id, as `idle`, `blocked:<label>` or `waiting:<label>`. */
 export const stateCalls = (f: Fixture): string[] =>
-  f.argvs().filter((a) => a[0] === "session" && a[1] === "state").map((a) => (a[2] === "blocked" ? `blocked:${a[a.indexOf("--label") + 1]}` : a[2]!));
+  f.argvs().filter((a) => a[0] === "session" && a[1] === "state").map((a) => (a[2] === "blocked" || a[2] === "waiting" ? `${a[2]}:${a[a.indexOf("--label") + 1]}` : a[2]!));

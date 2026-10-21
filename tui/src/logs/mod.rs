@@ -1,5 +1,5 @@
 //! The `logs` view (commands.md §13.2, §17; R36): the Event log, in a tmux popup opened by the StatusBar's
-//! `▤` button (`cpd tui action logs`). It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
+//! `󰧭` (U+F09ED) button (`cpd tui action logs`). It takes the latest [`RECENT`] Events, then looks at the store's highest Event id every
 //! `events.poll_ms` and appends what is new. ↑↓, j/k, PgUp/PgDn and the mouse wheel scroll (the dialog kit's
 //! scrolling, mouse capture on); its title is a section header; `q` or Esc closes it. It makes no
 //! write of its own. With `--event <id>` it opens at that Event (a click on an `engine-error` or `engine-down` Inbox
@@ -17,14 +17,13 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 
 pub use self::view::{Log, draw};
 use super::read;
-use super::widgets::{legend, newest_client};
+use super::widgets::legend;
 use super::runner::{ViewError, kept};
 use super::{Capture, run_view};
 use cpd_core::config::Config;
-use cpd_core::error::{CpdError, ErrorCode};
+use cpd_core::error::CpdError;
 use cpd_core::events::Selection;
 use cpd_core::home::CpdHome;
-use cpd_core::host::Tmux;
 use cpd_core::output::Output;
 use cpd_core::store::Store;
 
@@ -52,15 +51,6 @@ pub fn popup_args(client: (u16, u16), event: Option<i64>) -> Vec<String> {
         None => "cpd tui view logs".to_owned(),
     };
     args
-}
-
-/// The log in a tmux popup over the cockpit, at the Event `event` (the bottom with none): the click on an Inbox item.
-pub(crate) fn open_at(tmux: &Tmux, event: Option<i64>) -> Result<(), CpdError> {
-    let clients = tmux.run(&["list-clients", "-F", "#{client_activity} #{client_width} #{client_height}"].map(str::to_owned))?;
-    let client = newest_client(&clients).ok_or_else(|| {
-        CpdError::new(ErrorCode::TmuxFailed, "No tmux client is attached to the cockpit.").with("socket", tmux.socket())
-    })?;
-    tmux.run(&popup_args(client, event)).map(drop)
 }
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {

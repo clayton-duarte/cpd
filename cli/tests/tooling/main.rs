@@ -1,0 +1,23 @@
+//! The `tooling` integration-test binary of `cpd` (docs/implementing.md, Tests: the area table): every file of this
+//! directory is a module. The harness, `cli/tests/common/`, is shared by every area's binary.
+
+#[path = "../common/mod.rs"]
+mod common;
+
+mod cargo_script;
+mod dead_code;
+mod e2e_cross;
+mod e2e;
+mod harness;
+mod install_script;
+mod interface;
+mod layout;
+mod no_repo_lock;
+mod npm_fresh;
+mod preview_script;
+mod prune_script;
+mod release_script;
+mod slot;
+mod test_changed_script;
+mod tests_script;
+mod version;

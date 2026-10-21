@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::Serialize;
 use toml::{Table, Value};
 
-use super::tier::Tier;
+use super::tier::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::MachineName;
@@ -36,6 +36,9 @@ pub struct Config {
     pub machine: MachineName,
     /// Attempts not ended, machine-wide (§3.4).
     pub concurrency: u32,
+    /// Full test runs at once (Gates and `cpd slot` commands), machine-wide: the number of `run/test-<i>.lock` slots
+    /// (§7.6 "The test slot", hs-d336, hs-d301).
+    pub test_concurrency: u32,
     /// Automatic Attempts are capped at `1 + retry_cap` (§9).
     pub retry_cap: u32,
     pub lead_tier: Tier,
@@ -43,11 +46,11 @@ pub struct Config {
     pub manager_tier: Tier,
     /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
     pub context_distill_tier: Tier,
+    /// The Tier of the `open` and `update` Jobs cpd adds (§2.2 "Job kinds", §8.2, hs-d340, hs-d497).
+    pub open_tier: Tier,
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
-    /// How long a PR whose Jobs are all merged may stay unopened before E4 tells the Manager (§3.7 E4, hs-d334).
-    pub pr_open_escalate_minutes: u32,
     /// One port per Plan's plannotator review (§6.5).
     pub plannotator_ports: PortRange,
     pub tiers: Tiers,
@@ -180,15 +183,27 @@ impl Serialize for TickSeconds {
 pub struct Watch {
     pub tick_seconds: TickSeconds,
     pub pr_poll_seconds: u32,
+    /// E11 reads the team channel this long after its previous read ended (§3.7, §8.2).
+    pub team_review_seconds: u32,
     /// The same `error` Event (step and code) is appended at most once per this (§3.7).
     pub error_repeat_seconds: u32,
+    /// E5 raises an `error` once the same `gh` call of the poll has failed with an HTTP 5xx or a timeout this long (§3.7, §8.2).
+    pub pr_poll_transient_minutes: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Inbox {
     /// A failed Job becomes a `job-stuck` item after this (E8, §2.2).
     pub stuck_job_minutes: u32,
+    /// The Slack channel id of the team review channel; `""` switches E11 and the `review-requested` item off (§2.2, §8.2).
+    pub team_channel: String,
+    /// The User's Slack user id; set when `team_channel` is.
+    pub slack_user_id: String,
+    /// GitHub logins whose reviews do not count as a human's (hermes `BOT_REVIEWERS`).
+    pub bot_reviewers: Vec<String>,
 }
+
+const DEFAULT_BOT_REVIEWERS: [&str; 3] = ["mission-lane-claude-code-assistant", "github-actions", "copilot-pull-request-reviewer"];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Events {
@@ -249,15 +264,23 @@ impl Config {
         let version = r.require("version", |v| int(v, 1, 1))?;
         let machine = r.require("machine", |v| MachineName::parse(text_of(&v)?).map_err(|e| e.message().to_owned()))?;
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
+        let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
-        let lead_tier = r.get("lead_tier", Tier::parse("O3").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
+        // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
+        let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
+        let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
+        let context_distill_tier = r.get("context_distill_tier", Tier::parse("H2").expect("a valid Tier"), |v| {
+            let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
+            if tier.letter() != Letter::H || tier.effort() > Tier::MAX_EFFORT {
+                return Err(format!("must be an H Tier with effort 0-4, not {tier}: an auxiliary run uses only the H tier and never effort 5, to keep cost down (hs-d506)"));
+            }
+            Ok(tier)
         })?;
-        let manager_tier = r.get("manager_tier", Tier::parse("O5").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
-        })?;
-        let context_distill_tier = r.get("context_distill_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
+            let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
+            tier.check_worker().map_err(|e| e.message().to_owned())?;
+            Ok(tier)
         })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
@@ -275,7 +298,6 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
-        let pr_open_escalate_minutes = r.get("pr_open_escalate_minutes", 10, |v| int(v, 1, u32::MAX))?;
         let plannotator_ports = r.get("plannotator_ports", PortRange { first: 19432, last: 19441 }, |v| {
             PortRange::parse(text_of(&v)?)
         })?;
@@ -300,9 +322,34 @@ impl Config {
         let watch = Watch {
             tick_seconds: r.get("watch.tick_seconds", TickSeconds(5000), TickSeconds::parse)?,
             pr_poll_seconds: positive(&mut r, "watch.pr_poll_seconds", 5)?,
+            team_review_seconds: positive(&mut r, "watch.team_review_seconds", 1800)?,
             error_repeat_seconds: positive(&mut r, "watch.error_repeat_seconds", 600)?,
+            pr_poll_transient_minutes: positive(&mut r, "watch.pr_poll_transient_minutes", 10)?,
         };
-        let inbox = Inbox { stuck_job_minutes: positive(&mut r, "inbox.stuck_job_minutes", 10)? };
+        let slack_id = |first: char| move |v: Value| {
+            let id = text_of(&v)?;
+            let ok = id.is_empty()
+                || (id.starts_with(first) && id.len() > 1 && id.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()));
+            if ok { Ok(id.to_owned()) } else { Err(format!("{id:?} is not \"\" or a Slack id starting with {first}")) }
+        };
+        let inbox = Inbox {
+            stuck_job_minutes: positive(&mut r, "inbox.stuck_job_minutes", 10)?,
+            team_channel: r.get("inbox.team_channel", String::new(), slack_id('C'))?,
+            slack_user_id: r.get("inbox.slack_user_id", String::new(), slack_id('U'))?,
+            bot_reviewers: r.get("inbox.bot_reviewers", DEFAULT_BOT_REVIEWERS.map(str::to_owned).to_vec(), |v| match v {
+                Value::Array(items) => items.iter().map(|i| non_empty(text_of(i)?)).collect(),
+                other => Err(format!("must be an array of text, not {}", other.type_str())),
+            })?,
+        };
+        // The claim and mention rules cannot run without the User's id, nor without the channel.
+        if inbox.team_channel.is_empty() != inbox.slack_user_id.is_empty() {
+            let (key, other) = if inbox.team_channel.is_empty() {
+                ("inbox.team_channel", "inbox.slack_user_id")
+            } else {
+                ("inbox.slack_user_id", "inbox.team_channel")
+            };
+            return Err(r.invalid(key, format!("must be set together with {other}: both or neither")));
+        }
         let events = Events { poll_ms: r.get("events.poll_ms", 200, |v| int(v, 20, 10_000))? };
         let tmux = Tmux {
             socket: r.get("tmux.socket", "cpd".into(), |v| tmux_name(text_of(&v)?))?,
@@ -321,13 +368,14 @@ impl Config {
             version,
             machine,
             concurrency,
+            test_concurrency,
             retry_cap,
             lead_tier,
             manager_tier,
             context_distill_tier,
+            open_tier,
             lead_pi_packages,
             pi_adapter,
-            pr_open_escalate_minutes,
             plannotator_ports,
             tiers,
             timeouts,
@@ -433,6 +481,15 @@ impl Reader<'_> {
 }
 
 const KNOWN_SECTIONS: [&str; 6] = ["tiers", "timeouts", "watch", "inbox", "events", "tmux"];
+
+/// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
+fn leader_tier(value: &Value) -> Result<Tier, String> {
+    let tier = Tier::parse(text_of(value)?).map_err(|e| e.message().to_owned())?;
+    if tier.effort() > Tier::MAX_EFFORT {
+        return Err(format!("must have effort 0-4, not {tier}: no agent uses effort 5, to keep cost down (hs-d506)"));
+    }
+    Ok(tier)
+}
 
 fn text_of(value: &Value) -> Result<&str, String> {
     match value {

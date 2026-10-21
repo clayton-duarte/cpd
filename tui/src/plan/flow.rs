@@ -24,9 +24,11 @@ use ratatui::{
 use crate::palette::{self, Meaning};
 use cpd_core::config::Tier;
 use crate::read::{AttemptStatus, JobNode, JobStatus};
+use cpd_core::ids::JobKey;
 
 /// A Job's status as the chart draws it. A cancelled Job is not drawn, so it has none; a `running` Job whose Attempt is
-/// `merging` is `Merging` (the cockpit's `in_review`).
+/// `merging` is `Merging` (the cockpit's `in_review`); a `failed` Job is `Failed` while its Lead handles it (the waiting
+/// colour) and `Stuck` once `job-stuck` is open (red: it needs the User, audit Q3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Live {
     Draft,
@@ -35,6 +37,7 @@ pub enum Live {
     Merging,
     Merged,
     Failed,
+    Stuck,
 }
 
 impl Live {
@@ -47,17 +50,19 @@ impl Live {
             Live::Merging => palette::job_status(JobStatus::Running, true),
             Live::Merged => palette::job_status(JobStatus::Merged, false),
             Live::Failed => palette::job_status(JobStatus::Failed, false),
+            Live::Stuck => palette::JOB_STUCK,
         }
     }
 
-    /// `None` for a cancelled Job.
-    pub fn of(job: &JobNode) -> Option<Live> {
+    /// `None` for a cancelled Job. `stuck`: the Job has an open `job-stuck` item.
+    pub fn of(job: &JobNode, stuck: bool) -> Option<Live> {
         Some(match job.status {
             JobStatus::Draft => Live::Draft,
             JobStatus::Queued => Live::Queued,
             JobStatus::Running if job.active_attempt().is_some_and(|a| a.status == AttemptStatus::Merging) => Live::Merging,
             JobStatus::Running => Live::Running,
             JobStatus::Merged => Live::Merged,
+            JobStatus::Failed if stuck => Live::Stuck,
             JobStatus::Failed => Live::Failed,
             JobStatus::Cancelled => return None,
         })
@@ -82,9 +87,10 @@ pub struct Pill {
     pub column: usize,
 }
 
-/// Jobs (one PR's) as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them.
-pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>) -> Vec<FlowJob> {
-    let live: Vec<(&JobNode, Live)> = jobs.into_iter().filter_map(|j| Some((j, Live::of(j)?))).collect();
+/// Jobs (one PR's) as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them. `stuck`
+/// are the keys of the Jobs with an open `job-stuck` item.
+pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, stuck: &[JobKey]) -> Vec<FlowJob> {
+    let live: Vec<(&JobNode, Live)> = jobs.into_iter().filter_map(|j| Some((j, Live::of(j, stuck.contains(&j.key))?))).collect();
     live.iter()
         .map(|&(j, status)| FlowJob {
             key: j.key.to_string(),
@@ -112,6 +118,10 @@ pub enum Dir {
     Right,
 }
 
+/// The rounded caps of a pill (powerline, U+E0B6 and U+E0B4), each one cell, drawn in the pill's status colour.
+pub const CAP_L: &str = "\u{e0b6}";
+pub const CAP_R: &str = "\u{e0b4}";
+
 /// Columns between a column's right bracket and the next column's left bracket: line, bus, line.
 const GAP: u16 = 3;
 
@@ -123,10 +133,10 @@ fn truncate(s: &str, w: usize) -> String {
     }
 }
 
-/// The left half of a pill (` <icon> <key> `, the key cut to `key_w` characters) and the right half (`│<tier>[│aN] `).
+/// The left half of a pill (`<icon> <key>`, the key cut to `key_w` characters) and the right half (`│<tier>[│aN]`).
 fn pill_parts(j: &FlowJob, key_w: usize, frame: usize) -> (String, String) {
     let a = if j.attempt > 1 { format!("│a{}", j.attempt) } else { String::new() };
-    (format!(" {} {} ", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{} ", j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string()), a))
+    (format!("{} {}", j.status.icon(frame).0, truncate(&j.key, key_w)), format!("│{}{}", j.tier.map_or_else(|| "—".to_owned(), |t| t.to_string()), a))
 }
 
 /// The needs of each Job (as indices) that no other need already implies: a need reachable through another need is dropped.
@@ -305,7 +315,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     // x: the left bracket column, then each column's pills, `GAP` + both bracket columns between columns
     let parts: Vec<(String, String)> = jobs.iter().map(|j| pill_parts(j, usize::MAX, frame)).collect();
     let pill_w = |i: usize| (Line::from(parts[i].0.as_str()).width() + Line::from(parts[i].1.as_str()).width()) as u16;
-    let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i)).max().unwrap_or(0)).collect();
+    let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i) + 2).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
     let xs: Vec<u16> = starts(1, col_w.iter().copied(), spacing);
@@ -405,15 +415,25 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
                 let rect = Rect::new(xs[l], top[c] + k as u16, col_w[l], 1);
                 let style = palette::pill(jobs[i].status.icon(frame).1);
-                // the icon and key to the left, the tier (and `aN`) to the right, whatever the column's width
-                Line::from(parts[i].0.as_str()).style(style).left_aligned().render(rect, &mut buf);
-                Line::from(parts[i].1.as_str()).style(style).right_aligned().render(rect, &mut buf);
+                // a cap on each side in the status colour, on the default background; between them the icon and key to
+                // the left, the tier (and `aN`) to the right, whatever the column's width
+                let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+                buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
+                buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
+                let body = body_of(rect);
+                Line::from(parts[i].0.as_str()).style(style).left_aligned().render(body, &mut buf);
+                Line::from(parts[i].1.as_str()).style(style).right_aligned().render(body, &mut buf);
                 pills[i] = Some(Pill { key: jobs[i].key.clone(), rect, column: l });
                 columns[l].push(i);
             }
         }
     }
     Chart { buf, pills: pills.into_iter().flatten().collect(), columns }
+}
+
+/// A pill's rectangle without its two caps.
+fn body_of(rect: Rect) -> Rect {
+    Rect { x: rect.x + 1, width: rect.width.saturating_sub(2), ..rect }
 }
 
 /// The User's selection in the Plan view: a Job key, held by key so a refresh keeps it. Nothing is selected until the User
@@ -518,7 +538,7 @@ impl Chart {
         (fit(ox, r.x.saturating_sub(1), r.right() + 1, w), fit(oy, r.y, r.bottom(), h))
     }
 
-    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill bold and reversed. Offsets are clamped to
+    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill's body bold and reversed (its caps keep the status colour). Offsets are clamped to
     /// the chart; the clamped offsets are returned. (Hand-written: ratatui has no widget that copies a window of a `Buffer`.)
     pub fn blit(&self, dst: &mut Buffer, area: Rect, (ox, oy): (u16, u16), selected: Option<usize>) -> (u16, u16) {
         let ox = ox.min(self.buf.area.width.saturating_sub(area.width));
@@ -528,7 +548,7 @@ impl Chart {
                 dst[(area.x + x, area.y + y)] = self.buf[(x + ox, y + oy)].clone();
             }
         }
-        if let Some(r) = selected.map(|i| self.pills[i].rect) {
+        if let Some(r) = selected.map(|i| body_of(self.pills[i].rect)) {
             let seen = Rect::new(ox, oy, area.width, area.height).intersection(r);
             if !seen.is_empty() {
                 let on_dst = Rect::new(area.x + seen.x - ox, area.y + seen.y - oy, seen.width, seen.height);
@@ -567,15 +587,70 @@ mod tests {
 
     #[test]
     fn a_pill_has_the_icon_and_colour_of_its_status() {
-        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed];
+        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed, Live::Stuck];
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: *s, ..job(&format!("{s:?}"), &[]) }).collect();
         let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
             let (icon, meaning) = status.icon(0);
             assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status:?}");
-            let cell = &c.buf[(p.rect.x, p.rect.y)];
+            // the body keeps the pill's colours
+            let cell = &c.buf[(p.rect.x + 1, p.rect.y)];
             assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status:?}");
+            // a rounded cap on each end: the status colour on the default background
+            for (x, glyph) in [(p.rect.x, "\u{e0b6}"), (p.rect.right() - 1, "\u{e0b4}")] {
+                let cap = &c.buf[(x, p.rect.y)];
+                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, palette::pill(meaning).bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
+            }
         }
+    }
+
+    /// The cells of the pill at `i`, caps included.
+    fn cells(c: &Chart, i: usize) -> String {
+        let r = c.pills[i].rect;
+        (r.x..r.right()).map(|x| c.buf[(x, r.y)].symbol()).collect()
+    }
+
+    #[test]
+    fn a_pill_is_cap_icon_key_bar_tier_cap_with_no_padding() {
+        // hs-d474: no space inside the caps and none before the `│`
+        let c = layout(&[job("titles-docs-2", &[])], 0);
+        let icon = Live::Queued.icon(0).0;
+        assert_eq!(cells(&c, 0), format!("{CAP_L}{icon} titles-docs-2│S1{CAP_R}"));
+        assert_eq!(c.pills[0].rect.width as usize, 2 + icon.chars().count() + " titles-docs-2│S1".chars().count());
+    }
+
+    #[test]
+    fn a_pill_from_the_second_attempt_has_the_attempt_after_the_tier() {
+        let icon = Live::Queued.icon(0).0;
+        for (attempt, tail) in [(1, ""), (2, "│a2"), (3, "│a3")] {
+            let c = layout(&[FlowJob { attempt, ..job("a", &[]) }], 0);
+            assert_eq!(cells(&c, 0), format!("{CAP_L}{icon} a│S1{tail}{CAP_R}"), "attempt {attempt}");
+        }
+    }
+
+    #[test]
+    fn a_stub_draft_pill_shows_a_dash_for_its_tier_with_no_padding() {
+        let c = layout(&[FlowJob { status: Live::Draft, tier: None, ..job("a", &[]) }], 0);
+        assert_eq!(cells(&c, 0), format!("{CAP_L}{} a│—{CAP_R}", Live::Draft.icon(0).0));
+    }
+
+    #[test]
+    fn the_widest_pill_of_a_column_fills_it_and_the_others_pad_between_key_and_bar() {
+        let c = layout(&[job("a", &[]), job("long", &[])], 0);
+        let icon = Live::Queued.icon(0).0;
+        assert_eq!(cells(&c, 0), format!("{CAP_L}{icon} a   │S1{CAP_R}"));
+        assert_eq!(cells(&c, 1), format!("{CAP_L}{icon} long│S1{CAP_R}"));
+    }
+
+    #[test]
+    fn a_failed_pill_is_waiting_and_red_only_once_its_job_is_stuck() {
+        assert_eq!(Live::Failed.icon(0).1, Meaning::Waiting, "its Lead handles it");
+        assert_eq!(Live::Stuck.icon(0).1, Meaning::Failed, "job-stuck: it needs the User");
+        assert_eq!(Live::Stuck.icon(0).0, Live::Failed.icon(0).0, "the same glyph");
+        let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
+        // the body, after the left cap
+        let bg = |i: usize| c.buf[(c.pills[i].rect.x + 1, c.pills[i].rect.y)].bg;
+        assert_eq!((bg(0), bg(1)), (palette::color(Meaning::Waiting), palette::color(Meaning::Failed)));
     }
 
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.
@@ -630,7 +705,7 @@ mod tests {
     fn columns_run_left_to_right() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1");
+ 󰝦 a│S1─────󰝦 b│S1─────󰝦 c│S1");
         assert_eq!(c.columns, vec![vec![0], vec![1], vec![2]]);
     }
 
@@ -639,7 +714,7 @@ mod tests {
         // c needs a through b, so its own need of a is dropped: a has one line out, to b
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["b", "a"])], 0);
         snap(&c, "
-  󰝦 a │S1 ───── 󰝦 b │S1 ───── 󰝦 c │S1");
+ 󰝦 a│S1─────󰝦 b│S1─────󰝦 c│S1");
         // the same with the implied need listed first
         assert_eq!(text(&layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a", "b"])], 0)), text(&c));
     }
@@ -648,9 +723,9 @@ mod tests {
     fn jobs_with_the_same_needs_share_a_card_stacked_with_no_space() {
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("d", &["a"])], 0);
         snap(&c, "
-              ╭ 󰝦 b │S1 ╮
-  󰝦 a │S1 ────┤ 󰝦 c │S1 │
-              ╰ 󰝦 d │S1 ╯");
+             ╭󰝦 b│S1╮
+ 󰝦 a│S1────┤󰝦 c│S1│
+             ╰󰝦 d│S1╯");
         assert_eq!(c.pills.iter().map(|p| p.rect.y).collect::<Vec<_>>(), [1, 0, 1, 2]);
     }
 
@@ -659,23 +734,23 @@ mod tests {
         // three Jobs: both brackets are joined at the middle row, where the line in and the line out meet them
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"]), job("e", &["a"]), job("d", &["b", "c", "e"])], 0);
         snap(&c, "
-              ╭ 󰝦 b │S1 ╮
-  󰝦 a │S1 ────┤ 󰝦 c │S1 ├──── 󰝦 d │S1
-              ╰ 󰝦 e │S1 ╯");
+             ╭󰝦 b│S1╮
+ 󰝦 a│S1────┤󰝦 c│S1├────󰝦 d│S1
+             ╰󰝦 e│S1╯");
         // two Jobs: the middle row is the upper one
         let c = layout(&[job("a", &[]), job("b", &["a"]), job("c", &["a"])], 0);
         snap(&c, "
-  󰝦 a │S1 ────┬ 󰝦 b │S1 ╮
-              ╰ 󰝦 c │S1 ╯");
+ 󰝦 a│S1────┬󰝦 b│S1╮
+             ╰󰝦 c│S1╯");
     }
 
     #[test]
     fn single_cards_are_one_row_apart_and_have_plain_line_ends() {
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a"]), job("d", &["b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──┬── 󰝦 c │S1
-            │
-  󰝦 b │S1 ──┴── 󰝦 d │S1");
+ 󰝦 a│S1──┬──󰝦 c│S1
+           │
+ 󰝦 b│S1──┴──󰝦 d│S1");
     }
 
     #[test]
@@ -684,14 +759,16 @@ mod tests {
         long.attempt = 2;
         let c = layout(&[job("a", &[]), long, job("b", &[])], 0);
         snap(&c, "
-  󰝦 a               │S1
+ 󰝦 a              │S1
 
-  󰝦 a-longer-key │S1│a2
+ 󰝦 a-longer-key│S1│a2
 
-  󰝦 b               │S1");
+ 󰝦 b              │S1");
         // the last cell of the widest pill is a hit, the one after it is not
         let r = c.pills[1].rect;
         assert_eq!((c.pill_at(r.right() - 1, r.y), c.pill_at(r.right(), r.y)), (Some(1), None));
+        // so is the left cap, the pill's first cell; the cell before it is not
+        assert_eq!((c.pill_at(r.x, r.y), c.pill_at(r.x - 1, r.y)), (Some(1), None));
     }
 
     #[test]
@@ -703,18 +780,18 @@ mod tests {
         assert_eq!(glyphs, ["┬", "│", "┴"]);
         let c = layout(&[job("a", &[]), job("b", &[]), job("c", &["a", "b"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──╮
-            ├── 󰝦 c │S1
-  󰝦 b │S1 ──╯");
+ 󰝦 a│S1──╮
+           ├──󰝦 c│S1
+ 󰝦 b│S1──╯");
     }
 
     #[test]
     fn a_line_that_skips_columns_rides_a_free_row() {
         let c = layout(&[job("a", &[]), job("x", &[]), job("b", &["a"]), job("c", &["b", "x"])], 0);
         snap(&c, "
-  󰝦 a │S1 ──╮
-            ├── 󰝦 b │S1 ──┬── 󰝦 c │S1
-  󰝦 x │S1 ──┴─────────────╯");
+ 󰝦 a│S1──╮
+           ├──󰝦 b│S1──┬──󰝦 c│S1
+ 󰝦 x│S1──┴────────────╯");
     }
 
     #[test]
@@ -878,8 +955,9 @@ mod tests {
         let mut dst = Buffer::empty(Rect::new(0, 0, 30, 3));
         let (ox, oy) = c.blit(&mut dst, Rect::new(2, 1, 20, 1), (0, 100), Some(3)); // clamped to the chart
         assert_eq!((ox, oy), (0, 6));
-        let cell = &dst[(3, 1)];
-        assert!(cell.modifier.contains(Modifier::REVERSED | Modifier::BOLD));
+        // the pill's body is reversed, its caps are not
+        assert!(dst[(4, 1)].modifier.contains(Modifier::REVERSED | Modifier::BOLD));
+        assert!(!dst[(3, 1)].modifier.contains(Modifier::REVERSED));
         assert_eq!(dst[(3, 0)].symbol(), " "); // the padding is untouched
     }
 
@@ -890,7 +968,7 @@ mod tests {
         assert_eq!((c.buf.area.width, c.buf.area.height), (plain.buf.area.width + 4, plain.buf.area.height + 2));
         for (p, q) in c.pills.iter().zip(&plain.pills) {
             assert_eq!((p.rect.x, p.rect.y), (q.rect.x + 2, q.rect.y + 1));
-            assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), plain.buf[(q.rect.x + 1, q.rect.y)].symbol());
+            assert_eq!(c.buf[(p.rect.x + 2, p.rect.y)].symbol(), plain.buf[(q.rect.x + 2, q.rect.y)].symbol());
             assert_eq!(c.pill_at(p.rect.x, p.rect.y), c.pills.iter().position(|r| r.key == p.key));
         }
         assert_eq!(c.pill_at(q_x(&plain), 0), None, "the margin is not a pill");

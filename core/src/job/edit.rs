@@ -8,7 +8,10 @@ use rusqlite::Connection;
 use serde_json::json;
 
 use super::spec::{self, Spec};
-use super::{EditArgs, Env, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, find, plan_phase, sorted_needs};
+use super::{
+    EditArgs, Env, check_kind_not_reserved, check_needs_available, check_needs_known, check_needs_same_pr, check_pr_live, check_shape_allows, find,
+    plan_phase, sorted_needs,
+};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::ids::{JobKey, PlanId};
@@ -25,6 +28,7 @@ struct Edits {
     spec: Option<Spec>,
     pr: Option<String>,
     needs: Option<Vec<String>>,
+    kind: Option<String>,
 }
 
 enum Decision {
@@ -35,10 +39,10 @@ enum Decision {
 
 pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.pr.is_none() && args.needs.is_none() && !args.no_needs {
+    if args.title.is_none() && args.tier.is_none() && args.spec.is_none() && args.pr.is_none() && args.kind.is_none() && args.needs.is_none() && !args.no_needs {
         return Err(CpdError::new(
             ErrorCode::NothingToEdit,
-            "Nothing to edit: pass --title, --tier, --spec, --pr, --needs or --no-needs.",
+            "Nothing to edit: pass --title, --tier, --spec, --pr, --kind, --needs or --no-needs.",
         ));
     }
     let needs = match (&args.needs, args.no_needs) {
@@ -46,12 +50,22 @@ pub(super) fn edit(args: EditArgs) -> Result<Output, CpdError> {
         (None, true) => Some(Vec::new()),
         (None, false) => None,
     };
+    if let Some(kind) = &args.kind {
+        check_kind_not_reserved(kind)?;
+    }
     let spec = args.spec.as_ref().map(|path: &PathBuf| spec::read(path)).transpose()?;
     let mut env = Env::open()?;
     if let Some(tier) = args.tier {
         env.check_tier(tier)?;
     }
-    let edits = Edits { title: args.title.map(|t| t.as_str().to_owned()), tier: args.tier.map(|t| t.to_string()), spec, pr: args.pr.map(|p| p.as_str().to_owned()), needs };
+    let edits = Edits {
+        title: args.title.map(|t| t.as_str().to_owned()),
+        tier: args.tier.map(|t| t.to_string()),
+        spec,
+        pr: args.pr.map(|p| p.as_str().to_owned()),
+        needs,
+        kind: args.kind,
+    };
     let key = args.key;
 
     let decision = env.store.read(|conn| decide(conn, &plan, &key, &edits))?;
@@ -94,8 +108,28 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     if let Some(tier) = &edits.tier {
         after.tier = Some(tier.clone());
     }
+    if let Some(kind) = &edits.kind {
+        after.kind = kind.clone();
+    }
     if let Some(spec) = &edits.spec {
+        spec.check_kind(&after.kind)?;
         after.spec = Some(spec.stored());
+        after.tests = spec.tests.as_ref().map(|t| json!(t));
+        after.test_files = spec.test_files.as_ref().map(|t| json!(t));
+    }
+    // The Spec fits the kind (§5.2): a `test` Job with a Spec has `tests` and `test_files`, every other kind neither.
+    if edits.kind.is_some() && after.kind != before.kind {
+        if after.spec.is_some() && (after.kind == "test") != after.tests.is_some() {
+            let field = if after.kind == "test" { "tests" } else { "test_files" };
+            let why = if after.kind == "test" { "a test Job's Spec names its tests" } else { "only a test Job's Spec has tests and test_files" };
+            return Err(CpdError::new(ErrorCode::SpecInvalid, format!("The Spec is invalid at $.{field}: {why}; give --spec with the Spec that fits {}.", after.kind))
+                .with("path", format!("$.{field}"))
+                .with("job", key.as_str()));
+        }
+        if after.spec.is_none() {
+            after.tests = None;
+            after.test_files = None;
+        }
     }
     if let Some(pr) = &edits.pr {
         let prs = load_prs(conn, plan)?;
@@ -108,6 +142,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
         after.pr = pr.clone();
     }
     let moved = after.pr != before.pr;
+    if moved || after.kind != before.kind {
+        check_shape_allows(&load_prs(conn, plan)?, plan, &after.pr, &after.kind, after.review)?;
+    }
     // A Job that changes PR keeps none of its old needs: they are checked against the new PR.
     if let Some(needs) = &edits.needs {
         check_needs_known(&all, plan, needs)?;
@@ -145,6 +182,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     if before.title != after.title {
         fields.push("title");
     }
+    if before.kind != after.kind {
+        fields.push("kind");
+    }
     // A stub gets its whole Spec at once: it is one field, `spec`, not the five columns.
     let completed = before.spec.is_none() && after.spec.is_some();
     for (_, (name, _)) in columns(&before).into_iter().zip(columns(&after)).filter(|(b, a)| b.1 != a.1) {
@@ -167,8 +207,8 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     Ok(Decision::Update { before: before.clone(), after, fields })
 }
 
-/// The Tier and Spec columns as stored, in column order: `None` is null (a stub).
-fn columns(job: &Job) -> [(&'static str, Option<String>); 6] {
+/// The Tier and Spec columns (`tests` and `test_files` of a `test` Job with them) as stored, in column order: `None` is null (a stub).
+fn columns(job: &Job) -> [(&'static str, Option<String>); 8] {
     let spec = job.spec.as_ref();
     [
         ("tier", job.tier.clone()),
@@ -177,6 +217,8 @@ fn columns(job: &Job) -> [(&'static str, Option<String>); 6] {
         ("touches", spec.map(|s| s.touches.to_string())),
         ("acceptance", spec.map(|s| s.acceptance.to_string())),
         ("out_of_scope", spec.map(|s| s.out_of_scope.to_string())),
+        ("tests", job.tests.as_ref().map(|t| t.to_string())),
+        ("test_files", job.test_files.as_ref().map(|t| t.to_string())),
     ]
 }
 
@@ -187,7 +229,8 @@ fn update(tx: &Connection, plan: &PlanId, before: &Job, after: &Job) -> Result<(
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
         tx.execute("DELETE FROM dependencies WHERE plan = ?1 AND job = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
     }
-    let mut written: Vec<(&str, bool, Option<String>)> = vec![("title", before.title != after.title, Some(after.title.clone()))];
+    let mut written: Vec<(&str, bool, Option<String>)> =
+        vec![("title", before.title != after.title, Some(after.title.clone())), ("kind", before.kind != after.kind, Some(after.kind.clone()))];
     written.extend(columns(before).into_iter().zip(columns(after)).map(|(b, a)| (a.0, b.1 != a.1, a.1)));
     written.push(("pr", before.pr != after.pr, Some(after.pr.clone())));
     let changed: Vec<&(&str, bool, Option<String>)> = written.iter().filter(|(_, changed, _)| *changed).collect();

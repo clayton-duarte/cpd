@@ -4,19 +4,34 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+
 use super::fingerprint::{load_prs, plan_fingerprint};
 use super::prs::PrRow;
 use super::jobs::{self, Job};
 use super::overlap::{self, Overlap};
 use super::row::{self, Phase, PlanRow};
-use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, write_file};
+use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, summary, write_file};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
+use crate::home::CpdHome;
 use crate::ids::{PlanId, ReviewId};
+use crate::job::open as job_open;
 use crate::output::Output;
 
 /// What the Lead does after requesting a review (commands.md §4.6).
-const REVIEW_NEXT: &str = "The User reviews the plan in plannotator. Stop and wait for the decision message.";
+const REVIEW_NEXT: &str = "The User reviews the plan summary in your chat and decides there. Stop and wait for the decision message.";
+
+/// `run/<plan>/summary.md` (contract §1.4), beside `plan.md`.
+fn summary_md(home: &CpdHome, plan: &PlanId) -> PathBuf {
+    home.plan_md(plan).with_file_name("summary.md")
+}
+
+/// `run/<plan>/summary-<review>.md`, beside `plan-<review>.md`.
+fn summary_review_md(home: &CpdHome, plan: &PlanId, review: ReviewId) -> PathBuf {
+    home.plan_review_md(plan, review).with_file_name(format!("summary-{review}.md"))
+}
 
 /// A `plan_reviews` row.
 #[derive(Clone, Debug)]
@@ -67,19 +82,29 @@ fn find(conn: &Connection, plan: &PlanId, review: ReviewId) -> Result<Option<Rev
 
 /// What `plan render` and `plan review` read, in one read transaction.
 struct Snapshot {
+    /// `open_tier` (§8.2): the Tier the render shows for the `open` Job a PR that has not started will get.
+    open_tier: String,
     plan: PlanRow,
     prs: Vec<PrRow>,
     jobs: Vec<Job>,
     overlaps: Vec<Overlap>,
+    /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
+    base_prs: BTreeMap<String, String>,
+    /// The needs of other Plans whose PR is `cancelled`.
+    cancelled_needs: BTreeSet<String>,
     review: Option<Review>,
     fingerprint: String,
 }
 
 fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
+    let open_tier = env.config.open_tier.to_string();
     env.store.read(|conn| {
         let (prs, jobs) = (load_prs(conn, id)?, jobs::load(conn, id)?);
         let overlaps = overlap::find(&prs, &jobs, &overlap::load_others(conn, id)?);
         Ok(Snapshot {
+            open_tier,
+            base_prs: base_prs(conn, id)?,
+            cancelled_needs: cancelled_needs(conn, id)?,
             plan: row::load(conn, id)?,
             review: latest(conn, id)?,
             fingerprint: plan_fingerprint(conn, id)?,
@@ -90,8 +115,42 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
     })
 }
 
+/// The base PR of each stacked PR of `plan`, `<plan>/<key>` by PR key: the PR whose Lead Branch is the PR's `base`. A Lead
+/// Branch names its Plan, so it names one PR (contract §2.2); the same repo is checked when a base is set, not here.
+fn base_prs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM prs p JOIN prs q ON q.lead_branch = p.base WHERE p.plan = ?1")?;
+    let rows = stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The needs of `plan` on a PR of another Plan that is `cancelled`, as `<plan>/<key>`.
+fn cancelled_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeSet<String>, CpdError> {
+    let mut stmt = conn.prepare(
+        "SELECT n.needs_plan || '/' || n.needs FROM pr_needs n JOIN prs q ON q.plan = n.needs_plan AND q.key = n.needs
+          WHERE n.plan = ?1 AND n.needs_plan <> n.plan AND q.status = 'cancelled'",
+    )?;
+    let rows = stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The summary of the snapshot (commands.md §4.5); `full_plan` is the file its last line names.
+fn summary_markdown(s: &Snapshot, kind: &summary::Kind, full_plan: &std::path::Path) -> String {
+    summary::markdown(
+        kind,
+        &summary::Input {
+            plan: &s.plan,
+            prs: &s.prs,
+            jobs: &s.jobs,
+            overlaps: &s.overlaps,
+            base_prs: &s.base_prs,
+            cancelled_needs: &s.cancelled_needs,
+            full_plan,
+        },
+    )
+}
+
 fn plan_markdown(s: &Snapshot, heading: &render::Heading) -> String {
-    render::markdown(heading, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps)
+    render::markdown(heading, s.plan.context.as_str(), s.plan.phase.as_str(), &s.prs, &s.jobs, &s.overlaps, &s.open_tier)
 }
 
 /// `plan render` (§4.5).
@@ -101,8 +160,11 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
     let s = snapshot(&mut env, &id)?;
     let path = env.home.plan_md(&id);
     write_file(&path, &plan_markdown(&s, &render::Heading::Plan { title: &s.plan.title }))?;
+    let summary = summary_md(&env.home, &id);
+    write_file(&summary, &summary_markdown(&s, &summary::Kind::Plan, &path))?;
     Ok(Output::success(json!({
         "path": path.display().to_string(),
+        "summary": summary.display().to_string(),
         "fingerprint": s.fingerprint,
         "draft_jobs": s.jobs.iter().filter(|j| j.is_draft()).count(),
         "prs": s.prs.iter().filter(|p| p.status != "cancelled").count(),
@@ -129,10 +191,13 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         return Err(no_draft_jobs(&id));
     }
     check_drafts_complete(&id, jobs)?;
+    check_outline(&id, &s)?;
+    super::shape::check(&id, &s.prs, jobs)?;
     if let Some(r) = latest_review.as_ref().filter(|r| r.status == "pending" && r.fingerprint == fingerprint) {
         return Ok(Output::success(json!({
             "review": {"id": r.id, "fingerprint": r.fingerprint, "status": r.status, "requested_at": r.requested_at},
             "path": env.home.plan_review_md(&id, r.id).display().to_string(),
+            "summary": summary_review_md(&env.home, &id, r.id).display().to_string(),
             "next": REVIEW_NEXT,
             "already": true,
         })));
@@ -150,6 +215,10 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         review: &review.to_string(),
     };
     write_file(&path, &plan_markdown(&s, &heading))?;
+    let plan_summary = summary_md(&env.home, &id);
+    write_file(&plan_summary, &summary_markdown(&s, &summary::Kind::Plan, &env.home.plan_md(&id)))?;
+    let summary = summary_review_md(&env.home, &id, review);
+    write_file(&summary, &summary_markdown(&s, &summary::Kind::Review { title: args.title.as_str(), review: &review.to_string() }, &path))?;
 
     let requested_at = env.store.write("plan review", |tx| {
         // Compare-and-swap on what was read: the phase, the plan fingerprint and the latest review.
@@ -164,15 +233,46 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
              SELECT ?1, ?2, ?3, ?4, ?5, 'pending', at FROM txns WHERE id = cpd_txn()",
             rusqlite::params![id.as_str(), review.to_string(), number, fingerprint, args.title.as_str()],
         )?;
-        let text = format!("Plan review {review} of Plan {id} requested: the User reviews {drafts} draft Jobs in plannotator.");
+        let text = format!("Plan review {review} of Plan {id} requested: the User reviews {drafts} draft Jobs in your chat.");
         append(tx, NewEvent::plan_review_requested(text, review, &fingerprint).plan(id.clone()))?;
         Ok(tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get::<_, String>(0))?)
     })?;
     Ok(Output::success(json!({
         "review": {"id": review, "fingerprint": fingerprint, "status": "pending", "requested_at": requested_at},
         "path": path.display().to_string(),
+        "summary": summary.display().to_string(),
         "next": REVIEW_NEXT,
     })))
+}
+
+/// The Plan has an outline, and it says when each PR with a draft Job is done (§4.6, D3): else `outline_missing` or
+/// `outline_incomplete` (`details.prs`, in key order). Before anything is written.
+fn check_outline(id: &PlanId, s: &Snapshot) -> Result<(), CpdError> {
+    let Some(outline) = &s.plan.outline else {
+        return Err(CpdError::new(
+            ErrorCode::OutlineMissing,
+            format!("Plan {id} has no outline: write what was settled with the User, then ask again."),
+        )
+        .with("plan", id.as_str())
+        .with("next", "cpd plan outline --file <outline.json>"));
+    };
+    let mut without: Vec<&str> = s
+        .prs
+        .iter()
+        .filter(|p| p.status != "cancelled" && s.jobs.iter().any(|j| j.is_draft() && j.pr == p.key.as_str()))
+        .map(|p| p.key.as_str())
+        .filter(|key| !outline.done_when.contains_key(*key))
+        .collect();
+    if without.is_empty() {
+        return Ok(());
+    }
+    without.sort();
+    Err(CpdError::new(
+        ErrorCode::OutlineIncomplete,
+        format!("The outline of Plan {id} has no done_when for the PRs {}: add them with cpd plan outline, then ask again.", without.join(", ")),
+    )
+    .with("plan", id.as_str())
+    .with("prs", without))
 }
 
 pub(super) fn no_draft_jobs(id: &PlanId) -> CpdError {
@@ -227,6 +327,7 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
         return Err(review_decided(&id, &review));
     }
 
+    let open_tier = env.config.open_tier;
     let (review, phase, current, queued) = env.store.write("plan decide", |tx| {
         // The phase and the drafts as they are now: an approval queues what it covered only.
         let phase = row::load(tx, &id)?.phase;
@@ -252,6 +353,14 @@ pub(super) fn decide(args: DecideArgs) -> Result<Output, CpdError> {
                 queued.push(job.key.clone());
             }
             queued.sort();
+            // One path for every change to an open PR (hs-d497): a fix draft queued on an `open` PR queues its `update` Job.
+            let mut keys: Vec<&str> = all.iter().filter(|j| j.is_draft()).map(|j| j.pr.as_str()).collect();
+            keys.sort_unstable();
+            keys.dedup();
+            let prs = load_prs(tx, &id)?;
+            for pr in prs.iter().filter(|p| p.status == "open" && keys.contains(&p.key.as_str())) {
+                job_open::queue_update(tx, &id, pr, open_tier, "plan decide", job_open::Cause::Feedback)?;
+            }
         }
         let verdict = status.to_uppercase();
         let text = match (status, phase) {

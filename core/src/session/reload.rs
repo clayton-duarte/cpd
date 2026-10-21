@@ -17,6 +17,7 @@ use super::state::scoped;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::host::exe::{Exe, Refusal};
+use crate::host::limit::limit;
 use crate::host::pi::PiDirs;
 use crate::ids::SessionId;
 
@@ -27,6 +28,7 @@ const STOP_POLL: Duration = Duration::from_millis(50);
 const CHAT_IDLE: Duration = Duration::from_secs(10 * 60);
 /// How long a Session may stay `stopped` while its pi runs before the wrapper
 /// restarts pi: the adapter is missing (contract §6.7 "Adapter watchdog", hs-d141).
+/// Tests shorten it with `CPD_TEST_ADAPTER_WATCHDOG` ([`limit`]).
 const ADAPTER_WATCHDOG: Duration = Duration::from_secs(60);
 
 /// Whether the wrapper may `exec` the cpd at its path: nothing replaced it (a
@@ -76,7 +78,7 @@ pub(super) fn adapter_missing(env: &mut Env, id: &SessionId, running: Duration) 
         .map_err(|e| CpdError::bad_row(format!("{} has state_at {:?}: {e}", row.id, row.state_at)))?;
     // A `stopped` the wrapper set when the previous pi exited does not count while no pi ran.
     let stopped_for = Duration::try_from(OffsetDateTime::now_utc() - since).unwrap_or_default().min(running);
-    if stopped_for <= ADAPTER_WATCHDOG {
+    if stopped_for <= limit("ADAPTER_WATCHDOG", ADAPTER_WATCHDOG) {
         return Ok(false);
     }
     let seconds = stopped_for.as_secs();
@@ -131,7 +133,7 @@ pub(super) fn reload_due(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result
 /// Whether a Lead whose pi runs reloads it now (hs-d49): it is idle, its last
 /// turn is finished and its session file is quiet (the rule of `session fork`),
 /// and it is parked, or in the chat slot and has been idle for [`CHAT_IDLE`] (so
-/// unsent typing is not lost). A `blocked` or `working` Lead never reloads.
+/// unsent typing is not lost). A `waiting`, `blocked` or `working` Lead never reloads.
 fn reload_now(state: State, place: &str, idle_for: Duration, turn_finished: bool, file_quiet: bool) -> bool {
     state == State::Idle && turn_finished && file_quiet && (place != "chat" || idle_for >= CHAT_IDLE)
 }
@@ -150,7 +152,7 @@ mod tests {
 
     #[test]
     fn a_lead_that_is_not_idle_never_reloads() {
-        for state in [State::Working, State::Blocked, State::Stopped] {
+        for state in [State::Working, State::Waiting, State::Blocked, State::Stopped] {
             for place in ["parked", "chat", "none"] {
                 assert!(!reload_now(state, place, 60 * MINUTE, true, true), "{state:?} in {place}");
             }

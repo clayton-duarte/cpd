@@ -5,6 +5,7 @@ import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
 import { checkProtocol } from "./protocol.ts";
 import { decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
+import { noteRetier } from "./retier.ts";
 import type { Run } from "./run.ts";
 
 // The follower's lines (§15.2, §15.3).
@@ -70,6 +71,10 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
     if (own && (r.info.role === "lead" || r.info.role === "manager")) await deliverSessionMessage(host, r, ev);
     return;
   }
+  if (ev.kind === "session-retiered") {
+    if (own && (r.info.role === "lead" || r.info.role === "manager")) await noteRetier(host, r);
+    return;
+  }
   if (ev.kind === "session-renamed") {
     if (!own) return;
     const name = ev.data.name;
@@ -85,7 +90,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
   const rule = LEAD_MESSAGES[ev.kind];
   if (rule) {
     pi.sendMessage(eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
-    if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation}`, QUESTION_LABEL)) host.refresh(r);
+    if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation}`, QUESTION_LABEL, "agent")) host.refresh(r);
     return;
   }
   if (ev.kind === "escalation-answered" || ev.kind === "escalation-expired") {

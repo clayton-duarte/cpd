@@ -16,14 +16,16 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let listed = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
+        let everything = all.clone();
         let counts = attempt_counts(conn, &plan)?;
         Ok(all
             .into_iter()
             .filter(|j| args.statuses.is_empty() || args.statuses.contains(&j.status))
             .map(|j| {
+                let needs = super::open::shown_needs(&everything, &j);
                 let attempts = counts.iter().find(|(job, _)| *job == j.key).map_or(0, |(_, n)| *n);
-                json!({"key": j.key, "title": j.title, "status": j.status, "tier": j.tier, "appended": j.appended, "review": j.review, "urgent": j.urgent,
-                       "needs": j.needs, "attempts": attempts, "merged_sha": j.merged_sha})
+                json!({"key": j.key, "title": j.title, "kind": j.kind, "status": j.status, "tier": j.tier, "appended": j.appended, "review": j.review, "urgent": j.urgent,
+                       "needs": needs, "attempts": attempts, "merged_sha": j.merged_sha})
             })
             .collect::<Vec<_>>())
     })?;
@@ -40,21 +42,24 @@ fn attempt_counts(conn: &Connection, plan: &PlanId) -> Result<Vec<(String, i64)>
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
     let mut env = Env::open()?;
-    let (job, review, needed_by, attempts) = env.store.read(|conn| {
+    let (job, review, needed_by, attempts, needs) = env.store.read(|conn| {
         plan_phase(conn, &plan)?;
         let all = jobs::load(conn, &plan)?;
         let job = find(&all, &plan, &args.key)?.clone();
+        // An `open` Job has no Dependency rows: its needs are its Ready rule's list, derived now (§3.2).
+        let needs = super::open::shown_needs(&all, &job);
         let needed_by: Vec<&str> = all.iter().filter(|j| j.needs.contains(&job.key)).map(|j| j.key.as_str()).collect();
         let needed_by = needed_by.into_iter().map(str::to_owned).collect::<Vec<_>>();
         let attempts = attempts(conn, &plan, &job.key)?;
         let review: bool = conn.query_row("SELECT review FROM jobs WHERE plan = ?1 AND key = ?2", [plan.as_str(), job.key.as_str()], |r| r.get(0))?;
-        Ok((job, review, needed_by, attempts))
+        Ok((job, review, needed_by, attempts, needs))
     })?;
     let tamper = jobs::tampered(&plan, std::slice::from_ref(&job));
     let mut fields = job.to_json();
     fields["review"] = json!(review);
+    fields["needs"] = json!(needs);
     Ok(Output::success(json!({
-        "job": fields, "needs": job.needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
+        "job": fields, "needs": needs, "needed_by": needed_by, "attempts": attempts, "tamper": tamper,
     })))
 }
 

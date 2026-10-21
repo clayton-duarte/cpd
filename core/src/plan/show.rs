@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use super::fingerprint::{of as fingerprint_of, reviews_prs};
+use super::fingerprint::{of_with as fingerprint_of, reviews_prs};
 use super::jobs::{self, Job};
-use super::prs::{PrRow, Pull};
-use super::row::{self, Phase, PlanRow};
+use super::prs::{PrRow, Pull, load_needs};
+use super::row::{self, PlanRow};
 use super::{Env, ShowArgs};
 use crate::error::CpdError;
 use crate::events::highest_id;
@@ -22,15 +22,12 @@ use crate::pr::pulls;
 /// Every PR of `plan` in key order, `cancelled` ones included, with every
 /// field of §2.2 PR (`needs`, `pr` and `pull_request` parsed). `jobs` is not here.
 pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
-    let mut needs: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut stmt = conn.prepare("SELECT pr, needs FROM pr_needs WHERE plan = ?1 ORDER BY pr, needs")?;
-    for row in stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
-        let (pr, need) = row?;
-        needs.entry(pr).or_default().push(need);
-    }
+    let mut needs = load_needs(conn, plan)?;
+    // The base PR is derived from `base` (contract §2.2 "The base PR"): the PR of the same repo whose Lead Branch it is.
     let mut stmt = conn.prepare(
         "SELECT key, repo, base, status, lead_branch, lead_worktree, pr_number, pr_url, pr_opened_at, pull_request,
-                all_merged_at, start_failed_at, created_at, started_at, merged_at, title
+                all_merged_at, start_failed_at, created_at, started_at, merged_at, title,
+                (SELECT q.plan || '/' || q.key FROM prs q WHERE q.repo = prs.repo AND q.lead_branch = prs.base), shape
            FROM prs WHERE plan = ?1 ORDER BY key",
     )?;
     let rows = stmt
@@ -41,12 +38,13 @@ pub(super) fn pr_values(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, 
             };
             Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(9)?, json!({
                 "key": r.get::<_, String>(0)?, "repo": r.get::<_, String>(1)?, "base": r.get::<_, String>(2)?,
+                "base_pr": r.get::<_, Option<String>>(16)?,
                 "status": r.get::<_, String>(3)?, "lead_branch": r.get::<_, String>(4)?,
                 "lead_worktree": r.get::<_, Option<String>>(5)?, "pr": pull,
                 "all_merged_at": r.get::<_, Option<String>>(10)?,
                 "start_failed_at": r.get::<_, Option<String>>(11)?, "created_at": r.get::<_, String>(12)?,
                 "started_at": r.get::<_, Option<String>>(13)?, "merged_at": r.get::<_, Option<String>>(14)?,
-                "title": r.get::<_, Option<String>>(15)?,
+                "title": r.get::<_, Option<String>>(15)?, "shape": r.get::<_, String>(17)?,
             })))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -102,17 +100,17 @@ fn snapshot(conn: &Connection, id: &PlanId) -> Result<Snapshot, CpdError> {
     let jobs = jobs::load(conn, id)?;
     let attempts = attempts(conn, id)?;
     let escalations = open_escalations(conn, id)?;
-    let review = latest_review(conn, id, plan.phase, &jobs, &prs)?;
+    let review = latest_review(conn, id, &plan, &jobs, &prs)?;
     Ok((plan, prs, jobs, attempts, escalations, review, highest_id(conn)?))
 }
 
 /// `plan_fingerprint` from rows already read: the PRs are the `pr_values` ones, as the
 /// [`PrRow`]s the fingerprint takes. It reads `key`, `repo`, `base`, `needs` and `status`;
 /// `pull_request` (expanded, not an id, in `pr_values`) is left `None`.
-fn current_fingerprint(phase: Phase, jobs: &[Job], prs: &[Value]) -> String {
+fn current_fingerprint(plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> String {
     let strings = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|n| n.as_str().map(str::to_owned)).collect() };
     let text = |p: &Value, field: &str| p[field].as_str().unwrap_or_else(|| panic!("a PR {field}")).to_owned();
-    let rows: Vec<PrRow> = if reviews_prs(Some(phase.as_str())) {
+    let rows: Vec<PrRow> = if reviews_prs(Some(plan.phase.as_str())) {
         prs.iter()
             .map(|p| PrRow {
                 key: PrKey::parse(&text(p, "key")).expect("a PR key"),
@@ -128,12 +126,15 @@ fn current_fingerprint(phase: Phase, jobs: &[Job], prs: &[Value]) -> String {
                     opened_at: text(&p["pr"], "opened_at"),
                 }),
                 pull_request: None,
+                name: None,
+                title: p["title"].as_str().map(str::to_owned),
+                shape: text(p, "shape"),
             })
             .collect()
     } else {
         Vec::new()
     };
-    fingerprint_of(jobs, &rows)
+    fingerprint_of(jobs, &rows, plan.outline.as_ref())
 }
 
 /// Every Attempt of the Plan by Job, oldest first.
@@ -179,12 +180,12 @@ fn open_escalations(conn: &Connection, plan: &PlanId) -> Result<Vec<Value>, CpdE
 /// The latest Plan review, with `current`: whether its fingerprint is still
 /// the plan fingerprint of `jobs` and `prs` (already read, `pr_values`). Null
 /// when the Plan has none.
-fn latest_review(conn: &Connection, plan: &PlanId, phase: Phase, jobs: &[Job], prs: &[Value]) -> Result<Value, CpdError> {
+fn latest_review(conn: &Connection, id: &PlanId, plan: &PlanRow, jobs: &[Job], prs: &[Value]) -> Result<Value, CpdError> {
     let review = conn
         .query_row(
             "SELECT id, status, fingerprint, feedback, requested_at, decided_at FROM plan_reviews
               WHERE plan = ?1 ORDER BY number DESC LIMIT 1",
-            [plan.as_str()],
+            [id.as_str()],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -200,7 +201,7 @@ fn latest_review(conn: &Connection, plan: &PlanId, phase: Phase, jobs: &[Job], p
     Ok(match review {
         None => Value::Null,
         Some((id, status, fingerprint, feedback, requested_at, decided_at)) => {
-            let current = fingerprint == current_fingerprint(phase, jobs, prs);
+            let current = fingerprint == current_fingerprint(plan, jobs, prs);
             json!({"id": id, "status": status, "fingerprint": fingerprint, "current": current,
                    "feedback": feedback, "requested_at": requested_at, "decided_at": decided_at})
         }

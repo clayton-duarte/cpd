@@ -82,6 +82,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, Cp
         "cancelled" => Ok(Decision::Already(job)),
         "running" if job.cancel_requested_at.is_some() => Ok(Decision::Already(job)),
         "running" => {
+            keeps_the_shape(conn, plan, &all, &job)?;
             let active: Option<String> = conn
                 .query_row("SELECT id FROM attempts WHERE plan = ?1 AND job = ?2 AND status <> 'ended'", [plan.as_str(), key.as_str()], |r| r.get(0))
                 .optional()?;
@@ -90,6 +91,24 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, Cp
                 .ok_or_else(|| CpdError::bad_row(format!("Job {plan}/{key} is running with no active Attempt")))?;
             Ok(Decision::Request(job, attempt))
         }
-        _ => Ok(Decision::Cancel(job)),
+        _ => {
+            keeps_the_shape(conn, plan, &all, &job)?;
+            Ok(Decision::Cancel(job))
+        }
     }
+}
+
+/// The last `test` or the last `impl` Job of a `tdd` PR that has not opened is not cancelled: add the replacement first
+/// (`shape_incomplete`, §5.3, hs-d497).
+fn keeps_the_shape(conn: &Connection, plan: &PlanId, all: &[Job], job: &Job) -> Result<(), CpdError> {
+    let prs = crate::plan::fingerprint::load_prs(conn, plan)?;
+    let Some(pr) = prs.iter().find(|p| p.key.as_str() == job.pr) else { return Ok(()) };
+    let lacks = crate::plan::shape::missing(pr, all, Some(job.key.as_str()));
+    // Only what this cancel would take away: a PR that already lacked a kind is not this Job's doing.
+    let kept = crate::plan::shape::missing(pr, all, None);
+    let taken: Vec<&str> = lacks.into_iter().filter(|k| !kept.contains(k)).collect();
+    if taken.is_empty() {
+        return Ok(());
+    }
+    Err(crate::plan::shape::incomplete(plan, pr, &taken, &format!("cancelling {} would leave it with none", job.key)))
 }

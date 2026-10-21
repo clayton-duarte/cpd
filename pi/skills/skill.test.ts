@@ -202,10 +202,10 @@ test("cpd-lead is organised by the CPD flow: Context, Plan and Deploy with their
   assert.match(section(text, "### Dispatching"), /\| `job-merged` \|/, "the Events table stays under Dispatching");
 });
 
-test("cpd-lead: no local review before pr open, and the overlaps are settled before the Plan review", () => {
+test("cpd-lead: no local review before the PR opens, and the overlaps are settled before the Plan review", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
   const deploy = section(text, "## 3. Deploy");
-  assert.match(deploy, /No local review before `pr open`/);
+  assert.match(deploy, /No local review before the PR opens/);
   assert.match(deploy, /final review Job stays optional/);
   const approving = section(text, "### Approving");
   assert.ok(approving.indexOf("## Overlaps") >= 0, "Approving reads the ## Overlaps section of plan render");
@@ -232,6 +232,32 @@ test("cpd-lead: sizing follows attempt_minutes, dialogs stay short, Specs carry 
   for (const rule of ["within 10 minutes", "`timeout`", "synthetic benchmarks", "`cpd events follow`", "`cpd watch`", "`cpd tui`", "`cpd session run`"]) {
     assert.ok(spec.includes(rule), `spec-files.md must state: ${rule}`);
   }
+});
+
+test("cpd-lead: a Spec's acceptance names targeted tests and the full suite is the Gate's", () => {
+  const [skillMd, ...refs] = skillFiles("cpd-lead");
+  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
+  for (const { name, text } of [skillMd!, { name: "spec-files.md", text: spec }]) {
+    assert.match(text, /targeted tests/, `${name}: acceptance names targeted tests`);
+    assert.match(text, /full suite is the Gate's/, `${name}: the full suite is the Gate's`);
+  }
+  assert.doesNotMatch(spec, /npm test -- |test --workspace|`npm test`\s+passes/, "no example acceptance runs a full suite");
+});
+
+test("cpd-lead: a PR is docs, red tests by another Worker, implementation; bug fixes reproduce first", () => {
+  const [skillMd, ...refs] = skillFiles("cpd-lead");
+  const text = skillMd!.text;
+  const line = text.split("\n").find((l) => l.startsWith("- **PR shape:**"))!;
+  assert.ok(line, "Sequencing states the PR shape");
+  const at = (re: RegExp) => { const m = re.exec(line); assert.ok(m, `PR shape must state: ${re}`); return m.index; };
+  assert.ok(at(/docs Job/) < at(/red tests/) && at(/red tests/) < at(/implementation Job/) && at(/implementation Job/) < at(/open Job cpd adds/), "order: docs, red tests, implementation, open Job");
+  assert.match(line, /different Worker from the implementer, from the docs alone/);
+  assert.match(line, /A bug or flake fix starts with a test that reproduces it/);
+  assert.match(line, /exact rows/);
+  assert.match(line, /docs-only or config-only PR skips the test Job/);
+  assert.match(text, /cpd job add <tests> .*--needs <docs>\n/);
+  assert.match(text, /cpd job add <impl> .*--needs <tests>\n/);
+  assert.ok(refs.length > 0);
 });
 
 // --- the facts the skills state must be facts of the contract ---
@@ -304,6 +330,9 @@ function configDefaults(): Map<string, string> {
 function vocabulary(): { causes: Set<string>; reasons: Set<string>; configKeys: Set<string>; fields: Set<string>; tools: Set<string> } {
   const fields = new Set<string>();
   for (const line of section(contractDoc, "### 2.2 Objects").split("\n")) for (const w of wordsOfCell(cells(line)?.[0] ?? "") ?? []) fields.add(w);
+  // The outline file's fields (commands.md §4.13).
+  const outline = section(commandsDoc, "### 4.13 `plan outline`");
+  for (const line of outline.split("\n")) for (const w of wordsOfCell(cells(line)?.[0] ?? "") ?? []) fields.add(w);
   const reasons = /reasons` is a subset of `\[([^\]]+)\]`/.exec(kindRows().get("pr-feedback")!)![1]!.match(/[a-z_]+/g)!;
   const tools = /--exclude-tools ([a-z_,]+)/.exec(contractDoc)![1]!.split(",");
   return {
@@ -358,8 +387,8 @@ function factProblems(files: { name: string; text: string }[]): string[] {
       if (!exits) bad(`"${m[0]}": \`${m[1]}\` is not an error code`);
       else if (!exits.has(Number(m[2]))) bad(`"${m[0]}": commands.md gives \`${m[1]}\` exit ${[...exits].join(" or ")}`);
     }
-    // Flags: every --flag the text names, in a command or in prose, is a flag of some cpd synopsis (a `gh` or `git` command is not cpd's).
-    for (const f of new Set(text.replace(/`(?:gh|git) [^`\n]*`/g, "").match(/(?<![\w-])--[a-z][a-z-]*/g))) if (!flags.has(f)) bad(`${f} is no flag of any cpd command (commands.md)`);
+    // Flags: every --flag the text names, in a command or in prose, is a flag of some cpd synopsis (a `gh`, `git`, `scripts/cargo.sh`, `node` or `npm` command is not cpd's).
+    for (const f of new Set(text.replace(/`(?:gh|git|timeout \d+ node|scripts\/cargo\.sh|node|npm) [^`\n]*`/g, "").match(/(?<![\w-])--[a-z][a-z-]*/g))) if (!flags.has(f)) bad(`${f} is no flag of any cpd command (commands.md)`);
     // `error.details.x`: a field of the details of some refusal (not the `details` of pi's ask_user_question result).
     for (const m of text.matchAll(/\berror\.details\.([a-z_]+)/g)) if (!commandsDoc.includes(`details.${m[1]}`)) bad(`error.details.${m[1]} is in no commands.md refusal row`);
     // Ids: record ids are <machine>-<letter><n>; the skill's patterns are the contract's.
@@ -444,7 +473,7 @@ test("every Event kind of the Lead's Dispatching table is one the adapter delive
 
 test("the skills' list of pr-feedback reasons and of ladder causes is the contract's", () => {
   const reasons = vocabulary().reasons;
-  assert.ok(reasons.size === 4);
+  assert.ok(reasons.size === 3); // a conflict is an update Job, not a reason (hs-d340)
   const lead = skillFiles("cpd-lead")[0]!.text;
   const stated = /`data\.reasons` lists ((?:`[a-z_]+`(?:, | or )?)+)/.exec(lead);
   assert.ok(stated, "the pr-feedback row lists data.reasons");
@@ -477,7 +506,7 @@ test("cpd-lead registers planned work at once; cpd-manager checks it", () => {
 
 test("cpd-manager splits work by area, maps files and sets the landing order", () => {
   const manager = skillFiles("cpd-manager")[0]!.text;
-  assert.match(manager, /Split by area/);
+  assert.match(manager, /Split by deliverable and area/);
   assert.match(manager, /cpd context pending --context <c>/);
   assert.match(manager, /Set the landing order/);
 });
@@ -553,28 +582,163 @@ for (const { skill } of skills) test(`${skill}: asks the User only with ask_user
   assert.match(ask, /\(a record, not a question to the User\)/);
 });
 
-test("cpd-lead resolves a PR conflict inline and pushes through the Gate, never a plain git push or a sync Job (hs-d305)", () => {
+test("cpd-lead leaves a PR's conflict and its fixes to the update Job; the hand repair pushes through the Gate, never a plain git push or a sync Job (hs-d305, hs-d340)", () => {
   const text = skillFiles("cpd-lead")[0]!.text;
   assert.ok(!/(?<!never a )plain `git push`/.test(text));
   assert.ok(!/run no local tests/i.test(text));
   assert.ok(!/hs-d220/.test(text));
   const row = text.split("\n").find((l) => l.startsWith("| `pr-feedback`"))!;
-  const step = text.split("\n").find((l) => l.startsWith("2. After those Jobs are Merged"))!;
+  const addressing = section(text, "### Addressing");
   const rule = text.split("\n").find((l) => /`git` and `gh` are allowed/.test(l))!;
-  for (const [name, place] of [["pr-feedback row", row], ["Addressing step 2", step]] as const) {
-    assert.match(place, /cpd pr push --pr <key>/, name);
-    assert.match(place, /never a plain `git push`/, name);
-    assert.match(place, /never with a sync (or merge )?Job/, name);
-    assert.match(place, /code the merge needs/, name);
-  }
-  assert.match(row, /cpd pr rebase --pr <key>/);
-  assert.match(step, /cpd pr rebase --pr <key>/);
+  assert.match(row, /A conflict with the base is no reason and sends you nothing/);
+  assert.match(row, /cpd queue the PR's update Job/);
+  assert.match(row, /you run neither `cpd pr rebase` nor `cpd pr push` for it/);
+  assert.doesNotMatch(row, /`conflict`/, "a conflict is no pr-feedback reason (hs-d340)");
+  assert.match(addressing, /Queuing the first fix Job makes cpd queue the PR's update Job/);
+  assert.match(addressing, /merges the base only if the Lead Branch conflicts with it/);
+  assert.match(addressing, /for which the poll queues the same Job/);
+  assert.match(addressing, /never a plain `git push`/);
+  assert.match(addressing, /never with a sync (or merge )?Job/);
+  assert.match(addressing, /code the merge needs/);
+  assert.match(addressing, /`cpd pr rebase --pr <key>`/);
+  assert.match(addressing, /`cpd pr push --pr <key>`/);
   assert.match(rule, /`cpd pr push` or `cpd pr rebase`/);
   assert.match(rule, /never with `git push`/);
+  assert.match(rule, /the PR's open and update Jobs push it/);
 });
 
 test("cpd-manager never blocks and says the adapter refuses waits over 30 seconds", () => {
   const text = skillFiles("cpd-manager")[0]!.text;
   assert.match(text, /\*\*Never block\.\*\*/);
   assert.match(text, /waits longer than 30 seconds/);
+});
+
+test("cpd opens the PRs: cpd-lead never opens one or waits, cpd-manager oversees the PRs whose Jobs are all merged (hs-d340)", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /\*\*cpd opens the PRs, you do not\.\*\*/);
+  assert.match(lead, /never wait for anything to open a PR/);
+  assert.match(lead, /`cpd pr open` is the repair/);
+  assert.doesNotMatch(lead, /all-merged/, "no Event `all-merged` is appended any more (contract §3.7 E4)");
+  assert.doesNotMatch(lead, /Open a PR as soon as its last Job merges/);
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(manager, /Oversee all-merged PRs/);
+  assert.match(manager, /stack those that would conflict/);
+  assert.match(manager, /cpd opens a PR as soon as its last Job merges/);
+});
+
+test("the Job kinds: the template and its shape, [tests], the kind of each Job and the red-test guard (hs-d341, hs-d497)", () => {
+  const [skillMd, ...refs] = skillFiles("cpd-lead");
+  const lead = skillMd!.text;
+  const dividing = section(lead, "### Dividing");
+  assert.match(dividing, /cpd pr add <key> --repo <path> --title "<title>" --shape docs/);
+  assert.match(dividing, /cpd pr add <key> --repo <path> --title "<title>" --shape config/);
+  assert.match(dividing, /`<key>-docs` \(kind docs\), `<key>-tests` \(kind test, needs the docs Job\) and `<key>-impl` \(kind impl, needs the test Job\)/);
+  assert.match(dividing, /stored and enforced/);
+  assert.match(dividing, /`shape_violation`/);
+  assert.match(dividing, /`shape_incomplete`/);
+  assert.match(dividing, /`tests_unconfigured`/);
+  assert.match(dividing, /you add it yourself, as a commit in the Lead worktree of a PR of that repo/);
+  assert.match(dividing, /`--kind docs\|test\|impl`/);
+  assert.match(dividing, /a test Job's also has `tests` and `test_files`/);
+  const approving = section(lead, "### Approving");
+  assert.match(approving, /the kind of each Job and, for each PR that has not started, the placeholder row of its open Job/);
+  const escalations = section(lead, "#### Escalations");
+  assert.match(escalations, /`cpd job approve-tests <job> --path <p> --reason "<why>"`/);
+  assert.match(escalations, /only an implementation Job/);
+  const spec = refs.find((f) => f.name.endsWith("spec-files.md"))!.text;
+  const tests = section(spec, "## Test Jobs");
+  for (const word of ["`tests`", "`test_files`", "`[tests]`", "`build`", "`run`", "`list`", "`tests_not_found`", "guarded", "cpd job approve-tests", "derived"]) assert.ok(tests.includes(word), `spec-files.md Test Jobs must state ${word}`);
+  const fields = /with exactly these fields.*$/m.exec(spec)![0];
+  assert.match(fields, /a test Job's also has `tests` and `test_files`/);
+});
+
+test("the open Job and the update Job: cpd adds them, the Lead decides only when one fails (hs-d340, hs-d490, hs-d497)", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  const checks = section(lead, "### Mechanical checks");
+  assert.match(checks, /The checks are part of the PR's open Job \(key `open-<pr>`/);
+  assert.match(checks, /You run none of them/);
+  assert.match(checks, /only when the Lead Branch conflicts with it/);
+  assert.match(checks, /a base that merely moved ahead is no reason/);
+  assert.match(checks, /`gate_failed` when the Gate/);
+  assert.match(checks, /you append no fix Jobs for a failed Gate/);
+  assert.match(checks, /ready and never a draft/);
+  assert.match(checks, /`cpd job retry <k> --tier <T>`, or cancel it so that cpd adds a fresh one/);
+  assert.match(checks, /`open_job_live`/);
+  const rows = section(lead, "### Dispatching");
+  const merged = rows.split("\n").find((l) => l.startsWith("| `job-merged`"))!;
+  assert.match(merged, /`data\.number` and `data\.url`/);
+  assert.match(merged, /Do not open a PR yourself/);
+  assert.match(merged, /cpd queues an update Job that pushes them/);
+  const failed = section(lead, "#### Failed Jobs");
+  assert.match(failed, /A PR's open or update Job/);
+  assert.match(failed, /cpd adds a fresh open Job at its next tick/);
+  const pr = section(lead, "### PR");
+  assert.match(pr, /the Job's `job-merged` Event carries the URL \(`data\.url`\)/);
+  assert.match(pr, /cpd queues an update Job; you do nothing/);
+  const fixes = section(lead, "#### Appending fixes");
+  assert.match(fixes, /A Gate failure of a PR's open or update Job is not one/);
+  assert.match(fixes, /makes cpd queue the PR's update Job/);
+});
+
+test("a review Job holds the open Job through a stub fix draft the Lead registers with it (hs-d497)", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  const judging = section(lead, "#### Judging material");
+  assert.match(judging, /together with a stub draft for its fixes/);
+  assert.match(judging, /cpd job add <fixes> --title "Fix the findings of <k>" --draft --pr <key>/);
+  assert.match(judging, /keeps the PR's open Job from becoming Ready/);
+  assert.match(judging, /cancel the stub/);
+  const merged = lead.split("\n").find((l) => l.startsWith("| `job-merged`"))!;
+  assert.match(merged, /cancel the stub fix draft/);
+});
+
+test("cpd-manager: job approve-tests joins the commands that belong to a Lead and pr open leaves them (hs-d340, hs-d341)", () => {
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  const rule = manager.split("\n").find((l) => l.startsWith("- Never run what belongs to a Lead"))!;
+  assert.match(rule, /`cpd job approve-tests`/);
+  assert.doesNotMatch(rule, /`cpd pr open`/);
+});
+
+test("the Worker Spec's text and the adapter's refusal say the full suite is the Gate's, run by the PR's open Job (hs-d340)", () => {
+  const worker = readFileSync(new URL("../../core/src/spec/worker.md", here), "utf8");
+  assert.match(worker, /the Gate runs it, in the PR's open Job/);
+  const guard = readFileSync(new URL("../lib/testguard.ts", here), "utf8");
+  assert.match(guard, /the full suite is the Gate's, run by the PR's open Job/);
+  for (const text of [worker, guard]) assert.doesNotMatch(text, /at pr open/);
+  const deliveries = readFileSync(new URL("../lib/delivery.ts", here), "utf8");
+  assert.doesNotMatch(deliveries, /"all-merged":/, "commands.md §15.3: all-merged is ignored");
+});
+
+test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and folds small PRs; cpd-manager splits by deliverable and area", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /A PR is a substantial deliverable\./);
+  assert.match(lead, /parallelism from Jobs inside a PR, not from more PRs/);
+  assert.match(lead, /one small Job joins the PR of its area/);
+  assert.match(lead, /combine finished PRs into one before they open/);
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  assert.match(manager, /Split by deliverable and area/);
+  assert.match(manager, /small follow-up goes into its area's existing PR, not a new one/);
+});
+
+test("both skills: decisions are ask rounds at any phase, only the 1500-character guard stays, plannotator is for long documents", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  const manager = skillFiles("cpd-manager")[0]!.text;
+  for (const text of [lead, manager]) {
+    assert.match(text, /every open decision goes to the User as an ask round/);
+    assert.match(text, /refuses only an `ask_user_question` over 1500 characters/);
+    assert.doesNotMatch(text, /refuses `ask_user_question` for a Lead whose Plan has draft/);
+  }
+  const approving = section(lead, "### Approving");
+  assert.match(approving, /cpd plan outline --file/);
+  assert.match(approving, /`Approve`[\s\S]*`Change`[\s\S]*`Open full plan`/);
+  assert.match(approving, /outline_missing[\s\S]*outline_incomplete/);
+});
+
+test("cpd-lead merges the base only on a conflict; ready is its own Gate and no conflict", () => {
+  const lead = skillFiles("cpd-lead")[0]!.text;
+  assert.match(lead, /only when the Lead Branch conflicts with it/);
+  assert.match(lead, /its Gate passed on its own head and GitHub reports no conflict/);
+  assert.match(lead, /Its open Job checks exactly that/);
+  // `base_behind` is retired (hs-d490): cpd refuses only a conflict, `base_conflict`.
+  assert.doesNotMatch(lead, /base_behind/);
+  assert.doesNotMatch(lead, /contains (the|its) base|if it moved/i);
 });

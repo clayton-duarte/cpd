@@ -24,7 +24,7 @@ use crate::home::Hook;
 
 pub use def::{HookCommand, Pipeline, load};
 pub use exec::is_withheld;
-pub use template::shell_escape;
+pub use template::{shell_escape, uses as template_uses};
 
 /// Why a hook could not be judged (contract §7.3, the last row of the result table).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,30 +104,49 @@ pub fn run_hook(
     timeout: Duration,
     log: &Path,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(hook, worktree, None, operation, timeout, log)
+    run_with_branch(hook, worktree, None, operation, timeout, log, Log::Truncate)
+}
+
+/// How a hook's log is opened: every hook starts its log afresh, except the Gate's `pre-merge`, whose log
+/// already holds the lines of the wait for a slot (contract §7.6 "The test slot"), which its output follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Log {
+    Truncate,
+    Append,
+}
+
+/// What the Gate adds to [`run_hook`] for a hook in a gate worktree (contract §7.3, §7.6).
+#[derive(Clone, Copy, Debug)]
+pub struct Detached<'a> {
+    /// The template variable `branch`, given explicitly because `HEAD` is detached.
+    pub branch: &'a str,
+    /// Variables added to the hook's environment, which holds no inherited `CPD_*` (contract §7.3): `CPD_TEST_SLOT`.
+    pub env: &'a [(&'a str, &'a str)],
 }
 
 /// [`run_hook`] in a worktree whose `HEAD` is detached (a gate worktree,
-/// contract §7.3, §7.6): the template variable `branch` is `branch`, given
-/// explicitly, instead of being read from `HEAD`.
+/// contract §7.3, §7.6): the template variable `branch` is `detached.branch`
+/// instead of being read from `HEAD`, and `detached.env` is added to the environment.
 pub fn run_hook_as(
     hook: Hook,
     worktree: &Path,
-    branch: &str,
+    detached: &Detached<'_>,
     operation: Option<&Operation<'_>>,
     timeout: Duration,
     log: &Path,
+    mode: Log,
 ) -> Result<HookResult, CpdError> {
-    run_with_branch(hook, worktree, Some(branch), operation, timeout, log)
+    run_with_branch(hook, worktree, Some(detached), operation, timeout, log, mode)
 }
 
 fn run_with_branch(
     hook: Hook,
     worktree: &Path,
-    branch: Option<&str>,
+    detached: Option<&Detached<'_>>,
     operation: Option<&Operation<'_>>,
     timeout: Duration,
     log: &Path,
+    mode: Log,
 ) -> Result<HookResult, CpdError> {
     let pipeline = match load(worktree, hook) {
         Ok(p) => p,
@@ -138,7 +157,7 @@ fn run_with_branch(
     }
 
     let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
-    let vars = variables(hook, &cwd, branch, operation)?;
+    let vars = variables(hook, &cwd, detached.map(|d| d.branch), operation)?;
     let mut blocks = Vec::new();
     for block in &pipeline.blocks {
         let mut rendered = Vec::new();
@@ -158,16 +177,25 @@ fn run_with_branch(
         blocks.push(rendered);
     }
 
+    Ok(run_rendered(&blocks, &cwd, detached.map_or(&[], |d| d.env), timeout, log, mode))
+}
+
+/// Runs rendered `blocks` in `cwd` and writes the output to `log` (opened as `mode` says).
+fn run_rendered(blocks: &[Vec<exec::Rendered>], cwd: &Path, env: &[(&str, &str)], timeout: Duration, log: &Path, mode: Log) -> HookResult {
     // The log is opened first and written as the output arrives (a killed hook
     // or driver still leaves it, and `tail -f` works).
-    let file = match log.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::File::create(log)) {
+    let open = || match mode {
+        Log::Truncate => fs::File::create(log),
+        Log::Append => fs::File::options().create(true).append(true).open(log),
+    };
+    let file = match log.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| open()) {
         Ok(file) => file,
         Err(e) => {
             let why = format!("Cannot write {}: {e}.", log.display());
-            return Ok(HookResult { outcome: HookOutcome::Error(HookError::Io(why)), tail: None });
+            return HookResult { outcome: HookOutcome::Error(HookError::Io(why)), tail: None };
         }
     };
-    let done = exec::execute(&blocks, &cwd, timeout, file, TAIL_LINES);
+    let done = exec::execute(blocks, cwd, timeout, env, file, TAIL_LINES);
     let tail = Some(done.tail.join("\n"));
 
     let written = match done.log_error {
@@ -182,7 +210,32 @@ fn run_with_branch(
         (Some(exec::Ended::NotStarted(why)), _) => HookOutcome::Error(HookError::Io(why)),
         (None, Err(e)) => HookOutcome::Error(e),
     };
-    Ok(HookResult { outcome, tail })
+    HookResult { outcome, tail }
+}
+
+/// One command of the repo's `[tests]` (contract §7.7), run as a hook is (§7.3): rendered with the hook's variables
+/// (`target` the Lead Branch) and `extra` (`tests`, a list, or `test`), in `worktree`, `sh -c`, the hook environment.
+/// Its output goes to `log`, which `mode` truncates or appends to. `HookOutcome::Error(Invalid)` when the template does not render; nothing ran then.
+pub fn run_command(
+    template: &str,
+    extra: &[(&str, Value)],
+    worktree: &Path,
+    operation: &Operation<'_>,
+    timeout: Duration,
+    log: &Path,
+    mode: Log,
+) -> Result<HookResult, CpdError> {
+    let cwd = worktree.canonicalize().unwrap_or_else(|_| worktree.to_path_buf());
+    let mut vars = variables(Hook::PreCommit, &cwd, None, Some(operation))?;
+    for (key, value) in extra {
+        vars.insert((*key).to_owned(), value.clone());
+    }
+    let command = match template::render(template, &vars) {
+        Ok(command) => command,
+        Err(why) => return Ok(HookResult { outcome: HookOutcome::Error(HookError::Invalid(why)), tail: None }),
+    };
+    let rendered = exec::Rendered { name: None, command, context: exec::context_json(&vars) };
+    Ok(run_rendered(&[vec![rendered]], &cwd, &[], timeout, log, mode))
 }
 
 /// The template variables of contract §7.3, as worktrunk defines them; also the
