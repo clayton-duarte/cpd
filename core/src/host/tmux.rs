@@ -456,6 +456,14 @@ impl Tmux {
 
     fn output(&self, args: &[String]) -> Result<Output, CpdError> {
         let argv = self.argv(args);
+        // tmux falls back to `/tmp/tmux-<uid>/` for a `TMUX_TMPDIR` that does not exist: a late start would escape every
+        // teardown (hygiene.md 3b), so a missing directory is refused.
+        let tmpdir = self.tmpdir.clone().or_else(|| std::env::var_os("TMUX_TMPDIR").filter(|v| !v.is_empty()).map(Into::into));
+        if let Some(dir) = tmpdir.filter(|d| !d.is_dir()) {
+            return Err(CpdError::new(ErrorCode::TmuxFailed, format!("TMUX_TMPDIR {} is not a directory.", dir.display()))
+                .with("argv", argv)
+                .with("exit", serde_json::Value::Null));
+        }
         let mut cmd = self.command(args);
         let ran = match deadline_of(args) {
             Some(limit) => deadline::output(&mut cmd, "tmux", limit),

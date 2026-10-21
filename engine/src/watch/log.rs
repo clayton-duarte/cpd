@@ -13,7 +13,7 @@ pub(super) struct Log {
 }
 
 impl Log {
-    /// Opens `run/watch.log` for appending, creating it and `run/`.
+    /// Opens `run/watch.log` for appending, creating it and `run/` (not the home).
     pub(super) fn open(home: &CpdHome) -> Result<Log, CpdError> {
         let path = home.watch_log();
         let failed = |e: std::io::Error| {
@@ -21,7 +21,11 @@ impl Log {
                 .with("path", path.display().to_string())
         };
         if let Some(dir) = path.parent() {
-            fs::create_dir_all(dir).map_err(failed)?;
+            // `run/` only, never the home above it: a home that was removed stays removed (hygiene.md 3c).
+            match fs::create_dir(dir) {
+                Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(failed(e)),
+                _ => {}
+            }
         }
         let file = OpenOptions::new().create(true).append(true).open(&path).map_err(failed)?;
         Ok(Log { file })

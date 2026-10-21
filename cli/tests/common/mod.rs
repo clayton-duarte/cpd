@@ -135,10 +135,15 @@ stop() {
   done 2>/dev/null
 }
 
-# stop_tmux: stops the tmux server and its panes (a session each), whose pids tmux gives.
+# stop_tmux: stops the tmux server and its panes (a session each), whose pids tmux gives. The
+# supervising hooks go first: a hook that runs while the server dies starts a new server, where
+# no teardown looks (hygiene.md 3a).
 stop_tmux() {
   for _s in "$dir"/tmux/*/"$socket"; do
     [ -S "$_s" ] || return 0
+    for _h in pane-died window-unlinked; do
+      TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" set-hook -gu "$_h" >/dev/null 2>&1
+    done
     _g=
     for _p in $(TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); do
       _g="$_g -$_p"
@@ -195,10 +200,18 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Where every env's directory is made: a tmpfs, so the `fsync`s of the store's writes (several per `cpd` command
+/// Where every env's directory is made: the `TMPDIR` of the test process when set (the Gate's run directory,
+/// `scripts/gate-run.sh`, which fails the run for what is left in it), else a tmpfs, so the `fsync`s of the store's writes (several per `cpd` command
 /// that writes) and git's cost no disk flush. On a disk shared with builds and other test runs one such `fsync` waits
 /// for their writeback, from tens of ms to seconds; no test claims durability across a power loss.
-const ENVS_DIR: &str = "/dev/shm";
+fn envs_dir() -> PathBuf {
+    std::env::var_os("TMPDIR").filter(|d| !d.is_empty()).map_or_else(|| PathBuf::from("/dev/shm"), PathBuf::from)
+}
+
+/// The Gate's run id (`scripts/gate-run.sh`), which every socket name carries so that the run finds its own.
+fn gate_run_id() -> Option<String> {
+    std::env::var("GATE_RUN").ok().filter(|id| !id.is_empty())
+}
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
@@ -471,6 +484,55 @@ pub fn sql(store: &mut Store, text: &str) {
         .unwrap();
 }
 
+/// A cpd `git` wrapper (`$CPD_HOME/bin/git`, [`git_guard::WRAPPER`]) in a directory of its own, and the way to run it
+/// as a Session does. Shared by the `pr` tests of the wrapper and the harness's test of what a killed test leaves.
+pub struct GitWrapper {
+    env: TestEnv,
+    home: CpdHome,
+}
+
+/// How long one call of the wrapper may take: a few `sh` builtins and one `exec`, milliseconds. A call that is not
+/// over in this is wrappers that `exec` each other for ever (hs-d341), not a slow machine.
+pub const GIT_WRAPPER_BOUND: Duration = Duration::from_secs(10);
+
+impl GitWrapper {
+    /// In a [`TestEnv`], so that a call runs in the env's process group and a killed test's reaper stops it (hygiene.md 1b).
+    pub fn new() -> GitWrapper {
+        let env = TestEnv::empty();
+        let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+        fs::create_dir_all(home.bin_dir()).unwrap();
+        write_executable(&home.git_wrapper(), git_guard::WRAPPER);
+        GitWrapper { env, home }
+    }
+
+    pub fn bin(&self) -> PathBuf {
+        self.home.bin_dir()
+    }
+
+    /// Runs `git <args>` the way a Session does, with `path` as `PATH`: (exit code, stdout, stderr). Panics when the
+    /// call is not over in [`GIT_WRAPPER_BOUND`].
+    pub fn run(&self, path: &OsString, cwd: &Path, args: &[&str]) -> (i32, String, String) {
+        let mut cmd = self.env.command(self.home.git_wrapper());
+        cmd.args(args).current_dir(cwd).env("PATH", path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = spawn(&mut cmd).unwrap();
+        if poll(GIT_WRAPPER_BOUND, || child.try_wait().unwrap()).is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!(
+                "`git {args:?}` through {} is not over after {GIT_WRAPPER_BOUND:?}: wrappers that exec each other, PATH {path:?}",
+                self.home.git_wrapper().display()
+            );
+        }
+        // Already reaped: `wait_with_output` reads what is left in the pipes.
+        let out = child.wait_with_output().unwrap();
+        (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+    }
+
+    pub fn session_path(&self) -> OsString {
+        git_guard::path_with_bin(&self.home, Some(inherited_path().to_owned())).into()
+    }
+}
+
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
@@ -544,9 +606,13 @@ impl TestEnv {
     /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
     pub fn empty() -> TestEnv {
         let sqlite3 = sqlite3();
-        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(ENVS_DIR).unwrap_or_else(|e| panic!("a temp dir in {ENVS_DIR}: {e}"));
+        let envs_dir = envs_dir();
+        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(&envs_dir).unwrap_or_else(|e| panic!("a temp dir in {}: {e}", envs_dir.display()));
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
-        let tmux_socket = format!("cpdt-{}-{n}", std::process::id());
+        let tmux_socket = match gate_run_id() {
+            Some(run) => format!("cpdt-{run}-{}-{n}", std::process::id()),
+            None => format!("cpdt-{}-{n}", std::process::id()),
+        };
         let script = dir.path().join("teardown.sh");
         fs::write(
             &script,
@@ -830,6 +896,15 @@ impl TestEnv {
         if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
             self.git(repo, &["remote", "remove", "origin"]);
         }
+    }
+
+    /// Kills this env's tmux server, after unsetting the supervising hooks (`pane-died`, `window-unlinked`): a hook that
+    /// runs while the server dies starts a new one, where no teardown looks (hygiene.md 3a).
+    pub fn kill_tmux_server(&self) {
+        for hook in ["pane-died", "window-unlinked"] {
+            self.tmux(&["set-hook", "-gu", hook]);
+        }
+        self.tmux(&["kill-server"]);
     }
 
     /// `tmux -L <private socket> <args>` in this env.

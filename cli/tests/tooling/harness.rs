@@ -483,6 +483,209 @@ fn a_dropped_env_leaves_no_tmux_server_process_dir_or_reaper() {
     assert!(left.is_empty(), "a dropped env left behind: {left:?}");
 }
 
+/// Kills `pid` when dropped: a test that fails midway leaves nothing it started.
+struct KillOnDrop(u32);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("kill").args(["-KILL", &self.0.to_string()]).status();
+    }
+}
+
+/// Kills the helper child when dropped (a failed assertion unwinds through it).
+struct KillChild(std::process::Child);
+
+impl Drop for KillChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Starts this binary as the helper test `name` (gated by `gate`), with `extra` variables; its stdout is piped.
+fn start_helper(name: &str, gate: &str, extra: &[(&str, &std::ffi::OsStr)]) -> KillChild {
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+    cmd.args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env(gate, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    for (k, v) in extra {
+        cmd.env(k, v);
+    }
+    KillChild(cmd.spawn().unwrap())
+}
+
+/// The `KEY value` lines the helper prints before `READY`.
+fn helper_lines(helper: &mut KillChild, key: &str) -> Vec<String> {
+    use std::io::{BufRead, BufReader};
+    let mut found = Vec::new();
+    for line in BufReader::new(helper.0.stdout.take().unwrap()).lines() {
+        let line = line.unwrap();
+        if line == "READY" {
+            break;
+        }
+        if let Some(v) = line.strip_prefix(&format!("{key} ")) {
+            found.push(v.to_owned());
+        }
+    }
+    found
+}
+
+// ---- hygiene.md 3a: a test that kills its own tmux server does not let the supervising hooks restart one ----
+
+/// An env whose server has the real hooks of `SERVER_OPTIONS` armed, with a fake `cpd` whose `watch --ensure --wait`
+/// (what the hooks run) writes `marker`, and a `tmux` that records its calls to `log` before running the real one.
+fn armed_env(marker: &std::path::Path, log: &std::path::Path) -> TestEnv {
+    let env = TestEnv::new();
+    env.fake("cpd", &format!("case \"$1 $2 $3\" in \"watch --ensure --wait\") : > '{}'; exit 0;; esac\nexit 1", marker.display()));
+    common::write_executable(
+        &env.bin().join("tmux"),
+        &format!("#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n", log.display(), common::real_tmux().display()),
+    );
+    let out = env.tmux(&["new-session", "-d", "-s", "t", "-n", "watch", &format!("sleep {SLEEP_SECONDS}")]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    for option in cpd_core::host::tmux::SERVER_OPTIONS.iter().filter(|o| o[1] != "-as") {
+        let out = env.tmux(option);
+        assert!(out.status.success(), "{option:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    env
+}
+
+#[test]
+fn a_server_the_test_kills_is_not_restarted_by_its_supervising_hooks() {
+    // Outside the env: the env's directory is removed with it, and a late hook would write after that.
+    let outside = tempfile::tempdir().unwrap();
+    let (marker, log) = (outside.path().join("ensure-ran"), outside.path().join("tmux-calls"));
+    let env = armed_env(&marker, &log);
+    let socket = env.tmux_socket().to_owned();
+
+    env.kill_tmux_server();
+
+    // Disarmed first: both hooks are unset before the server is killed (a kill-server that runs a hook is only sometimes
+    // seen, hygiene.md bug 3: this is the deterministic half).
+    let calls = std::fs::read_to_string(&log).unwrap();
+    let at = |needle: &str| calls.lines().position(|l| l.contains(needle));
+    let kill = at("kill-server").expect("kill_tmux_server runs kill-server");
+    for hook in ["pane-died", "window-unlinked"] {
+        let unset = at(&format!("set-hook -gu {hook}")).unwrap_or_else(|| panic!("the {hook} hook is not unset:\n{calls}"));
+        assert!(unset < kill, "the {hook} hook is unset after kill-server:\n{calls}");
+    }
+    // And nothing ran the hook, nor started a server on the socket, within the wait.
+    let restarted = common::poll(WAIT, || {
+        let mentions = marker.exists() || processes_mentioning(std::path::Path::new(&socket)).iter().any(|p| *p != std::process::id());
+        mentions.then_some(())
+    });
+    assert!(restarted.is_none(), "a hook ran `cpd watch --ensure --wait` or a process mentions {socket} after the kill");
+}
+
+// ---- hygiene.md 1b: the git wrapper tests run through the env's group and reaper ----
+
+const WRAPPER_HELPER_GATE: &str = "CPD_HARNESS_WRAPPER_HELPER";
+
+/// Not a test of its own: runs a `common::GitWrapper` whose directory and another's hold old-version wrappers that
+/// `exec` each other for ever (hs-d341), the call of `Wrapper::run` blocked in its thread. Does nothing unless gated.
+#[test]
+fn wrapper_helper() {
+    if std::env::var_os(WRAPPER_HELPER_GATE).is_none() {
+        return;
+    }
+    let (first, second) = (common::GitWrapper::new(), common::GitWrapper::new());
+    for (me, other) in [(&first, &second), (&second, &first)] {
+        common::write_executable(&me.bin().join("git"), &format!("#!/bin/sh\nexec '{}/git' \"$@\"\n", other.bin().display()));
+    }
+    let path = std::env::join_paths([first.bin(), second.bin()]).unwrap();
+    let dirs = [first.bin(), second.bin()];
+    std::thread::scope(|s| {
+        s.spawn(|| first.run(&path, std::path::Path::new("/"), &["status"]));
+        // One process, which `exec`s from one wrapper to the other: it mentions one directory at a time.
+        common::wait_until("the looping wrappers to run", || dirs.iter().any(|d| !processes_mentioning(d).is_empty()));
+        println!();
+        for d in &dirs {
+            println!("BIN {}", d.display());
+        }
+        println!("READY");
+        std::thread::sleep(std::time::Duration::from_secs(SLEEP_SECONDS));
+    });
+}
+
+#[test]
+fn a_killed_test_leaves_no_git_wrapper_process() {
+    let mut helper = start_helper("harness::wrapper_helper", WRAPPER_HELPER_GATE, &[]);
+    let dirs: Vec<std::path::PathBuf> = helper_lines(&mut helper, "BIN").into_iter().map(Into::into).collect();
+    // Whatever the outcome, what the helper left is stopped and its temporary directories removed.
+    // (A `tempfile` directory, `.tmp*`, or an env's, `cpd-test-*`: never a directory that is not the helper's.)
+    let _sweep = Sweep(
+        dirs.iter()
+            .flat_map(|d| d.ancestors())
+            .filter(|a| a.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".tmp") || n.to_string_lossy().starts_with("cpd-test-")))
+            .map(ToOwned::to_owned)
+            .collect(),
+    );
+    assert_eq!(dirs.len(), 2, "the helper printed no READY with its wrapper directories");
+    // The wrapper `exec`s from one script to the other: its command line is empty for a moment at each `exec`.
+    let wrappers = common::poll(WAIT, || Some(dirs.iter().flat_map(|d| processes_mentioning(d)).collect::<Vec<u32>>()).filter(|w| !w.is_empty()))
+        .expect("a wrapper runs before the kill");
+
+    helper.0.kill().unwrap(); // SIGKILL: no Drop runs
+    helper.0.wait().unwrap();
+
+    let left = common::poll(WAIT, || wrappers.iter().all(|p| !alive(*p)).then_some(()));
+    assert!(left.is_some(), "a killed test left git wrapper processes: {:?}", wrappers.iter().filter(|p| alive(**p)).collect::<Vec<_>>());
+}
+
+/// Removes the directories when dropped.
+struct DirsOnDrop(Vec<std::path::PathBuf>);
+
+impl Drop for DirsOnDrop {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
+
+/// Kills every process that mentions one of the directories, then removes them, when dropped.
+struct Sweep(Vec<std::path::PathBuf>);
+
+impl Drop for Sweep {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            for pid in processes_mentioning(d) {
+                drop(KillOnDrop(pid));
+            }
+        }
+        drop(DirsOnDrop(std::mem::take(&mut self.0)));
+    }
+}
+
+// ---- hygiene.md 5b: an env is made under the run's TMPDIR ----
+
+const ENVS_HELPER_GATE: &str = "CPD_HARNESS_ENVS_HELPER";
+
+/// Not a test of its own: makes an env and prints its directory. Does nothing unless gated.
+#[test]
+fn envs_helper() {
+    if std::env::var_os(ENVS_HELPER_GATE).is_none() {
+        return;
+    }
+    let env = TestEnv::new();
+    println!();
+    println!("DIR {}", env.root().display());
+    println!("READY");
+}
+
+#[test]
+fn an_env_is_made_under_the_runs_tmpdir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut helper = start_helper("harness::envs_helper", ENVS_HELPER_GATE, &[("TMPDIR", tmp.path().as_os_str())]);
+    let dirs = helper_lines(&mut helper, "DIR");
+    assert_eq!(dirs.len(), 1, "the helper printed no DIR");
+    let dir = std::path::PathBuf::from(&dirs[0]);
+    let _gone = DirsOnDrop(vec![dir.clone()]);
+    assert_eq!(dir.parent(), Some(tmp.path()), "the env's directory is not under the TMPDIR of its process");
+}
+
 #[test]
 fn a_process_that_leaves_the_group_and_is_not_recorded_outlives_the_teardown() {
     // What the teardown does not stop: it finds nothing by scanning, and cpd records only its own detached children.

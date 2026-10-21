@@ -527,7 +527,7 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
     // A crash after the first transaction: no pane, no message. Rerunning redoes both.
     store(&env).write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{session}';"))).unwrap();
     fs::remove_file(home(&env).lead_message(&pid("pay"))).unwrap();
-    env.tmux(&["kill-server"]);
+    env.kill_tmux_server();
     let redone = env.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     assert_eq!(redone["already"], true);
     assert_eq!(redone["lead"]["cwd"], first["lead"]["cwd"]);

@@ -39,6 +39,16 @@ const BACKOFF: Duration = Duration::from_secs(2);
 pub(super) fn ensure(wait: bool) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
+    // A home whose store is gone is one being removed (a test env's teardown, hygiene.md 3c): a late supervising call
+    // must not make `run/`, `locks/` or a server again.
+    if !home.db().try_exists().unwrap_or(false) {
+        return Err(CpdError::new(
+            ErrorCode::WatchStartFailed,
+            format!("{} has no store: the home does not exist (any more), so no engine is started.", home.root().display()),
+        )
+        .with("path", home.root().display().to_string())
+        .with("next", "cpd watch --ensure"));
+    }
     let tmux = Tmux::new(config.tmux.socket.as_str());
     let work = config.tmux.work_session.as_str();
     // One call at a time, plain or supervising: a pane that dies at once makes its
