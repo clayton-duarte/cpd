@@ -379,6 +379,11 @@ impl NewEvent {
         make(Kind::SessionMessage, text, json!({"from": from, "text": message, "wake": wake}))
     }
 
+    /// A `session-message` of `cpd session send`: it always wakes, so it carries `unblocks` and no `wake` (hs-d514).
+    pub fn session_message_unblocking(text: impl Into<String>, from: impl Serialize, message: &str, unblocks: &str) -> NewEvent {
+        make(Kind::SessionMessage, text, json!({"from": from, "text": message, "unblocks": unblocks}))
+    }
+
     pub fn inbox_opened(text: impl Into<String>, item: i64, kind: &str, urgency: &str, label: &str) -> NewEvent {
         make(Kind::InboxOpened, text, json!({"item": item, "kind": kind, "urgency": urgency, "label": label}))
     }
@@ -486,7 +491,7 @@ mod tests {
             Kind::ContextArchived => vec![NewEvent::context_archived(T, b)],
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],
             Kind::SessionArchived => vec![NewEvent::session_archived(T, b)],
-            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b)],
+            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b), NewEvent::session_message_unblocking(T, s, s, s)],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],
             Kind::InboxClosed => vec![NewEvent::inbox_closed(T, 1, s)],
             Kind::InboxSnoozed => vec![NewEvent::inbox_snoozed(T, 1, s)],

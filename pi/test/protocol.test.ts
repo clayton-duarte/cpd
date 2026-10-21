@@ -23,8 +23,8 @@ test("the adapter's KINDS are exactly core's Event kinds", () => {
   assert.deepEqual([...KINDS].sort(), [...core].sort(), "pi/lib/event.ts KINDS differs from core's kinds: update it, and raise PROTOCOL");
 });
 
-test("hs-d496: the protocol is 10, and review-opened and review-closed are known kinds that are delivered to nobody", () => {
-  assert.equal(PROTOCOL, 10);
+test("hs-d496: the protocol is 11, and review-opened and review-closed are known kinds that are delivered to nobody", () => {
+  assert.equal(PROTOCOL, 11);
   for (const kind of ["review-opened", "review-closed"]) {
     assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is not in KINDS`);
     assert.equal((LEAD_MESSAGES as Record<string, unknown>)[kind], undefined, `${kind}: delivery none`);

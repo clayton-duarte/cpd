@@ -270,7 +270,10 @@ fn the_wake_flag_is_gone() {
 fn a_send_to_the_lead_of_a_done_plan_is_refused_plan_inactive() {
     let env = TestEnv::new();
     setup(&env);
-    exec_sql(&env, "UPDATE plans SET phase = 'done' WHERE id = 'pay'");
+    exec_sql(&env, "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+         UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'");
     let error = refused(&cpd_with(&env, AGENT, &["session", "send", "lead1", "hi", "--unblocks", "u"]), "plan_inactive", 3);
     assert_eq!(error["details"]["plan"], "pay");
     assert_eq!(error["details"]["phase"], "done");
@@ -301,7 +304,10 @@ fn the_same_text_to_the_same_session_within_an_hour_is_refused_duplicate() {
 fn the_user_without_a_session_is_not_guarded() {
     let env = TestEnv::new();
     setup(&env);
-    exec_sql(&env, "UPDATE plans SET phase = 'done' WHERE id = 'pay'");
+    exec_sql(&env, "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+         UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'");
     env.cpd(&["session", "send", "lead1", "same", "--unblocks", "u"]).ok();
     env.cpd(&["session", "send", "lead1", "same", "--unblocks", "u"]).ok();
     env.cpd(&["session", "send", "fork1", "same", "--unblocks", "u"]).ok();

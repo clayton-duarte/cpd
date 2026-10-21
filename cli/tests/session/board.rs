@@ -60,7 +60,10 @@ fn a_post_to_manager_reaches_the_context_manager() {
 fn a_post_to_the_lead_of_a_done_plan_is_refused_plan_inactive() {
     let env = TestEnv::new();
     setup(&env);
-    exec_sql(&env, "UPDATE plans SET phase = 'done' WHERE id = 'pay'");
+    exec_sql(&env, "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+         UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'");
     let error = refused(&cpd_with(&env, FROM_LEAD2, &["board", "post", "hi", "--to", "pay"]), "plan_inactive", 3);
     assert_eq!((&error["details"]["plan"], &error["details"]["phase"]), (&json!("pay"), &json!("done")));
     assert!(list(&env, "lead1", true).is_empty());

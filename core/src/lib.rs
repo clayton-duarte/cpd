@@ -19,6 +19,7 @@ pub mod slot;
 // One module per area, each filled in by its own Job.
 pub mod ask;
 pub mod attempt;
+pub mod board;
 pub mod config;
 pub mod context;
 pub mod driver;

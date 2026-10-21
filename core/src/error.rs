@@ -126,6 +126,10 @@ error_codes! {
 
     // Exit 3: refused by an invariant.
     CasLost = "cas_lost" => Refused,
+    PlanInactive = "plan_inactive" => Refused,
+    Broadcast = "broadcast" => Refused,
+    Duplicate = "duplicate" => Refused,
+    NoManager = "no_manager" => Refused,
     DistillRunning = "distill_running" => Refused,
     WatchNotStarted = "watch_not_started" => Refused,
     IllegalTransition = "illegal_transition" => Refused,

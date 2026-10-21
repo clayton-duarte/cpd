@@ -12,7 +12,7 @@ use cpd_core::home::CpdHome;
 use cpd_core::output::Output;
 use cpd_core::config::Config;
 use cpd_core::store::Store;
-use cpd_core::{ask, attempt, config, context, events, inbox, job, plan, policy, pr, review, session, slot};
+use cpd_core::{ask, attempt, board, config, context, events, inbox, job, plan, policy, pr, review, session, slot};
 use cpd_engine::watch::restart;
 use cpd_engine::{doctor, watch};
 
@@ -48,6 +48,9 @@ pub enum Command {
     Ask(ask::AskArgs),
     /// Answer a Worker's Escalation (Lead) (commands.md §8.2)
     Answer(ask::AnswerArgs),
+    /// The message board (commands.md §10a)
+    #[command(subcommand)]
+    Board(board::Command),
     /// Pull requests (commands.md §9)
     #[command(subcommand)]
     Pr(pr::Command),
@@ -116,6 +119,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Attempt(c) => attempt::run(c),
         Command::Ask(a) => ask::ask(a),
         Command::Answer(a) => ask::answer(a),
+        Command::Board(c) => board::run(c),
         Command::Pr(c) => pr::run(c),
         Command::Review(c) => review::run(c),
         Command::Policy(c) => policy::run(c),

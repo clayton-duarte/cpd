@@ -43,7 +43,12 @@ pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
 pub use state::Label;
-pub use send::tell_managers;
+pub use send::{plan_inactive, sender, tell_managers};
+
+/// The Session `reference` names (commands.md §1.3), for the commands outside this module.
+pub fn resolve(conn: &rusqlite::Connection, reference: &SessionRef) -> Result<SessionId, CpdError> {
+    resolve::resolve(conn, reference)
+}
 pub use state::pane_gone;
 
 /// The program in every pane cpd starts, resolved on the tmux server's `PATH`
@@ -181,9 +186,32 @@ pub struct SendArgs {
     /// The message, read from a file
     #[arg(long, value_name = "f")]
     file: Option<PathBuf>,
-    /// Start a turn when the target is idle (a Manager waking a stalled Lead; use sparingly)
-    #[arg(long)]
-    wake: bool,
+    /// What the message unblocks (1–200 characters, one line)
+    #[arg(long, value_name = "reason")]
+    unblocks: Unblocks,
+}
+
+/// What a `session send` unblocks (commands.md §10.13): 1 to 200 characters on one line; else `usage`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unblocks(String);
+
+impl Unblocks {
+    const MAX_CHARS: usize = 200;
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::str::FromStr for Unblocks {
+    type Err = CpdError;
+    fn from_str(s: &str) -> Result<Unblocks, CpdError> {
+        let chars = s.chars().count();
+        if chars == 0 || chars > Unblocks::MAX_CHARS || s.chars().any(char::is_control) {
+            return Err(CpdError::new(ErrorCode::Usage, format!("--unblocks is 1 to {} characters on one line.", Unblocks::MAX_CHARS)).with("chars", chars));
+        }
+        Ok(Unblocks(s.to_owned()))
+    }
 }
 
 #[derive(clap::Args, Debug)]
