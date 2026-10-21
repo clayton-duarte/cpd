@@ -2113,7 +2113,15 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
     let conn = connection(&home.db());
-    assert_eq!(session_rows(&conn), before);
+    // `asleep_at` is a later migration's column (`session-asleep`), null on every row.
+    let after: Vec<Value> = session_rows(&conn)
+        .into_iter()
+        .map(|mut row| {
+            assert_eq!(row.as_object_mut().unwrap().remove("asleep_at"), Some(Value::Null));
+            row
+        })
+        .collect();
+    assert_eq!(after, before);
     assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap(), history);
     assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
     let objects = names(&conn, "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name");
@@ -2779,8 +2787,8 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     let mut store = Store::open(&home, 5000).unwrap();
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
-    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered` and the one of `plan-outline`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1])]);
+    // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered`, the one of `plan-outline` and the one of `session-asleep`: the later migrations that add Event kinds
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------

@@ -144,6 +144,7 @@ fn click_on_asleep_row_resumes_it_in_the_chat_slot() {
     let row = row_of(&pane.ready(), "f-sl");
     pane.click(8, row as u16);
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-slp"])]);
+    // time-claim: no second command follows the click in 500 ms (one action); no per-poll signal from a command that is never run.
     std::thread::sleep(std::time::Duration::from_millis(500));
     assert_eq!(env.calls("cpd"), [words(&["session", "open", "f-slp"])], "one action: no unarchive, no history");
 }

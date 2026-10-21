@@ -1340,6 +1340,7 @@ CREATE TABLE sessions (
   archived_at TEXT,
   title       TEXT CHECK (title IS NULL OR length(title) BETWEEN 1 AND 60),   -- named migration session-titles
   titled_at   TEXT,                                                           -- named migration session-titles
+  asleep_at   TEXT,                                                           -- named migration session-asleep
   FOREIGN KEY (plan, attempt) REFERENCES attempts(plan, id) DEFERRABLE INITIALLY DEFERRED,
   CHECK ((role = 'worker') = (attempt IS NOT NULL)),
   CHECK (role = 'manager' OR role = 'lead' OR plan IS NOT NULL),
