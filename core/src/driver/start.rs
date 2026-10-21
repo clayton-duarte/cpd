@@ -305,6 +305,10 @@ fn spawn(home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> 
         .map_err(|e| format!("cannot open {}: {e}", log_path.display()))?;
     let stdout = log.try_clone().map_err(|e| format!("cannot use {}: {e}", log_path.display()))?;
 
+    // `nice` would start with a missing binary and die with 127: a driver that cannot start is a spawn failure.
+    if !exe.exists() {
+        return Err(format!("cannot run {}: no such file", exe.display()));
+    }
     // hs-d528: nice and ionice exec, so the recorded pid is the driver's.
     let prefix = crate::host::priority::idle_prefix();
     let mut command = Command::new(prefix[0]);
