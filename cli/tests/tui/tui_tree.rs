@@ -1027,7 +1027,7 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
         "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰁣 collapse`; alpha has nothing to fold: its last row ends it with `╰─`, and `gamma`, with no row, closes with a plain `╰─`; no `󰇘` row"
     );
     assert!(screen.iter().all(|r| !r.contains('\u{F01D8}')), "no `󰇘` row: {screen:?}");
-    // a click on the archived Plan unarchives it and opens its Lead; the archived Context's title and its plain closing row do nothing
+    // a click on the archived Plan unarchives it and opens its Lead; one on the archived Context's title unarchives it and opens its Manager; its plain closing row does nothing
     pane.click(10, 9);
     assert_eq!(wait_for_calls(&env, 2), [words(&["plan", "unarchive", "--plan=old"]), words(&["session", "open", "l-old"])]);
     pane.click(5, 12);
@@ -1043,8 +1043,13 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
     assert_eq!((screen[11].as_str(), screen[12].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰─"));
     assert_eq!(
         calls(&env),
-        [words(&["plan", "unarchive", "--plan=old"]), words(&["session", "open", "l-old"])],
-        "only the click on the archived Plan ran commands"
+        [
+            words(&["plan", "unarchive", "--plan=old"]),
+            words(&["session", "open", "l-old"]),
+            words(&["context", "unarchive", "gamma"]),
+            words(&["context", "manager", "--context=gamma"])
+        ],
+        "only the clicks on the archived Plan and the archived Context's title ran commands"
     );
 }
 
