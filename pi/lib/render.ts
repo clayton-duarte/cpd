@@ -63,6 +63,7 @@ const ADAPTER_PREFIX = "cpd adapter: ";
 function summaryOf(message: RenderedMessage, content: string): string | undefined {
   const d = isObject(message.details) ? message.details : {};
   if (message.customType === CONTEXT_TYPE) {
+    if (typeof d.summary === "string") return d.summary;
     const counts = countsOf(message.details);
     return counts === undefined ? undefined : summaryLine(counts);
   }

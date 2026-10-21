@@ -1,5 +1,5 @@
 import { CpdError, isObject } from "./cpd.ts";
-import { eventMessage, FOLLOW_UP, LEAD_MESSAGES, sessionMessage } from "./delivery.ts";
+import { eventMessage, FOLLOW_UP, leadRule, sessionMessage } from "./delivery.ts";
 import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
 import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
@@ -87,7 +87,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
     if (ev.kind === "attempt-nudge" && own) pi.sendMessage(eventMessage(ev, r.id, ev.data.prompt), FOLLOW_UP(true));
     return;
   }
-  const rule = LEAD_MESSAGES[ev.kind];
+  const rule = leadRule(ev);
   if (rule) {
     pi.sendMessage(eventMessage(ev, r.id), { triggerTurn: rule.turn, deliverAs: rule.deliverAs });
     if (ev.kind === "escalation" && r.facts.open(`escalation:${ev.data.escalation}`, QUESTION_LABEL, "agent")) host.refresh(r);
