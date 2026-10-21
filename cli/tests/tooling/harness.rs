@@ -598,7 +598,8 @@ fn wrapper_helper() {
     let dirs = [first.bin(), second.bin()];
     std::thread::scope(|s| {
         s.spawn(|| first.run(&path, std::path::Path::new("/"), &["status"]));
-        common::wait_until("the looping wrappers to run", || dirs.iter().all(|d| !processes_mentioning(d).is_empty()));
+        // One process, which `exec`s from one wrapper to the other: it mentions one directory at a time.
+        common::wait_until("the looping wrappers to run", || dirs.iter().any(|d| !processes_mentioning(d).is_empty()));
         println!();
         for d in &dirs {
             println!("BIN {}", d.display());
@@ -612,12 +613,19 @@ fn wrapper_helper() {
 fn a_killed_test_leaves_no_git_wrapper_process() {
     let mut helper = start_helper("harness::wrapper_helper", WRAPPER_HELPER_GATE, &[]);
     let dirs: Vec<std::path::PathBuf> = helper_lines(&mut helper, "BIN").into_iter().map(Into::into).collect();
-    assert_eq!(dirs.len(), 2, "the helper printed no READY with its wrapper directories");
-    let wrappers: Vec<u32> = dirs.iter().flat_map(|d| processes_mentioning(d)).collect();
-    assert!(!wrappers.is_empty(), "a wrapper runs before the kill");
     // Whatever the outcome, what the helper left is stopped and its temporary directories removed.
-    let _stop: Vec<KillOnDrop> = wrappers.iter().copied().map(KillOnDrop).collect();
-    let _tmp = DirsOnDrop(dirs.iter().filter_map(|d| d.parent()?.parent().map(ToOwned::to_owned)).collect());
+    // (A `tempfile` directory, `.tmp*`, or an env's, `cpd-test-*`: never a directory that is not the helper's.)
+    let _sweep = Sweep(
+        dirs.iter()
+            .flat_map(|d| d.ancestors())
+            .filter(|a| a.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".tmp") || n.to_string_lossy().starts_with("cpd-test-")))
+            .map(ToOwned::to_owned)
+            .collect(),
+    );
+    assert_eq!(dirs.len(), 2, "the helper printed no READY with its wrapper directories");
+    // The wrapper `exec`s from one script to the other: its command line is empty for a moment at each `exec`.
+    let wrappers = common::poll(WAIT, || Some(dirs.iter().flat_map(|d| processes_mentioning(d)).collect::<Vec<u32>>()).filter(|w| !w.is_empty()))
+        .expect("a wrapper runs before the kill");
 
     helper.0.kill().unwrap(); // SIGKILL: no Drop runs
     helper.0.wait().unwrap();
@@ -634,6 +642,20 @@ impl Drop for DirsOnDrop {
         for d in &self.0 {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+}
+
+/// Kills every process that mentions one of the directories, then removes them, when dropped.
+struct Sweep(Vec<std::path::PathBuf>);
+
+impl Drop for Sweep {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            for pid in processes_mentioning(d) {
+                drop(KillOnDrop(pid));
+            }
+        }
+        drop(DirsOnDrop(std::mem::take(&mut self.0)));
     }
 }
 

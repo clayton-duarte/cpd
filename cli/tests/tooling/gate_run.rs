@@ -158,7 +158,10 @@ fn another_runs_leftovers_do_not_fail_this_run() {
         .unwrap();
     let _stop = StopChild(&mut other);
     common::wait_some("the other run's command to start", WAIT, || {
-        if other_id.exists() { Ok(()) } else { Err(format!("exited: {:?}", _stop.0.try_wait())) }
+        if let Some(status) = _stop.0.try_wait().unwrap() {
+            panic!("the other run ended ({status}) before it ran its command: is there a scripts/gate-run.sh?");
+        }
+        if other_id.exists() { Ok(()) } else { Err("not yet".into()) }
     });
 
     let run = fx.gate_run("exit 0");
