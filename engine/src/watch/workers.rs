@@ -45,11 +45,11 @@ const QUEUED: &str = "SELECT count(*) FROM jobs WHERE status = 'queued'";
 
 /// The Inbox counter of the StatusBar.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-struct Inbox {
+pub(super) struct Inbox {
     /// The open items that are neither snoozed nor dismissed.
-    count: usize,
+    pub(super) count: usize,
     /// The urgency of the most urgent of them; `None` when `count` is 0.
-    urgency: Option<Urgency>,
+    pub(super) urgency: Option<Urgency>,
 }
 
 impl Inbox {
@@ -60,7 +60,7 @@ impl Inbox {
     }
 
     /// `inbox <n>` in the colour of the most urgent item; dim when there is none.
-    fn styled(self) -> String {
+    pub(super) fn styled(self) -> String {
         match self.urgency {
             Some(urgency) => format!("#[fg={}]inbox {}#[default]", colour(urgency), self.count),
             None => format!("#[dim]inbox {}#[default]", self.count),
@@ -85,15 +85,15 @@ fn colour(urgency: Urgency) -> &'static str {
 
 /// The three numbers of the StatusBar.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-struct Counts {
+pub(super) struct Counts {
     /// Attempts not `ended`.
-    running: u32,
+    pub(super) running: u32,
     /// Config `concurrency`.
-    limit: u32,
+    pub(super) limit: u32,
     /// Ready Jobs.
-    waiting: u32,
+    pub(super) waiting: u32,
     /// `queued` Jobs.
-    queued: u32,
+    pub(super) queued: u32,
 }
 
 impl Counts {
@@ -114,7 +114,7 @@ impl Counts {
     }
 
     /// `workers N/M · W waiting · Q queued`, the words, `/M`, `·` and `Q` dim.
-    fn long(self) -> String {
+    pub(super) fn long(self) -> String {
         format!(
             "#[dim]workers #[nodim,fg={}]{}#[default,dim]/{} · {} waiting · {} queued#[default]",
             self.running_colour(),
@@ -126,7 +126,7 @@ impl Counts {
     }
 
     /// `N/M·W·Q`, coloured as the long form.
-    fn short(self) -> String {
+    pub(super) fn short(self) -> String {
         format!("#[nodim,fg={}]{}#[default,dim]/{}·{}·{}#[default]", self.running_colour(), self.running, self.limit, self.waiting_styled(), self.queued)
     }
 

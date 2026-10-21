@@ -31,6 +31,8 @@ mod schedule;
 pub mod team;
 mod titles;
 mod workers;
+#[cfg(test)]
+mod pill_texts;
 
 use std::fs;
 use std::io;
