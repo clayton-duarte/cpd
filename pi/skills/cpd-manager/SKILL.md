@@ -70,7 +70,7 @@ Attribute each record to its source (the User, a Lead, a document) and date it w
 
 1. **Intake.** Treat everything the User brings the same way: an Epic, a PRD, an ADR, a ticket, a sentence in chat. Read the material yourself; never ask the User for a fact you can look up. Restate the Requirements in a few lines and record them.
 2. **Interview** until the Requirements have no contradictions and the cut into Plans is clear. Group independent questions into one round. Record each answer as you get it.
-3. **Split into Plans.** A Plan is one deliverable: one or more PRs, in one or more repos, that ship together. Cut the Requirements into Plans a Lead can own end to end. When one Plan needs another's result, start it after the first is done and record the order as a decision. Agree the cut with the User before starting any Plan.
+3. **Split into Plans.** A Plan is one deliverable: one or more PRs, in one or more repos, that ship together. Cut the Requirements into Plans a Lead can own end to end. Each Plan is independent: no PR needs another Plan's PR, and no PR's base is another Plan's PR. When one Plan needs another's result, split them so they stay independent: start the first Plan, let it land, then start the second with what the first delivered. Record the order as a decision. Agree the cut with the User before starting any Plan.
 4. **Check pending work first.** Before you start a Plan or route an issue to a Lead, run `cpd context pending --context <c>` (`--markdown` to read it) and compare the issue with the title and touched files of every pending Job of every active Plan. When something in flight already fixes or changes it, tell the User which Plan and Job, and do not start a Plan. See "Areas and overlaps" below for work that only overlaps.
 5. **Write the brief** for each Plan in a file outside any repo. Its first line is a one-line summary (it is what `context show` and every turn-start update show). Then: the goal, the Requirements it covers, what is out of scope, the record ids that apply, the repos you know of and the User's material (paths, links). The Lead reads its brief in full plus every record, and nothing else from you.
 6. **Start the Plan** from `~`, so its Lead starts there (`cd ~` first):
@@ -89,7 +89,7 @@ Prevent conflicts between Leads' PRs before the work starts, and remedy them whe
 
 - **Split by deliverable and area.** Cut work between Leads by deliverable and by area: the files and directories each touches. A small follow-up goes into its area's existing PR, not a new one. Give two Plans the same area only when you cannot avoid it.
 - **Keep a file map.** Map the files of every active PR: each pending Job's `touches` from `cpd context pending --context <c>`, and `cpd plan show --plan <p>` per Plan. `cpd plan render`'s Overlaps section shows a Plan's overlaps with other active Plans. Know every unavoidable overlap before the work starts, and tell both Leads in the brief or by `cpd session send`.
-- **Set the landing order.** For overlapping PRs, decide which lands first. Within one Plan the order is a PR's needs (`cpd pr add <key> --repo <path> --needs <k>`): it starts from the base after the other merges. Across Plans, tell each Lead with `cpd session send <lead-session>` which PR lands first and that the next one waits.
+- **Set the landing order.** For overlapping PRs (files each touches), decide which Plan's PR lands first. Coordinate through Context notes (`cpd context note "<fact>"`) so Leads know the order. Within one Plan, a PR's needs (`cpd pr add <key> --repo <path> --needs <k>`) order its own PRs: each starts when the other merges. Across Plans, there are no direct dependencies: if a Lead finds itself waiting on another Plan's work, tell the Manager with `cpd session send <manager-id> "<text>"`, which moves the work or re-routes it, never sequences across Leads.
 - **Oversee all-merged PRs.** cpd opens a PR as soon as its last Job merges (the PR's open Job; no Lead opens it). Watch the PRs whose Jobs are all merged (`cpd context pending --context <c>` shows each PR's Jobs) and stack those that would conflict, so each PR can simply be merged.
 - **One PR in flight per area, the next stacked.** Tell the Leads the order and which branch the next PR builds on and targets:
   - The next PR is built on the previous PR's last commit (its Lead Branch head), never in parallel from the base.
@@ -108,11 +108,23 @@ Prevent conflicts between Leads' PRs before the work starts, and remedy them whe
 
 ## 4. Messaging a Lead
 
+### Communication rules
+
+Three ways to communicate are distinct:
+
+- **Message** (`cpd session send`): only to unblock another agent, with `--unblocks "<reason>"`. A message always wakes an idle agent; send sparingly. No broadcasts, no FYI, no acks.
+- **Board** (`cpd board post --to <session>`): for information another agent needs at its next turn. A board post does not wake; it arrives when the agent's turn starts.
+- **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
+
+### Sending a message
+
 ```
 cpd session send <lead-session> "<text>" --unblocks "<reason>"
 cpd session send <lead-session> --file <file> --unblocks "<reason>"
 ```
 
-Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd session list --plan <p> --role lead`. The message always wakes an idle Lead (a working or blocked Lead gets it after its running turn, never interrupted); a stopped Lead gets it when it starts again. `--unblocks` states what the message unblocks; send sparingly. Use it to pass a new record, a changed Requirement or a question about the Plan's progress. Write the message so it stands alone. When the work you route only carries out a decision the User already recorded, name the decision id (for example `<machine>-d12`) and say the work needs no Plan review: the Lead adds it queued, with a Spec that cites the decision. Work with an open design choice is a draft and gets a Plan review.
+Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd session list --plan <p> --role lead`. The message always wakes an idle Lead (a working or blocked Lead gets it after its running turn, never interrupted); a stopped Lead gets it when it starts again. `--unblocks` states what the message unblocks; send sparingly. Use it only to unblock: to ask a Lead to register draft Jobs, to point it to a new record, or to notify it of a changed Requirement. Write the message so it stands alone.
+
+Rules and decisions for a Lead are written to the Context as records, not sent as messages. A decision record reaches the Lead at its turn start, and it reads what applies to it. When the work you route only carries out a decision the User already recorded, name the decision id (for example `<machine>-d12`) and the Lead reads it at turn start; it adds the work queued, with a Spec that cites the decision, and needs no Plan review. Work with an open design choice is a draft and gets a Plan review; message the Lead to notify it.
 
 A Lead may message you the same way: its message arrives as `Message from <name> (<id>): <text>`. Answer only what the records or the User settle; anything the User must decide, tell the Lead to ask the User directly. Record what its report changes.

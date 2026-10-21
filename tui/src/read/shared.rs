@@ -212,6 +212,8 @@ pub struct SessionNode {
     pub dot: Dot,
     /// When it was archived (contract §4.5); archived Sessions are in the model.
     pub archived_at: Option<String>,
+    /// When engine E13 put it to sleep (contract §2.2 "Asleep"): it keeps its place among the live rows, drawn muted.
+    pub asleep_at: Option<String>,
 }
 
 impl SessionNode {
@@ -228,6 +230,10 @@ impl SessionNode {
     pub fn is_archived(&self) -> bool {
         self.archived_at.is_some()
     }
+
+    pub fn is_asleep(&self) -> bool {
+        self.asleep_at.is_some()
+    }
 }
 
 const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.tier,
@@ -235,7 +241,7 @@ const SESSION_SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt,
        (SELECT json_extract(e.data, '$.place') FROM events e
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        l.lead_session IS NOT NULL,
-       s.archived_at
+       s.archived_at, s.asleep_at
   FROM sessions s
   LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
@@ -272,6 +278,7 @@ pub(super) fn sessions(conn: &Connection, filter: &str, params: &[&dyn ToSql]) -
             place,
             plan_lead,
             archived_at: r.get(16)?,
+            asleep_at: r.get(17)?,
             id: session,
         });
     }

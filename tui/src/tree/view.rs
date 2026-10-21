@@ -576,7 +576,8 @@ impl View {
             Row::Fork(_, _, s) => vec![s],
             Row::Toggle => return Some(None),
         };
-        if !archiving.iter().any(|s| s.is_active()) {
+        let manager_in_chat = matches!(*row, Row::Context(c) if c.manager_place == Some(crate::read::Place::Chat));
+        if !manager_in_chat && !archiving.iter().any(|s| s.is_active()) {
             return Some(None);
         }
         let items = rows::items(&self.tree, self.state.opened(), 0, 0);
@@ -625,13 +626,14 @@ impl View {
             return Effect::None;
         }
         if let Some(Row::Context(c)) = rows::row(&self.tree, &path) {
-            return if c.is_archived() { Effect::None } else { Effect::Run(Action::OpenManager(c.id.clone())) };
+            let open = Action::OpenManager(c.id.clone());
+            return Effect::Run(if c.is_archived() { Action::Resume { unarchive: Subject::Context(c.id.clone()), then: Box::new(open) } } else { open });
         }
         match rows::row(&self.tree, &path) {
-            Some(row) => match row.session() {
-                Some(s) if row.archived() => Effect::Run(Action::History(s.id.clone())),
-                Some(s) => Effect::Run(Action::Open(s.id.clone())),
-                None => Effect::None,
+            Some(row) => match (row.session(), row.resume()) {
+                (Some(_), Some((unarchive, open))) => Effect::Run(Action::Resume { unarchive, then: Box::new(open) }),
+                (Some(s), None) => Effect::Run(Action::Open(s.id.clone())),
+                (None, _) => Effect::None,
             },
             None => Effect::None,
         }
@@ -776,6 +778,18 @@ mod tests {
 
     fn sid(s: &str) -> SessionId {
         SessionId::parse(s).unwrap()
+    }
+
+    fn cid(s: &str) -> ContextId {
+        ContextId::parse(s).unwrap()
+    }
+
+    fn pid(s: &str) -> PlanId {
+        PlanId::parse(s).unwrap()
+    }
+
+    fn resume(unarchive: Subject, then: Action) -> Action {
+        Action::Resume { unarchive, then: Box::new(then) }
     }
 
     fn drawn(view: &mut View, width: u16, height: u16) -> Vec<String> {
@@ -1001,17 +1015,17 @@ mod tests {
     }
 
     #[test]
-    fn an_archived_context_starts_folded_unfolds_at_its_closing_row_and_opens_no_manager() {
+    fn an_archived_context_starts_folded_unfolds_at_its_closing_row_and_a_click_on_its_title_unarchives_it_and_opens_its_manager() {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 23);
         assert_eq!((rows[15].as_str(), rows[16].as_str()), (format!(" ╭{STOPPED} zeta").as_str(), EXPAND), "{rows:?}");
-        assert_eq!(click(&mut view, 6, 15), Effect::None, "its title: no Manager for an archived Context");
+        assert_eq!(click(&mut view, 6, 15), Effect::Run(resume(Subject::Context(cid("zeta")), Action::OpenManager(cid("zeta")))), "its title: unarchive, then its Manager");
         assert_eq!(drawn(&mut view, 44, 23), rows, "its title folds and unfolds nothing");
         click(&mut view, 3, 16);
         let rows = drawn(&mut view, 44, 23);
         assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
         assert_eq!(rows[18], COLLAPSE, "its closing row unfolds it");
-        assert_eq!(click(&mut view, 6, 15), Effect::None);
+        assert_eq!(click(&mut view, 6, 15), Effect::Run(resume(Subject::Context(cid("zeta")), Action::OpenManager(cid("zeta")))));
         assert_eq!(click(&mut view, 8, 18), Effect::None);
         assert_eq!(drawn(&mut view, 44, 23)[16], EXPAND, "and folds it");
     }
@@ -1132,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn the_archived_rows_are_inside_the_expanded_block_with_one_toggle_row_that_folds_them_and_a_click_on_one_shows_its_history() {
+    fn the_archived_rows_are_inside_the_expanded_block_with_one_toggle_row_that_folds_them_and_a_click_on_one_resumes_it() {
         let mut view = View::new(archived(), true);
         let rows = drawn(&mut view, 44, 23);
         assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")), "{rows:?}");
@@ -1141,9 +1155,9 @@ mod tests {
         assert_eq!(rows[8], "", "one empty row between two Contexts");
         assert_eq!(rows[9], format!(" ╭{NEEDS_YOU} beta"));
         assert!(!rows.iter().any(|r| r.contains('\u{F01D8}')), "no `󰇘` row: {rows:?}");
-        // a click on an archived row is a click on its row: its history
-        assert_eq!(click(&mut view, 3, 5), Effect::Run(Action::History(sid("l-old"))));
-        assert_eq!(click(&mut view, 3, 6), Effect::Run(Action::History(sid("f-blocked"))));
+        // a click on an archived row resumes it: the unarchive of its outermost archived object, then the Open
+        assert_eq!(click(&mut view, 3, 5), Effect::Run(resume(Subject::Plan(pid("old")), Action::Open(sid("l-old")))));
+        assert_eq!(click(&mut view, 3, 6), Effect::Run(resume(Subject::Session(sid("f-blocked")), Action::Open(sid("f-blocked")))));
         assert_eq!(drawn(&mut view, 44, 23), rows, "a click on an archived row changes nothing");
         // the closing row folds the archived rows only: the live ones stay
         assert_eq!(click(&mut view, 3, 7), Effect::None);
@@ -1238,20 +1252,26 @@ mod tests {
     }
 
     #[test]
-    fn a_click_on_an_archived_session_shows_its_history_and_enter_n_and_x_never_act_on_one() {
+    fn a_click_on_an_archived_row_unarchives_and_opens_it_and_enter_n_and_x_never_act_on_one() {
         let mut view = View::new(archived(), true);
         drawn(&mut view, 44, 23);
         click(&mut view, 1, 16);
         let rows = drawn(&mut view, 44, 23);
         assert!(rows[5].starts_with(&format!(" ├─{STOPPED} old")) && rows[15] == format!(" ╭{STOPPED} zeta"), "{rows:?}");
         // the archived Plan (its Lead), the archived fork of a live Plan, the Plan of the archived Context and its
-        // fork: each shows the history of its Session
-        for ((column, row), id) in [((8, 5), "l-old"), ((8, 6), "f-blocked"), ((8, 16), "l-zp"), ((8, 17), "f-zp")] {
-            assert_eq!(click(&mut view, column, row), Effect::Run(Action::History(sid(id))), "({column}, {row})");
+        // fork: each unarchives its outermost archived object, then opens its Session
+        let archived_objects = [
+            ((8, 5), Subject::Plan(pid("old")), "l-old"),
+            ((8, 6), Subject::Session(sid("f-blocked")), "f-blocked"),
+            ((8, 16), Subject::Context(cid("zeta")), "l-zp"),
+            ((8, 17), Subject::Context(cid("zeta")), "f-zp"),
+        ];
+        for ((column, row), subject, id) in archived_objects {
+            assert_eq!(click(&mut view, column, row), Effect::Run(resume(subject, Action::Open(sid(id)))), "({column}, {row})");
             assert_eq!(drawn(&mut view, 44, 23), rows, "({column}, {row}) changes nothing");
         }
-        // the archived Context's title does nothing
-        assert_eq!(click(&mut view, 5, 15), Effect::None);
+        // the archived Context's title resumes its Manager
+        assert_eq!(click(&mut view, 5, 15), Effect::Run(resume(Subject::Context(cid("zeta")), Action::OpenManager(cid("zeta")))));
         // the cursor is put on archived rows by hand, as a bug might: no key acts on it
         press(&mut view, KeyCode::Down);
         for path in [&["alpha", "old"][..], &["alpha", "f-blocked"], &["zeta", "zp"], &["zeta", "f-zp"]] {

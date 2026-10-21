@@ -92,6 +92,8 @@ pub(super) struct Row {
     pub registered_event: Option<i64>,
     /// When it was archived (contract §2.2 "Archived"), else none.
     pub archived_at: Option<String>,
+    /// When engine E13 put it to sleep (contract §2.2 "Asleep"), else none.
+    pub asleep_at: Option<String>,
     /// Its dynamic title (contract §2.2, hs-d257), written by `session retitle`, and when.
     pub dynamic_title: Option<String>,
     pub titled_at: Option<String>,
@@ -103,7 +105,7 @@ const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name,
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        l.lead_session IS NOT NULL,
        (SELECT min(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-registered'),
-       s.archived_at, s.title, s.titled_at
+       s.archived_at, s.title, s.titled_at, s.asleep_at
   FROM sessions s
   LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
@@ -130,6 +132,7 @@ struct Raw {
     archived_at: Option<String>,
     title: Option<String>,
     titled_at: Option<String>,
+    asleep_at: Option<String>,
 }
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
@@ -155,6 +158,7 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         archived_at: r.get(18)?,
         title: r.get(19)?,
         titled_at: r.get(20)?,
+        asleep_at: r.get(21)?,
     })
 }
 
@@ -196,6 +200,7 @@ impl Row {
             plan_lead: raw.plan_lead,
             registered_event: raw.registered_event,
             archived_at: raw.archived_at,
+            asleep_at: raw.asleep_at,
             dynamic_title: raw.title,
             titled_at: raw.titled_at,
             id,
@@ -215,6 +220,7 @@ impl Row {
             "state_label": self.state_label,
             "state_at": self.state_at,
             "archived_at": self.archived_at,
+            "asleep_at": self.asleep_at,
             "place": self.place,
             "tmux_pane": self.tmux_pane,
             "file": self.file,
@@ -285,6 +291,9 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let mut filter = vec!["1".to_owned()];
     let mut params = Vec::new();
+    if !args.archived {
+        filter.push("s.archived_at IS NULL".into());
+    }
     if let Some(context) = &args.context {
         filter.push("s.context = ?".into());
         params.push(Sql::Text(context.to_string()));

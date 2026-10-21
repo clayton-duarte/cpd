@@ -38,7 +38,7 @@ use crate::host::Tmux;
 use crate::ids::{ContextId, PlanId, SessionId};
 use crate::output::Output;
 
-pub use archive::{Blocker, archive_blocked, blockers};
+pub use archive::{Blocker, archive_ended_workers, archive_blocked, blockers};
 pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
@@ -107,6 +107,9 @@ pub struct ListArgs {
     /// Only this state (repeatable)
     #[arg(long = "state", value_name = "state")]
     states: Vec<State>,
+    /// List archived Sessions too
+    #[arg(long)]
+    archived: bool,
 }
 
 #[derive(clap::Args, Debug)]

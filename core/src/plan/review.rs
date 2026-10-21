@@ -4,7 +4,7 @@
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use super::display::Display;
@@ -91,8 +91,6 @@ struct Snapshot {
     overlaps: Vec<Overlap>,
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
     base_prs: BTreeMap<String, String>,
-    /// The needs of other Plans whose PR is `cancelled`.
-    cancelled_needs: BTreeSet<String>,
     /// What waits and what was superseded (hs-d518, hs-d521): shown, never counted.
     display: Display,
     review: Option<Review>,
@@ -107,7 +105,6 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
         Ok(Snapshot {
             open_tier,
             base_prs: base_prs(conn, id)?,
-            cancelled_needs: cancelled_needs(conn, id)?,
             display: Display::load(conn, id)?,
             plan: row::load(conn, id)?,
             review: latest(conn, id)?,
@@ -122,18 +119,8 @@ fn snapshot(env: &mut Env, id: &PlanId) -> Result<Snapshot, CpdError> {
 /// The base PR of each stacked PR of `plan`, `<plan>/<key>` by PR key: the PR whose Lead Branch is the PR's `base`. A Lead
 /// Branch names its Plan, so it names one PR (contract §2.2); the same repo is checked when a base is set, not here.
 fn base_prs(conn: &Connection, plan: &PlanId) -> Result<BTreeMap<String, String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM prs p JOIN prs q ON q.lead_branch = p.base WHERE p.plan = ?1")?;
+    let mut stmt = conn.prepare("SELECT p.key, q.plan || '/' || q.key FROM prs p JOIN prs q ON q.plan = p.plan AND q.lead_branch = p.base WHERE p.plan = ?1")?;
     let rows = stmt.query_map([plan.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-    Ok(rows.collect::<rusqlite::Result<_>>()?)
-}
-
-/// The needs of `plan` on a PR of another Plan that is `cancelled`, as `<plan>/<key>`.
-fn cancelled_needs(conn: &Connection, plan: &PlanId) -> Result<BTreeSet<String>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT n.needs_plan || '/' || n.needs FROM pr_needs n JOIN prs q ON q.plan = n.needs_plan AND q.key = n.needs
-          WHERE n.plan = ?1 AND n.needs_plan <> n.plan AND q.status = 'cancelled'",
-    )?;
-    let rows = stmt.query_map([plan.as_str()], |r| r.get::<_, String>(0))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -147,7 +134,6 @@ fn summary_markdown(s: &Snapshot, kind: &summary::Kind, full_plan: &std::path::P
             jobs: &s.jobs,
             overlaps: &s.overlaps,
             base_prs: &s.base_prs,
-            cancelled_needs: &s.cancelled_needs,
             full_plan,
         },
     )

@@ -48,6 +48,8 @@ pub struct ContextNode {
     pub dot: Dot,
     /// Where its live Manager's chat is, `None` with no Manager: the Context row is selected when it is `Chat`.
     pub manager_place: Option<Place>,
+    /// Its live Manager is asleep (§2.2 "Asleep"): the Context row is drawn muted.
+    pub manager_asleep: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -169,11 +171,11 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
         let mut heads = plan_heads(conn, None)?;
         // One live Manager per Context (`core/src/context/manager.rs`); the Context row shows its dot, a `●` only from
         // the Manager's own items (hs-d215, hs-d217).
-        let managers: BTreeMap<ContextId, (Dot, Place)> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
+        let managers: BTreeMap<ContextId, (Dot, Place, bool)> = sessions(conn, "s.role = 'manager' AND s.archived_at IS NULL", &[])?
             .into_iter()
             .map(|s| {
                 let dot = Dot::of(s.state, dot::urgency(&inbox, &s.id, None));
-                (s.context, (dot, s.place))
+                { let asleep = s.is_asleep(); (s.context, (dot, s.place, asleep)) }
             })
             .collect();
 
@@ -198,6 +200,7 @@ pub fn tree(store: &mut Store) -> Result<Tree, CpdError> {
             contexts.push(ContextNode {
                 dot: managers.get(&context).map_or(Dot::Stopped, |m| m.0),
                 manager_place: managers.get(&context).map(|m| m.1),
+                manager_asleep: managers.get(&context).is_some_and(|m| m.2),
                 title: r.get(1)?,
                 jira: r.get(2)?,
                 records: records.remove(&cid).unwrap_or(0),

@@ -31,8 +31,6 @@ pub struct Input<'a> {
     pub overlaps: &'a [Overlap],
     /// The base PR (`<plan>/<key>`) of each stacked PR, by PR key (contract §2.2 "The base PR").
     pub base_prs: &'a BTreeMap<String, String>,
-    /// The needs of other Plans (`<plan>/<key>`) whose PR is `cancelled`: they do not count.
-    pub cancelled_needs: &'a BTreeSet<String>,
     /// The absolute path of the full render the last line names: `plan-<review>.md` or `plan.md`.
     pub full_plan: &'a Path,
 }
@@ -57,7 +55,7 @@ fn order(i: &Input, counting: &[&PrRow]) -> Vec<String> {
         return Vec::new();
     }
     let keys: BTreeSet<&str> = counting.iter().map(|p| p.key.as_str()).collect();
-    let counts = |need: &str| if need.contains('/') { !i.cancelled_needs.contains(need) } else { keys.contains(need) };
+    let counts = |need: &str| keys.contains(need);
     let mut items: Vec<String> = Vec::new();
     let mut tied: BTreeSet<&str> = keys.clone();
     for pr in counting {

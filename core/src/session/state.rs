@@ -97,7 +97,8 @@ pub(super) fn set_reply(
     }
     store.write(command, |tx| {
         let changed = tx.execute(
-            "UPDATE sessions SET state = ?1, state_label = ?2, state_at = (SELECT at FROM txns WHERE id = cpd_txn())
+            "UPDATE sessions SET state = ?1, state_label = ?2, state_at = (SELECT at FROM txns WHERE id = cpd_txn()),
+                asleep_at = iif(state = 'stopped', NULL, asleep_at)
               WHERE id = ?3 AND state = ?4 AND state_label IS ?5",
             rusqlite::params![to.as_str(), label, id.as_str(), read.state.as_str(), read.state_label],
         )?;

@@ -8,7 +8,7 @@
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::add::{needs_refs, node_of};
+use super::add::needs_refs;
 use super::open::{merged_prs, opened_prs};
 use super::{CancelArgs, Env, find_pr, plan_phase, pulls};
 use crate::error::{CpdError, ErrorCode};
@@ -240,57 +240,47 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, superseded: Option<&str
     Ok(Decision::Cancel { from, released: None, superseded_by: superseded.map(str::to_owned) })
 }
 
-/// The superseding PR `by` (a reference of `plan`, §2.2): a PR of a Plan of the same Context (`pr_not_found`,
-/// `pr_other_context`), not `key` itself (`usage`), not `cancelled` (`illegal_transition`). Any other status will do:
-/// cpd cannot know where the work went (contract §3.8).
+/// The superseding PR `by` (a reference of `plan`, §2.2: a bare key, or `<plan>/<key>`): a PR of a Plan of the same
+/// Context (`pr_not_found`), not `key` itself (`usage`), not `cancelled` (`illegal_transition`). Any other status will
+/// do: cpd cannot know where the work went (contract §3.8). It is where the work went, not a dependency: it may be
+/// another Plan's.
 fn check_superseding(conn: &Connection, plan: &PlanId, key: &PrKey, by: &str) -> Result<(), CpdError> {
-    let (by_plan, by_key) = node_of(plan, by);
+    let (by_plan, by_key) = by.split_once('/').unwrap_or((plan.as_str(), by));
     if by_plan == plan.as_str() && by_key == key.as_str() {
         return Err(CpdError::new(ErrorCode::Usage, format!("--superseded-by names PR {key} itself.")).with("pr", key.as_str()));
     }
-    let found: Option<(String, String)> = conn
+    let found: Option<String> = conn
         .query_row(
-            "SELECT r.status, p.context FROM prs r JOIN plans p ON p.id = r.plan WHERE r.plan = ?1 AND r.key = ?2",
-            [by_plan.as_str(), by_key.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            "SELECT r.status FROM prs r JOIN plans p ON p.id = r.plan
+              WHERE r.plan = ?1 AND r.key = ?2 AND p.context = (SELECT context FROM plans WHERE id = ?3)",
+            [by_plan, by_key, plan.as_str()],
+            |r| r.get(0),
         )
         .map(Some)
         .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(None) } else { Err(e) })?;
-    let Some((status, context)) = found else {
+    let Some(status) = found else {
         return Err(CpdError::new(ErrorCode::PrNotFound, format!("No PR {by_key} in Plan {by_plan} to be superseded by."))
-            .with("plan", by_plan.as_str())
-            .with("pr", by_key.as_str()));
+            .with("plan", by_plan)
+            .with("pr", by_key));
     };
-    let own: String = conn.query_row("SELECT context FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
-    if context != own {
-        return Err(CpdError::new(
-            ErrorCode::PrOtherContext,
-            format!("PR {by_plan}/{by_key} is in Context {context}, not in {own}: PRs reference only PRs of their Context."),
-        )
-        .with("pr", format!("{by_plan}/{by_key}"))
-        .with("context", own.as_str())
-        .with("other_context", context.as_str()));
-    }
     if status == "cancelled" {
         return Err(CpdError::new(ErrorCode::IllegalTransition, format!("PR {by_plan}/{by_key} is cancelled: its work cannot supersede PR {key}'s."))
-            .with("plan", by_plan.as_str())
-            .with("pr", by_key.as_str())
+            .with("plan", by_plan)
+            .with("pr", by_key)
             .with("from", "cancelled")
             .with("to", "superseding"));
     }
     Ok(())
 }
 
-/// The PRs that are not `cancelled` and stacked on `pr`, of any Plan: those of its repo whose `base` is its Lead Branch
-/// (§2.2 "The base PR"), as a bare key in its own Plan and `<plan>/<key>` in another.
+/// The PRs of `plan` that are not `cancelled` and stacked on `pr`: those of its repo whose `base` is its Lead Branch
+/// (§2.2 "The base PR"), by key.
 fn stacked_on(conn: &Connection, plan: &PlanId, pr: &PrRow) -> Result<Vec<String>, CpdError> {
-    let mut stmt = conn.prepare(
-        "SELECT plan, key FROM prs WHERE repo = ?1 AND base = ?2 AND status <> 'cancelled' AND NOT (plan = ?3 AND key = ?4) ORDER BY plan, key",
-    )?;
+    let mut stmt = conn.prepare("SELECT key FROM prs WHERE plan = ?1 AND repo = ?2 AND base = ?3 AND status <> 'cancelled' AND key <> ?4 ORDER BY key")?;
     let found = stmt
-        .query_map([pr.repo.as_str(), pr.lead_branch.as_str(), plan.as_str(), pr.key.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .query_map([plan.as_str(), pr.repo.as_str(), pr.lead_branch.as_str(), pr.key.as_str()], |r| r.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(found.into_iter().map(|(p, k)| if p == plan.as_str() { k } else { format!("{p}/{k}") }).collect())
+    Ok(found)
 }
 
 /// An `open` PR: its pull request must be stored `closed` (`pr_not_closed`, no `gh` call: the row is what the last poll

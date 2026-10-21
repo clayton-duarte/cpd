@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::gh;
 use super::add::{
-    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_prs, main_worktree, needs_refs, no_branch_clash, node_of,
+    BaseArg, BaseWanted, Subject, classify_base, insert_needs, key_repo, known_prs, main_worktree, needs_refs, no_branch_clash,
     resolve_refs, stacked_on, wanted_base,
 };
 use super::{EditArgs, Env, find_pr, plan_phase, pr_locked};
@@ -170,7 +170,7 @@ fn decide(conn: &Connection, plan: &PlanId, key: &PrKey, edits: &Edits) -> Resul
         after.base = resolved.base;
     }
     if after.repo != before.repo {
-        let in_use = stacked_on(&known_prs(conn)?, &before.repo, &before.lead_branch);
+        let in_use = stacked_on(&known_prs(conn, plan)?, &before.repo, &before.lead_branch);
         if !in_use.is_empty() {
             return Err(CpdError::new(
                 ErrorCode::PrInUse,
@@ -214,11 +214,7 @@ fn update(tx: &Connection, plan: &PlanId, before: &PrRow, after: &PrRow, name: O
         )?;
     }
     for need in before.needs.iter().filter(|n| !after.needs.contains(n)) {
-        let (needs_plan, needs) = node_of(plan, need);
-        tx.execute(
-            "DELETE FROM pr_needs WHERE plan = ?1 AND pr = ?2 AND needs_plan = ?3 AND needs = ?4",
-            [plan.as_str(), after.key.as_str(), needs_plan.as_str(), needs.as_str()],
-        )?;
+        tx.execute("DELETE FROM pr_needs WHERE plan = ?1 AND pr = ?2 AND needs = ?3", [plan.as_str(), after.key.as_str(), need.as_str()])?;
     }
     let added: Vec<String> = after.needs.iter().filter(|n| !before.needs.contains(n)).cloned().collect();
     insert_needs(tx, plan, &after.key, &added)

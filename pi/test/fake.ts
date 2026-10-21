@@ -54,7 +54,9 @@ async function follow() {
   log({ phase: "start", argv, since: flag("--since") });
   if (argv[0] === "events" && argv[1] === "follow") return follow();
   const key = argv.slice(0, 2).join("-");
-  const r = JSON.parse(read("resp/" + key + "@" + flag("--kind") + ".json") || read("resp/" + key + "-" + argv[2] + ".json") || read("resp/" + key + ".json") || '{"stdout":{"ok":true}}');
+  // a call with no \`--context\` (the machine-wide read) may be answered apart: \`<a>-<b>@<kind>@machine\`
+  const machine = flag("--context") === undefined ? read("resp/" + key + "@" + flag("--kind") + "@machine.json") : undefined;
+  const r = JSON.parse(machine || read("resp/" + key + "@" + flag("--kind") + ".json") || read("resp/" + key + "-" + argv[2] + ".json") || read("resp/" + key + ".json") || '{"stdout":{"ok":true}}');
   let feedback;
   if (flag("--feedback-file")) feedback = fs.readFileSync(flag("--feedback-file"), "utf8");
   if (r.delay) await sleep(r.delay);
@@ -117,6 +119,8 @@ export class Fixture {
     delete process.env.CPD_PLAN;
     this.pi = new FakePi();
     for (const [key, answer] of Object.entries(answers())) this.respond(key, answer); // the same answers as pi-check's fake (answers.ts)
+    this.respond("board-take", { ok: true, session: ID, taken: [] }); // a Lead or Manager takes its board posts at every turn start (commands.md §15.7)
+    this.respond("events-list", { ok: true, events: [], next: 0 });
   }
 
   /** A new install of the fake `cpd`: the same program in a file of another size and mtime. */
@@ -245,7 +249,7 @@ export class Fixture {
    * them proves it: `marker` (default a `job-merged`, delivered to a Plan Lead; a Worker needs its own kind) is emitted last, with the id after the highest so far
    * (a test's next Event must have a higher one, as the cursor has passed it), waited for and taken out of what the pi received, so the test can assert what is left. Replaces waiting a fixed time for something that must not happen.
    */
-  async drain(marker: (id: number) => unknown = (id) => ev(id, "job-merged")): Promise<void> {
+  async drain(marker: (id: number) => unknown = (id) => ev(id, "job-merged", { data: { turn: true } })): Promise<void> {
     const id = this.lastId + 1;
     this.emit(marker(id));
     const at = await waitFor(`the marker Event ${id}`, () => {
