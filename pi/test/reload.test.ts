@@ -85,7 +85,7 @@ test("a changed adapter directory triggers its command once, with expandPromptTe
   await waitFor("the reload", () => f.pi.reloads > 0);
   await waitFor("the command's end", () => f.pi.commandsRunning.size === 0);
   assert.deepEqual(f.pi.userMessages, [{ content: `/${RELOAD_COMMAND}`, options: { expandPromptTemplates: true } }]);
-  assert.ok(f.pi.notices.includes("cpd: adapter updated, reloading"));
+  assert.ok(!f.pi.notices.some((n) => n.includes("cpd: adapter updated")), "no notice on a normal reload");
   assert.equal(f.pi.reloads, 1);
   const watching = logLines(f).filter((l) => l.includes("poll: watching"));
   assert.equal(watching.length, 2, "the new load starts a poll");
