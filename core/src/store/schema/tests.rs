@@ -2765,7 +2765,7 @@ fn event_pr_base_changed_is_additive_and_adds_exactly_its_kind() {
     assert_eq!(store.schema_mismatch(), None);
     assert_eq!(rows(&mut store, "SELECT name FROM event_kinds WHERE name = 'pr-base-changed'"), vec![serde_json::json!(["pr-base-changed"])]);
     // this migration's one kind, the two of `plannotator-reviews`, the one of `event-session-retiered` and the one of `plan-outline`: the later migrations that add Event kinds
-    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1])]);
+    assert_eq!(rows(&mut store, "SELECT count(*) FROM event_kinds"), vec![serde_json::json!([before + 1 + 2 + 1 + 1])]);
 }
 
 // ---------- named migration session-titles ----------
