@@ -261,7 +261,7 @@ test("the Manager's cursor is the one for both sections: the next read starts af
   const [result] = await f.pi.fireWith("before_agent_start");
   f.pi.entries.push({ type: "custom_message", ...(result as any).message });
   await f.pi.fireWith("before_agent_start");
-  assert.deepEqual(updatesCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "100", "301", "301"]);
+  assert.deepEqual(updatesCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "100", "100", "100", "301", "301", "301", "301"]);
 });
 
 test("a failed Plan Events read fails the whole message: nothing added, the cursor stays, one error without a turn", async (t) => {

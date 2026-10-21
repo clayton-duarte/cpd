@@ -89,7 +89,7 @@ test("the dialog is detached: Events keep being handled while it is open", async
   const f = new Fixture();
   t.after(() => f.close());
   await opens(f);
-  f.emit(ev(110, "job-merged"));
+  f.emit(ev(110, "job-merged", { data: { turn: true } }));
   await waitFor("the Event delivered", () => f.pi.delivered().some((s) => (s.message.details as any)?.id === 110));
 });
 

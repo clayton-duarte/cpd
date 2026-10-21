@@ -54,7 +54,7 @@ test("a failure line is delivered once per code until a line is read again; the 
   assert.equal(errorsOf(f, "store_too_new").length, 1, "once, however often it restarts");
 
   f.remove("follow-failure.json");
-  f.emit(ev(101, "job-merged"));
+  f.emit(ev(101, "job-merged", { data: { turn: true } }));
   await waitFor("a line is read again", () => f.pi.delivered().length === 1);
   f.file("follow-failure.json", JSON.stringify({ line: failure("store_too_new"), exit: 3 }));
   await waitFor("delivered again", () => errorsOf(f, "store_too_new").length === 2);
@@ -98,10 +98,10 @@ test("a malformed line is an error and is skipped; the cursor moves past it", as
   await started(f);
   f.emit(
     "this is not json",
-    { ...ev(101, "job-merged"), at: 5 },
+    { ...ev(101, "job-merged", { data: { turn: true } }), at: 5 },
     { ...ev(102, "job-merged"), data: "not an object" },
     { ...ev(103, "escalation"), data: {} },
-    ev(104, "job-merged"),
+    ev(104, "job-merged", { data: { turn: true } }),
   );
   await waitFor("the good event after four bad lines", () => f.pi.delivered().length === 1);
   assert.equal(f.pi.errors().length, 4, "one error per bad line");
@@ -113,7 +113,7 @@ test("a malformed line is an error and is skipped; the cursor moves past it", as
   assert.deepEqual(f.sinces(), [100, 104]);
 
   // a bad line with an id alone: the restart skips past it too
-  f.emit({ ...ev(110, "job-merged"), at: 5 });
+  f.emit({ ...ev(110, "job-merged", { data: { turn: true } }), at: 5 });
   // 101 has the same `at` error, so the second one is 110's (the fake replays a line without an id at every start, which adds errors of its own)
   await waitFor("its error", () => f.pi.errors().filter((e) => /`at` is not a string/.test(e.message.content)).length === 2);
   f.file("exit-next", "0");
@@ -125,14 +125,14 @@ test("an Event of an unknown kind is skipped silently; the cursor moves past it 
   const f = new Fixture();
   t.after(() => f.close());
   await started(f);
-  f.emit(ev(101, "job-merged"), { ...ev(102, "job-merged"), kind: "from-the-future" }, ev(103, "job-merged"));
+  f.emit(ev(101, "job-merged", { data: { turn: true } }), { ...ev(102, "job-merged", { data: { turn: true } }), kind: "from-the-future" }, ev(103, "job-merged", { data: { turn: true } }));
   // Events are handled in order: 103 delivered means 102 was handled before it
   await waitFor("both known Events", () => f.pi.delivered().length === 2);
   assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101, 103]);
   assert.equal(f.pi.errors().length, 0, "no message for the unknown kind");
 
   // the cursor is past the unknown Event: an unknown kind last still moves it
-  f.emit({ ...ev(104, "job-merged"), kind: "from-the-future" });
+  f.emit({ ...ev(104, "job-merged", { data: { turn: true } }), kind: "from-the-future" });
   f.file("exit-next", "0"); // the fake prints every line emitted before it, then exits: 104 is read before the restart
   await waitFor("restart", () => f.follows().length === 2);
   assert.deepEqual(f.sinces(), [100, 104]);
