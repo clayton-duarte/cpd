@@ -252,6 +252,7 @@ fn popup_lists_what_goes_and_n_keeps_it() {
         assert!(popup.contains(count), "the popup lists the count {count}: {popup}");
     }
     // N: nothing is deleted
+    // time-claim: no `--yes` follows an N; 0.5 s is more than the tree takes to run a command after a popup answer (the Y test needs under 0.2 s); a negative has no signal to wait for.
     std::thread::sleep(std::time::Duration::from_millis(500));
     assert_eq!(calls(&env), [words(&["plan", "delete", "old"])], "no `--yes` after N");
 }

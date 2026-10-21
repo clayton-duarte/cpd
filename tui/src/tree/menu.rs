@@ -24,6 +24,7 @@ pub enum Item {
     Close,
     NewContext,
     Unarchive,
+    Delete,
     CopyId,
     Snooze15,
     Snooze1h,
@@ -43,6 +44,7 @@ impl Entry for Item {
             Item::Close => "Close",
             Item::NewContext => "New Context…",
             Item::Unarchive => "Unarchive",
+            Item::Delete => "Delete",
             Item::CopyId => "Copy id",
             Item::Snooze15 => "Snooze 15 min",
             Item::Snooze1h => "Snooze 1 h",
@@ -106,13 +108,18 @@ pub struct Menu {
 }
 
 impl Menu {
-    pub fn new(kind: Kind, path: Vec<Id>, at: Position) -> Menu {
-        Menu { path, inbox: None, menu: menu::Menu::new(kind.items().to_vec(), at) }
+    /// The menu of a row of `kind`; `deletable` adds the Delete item last (an archived or asleep Plan or Context row).
+    pub fn new(kind: Kind, path: Vec<Id>, at: Position, deletable: bool) -> Menu {
+        let mut items = kind.items().to_vec();
+        if deletable {
+            items.push(Item::Delete);
+        }
+        Menu { path, inbox: None, menu: menu::Menu::new(items, at) }
     }
 
     /// The menu of the Inbox item `id` (`Kind::Inbox`: a right click) or its snooze choices (`Kind::Snooze`: `s`).
     pub fn for_item(kind: Kind, id: i64, at: Position) -> Menu {
-        Menu { inbox: Some(id), ..Menu::new(kind, Vec::new(), at) }
+        Menu { inbox: Some(id), ..Menu::new(kind, Vec::new(), at, false) }
     }
 
     #[cfg(test)]
@@ -191,8 +198,29 @@ mod tests {
     }
 
     #[test]
+    fn delete_is_offered_last_on_an_archived_or_asleep_plan_or_context_row_only() {
+        let deletable = |tree: &crate::read::Tree, p: &[&str]| rows::row(tree, &path(p)).is_some_and(|r| r.deletable());
+        let tree = sample();
+        assert!(!deletable(&tree, &["alpha"]) && !deletable(&tree, &["alpha", "ship"]) && !deletable(&tree, &["alpha", "f-idle"]));
+        let tree = archived();
+        assert!(deletable(&tree, &["alpha", "old"]) && deletable(&tree, &["zeta"]) && deletable(&tree, &["zeta", "zp"]));
+        assert!(!deletable(&tree, &["alpha", "f-blocked"]) && !deletable(&tree, &["zeta", "f-zp"]) && !deletable(&tree, &["alpha", "ship"]));
+        // the last item: the selection is clamped, so many Downs reach it
+        let last = |kind: Kind, deletable: bool| {
+            let mut menu = Menu::new(kind, Vec::new(), Position::new(0, 0), deletable);
+            for _ in 0..9 {
+                press(&mut menu, KeyCode::Down);
+            }
+            press(&mut menu, KeyCode::Enter)
+        };
+        assert_eq!(last(Kind::Archived, true), Outcome::Pick(Item::Delete));
+        assert_eq!(last(Kind::Plan, true), Outcome::Pick(Item::Delete));
+        assert_eq!(last(Kind::Plan, false), Outcome::Pick(Item::Archive));
+    }
+
+    #[test]
     fn arrows_move_the_selection_clamped_and_enter_picks() {
-        let mut menu = Menu::new(Kind::Fork, path(&["a", "b", "c"]), Position::new(3, 3));
+        let mut menu = Menu::new(Kind::Fork, path(&["a", "b", "c"]), Position::new(3, 3), false);
         assert_eq!(menu.selected(), 0);
         assert_eq!(press(&mut menu, KeyCode::Up), Outcome::Stay);
         assert_eq!(menu.selected(), 0);

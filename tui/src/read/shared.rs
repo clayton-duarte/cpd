@@ -363,7 +363,7 @@ pub(super) fn plan_heads(conn: &Connection, only: Option<&PlanId>) -> Result<Vec
            FROM plans p LEFT JOIN prs r ON r.plan = p.id
                 AND r.key = (SELECT key FROM prs WHERE plan = p.id ORDER BY created_txn, key LIMIT 1)
                 LEFT JOIN pull_requests q ON q.id = r.pull_request
-          WHERE ?1 IS NULL OR p.id = ?1 ORDER BY p.created_at, p.id",
+          WHERE p.deleted_at IS NULL AND (?1 IS NULL OR p.id = ?1) ORDER BY p.created_at, p.id",
     )?;
     let mut rows = stmt.query([&only])?;
     let mut heads = Vec::new();
