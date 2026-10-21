@@ -169,6 +169,38 @@ pub(super) fn archive_lead(env: &mut Env, lead: &Row, keep: bool) -> Result<Outp
     Ok(Output::success(json!({"archived": [{"kind": "session", "id": lead.id}], "closed": closed})))
 }
 
+/// E12, the Worker archive (contract §3.7): archives every stopped, unarchived Worker Session whose Attempt is `ended`,
+/// one transaction and one `session-archived` Event each, as `session archive` writes them. Returns the ids archived.
+pub fn archive_ended_workers(store: &mut crate::store::Store) -> Result<Vec<SessionId>, CpdError> {
+    const WHERE: &str = "s.role = 'worker' AND s.archived_at IS NULL AND s.state = 'stopped'
+        AND EXISTS (SELECT 1 FROM attempts a WHERE a.plan = s.plan AND a.id = s.attempt AND a.status = 'ended')";
+    let ids: Vec<String> = store.read(|conn| {
+        let mut stmt = conn.prepare(&format!("SELECT s.id FROM sessions s WHERE {WHERE} ORDER BY s.id"))?;
+        let ids = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(ids)
+    })?;
+    let mut done = Vec::new();
+    for id in ids {
+        let id = SessionId::parse(&id)?;
+        let archived = store.write("session archive", |tx| {
+            let changed = tx.execute(
+                &format!("UPDATE sessions AS s SET archived_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE s.id = ?1 AND {WHERE}"),
+                [id.as_str()],
+            )?;
+            if changed == 0 {
+                return Ok(false);
+            }
+            let row = row::load(tx, &id)?;
+            append(tx, archived_event(&row, true))?;
+            Ok(true)
+        })?;
+        if archived {
+            done.push(id);
+        }
+    }
+    Ok(done)
+}
+
 /// The archive when the User quits pi in Lead `id`'s pane (commands.md §10.8), called by
 /// `session run` in that pane. Refused (`archive_blocked`) before anything moves when something
 /// is live. Else: the Lead is parked when it holds the chat slot, so the placeholder takes the

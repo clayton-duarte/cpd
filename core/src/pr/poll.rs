@@ -461,6 +461,9 @@ struct Merged {
     /// The PR's pull request, `(owner/name, number)`, from its `pull_requests` row (contract §7.2 "The recorded head").
     pull_request: Option<(String, i64)>,
     attempts: Vec<Attempt>,
+    /// Whether this poll reports its failures: it merged in this poll, or it is cancelled and no `cleanup_failed`
+    /// Event of it exists yet (the poll that first sees it).
+    fresh: bool,
 }
 
 /// An Attempt of one of the PR's Jobs.
@@ -497,8 +500,8 @@ type Failure = (String, String);
 /// or kept Lead worktree; then, with no Event, the retry of every other `merged` PR that
 /// still has a path on disk. Best effort: only a failure to read or write the store fails it.
 fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
-    let all = env.store.read(merged_prs_to_clean)?;
-    let (fresh, earlier): (Vec<Merged>, Vec<Merged>) = all.into_iter().partition(|m| just.contains(&(m.plan.clone(), m.pr.clone())));
+    let all = env.store.read(|conn| merged_prs_to_clean(conn, just))?;
+    let (fresh, earlier): (Vec<Merged>, Vec<Merged>) = all.into_iter().partition(|m| m.fresh);
     for merged in earlier.iter().filter(|m| m.on_disk()) {
         clean_when_idle(&env.home, merged);
     }
@@ -537,15 +540,17 @@ fn clean_up(env: &mut Env, just: &[(PlanId, PrKey)]) -> Result<(), CpdError> {
     })
 }
 
-/// Every PR in status `merged`, with its Attempts.
-fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdError> {
-    let mut prs = conn.prepare("SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number
-           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status = 'merged' ORDER BY p.plan, p.key",
+/// Every PR in status `merged` or `cancelled`, with its Attempts. A cancelled PR's row has no `lead_worktree`
+/// (`pr cancel` clears it), so its Lead worktree is the one contract §7.1 names, when that exists and is a worktree
+/// of the repo on the PR's Lead Branch.
+fn merged_prs_to_clean(conn: &rusqlite::Connection, just: &[(PlanId, PrKey)]) -> Result<Vec<Merged>, CpdError> {
+    let mut prs = conn.prepare("SELECT p.plan, p.key, p.repo, p.lead_branch, p.lead_worktree, q.repo, q.number, p.status = 'cancelled'
+           FROM prs p LEFT JOIN pull_requests q ON q.id = p.pull_request WHERE p.status IN ('merged', 'cancelled') ORDER BY p.plan, p.key",
     )?;
     let rows = prs
         .query_map([], |r| {
             let pull_request = r.get::<_, Option<String>>(5)?.zip(r.get::<_, Option<i64>>(6)?);
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, pull_request))
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, pull_request, r.get::<_, bool>(7)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut attempts = conn.prepare(
@@ -553,14 +558,36 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection) -> Result<Vec<Merged>, CpdEr
           WHERE j.plan = ?1 AND j.pr = ?2 ORDER BY a.id",
     )?;
     let mut found = Vec::new();
-    for (plan, pr, repo, lead_branch, lead_worktree, pull_request) in rows {
+    let mut reported = conn.prepare(
+        "SELECT count(*) FROM events WHERE plan = ?1 AND kind = 'error' AND json_extract(data, '$.code') = 'cleanup_failed'
+            AND json_extract(data, '$.details.pr') = ?2",
+    )?;
+    for (plan, pr, repo, lead_branch, lead_worktree, pull_request, cancelled) in rows {
         let list = attempts
             .query_map([&plan, &pr], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, bool>(3)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
             .map(|(id, branch, worktree, ended)| Ok(Attempt { id: AttemptId::parse(&id)?, branch, worktree, ended }))
             .collect::<Result<Vec<_>, CpdError>>()?;
-        found.push(Merged { plan: PlanId::parse(&plan)?, pr: PrKey::parse(&pr)?, repo, lead_branch, lead_worktree, pull_request, attempts: list });
+        let plan = PlanId::parse(&plan)?;
+        let pr = PrKey::parse(&pr)?;
+        let (lead_worktree, fresh) = if cancelled {
+            let lead = git::pr_lead_worktree_path(Path::new(&repo), &plan, &pr, &lead_branch)
+                .ok()
+                .filter(|path| {
+                    path.exists()
+                        && git::worktree::list(Path::new(&repo)).is_ok_and(|all| {
+                            all.iter().any(|w| w.branch.as_deref() == Some(lead_branch.as_str()) && w.path.canonicalize().ok() == path.canonicalize().ok())
+                        })
+                })
+                .map(|path| path.to_string_lossy().into_owned());
+            let seen: i64 = reported.query_row([plan.as_str(), pr.as_str()], |r| r.get(0))?;
+            (lead, seen == 0)
+        } else {
+            let fresh = just.contains(&(plan.clone(), pr.clone()));
+            (lead_worktree, fresh)
+        };
+        found.push(Merged { plan, pr, repo, lead_branch, lead_worktree, pull_request, attempts: list, fresh });
     }
     Ok(found)
 }
