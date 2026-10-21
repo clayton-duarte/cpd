@@ -137,10 +137,10 @@ impl NewEvent {
         make(Kind::JobEdited, text, json!({"fields": fields}))
     }
 
-    /// `cancel_too_late` is in `data` only when true. `pull` is the pull request an `open` Job's merge opened, `(pr, number, url)`: its
+    /// `turn` is whether the Lead should take a turn (hs-d514). `cancel_too_late` is in `data` only when true. `pull` is the pull request an `open` Job's merge opened, `(pr, number, url)`: its
     /// `pr`, `number` and `url` are in `data` only then (§5.2).
-    pub fn job_merged(text: impl Into<String>, sha: &str, tier: &str, kind: &str, cancel_too_late: bool, pull: Option<(&str, i64, &str)>) -> NewEvent {
-        let mut data = json!({"sha": sha, "tier": tier, "kind": kind});
+    pub fn job_merged(text: impl Into<String>, sha: &str, tier: &str, kind: &str, turn: bool, cancel_too_late: bool, pull: Option<(&str, i64, &str)>) -> NewEvent {
+        let mut data = json!({"sha": sha, "tier": tier, "kind": kind, "turn": turn});
         if cancel_too_late {
             data["cancel_too_late"] = json!(true);
         }
@@ -449,7 +449,7 @@ mod tests {
                 NewEvent::job_added_by_cpd(T, s, s, s, s, Some(s)),
             ],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
-            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, None), NewEvent::job_merged(T, s, s, s, true, Some((s, n, s)))],
+            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, false, None), NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s)))],
             Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],

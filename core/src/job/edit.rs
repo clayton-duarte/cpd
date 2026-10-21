@@ -142,6 +142,12 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
         after.pr = pr.clone();
     }
     let moved = after.pr != before.pr;
+    if let Some(spec) = &edits.spec {
+        let prs = load_prs(conn, plan)?;
+        if let Some(pr) = prs.iter().find(|p| p.key.as_str() == after.pr) {
+            super::add::check_touches(pr, &spec.touches)?;
+        }
+    }
     if moved || after.kind != before.kind {
         check_shape_allows(&load_prs(conn, plan)?, plan, &after.pr, &after.kind, after.review)?;
     }

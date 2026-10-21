@@ -6,6 +6,8 @@
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
+use std::collections::BTreeSet;
+
 use super::open;
 use super::spec::{self, Spec};
 use super::{
@@ -20,6 +22,7 @@ use crate::args::PrArg;
 use crate::plan::fingerprint::load_prs;
 use crate::plan::jobs::{self, Job};
 use crate::plan::locked_fingerprint;
+use crate::plan::PrRow;
 
 const COMMAND: &str = "job add";
 
@@ -189,6 +192,11 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         .with("plan", plan.as_str())
         .with("job", job.key.as_str()));
     }
+    // A review Job's `touches` is informational (commands.md §5.1).
+    if let (Some(spec), false) = (&wanted.spec, wanted.review) {
+        let pr = prs.iter().find(|p| p.key.as_str() == job.pr).expect("check_pr_live found the PR");
+        check_touches(pr, &spec.touches)?;
+    }
     check_needs_known(&all, plan, &job.needs)?;
     check_needs_same_pr(&all, plan, &job.pr, &job.needs)?;
     check_needs_available(&all, plan, &job.needs)?;
@@ -281,4 +289,69 @@ fn insert(tx: &Connection, plan: &PlanId, job: &Job, review: bool) -> Result<(),
         tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), job.key.as_str(), need.as_str()])?;
     }
     Ok(())
+}
+
+/// Every `touches` entry against the tree the Job will start from (contract §2.1, hs-d512): the PR's Lead Branch head once
+/// the PR started, else its base. A literal path must exist, or its parent directory must (a new file); a glob must match a
+/// file, or its fixed prefix directory must exist. `touches_missing`, `details: {missing, tree}`.
+pub(super) fn check_touches(pr: &PrRow, touches: &[String]) -> Result<(), CpdError> {
+    // A PR whose repo path is not on this machine has no tree to check against (a Plan written elsewhere, a test's placeholder).
+    if touches.is_empty() || !std::path::Path::new(&pr.repo).is_dir() {
+        return Ok(());
+    }
+    let tree = if pr.lead_worktree.is_some() { pr.lead_branch.as_str() } else { pr.base.as_str() };
+    let listing = crate::git::run::ok(std::path::Path::new(&pr.repo), &["ls-tree", "-r", "--name-only", "-z", tree])?;
+    let files: Vec<&str> = listing.split('\0').filter(|f| !f.is_empty()).collect();
+    let dirs: BTreeSet<&str> = files.iter().flat_map(|f| f.match_indices('/').map(move |(i, _)| &f[..i])).collect();
+    let dir_exists = |dir: &str| dir.is_empty() || dirs.contains(dir);
+    let missing: Vec<&String> = touches
+        .iter()
+        // `run/<plan>/reviews/<key>.md` is cpd's run directory, not a path of the repo (contract §1.4).
+        .filter(|entry| {
+            let entry = entry.as_str();
+            if entry.starts_with("run/") {
+                return false;
+            }
+            if entry.contains(['*', '?', '[']) {
+                let fixed = entry.split(['*', '?', '[']).next().unwrap_or("");
+                let prefix = fixed.rsplit_once('/').map_or("", |(dir, _)| dir);
+                !(files.iter().any(|f| glob_matches(entry, f)) || dir_exists(prefix))
+            } else {
+                let entry = entry.trim_end_matches('/');
+                let parent = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
+                !(files.contains(&entry) || dirs.contains(entry) || dir_exists(parent))
+            }
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::TouchesMissing,
+        format!("The Spec's touches name paths that are not in {tree}: {}.", missing.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ")),
+    )
+    .with("missing", missing.iter().map(|m| m.as_str()).collect::<Vec<_>>())
+    .with("tree", tree))
+}
+
+/// Whether `path` matches `pattern`: `?` is one character but `/`, `*` any run but `/`, `**` any run, `[...]` one of a set.
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    fn go(p: &[char], s: &[char]) -> bool {
+        match p.first() {
+            None => s.is_empty(),
+            Some('*') if p.get(1) == Some(&'*') => {
+                let rest = &p[2..];
+                let rest = rest.strip_prefix(&['/']).unwrap_or(rest);
+                (0..=s.len()).any(|i| go(rest, &s[i..]))
+            }
+            Some('*') => (0..=s.len()).take_while(|&i| i == 0 || s[i - 1] != '/').any(|i| go(&p[1..], &s[i..])),
+            Some('?') => s.first().is_some_and(|c| *c != '/') && go(&p[1..], &s[1..]),
+            Some('[') => match p.iter().position(|c| *c == ']') {
+                Some(end) if end > 1 => s.first().is_some_and(|c| p[1..end].contains(c)) && go(&p[end + 1..], &s[1..]),
+                _ => s.first() == Some(&'[') && go(&p[1..], &s[1..]),
+            },
+            Some(c) => s.first() == Some(c) && go(&p[1..], &s[1..]),
+        }
+    }
+    go(&pattern.chars().collect::<Vec<_>>(), &path.chars().collect::<Vec<_>>())
 }

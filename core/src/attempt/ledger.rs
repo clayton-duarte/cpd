@@ -276,6 +276,17 @@ pub fn end_opened(
     let show = format!("cpd job show {job} --plan {plan}");
     let (status, failed_cause, event) = match end {
         End::Merged { sha } => {
+            // hs-d514: a review Job's merge turns the Lead; so does the merge that leaves a draft and no queued or running Job but
+            // `open` and `update` Jobs. An `open` Job's own merge never turns it.
+            let turn = attempt.kind != "open"
+                && tx.query_row(
+                    "SELECT (SELECT review FROM jobs WHERE plan = ?1 AND key = ?2) = 1
+                         OR (EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND status = 'draft')
+                             AND NOT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key != ?2 AND status IN ('queued', 'running')
+                                               AND kind NOT IN ('open', 'update')))",
+                    params![attempt.plan.as_str(), attempt.job.as_str()],
+                    |r| r.get::<_, bool>(0),
+                )?;
             let cancel_too_late = cancel_request(tx, &attempt.plan, &attempt.job)?.is_some();
             let mut text = format!("Job {job} merged: Attempt {id} fast-forwarded {} to {}.", attempt.lead_branch, short(sha));
             if cancel_too_late {
@@ -286,7 +297,7 @@ pub fn end_opened(
             }
             text.push_str(&format!(" Next: {show}"));
             let pull = pull.map(|p| (attempt.pr.as_str(), p.number, p.url));
-            ("merged", None, NewEvent::job_merged(text, sha, &tier, &attempt.kind, cancel_too_late, pull))
+            ("merged", None, NewEvent::job_merged(text, sha, &tier, &attempt.kind, turn, cancel_too_late, pull))
         }
         End::Cancelled => {
             let reason = cancel_request(tx, &attempt.plan, &attempt.job)?.ok_or_else(|| cas_lost("The Job's cancel request"))?;

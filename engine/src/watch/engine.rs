@@ -328,27 +328,6 @@ impl Downtime {
             format!("The engine was down for {secs:.1} s: {how} at {at}.")
         }
     }
-
-    /// One `session-message` (no `--wake`) to each Manager that is not archived, as `cpd session send` appends
-    /// it; returns how many. A Context with no Manager hears nothing: the `watch-started` text says it too.
-    fn tell_managers(&self, store: &mut Store, pid: u32) -> Result<usize, CpdError> {
-        let text = format!("From cpd's engine, not the User: {} A new engine runs (pid {pid}).", self.sentence());
-        store.write(SOURCE, |tx| {
-            let managers = {
-                let mut stmt = tx.prepare("SELECT id, context, name FROM sessions WHERE role = 'manager' AND archived_at IS NULL ORDER BY created_at, id")?;
-                let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
-                rows.collect::<rusqlite::Result<Vec<_>>>()?
-            };
-            for (id, context, name) in &managers {
-                let summary = format!("Message for {name} from the cpd engine: {}", text.chars().take(60).collect::<String>());
-                let event = NewEvent::session_message(summary, None::<String>, &text, false)
-                    .session(SessionId::parse(id)?)
-                    .context(ContextId::parse(context)?);
-                events::append(tx, event)?;
-            }
-            Ok(managers.len())
-        })
-    }
 }
 
 /// `cpd watch`: the engine in the foreground.
@@ -370,14 +349,6 @@ pub(super) fn run() -> Result<Output, CpdError> {
     log.line(&format!("started (pid {pid}), a tick every {}s", config.watch.tick_seconds));
     if let Some(down) = down {
         log.line(&down.sentence());
-        if down.planned {
-            log.line("a planned restart: no Manager is told");
-        } else {
-            match down.tell_managers(&mut store, pid) {
-                Ok(told) => log.line(&format!("told {told} Manager(s) how long the engine was down")),
-                Err(e) => log.line(&format!("cannot tell the Managers: {} ({})", e.message(), e.code().as_str())),
-            }
-        }
     }
 
     let tmux = Tmux::new(config.tmux.socket.as_str());

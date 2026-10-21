@@ -180,7 +180,7 @@ fn stuck_text(key: &str, minutes: i64, cause: &str) -> String {
 }
 
 /// hs-d318: a failed Job, `stuck_job_minutes` (here 1) after its `job-failed` Event and with its Lead not working, is one
-/// message to its Context's Manager, from the User's side with no wake, once, and opens no `job-stuck` item. A fresh
+/// message to its Context's Manager, from the User's side waking, once, and opens no `job-stuck` item. A fresh
 /// failure is not stuck yet.
 #[test]
 fn a_stuck_job_is_one_message_to_the_manager_and_opens_no_item() {
@@ -194,7 +194,7 @@ fn a_stuck_job_is_one_message_to_the_manager_and_opens_no_item() {
     wait_until("the message", || !fx.messages().is_empty());
     // Three whole ticks later: still the one message, the fresh failure is not stuck, and no item opened.
     fx.env.wait_whole_ticks(3);
-    assert_eq!(fx.messages(), [("mgr1".to_owned(), None, false, stuck_text("old", 2, "crashed"))]);
+    assert_eq!(fx.messages(), [("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed"))]);
     assert_eq!(fx.open_items(), []);
     assert_eq!(fx.events("inbox-opened"), Vec::<Value>::new());
 }
@@ -215,7 +215,7 @@ fn a_restarted_engine_does_not_tell_the_manager_of_the_same_failure_again() {
     fx.env.wait_whole_ticks(3);
     // The restarted engine also tells the Manager how long it was down (contract §3.7, hs-d328): not a stuck-Job message.
     let messages: Vec<_> = fx.messages().into_iter().filter(|(_, _, _, text)| !text.contains("The engine was down for ")).collect();
-    assert_eq!(messages, [("mgr1".to_owned(), None, false, stuck_text("old", 2, "crashed"))]);
+    assert_eq!(messages, [("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed"))]);
     drop(second);
 }
 
@@ -263,7 +263,7 @@ fn with_no_manager_nothing_is_sent_and_a_later_manager_is_told() {
 
     fx.manager();
     wait_until("the message", || !fx.messages().is_empty());
-    assert_eq!(fx.messages(), [("mgr1".to_owned(), None, false, stuck_text("old", 2, "crashed"))]);
+    assert_eq!(fx.messages(), [("mgr1".to_owned(), None, true, stuck_text("old", 2, "crashed"))]);
 }
 
 /// A working Lead is handling the failure: nothing is sent until it stops (audit Q1).

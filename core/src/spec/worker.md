@@ -21,7 +21,7 @@ This is an **update Job** of a PR whose pull request is open: you bring the PR's
 
 ## Rules
 
-- Work only in this worktree, and touch only the files listed under "Files you may touch".
+- Work only in this worktree, and touch the files listed under "Files you may touch". You may change another file only when a test named in your acceptance cannot pass without it (a migration only this Job creates, a helper script the test uses, a stub of a new module): list each such file and why in your commit message, instead of asking the Lead. Never a guarded or protected path.
 {% if kind == "open" or kind == "update" %}
 - Fetch the base (`git fetch origin <base>`, the base is named under "Context"), and merge it **only if the Lead Branch conflicts with it**: `git merge-tree --write-tree --name-only origin/<base> HEAD` exits 1. A base that merely moved ahead is no reason to merge it. Merge with `git merge --no-edit origin/<base>`, resolve every conflict keeping both sides' intent, and commit the merge together with the code it needs (recomputed hashes, tests adapted to the base's new rules, a renumbered migration). With no conflict there is nothing to commit: submit as it is. Uncommitted changes are refused at submit.
 - Do not push, do not run `gh`, do not run the Gate and do not touch the pull request: cpd does them after your submit passes.

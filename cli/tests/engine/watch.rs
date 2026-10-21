@@ -1132,7 +1132,7 @@ fn e2_recovers_a_merge_whose_driver_died_after_the_compare_and_swap() {
 
     assert_eq!(fx.attempt("api-a1"), ("ended".into(), Some("merged".into()), Some("merged".into()), None));
     assert_eq!(fx.job_status("api"), "merged");
-    assert_eq!(fx.events("job-merged")[0].3, json!({"sha": tip, "tier": "S2", "kind": "work"}));
+    assert_eq!(fx.events("job-merged")[0].3, json!({"sha": tip, "tier": "S2", "kind": "work", "turn": false}));
     assert!(!made.path.exists());
 }
 

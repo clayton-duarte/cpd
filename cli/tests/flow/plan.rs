@@ -1761,7 +1761,7 @@ fn seed_tiers(env: &TestEnv) {
 /// A Spec file for `job edit --spec`.
 fn spec_file(env: &TestEnv, name: &str) -> String {
     let path = env.root().join(format!("{name}.json"));
-    let spec = json!({"goal": format!("Goal of {name}."), "context": "Why.", "touches": [format!("src/{name}.rs")], "acceptance": ["cargo test"], "out_of_scope": []});
+    let spec = json!({"goal": format!("Goal of {name}."), "context": "Why.", "touches": [format!("{name}.rs")], "acceptance": ["cargo test"], "out_of_scope": []});
     fs::write(&path, spec.to_string()).unwrap();
     path.to_str().unwrap().to_owned()
 }
@@ -1908,6 +1908,6 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
     let completed = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
     assert_ne!(completed["fingerprint"], out["fingerprint"]);
     let text = fs::read_to_string(home(&env).plan_md(&pid("pay"))).unwrap();
-    assert!(text.contains("| `bare` | Planned bare | work | S2 | draft | none | `src/bare.rs` |"), "{text}");
+    assert!(text.contains("| `bare` | Planned bare | work | S2 | draft | none | `bare.rs` |"), "{text}");
     assert_eq!(text.matches("Spec: not written yet").count(), 1, "{text}");
 }

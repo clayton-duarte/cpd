@@ -325,7 +325,7 @@ impl View {
 
     /// The tree never runs `cpd watch --ensure` by itself: the supervisor restarts a stopped engine (contract §6.6,
     /// hs-d328, hs-d363). It only speaks: when `locks/watch.lock` has been read free on every snapshot for [`DOWN_FOR`]
-    /// (`self.tree.engine_running` is false at each call since `now`), it tells the live Manager of every Context once
+    /// (`self.tree.engine_running` is false at each call since `now`), it tells the most recently active live Manager once
     /// per downtime (`run` with [`Action::Tell`], `managers` lists them). It draws nothing (commands.md §17 "No notes": the
     /// Inbox's `engine-down` item and the Managers' message say it); it returns the lines for the view's log
     /// (`run/tui/tree.log`), a failure to list or tell among them; never writes to the terminal.
@@ -344,7 +344,7 @@ impl View {
             return Vec::new();
         }
         down.spoke = true;
-        let mut lines = vec![format!("engine down {} s+: telling the Managers", DOWN_FOR.as_secs())];
+        let mut lines = vec![format!("engine down {} s+: telling the Manager", DOWN_FOR.as_secs())];
         match managers() {
             Err(why) => lines.push(format!("listing the Managers failed: {why}")),
             Ok(ids) if ids.is_empty() => lines.push("no live Manager to tell".to_owned()),
@@ -2741,9 +2741,12 @@ mod tests {
         t0 + Duration::from_secs(s)
     }
 
-    /// The `session send` of `text` to each of `managers`: from null, no `--wake` (the path of the Inbox's Manager messages).
+    /// The `session send` of `text` to each of `managers`: from null; send always wakes, with `--unblocks`.
     fn sends(managers: &[&str], text: &str) -> Vec<Vec<String>> {
-        managers.iter().map(|m| ["session", "send", m, text].map(str::to_owned).to_vec()).collect()
+        managers
+            .iter()
+            .map(|m| ["session", "send", m, "--unblocks", "the engine has been down 60 s", "--", text].map(str::to_owned).to_vec())
+            .collect()
     }
 
     #[test]
@@ -2765,18 +2768,18 @@ mod tests {
     }
 
     #[test]
-    fn a_lock_free_for_60_seconds_tells_each_live_manager_once_and_nothing_more_at_120() {
-        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha", "m-beta"]), Instant::now());
+    fn a_lock_free_for_60_seconds_tells_the_live_manager_once_and_nothing_more_at_120() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha"]), Instant::now());
         for s in 0..60 {
             fake.tick(&mut view, secs(t0, s), false);
         }
         assert!(fake.calls.is_empty(), "59 s: {:?}", fake.calls);
         fake.tick(&mut view, secs(t0, 60), false);
-        assert_eq!(fake.calls, sends(&["m-alpha", "m-beta"], TOLD), "one message per Manager, no `watch --ensure`");
+        assert_eq!(fake.calls, sends(&["m-alpha"], TOLD), "one message, no `watch --ensure`");
         for s in 61..=120 {
             fake.tick(&mut view, secs(t0, s), false);
         }
-        assert_eq!(fake.calls.len(), 2, "one message per downtime: {:?}", fake.calls);
+        assert_eq!(fake.calls.len(), 1, "one message per downtime: {:?}", fake.calls);
     }
 
     #[test]
@@ -3118,14 +3121,14 @@ mod tests {
     }
 
     #[test]
-    fn an_engine_down_for_60_seconds_tells_the_managers_and_draws_no_note() {
-        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha", "m-beta"]), Instant::now());
+    fn an_engine_down_for_60_seconds_tells_the_manager_and_draws_no_note() {
+        let (mut view, mut fake, t0) = (View::new(sample(), true), Fake::with(&["m-alpha"]), Instant::now());
         fake.tick(&mut view, t0, false);
         let before = frame(&mut view);
         for s in 1..=60 {
             fake.tick(&mut view, secs(t0, s), false);
         }
-        assert_eq!(fake.calls, sends(&["m-alpha", "m-beta"], TOLD), "the Managers are told");
+        assert_eq!(fake.calls, sends(&["m-alpha"], TOLD), "the Manager is told");
         assert_eq!(frame(&mut view), before, "and the view says nothing: no `engine down 60 s+: Managers told`");
     }
 

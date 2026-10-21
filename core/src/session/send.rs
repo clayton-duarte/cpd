@@ -83,7 +83,7 @@ fn guard(tx: &WriteTxn<'_>, target: &Row, from: &SessionId, text: &str) -> Resul
 
 /// The `session-message` Event for `target`, from `from` (the User when none), in the caller's transaction: the write of
 /// `session send`, whatever sends.
-fn write(tx: &WriteTxn<'_>, target: &Row, from: &Option<SessionId>, text: &str, unblocks: Option<&str>) -> Result<i64, CpdError> {
+fn write(tx: &WriteTxn<'_>, target: &Row, from: &Option<SessionId>, text: &str, unblocks: Option<&str>, wake: bool) -> Result<i64, CpdError> {
     let from_name: Option<String> = match from {
         Some(id) => tx.query_row("SELECT name FROM sessions WHERE id = ?1", [id.as_str()], |r| r.get(0)).optional()?,
         None => None,
@@ -99,24 +99,24 @@ fn write(tx: &WriteTxn<'_>, target: &Row, from: &Option<SessionId>, text: &str, 
             let summary = format!("Message for {} from {who} (unblocks: {reason}): {preview}", target.name);
             NewEvent::session_message_unblocking(summary, from, text, reason)
         }
-        None => NewEvent::session_message(format!("Message for {} from {who}: {preview}", target.name), from, text, false),
+        None => NewEvent::session_message(format!("Message for {} from {who}: {preview}", target.name), from, text, wake),
     };
     append(tx, scoped(message, target))
 }
 
-/// The engine's report of an `error` Event (contract §3.7, hs-d314): `text` as a message from the User's side (`from` null,
-/// no wake: `session send` with no sender and no `--wake`) to the live Managers (role `manager`, not archived) of the
-/// Event's Context, or of every Context when the Event has none. Returns how many it sent; none when there is no Manager.
+/// The engine's report of a stuck Job (blocked work, hs-d514): `text` as a waking message from the User's side (`from` null)
+/// to one live Manager (role `manager`, not archived, the first created) of the Event's Context, or of any Context when the
+/// Event has none. Returns how many it sent (0 or 1); none when there is no Manager.
 pub fn tell_managers(tx: &WriteTxn<'_>, error: i64, text: &str) -> Result<usize, CpdError> {
     let context: Option<String> = tx.query_row("SELECT context FROM events WHERE id = ?1", [error], |r| r.get(0))?;
     let ids = {
         let mut stmt = tx.prepare(
-            "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND (?1 IS NULL OR context = ?1) ORDER BY created_at, id",
+            "SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL AND (?1 IS NULL OR context = ?1) ORDER BY created_at, id LIMIT 1",
         )?;
         stmt.query_map([context], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
     };
     for id in &ids {
-        write(tx, &row::load(tx, &SessionId::parse(id)?)?, &None, text, None)?;
+        write(tx, &row::load(tx, &SessionId::parse(id)?)?, &None, text, None, true)?;
     }
     Ok(ids.len())
 }
@@ -136,7 +136,7 @@ pub(super) fn send(args: SendArgs) -> Result<Output, CpdError> {
         if let Some(from) = &from {
             guard(tx, &target, from, text.as_str())?;
         }
-        let event = write(tx, &target, &from, text.as_str(), Some(args.unblocks.as_str()))?;
+        let event = write(tx, &target, &from, text.as_str(), Some(args.unblocks.as_str()), true)?;
         Ok((event, target))
     })?;
     Ok(Output::success(json!({"event": event, "session": target.id, "from": from, "unblocks": args.unblocks.as_str()})))

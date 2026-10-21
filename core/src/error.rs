@@ -152,6 +152,7 @@ error_codes! {
     DependencyCycle = "dependency_cycle" => Refused,
     WorktreeExists = "worktree_exists" => Refused,
     JobKeyExists = "job_key_exists" => Refused,
+    TouchesMissing = "touches_missing" => Refused,
     DraftIncomplete = "draft_incomplete" => Refused,
     OutlineMissing = "outline_missing" => Refused,
     OutlineIncomplete = "outline_incomplete" => Refused,
