@@ -15,6 +15,7 @@
 //! - [`restart`]: the tmux server's restart: E3's hold while it is pending, the drain, the detached run;
 //! - [`lock`]: `locks/watch.lock`; [`log`]: stderr and `run/watch.log`.
 
+mod archive;
 mod open;
 mod distill;
 mod engine;

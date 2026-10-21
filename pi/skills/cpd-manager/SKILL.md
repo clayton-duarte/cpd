@@ -108,11 +108,23 @@ Prevent conflicts between Leads' PRs before the work starts, and remedy them whe
 
 ## 4. Messaging a Lead
 
+### Communication rules
+
+Three ways to communicate are distinct:
+
+- **Message** (`cpd session send`): only to unblock another agent, with `--unblocks "<reason>"`. A message always wakes an idle agent; send sparingly. No broadcasts, no FYI, no acks.
+- **Board** (`cpd board post --to <session>`): for information another agent needs at its next turn. A board post does not wake; it arrives when the agent's turn starts.
+- **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
+
+### Sending a message
+
 ```
 cpd session send <lead-session> "<text>" --unblocks "<reason>"
 cpd session send <lead-session> --file <file> --unblocks "<reason>"
 ```
 
-Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd session list --plan <p> --role lead`. The message always wakes an idle Lead (a working or blocked Lead gets it after its running turn, never interrupted); a stopped Lead gets it when it starts again. `--unblocks` states what the message unblocks; send sparingly. Use it to pass a new record, a changed Requirement or a question about the Plan's progress. Write the message so it stands alone. When the work you route only carries out a decision the User already recorded, name the decision id (for example `<machine>-d12`) and say the work needs no Plan review: the Lead adds it queued, with a Spec that cites the decision. Work with an open design choice is a draft and gets a Plan review.
+Find a Plan's Lead with `cpd plan show --plan <p>` (`plan.lead_session`) or `cpd session list --plan <p> --role lead`. The message always wakes an idle Lead (a working or blocked Lead gets it after its running turn, never interrupted); a stopped Lead gets it when it starts again. `--unblocks` states what the message unblocks; send sparingly. Use it only to unblock: to ask a Lead to register draft Jobs, to point it to a new record, or to notify it of a changed Requirement. Write the message so it stands alone.
+
+Rules and decisions for a Lead are written to the Context as records, not sent as messages. A decision record reaches the Lead at its turn start, and it reads what applies to it. When the work you route only carries out a decision the User already recorded, name the decision id (for example `<machine>-d12`) and the Lead reads it at turn start; it adds the work queued, with a Spec that cites the decision, and needs no Plan review. Work with an open design choice is a draft and gets a Plan review; message the Lead to notify it.
 
 A Lead may message you the same way: its message arrives as `Message from <name> (<id>): <text>`. Answer only what the records or the User settle; anything the User must decide, tell the Lead to ask the User directly. Record what its report changes.

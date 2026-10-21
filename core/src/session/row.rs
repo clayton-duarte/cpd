@@ -291,6 +291,9 @@ pub(super) fn list(args: ListArgs) -> Result<Output, CpdError> {
     let mut env = Env::open()?;
     let mut filter = vec!["1".to_owned()];
     let mut params = Vec::new();
+    if !args.archived {
+        filter.push("s.archived_at IS NULL".into());
+    }
     if let Some(context) = &args.context {
         filter.push("s.context = ?".into());
         params.push(Sql::Text(context.to_string()));

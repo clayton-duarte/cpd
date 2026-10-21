@@ -1277,8 +1277,8 @@ fn archive_kills_the_pane_of_an_idle_parked_fork_and_appends_one_event() {
     assert_eq!(archived.len(), 1);
     assert_eq!((&archived[0]["session"], &archived[0]["data"]), (&json!(fork), &json!({"archived": true})));
 
-    // `session list` shows it; the Plan's Lead and the other Sessions are not archived.
-    let list = env.cpd(&["session", "list"]).ok();
+    // `session list --archived` shows it; the Plan's Lead and the other Sessions are not archived.
+    let list = env.cpd(&["session", "list", "--archived"]).ok();
     let at = |id: &str| list["sessions"].as_array().unwrap().iter().find(|s| s["id"] == id).unwrap()["archived_at"].clone();
     assert_eq!(at(&fork), row["archived_at"]);
     assert_eq!(at(LEAD1), Value::Null);

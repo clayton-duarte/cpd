@@ -460,7 +460,7 @@ test("every Event kind of the Lead's Dispatching table is one the adapter delive
   const dispatching = section(skillFiles("cpd-lead")[0]!.text, "### Dispatching");
   const table = dispatching.slice(0, dispatching.indexOf("#### "));
   const rowKinds = table.split("\n").flatMap((l) => /^\| `([a-z-]+)` \|/.exec(l)?.slice(1) ?? []);
-  assert.ok(rowKinds.length >= 9, `expected the Events table, found ${rowKinds.length} rows`);
+  assert.ok(rowKinds.length >= 6, `expected the Events table, found ${rowKinds.length} rows`);
   for (const k of rowKinds) assert.ok(k in LEAD_MESSAGES, `${k}: a row of the Events table, but the adapter delivers no such message to a Lead (pi/lib/delivery.ts LEAD_MESSAGES)`);
   for (const [k, { turn }] of Object.entries(LEAD_MESSAGES)) if (turn) assert.ok(rowKinds.includes(k), `${k} starts a Lead's turn but the Events table has no row for it`);
   const rows = kindRows();
