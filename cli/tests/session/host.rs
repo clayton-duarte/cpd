@@ -485,14 +485,15 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
         ) + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
-         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},\
-         #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
+         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}},\
+         #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
          #[default]#[align=right]\
          #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]\
          #[fg=colour8]\u{2500}#[default]\
          #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]\
+         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour236]\u{e0b6}#[fg=colour8]#[bg=colour236]#{@cpd_version}#[fg=colour236]#[bg=default]\u{e0b4}#[default],}\
          #[fg=colour8]\u{2500}#[default]"
     );
 }

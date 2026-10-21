@@ -249,7 +249,7 @@ pub const STATUS_FORMAT: &str = concat!(
     "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]",
     "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}",
     "#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]",
-    "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour236]\u{e0b6}#[fg=colour8,bg=colour236]#{@cpd_version}#[fg=colour236,bg=default]\u{e0b4}#[default],}",
+    "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour236]\u{e0b6}#[fg=colour8]#[bg=colour236]#{@cpd_version}#[fg=colour236]#[bg=default]\u{e0b4}#[default],}",
     join!()
 );
 
