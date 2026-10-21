@@ -447,6 +447,23 @@ export class FakePi implements PiApi {
     });
   }
 
+  /** The models `pi.setModel` was called with, in order (commands.md §15.3 `session-retiered`), and the levels `pi.setThinkingLevel` was called with. */
+  readonly modelsSet: { provider: string; id: string }[] = [];
+  readonly thinkingSet: string[] = [];
+  /** What `setModel` answers: false is pi's "no authentication for the model's provider". */
+  modelAccepted = true;
+  /** The models `ctx.modelRegistry.find(provider, id)` knows, as `provider/id`. */
+  readonly knownModels = new Set<string>(["p/opus", "p/sonnet", "p/haiku"]);
+
+  async setModel(model: { provider: string; id: string }): Promise<boolean> {
+    this.modelsSet.push(model);
+    return this.modelAccepted;
+  }
+
+  setThinkingLevel(level: string): void {
+    this.thinkingSet.push(level);
+  }
+
   ctx(): Ctx {
     const ui = {
       notify: (m: string, level?: string) => {
@@ -457,7 +474,8 @@ export class FakePi implements PiApi {
       select: (title: string, options: string[], opts?: { signal?: AbortSignal }) => this.dialog("select", title, options, opts?.signal),
       editor: (title: string) => this.dialog("editor", title, undefined, undefined),
     };
-    return {
+    // `modelRegistry` is what the adapter reads to find a model (commands.md §15.3 `session-retiered`): pi's `ModelRegistry.find`.
+    const ctx: Ctx & { modelRegistry: { find(provider: string, id: string): { provider: string; id: string } | undefined } } = {
       mode: this.mode,
       cwd: join(tmpdir(), "pi-test-no-such-project"),
       isProjectTrusted: () => this.trusted,
@@ -465,7 +483,9 @@ export class FakePi implements PiApi {
       sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]> },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
+      modelRegistry: { find: (provider, id) => (this.knownModels.has(`${provider}/${id}`) ? { provider, id } : undefined) },
     };
+    return ctx;
   }
 
   /** A command context that, like pi's, throws on any use once `reload()` has resolved. */

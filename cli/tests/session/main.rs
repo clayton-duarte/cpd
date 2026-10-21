@@ -6,6 +6,7 @@ mod common;
 
 mod host;
 mod session_reload;
+mod session_retier;
 mod session;
 mod session_send;
 mod session_titles;

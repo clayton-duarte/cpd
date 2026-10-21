@@ -35,8 +35,9 @@ pub enum LeadStart {
     Fresh { model: String, name: String, first_message: PathBuf },
     /// A fork of `source_file`; a fork by `session fork` without `--message-file` has no first message.
     Fork { model: String, name: String, source_file: PathBuf, first_message: Option<PathBuf> },
-    /// The Session's own file again, with no first message.
-    Resume { file: PathBuf },
+    /// The Session's own file again, with no first message, on `model` (the row's current Tier, hs-d506): pi uses
+    /// `--model` instead of the model its file recorded.
+    Resume { model: String, file: PathBuf },
 }
 
 /// What a Lead's pi gets for plannotator (contract §6.5): `PLANNOTATOR_PORT` when there is a port, always
@@ -107,8 +108,8 @@ pub fn lead(launch: &LeadLaunch) -> Launch {
     let (model, name, fork, message) = match &launch.start {
         LeadStart::Fresh { model, name, first_message } => (model, name, None, Some(first_message)),
         LeadStart::Fork { model, name, source_file, first_message } => (model, name, Some(source_file), first_message.as_ref()),
-        LeadStart::Resume { file } => {
-            argv.extend(["--session".to_owned(), file.display().to_string()]);
+        LeadStart::Resume { model, file } => {
+            argv.extend(["--model".to_owned(), model.clone(), "--session".to_owned(), file.display().to_string()]);
             push_extensions(&mut argv, launch.extensions);
             return Launch { argv, env: lead_env(launch) };
         }
@@ -242,10 +243,19 @@ mod tests {
         lead(&LeadLaunch { home: &home, session: &session, plan: Some(&plan), extensions: &extensions, plannotator, start })
     }
 
+    /// hs-d506: a resume names the model of the row's Tier, before `--session`: pi restores its file's model only when
+    /// `--model` is not given.
+    #[test]
+    fn a_resume_runs_on_the_given_model() {
+        let start = LeadStart::Resume { model: "p/m:medium".into(), file: "/s/a.jsonl".into() };
+        let argv = lead_launch(start, &plannotator(None)).argv;
+        assert_eq!(argv[..5], ["pi", "--model", "p/m:medium", "--session", "/s/a.jsonl"]);
+    }
+
     #[test]
     fn every_role_skips_the_pi_version_check() {
         let plannotator = plannotator(None);
-        let resume = LeadStart::Resume { file: "/s/a.jsonl".into() };
+        let resume = LeadStart::Resume { model: "p/m:high".into(), file: "/s/a.jsonl".into() };
         assert_eq!(lead_launch(resume, &plannotator).env["PI_SKIP_VERSION_CHECK"], "1");
         let home = home();
         let session = SessionId::parse(ID).unwrap();
@@ -255,7 +265,7 @@ mod tests {
             plan: None,
             extensions: &[],
             plannotator: &plannotator,
-            start: LeadStart::Resume { file: "/s/a.jsonl".into() },
+            start: LeadStart::Resume { model: "p/m:high".into(), file: "/s/a.jsonl".into() },
         });
         assert_eq!(manager.env["PI_SKIP_VERSION_CHECK"], "1");
         let plan = PlanId::parse("cpd2").unwrap();
@@ -277,14 +287,14 @@ mod tests {
             extensions: &[],
             fork: None,
         });
-        let lead = lead_launch(LeadStart::Resume { file: "/s/a.jsonl".into() }, &plannotator(None));
+        let lead = lead_launch(LeadStart::Resume { model: "p/m:high".into(), file: "/s/a.jsonl".into() }, &plannotator(None));
         let manager = super::lead(&LeadLaunch {
             home: &home,
             session: &session,
             plan: None,
             extensions: &[],
             plannotator: &plannotator(None),
-            start: LeadStart::Resume { file: "/s/a.jsonl".into() },
+            start: LeadStart::Resume { model: "p/m:high".into(), file: "/s/a.jsonl".into() },
         });
         for (role, launch) in [("worker", worker), ("lead", lead), ("manager", manager)] {
             let path = &launch.env["PATH"];
@@ -326,7 +336,7 @@ mod tests {
         let session = SessionId::parse(ID).unwrap();
         let extensions = strs(&["/opt/cpd/pi"]);
         let plannotator = plannotator(Some("19437"));
-        let start = LeadStart::Resume { file: "/cpd-home/sessions/m.jsonl".into() };
+        let start = LeadStart::Resume { model: "p/m:high".into(), file: "/cpd-home/sessions/m.jsonl".into() };
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(launch.env["PLANNOTATOR_REMOTE"], "1");
         assert_eq!(launch.env["PLANNOTATOR_URL_HOST"], "192.168.3.3");
@@ -371,7 +381,7 @@ mod tests {
 
     #[test]
     fn every_lead_gets_remote_and_the_review_host_and_the_port_when_there_is_one() {
-        let start = LeadStart::Resume { file: "/s/x.jsonl".into() };
+        let start = LeadStart::Resume { model: "p/m:high".into(), file: "/s/x.jsonl".into() };
         let without = lead_launch(start.clone(), &plannotator(None)).env;
         assert_eq!((without["PLANNOTATOR_REMOTE"].as_str(), without["PLANNOTATOR_URL_HOST"].as_str()), ("1", "192.168.3.3"));
         assert!(!without.contains_key("PLANNOTATOR_PORT"));
@@ -403,11 +413,11 @@ mod tests {
 
     #[test]
     fn resumed_lead() {
-        let launch = lead_launch(LeadStart::Resume { file: "/s/x.jsonl".into() }, &plannotator(None));
+        let launch = lead_launch(LeadStart::Resume { model: "p/m:high".into(), file: "/s/x.jsonl".into() }, &plannotator(None));
         assert_eq!(
             launch.argv,
             strs(&[
-                "pi", "--session", "/s/x.jsonl",
+                "pi", "--model", "p/m:high", "--session", "/s/x.jsonl",
                 "-e", "/opt/cpd/pi", "-e", "npm:@juicesharp/rpiv-ask-user-question@2.13.8",
             ])
         );

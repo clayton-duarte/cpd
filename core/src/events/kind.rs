@@ -110,6 +110,7 @@ kinds! {
     SessionMoved = "session-moved",
     SessionRenamed = "session-renamed",
     SessionTitled = "session-titled",
+    SessionRetiered = "session-retiered",
     ContextRenamed = "context-renamed",
     ContextOwner = "context-owner",
     PlanRenamed = "plan-renamed",
@@ -177,6 +178,7 @@ impl Kind {
             SessionMoved => spec([Y, M, N, N, Y], &["pane", "window", "place"], &[]),
             SessionRenamed => spec([Y, M, N, N, Y], &["name"], &[]),
             SessionTitled => spec([Y, M, N, N, Y], &["title"], &[]),
+            SessionRetiered => spec([Y, M, N, N, Y], &["from", "to"], &[]),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
             ContextOwner => spec([Y, N, N, N, N], &["owner"], &[]),
             PlanRenamed => spec([Y, Y, N, N, N], &["title"], &[]),
@@ -222,10 +224,17 @@ mod tests {
 
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
-    /// hs-d496: two Event kinds, so the adapter/cpd protocol is 8; hs-d506 (`session-retiered`: 9) and hs-d502 (`plan-outlined`: 10).
+    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9) and hs-d502 (`plan-outlined`: 10).
     #[test]
-    fn the_protocol_is_9_with_the_plan_outlined_kind() {
+    fn the_protocol_is_10_with_the_plan_outlined_kind() {
         assert_eq!(PROTOCOL, 10);
+    }
+
+    #[test]
+    fn session_retiered_is_about_a_session_and_carries_from_and_to() {
+        let spec = Kind::SessionRetiered.spec();
+        assert_eq!((spec.context, spec.plan, spec.job, spec.attempt, spec.session), (Y, M, N, N, Y));
+        assert_eq!(spec.required, ["from", "to"]);
     }
 
     #[test]

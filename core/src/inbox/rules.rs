@@ -4,11 +4,10 @@
 //! [`super::model::reconcile`] opens and closes the items. A stuck Job is no Inbox
 //! condition: [`stuck_jobs`] finds the ones the engine tells the Manager of (hs-d318).
 
-use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -53,7 +52,7 @@ pub fn conditions(store: &mut Store, home: &CpdHome) -> Result<Vec<Condition>, C
 /// [`conditions`] at `now` with the team review rule's inputs given; `None` switches that kind off.
 pub fn conditions_with(store: &mut Store, home: &CpdHome, now: OffsetDateTime, team: Option<Team<'_>>) -> Result<Vec<Condition>, CpdError> {
     let mut all = store.read(dialogs)?;
-    all.extend(store.read(|conn| plan_reviews(conn, home))?);
+    all.extend(store.read(|conn| plan_reviews(conn))?);
     all.extend(store.read(review_waiting)?);
     all.extend(store.read(unread)?);
     // No `question` kind (hs-d306 (1)): an open Context question opens nothing, and an item an older engine opened for
@@ -190,22 +189,6 @@ fn unread(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 // ---- Plans and Jobs: plan-review, and the stuck Jobs -------------------------------------------------------------
 
-/// The Plan's plannotator page, when its port file holds a port (the convention of `session::port`), on the review host
-/// ([`review_host`], hs-d264).
-fn plannotator_url(home: &CpdHome, plan: &PlanId) -> Result<Option<String>, CpdError> {
-    let path: &Path = &home.plannotator_port(plan);
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(text
-            .trim()
-            .parse::<u16>()
-            .ok()
-            .map(review_url)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(CpdError::new(ErrorCode::StoreFailed, format!("Cannot read {}: {e}.", path.display()))
-            .with("path", path.display().to_string())),
-    }
-}
-
 /// The plannotator page on `port`, on the review host.
 fn review_url(port: u16) -> String {
     format!("http://{}:{port}/", review_host(&mut std::io::stderr()))
@@ -243,12 +226,15 @@ fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
 
 /// `plan-review`: a Plan's latest review is `pending`. Its subject is Plan-qualified because review ids (`r1`)
 /// repeat across Plans.
-fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
+fn plan_reviews(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare(
         "SELECT v.plan, v.id, p.context, p.lead_session, v.title
            FROM plan_reviews v JOIN plans p ON p.id = v.plan
           WHERE v.status = 'pending' AND v.number = (SELECT max(w.number) FROM plan_reviews w WHERE w.plan = v.plan)
           ORDER BY v.requested_at, v.plan",
+    )?;
+    let mut port_stmt = conn.prepare(
+        "SELECT port FROM plannotator_reviews WHERE session = ?1 AND kind = 'plan' AND closed_at IS NULL ORDER BY opened_at, pn_id LIMIT 1",
     )?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
@@ -265,7 +251,7 @@ fn plan_reviews(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, Cpd
                 Some(title) => format!("{plan} plan review: {title}"),
                 None => format!("{plan} plan review"),
             },
-            url: plannotator_url(home, &plan)?,
+            url: port_stmt.query_row([lead.as_str()], |r| r.get::<_, u16>(0)).optional()?.map(review_url),
             context: Some(id("Context id", &context, ContextId::parse)?),
             plan: Some(plan),
             job: None,
@@ -871,18 +857,61 @@ mod tests {
             (c.urgency, c.subject.as_str(), c.label.as_str()),
             (Urgency::Magenta, "review:pay/r1", "pay plan review: Add retries")
         );
-        assert_eq!(c.url, None, "no port file");
+        assert_eq!(c.url, None, "no open plan row (hs-d502)");
         assert_eq!(c.session.as_ref().map(|s| s.as_str()), Some("l-pay"), "its Lead");
         assert_eq!((c.context.as_ref().map(|c| c.as_str()), c.plan.as_ref().map(|p| p.as_str())), (Some("ctx"), Some("pay")));
+    }
 
-        let port = f.home.plannotator_port(&PlanId::parse("pay").unwrap());
-        std::fs::create_dir_all(port.parent().unwrap()).unwrap();
-        std::fs::write(&port, "20000\n").unwrap();
-        // the review host: `PLANNOTATOR_URL_HOST` from cpd's environment (the only test that sets it)
+    impl Fixture {
+        /// A tracked plannotator session of `session` with `kind`; open unless `closed`.
+        fn tracked_kind(&mut self, session: &str, kind: &str, port: u16, closed: bool) {
+            let (closed_at, ended) = if closed { (format!("'{T}'"), "'decided'".to_owned()) } else { ("NULL".to_owned(), "NULL".to_owned()) };
+            self.sql(&format!(
+                "INSERT INTO plannotator_reviews (session, pn_id, kind, subject, port, opened_at, closed_at, ended)
+                 VALUES ('{session}', 'pn-0a1b2c', '{kind}', 'plan.md', {port}, '{T}', {closed_at}, {ended});"
+            ));
+        }
+
+        fn plan_port_file(&self, port: &str) {
+            let path = self.home.plannotator_port(&PlanId::parse("pay").unwrap());
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, port).unwrap();
+        }
+    }
+
+    #[test]
+    fn a_plan_review_has_no_url_without_an_open_plan_row_even_with_a_port_file_hs_d502() {
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        f.plan_port_file("20000\n");
+        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "a port file alone is no open page");
+    }
+
+    #[test]
+    fn a_plan_review_carries_the_review_hosts_page_on_the_open_plan_rows_port_hs_d502() {
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        f.plan_port_file("20000\n");
+        f.tracked_kind("l-pay", "plan", 20007, false);
         unsafe { std::env::set_var(URL_HOST, "review.example") };
         let url = one(f.of(Kind::PlanReview)).url;
         unsafe { std::env::remove_var(URL_HOST) };
-        assert_eq!(url.as_deref(), Some("http://review.example:20000/"));
+        assert_eq!(url.as_deref(), Some("http://review.example:20007/"));
+    }
+
+    #[test]
+    fn a_closed_plan_row_or_an_open_annotate_row_gives_a_plan_review_no_url_hs_d502() {
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        f.plan_port_file("20000\n");
+        f.tracked_kind("l-pay", "plan", 20007, true);
+        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "closed plan row");
+        // plannotator_reviews is append-only: case 2 gets a fresh fixture
+        let mut f = fixture("plan");
+        f.review("r1", "pending");
+        f.plan_port_file("20000\n");
+        f.tracked_kind("l-pay", "annotate", 20008, false);
+        assert_eq!(one(f.of(Kind::PlanReview)).url, None, "open annotate row");
     }
 
     #[test]

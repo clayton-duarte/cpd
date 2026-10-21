@@ -21,7 +21,6 @@ use super::port;
 use super::reload::{adapter_missing, may_exec, reload, reload_due, stop_pi};
 use super::row::{self, Role, Row, State};
 use super::{Env, RunArgs, not_a_lead, state};
-use crate::config::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::host::addr::review_host;
 use crate::host::exe::{Exe, Watched};
@@ -369,20 +368,15 @@ fn record_file(env: &mut Env, dirs: &PiDirs, id: &SessionId) -> Result<bool, Cpd
 /// exists, else fork once the source is idle, else fresh. `None` at the end of
 /// input while a fork waits for a source that can never become idle.
 fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, CpdError> {
+    // The row's current Tier, also on a resume (hs-d506): pi uses `--model` instead of the model its file recorded.
+    let (model, level) = row::model_and_level(&env.config, &row.id, &row.tier)?;
+    let model = format!("{model}:{level}");
     if let Some(file) = existing_file(dirs, row) {
         if row.file.as_deref() != Some(&file.display().to_string()) {
             patiently("recording the session file", || record_file(env, dirs, &row.id))?;
         }
-        return Ok(Some(LeadStart::Resume { file }));
+        return Ok(Some(LeadStart::Resume { model, file }));
     }
-    let tier = Tier::parse(&row.tier).map_err(|_| CpdError::bad_row(format!("{} has tier {:?}", row.id, row.tier)))?;
-    let models = &env.config.tiers;
-    let model = match tier.letter() {
-        Letter::O => &models.o,
-        Letter::S => &models.s,
-        Letter::H => &models.h,
-    };
-    let model = format!("{model}:{}", tier.level());
     let message = first_message(&env.home, row)?;
     match &row.forked_from {
         Some(source) => {

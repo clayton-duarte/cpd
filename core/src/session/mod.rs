@@ -7,6 +7,7 @@
 //! - [`moves`]: the panes: `session fork`, `open`, `park` and `close`;
 //! - [`history`]: `session history`, an archived Session's history in the chat slot;
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
+//! - [`retier`]: `session retier`, a live Lead's or Manager's Tier set to the config's;
 //! - [`send`]: `session send`, one message to a Lead;
 //! - [`retitle`]: `session retitle`, a Lead's or a Manager's dynamic title;
 //! - [`port`]: a Plan's plannotator port;
@@ -21,6 +22,7 @@ mod moves;
 mod port;
 mod reload;
 mod resolve;
+mod retier;
 mod retitle;
 mod row;
 pub(crate) mod run;
@@ -70,6 +72,8 @@ pub enum Command {
     Unarchive(UnarchiveArgs),
     /// Send a message to a Lead (§10.13)
     Send(SendArgs),
+    /// Move live Leads and Managers to the Tier the config names now (§10.15)
+    Retier(RetierArgs),
     /// Rename a Session (§10.7)
     Rename(RenameArgs),
     /// Report a Session's agent state (pi adapter) (§10.6)
@@ -207,6 +211,17 @@ pub struct StateArgs {
 }
 
 #[derive(clap::Args, Debug)]
+#[command(group(clap::ArgGroup::new("target").required(true).multiple(false).args(["id", "all"])))]
+pub struct RetierArgs {
+    /// The Lead or Manager Session to move
+    #[arg(value_name = "id")]
+    id: Option<SessionRef>,
+    /// Every Lead and Manager that is not archived
+    #[arg(long)]
+    all: bool,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RetitleArgs {
     /// The Lead or Manager Session to title
     #[arg(value_name = "session")]
@@ -239,6 +254,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Send(args) => send::send(args),
+        Command::Retier(args) => retier::retier(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
         Command::Retitle(args) => retitle::retitle(args),

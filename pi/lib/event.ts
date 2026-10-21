@@ -16,7 +16,7 @@ export const KINDS = [
   "attempt-started", "attempt-status", "attempt-retry", "attempt-nudge",
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
-  "session-registered", "session-state", "session-moved", "session-renamed", "session-titled",
+  "session-registered", "session-state", "session-moved", "session-renamed", "session-titled", "session-retiered",
   "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-message",
   "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-base-changed", "pr-opened", "pr-merged",
