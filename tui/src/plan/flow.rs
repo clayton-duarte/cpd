@@ -414,7 +414,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
         for &c in cs {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
                 let rect = Rect::new(xs[l], top[c] + k as u16, col_w[l], 1);
-                let style = palette::pill(jobs[i].status.icon(frame).1);
+                let style = palette::pill_interactive();
                 // a cap on each side in the status colour, on the default background; between them the icon and key to
                 // the left, the tier (and `aN`) to the right, whatever the column's width
                 let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
@@ -591,15 +591,15 @@ mod tests {
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: *s, ..job(&format!("{s:?}"), &[]) }).collect();
         let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
-            let (icon, meaning) = status.icon(0);
+            let (icon, _meaning) = status.icon(0);
             assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status:?}");
             // the body keeps the pill's colours
             let cell = &c.buf[(p.rect.x + 1, p.rect.y)];
-            assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill(meaning).fg, palette::pill(meaning).bg), "{status:?}");
+            assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill_interactive().fg, palette::pill_interactive().bg), "{status:?}");
             // a rounded cap on each end: the status colour on the default background
             for (x, glyph) in [(p.rect.x, "\u{e0b6}"), (p.rect.right() - 1, "\u{e0b4}")] {
                 let cap = &c.buf[(x, p.rect.y)];
-                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, palette::pill(meaning).bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
+                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, palette::pill_interactive().bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
             }
         }
     }
@@ -650,7 +650,7 @@ mod tests {
         let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
         // the body, after the left cap
         let bg = |i: usize| c.buf[(c.pills[i].rect.x + 1, c.pills[i].rect.y)].bg;
-        assert_eq!((bg(0), bg(1)), (palette::color(Meaning::Waiting), palette::color(Meaning::Failed)));
+        assert_eq!((bg(0), bg(1)), (palette::pill_interactive().bg.unwrap(), palette::pill_interactive().bg.unwrap()), "an interactive pill whatever its state");
     }
 
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.

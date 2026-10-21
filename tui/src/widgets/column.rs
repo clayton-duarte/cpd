@@ -796,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn the_prs_pill_text_is_inverted_and_its_lines_are_muted() {
+    fn the_prs_pill_text_is_static_and_its_lines_are_muted() {
         let (buf, _) = scrolled(30, height(5), &many(5), 0);
         let muted = palette::color(palette::Meaning::Nothing);
         let (y, _) = first_title(&buf);
@@ -804,7 +804,7 @@ mod tests {
         assert_eq!((at(1).symbol(), at(1).fg), ("─", muted), "the first line (a non-collapsible title has no corner, hs-d478)");
         assert_eq!((at(2).symbol(), at(2).fg), ("─", muted), "its line");
         for x in 4..7 {
-            assert!(at(x).modifier.contains(Modifier::REVERSED), "the title text is inverted: column {x} {:?}", at(x));
+            assert_eq!((Some(at(x).fg), Some(at(x).bg)), (palette::pill_static().fg, palette::pill_static().bg), "the title text is the static pill's: column {x} {:?}", at(x));
         }
         assert_eq!((at(11).symbol(), at(11).fg), ("─", muted), "the line to the edge");
     }
