@@ -42,7 +42,7 @@ export type FollowerHooks = {
   before(): Promise<void>;
   /** A process was started. */
   onRunStart(): void;
-  /** Each complete stdout line. Returns true when it was a valid Event: only that resets the restart delay. */
+  /** Each complete stdout line. Returns true when the restart delay resets: a valid Event, or a failure line the restart cures: only that resets the restart delay. */
   onLine(line: string): boolean;
   /** The process failed without a failure line: a spawn error or a non-zero exit. */
   onFailure(error: CpdError): void;

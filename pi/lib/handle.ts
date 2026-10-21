@@ -1,4 +1,4 @@
-import { CpdError, isObject } from "./cpd.ts";
+import { CpdError, installedIdentity, isObject } from "./cpd.ts";
 import { eventMessage, FOLLOW_UP, leadRule, sessionMessage } from "./delivery.ts";
 import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
 import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
@@ -18,6 +18,7 @@ export const followerHooks =
     cursor: () => r.cursor,
     onRunStart: () => {
       r.failureLineThisRun = false;
+      r.startedWith = installedIdentity();
     },
     onLine: (line) => handleLine(host, r, line),
     onFailure: (e) => {
@@ -32,11 +33,13 @@ function followerError(host: Host, r: Run, e: CpdError): void {
   host.deliver("events follow", e);
 }
 
-/** Returns true when the line was a valid Event. The cursor moves past every line that has an id, delivered or not. */
+/** Returns true when the line was a valid Event, or a `store_too_new` line of a replaced cpd (both reset the restart delay). The cursor moves past every line that has an id, delivered or not. */
 function handleLine(host: Host, r: Run, line: string): boolean {
   const parsed = parseLine(line);
   if (parsed.type === "failure") {
     r.failureLineThisRun = true;
+    // A newer cpd was installed since this follower started: the restart runs it, so the line is not delivered (§15.2).
+    if (parsed.error.code === "store_too_new" && installedIdentity() !== r.startedWith) return true; // true: the restart delay goes back to the initial one
     followerError(host, r, parsed.error);
     if (PERMANENT_CODES.has(parsed.error.code)) r.follower.stop(); // a refusal: restarting would fail the same way (§15.2)
     return false;
