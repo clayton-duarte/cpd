@@ -26,6 +26,9 @@ GATE_RUN=${RUN##*.}
 export GATE_RUN
 TMPDIR=$RUN
 export TMPDIR
+# Node's compile cache would put a `node-compile-cache` directory in TMPDIR: a tool's cache, not a leak of a test.
+NODE_DISABLE_COMPILE_CACHE=1
+export NODE_DISABLE_COMPILE_CACHE
 uid=$(id -u)
 self=$$
 tmux_dirs="/tmp/tmux-$uid"
