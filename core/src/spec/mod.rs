@@ -126,6 +126,38 @@ pub struct Answer {
     pub answer: String,
 }
 
+/// What a Job's kind adds to its Spec (§16.1, contract §2.2 "Job kinds"): a section for each kind that has checks. `work` and
+/// `docs` have none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JobKind<'a> {
+    Work,
+    Docs,
+    /// A `test` Job's own named tests and the files that hold them (its Spec's `tests` and `test_files`).
+    Test { tests: &'a [String], test_files: &'a [String] },
+    /// An `impl` Job's derived tests, the guarded files and the paths the Lead approved, and the keys of the `test` Jobs it needs.
+    Impl { test_jobs: &'a [String], tests: &'a [String], guarded: &'a [String], approved: &'a [String] },
+    Open,
+    Update,
+}
+
+impl JobKind<'_> {
+    fn as_str(&self) -> &'static str {
+        match self {
+            JobKind::Work => "work",
+            JobKind::Docs => "docs",
+            JobKind::Test { .. } => "test",
+            JobKind::Impl { .. } => "impl",
+            JobKind::Open => "open",
+            JobKind::Update => "update",
+        }
+    }
+}
+
+/// `a`, `b`: Job keys as inline code in a sentence.
+fn code_list(items: &[String]) -> String {
+    items.iter().map(|i| format!("`{i}`")).collect::<Vec<_>>().join(", ")
+}
+
 /// Everything the Spec says. The lists of the Job's Spec are as `job add` stored them.
 #[derive(Clone, Debug)]
 pub struct Input<'a> {
@@ -134,6 +166,8 @@ pub struct Input<'a> {
     pub title: &'a str,
     pub tier: Tier,
     pub worktree: &'a Path,
+    /// The Job's kind and what it adds to the Spec.
+    pub kind: JobKind<'a>,
     pub goal: &'a str,
     pub context: &'a str,
     pub touches: &'a [String],
@@ -220,7 +254,17 @@ pub fn render(input: &Input<'_>) -> Result<String, CpdError> {
         })
         .collect();
 
+    let (tests, test_files, test_jobs, approved): (&[String], &[String], String, &[String]) = match input.kind {
+        JobKind::Test { tests, test_files } => (tests, test_files, String::new(), &[]),
+        JobKind::Impl { test_jobs, tests, guarded, approved } => (tests, guarded, code_list(test_jobs), approved),
+        _ => (&[], &[], String::new(), &[]),
+    };
     let vars = Value::from_pairs([
+        ("kind", Value::from(input.kind.as_str())),
+        ("tests", Value::from(tests.to_vec())),
+        ("test_files", Value::from(test_files.to_vec())),
+        ("test_jobs", Value::from(test_jobs)),
+        ("approved", Value::from(approved.to_vec())),
         ("job", Value::from(input.attempt.job().to_string())),
         ("number", Value::from(input.attempt.number().get())),
         ("attempt", Value::from(input.attempt.to_string())),

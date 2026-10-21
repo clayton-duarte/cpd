@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::Serialize;
 use toml::{Table, Value};
 
-use super::tier::Tier;
+use super::tier::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::MachineName;
@@ -46,11 +46,11 @@ pub struct Config {
     pub manager_tier: Tier,
     /// The Tier of the distiller, the pi run that writes a Context digest (§4.6, hs-d194).
     pub context_distill_tier: Tier,
+    /// The Tier of the `open` and `update` Jobs cpd adds (§2.2 "Job kinds", §8.2, hs-d340, hs-d497).
+    pub open_tier: Tier,
     pub lead_pi_packages: Vec<String>,
     /// `""` is beside the binary: see [`Config::pi_adapter_dir`].
     pub pi_adapter: String,
-    /// How long a PR whose Jobs are all merged may stay unopened before E4 tells the Manager (§3.7 E4, hs-d334).
-    pub pr_open_escalate_minutes: u32,
     /// One port per Plan's plannotator review (§6.5).
     pub plannotator_ports: PortRange,
     pub tiers: Tiers,
@@ -266,14 +266,21 @@ impl Config {
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
         let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
-        let lead_tier = r.get("lead_tier", Tier::parse("O3").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
+        // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
+        let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
+        let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
+        let context_distill_tier = r.get("context_distill_tier", Tier::parse("H2").expect("a valid Tier"), |v| {
+            let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
+            if tier.letter() != Letter::H || tier.effort() > Tier::MAX_EFFORT {
+                return Err(format!("must be an H Tier with effort 0-4, not {tier}: an auxiliary run uses only the H tier and never effort 5, to keep cost down (hs-d506)"));
+            }
+            Ok(tier)
         })?;
-        let manager_tier = r.get("manager_tier", Tier::parse("O5").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
-        })?;
-        let context_distill_tier = r.get("context_distill_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
+            let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
+            tier.check_worker().map_err(|e| e.message().to_owned())?;
+            Ok(tier)
         })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
@@ -291,7 +298,6 @@ impl Config {
             Ok(dir.to_owned())
         })?;
 
-        let pr_open_escalate_minutes = r.get("pr_open_escalate_minutes", 10, |v| int(v, 1, u32::MAX))?;
         let plannotator_ports = r.get("plannotator_ports", PortRange { first: 19432, last: 19441 }, |v| {
             PortRange::parse(text_of(&v)?)
         })?;
@@ -367,9 +373,9 @@ impl Config {
             lead_tier,
             manager_tier,
             context_distill_tier,
+            open_tier,
             lead_pi_packages,
             pi_adapter,
-            pr_open_escalate_minutes,
             plannotator_ports,
             tiers,
             timeouts,
@@ -475,6 +481,15 @@ impl Reader<'_> {
 }
 
 const KNOWN_SECTIONS: [&str; 6] = ["tiers", "timeouts", "watch", "inbox", "events", "tmux"];
+
+/// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
+fn leader_tier(value: &Value) -> Result<Tier, String> {
+    let tier = Tier::parse(text_of(value)?).map_err(|e| e.message().to_owned())?;
+    if tier.effort() > Tier::MAX_EFFORT {
+        return Err(format!("must have effort 0-4, not {tier}: no agent uses effort 5, to keep cost down (hs-d506)"));
+    }
+    Ok(tier)
+}
 
 fn text_of(value: &Value) -> Result<&str, String> {
     match value {

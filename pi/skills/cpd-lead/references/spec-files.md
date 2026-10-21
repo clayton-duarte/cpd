@@ -4,7 +4,7 @@ A Worker is a fresh session that sees only its Spec. Whatever it needs must be i
 
 ## The spec file
 
-The file passed as `--spec` when you add a Job is JSON with exactly these fields, all required, and no others (an unknown field is refused with `spec_invalid`):
+The file passed as `--spec` when you add a Job is JSON with exactly these fields, all required, and no others (an unknown field is refused with `spec_invalid`); a test Job's also has `tests` and `test_files` ([Test Jobs](#test-jobs)):
 
 ```json
 {
@@ -25,12 +25,12 @@ The file passed as `--spec` when you add a Job is JSON with exactly these fields
 | `goal` | One outcome, in the imperative. |
 | `context` | Everything the Worker needs and cannot ask the User for: facts, paths, names, signatures, how to run things, decisions from the interview and the Context's records, the accepted assumptions that apply. |
 | `touches` | Exact paths the Worker may change, at least one. New files included. The Worker may touch nothing else. |
-| `acceptance` | At least one item, each checkable by a command or an observable result. Test items name the targeted tests: the test files or modules of what the Job changes plus its new tests (for example `scripts/cargo.sh nextest run -p cpd --test plan_overlap`, `node --test pi/test/updates.test.ts`). Never a full unfiltered run (the whole workspace, `npm test` of everything): the full suite is the Gate's, at `pr open`. |
+| `acceptance` | At least one item, each checkable by a command or an observable result. Test items name the targeted tests: the test files or modules of what the Job changes plus its new tests (for example `scripts/cargo.sh nextest run -p cpd --test plan_overlap`, `node --test pi/test/updates.test.ts`). Never a full unfiltered run (the whole workspace, `npm test` of everything): the full suite is the Gate's, run by the PR's open Job. |
 | `out_of_scope` | The adjacent temptations to refuse. May be empty, rarely should be. |
 
 Write the text in GFM only: tables, lists, code and Mermaid. Footnotes render as literal text and raw HTML is not rendered, so the User would see them broken in the Plan.
 
-The Worker's submit runs only the repo's quick check (its `pre-commit` hook). The Gate (its `pre-merge` hook) runs later, on the whole Lead Branch, so an acceptance item that needs the Gate must name the command itself.
+The Worker's submit runs only the repo's quick check (its `pre-commit` hook) and, for a test or implementation Job, the named tests ([Test Jobs](#test-jobs)). The Gate (its `pre-merge` hook) runs later, on the whole Lead Branch, in the submit of the PR's open Job, so an acceptance item that needs the Gate must name the command itself.
 
 ## Size
 
@@ -50,7 +50,7 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Dependencies
 
-- Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. The exception is the PR shape's red tests: they come first, `--needs` only the docs Job, and the implementation `--needs` them. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
+- Add `--needs <k1,k2>` when a Job changes files another Job changes, imports what another Job produces, or tests another Job's behaviour. The exception is the PR shape's red tests: they come first, `--needs` only the docs Job, and the implementation `--needs` them (an implementation Job must need a test Job of its PR, `test_job_required`). A PR's open and update Jobs are cpd's and have no Dependencies: the open Job waits for every other Job of its PR by its own rule, so nothing needs it. A Job starts only after its Dependencies are Merged and branches from the Lead Branch that contains them.
 - Jobs with disjoint `touches` and no data flow between them need no Dependency. Shared files such as lockfiles, `package.json`, config and index or route registries count as shared.
 - Dependencies cannot form a cycle (`dependency_cycle`), cannot name an unknown Job (`needs_unknown`) and cannot name a cancelled or failed Job (`needs_unavailable`).
 
@@ -63,6 +63,32 @@ Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0
 | Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`crashed`, `no_submit`, `merge_conflict`) raises effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). |
 | Docs, config, mechanical edits | `H2` | Cheap and enough. |
 | Judgement-heavy work (ambiguous design, security-sensitive, subtle algorithms) | `O3` | `O` only when judgement decides the outcome. |
+| A PR's open and update Jobs | `open_tier` (default `S2`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
+
+## Test Jobs
+
+A PR that changes behaviour has a test Job and an implementation Job after its docs Job ([the PR's shape](../SKILL.md#dividing)). A different Worker writes each, so the tests are not fitted to the code.
+
+- **A test Job's spec file** has two more fields, both required once the Job is not a stub, and refused for every other kind: `tests`, the named tests (one or more distinct one-line strings, the names the repo's test command takes), and `test_files`, the files that hold them (repo-relative paths or, ending in `/`, directory prefixes; no `..`, no leading `/`). Name the tests exactly: with no `list` command below, a name that matches no test can read as a red test. Its `touches` includes those files and the stubs that make the branch build.
+
+  ```json
+  {"goal": "Write the red tests for the /health endpoint, with stubs.", "context": "…", "touches": ["test/routes/health.test.ts", "src/routes/health.ts"], "acceptance": ["…"], "out_of_scope": ["…"],
+   "tests": ["health returns 200", "health body is ok"], "test_files": ["test/routes/health.test.ts"]}
+  ```
+
+  Its submit builds the branch and runs the named tests, and is refused unless they fail for a reason other than a build error (`tests_build_failed`, `tests_not_red`; `test_files_missing` when a `test_files` entry matches nothing the Job changed).
+- **An implementation Job names no tests.** Its tests are the union of the `tests` of the test Jobs it needs directly (derived, so the tests it must pass are the ones that were red). Its submit is refused unless they pass (`tests_failed`). Its Spec's `context` says which test Jobs it builds on.
+- **The red tests are guarded.** The implementation Job may not change a path matched by the `test_files` of the test Jobs it needs (`tests_tampered`), unless you approve the path with `cpd job approve-tests <job> --path <p> --reason "<why>"`. A Worker that needs a test changed asks you with `cpd ask`; the decision is yours ([Escalations](../SKILL.md#escalations)).
+- **The repo's test commands** are the `[tests]` table of its protected `.config/cpd.toml`, which you add (a Worker's diff of that file is refused):
+
+  ```toml
+  [tests]
+  build = "<compile what the named tests need; \"true\" when nothing builds>"
+  list  = "<optional: exit zero when the one test named by {{ test }} exists>"
+  run   = "<run the named tests, {{ tests }}: exit non-zero when one fails>"
+  ```
+
+  cpd tells a build error from a red test by which of `build` and `run` fails, and reads exit statuses only. With `list`, a name that matches no test is refused (`tests_not_found`) before `run`; a repo whose runner exits non-zero on an unknown name needs it. A repo with no table refuses a test or implementation Job (`tests_unconfigured`): a docs-only or config-only PR is made with `--shape docs` or `--shape config`.
 
 ## Research Jobs
 

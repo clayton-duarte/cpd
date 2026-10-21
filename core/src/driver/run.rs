@@ -306,6 +306,11 @@ impl Driver {
 
     /// A2 to A5, for a `starting` Attempt.
     fn start(&mut self, target: &Target, job: &jobs::Job, dirs: &PiDirs) -> Result<Ended, CpdError> {
+        // A2: an `open` Job's PR stacked on a merged base PR is unstacked first, so the Worker is told a base that exists (§3.4).
+        if job.kind == "open" {
+            let pr = crate::ids::PrKey::parse(&job.pr).map_err(|_| CpdError::bad_row(format!("Job {} has the PR key {:?}", job.key, job.pr)))?;
+            crate::pr::start::unstack_for_open_job(&mut self.store, SOURCE, &self.plan, &pr)?;
+        }
         // A2: the worktree from the Lead Branch HEAD, and pre-start.
         log("A2: creating the worktree and running pre-start");
         let setup = Setup {
@@ -548,7 +553,9 @@ impl Driver {
             let Some(file) = file.clone() else { continue };
             // The stall rule (§3.4 A4): pi is the pane's process, alive here. tmux
             // gives a live pane's pid; it is empty only for a dead or dying pane (hs-n102).
-            if let Some(line) = pi.and_then(|pi| stall.check(&file, pi)) {
+            // Not while the Worker's `attempt submit` holds a check span (§7.7): it is silent for as long as its Gate runs.
+            let span_open = lock::check_span_open(&self.home, &self.plan, &self.id)?;
+            if let Some(line) = pi.and_then(|pi| stall.check(&file, pi, span_open)) {
                 log(&line);
             }
             // Idle is read from the Session state and confirmed from the file (A5).

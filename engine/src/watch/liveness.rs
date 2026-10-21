@@ -90,6 +90,13 @@ fn attempts(engine: &mut Engine) {
     };
 
     for attempt in &active {
+        // A submit that died inside its check span left the span open: close it (§7.7), before the Attempt's end or its timeout reads it.
+        if attempt.status == "running" {
+            if let Err(e) = close_dead_span(engine, attempt) {
+                engine.fail(Step::E2, attempt.about(), &e);
+                continue;
+            }
+        }
         let probe = lock::probe(&engine.home, &attempt.plan, &attempt.id);
         let result = match probe {
             // Released at once: R takes it again itself.
@@ -106,6 +113,33 @@ fn attempts(engine: &mut Engine) {
             Err(e) => engine.fail(Step::E2, attempt.about(), &e),
         }
     }
+}
+
+/// A check span (contract §7.7) of a `running` Attempt whose `attempt submit` is gone: its latest check Event is a `start` and nothing
+/// holds `locks/check-<plan>--<attempt>.lock`. Appends the missing `end` with `died: true` (§3.7 E2), once. The lock is probed first and
+/// the Events read after, so a submit that has just ended its span (it writes the `end` before it lets the lock go) is not closed twice.
+fn close_dead_span(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
+    if lock::check_span_open(&engine.home, &active.plan, &active.id)? {
+        return Ok(());
+    }
+    let (plan, id) = (&active.plan, &active.id);
+    engine.store.write(SOURCE, |tx| {
+        let latest: Option<(String, String)> = tx
+            .query_row(
+                "SELECT json_extract(data, '$.check'), json_extract(data, '$.what') FROM events
+                  WHERE plan = ?1 AND attempt = ?2 AND kind = 'attempt-status' AND json_extract(data, '$.check') IS NOT NULL
+                  ORDER BY id DESC LIMIT 1",
+                [plan.as_str(), id.to_string().as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((_, what)) = latest.filter(|(check, _)| check == "start") else { return Ok(()) };
+        let job = ledger::load(tx, plan, id)?.job;
+        let text = format!("Attempt {id} of Job {job} ended its {what} check: its submit died inside it.");
+        cpd_core::events::append(tx, cpd_core::events::NewEvent::attempt_check_end(text, &what, true).plan(plan.clone()).job(job).attempt(id.clone()))?;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 /// The driver of `active` (`starting` or `running`) is dead: end the Attempt
@@ -202,7 +236,8 @@ fn stop_request(engine: &mut Engine, active: &Active) -> Result<(), CpdError> {
 /// Wall time since the Attempt turned `running` (the time of its `starting →
 /// running` `attempt-status` Event: the wait in `starting`, a review Job's wait
 /// for its Lead, is not counted), minus the time an Escalation of it was
-/// `open` (§3.3, §3.4 A4). Overlapping Escalations count once.
+/// `open` (§3.3, §3.4 A4), minus the check spans of its `attempt submit` (a `start` to its `end`, or to now while open; §7.7). Overlaps
+/// count once.
 fn active_time(engine: &mut Engine, active: &Active) -> Result<Duration, CpdError> {
     let (plan, id) = (active.plan.as_str(), active.id.to_string());
     let (running, open): (Option<String>, Vec<(String, Option<String>)>) = engine.store.read(|conn| {
@@ -217,7 +252,8 @@ fn active_time(engine: &mut Engine, active: &Active) -> Result<Duration, CpdErro
         let mut stmt = conn.prepare(
             "SELECT asked_at, coalesce(answered_at, expired_at) FROM escalations WHERE plan = ?1 AND attempt = ?2 ORDER BY asked_at",
         )?;
-        let rows = stmt.query_map([plan, &id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut rows = stmt.query_map([plan, &id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.extend(check_spans(conn, plan, &id)?);
         Ok((running, rows))
     })?;
     let running = running.ok_or_else(|| {
@@ -229,6 +265,25 @@ fn active_time(engine: &mut Engine, active: &Active) -> Result<Duration, CpdErro
         escalations.push((parse_time(asked)?, closed.as_deref().map(parse_time).transpose()?));
     }
     Ok(active_between(parse_time(&running)?, OffsetDateTime::now_utc(), &escalations))
+}
+
+/// The check spans of the Attempt as `(start, end)`, `end` `None` for a span still open: each `start` Event pairs with the next `end`.
+fn check_spans(conn: &rusqlite::Connection, plan: &str, id: &str) -> rusqlite::Result<Vec<(String, Option<String>)>> {
+    let mut stmt = conn.prepare(
+        "SELECT at, json_extract(data, '$.check') FROM events
+          WHERE plan = ?1 AND attempt = ?2 AND kind = 'attempt-status' AND json_extract(data, '$.check') IS NOT NULL ORDER BY id",
+    )?;
+    let events = stmt.query_map([plan, id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut spans: Vec<(String, Option<String>)> = Vec::new();
+    for (at, check) in events {
+        match (check.as_str(), spans.last_mut()) {
+            ("start", Some((_, end))) if end.is_none() => {}
+            ("start", _) => spans.push((at, None)),
+            (_, Some((_, end))) if end.is_none() => *end = Some(at),
+            _ => {}
+        }
+    }
+    Ok(spans)
 }
 
 /// The time from `running` to `now`, minus the union of the Escalation

@@ -124,7 +124,7 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     let row = env.cpd(&["session", "show", &id]).ok()["session"].clone();
     assert_eq!(
         (&row["role"], &row["plan"], &row["context"], &row["tier"], &row["forked_from"], &row["state"]),
-        (&json!("manager"), &Value::Null, &json!("ctx"), &json!("O5"), &Value::Null, &json!("stopped"))
+        (&json!("manager"), &Value::Null, &json!("ctx"), &json!("O4"), &Value::Null, &json!("stopped"))
     );
     assert_eq!(row["cwd"], env.root().canonicalize().unwrap().display().to_string());
     assert_eq!(row["tmux_pane"], manager["pane"]);
@@ -140,7 +140,7 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     let registered = events(&env, "session-registered");
     assert_eq!(registered.len(), 1);
     assert_eq!(registered[0]["session"], json!(id));
-    assert_eq!(registered[0]["data"], json!({"role": "manager", "name": "ctx-manager", "forked_from": null, "tier": "O5"}));
+    assert_eq!(registered[0]["data"], json!({"role": "manager", "name": "ctx-manager", "forked_from": null, "tier": "O4"}));
     let moved = events(&env, "session-moved");
     assert_eq!(moved.len(), 1);
     assert_eq!(moved[0]["data"]["place"], "parked");
@@ -164,7 +164,7 @@ fn the_first_call_registers_the_manager_and_starts_pi_in_its_window() {
     assert_eq!(calls.len(), 1);
     let argv = &calls[0];
     let at = |flag: &str| argv.iter().position(|a| a == flag).unwrap_or_else(|| panic!("{flag} in {argv:?}"));
-    assert!(argv[at("--model") + 1].ends_with(":max"), "O5's level: {argv:?}");
+    assert!(argv[at("--model") + 1].ends_with(":xhigh"), "O4's level: {argv:?}");
     assert_eq!(argv[at("--session-id") + 1], id);
     assert_eq!(argv[at("-n") + 1], "ctx-manager");
     // The first message goes as its file, `@<path>` (hs-n111), as a Lead's does.
@@ -278,7 +278,7 @@ fn a_stopped_manager_without_a_pane_is_started_again_on_its_file() {
     let calls = env.calls("pi");
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[1][0], "--model", "{calls:?}");
-    assert!(calls[1][1].ends_with(":max"), "O5's level: {calls:?}");
+    assert!(calls[1][1].ends_with(":xhigh"), "O4's level (manager_tier's default since hs-d506): {calls:?}");
     assert_eq!(calls[1][2..4], ["--session".to_owned(), file.display().to_string()], "{calls:?}");
     assert!(!calls[1].contains(&"--".to_owned()), "no first message: {calls:?}");
 

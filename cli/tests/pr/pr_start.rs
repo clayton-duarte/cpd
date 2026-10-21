@@ -70,11 +70,17 @@ impl Fx {
     /// `pr add <key> --repo <repo> [--needs <needs>]`.
     fn add(&self, key: &str, repo: &Path, needs: &[&str]) {
         let needs = needs.join(",");
-        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--plan", "pay"];
+        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config", "--plan", "pay"];
         if !needs.is_empty() {
             args.extend(["--needs", &needs]);
         }
         self.env.cpd(&args).ok();
+        self.cancel_stub(key, "pay");
+    }
+
+    /// Cancels the stub draft `<pr>-config` of the shape: these tests add the Jobs they need, as a Lead cancels a stub it does not need.
+    fn cancel_stub(&self, pr: &str, plan: &str) {
+        self.env.cpd(&["job", "cancel", &format!("{pr}-config"), "--reason", "a stub of the template", "--plan", plan]).ok();
     }
 
     /// A draft Job of PR `pr`.
@@ -159,10 +165,11 @@ impl Fx {
 
     /// `pr add <key> --repo <repo> <extra…> --plan ship`.
     fn ship_add(&self, key: &str, repo: &Path, extra: &[&str]) {
-        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR"];
+        let mut args = vec!["pr", "add", key, "--repo", repo.to_str().unwrap(), "--title", "Change the PR", "--shape", "config"];
         args.extend(extra);
         args.extend(["--plan", "ship"]);
         self.env.cpd(&args).ok();
+        self.cancel_stub(key, "ship");
     }
 
     fn ship_dispatch(&self) {

@@ -195,6 +195,12 @@ pub(super) fn unstack_stored(store: &mut Store, source: &str, plan: &PlanId, key
         .ok_or_else(|| CpdError::bad_row(format!("PR {key} of Plan {plan} vanished while it was unstacked")))
 }
 
+/// A2 of an `open` Job (contract §3.4, hs-d340): a PR stacked on a base PR that has merged is unstacked first (`pr-base-changed`, `by` `open job`),
+/// so the Worker is told a base that exists: GitHub deleted the merged base PR's branch.
+pub fn unstack_for_open_job(store: &mut Store, source: &str, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+    unstack_stored(store, source, plan, key, "open job").map(|_| ())
+}
+
 /// The root base of a PR of `repo` whose `base` is `base` (§2.2, §7.5): the `base` of the first PR down the chain
 /// of base PRs that is not stacked, the branch the stack lands on; `base` itself when the PR is not stacked.
 pub fn root_base(conn: &rusqlite::Connection, repo: &str, base: &str) -> Result<String, CpdError> {

@@ -8,10 +8,12 @@
 //!
 //! `attempt run` belongs to the driver (`crate::driver`).
 
+mod kind;
 pub mod ledger;
 mod read;
 mod row;
 mod show;
+mod span;
 mod submit;
 
 use crate::args::PlanArg;

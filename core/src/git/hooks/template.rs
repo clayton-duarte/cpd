@@ -18,6 +18,13 @@ pub fn render(template: &str, vars: &Map<String, Json>) -> Result<String, String
     env.render_str(template, Value::from_pairs(vars.iter().map(|(k, v)| (k.as_str(), to_value(v))))).map_err(|e| format!("Cannot render `{template}`: {e}"))
 }
 
+/// Whether `template` uses the variable `name`; `Err` (a sentence) when it does not parse.
+pub fn uses(template: &str, name: &str) -> Result<bool, String> {
+    let env = Environment::new();
+    let compiled = env.template_from_str(template).map_err(|e| format!("Cannot parse `{template}`: {e}"))?;
+    Ok(compiled.undeclared_variables(false).contains(name))
+}
+
 /// The variables are strings and lists (`args`); `minijinja` here has no serde bridge.
 fn to_value(json: &Json) -> Value {
     match json {

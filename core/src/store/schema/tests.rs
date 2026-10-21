@@ -947,7 +947,8 @@ fn migration_6_keeps_migration_5s_triggers_on_prs() {
     let dir = tempfile::tempdir().unwrap();
     let (store, before) = migrated_5(&dir);
     drop(store);
-    let after = prs_triggers(&Connection::open(home(&dir).db()).unwrap());
+    // `prs_shape_fixed` is `job-kinds`': it is not one of migration 5's.
+    let after: Vec<(String, String)> = prs_triggers(&Connection::open(home(&dir).db()).unwrap()).into_iter().filter(|(name, _)| name != "prs_shape_fixed").collect();
     let names = |t: &[(String, String)]| t.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&after), names(&before), "the same triggers on prs");
     for ((name, old), (_, new)) in before.iter().zip(&after) {
@@ -1370,7 +1371,9 @@ fn a_version_13_database_migrates_to_14_keeping_every_job_and_seq_and_its_checks
     // The triggers of §4.4 on `jobs` are back: the Locked guard, the legal transitions, the history and no delete.
     assert_eq!(
         rows(&mut store, "SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'jobs' ORDER BY name"),
-        ["jobs_hist_ins", "jobs_hist_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"].map(|name| serde_json::json!([name]))
+        // `jobs_kind_spec_ins` and `_upd` are `job-kinds`'.
+        ["jobs_hist_ins", "jobs_hist_upd", "jobs_kind_spec_ins", "jobs_kind_spec_upd", "jobs_locked", "jobs_no_delete", "jobs_pr_dependencies", "jobs_status"]
+            .map(|name| serde_json::json!([name]))
     );
     assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tier = 'S1' WHERE key = 'c'")), "job_locked");
     assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET goal = 'x' WHERE key = 's1'")), "job_locked", "a cancelled stub is Locked");
@@ -1806,7 +1809,9 @@ fn converts_keeping_every_row_and_id(n: usize) {
                 if values.len() == width {
                     continue;
                 }
-                assert!(values[width..].iter().all(Value::is_null), "{table}: an added column is set: {row}");
+                // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`.
+                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free");
+                assert!(values[width..].iter().all(default), "{table}: an added column is set: {row}");
                 values.truncate(width);
                 *row = Value::from(values).to_string();
             }
@@ -2663,7 +2668,16 @@ fn stacked_prs_keeps_every_pr_and_need_and_gives_pr_needs_its_plan() {
         vec![serde_json::json!(["pl", "b", "pl", "c"])]
     );
     let after = dump(&connection(&home.db()));
-    assert_eq!(after["prs"], before["prs"]);
+    // `job-kinds` added `prs.shape`, last, `free` in every row.
+    let without_shape: Vec<String> = after["prs"]
+        .iter()
+        .map(|row| {
+            let mut cells: Vec<serde_json::Value> = serde_json::from_str(row).unwrap();
+            assert_eq!(cells.pop(), Some(serde_json::json!("free")));
+            serde_json::Value::from(cells).to_string()
+        })
+        .collect();
+    assert_eq!(without_shape, before["prs"]);
     assert_eq!(after["pr_needs"].len(), 1);
 
     // A need of another Plan is stored; one naming no PR is refused by the foreign key.
@@ -2817,6 +2831,231 @@ fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_an
     );
     let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
     assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
+}
+
+// ---------- named migration `job-kinds` (§4.5; §2.2 "Job kinds", hs-d341, hs-d497) ----------
+
+/// A locked Plan `pl` with one `waiting` PR `a` and a Job of every status, as a store before `job-kinds` holds them.
+const KINDS_FIXTURE: &str = "
+  INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+  INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+    VALUES ('lead', 'lead', 'ctx', 'pl', 'Lead', '/', 'O3', 'idle', 't', 't');
+  INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at)
+    VALUES ('pl', 'ctx', 'Plan', 'dispatch', 'lead', 't', 't');
+  INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+    VALUES ('pl', 'a', '/r', 'main', 'waiting', 'cpd/pl/a', cpd_txn(), 't');
+  INSERT INTO jobs (plan, pr, key, title, status, appended, created_txn, created_at)
+    VALUES ('pl', 'a', 'stub', 'Stub', 'draft', 1, cpd_txn(), 't');
+  INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint, created_txn, created_at)
+    VALUES ('pl', 'a', 'draft', 'D', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, NULL, cpd_txn(), 't'),
+           ('pl', 'a', 'queued', 'Q', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cpd_txn(), 't'),
+           ('pl', 'a', 'running', 'R', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cpd_txn(), 't'),
+           ('pl', 'a', 'merged', 'M', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cpd_txn(), 't'),
+           ('pl', 'a', 'failed', 'F', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cpd_txn(), 't'),
+           ('pl', 'a', 'gone', 'G', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', cpd_txn(), 't');
+  UPDATE jobs SET status = 'running' WHERE key IN ('running', 'merged', 'failed');
+  UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'merged';
+  UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE key = 'failed';
+  UPDATE jobs SET status = 'cancelled', cancel_reason = 'no', cancel_requested_at = 't' WHERE key = 'gone';
+";
+
+/// A named store as the binaries before `job-kinds` left it, holding [`KINDS_FIXTURE`].
+fn store_before_job_kinds(home: &CpdHome) -> Vec<Named> {
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-job-kinds")).collect();
+    assert!(earlier.len() < NAMED.len(), "job-kinds is a built-in migration");
+    drop(crate::store::tests::open_named(home, &earlier).unwrap());
+    connection(&home.db()).execute_batch(&format!("PRAGMA foreign_keys = OFF; {KINDS_FIXTURE}")).unwrap();
+    earlier
+}
+
+#[test]
+fn job_kinds_is_breaking_after_the_names_before_it() {
+    let (index, migration) = NAMED.iter().enumerate().find(|(_, n)| n.name.ends_with("-job-kinds")).unwrap();
+    assert_eq!(migration.compat, Compat::Breaking);
+    let after = LEGACY.len() + index;
+    assert_eq!(migration.sql.lines().next().unwrap(), format!("-- cpd-migration: breaking after {after}"));
+}
+
+#[test]
+fn job_kinds_keeps_every_job_and_pr_as_work_and_free_and_matches_a_fresh_store() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    store_before_job_kinds(&home);
+    let before = dump(&connection(&home.db()));
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-job-kinds")));
+    assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
+
+    // Every Job is `work` with the other columns null and every PR is `free`: the rows are as they were, plus those.
+    let after = dump(&connection(&home.db()));
+    let strip = |rows: &[String], added: usize, default: &str| -> Vec<String> {
+        rows.iter()
+            .map(|row| {
+                let mut cells: Vec<serde_json::Value> = serde_json::from_str(row).unwrap();
+                let tail = cells.split_off(cells.len() - added);
+                assert_eq!(tail[0], serde_json::json!(default), "{row}");
+                assert!(tail[1..].iter().all(serde_json::Value::is_null), "{row}");
+                serde_json::Value::from(cells).to_string()
+            })
+            .collect()
+    };
+    assert_eq!(strip(&after["jobs"], 4, "work"), before["jobs"]);
+    assert_eq!(strip(&after["prs"], 1, "free"), before["prs"]);
+    assert_eq!(count(&mut store, "SELECT count(*) FROM jobs WHERE status = 'merged'"), 1);
+
+    let migrated = store.read(|c| Ok(canonical_hash(c)?)).unwrap();
+    assert_eq!(migrated, fresh_canonical_hash(), "the schema of a fresh store with the migration");
+}
+
+/// The store migrated to `job-kinds` from [`store_before_job_kinds`].
+fn store_with_job_kinds() -> (tempfile::TempDir, Store) {
+    let (dir, home) = crate::store::tests::tmp_home();
+    store_before_job_kinds(&home);
+    let store = Store::open(&home, 5000).unwrap();
+    (dir, store)
+}
+
+#[test]
+fn the_shape_of_a_pr_is_one_of_four_and_never_changes() {
+    let (_dir, mut store) = store_with_job_kinds();
+    assert_eq!(rows(&mut store, "SELECT shape FROM prs"), vec![serde_json::json!(["free"])], "the PR that existed before the migration");
+    for shape in ["tdd", "docs", "config"] {
+        write(
+            &mut store,
+            &format!(
+                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+                 VALUES ('pl', 's-{shape}', '/r', 'main', 'waiting', 'cpd/pl/s-{shape}', '{shape}', cpd_txn(), 't')"
+            ),
+        )
+        .unwrap();
+    }
+    let bad = refused(
+        &mut store,
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+         VALUES ('pl', 'bad', '/r', 'main', 'waiting', 'cpd/pl/bad', 'other', cpd_txn(), 't')",
+    );
+    assert!(sqlite_message(&bad).contains("CHECK constraint failed"), "{bad:?}");
+    // The shape is the PR's identity, in any phase: `prs_shape_fixed` refuses every update of it, a same value included.
+    for shape in ["docs", "tdd", "free"] {
+        assert_eq!(sqlite_message(&refused(&mut store, &format!("UPDATE prs SET shape = '{shape}' WHERE key = 's-tdd'"))), "pr_locked");
+    }
+    // The PR's other columns still change where they could.
+    write(&mut store, "UPDATE prs SET title = 'New' WHERE key = 's-tdd'").unwrap();
+}
+
+/// A Job `key` of `kind` in PR `a`, as a draft with the Spec and the given extra columns and values.
+fn job_of_kind(key: &str, kind: &str, columns: &str, values: &str) -> String {
+    format!(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind{columns}, created_txn, created_at)
+         VALUES ('pl', 'a', '{key}', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'draft', 1, '{kind}'{values}, cpd_txn(), 't')"
+    )
+}
+
+#[test]
+fn a_jobs_kind_is_one_of_six_and_its_spec_fields_agree_with_it() {
+    let (_dir, mut store) = store_with_job_kinds();
+    let spec_invalid = |store: &mut Store, sql: &str| assert_eq!(sqlite_message(&refused(store, sql)), "spec_invalid", "{sql}");
+    let tests = ", tests, test_files";
+    let named = ", '[\"t::one\"]', '[\"tests/t.rs\"]'";
+    for kind in ["work", "docs", "impl", "open", "update"] {
+        write(&mut store, &job_of_kind(&format!("k-{kind}"), kind, "", "")).unwrap();
+    }
+    write(&mut store, &job_of_kind("k-test", "test", tests, named)).unwrap();
+    assert_eq!(count(&mut store, "SELECT count(DISTINCT kind) FROM jobs"), 6);
+    let bad = refused(&mut store, &job_of_kind("k-bad", "other", "", ""));
+    assert!(sqlite_message(&bad).contains("CHECK constraint failed"), "{bad:?}");
+
+    // `tests` and `test_files` belong to a `test` Job, and both or neither are set.
+    spec_invalid(&mut store, &job_of_kind("k-1", "impl", tests, named));
+    spec_invalid(&mut store, &job_of_kind("k-2", "work", tests, named));
+    spec_invalid(&mut store, &job_of_kind("k-3", "test", ", tests", ", '[\"t::one\"]'"));
+    spec_invalid(&mut store, &job_of_kind("k-4", "test", ", test_files", ", '[\"tests/t.rs\"]'"));
+    // A `test` Job that is a stub draft has neither; one that is queued has both.
+    write(
+        &mut store,
+        "INSERT INTO jobs (plan, pr, key, title, kind, status, appended, created_txn, created_at)
+         VALUES ('pl', 'a', 'k-stub', 'Stub', 'test', 'draft', 1, cpd_txn(), 't')",
+    )
+    .unwrap();
+    spec_invalid(
+        &mut store,
+        &format!("INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+                  VALUES ('pl', 'a', 'k-5', 'T', 'S2', 'g', 'c', '[\"x\"]', '[\"y\"]', '[]', 'queued', 1, 'test', '{FP}', cpd_txn(), 't')"),
+    );
+    write(&mut store, "UPDATE jobs SET kind = 'work' WHERE key = 'k-stub'").unwrap();
+    // The same rule on update: the review flag is for `work`, the approvals for `impl`, the named tests for `test`.
+    spec_invalid(&mut store, "UPDATE jobs SET review = 1 WHERE key = 'k-docs'");
+    write(&mut store, "UPDATE jobs SET review = 1 WHERE key = 'k-work'").unwrap();
+    spec_invalid(&mut store, "UPDATE jobs SET kind = 'docs' WHERE key = 'k-work'");
+    spec_invalid(&mut store, "UPDATE jobs SET test_approved = '[\"a\"]' WHERE key = 'k-work'");
+    write(&mut store, "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'k-impl'").unwrap();
+    spec_invalid(&mut store, "UPDATE jobs SET kind = 'work' WHERE key = 'k-impl'");
+    spec_invalid(&mut store, "UPDATE jobs SET kind = 'impl' WHERE key = 'k-test'");
+    spec_invalid(&mut store, "UPDATE jobs SET tests = NULL WHERE key = 'k-test'");
+    // Each column keeps its own check: a JSON array, of at least one name for `tests` and `test_files`.
+    for column in ["tests", "test_files"] {
+        for bad in ["'[]'", "'{}'", "'nope'"] {
+            let error = refused(&mut store, &format!("UPDATE jobs SET {column} = {bad} WHERE key = 'k-test'"));
+            assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{column} = {bad}: {error:?}");
+        }
+    }
+    let error = refused(&mut store, "UPDATE jobs SET test_approved = '\"a\"' WHERE key = 'k-impl'");
+    assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{error:?}");
+    write(&mut store, "UPDATE jobs SET test_approved = '[]' WHERE key = 'k-impl'").unwrap();
+}
+
+#[test]
+fn kind_tests_and_test_files_are_locked_with_the_job_and_test_approved_is_not() {
+    let (_dir, mut store) = store_with_job_kinds();
+    write(&mut store, &job_of_kind("impl-draft", "impl", "", "")).unwrap();
+    // A draft is editable in all three; once it is not a draft they are Locked, as the Spec is.
+    write(&mut store, "UPDATE jobs SET kind = 'docs' WHERE key = 'draft'").unwrap();
+    write(&mut store, "UPDATE jobs SET kind = 'test', tests = '[\"a\"]', test_files = '[\"b\"]' WHERE key = 'draft'").unwrap();
+    write(&mut store, "UPDATE jobs SET kind = 'work', tests = NULL, test_files = NULL WHERE key = 'draft'").unwrap();
+    for sql in [
+        "UPDATE jobs SET kind = 'docs' WHERE key = 'queued'",
+        "UPDATE jobs SET kind = 'impl' WHERE key = 'running'",
+        "UPDATE jobs SET kind = 'work' WHERE key = 'merged'",
+        "UPDATE jobs SET kind = 'work' WHERE key = 'failed'",
+    ] {
+        assert_eq!(sqlite_message(&refused(&mut store, sql)), "job_locked", "{sql}");
+    }
+    write(&mut store, &job_of_kind("test-draft", "test", ", tests, test_files", ", '[\"t::one\"]', '[\"tests/t.rs\"]'")).unwrap();
+    for key in ["impl-draft", "test-draft"] {
+        write(&mut store, &format!("UPDATE jobs SET status = 'queued', fingerprint = '{FP}' WHERE key = '{key}'")).unwrap();
+    }
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET tests = '[\"a\"]' WHERE key = 'test-draft'")), "job_locked");
+    assert_eq!(sqlite_message(&refused(&mut store, "UPDATE jobs SET test_files = '[\"a\"]' WHERE key = 'test-draft'")), "job_locked");
+    // `test_approved` changes after the lock: that is what `job approve-tests` does.
+    write(&mut store, "UPDATE jobs SET test_approved = '[\"tests/t.rs\"]' WHERE key = 'impl-draft'").unwrap();
+    assert_eq!(rows(&mut store, "SELECT test_approved FROM jobs WHERE key = 'impl-draft'"), vec![serde_json::json!(["[\"tests/t.rs\"]"])]);
+}
+
+#[test]
+fn the_history_of_jobs_and_prs_lists_the_new_columns() {
+    let (_dir, mut store) = store_with_job_kinds();
+    write(&mut store, &job_of_kind("h", "test", ", tests, test_files", ", '[\"t::one\"]', '[\"tests/t.rs\"]'")).unwrap();
+    write(&mut store, "UPDATE jobs SET test_files = '[\"tests/u.rs\"]' WHERE key = 'h'").unwrap();
+    // The insert lists every column; an update the columns it changed (`history-changed`).
+    assert_eq!(
+        rows(&mut store, "SELECT json_extract(after, '$.kind'), json_extract(after, '$.tests'), json_extract(after, '$.test_files') FROM history WHERE tbl = 'jobs' AND op = 'insert' AND json_extract(after, '$.key') = 'h'"),
+        vec![serde_json::json!(["test", "[\"t::one\"]", "[\"tests/t.rs\"]"])]
+    );
+    assert_eq!(
+        rows(&mut store, "SELECT json_extract(after, '$.test_files') FROM history WHERE tbl = 'jobs' AND op = 'update' AND json_extract(after, '$.test_files') IS NOT NULL"),
+        vec![serde_json::json!(["[\"tests/u.rs\"]"])]
+    );
+    write(
+        &mut store,
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, shape, created_txn, created_at)
+         VALUES ('pl', 'b', '/r', 'main', 'waiting', 'cpd/pl/b', 'tdd', cpd_txn(), 't')",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&mut store, "SELECT json_extract(after, '$.shape') FROM history WHERE tbl = 'prs' AND op = 'insert' AND json_extract(after, '$.key') = 'b'"),
+        vec![serde_json::json!(["tdd"])]
+    );
 }
 
 // ---------- named migrations `plannotator-reviews` and `review-waiting` (§4.4, §4.5; hs-d496) ----------

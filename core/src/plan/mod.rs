@@ -24,6 +24,7 @@ mod render;
 mod rename;
 mod review;
 pub mod row;
+pub(crate) mod shape;
 mod show;
 mod summary;
 #[cfg(test)]

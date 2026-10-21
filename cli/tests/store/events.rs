@@ -103,7 +103,7 @@ fn seed(store: &mut Store) {
         )
         .plan(plan("pay"))
         .session(session("lead1")),
-        NewEvent::new(JobMerged, "Job api merged. Next: cpd plan show", json!({"sha": "c0ffee1", "tier": "S2"}))
+        NewEvent::new(JobMerged, "Job api merged. Next: cpd plan show", json!({"sha": "c0ffee1", "tier": "S2", "kind": "work"}))
             .plan(plan("pay"))
             .job(job())
             .attempt(attempt()),
@@ -194,9 +194,9 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("plan-review", "cp", "", &["review", "fingerprint", "status"], &["feedback"]),
     ("plan-outlined", "cp", "", &["replaced"], &[]),
     ("plan-done", "cp", "", &["prs"], &[]),
-    ("job-added", "cpj", "", &["pr", "status", "appended", "tier", "needs", "review", "urgent"], &[]),
+    ("job-added", "cpj", "", &["pr", "kind", "status", "appended", "tier", "needs", "review", "urgent"], &["by", "reason"]),
     ("job-edited", "cpj", "", &["fields"], &[]),
-    ("job-merged", "cpja", "", &["sha", "tier"], &["cancel_too_late"]),
+    ("job-merged", "cpja", "", &["sha", "tier", "kind"], &["cancel_too_late", "pr", "number", "url"]),
     ("job-failed", "cpj", "a", &["cause", "detail", "tier", "attempts"], &[]),
     ("job-retried", "cpj", "", &["tier"], &[]),
     ("job-cancel-requested", "cpja", "", &["reason"], &[]),
@@ -480,7 +480,7 @@ fn list_prints_events_in_the_shape_of_11_1() {
     assert_eq!(merged["attempt"], "api-a1");
     assert_eq!(merged["session"], Value::Null);
     assert_eq!(merged["text"], "Job api merged. Next: cpd plan show");
-    assert_eq!(merged["data"], json!({"sha": "c0ffee1", "tier": "S2"}));
+    assert_eq!(merged["data"], json!({"sha": "c0ffee1", "tier": "S2", "kind": "work"}));
     assert!(merged["at"].as_str().unwrap().ends_with('Z'));
 }
 

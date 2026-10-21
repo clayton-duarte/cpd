@@ -14,9 +14,10 @@ use serde_json::json;
 use super::{AddArgs, Env, plan_phase};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
+use crate::git;
 use crate::git::run::{branch_exists, delete_remote_branch, has_origin, ok, remote_has_branch, run};
 use crate::git::worktree::list as worktrees;
-use crate::ids::{OwnerLogin, PlanId, PrKey, RepoName};
+use crate::ids::{JobKey, OwnerLogin, PlanId, PrKey, RepoName};
 use crate::policy::{PolicyKey, owner_mismatch, owner_unset, repo_key, resolve};
 use crate::output::Output;
 use crate::plan::Phase;
@@ -26,6 +27,38 @@ use crate::store::WriteTxn;
 
 const COMMAND: &str = "pr add";
 
+/// The shapes `pr add` writes (contract §2.2 "Job kinds"); `free` is only what the migration gave an older PR.
+pub(super) const SHAPES: [&str; 3] = ["tdd", "docs", "config"];
+
+/// One stub draft of a shape's template.
+struct Stub {
+    key: String,
+    kind: &'static str,
+    title: String,
+    /// The stub it needs: the step before it.
+    needs: Option<String>,
+}
+
+/// The stub drafts a PR of `shape` starts with (commands.md §9.4): `tdd` docs, red tests (needs docs) and
+/// implementation (needs the tests); `docs` its docs; `config` one `work` Job.
+fn template(shape: &str, pr: &PrKey, title: &str) -> Vec<Stub> {
+    let stub = |suffix: &str, kind: &'static str, prefix: &str, needs: Option<&str>| Stub {
+        key: format!("{pr}-{suffix}"),
+        kind,
+        title: format!("{prefix}: {title}"),
+        needs: needs.map(|n| format!("{pr}-{n}")),
+    };
+    match shape {
+        "tdd" => vec![
+            stub("docs", "docs", "Docs", None),
+            stub("tests", "test", "Red tests", Some("docs")),
+            stub("impl", "impl", "Implement", Some("tests")),
+        ],
+        "docs" => vec![stub("docs", "docs", "Docs", None)],
+        _ => vec![stub("config", "work", "Config", None)],
+    }
+}
+
 /// The flags given, resolved.
 struct Wanted {
     key: PrKey,
@@ -34,6 +67,8 @@ struct Wanted {
     name: RepoName,
     base: BaseWanted,
     title: String,
+    /// `--shape` (§9.4): `tdd` by default.
+    shape: String,
     /// `--needs` as given, as sorted PR references (`needs_refs`); `Some(vec![])` is `--no-needs`; `None`: the default.
     needs: Option<Vec<String>>,
 }
@@ -411,11 +446,12 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
         repo: repo.display().to_string(),
         name,
         title: args.title.to_string(),
+        shape: args.shape,
         key: args.key,
         needs,
     };
 
-    let (status, lead_branch, appended, base, base_pr, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted))? {
+    let (status, lead_branch, appended, base, base_pr, needs, already) = match env.store.read(|conn| decide(conn, &plan, &wanted, true))? {
         Decision::Already { status, lead_branch, appended, base, base_pr, needs } => (status, lead_branch, appended, base, base_pr, needs, true),
         Decision::Insert { .. } => {
             // git, outside any transaction.
@@ -424,7 +460,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                 move_legacy_branch(&plan, legacy)?;
             }
             no_branch_clash(&repo, &plan, &wanted.key)?;
-            env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted)? {
+            env.store.write(COMMAND, |tx| match decide(tx, &plan, &wanted, false)? {
                 Decision::Already { status, lead_branch, appended, base, base_pr, needs } => {
                     Ok((status, lead_branch, appended, base, base_pr, needs, true))
                 }
@@ -439,6 +475,7 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                         rename_legacy(tx, &plan, legacy)?;
                     }
                     insert(tx, &plan, &wanted, &base, &needs, &lead_branch)?;
+                    let stubs = insert_stubs(tx, &plan, &wanted, appended)?;
                     let with = if needs.is_empty() { String::new() } else { format!(", needs {}", needs.join(", ")) };
                     let text = format!(
                         "PR {key} added to Plan {plan} (repo {}, base {base}{with}), waiting. Next: cpd plan show --plan {plan}",
@@ -446,6 +483,12 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
                     );
                     let event = NewEvent::pr_added(text, key, &wanted.repo, &base, &wanted.title, &needs, appended);
                     append(tx, event.plan(plan.clone()))?;
+                    for stub in &stubs {
+                        let text = format!("Job {} added to Plan {plan} as draft (the {} template of PR {key}). Next: cpd job edit {} --tier <T> --spec <file> --plan {plan}", stub.key, wanted.shape, stub.key);
+                        let needs: Vec<&String> = stub.needs.iter().collect();
+                        let event = NewEvent::job_added(text, key, stub.kind, "draft", appended, None, needs, false, false);
+                        append(tx, event.plan(plan.clone()).job(JobKey::parse(&stub.key)?))?;
+                    }
                     Ok(("waiting".to_owned(), lead_branch, appended, base, base_pr, needs, false))
                 }
             })?
@@ -453,7 +496,8 @@ pub(super) fn add(args: AddArgs) -> Result<Output, CpdError> {
     };
     let mut out = json!({"pr": {
         "key": wanted.key, "repo": wanted.repo, "name": wanted.name, "base": base, "base_pr": base_pr, "title": wanted.title, "needs": needs,
-        "status": status, "lead_branch": lead_branch, "appended": appended,
+        "status": status, "lead_branch": lead_branch, "appended": appended, "shape": wanted.shape,
+        "jobs": template(&wanted.shape, &wanted.key, &wanted.title).iter().map(|s| s.key.clone()).collect::<Vec<_>>(),
     }});
     if already {
         out["already"] = json!(true);
@@ -495,7 +539,8 @@ fn check_plan(conn: &Connection, plan: &PlanId) -> Result<Phase, CpdError> {
     Ok(phase)
 }
 
-fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision, CpdError> {
+/// `read_tests`: the first decision reads the repo's `[tests]` (git, outside the write); the one inside the write transaction does not.
+fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted, read_tests: bool) -> Result<Decision, CpdError> {
     let phase = check_plan(conn, plan)?;
     let prs = load_prs(conn, plan)?;
     if let Some(existing) = prs.iter().find(|p| p.key == wanted.key) {
@@ -524,6 +569,7 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
             .with("base", existing.base.as_str())
             .with("title", title)
             .with("needs", existing.needs.clone())
+            .with("shape", existing.shape.as_str())
             .with("status", existing.status.as_str()));
     }
     let needs = match &wanted.needs {
@@ -532,7 +578,68 @@ fn decide(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<Decision,
         None => Vec::new(),
     };
     let resolved = resolve_refs(conn, &Subject { plan, key: &wanted.key, repo: &wanted.repo }, &wanted.base, &needs)?;
+    if read_tests && wanted.shape == "tdd" {
+        require_tests_table(conn, wanted, &resolved.base)?;
+    }
+    check_template_keys_free(conn, plan, wanted)?;
     Ok(Decision::Insert { phase, base: resolved.base, base_pr: resolved.base_pr, needs })
+}
+
+/// A `tdd` PR needs the repo's `[tests]` (contract §7.7), read from `origin/<base>` (`<base>` with no `origin`): `tests_unconfigured`;
+/// a table that is not as documented is `config_invalid`. A stacked PR's base is its base PR's Lead Branch, which may not be on the
+/// remote yet: the table is then read from the base the stack lands on, followed through the base PRs.
+fn require_tests_table(conn: &Connection, wanted: &Wanted, base: &str) -> Result<(), CpdError> {
+    let repo = Path::new(&wanted.repo);
+    let known = known_prs(conn)?;
+    let mut base = base.to_owned();
+    let mut steps = 0;
+    let at = loop {
+        let at = git::tamper::base_ref(repo, &base)?;
+        if git::run::run(repo, &["rev-parse", "--verify", "--quiet", &format!("{at}^{{commit}}")])?.code == 0 {
+            break at;
+        }
+        steps += 1;
+        match known.iter().find(|p| p.repo == wanted.repo && p.lead_branch == base) {
+            Some(parent) if steps <= known.len() => base = parent.base.clone(),
+            _ => {
+                return Err(CpdError::new(ErrorCode::BaseNotFound, format!("The base {base} is not a branch of {}.", wanted.repo))
+                    .with("base", base));
+            }
+        }
+    };
+    if git::repo_tests(repo, &at)?.is_some() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::TestsUnconfigured,
+        format!(
+            "{} has no table [tests] in .config/cpd.toml on {at}, and a tdd PR needs it to check its test and impl Jobs. Add --shape docs or --shape config for a PR with no behaviour, or ask the Lead to commit the table (contract §7.7).",
+            wanted.repo
+        ),
+    )
+    .with("repo", wanted.repo.as_str())
+    .with("base", at))
+}
+
+/// None of the Job keys the shape lays out exists in the Plan (`job_key_exists`, `details.jobs`, §9.4).
+fn check_template_keys_free(conn: &Connection, plan: &PlanId, wanted: &Wanted) -> Result<(), CpdError> {
+    let mut taken: Vec<String> = Vec::new();
+    for stub in template(&wanted.shape, &wanted.key, &wanted.title) {
+        let exists: bool = conn.query_row("SELECT EXISTS (SELECT 1 FROM jobs WHERE plan = ?1 AND key = ?2)", [plan.as_str(), stub.key.as_str()], |r| r.get(0))?;
+        if exists {
+            taken.push(stub.key);
+        }
+    }
+    if taken.is_empty() {
+        return Ok(());
+    }
+    Err(CpdError::new(
+        ErrorCode::JobKeyExists,
+        format!("Plan {plan} already has the Job {}, which the {} template of PR {} would add.", taken.join(", "), wanted.shape, wanted.key),
+    )
+    .with("plan", plan.as_str())
+    .with("pr", wanted.key.as_str())
+    .with("jobs", taken))
 }
 
 /// The branch `base` names, before any validation: a base PR is looked up (`base_pr_unknown`).
@@ -566,16 +673,35 @@ fn same(existing: &PrRow, title: Option<&str>, wanted: &Wanted, prs: &[PrRow], b
         Some(needs) => &existing.needs == needs,
         None => existing.needs.iter().all(|n| merged_keys(prs).contains(n)),
     };
-    (existing.repo.as_str(), existing.base.as_str()) == (wanted.repo.as_str(), base) && title == Some(wanted.title.as_str()) && needs_match
+    (existing.repo.as_str(), existing.base.as_str(), existing.shape.as_str()) == (wanted.repo.as_str(), base, wanted.shape.as_str())
+        && title == Some(wanted.title.as_str())
+        && needs_match
 }
 
 fn insert(tx: &Connection, plan: &PlanId, wanted: &Wanted, base: &str, needs: &[String], lead_branch: &str) -> Result<(), CpdError> {
     tx.execute(
-        "INSERT INTO prs (plan, key, repo, name, base, title, status, lead_branch, created_txn, created_at)
-         SELECT ?1, ?2, ?3, ?6, ?4, ?7, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
-        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, base, lead_branch, wanted.name.as_str(), wanted.title],
+        "INSERT INTO prs (plan, key, repo, name, base, title, shape, status, lead_branch, created_txn, created_at)
+         SELECT ?1, ?2, ?3, ?6, ?4, ?7, ?8, 'waiting', ?5, id, at FROM txns WHERE id = cpd_txn()",
+        rusqlite::params![plan.as_str(), wanted.key.as_str(), wanted.repo, base, lead_branch, wanted.name.as_str(), wanted.title, wanted.shape],
     )?;
     insert_needs(tx, plan, &wanted.key, needs)
+}
+
+/// The shape's stub drafts (§9.4): `jobs` rows with a title and a kind and no Tier and no Spec, `draft`, no
+/// fingerprint, `appended` as `job add --draft` writes it, and the `dependencies` of the template.
+fn insert_stubs(tx: &Connection, plan: &PlanId, wanted: &Wanted, appended: bool) -> Result<Vec<Stub>, CpdError> {
+    let stubs = template(&wanted.shape, &wanted.key, &wanted.title);
+    for stub in &stubs {
+        tx.execute(
+            "INSERT INTO jobs (plan, pr, key, title, status, appended, kind, created_txn, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'draft', ?5, ?6, cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
+            rusqlite::params![plan.as_str(), wanted.key.as_str(), stub.key, stub.title, appended, stub.kind],
+        )?;
+        if let Some(need) = &stub.needs {
+            tx.execute("INSERT INTO dependencies (plan, job, needs) VALUES (?1, ?2, ?3)", [plan.as_str(), stub.key.as_str(), need.as_str()])?;
+        }
+    }
+    Ok(stubs)
 }
 
 /// One `pr_needs` row per need, `needs_plan` the needed PR's Plan.

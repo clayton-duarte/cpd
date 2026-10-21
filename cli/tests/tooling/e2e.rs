@@ -2,7 +2,7 @@
 //! `plan new`, `plan phase plan`, two Jobs (one needing the other), the Plan
 //! review, `plan lock`, the engine in the background dispatching both
 //! Attempts, fake Workers that commit and submit, both merges in dependency
-//! order, `all-merged`, `pr open` with the Gate and `pr poll` with failing checks.
+//! order, the open Job (the Gate, the push and the pull request in its merge) and `pr poll` with failing checks.
 //!
 //! Everything external is faked: `pi` (Leads and Workers), `gh`, pi's Node for
 //! the Tier catalog, a bare `origin`, and a private tmux server. Nothing is
@@ -46,8 +46,14 @@ if [ -n "$CPD_ATTEMPT" ]; then
   until cpd attempt show "$CPD_ATTEMPT" | grep -q '"status":"running"'; do sleep 0.1; done
   job="${CPD_ATTEMPT%-a*}"
   if [ "$job" = ui ] && [ ! -f api.txt ]; then exit 13; fi
-  echo "$job" > "$job.txt"
-  git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
+  case "$job" in
+    # The PR's open Job: the base did not move, so there is nothing to merge or commit; it submits when the test lets it.
+    open-*) until [ -e "$(dirname "$PWD")/open-go" ]; do sleep 0.1; done ;;
+    *)
+      echo "$job" > "$job.txt"
+      git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
+      ;;
+  esac
   # The driver kills this window (SIGHUP) as soon as the Attempt is `merging` (contract §7.4 step 0), which may be
   # before `attempt submit` has printed: the submit and the rename ignore SIGHUP, and the path is absolute, as A9
   # removes this worktree after the merge.
@@ -164,6 +170,11 @@ impl Fx {
 
     fn cursor(&self) -> i64 {
         self.events_since(0).last().map_or(0, |e| e["id"].as_i64().unwrap())
+    }
+
+    /// The cursor just before Event `event`.
+    fn cursor_before(&self, event: &Value) -> i64 {
+        event["id"].as_i64().unwrap() - 1
     }
 
     fn plan(&self) -> Value {
@@ -322,16 +333,19 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let calls = fx.pi_calls();
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(flag(&calls[0], "--session-id"), Some(lead_session.as_str()));
-    assert_eq!(flag(&calls[0], "--model"), Some("p/opus:high"));
+    assert_eq!(flag(&calls[0], "--model"), Some("p/opus:medium"));
     assert_eq!(flag(&calls[0], "-n"), Some(PLAN));
     let message_file = fx.env.cpd_home().join("run/pay/lead-message.md");
     assert_eq!(calls[0][calls[0].len() - 2..], ["--".to_owned(), format!("@{}", message_file.display())]);
     assert!(!calls[0].contains(&"--fork".to_owned()), "{calls:?}");
     cursor = fx.cursor();
-    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--title", "Change the PR", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "pay", "--repo", repo, "--title", "Change the PR", "--shape", "config", "--plan", PLAN]);
     assert_eq!(out["pr"]["base"], "main");
     assert_eq!(out["pr"]["lead_branch"], "cpd/pay/pay");
-    assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added"]);
+    assert_eq!(out["pr"]["jobs"], json!(["pay-config"]));
+    assert_eq!(kinds(&fx.events_since(cursor)), ["pr-added", "job-added"]);
+    // The stub draft the shape lays out is not one of this flow's Jobs: a Lead cancels a stub it does not need.
+    fx.ok(&["job", "cancel", "pay-config", "--reason", "a stub of the template", "--plan", PLAN]);
     cursor = fx.cursor();
 
     // ---------- 3. plan phase plan: the phase and its Event, no Session and no window
@@ -345,11 +359,11 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
 
     // ---------- 4. two Jobs, `ui` needing `api`; the Plan review, approved
     let out = fx.ok(&["job", "add", "api", "--title", "The API", "--tier", "S2", "--spec", &spec_file(&fx, "api"), "--plan", PLAN]);
-    assert_eq!(out["job"], json!({"key": "api", "pr": "pay", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "api", "pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
     let out = fx.ok(&[
         "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
-    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
     fx.env.outline_for_review(PLAN);
     let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     assert_eq!(review["review"]["id"], "r1");
@@ -358,7 +372,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["job-added", "job-added", "plan-outlined", "plan-review", "plan-review"]);
     assert_eq!(events[1]["job"], "ui");
-    assert_eq!(events[1]["data"], json!({"pr": "pay", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
+    assert_eq!(events[1]["data"], json!({"pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
     assert_eq!(events[3]["data"]["status"], "pending");
     assert_eq!(events[4]["data"]["status"], "approved");
     cursor = fx.cursor();
@@ -434,18 +448,20 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     assert_eq!(fs::read_to_string(fx.lead.join("ui.txt")).unwrap(), "ui\n");
     assert_eq!(fx.git(&fx.lead, &["status", "--porcelain"]), "");
 
-    // ---------- 9. all-merged, once
-    let all = fx.wait_event(cursor, "all-merged", 30, |_| true);
-    assert_eq!(all["data"], json!({"pr": "pay", "merged": ["api", "ui"], "cancelled": []}));
+    // ---------- 9. the open Job (contract §3.7 E4): added to the started PR by the engine, Ready once api and ui are merged
+    let added = fx.wait_event(cursor, "job-added", 30, |e| e["job"] == "open-pay");
+    assert_eq!(
+        added["data"],
+        json!({"pr": "pay", "kind": "open", "status": "queued", "appended": true, "tier": "S2", "needs": [], "review": false, "urgent": false, "by": "engine"})
+    );
     let shown = fx.plan();
     assert_eq!(shown["plan"]["phase"], "dispatch");
-    assert!(shown["prs"][0]["all_merged_at"].is_string(), "{shown}");
-    assert_eq!(shown["counts"], json!({"draft": 0, "queued": 0, "running": 0, "merged": 2, "failed": 0, "cancelled": 0}));
+    assert_eq!(shown["counts"]["merged"], 2);
+    assert_eq!(shown["counts"]["cancelled"], 1);
     assert_eq!(shown["tamper"], json!([]));
+    assert!(of_kind(&fx.events_since(0), "all-merged").is_empty(), "the all-merged steer is retired");
 
-    // The engine stops on SIGTERM, so the `pr poll` below is the only one that finds the PR. First,
-    // E2 records that each Worker's pane is gone after A9 killed its window
-    // (Escalation e2e-a1-q1): `stopped`, no pane, place `none`.
+    // E2 records that each Worker's pane is gone after A9 killed its window (Escalation e2e-a1-q1): `stopped`, no pane, place `none`.
     for attempt in ["api-a1", "ui-a1"] {
         let worker = fx.ok(&["attempt", "show", attempt, "--plan", PLAN])["attempt"]["worker_session"].as_str().unwrap().to_owned();
         let moved = fx.wait_event(cursor, "session-moved", 30, |e| e["session"] == worker.as_str() && e["data"]["place"] == "none");
@@ -455,52 +471,61 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     }
     let session = fx.session(&lead_session);
     assert_eq!((&session["state"], &session["place"]), (&json!("idle"), &json!("parked")), "{session}");
-    // The engine is supervised (contract §6.6, hs-d328): a stopped engine comes back at once, through the tmux hook `pane-died`
-    // (its pane dies with it) and, were its window killed, `window-unlinked`. This test needs it to stay stopped, so that its own
-    // `pr poll` is the only one: it takes the one hook that its SIGTERM triggers off this private server, by name.
-    assert!(fx.env.tmux(&["set-hook", "-gu", "pane-died"]).status.success());
-    kill(Pid::from_raw(engine), Signal::SIGTERM).unwrap();
-    fx.wait_event(cursor, "watch-stopped", 30, |e| e["data"]["pid"] == engine);
-    let events = fx.events_since(cursor);
-    assert_eq!(of_kind(&events, "all-merged").len(), 1, "{events:?}");
-    cursor = fx.cursor();
 
-    // ---------- 10. pr open: the Gate on the Lead Branch, the push, gh
-    let out = fx.ok(&["pr", "open", "--plan", PLAN]);
-    assert_eq!(out["phase"], "deploy");
-    assert_eq!(out["pr"]["key"], "pay");
-    assert_eq!(out["pr"]["pr"]["number"], 7);
-    assert_eq!(out["pr"]["pr"]["url"], PR_URL);
+    // ---------- 10. the open Job's Worker submits (§7.7): cpd gates the Lead Branch, pushes it and opens the pull request in its merge
+    fx.wait_event(cursor, "attempt-started", 30, |e| e["job"] == "open-pay");
+    fs::write(fx.repo.parent().unwrap().join("open-go"), "").unwrap();
+    let open_merged = fx.wait_event(cursor, "job-merged", 90, |e| e["job"] == "open-pay");
+    assert_eq!(open_merged["data"]["kind"], "open");
+    assert_eq!((&open_merged["data"]["pr"], &open_merged["data"]["number"], &open_merged["data"]["url"]), (&json!("pay"), &json!(7), &json!(PR_URL)));
+    // Nothing was merged: the Lead Branch is where the last Job left it, and it is what was gated and pushed.
+    assert_eq!(open_merged["data"]["sha"], lead_sha.as_str());
+    assert_eq!(fx.git(&fx.repo, &["rev-parse", "refs/heads/cpd/pay/pay"]), lead_sha);
     assert!(fx.hooks_log().ends_with("pre-merge cpd/pay/pay\n"), "{}", fx.hooks_log());
     let pushed = fx.git(&fx.origin, &["rev-parse", "refs/heads/cpd/pay/pay"]);
     assert_eq!(pushed, lead_sha);
-    // The engine's polls (`api graphql`) aside, `pr open` made these two calls.
+    // The engine's polls (`api graphql`) aside, the Job made these calls: the lookups of the Lead Branch's pull requests, then `gh pr create`.
     let gh: Vec<_> = fx.env.calls("gh").into_iter().filter(|c| c[0] != "api").collect();
     assert_eq!(gh[0], ["pr", "list", "--head", "cpd/pay/pay", "--state", "all", "--json", "number,url,state"]);
-    assert_eq!(gh[1][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Change the PR"]);
-    let body = &gh[1][9];
+    let created: Vec<&Vec<String>> = gh.iter().filter(|c| c[1] == "create").collect();
+    assert_eq!(created.len(), 1, "{gh:?}");
+    assert_eq!(created[0][..8], ["pr", "create", "--base", "main", "--head", "cpd/pay/pay", "--title", "Change the PR"]);
+    assert!(gh.iter().all(|c| !c.iter().any(|a| a == "--draft")), "never a draft: {gh:?}");
+    let body = &created[0][9];
     for sha in [&api_merged["data"]["sha"], &ui_merged["data"]["sha"]] {
         assert!(body.contains(sha.as_str().unwrap()), "{body}");
     }
     let events = fx.events_since(cursor);
-    assert_eq!(kinds(&events), ["pr-opened", "plan-phase"]);
-    assert_eq!(events[0]["data"], json!({"pr": "pay", "number": 7, "url": PR_URL}));
-    assert_eq!(events[1]["data"], json!({"from": "dispatch", "to": "deploy", "prs": [{"key": "pay", "number": 7, "url": PR_URL}]}));
-    cursor = fx.cursor();
+    let opened = of_kind(&events, "pr-opened");
+    assert_eq!(opened.len(), 1, "{events:?}");
+    assert_eq!(opened[0]["data"], json!({"pr": "pay", "number": 7, "url": PR_URL}));
+    let phase: Vec<&Value> = of_kind(&events, "plan-phase").into_iter().filter(|e| e["data"]["to"] == "deploy").collect();
+    assert_eq!(phase.len(), 1, "{events:?}");
+    assert_eq!(phase[0]["data"], json!({"from": "dispatch", "to": "deploy", "prs": [{"key": "pay", "number": 7, "url": PR_URL}]}));
+    // `job-merged`, `pr-opened` and `plan-phase` are one transaction: the same instant.
+    assert_eq!((&opened[0]["at"], &phase[0]["at"]), (&open_merged["at"], &open_merged["at"]));
+    let out = fx.ok(&["pr", "open", "--plan", PLAN]);
+    assert_eq!(out["already"], true, "{out}");
 
-    // ---------- 11. pr poll reports the failing checks, once (D7)
-    let out = fx.ok(&["pr", "poll", "--plan", PLAN]);
-    assert_eq!(out["feedback"], json!([{"plan": PLAN, "pr": "pay"}]));
-    assert_eq!(out["prs"][0]["pull_request"]["checks"], "failed");
-    let events = fx.events_since(cursor);
-    assert_eq!(kinds(&events), ["pr-feedback"]);
+    // ---------- 11. the poll reports the failing checks, once (D7): the engine's poll finds the pull request the Job opened
+    cursor = fx.cursor_before(&open_merged);
+    let feedback = fx.wait_event(cursor, "pr-feedback", 30, |_| true);
     assert_eq!(
-        events[0]["data"],
+        feedback["data"],
         json!({"pr": "pay", "number": 7, "url": PR_URL, "state": "open", "checks": "failed", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown", "conflict": false, "reasons": ["checks_failed"]})
     );
-    let again = fx.ok(&["pr", "poll", "--plan", PLAN]);
-    assert_eq!((again["feedback"].clone(), again["changed"].clone()), (json!([]), json!([])));
-    assert_eq!(fx.events_since(cursor).len(), 1);
+    // The engine is supervised (contract §6.6, hs-d328): a stopped engine comes back at once, through the tmux hook `pane-died`
+    // (its pane dies with it) and, were its window killed, `window-unlinked`. This test needs it to stay stopped, so that its own
+    // `pr poll` below is the only one that runs: it takes the one hook that its SIGTERM triggers off this private server, by name.
+    assert!(fx.env.tmux(&["set-hook", "-gu", "pane-died"]).status.success());
+    kill(Pid::from_raw(engine), Signal::SIGTERM).unwrap();
+    fx.wait_event(cursor, "watch-stopped", 30, |e| e["data"]["pid"] == engine);
+    cursor = fx.cursor();
+    let out = fx.ok(&["pr", "poll", "--plan", PLAN]);
+    assert_eq!(out["prs"][0]["pull_request"]["checks"], "failed");
+    assert_eq!((out["feedback"].clone(), out["changed"].clone()), (json!([]), json!([])), "once per transition: {out}");
+    assert!(fx.events_since(cursor).is_empty());
+    assert_eq!(of_kind(&fx.events_since(0), "pr-feedback").len(), 1);
 
     // ---------- the whole run: no `error` Event, nothing tampered, nothing left running
     let all = fx.events_since(0);

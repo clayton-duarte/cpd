@@ -22,7 +22,10 @@ use crate::git;
 use crate::home::CpdHome;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
-use crate::ids::{AttemptId, PlanId, PrKey};
+use crate::ids::{AttemptId, JobKey, PlanId, PrKey};
+use crate::config::Tier;
+use crate::job::open::{self, Cause};
+use crate::plan::fingerprint::load_prs;
 use crate::lock;
 use crate::output::Output;
 use crate::policy::Checks;
@@ -67,6 +70,8 @@ struct Outcome {
     base_changed: Vec<Value>,
     removed: usize,
     feedback: Vec<(PlanId, PrKey)>,
+    /// The `update` Jobs the poll queued, for a conflict (§3.7 E5).
+    update_jobs: Vec<(PlanId, PrKey, JobKey)>,
     merged: Vec<(PlanId, PrKey)>,
     done: Vec<PlanId>,
 }
@@ -123,8 +128,9 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         let unowned = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(unowned.iter().any(|row| !present.contains(row)))
     })?;
+    let open_tier = env.config.open_tier;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks, &follows))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
 
     report_unresolved(&mut env, &unresolved)?;
 
@@ -145,6 +151,7 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         "base_changed": outcome.base_changed,
         "removed": outcome.removed,
         "feedback": outcome.feedback.iter().map(pair).collect::<Vec<_>>(),
+        "update_jobs": outcome.update_jobs.iter().map(|(plan, pr, job)| json!({"plan": plan, "pr": pr, "job": job, "reason": Cause::Conflict.as_str()})).collect::<Vec<_>>(),
         "merged": outcome.merged.iter().map(pair).collect::<Vec<_>>(),
         "done": outcome.done,
         "rate_limit": {"cost": search.rate.cost, "remaining": search.rate.remaining, "reset_at": search.rate.reset_at},
@@ -191,6 +198,7 @@ fn apply(
     owned: &[Owned],
     checks: &[(PlanId, PrKey, Checks)],
     follows: &[Follow],
+    open_tier: Tier,
 ) -> Result<Outcome, CpdError> {
     let mut out = Outcome::default();
     for listed in seen {
@@ -214,10 +222,13 @@ fn apply(
                     out.done.push(plan.clone());
                 }
                 unstack_stacked_on(tx, plan, key)?;
-            } else if let Some(checks) = checks_of(checks, plan, key)
-                && tell(tx, plan, key, checks, &change)?
-            {
-                out.feedback.push((plan.clone(), key.clone()));
+            } else if let Some(checks) = checks_of(checks, plan, key) {
+                if tell(tx, plan, key, checks, &change)? {
+                    out.feedback.push((plan.clone(), key.clone()));
+                }
+                if let Some(job) = update_for_conflict(tx, plan, key, &change, open_tier)? {
+                    out.update_jobs.push((plan.clone(), key.clone(), job));
+                }
             }
         }
     }
@@ -334,6 +345,24 @@ fn tell(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, checks: Checks, change: &
     let text = feedback::text(plan.as_str(), key.as_str(), change.after.number, &reasons);
     append(tx, feedback::event(text, key.as_str(), &change.after, &reasons).plan(plan.clone()))?;
     Ok(true)
+}
+
+/// The `update` Job of a conflict (§3.7 E5, §7.6 step 6): when `mergeable` became `conflicting` (from anything else, so once per
+/// transition: `unknown` is no conflict and a base that merely moved, `merge_state` `behind`, is no cause), the row's `state` is `open`
+/// and the Plan is not archived, the PR's `update` Job is queued unless one is `queued` or `running`. The caller has resolved the
+/// PR's policy. The Job's key when one was inserted.
+fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &Change, tier: Tier) -> Result<Option<JobKey>, CpdError> {
+    let became = change.after.mergeable == "conflicting" && change.before.as_ref().is_none_or(|b| b.mergeable != "conflicting");
+    if !became || change.after.state != "open" {
+        return Ok(None);
+    }
+    let archived: bool = tx.query_row("SELECT archived_at IS NOT NULL FROM plans WHERE id = ?1", [plan.as_str()], |r| r.get(0))?;
+    if archived {
+        return Ok(None);
+    }
+    let prs = load_prs(tx, plan)?;
+    let Some(pr) = prs.iter().find(|p| p.key == *key) else { return Ok(None) };
+    open::queue_update(tx, plan, pr, tier, COMMAND_BY, Cause::Conflict)
 }
 
 /// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,

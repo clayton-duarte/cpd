@@ -1,7 +1,7 @@
 //! A Plan across two repos through the built `cpd`, end to end (R34, A4–A14;
 //! B2): PRs `a1` (repo `shared`) -> `b` (repo `web`) -> `a2` (repo `shared`
 //! again). From `plan new` (run outside any repo) and `pr add`, through
-//! `plan lock`, the engine, fake Workers, each PR's `pr open`, a fake GitHub
+//! `plan lock`, the engine, fake Workers, each PR's open Job, a fake GitHub
 //! that merges the pull requests one after the other, and engine E7 starting
 //! each waiting PR from a fresh base, to `plan-done`, once. `a2` also holds a
 //! review Job, added after its other Job, whose Worker is a fork of the Lead.
@@ -34,6 +34,7 @@ const PLAN: &str = "chain";
 ///   worktree: PR `a2` was started from a base that holds it;
 /// - the review Job `audit` commits nothing: it writes its findings, the files
 ///   its worktree differs in from `origin/main`, to `run/<plan>/reviews/audit.md`;
+/// - a PR's open Job (`open-<pr>`) commits nothing: the base did not move;
 /// - every other Job writes `<job>.txt` and commits it.
 ///
 /// Then it runs `attempt submit` and stays until the driver kills its window.
@@ -54,6 +55,8 @@ if [ -n "$CPD_ATTEMPT" ]; then
   if [ "$job" = audit ]; then
     mkdir -p "$CPD_HOME/run/$CPD_PLAN/reviews"
     { echo "# Findings"; git diff --name-only origin/main HEAD; } > "$CPD_HOME/run/$CPD_PLAN/reviews/audit.md"
+  elif [ "${job#open-}" != "$job" ]; then
+    : # a PR's open Job: the base did not move, so there is nothing to merge or commit
   else
     echo "$job" > "$job.txt"
     git add -A && git commit -qm "$CPD_ATTEMPT" || exit 14
@@ -356,12 +359,20 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     });
 
     // ---------- 2. the PRs: a1 -> b -> a2, two of them in one repo (A4)
-    let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--title", "Change the PR", "--plan", PLAN]);
-    assert_eq!(out["pr"], json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "base_pr": null, "title": "Change the PR", "needs": [], "status": "waiting", "lead_branch": "cpd/chain/a1", "appended": false}));
-    let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--title", "Change the PR", "--needs", "a1", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "a1", "--repo", &shared, "--title", "Change the PR", "--shape", "config", "--plan", PLAN]);
+    assert_eq!(
+        out["pr"],
+        json!({"key": "a1", "repo": shared, "name": "shared", "base": "main", "base_pr": null, "title": "Change the PR", "needs": [], "status": "waiting",
+               "lead_branch": "cpd/chain/a1", "appended": false, "shape": "config", "jobs": ["a1-config"]})
+    );
+    let out = fx.ok(&["pr", "add", "b", "--repo", &web, "--title", "Change the PR", "--needs", "a1", "--shape", "config", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/b"), &json!(["a1"])));
-    let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--title", "Change the PR", "--needs", "b", "--plan", PLAN]);
+    let out = fx.ok(&["pr", "add", "a2", "--repo", &shared, "--title", "Change the PR", "--needs", "b", "--shape", "config", "--plan", PLAN]);
     assert_eq!((&out["pr"]["lead_branch"], &out["pr"]["needs"]), (&json!("cpd/chain/a2"), &json!(["b"])));
+    // The stub drafts the shape lays out are not this flow's Jobs: a Lead cancels a stub it does not need.
+    for pr in ["a1", "b", "a2"] {
+        fx.ok(&["job", "cancel", &format!("{pr}-config"), "--reason", "a stub of the template", "--plan", PLAN]);
+    }
     assert_eq!(of_kind(&fx.events(), "pr-added").len(), 3);
     fx.ok(&["plan", "phase", "plan", "--plan", PLAN]);
 
@@ -382,7 +393,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     ]);
     assert_eq!(
         out["job"],
-        json!({"key": "audit", "pr": "a2", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true, "urgent": false})
+        json!({"key": "audit", "pr": "a2", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": ["wire"], "review": true, "urgent": false})
     );
 
     // ---------- 4. review and lock: only a1 starts (A8)
@@ -424,19 +435,18 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!((&pr_started[0]["data"]["base_sha"], &pr_started[0]["data"]["pushed"]), (&json!(base_a), &json!(true)), "{pr_started:?}");
     let engine = fx.engine_pid();
 
-    // ---------- 5. a1's Job merges and is pushed; all-merged names the PR (A2, A10)
+    // ---------- 5. a1's Job merges and is pushed (A2, A10)
     let schema = fx.wait_event("job-merged", |e| e["job"] == "schema");
     let a1_tip = schema["data"]["sha"].as_str().unwrap().to_owned();
     assert_eq!(fx.git(&fx.shared.path, &["rev-parse", "refs/heads/cpd/chain/a1"]), a1_tip);
     assert_eq!(fx.git(&fx.shared.origin, &["rev-parse", "refs/heads/cpd/chain/a1"]), a1_tip, "the merge pushes the Lead Branch");
     assert_eq!(fs::read_to_string(a1_lead.join("schema.txt")).unwrap(), "schema\n");
-    let all = fx.wait_event("all-merged", |e| e["data"]["pr"] == "a1");
-    assert_eq!(all["data"], json!({"pr": "a1", "merged": ["schema"], "cancelled": []}));
-    assert_eq!(fx.pr("a1")["status"], "dispatch");
-
-    // ---------- 6. pr open --pr a1: the Plan stays in `dispatch`, b and a2 wait
-    let out = fx.ok(&["pr", "open", "--pr", "a1", "--plan", PLAN]);
-    assert_eq!((&out["phase"], &out["pr"]["key"], &out["pr"]["pr"]["number"]), (&json!("dispatch"), &json!("a1"), &json!(11)));
+    // ---------- 6. a1's open Job (E4) gates the Lead Branch, pushes it and opens the pull request in its merge: the Plan stays in `dispatch`, b and a2 wait
+    let open_a1 = fx.wait_event("job-merged", |e| e["job"] == "open-a1");
+    assert_eq!((&open_a1["data"]["kind"], &open_a1["data"]["pr"], &open_a1["data"]["number"]), (&json!("open"), &json!("a1"), &json!(11)));
+    assert_eq!(open_a1["data"]["sha"], a1_tip.as_str(), "nothing was merged: the Job submitted the Lead Branch as it was");
+    assert_eq!(fx.pr("a1")["status"], "open");
+    assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "dispatch");
     assert!(hooks(&fx, "shared").ends_with("pre-merge cpd/chain/a1\n"), "{}", hooks(&fx, "shared"));
     let calls = fx.env.calls("gh");
     let create = calls.iter().find(|c| c[..2] == ["pr", "create"]).unwrap();
@@ -444,7 +454,7 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     // E5 polls whatever the phase, and a1 is not merged: nothing starts. Two whole ticks after the PR was created.
     fx.env.wait_whole_ticks(2);
     assert_eq!(fx.pr_statuses(["b", "a2"]), ["waiting", "waiting"]);
-    assert!(of_kind(&fx.events(), "attempt-started").iter().all(|e| e["job"] == "schema"));
+    assert!(of_kind(&fx.events(), "attempt-started").iter().all(|e| e["job"] == "schema" || e["job"] == "open-a1"));
 
     // ---------- 7. GitHub merges a1: E7 starts b, from a fresh fetch of its base
     fx.github_merges(&fx.shared, "cpd/chain/a1", 11);
@@ -461,17 +471,18 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(fx.pr_statuses(["a1", "a2"]), ["merged", "waiting"]);
     assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "dispatch");
 
-    // ---------- 8. b's Job runs in the other repo, merges; pr open --pr b
+    // ---------- 8. b's Job runs in the other repo, merges; b's open Job opens its pull request
     let client = fx.wait_event("job-merged", |e| e["job"] == "client");
     let started_client = of_kind(&fx.events(), "attempt-started").into_iter().find(|e| e["job"] == "client").unwrap().clone();
     assert!(id(&started_b) < id(&started_client), "client ran before b started");
     let b_tip = client["data"]["sha"].as_str().unwrap().to_owned();
     assert_eq!(fx.git(&fx.web.origin, &["rev-parse", "refs/heads/cpd/chain/b"]), b_tip);
     assert_eq!(fx.git(&fx.web.path, &["log", "--format=%s", "main..cpd/chain/b"]), "client-a1");
-    let all = fx.wait_event("all-merged", |e| e["data"]["pr"] == "b");
-    assert_eq!(all["data"]["merged"], json!(["client"]));
-    let out = fx.ok(&["pr", "open", "--pr", "b", "--plan", PLAN]);
-    assert_eq!((&out["phase"], &out["pr"]["pr"]["number"]), (&json!("dispatch"), &json!(12)));
+    let open_b = fx.wait_event("job-merged", |e| e["job"] == "open-b");
+    assert_eq!((&open_b["data"]["kind"], &open_b["data"]["pr"], &open_b["data"]["number"]), (&json!("open"), &json!("b"), &json!(12)));
+    assert_eq!(open_b["data"]["sha"], b_tip.as_str());
+    assert_eq!(fx.pr("b")["status"], "open");
+    assert_eq!(fx.ok(&["plan", "show", "--plan", PLAN])["plan"]["phase"], "dispatch");
     assert_eq!(fx.pr_status("a2"), "waiting");
 
     // ---------- 9. GitHub merges b: E7 starts a2, whose base holds a1's merge (A9)
@@ -522,11 +533,11 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     let plain = pi.iter().find(|c| flag(c, "-n") == Some("chain wire a1")).unwrap();
     assert!(!plain.contains(&"--fork".to_owned()), "a Job that is not a review starts a fresh session: {plain:?}");
 
-    // ---------- 11. a2: all-merged, pr open --pr a2 moves the Plan to `pr`
-    let all = fx.wait_event("all-merged", |e| e["data"]["pr"] == "a2");
-    assert_eq!(all["data"], json!({"pr": "a2", "merged": ["audit", "wire"], "cancelled": []}));
-    let out = fx.ok(&["pr", "open", "--pr", "a2", "--plan", PLAN]);
-    assert_eq!((&out["phase"], &out["pr"]["pr"]["number"]), (&json!("deploy"), &json!(13)));
+    // ---------- 11. a2: its open Job, added with the PR, waited for `wire` and the review Job; its merge moves the Plan to `deploy`
+    let open_a2 = fx.wait_event("job-merged", |e| e["job"] == "open-a2");
+    assert_eq!((&open_a2["data"]["kind"], &open_a2["data"]["pr"], &open_a2["data"]["number"]), (&json!("open"), &json!("a2"), &json!(13)));
+    assert!(id(&audit) < id(&open_a2), "the open Job waits for every other Job of its PR, the review Job included");
+    assert_eq!(open_a2["data"]["sha"], wire_tip);
     assert_eq!(fx.git(&fx.shared.origin, &["rev-parse", "refs/heads/cpd/chain/a2"]), wire_tip);
     let moved = of_kind(&fx.events(), "plan-phase").pop().unwrap().clone();
     assert_eq!(moved["data"]["to"], "deploy");
@@ -551,7 +562,8 @@ fn a_plan_across_two_repos_runs_a1_then_b_then_a2_and_a_review_job() {
     assert_eq!(of_kind(&events, "plan-done").len(), 1);
     assert_eq!(of_kind(&events, "pr-started").len(), 3);
     assert_eq!(of_kind(&events, "pr-merged").len(), 3);
-    assert_eq!(of_kind(&events, "all-merged").len(), 3);
+    assert!(of_kind(&events, "all-merged").is_empty(), "the all-merged steer is retired");
+    assert_eq!(of_kind(&events, "job-merged").iter().filter(|e| e["data"]["kind"] == "open").count(), 3);
 
     // ---------- the whole run: no `error` Event, nothing tampered, nothing left running
     assert!(of_kind(&events, "error").is_empty(), "{:?}", of_kind(&events, "error"));

@@ -18,6 +18,27 @@ use super::prs::PrRow;
 const MISSING_TIER: &str = "—";
 const MISSING_SPEC: &str = "Spec: not written yet";
 
+/// What the render says in place of the Spec of an `open` Job's placeholder (commands.md §4.5, hs-d497).
+const OPEN_PLACEHOLDER: &str = "Added by cpd when the PR starts: merges the base only on a conflict, runs the Gate, pushes and opens the pull request ready.";
+/// The placeholder's `Needs` (the Job's Ready rule, contract §3.2): not Dependencies, so no row and no graph edge.
+const OPEN_NEEDS: &str = "every other Job of the PR";
+
+/// The `open` Job a PR that has not started will get (hs-d497): shown, never stored. `tier` is `open_tier`.
+struct OpenPlaceholder<'a> {
+    pr: &'a PrRow,
+    tier: &'a str,
+}
+
+impl OpenPlaceholder<'_> {
+    fn key(&self) -> String {
+        format!("open-{}", self.pr.key)
+    }
+
+    fn title(&self) -> String {
+        format!("Open the pull request: {}", self.pr.title.as_deref().unwrap_or(self.pr.key.as_str()))
+    }
+}
+
 /// Inline text made safe for GFM: no HTML tags, no footnote syntax. Code
 /// spans (`` `…` `` on one line) are left alone.
 pub(super) fn inline(text: &str) -> String {
@@ -155,34 +176,46 @@ fn mark(job: &Job) -> &'static str {
 
 /// One PR's section: repo, base, needs, its Jobs' table and graph, its Jobs'
 /// Specs; `later` is a phase after `plan`, where the drafts are marked.
-fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool) {
+fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool, open_tier: &str) {
+    // A PR that has not started has no `open` Job yet: its placeholder is the last row and the last section.
+    let placeholder = (pr.status == "waiting").then_some(OpenPlaceholder { pr, tier: open_tier });
     out.extend([
         format!("## PR {}", pr.key),
         String::new(),
         format!("Repo: {} · Base: `{}` · Needs: {}", code(&pr.repo), pr.base, joined(&pr.needs, code)),
         String::new(),
     ]);
-    if jobs.is_empty() {
+    if jobs.is_empty() && placeholder.is_none() {
         out.extend(["No Jobs yet.".to_owned(), String::new()]);
         return;
     }
     // In a phase after `plan` the table has a last column, Review: what each Job is in this review.
     let (head, rule) = if later {
-        ("| Key | Title | Tier | Status | Needs | Touches | Review |", "|---|---|---|---|---|---|---|")
+        ("| Key | Title | Kind | Tier | Status | Needs | Touches | Review |", "|---|---|---|---|---|---|---|---|")
     } else {
-        ("| Key | Title | Tier | Status | Needs | Touches |", "|---|---|---|---|---|---|")
+        ("| Key | Title | Kind | Tier | Status | Needs | Touches |", "|---|---|---|---|---|---|---|")
     };
     out.extend(["### Jobs".to_owned(), String::new(), head.to_owned(), rule.to_owned()]);
     for j in jobs {
         let review = if later { format!(" {} |", mark(j)) } else { String::new() };
         out.push(format!(
-            "| {} | {} | {} | {} | {} | {} |{review}",
+            "| {} | {} | {} | {} | {} | {} | {} |{review}",
             tcode(&j.key),
             cell(&j.title),
+            j.kind,
             j.tier.as_deref().unwrap_or(MISSING_TIER),
             j.status,
             joined(&j.needs, tcode),
             j.spec.as_ref().map_or_else(|| MISSING_TIER.to_owned(), |s| joined(&strings(&s.touches), tcode)),
+        ));
+    }
+    if let Some(open) = &placeholder {
+        let review = if later { format!(" {MISSING_TIER} |") } else { String::new() };
+        out.push(format!(
+            "| {} | {} | open | {} | {MISSING_TIER} | {OPEN_NEEDS} | {MISSING_TIER} |{review}",
+            tcode(&open.key()),
+            cell(&open.title()),
+            open.tier,
         ));
     }
     let nodes: Vec<(&str, &[String])> = jobs.iter().map(|j| (j.key.as_str(), j.needs.as_slice())).collect();
@@ -192,8 +225,9 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool) {
             format!("### {}: {}", code(&j.key), inline(&j.title)),
             String::new(),
             format!(
-                "Status: `{}`{} · Tier: {} · Needs: {}",
+                "Status: `{}`{}{} · Tier: {} · Needs: {}",
                 j.status,
+                if j.kind == "work" { String::new() } else { format!(" · Kind: `{}`", j.kind) },
                 if later { format!(" · {}", mark(j)) } else { String::new() },
                 j.tier.as_deref().map_or_else(|| MISSING_TIER.to_owned(), |t| format!("`{t}`")),
                 joined(&j.needs, code)
@@ -204,6 +238,20 @@ fn pr_section(out: &mut Vec<String>, pr: &PrRow, jobs: &[&Job], later: bool) {
             Some(spec) => spec_section(out, spec),
             None => out.extend([MISSING_SPEC.to_owned(), String::new()]),
         }
+        if let (Some(tests), Some(files)) = (&j.tests, &j.test_files) {
+            out.extend(["#### Tests".to_owned(), String::new(), strings(tests).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
+            out.extend(["#### Test files".to_owned(), String::new(), strings(files).iter().map(|t| format!("- {}", code(t))).collect::<Vec<_>>().join("\n"), String::new()]);
+        }
+    }
+    if let Some(open) = &placeholder {
+        out.extend([
+            format!("### {}: {}", code(&open.key()), inline(&open.title())),
+            String::new(),
+            format!("Status: {MISSING_TIER} · Kind: `open` · Tier: `{}` · Needs: {OPEN_NEEDS}", open.tier),
+            String::new(),
+            OPEN_PLACEHOLDER.to_owned(),
+            String::new(),
+        ]);
     }
 }
 
@@ -273,9 +321,10 @@ pub enum Heading<'a> {
 
 /// The plan markdown for `prs` and `jobs` (every one of the Plan); `cancelled`
 /// PRs and Jobs are left out, and so are the Jobs of a `cancelled` PR.
-/// `overlaps` are those of [`super::overlap::find`]. Pure: the same PRs, Jobs
+/// `overlaps` are those of [`super::overlap::find`]; `open_tier` is the config key of that name, the Tier of the
+/// placeholder `open` Job of a PR that has not started (§4.5, hs-d497). Pure: the same PRs, Jobs
 /// and overlaps give the same text.
-pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jobs: &[Job], overlaps: &[Overlap]) -> String {
+pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jobs: &[Job], overlaps: &[Overlap], open_tier: &str) -> String {
     let prs: Vec<&PrRow> = prs.iter().filter(|p| p.status != "cancelled").collect();
     let mut out = match heading {
         Heading::Plan { title } => vec![format!("# Plan: {}", inline(title)), String::new()],
@@ -313,7 +362,7 @@ pub fn markdown(heading: &Heading, context: &str, phase: &str, prs: &[PrRow], jo
     overlaps_section(&mut out, overlaps);
     for pr in order {
         let jobs: Vec<&Job> = jobs.iter().filter(|j| j.pr == pr.key.as_str() && j.status != "cancelled").collect();
-        pr_section(&mut out, pr, &jobs, later);
+        pr_section(&mut out, pr, &jobs, later, open_tier);
     }
     out.join("\n")
 }
@@ -354,14 +403,14 @@ mod tests {
 
     #[test]
     fn a_plan_without_prs_says_so() {
-        assert_eq!(markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[], &[], &[]), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
+        assert_eq!(markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[], &[], &[], "S2"), "# Plan: T\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n");
     }
 
     #[test]
     fn a_review_document_opens_with_the_review_title_and_the_plan_line() {
         let heading = Heading::Review { title: "Add retries", plan: "pay-1", plan_title: "Payouts", review: "r2" };
         assert_eq!(
-            markdown(&heading, "ctx", "plan", &[], &[], &[]),
+            markdown(&heading, "ctx", "plan", &[], &[], &[], "S2"),
             "# Add retries\n\nPlan pay-1: Payouts · review r2\n\nContext: `ctx` · Phase: `plan`\n\nNo PRs yet.\n"
         );
     }
@@ -376,5 +425,69 @@ mod tests {
         let refs: Vec<&PrRow> = all.iter().collect();
         let keys: Vec<&str> = ordered(&refs).iter().map(|p| p.key.as_str()).collect();
         assert_eq!(keys, ["a-contract", "b", "a-integration", "c", "z"]);
+    }
+
+    fn job(key: &str, pr: &str, kind: &str) -> Job {
+        Job {
+            seq: 1,
+            key: key.into(),
+            pr: pr.into(),
+            title: format!("Title {key}"),
+            tier: Some("S2".into()),
+            spec: Some(JobSpec { goal: "g".into(), context: "c".into(), touches: serde_json::json!(["a"]), acceptance: serde_json::json!(["b"]), out_of_scope: serde_json::json!([]) }),
+            status: "draft".into(),
+            appended: false,
+            review: false,
+            kind: kind.into(),
+            tests: None,
+            test_files: None,
+            test_approved: None,
+            urgent: false,
+            fingerprint: None,
+            retry_tier: None,
+            cancel_reason: None,
+            cancel_requested_at: None,
+            failed_cause: None,
+            merged_sha: None,
+            created_at: "t".into(),
+            needs: Vec::new(),
+        }
+    }
+
+    fn titled_pr(key: &str, status: &str) -> PrRow {
+        let mut pr = PrRow::fixture(key, "/r", "main", &[], status);
+        pr.title = Some(format!("Change {key}"));
+        pr
+    }
+
+    #[test]
+    fn a_pr_that_has_not_started_shows_the_open_job_as_its_last_row_and_section_at_open_tier() {
+        let mut test = job("web-tests", "web", "test");
+        test.tests = Some(serde_json::json!(["t::one"]));
+        test.test_files = Some(serde_json::json!(["tests/t.rs"]));
+        let md = markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[titled_pr("web", "waiting")], &[job("web-docs", "web", "docs"), test], &[], "S3");
+        assert!(md.contains("| Key | Title | Kind | Tier | Status | Needs | Touches |"), "{md}");
+        assert!(md.contains("| `web-docs` | Title web-docs | docs | S2 | draft | none | `a` |"), "{md}");
+        // The last row of the table: key, title, kind, `open_tier`, no status, the Ready rule in place of needs.
+        let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| `")).collect();
+        assert_eq!(rows.last().unwrap(), &"| `open-web` | Open the pull request: Change web | open | S3 | — | every other Job of the PR | — |");
+        // The last section, with the text in place of a Spec; a `test` Job lists its tests and files.
+        assert!(md.trim_end().ends_with(&format!("### `open-web`: Open the pull request: Change web\n\nStatus: — · Kind: `open` · Tier: `S3` · Needs: every other Job of the PR\n\n{OPEN_PLACEHOLDER}")), "{md}");
+        assert!(md.contains("Status: `draft` · Kind: `test` · Tier: `S2` · Needs: none"), "{md}");
+        assert!(md.contains("#### Tests\n\n- `t::one`\n\n#### Test files\n\n- `tests/t.rs`"), "{md}");
+        // It is no Job: no node in the graph.
+        assert!(!md.contains("open-web[") && !md.contains("[\"open-web\"]"), "{md}");
+    }
+
+    #[test]
+    fn the_open_job_placeholder_is_for_a_pr_that_has_not_started_only_and_in_every_phase_until_then() {
+        let started = markdown(&Heading::Plan { title: "T" }, "ctx", "dispatch", &[titled_pr("web", "dispatch")], &[job("web-docs", "web", "docs")], &[], "S2");
+        assert!(!started.contains("open-web"), "{started}");
+        let waiting = markdown(&Heading::Plan { title: "T" }, "ctx", "dispatch", &[titled_pr("web", "waiting")], &[], &[], "S2");
+        assert!(waiting.contains("| `open-web` | Open the pull request: Change web | open | S2 | — | every other Job of the PR | — | — |"), "{waiting}");
+        // A PR with no Jobs yet is not "No Jobs yet": it has the Job cpd adds.
+        assert!(!waiting.contains("No Jobs yet."), "{waiting}");
+        let cancelled = markdown(&Heading::Plan { title: "T" }, "ctx", "plan", &[titled_pr("web", "cancelled")], &[], &[], "S2");
+        assert!(!cancelled.contains("open-web"), "{cancelled}");
     }
 }

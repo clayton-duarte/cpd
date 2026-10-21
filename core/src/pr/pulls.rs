@@ -290,7 +290,6 @@ pub(super) enum Reason {
     ChecksFailed,
     ChangesRequested,
     Closed,
-    Conflict,
 }
 
 impl Reason {
@@ -300,7 +299,6 @@ impl Reason {
             Reason::ChecksFailed => "checks_failed",
             Reason::ChangesRequested => "changes_requested",
             Reason::Closed => "closed",
-            Reason::Conflict => "conflict",
         }
     }
 }
@@ -308,13 +306,12 @@ impl Reason {
 /// D7: the reasons `after` needs attention that `before` did not: checks
 /// became `failed`, the review became `changes_requested` (each from anything
 /// else), the state became `closed` from `open`. `before` none is a row first
-/// seen: it counts as no checks, no review, `open` and `unknown` mergeable. The
-/// `mergeable` state became `conflicting` from anything else (D3); `unknown` is no conflict. Checks
-/// are a reason only when the PR's `pr.feedback.checks` is `any` (§8.3, hs-d292).
+/// seen: it counts as no checks, no review and `open`. A conflict is no reason any more (hs-d340): it queues an `update` Job
+/// (`poll::update_for_conflict`). Checks are a reason only when the PR's `pr.feedback.checks` is `any` (§8.3, hs-d292).
 pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, checks_policy: Checks) -> Vec<Reason> {
-    let (checks, review, state, mergeable) = match before {
-        Some(b) => (b.checks.as_str(), b.review_decision.as_str(), b.state.as_str(), b.mergeable.as_str()),
-        None => ("none", "none", "open", "unknown"),
+    let (checks, review, state) = match before {
+        Some(b) => (b.checks.as_str(), b.review_decision.as_str(), b.state.as_str()),
+        None => ("none", "none", "open"),
     };
     let mut reasons = Vec::new();
     if checks_policy == Checks::Any && after.checks == "failed" && checks != "failed" {
@@ -325,9 +322,6 @@ pub(super) fn attention(before: Option<&PullRequest>, after: &PullRequest, check
     }
     if after.state == "closed" && state == "open" {
         reasons.push(Reason::Closed);
-    }
-    if after.mergeable == "conflicting" && mergeable != "conflicting" {
-        reasons.push(Reason::Conflict);
     }
     reasons
 }
@@ -390,56 +384,27 @@ mod tests {
         let open = row("open", "none", "none");
         assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::None), []);
         assert_eq!(super::attention(Some(&open), &row("open", "none", "failed"), Checks::Any), [Reason::ChecksFailed]);
-        let all = super::attention(Some(&row("open", "none", "pending")), &conflicting(row("closed", "changes_requested", "failed")), Checks::None);
-        assert_eq!(all, [Reason::ChangesRequested, Reason::Closed, Reason::Conflict]);
+        let all = super::attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"), Checks::None);
+        assert_eq!(all, [Reason::ChangesRequested, Reason::Closed]);
     }
 
     #[test]
     fn attention_lists_every_reason_in_order() {
-        let all = attention(Some(&row("open", "none", "pending")), &conflicting(row("closed", "changes_requested", "failed")));
-        assert_eq!(all, [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed, Reason::Conflict]);
-        assert_eq!(
-            all.iter().map(|r| r.as_str()).collect::<Vec<_>>(),
-            ["checks_failed", "changes_requested", "closed", "conflict"]
-        );
+        let all = attention(Some(&row("open", "none", "pending")), &row("closed", "changes_requested", "failed"));
+        assert_eq!(all, [Reason::ChecksFailed, Reason::ChangesRequested, Reason::Closed]);
+        assert_eq!(all.iter().map(|r| r.as_str()).collect::<Vec<_>>(), ["checks_failed", "changes_requested", "closed"]);
     }
 
-    fn mergeable(mut row: PullRequest, value: &str) -> PullRequest {
-        row.mergeable = value.into();
+    fn conflicting(mut row: PullRequest) -> PullRequest {
+        row.mergeable = "conflicting".into();
         row
     }
 
-    fn conflicting(row: PullRequest) -> PullRequest {
-        mergeable(row, "conflicting")
-    }
-
     #[test]
-    fn attention_is_a_conflict_when_mergeable_becomes_conflicting_from_anything_else() {
+    fn a_conflict_is_no_reason_to_tell_the_lead() {
         let open = || row("open", "none", "none");
-        assert_eq!(attention(Some(&mergeable(open(), "mergeable")), &conflicting(open())), [Reason::Conflict]);
-        assert_eq!(attention(Some(&open()), &conflicting(open())), [Reason::Conflict], "from unknown");
-        assert_eq!(attention(None, &conflicting(open())), [Reason::Conflict], "a row first seen conflicting");
-        assert!(attention(None, &mergeable(open(), "unknown")).is_empty(), "unknown is no conflict");
-        assert!(attention(None, &mergeable(open(), "mergeable")).is_empty());
-    }
-
-    #[test]
-    fn attention_is_no_conflict_while_it_stays_conflicting_or_when_it_clears() {
-        let open = || row("open", "none", "none");
-        assert!(attention(Some(&conflicting(open())), &conflicting(open())).is_empty());
-        let mut dirty = conflicting(open());
-        dirty.merge_state = "dirty".into();
-        assert!(attention(Some(&dirty), &conflicting(open())).is_empty(), "only merge_state changed");
-        assert!(attention(Some(&conflicting(open())), &mergeable(open(), "mergeable")).is_empty());
-        assert!(attention(Some(&conflicting(open())), &mergeable(open(), "unknown")).is_empty());
-    }
-
-    #[test]
-    fn attention_is_a_conflict_again_after_conflicting_unknown_conflicting() {
-        let open = || row("open", "none", "none");
-        let steps = [mergeable(open(), "unknown"), conflicting(open())];
-        assert_eq!(attention(Some(&conflicting(open())), &steps[0]), []);
-        assert_eq!(attention(Some(&steps[0]), &steps[1]), [Reason::Conflict]);
+        assert!(attention(Some(&open()), &conflicting(open())).is_empty());
+        assert!(attention(None, &conflicting(open())).is_empty(), "a row first seen conflicting");
     }
 
     #[test]
@@ -532,7 +497,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!((conflict.after.mergeable.as_str(), conflict.after.merge_state.as_str()), ("conflicting", "unknown"));
-        assert_eq!(attention(conflict.before.as_ref(), &conflict.after), [Reason::Conflict]);
+        assert_eq!(attention(conflict.before.as_ref(), &conflict.after), []);
         assert_eq!(history_rows(&mut store), 2);
 
         let dirty = store.write("test", |tx| up(tx, &with(Mergeable::Conflicting, MergeState::Dirty))).unwrap().unwrap();
