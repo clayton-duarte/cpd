@@ -1704,9 +1704,9 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
     wait_until("E5's poll", || marker.exists());
 
     // A step: the second tick's E4 meets the lock, taken while E5 of the first tick is still running. The first tick added `open-repo`;
-    // cancelling it is how the Lead starts over, so E4 has a Job to add (a write) at the second tick.
+    // an open Job that merged on a PR still `dispatch` counts for nothing, so E4 has a Job to add (a write) at the second tick.
     assert_eq!(fx.jobs_of_kind("open").len(), 1);
-    fx.fixture("UPDATE jobs SET status = 'cancelled', cancel_reason = 'start over', cancel_requested_at = 't' WHERE key = 'open-repo';");
+    fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'open-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'open-repo';");
     let busy = watch_log(&fx).matches("store_busy: ").count();
     let held = hold_write_lock(&fx);
     fs::write(&go, "").unwrap();
