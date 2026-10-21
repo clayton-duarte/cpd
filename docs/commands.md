@@ -1123,7 +1123,7 @@ Effects (§3.2 "Cancel"):
 {"ok": true, "job": "worker", "status": "running", "cancel_requested": true}
 ```
 
-Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a cancelled Job cannot start (cpd 1 §11, kept); they stay `queued`. Cancelling a PR's `open` Job while the PR is `dispatch` makes engine E4 add a fresh one at the next tick (contract §3.7): it is how the Lead starts it over; `job retry` (§5.4) runs the same Job again at another Tier.
+Idempotent: yes; a `cancelled` Job, or one with a request already recorded, returns `"already": true` (the first reason is kept). Dependents of a cancelled Job cannot start (cpd 1 §11, kept); they stay `queued`. **Cancelling a PR's `open` Job stands** (contract §3.7 E4, §3.8): engine E4 adds no fresh one, so the PR stays `dispatch` with no live `open` Job. It is not a way to start over: to open the PR later the Lead runs `pr open --pr <key>` (§9.1, the repair, not refused `open_job_live` since no `open` Job is live); to give it up, `pr cancel <key>` (§9.6), which also cancels its own queued `open` Job with the PR and adds nothing back. `job retry` (§5.4) takes a `failed` Job only and runs it again at another Tier.
 
 ### 5.4 `job retry`
 
@@ -1417,7 +1417,7 @@ A Plan's PRs (R34, §2.2 PR, §3.8) and their pull requests, through `gh` (§7.6
 
 ### 9.1 `pr open`
 
-**The repair** (hs-d340). A PR is opened by its `open` Job (contract §7.7), not by the Lead: engine E4 adds the Job to every started PR, its Worker merges the base, and its submit runs the Gate, pushes, and opens the pull request in its merge. `pr open` stays for what that cannot cover: a PR whose `open` Job is `failed` (the Lead decides between `job retry <job> --tier <T>` (§5.4) and this command), or an engine that is down. It is refused `open_job_live` while the PR has an `open` Job that is `queued` or `running`, and its `jobs_not_done` counts every Job of the PR except its `open` and `update` Jobs. Nothing else here changes: the steps and refusals below are the ones the Job's submit and merge share (contract §7.6 steps 0, 1, 3, 4).
+**The repair** (hs-d340). A PR is opened by its `open` Job (contract §7.7), not by the Lead: engine E4 adds the Job to every started PR, its Worker merges the base, and its submit runs the Gate, pushes, and opens the pull request in its merge. `pr open` stays for what that cannot cover: a PR whose `open` Job is `failed` (the Lead decides between `job retry <job> --tier <T>` (§5.4) and this command), an engine that is down, or a PR whose `open` Job the Lead cancelled (`job cancel` stands, §5.3: E4 adds no new one, so this is how the PR is opened later; to give it up, `pr cancel`, §9.6). It is refused `open_job_live` while the PR has an `open` Job that is `queued` or `running`, and its `jobs_not_done` counts every Job of the PR except its `open` and `update` Jobs. Nothing else here changes: the steps and refusals below are the ones the Job's submit and merge share (contract §7.6 steps 0, 1, 3, 4).
 
 `pr open` is the **Mechanical checks** step of the Deploy stage (contract §3.9): it runs the Gate, then opens the pull request. Review follows the opening, not the Gate. **The Gate runs only when the PR's `pr.gate` is `local`** (contract §8.3, hs-d292; the PR's policy key, `Repo(<owner>, <name>)`): with `ci`, cpd's default, `pr open` runs no Gate, the repo's CI is the check, and the two Gate rows below do not apply.
 
