@@ -127,10 +127,13 @@ fn asleep_row_is_muted_among_live_rows() {
     assert!(asleep < live && live < archived, "the asleep row keeps its place among the live rows, the archived one is after them: {plain:?}");
 
     let styled = pane.capture(true);
-    let (asleep, live, archived) = (escapes(&styled[asleep]), escapes(&styled[live]), escapes(&styled[archived]));
+    // A live row's glyph is outside its muted branch's grey run; an asleep row's, like an archived one's, is inside it.
+    let grey_run_ends_after_the_branch = |row: &str| row.contains("├─\x1b[39m");
+    assert!(grey_run_ends_after_the_branch(&styled[live]), "a live idle row: {:?}", styled[live]);
+    assert!(!grey_run_ends_after_the_branch(&styled[asleep]), "an asleep row: {:?}", styled[asleep]);
+    let (asleep, archived) = (escapes(&styled[asleep]), escapes(&styled[archived]));
     assert!(!archived.is_empty(), "the archived row is coloured: {archived:?}");
     assert_eq!(asleep, archived, "an asleep row is drawn as an archived one: muted, grey glyph");
-    assert_ne!(asleep, live, "and not as a live idle one");
 }
 
 #[test]

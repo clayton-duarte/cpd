@@ -30,5 +30,10 @@ fn migration_adds_asleep_at_and_the_event_kind() {
             [],
         )
     };
-    store.write("test", |tx| Ok(insert(tx)?)).expect("the events table accepts session-asleep");
+    store
+        .write("test", |tx| {
+            tx.execute("INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm1')", [])?;
+            Ok(insert(tx)?)
+        })
+        .expect("the events table accepts session-asleep");
 }
