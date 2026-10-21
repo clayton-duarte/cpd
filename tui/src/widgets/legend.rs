@@ -125,10 +125,10 @@ fn sections() -> Vec<Section> {
     let mut jobs: Vec<Vec<Line<'static>>> = palette::JOB_LEGEND
         .iter()
         .map(|(name, status, merging)| {
-            let (icon, meaning) = palette::job_status(*status, *merging);
+            let (icon, _meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                capped(format!("{icon} key│S1"), palette::pill(meaning)),
+                capped(format!("{icon} key│S1"), palette::pill_static()),
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })
@@ -140,7 +140,7 @@ fn sections() -> Vec<Section> {
         failed + 1,
         vec![
             plain("failed, stuck"),
-            capped(format!("{stuck_icon} key│S1"), palette::pill(stuck)),
+            capped(format!("{stuck_icon} key│S1"), palette::pill_static()),
             Line::from(Span::styled("3", palette::fg(stuck))),
         ],
     );
@@ -456,8 +456,8 @@ mod tests {
         let (failed, stuck) = (&jobs.rows[4], &jobs.rows[5]);
         assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
         // the pill's body, after its left cap
-        let bg = |row: &Vec<Line>| row[1].spans[1].style.bg;
-        assert_eq!((bg(failed), bg(stuck)), (palette::pill(Meaning::Waiting).bg, palette::pill(Meaning::Failed).bg));
+        let style = |row: &Vec<Line>| row[1].spans[1].style;
+        assert_eq!((style(failed), style(stuck)), (palette::pill_static(), palette::pill_static()), "a sample pill is not interactive (hs-d530)");
         let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
         assert_eq!((fg(failed), fg(stuck)), (palette::fg(Meaning::Waiting).fg, palette::fg(Meaning::Failed).fg));
     }

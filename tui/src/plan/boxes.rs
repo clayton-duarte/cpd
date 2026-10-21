@@ -652,12 +652,12 @@ mod tests {
         };
         let none = NeedsUser::default();
         let one = NeedsUser { stuck_jobs: vec![stuck.key.clone()], ..NeedsUser::default() };
-        assert_eq!((bg(&none, 0), bg(&none, 1)), (palette::color(Meaning::Waiting), palette::color(Meaning::Waiting)));
-        assert_eq!((bg(&one, 0), bg(&one, 1)), (palette::color(Meaning::Failed), palette::color(Meaning::Waiting)), "only the stuck one");
+        assert_eq!((bg(&none, 0), bg(&none, 1)), (palette::pill_interactive().bg.unwrap(), palette::pill_interactive().bg.unwrap()));
+        assert_eq!((bg(&one, 0), bg(&one, 1)), (palette::pill_interactive().bg.unwrap(), palette::pill_interactive().bg.unwrap()), "a Job pill is interactive whatever its state (hs-d530)");
         // a queued Job is never stuck, whatever the list says
         let queued = job("api", "stuck", &[]);
         let c = layout(&[pr("api", &[])], &[queued], &one, 0);
-        assert_eq!(c.chart.buf[(c.chart.pills[0].rect.x + 1, c.chart.pills[0].rect.y)].bg, palette::color(Meaning::NotStarted));
+        assert_eq!(c.chart.buf[(c.chart.pills[0].rect.x + 1, c.chart.pills[0].rect.y)].bg, palette::pill_interactive().bg.unwrap());
     }
 
     #[test]

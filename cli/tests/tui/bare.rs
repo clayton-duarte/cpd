@@ -709,7 +709,7 @@ fn a_tmux_failure_of_the_workers_step_while_a_restart_is_pending_is_no_error_and
     fs::remove_file(&fails).unwrap();
     set_lead_state(&env, "idle");
     wait_until("the restart to finish", || !pending_file(&env).exists());
-    wait_until("the options on the new server", || env.tmux(&["show", "-gv", "@cpd_workers"]).stdout.starts_with(b"#[dim]workers"));
+    wait_until("the options on the new server", || env.tmux(&["show", "-gv", "@cpd_workers"]).stdout.starts_with(b"workers"));
     assert_eq!(count_events(&env, "error"), 0, "{:?}", env.cpd(&["events", "list", "--kind", "error"]));
 }
 

@@ -768,8 +768,8 @@ fn a_stuck_job_wakes_its_context_manager() {
 // ---------- @cpd_workers ----------
 
 // Each fixture's dispatch PR has its `open` Job, which E4 adds at the first tick and which waits for the PR's other Jobs: one queued Job.
-const NO_WORKERS: &str = "#[dim]workers #[nodim,fg=colour8]0#[default,dim]/3 · 0 waiting · 1 queued#[default]";
-const ONE_WORKER: &str = "#[dim]workers #[nodim,fg=green]1#[default,dim]/3 · 0 waiting · 1 queued#[default]";
+const NO_WORKERS: &str = "workers 0/3 · 0 waiting · 1 queued";
+const ONE_WORKER: &str = "workers 1/3 · 0 waiting · 1 queued";
 
 impl Fx {
     /// A tmux server with one session, `keepalive`.
@@ -796,7 +796,7 @@ fn the_engine_sets_cpd_workers_at_start_and_only_when_it_changes() {
 
     let engine = fx.start();
     wait_until("@cpd_workers", || fx.workers() == ONE_WORKER);
-    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/3·0·1#[default]");
+    assert_eq!(fx.option("@cpd_workers_short"), "1/3·0·1");
     assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
     assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
 
@@ -827,9 +827,9 @@ fn the_engine_counts_waiting_and_queued_jobs() {
     fx.add_job("blocked", &["free"], "");
 
     let engine = fx.start();
-    let long = "#[dim]workers #[nodim,fg=green]1#[default,dim]/1 · #[nodim,fg=yellow]1#[default,dim] waiting · 3 queued#[default]";
+    let long = "workers 1/1 · 1 waiting · 3 queued";
     wait_until("@cpd_workers", || fx.workers() == long);
-    assert_eq!(fx.option("@cpd_workers_short"), "#[nodim,fg=green]1#[default,dim]/1·#[nodim,fg=yellow]1#[default,dim]·3#[default]");
+    assert_eq!(fx.option("@cpd_workers_short"), "1/1·1·3");
     assert_eq!(fx.option("@cpd_workers_width"), "46", "inbox 0, one space, the long form, a pill's two caps each");
     assert_eq!(fx.option("@cpd_workers_short_width"), "19", "the same with the short form");
     engine.stop();
@@ -844,14 +844,14 @@ fn the_engine_sets_cpd_inbox_from_the_open_visible_inbox_items() {
     let fx = fx("");
     fx.tmux_server();
     let engine = fx.start();
-    wait_until("@cpd_inbox", || fx.option("@cpd_inbox") == "#[dim]inbox 0#[default]");
+    wait_until("@cpd_inbox", || fx.option("@cpd_inbox") == "inbox 0");
 
     // The Plan's Lead, in a live pane, asks the User in a dialog in Dispatch: E8 opens a red `dialog` item. (No pull
     // request row: the engine's own `pr poll` prunes the rows its fake `gh` does not list.)
     let pane = fx.env.tmux(&["display-message", "-p", "-t", "keepalive", "#{pane_id}"]);
     let pane = String::from_utf8(pane.stdout).unwrap().trim().to_owned();
     fx.fixture(&format!("UPDATE sessions SET state = 'blocked', state_label = 'dialog', state_at = 't2', tmux_pane = '{pane}' WHERE id = 'lead1';"));
-    wait_until("@cpd_inbox red 1", || fx.option("@cpd_inbox") == "#[fg=red]inbox 1#[default]");
+    wait_until("@cpd_inbox red 1", || fx.option("@cpd_inbox") == "inbox 1");
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM inbox_items WHERE closed_at IS NULL AND kind = 'dialog'"), 1);
     assert_eq!(fx.option("@cpd_workers_width"), "46");
     engine.stop();

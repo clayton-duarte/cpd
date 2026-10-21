@@ -141,9 +141,35 @@ pub fn note() -> Style {
     Style::new().fg(ui(Ui::Note))
 }
 
-/// A Plan pill: black on the colour of a meaning.
+/// A Plan pill: black on the colour of a meaning. No view draws it since hs-d530; the cli's tui tests still name it.
 pub fn pill(m: Meaning) -> Style {
     Style::new().fg(Color::Black).bg(color(m))
+}
+
+/// A non-interactive pill (hs-d530 R1): background 8 (`DarkGray`), text 7 (`Gray`); its caps are drawn in its background colour.
+pub fn pill_static() -> Style {
+    Style::new().bg(Color::DarkGray).fg(Color::Gray)
+}
+
+/// An interactive pill (hs-d530 R2): background 15 (`White`), text 0 (`Black`); its caps are drawn in its background colour.
+pub fn pill_interactive() -> Style {
+    Style::new().bg(Color::White).fg(Color::Black)
+}
+
+/// The focused pane's title pill (hs-d530 R3): background 4 (`Blue`), text 0 (`Black`).
+pub fn pill_focus() -> Style {
+    Style::new().bg(Color::Blue).fg(Color::Black)
+}
+
+/// The terminal colour numbers of hs-d530, for the tests of `pill_colours`, which may not name a colour themselves.
+#[cfg(test)]
+pub(crate) mod numbered {
+    use ratatui::style::Color;
+    pub(crate) const C0: Color = Color::Black;
+    pub(crate) const C4: Color = Color::Blue;
+    pub(crate) const C7: Color = Color::Gray;
+    pub(crate) const C8: Color = Color::DarkGray;
+    pub(crate) const C15: Color = Color::White;
 }
 
 // Job pill icons (Nerd Fonts, Material Design; hs-d235). https://www.nerdfonts.com/cheat-sheet
@@ -552,11 +578,6 @@ mod tests {
         assert_eq!(color(Meaning::Nothing), Color::DarkGray, "an empty slot's ▁ is grey");
     }
 
-    #[test]
-    fn a_pill_is_black_on_the_colour() {
-        assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Yellow));
-    }
-
     /// No other file of the cockpit's views names a colour.
     #[test]
     fn no_colour_outside_the_palette() {
@@ -582,6 +603,11 @@ mod tests {
         let mut offenders = Vec::new();
         walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut offenders);
         assert!(offenders.is_empty(), "colours belong in tui/palette.rs:\n{}", offenders.join("\n"));
+    }
+
+    #[test]
+    fn a_pill_is_black_on_the_colour() {
+        assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Yellow));
     }
 
     #[test]

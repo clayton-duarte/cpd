@@ -115,12 +115,12 @@ fn a_right_click_is_tmuxs_default_binding_that_passes_it_to_a_pane_that_captures
     assert!(String::from_utf8_lossy(&own.stdout).contains("cpd tui action"));
 }
 
-/// Contract §6.1 (hs-d489): the borders of unfocused panes are grey, `pane-border-style fg=colour8` set right before
+/// Contract §6.1 (hs-d489): the borders of unfocused panes are grey, `pane-border-style fg=colour7` set right before
 /// `pane-active-border-style`.
 #[test]
 fn the_pane_border_style_is_a_server_option_set_right_before_the_active_border_style() {
     let at = SERVER_OPTIONS.iter().position(|o| *o == ["set", "-g", "pane-active-border-style", "fg=blue"]).unwrap();
-    assert_eq!(SERVER_OPTIONS[at.checked_sub(1).unwrap()], ["set", "-g", "pane-border-style", "fg=colour8"]);
+    assert_eq!(SERVER_OPTIONS[at.checked_sub(1).unwrap()], ["set", "-g", "pane-border-style", "fg=colour7"]);
 }
 
 /// Contract §6.1 (hs-d353): tmux 3.8 defaults the popup, popup border and menu styles to a grey background, so
@@ -130,7 +130,7 @@ fn the_popup_and_menu_styles_are_server_options_set_to_default_after_the_active_
     let at = SERVER_OPTIONS.iter().position(|o| *o == ["set", "-g", "pane-active-border-style", "fg=blue"]).unwrap();
     let want: [&[&str]; 3] = [
         &["set", "-gq", "popup-style", "default"],
-        &["set", "-gq", "popup-border-style", "default"],
+        &["set", "-gq", "popup-border-style", "fg=colour7"],
         &["set", "-gq", "menu-style", "default"],
     ];
     assert_eq!(&SERVER_OPTIONS[at + 1..at + 4], &want);
@@ -143,7 +143,8 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
     for option in ["popup-style", "popup-border-style", "menu-style"] {
         let shown = s.env.tmux(&["show", "-gv", option]);
         if shown.status.success() {
-            assert_eq!(String::from_utf8_lossy(&shown.stdout).trim(), "default", "{option}");
+            let want = if option == "popup-border-style" { "fg=colour7" } else { "default" };
+            assert_eq!(String::from_utf8_lossy(&shown.stdout).trim(), want, "{option}");
         } else {
             eprintln!("{option} not asserted: this tmux does not know the option");
         }
@@ -154,12 +155,12 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
 /// (colour 8) and blue on the focused pane, set in the format itself; one `━` in the pill's colour before the left
 /// cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
 const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]#{@cpd_title}#[noreverse]\u{e0b4},},\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}#{@cpd_title}#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#[reverse]\
+#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}\
 #{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
 #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
-#[noreverse]\u{e0b4}}}}";
+#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4}}}}";
 
 /// Every option, binding and hook of contract §6.1: the reference's
 /// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.
@@ -177,7 +178,7 @@ fn assert_server_options(s: &Server) {
             "pane-border-format",
             BORDER_FORMAT_WANT,
         ),
-        ("pane-border-style", "fg=colour8"),
+        ("pane-border-style", "fg=colour7"),
         ("pane-active-border-style", "fg=blue"),
         ("remain-on-exit", "on"),
         ("set-titles", "on"),
@@ -495,7 +496,7 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
     // Title Case, no padding, the pill in blue (this pane is the active one), one border line character before the
     // left cap (hs-d475, hs-d478)
     t.set_pane_title(&pane_id, "Retry payouts").unwrap();
-    assert_eq!(border(), "#[fg=blue]━\u{e0b6}#[reverse]Retry Payouts#[noreverse]\u{e0b4}");
+    assert_eq!(border(), "#[fg=blue]━\u{e0b6}#[fg=colour0]#[bg=blue]Retry Payouts#[fg=blue]#[bg=default]\u{e0b4}");
 }
 
 /// The status line's format, exactly (hs-d479): one grey `─` line across the row, starting and ending with a `─`; the
@@ -508,24 +509,24 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
         cpd_core::host::tmux::STATUS_FORMAT,
         format!(
             "#[fg=colour8]\u{2500}#[default]\
-             #[range=user|reset]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[range=user|reset]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]{}#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2500}#[default]\
-             #[range=user|legend]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]\
+             #[range=user|legend]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]{}#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2500}#[default]\
-             #[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]{}#[noreverse]\u{e0b4}#[default]#[norange]",
+             #[range=user|logs]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]{}#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]",
             cpd_core::host::tmux::RESET_GLYPH,
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
-        ) + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}\
+        ) + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]preview: #{@cpd_preview}#[fg=colour8]#[bg=default]\u{e0b4}#[default],}\
          #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}},\
          #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
          #[default]#[align=right]\
-         #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]\
+         #[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]#{@cpd_inbox}#[fg=colour8]#[bg=default]\u{e0b4}#[default]\
          #[fg=colour8]\u{2500}#[default]\
-         #[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]\
+         #[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]\
          #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
-         #[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]\
-         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour236]\u{e0b6}#[fg=colour8]#[bg=colour236]#{@cpd_version}#[fg=colour236]#[bg=default]\u{e0b4}#[default],}\
+         #[fg=colour8]#[bg=default]\u{e0b4}#[default]\
+         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]#{@cpd_version}#[fg=colour8]#[bg=default]\u{e0b4}#[default],}\
          #[fg=colour8]\u{2500}#[default]"
     );
 }

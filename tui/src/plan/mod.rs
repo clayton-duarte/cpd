@@ -19,7 +19,7 @@
 
 mod actions;
 mod boxes;
-mod flow;
+pub(crate) mod flow;
 pub(crate) mod pulse;
 
 use std::collections::{BTreeMap, HashMap};

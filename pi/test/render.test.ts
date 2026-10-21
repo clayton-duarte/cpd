@@ -28,6 +28,9 @@ const tagged = (line: string): string =>
     .replace(/\x1b\[48;5;0m|\x1b\[49m/g, "")
     .replace(/\x1b\[38;5;(\d+)m/g, (_m, n) => `<${COLORS[Number(n)]}>`)
     .replace(/\x1b\[39m/g, "</>")
+    .replace(/\x1b\[90m/g, "<c8>")
+    .replace(/\x1b\[100m/g, "<bg8>")
+    .replace(/\x1b\[37m/g, "<t7>")
     .replace(/\x1b\[7m/g, "<inv>")
     .replace(/\x1b\[27m/g, "</inv>")
     .replace(/\x1b\[1m/g, "<b>")
@@ -39,13 +42,13 @@ const draw = (c: Component | undefined, width = WIDTH): string[] => c!.render(wi
 const rendering = (style: Style = "compact") => Object.assign(new Rendering(), { style });
 const show = (message: RenderedMessage, expanded: boolean, opts: { style?: Style; width?: number; outputPad?: number } = {}) =>
   draw(rendering(opts.style).render(message, { expanded, outputPad: opts.outputPad ?? 1 }, theme), opts.width);
-const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z]*>/g, ""));
+const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z0-9]*>/g, ""));
 
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 const DOT = "\u{2981}";
-// hs-d486: `╭─` and the caps muted; the title muted then reversed (pi's theme has no inverse); no dot.
-const HEAD = (summary: string) => ` <muted>╭─${CAP_L}</><inv><muted>cpd ${summary}</></inv><muted>${CAP_R}</>`;
+// hs-d486, hs-d530: `╭─` muted; the pill by explicit SGR (caps colour 8, background 8, text 7); no dot.
+const HEAD = (summary: string) => ` <muted>╭─</><c8>${CAP_L}<bg8><t7>cpd ${summary}<c8>${CAP_R}</>`;
 const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd ${summary}${CAP_R}`;
 const rail = (line: string) => ` <muted>│ </>${line}`;
 const FOLDED = "\u{F004B}";

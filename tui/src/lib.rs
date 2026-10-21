@@ -27,6 +27,8 @@ pub mod logs;
 pub mod menu;
 pub mod merge;
 pub mod palette;
+#[cfg(test)]
+mod pill_colours;
 mod plan;
 pub mod read;
 mod runner;

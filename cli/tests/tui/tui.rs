@@ -137,7 +137,7 @@ fn assert_status_line(env: &TestEnv) {
         "#[align=right]",
         "#{@cpd_inbox}",
         "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
-        "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]",
+        "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}",
         "#{R:\u{2500},",
     ] {
         assert!(format.contains(range), "{range} in {format}");
@@ -189,11 +189,11 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     assert_eq!(tmux_out(&env, &["show", "-gv", "remain-on-exit"]).trim(), "on");
     let border = tmux_out(&env, &["show", "-gv", "pane-border-format"]);
     assert!(border.contains("#{==:#{@cpd_view},tree},Context,"), "{border}");
-    assert!(border.contains("#[reverse]") && border.contains("#[noreverse]"), "{border}");
-    // tmux expands the format of the tree pane to its reversed title.
+    assert!(border.contains("#[bg=default]") && !border.contains("#[reverse]"), "{border}");
+    // tmux expands the format of the tree pane to its title pill (hs-d530 R1, R3).
     let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
-    // (the colour, grey or blue, is the pane's focus: `pane_active`)
-    assert!(expanded.contains("━\u{e0b6}#[reverse]Context#[noreverse]\u{e0b4}"), "{expanded}");
+    // (the colours, grey or blue, are the pane's focus: `pane_active`)
+    assert!(expanded.contains("━\u{e0b6}#[fg=colour7]#[bg=colour8]Context#[fg=colour8]#[bg=default]\u{e0b4}"), "{expanded}");
     assert!(!border.contains("statusbar"), "{border}");
     // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
     assert_status_line(&env);
@@ -620,15 +620,16 @@ fn visible(row: &str) -> String {
     out
 }
 
-/// Where the pill of `title` is in the styled `row`, its text reversed with no padding between the caps: the
-/// 0-based column of its left cap, the SGR parameters in force at that cap (`90` is colour 8, `34` blue) and those in
-/// force at the right cap.
+/// Where the pill of `title` is in the styled `row`, its text between the caps with no padding: the
+/// 0-based column of its left cap, the SGR parameters in force at that cap (`90` is colour 8, `34` blue) and those of the
+/// right cap (the first colour set after the text).
 fn pill(row: &str, title: &str) -> (usize, String, String) {
-    let (before, after) = row.split_once(&format!("\u{e0b6}\x1b[7m{title}\x1b[0m")).unwrap_or_else(|| panic!("{title} in {row:?}"));
+    let (head, after) = row.split_once(&format!("m{title}\x1b[")).unwrap_or_else(|| panic!("{title} in {row:?}"));
+    let (before, _) = head.rsplit_once('\u{e0b6}').unwrap_or_else(|| panic!("a left cap before {title} in {row:?}"));
     let in_force = |text: &str| text.rsplit("\x1b[").next().and_then(|s| s.split_once('m')).map_or(String::new(), |(p, _)| p.to_owned());
-    let right = after.strip_prefix("\x1b[").and_then(|s| s.split_once('m')).unwrap_or_else(|| panic!("a colour before the right cap in {after:?}"));
-    assert!(right.1.starts_with('\u{e0b4}'), "{title}: the right cap follows at once: {after:?}");
-    (visible(before).chars().count(), in_force(before), right.0.to_owned())
+    let (right, _) = after.split_once('\u{e0b4}').unwrap_or_else(|| panic!("a right cap after {title} in {row:?}"));
+    let first = right.split_once('m').map_or(String::new(), |(p, _)| p.to_owned());
+    (visible(before).chars().count(), in_force(before), first)
 }
 
 #[test]
@@ -719,7 +720,7 @@ fn a_pane_border_is_grey_and_the_focused_panes_border_is_blue() {
     let focused_border = sgr_at(&row, left + width);
     assert_eq!(focused_border, "34", "the focused pane's border is blue: {row:?}");
     let border = sgr_at(&row, widgets_left - 1);
-    assert!(border == "90" || border == "38;5;8", "an unfocused pane's border is grey, not {border:?}: {row:?}");
+    assert_eq!(border, "37", "an unfocused pane's border is colour 7 (hs-d530 R4): {row:?}");
 }
 
 /// Kills `gone` (views of `main`), runs `cpd tui`, and asserts the layout is whole again with the panes that were
@@ -1012,9 +1013,9 @@ fn env_with_workers() -> (TestEnv, Flock<File>) {
     // These tests pin the line without the version pill (its own tests set it): `tui` set it, so unset it.
     tmux_out(&env, &["set", "-gu", "@cpd_version"]);
     for (option, value) in [
-        ("@cpd_inbox", "#[fg=red]inbox 2#[default]"),
-        ("@cpd_workers", "#[dim]workers #[nodim,fg=green]6#[default,dim]/6 · #[nodim,fg=yellow]4#[default,dim] waiting · 9 queued#[default]"),
-        ("@cpd_workers_short", "#[nodim,fg=green]6#[default,dim]/6·#[nodim,fg=yellow]4#[default,dim]·9#[default]"),
+        ("@cpd_inbox", "inbox 2"),
+        ("@cpd_workers", "workers 6/6 · 4 waiting · 9 queued"),
+        ("@cpd_workers_short", "6/6·4·9"),
         ("@cpd_workers_width", "46"),
         ("@cpd_workers_short_width", "19"),
     ] {
@@ -1058,7 +1059,7 @@ fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_fro
         let (line, styled) = status_line(&env, width as u16, "queued");
         assert_eq!(line, row(width, None, LONG_ITEMS, LONG_WIDTH), "at {width}: {line:?}");
         assert_eq!(line.chars().count(), width, "{line:?}");
-        assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
+        assert!(styled.contains("\x1b[37m\x1b[100minbox 2"), "the counter in colour 7 on the pill: {styled:?}");
     }
 }
 
@@ -1069,7 +1070,7 @@ fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_be
         let (line, styled) = status_line(&env, width as u16, "6/6");
         assert!(!line.contains("workers"), "{line:?}");
         assert_eq!(line, row(width, None, SHORT_ITEMS, SHORT_WIDTH), "at {width}: {line:?}");
-        assert!(styled.contains("\x1b[31m\x1b[48;5;236minbox 2"), "the counter in red on the pill: {styled:?}");
+        assert!(styled.contains("\x1b[37m\x1b[100minbox 2"), "the counter in colour 7 on the pill: {styled:?}");
     }
 }
 
@@ -1085,9 +1086,9 @@ fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_w
         assert!(line.starts_with(&buttons()), "{line:?}");
         assert!(!line.contains("\u{e0b4} \u{e0b6}"), "no space between two pills: {line:?}");
         // The leading `─`, the joins and the fill are colour 8 (bright black, SGR 90), the pills' caps too.
-        assert!(styled.contains("\x1b[90m\u{2500}\u{e0b6}"), "the leading line cell, grey: {styled:?}");
+        assert!(styled.contains("\x1b[90m\u{2500}\x1b[97m\u{e0b6}"), "the leading line cell, grey, then a button's white cap: {styled:?}");
         assert!(styled.contains("\u{e0b4}\u{2500}\u{e0b6}"), "{styled:?}");
-        assert!(styled.trim_end().ends_with("\u{e0b4}\x1b[90m\u{2500}"), "the closing line cell, grey: {styled:?}");
+        assert!(styled.trim_end().ends_with("\x1b[90m\x1b[49m\u{e0b4}\u{2500}"), "the closing line cell, grey: {styled:?}");
     }
 }
 
@@ -1101,7 +1102,7 @@ fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
         let fill = "\u{2500}".repeat(usize::from(width) - used);
         // The last button's cap, the fill (the join is its first cell), then the Inbox counter's pill.
         assert!(line.contains(&format!("\u{e0b4}{fill}\u{e0b6}inbox")), "{line:?}");
-        assert!(styled.contains("\x1b[90m") && styled.contains(&format!("\u{e0b4}{fill}")), "{styled:?}");
+        assert!(styled.contains(&format!("\x1b[90m{fill}\u{e0b6}")), "{styled:?}");
     }
 }
 
@@ -1119,7 +1120,7 @@ fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_o
         assert!(line.starts_with(&format!("{}\u{2500}{pill}\u{2500}", buttons())), "a `─` join after the buttons, then the pill, then the line: {line:?}");
         assert!(line.ends_with(items), "at {width}: {line:?}");
         assert_eq!(line, row(width, Some(PREVIEW), items, items_width), "the row stays full at {width}: {line:?}");
-        assert!(styled.contains(&format!("\x1b[7mpreview: {PREVIEW}")) && styled.contains("\x1b[33m"), "yellow, reversed, unpadded: {styled:?}");
+        assert!(styled.contains(&format!("\x1b[37m\x1b[100mpreview: {PREVIEW}")), "colour 7 on 8, unpadded: {styled:?}");
     }
 }
 

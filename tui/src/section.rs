@@ -11,7 +11,6 @@
 //! Pure: it only builds a line. The pill is grey: the corner, the lines and the caps are muted
 //! (`palette::fg(Meaning::Nothing)`), the pill's text is the muted block with the background colour on it (reverse video).
 
-use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::palette::{self, Meaning};
@@ -59,13 +58,13 @@ fn row(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'sta
     let mut spans = vec![Span::raw(PAD.repeat(pad)), Span::styled(lead, muted)];
     if pill {
         spans.push(Span::styled(CAP_LEFT, muted));
-        spans.push(Span::styled(text, muted.add_modifier(Modifier::REVERSED)));
+        spans.push(Span::styled(text, palette::pill_static()));
         spans.push(Span::styled(CAP_RIGHT, muted));
     }
     spans.push(Span::styled(RULE.repeat(fill), muted));
     if !count.is_empty() {
         spans.push(Span::styled(CAP_LEFT, muted));
-        spans.push(Span::styled(count, muted.add_modifier(Modifier::REVERSED)));
+        spans.push(Span::styled(count, palette::pill_static()));
         spans.push(Span::styled(CAP_RIGHT, muted));
     }
     spans.push(Span::raw(PAD.repeat(pad)));
@@ -83,8 +82,7 @@ pub(crate) mod check {
     use crate::palette::{self, Meaning};
 
     /// The pill whose left cap is at (`x`, `y`) of `buf` reads `text` between its two caps, with no padding spaces, and is grey:
-    /// the caps are muted; the text is the block inverted (reverse video of the muted colour: the block is muted and the text is the
-    /// background colour).
+    /// the caps are muted; the text is the static pill's (hs-d530).
     pub(crate) fn grey_pill(buf: &Buffer, x: u16, y: u16, text: &str) {
         let grey = palette::color(Meaning::Nothing);
         let reset = Cell::EMPTY.bg; // the terminal's own background, which no colour names (no colour outside the palette)
@@ -96,10 +94,10 @@ pub(crate) mod check {
             assert_eq!((cell.fg, cell.bg), (grey, reset), "the cap at ({cap}, {y}) is muted: {cell:?}");
             assert!(!cell.modifier.contains(Modifier::REVERSED), "a cap is not inverted: {cell:?}");
         }
+        let pill = palette::pill_static();
         for at in x + 1..=x + width {
             let cell = &buf[(at, y)];
-            assert!(cell.modifier.contains(Modifier::REVERSED), "the text at ({at}, {y}) is inverted: {cell:?}");
-            assert_eq!((cell.fg, cell.bg), (grey, reset), "the block is muted, the text is the background colour: {cell:?}");
+            assert_eq!((Some(cell.fg), Some(cell.bg)), (pill.fg, pill.bg), "the text at ({at}, {y}): {cell:?}");
         }
     }
 }
@@ -169,11 +167,10 @@ mod tests {
         for l in [collapsible_title("Inbox", Some(35), 22), title("Inbox", Some(35), 22)] {
             let find = |what: &str| l.spans.iter().find(|s| s.content.contains(what)).unwrap_or_else(|| panic!("no span with {what:?}: {:?}", l.spans));
             let pill = find("Inbox");
-            assert!(pill.style.add_modifier.contains(Modifier::REVERSED), "the title text is reverse video: {pill:?}");
-            assert!(muted(pill), "{pill:?}");
+            assert_eq!(pill.style, palette::pill_static(), "the title text is the static pill's");
             for cap in [CAP_LEFT, CAP_RIGHT] {
                 let cap = find(cap);
-                assert!(muted(cap) && !cap.style.add_modifier.contains(Modifier::REVERSED), "a cap is muted, not inverted: {cap:?}");
+                assert!(muted(cap) && !cap.style.add_modifier.contains(ratatui::style::Modifier::REVERSED), "a cap is muted, not inverted: {cap:?}");
             }
             let lines: Vec<_> = l.spans.iter().filter(|s| !s.content.is_empty() && s.content.chars().all(|c| c == '╭' || c == '─')).collect();
             assert!(lines.iter().any(|s| s.content.contains('─')), "the lines: {:?}", l.spans);
