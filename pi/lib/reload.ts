@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,23 @@ export function appendLog(path: string, line: string, now: () => Date = () => ne
 
 /** The adapter directory: the parent of `pi/lib/`, which is what `scripts/install-cpd.sh` replaces as a whole. */
 export const adapterDir = (): string => dirname(dirname(fileURLToPath(import.meta.url)));
+
+/**
+ * The path to watch: the value of pi's `-e`/`--extension` argument whose real path is `dir` (the link pi loaded the adapter from, which an
+ * install swaps), else `dir`. A value that does not resolve (an `npm:` spec, a missing path) is skipped.
+ */
+export function watchedDir(argv: readonly string[], dir: string): string {
+  for (let i = 0; i < argv.length - 1; i++) {
+    if (argv[i] !== "-e" && argv[i] !== "--extension") continue;
+    const value = argv[i + 1]!;
+    try {
+      if (realpathSync(value) === realpathSync(dir)) return value;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    }
+  }
+  return dir;
+}
 
 /** `(dev, ino, mtimeMs)` of the directory; `undefined` when it does not exist (the install's `rm` → `mv` window, not a change). */
 export function identityOf(dir: string): string | undefined {

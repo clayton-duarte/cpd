@@ -14,7 +14,7 @@ import { ENTRY_TYPE, highestReview, plannotatorId, REVIEW_LABEL, reviewsFromEntr
 import { registerPlanReviewCommand } from "./plan-review-command.ts";
 import { createTracker, type Tracker } from "./pntrack.ts";
 import { parseResult } from "./plannotator.ts";
-import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage } from "./reload.ts";
+import { adapterDir, appendLog, DEFAULT_POLL_MS, LONG_REFUSAL_NOTICE, pollAdapter, refusal, reloadLogPath, RELOAD_TRIGGER, validatePackage, watchedDir } from "./reload.ts";
 import { guardOf } from "./reload-command.ts";
 import { decide, QUESTION_LABEL, recover, registerTool, showDialog } from "./review.ts";
 import { Run, parseSession, type SessionInfo } from "./run.ts";
@@ -185,7 +185,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   // 6. follow
   r.follower.start();
   r.reload = pollAdapter({
-    dir: options.reload?.dir ?? adapterDir(),
+    dir: options.reload?.dir ?? watchedDir(process.argv, adapterDir()),
     intervalMs: options.reload?.intervalMs ?? DEFAULT_POLL_MS,
     validate: (dir) => validatePackage(dir, options.reload),
     refusal: () => (host.run === r && host.ctx !== undefined ? refusal(guardOf(r, host.ctx)) : "not active"),
