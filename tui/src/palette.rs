@@ -141,6 +141,11 @@ pub fn note() -> Style {
     Style::new().fg(ui(Ui::Note))
 }
 
+/// A Plan pill: black on the colour of a meaning. No view draws it since hs-d530; the cli's tui tests still name it.
+pub fn pill(m: Meaning) -> Style {
+    Style::new().fg(Color::Black).bg(color(m))
+}
+
 /// A non-interactive pill (hs-d530 R1): background 8 (`DarkGray`), text 7 (`Gray`); its caps are drawn in its background colour.
 pub fn pill_static() -> Style {
     Style::new().bg(Color::DarkGray).fg(Color::Gray)
@@ -598,6 +603,11 @@ mod tests {
         let mut offenders = Vec::new();
         walk(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut offenders);
         assert!(offenders.is_empty(), "colours belong in tui/palette.rs:\n{}", offenders.join("\n"));
+    }
+
+    #[test]
+    fn a_pill_is_black_on_the_colour() {
+        assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Yellow));
     }
 
     #[test]
