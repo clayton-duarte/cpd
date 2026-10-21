@@ -984,14 +984,15 @@ mod tests {
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
         assert!(tail.contains("fg=colour8") && tail.contains("bg=colour236") && tail.contains("\u{e0b4}"), "{tail}");
         assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
-        assert_eq!(STATUS_FORMAT.matches("#{@cpd_version}").count(), 1, "{STATUS_FORMAT}");
+        assert_eq!(STATUS_FORMAT.matches("bg=colour236]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
     }
 
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.
     #[test]
     fn the_fill_and_long_fits_subtract_the_version_pills_width() {
         let width = "#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}";
-        assert_eq!(STATUS_FORMAT.matches(width).count(), 2, "fill and long_fits: {STATUS_FORMAT}");
+        let long_fits = STATUS_FORMAT.matches("#{?#{e|>=:#{client_width}").count();
+        assert_eq!(STATUS_FORMAT.matches(width).count(), long_fits + 1, "the fill and each long_fits: {STATUS_FORMAT}");
         let fill = STATUS_FORMAT.find("#{R:").unwrap();
         let fill_end = STATUS_FORMAT[fill..].find("#[default]#[align=right]").unwrap() + fill;
         assert!(STATUS_FORMAT[fill..fill_end].contains(width), "the fill: {}", &STATUS_FORMAT[fill..fill_end]);
