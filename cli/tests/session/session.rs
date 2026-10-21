@@ -521,7 +521,7 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let row = show(&env, &new);
     assert_eq!(
         (&row["role"], &row["context"], &row["state"], &row["tier"], &row["forked_from"], &row["place"]),
-        (&json!("lead"), &json!("ctx"), &json!("stopped"), &json!("O3"), &json!(LEAD2), &json!("parked"))
+        (&json!("lead"), &json!("ctx"), &json!("stopped"), &json!("O2"), &json!(LEAD2), &json!("parked"))
     );
     assert_eq!(row["cwd"], env.root().display().to_string());
     assert_eq!(row["tmux_pane"], out["session"]["pane"]);
@@ -536,7 +536,7 @@ fn fork_registers_a_stopped_lead_in_a_parked_window() {
     let registered = events(&env, "session-registered");
     let registered = registered.last().unwrap();
     assert_eq!((&registered["session"], &registered["plan"]), (&json!(new), &json!("pay")));
-    assert_eq!(registered["data"], json!({"role": "lead", "name": "Lead two (fork)", "forked_from": LEAD2, "tier": "O3"}));
+    assert_eq!(registered["data"], json!({"role": "lead", "name": "Lead two (fork)", "forked_from": LEAD2, "tier": "O2"}));
     let moved = events(&env, "session-moved");
     assert_eq!(moved.len(), 1);
     assert_eq!(moved[0]["data"], json!({"pane": out["session"]["pane"], "window": out["session"]["window"], "place": "parked"}));
@@ -692,7 +692,7 @@ fn fork_waits_until_the_source_is_idle_then_forks_and_resumes() {
     assert_eq!(after("--fork"), source_file.display().to_string());
     assert_eq!(after("--session-id"), new);
     assert_eq!(after("-n"), "side");
-    assert_eq!(after("--model"), "github-copilot/claude-opus-5.5:high");
+    assert_eq!(after("--model"), "github-copilot/claude-opus-5.5:medium");
     let copied = home(&env).session_message(&PlanId::parse("pay").unwrap(), &sid(&new));
     assert_eq!(fork[fork.len() - 2..], ["--".to_owned(), format!("@{}", copied.display())]);
 

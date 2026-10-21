@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::Serialize;
 use toml::{Table, Value};
 
-use super::tier::Tier;
+use super::tier::{Letter, Tier};
 use crate::error::{CpdError, ErrorCode};
 use crate::home::CpdHome;
 use crate::ids::MachineName;
@@ -266,17 +266,21 @@ impl Config {
         let concurrency = r.get("concurrency", 3, |v| int(v, 1, u32::MAX))?;
         let test_concurrency = r.get("test_concurrency", 2, |v| int(v, 1, 64))?;
         let retry_cap = r.get("retry_cap", 2, |v| int(v, 0, u32::MAX))?;
-        let lead_tier = r.get("lead_tier", Tier::parse("O3").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
-        })?;
-        let manager_tier = r.get("manager_tier", Tier::parse("O5").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
-        })?;
-        let context_distill_tier = r.get("context_distill_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+        // Tier rules (contract §9, hs-d506): no agent uses effort 5; Leads and the Manager may be `O`;
+        // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
+        let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
+        let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
+        let context_distill_tier = r.get("context_distill_tier", Tier::parse("H2").expect("a valid Tier"), |v| {
+            let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
+            if tier.letter() != Letter::H || tier.effort() > Tier::MAX_EFFORT {
+                return Err(format!("must be an H Tier with effort 0-4, not {tier}: an auxiliary run uses only the H tier and never effort 5, to keep cost down (hs-d506)"));
+            }
+            Ok(tier)
         })?;
         let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
-            Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())
+            let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
+            tier.check_worker().map_err(|e| e.message().to_owned())?;
+            Ok(tier)
         })?;
         let lead_pi_packages = r.get(
             "lead_pi_packages",
@@ -477,6 +481,15 @@ impl Reader<'_> {
 }
 
 const KNOWN_SECTIONS: [&str; 6] = ["tiers", "timeouts", "watch", "inbox", "events", "tmux"];
+
+/// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
+fn leader_tier(value: &Value) -> Result<Tier, String> {
+    let tier = Tier::parse(text_of(value)?).map_err(|e| e.message().to_owned())?;
+    if tier.effort() > Tier::MAX_EFFORT {
+        return Err(format!("must have effort 0-4, not {tier}: no agent uses effort 5, to keep cost down (hs-d506)"));
+    }
+    Ok(tier)
+}
 
 fn text_of(value: &Value) -> Result<&str, String> {
     match value {

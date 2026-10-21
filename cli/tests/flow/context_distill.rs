@@ -196,8 +196,8 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     assert!(fx.errors().is_empty());
 
     // The distiller's argv and inputs: print mode, no session, no extension, skill, context file or tool; two files.
-    let level = Tier::parse("S2").unwrap().level();
-    let model = format!("p/sonnet:{level}");
+    let level = Tier::parse("H2").unwrap().level();
+    let model = format!("p/haiku:{level}");
     let calls = fx.env.calls("pi");
     assert_eq!(
         calls,
