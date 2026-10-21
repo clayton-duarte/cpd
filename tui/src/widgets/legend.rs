@@ -82,7 +82,7 @@ impl Section {
 
     fn draw(&self, buf: &mut Buffer, area: Rect) {
         let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
-        Paragraph::new(Span::styled(self.title, Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)))
+        Paragraph::new(Span::styled(self.title, palette::read_only_text().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)))
             .render(title, buf);
         let mut table = Table::new(
             self.rows.iter().map(|r| Row::new(r.iter().cloned().map(Cell::from))),
@@ -91,14 +91,15 @@ impl Section {
         .column_spacing(COLUMN_SPACING);
         if let Some(h) = self.header {
             table = table
-                .header(Row::new(h.iter().map(|t| Cell::from(*t))).style(Style::new().add_modifier(Modifier::DIM)));
+                .header(Row::new(h.iter().map(|t| Cell::from(*t))).style(palette::muted_text()));
         }
         table.render(body, buf);
     }
 }
 
+/// Every other word of the legend is read-only text, colour 7.
 fn plain(text: &str) -> Line<'static> {
-    Line::from(text.to_string())
+    Line::styled(text.to_string(), palette::read_only_text())
 }
 
 /// The Context row's precedence line, with the real glyphs (the working one as its first frame).
@@ -128,7 +129,7 @@ pub(crate) fn sections() -> Vec<Section> {
             let (icon, _meaning) = palette::job_status(*status, *merging);
             vec![
                 plain(name),
-                capped(format!("{icon} key│S1"), palette::pill_static()),
+                capped(format!("{icon} key│S1"), palette::job_pill(*status, *merging, false)),
                 Line::from(Span::styled("3", palette::count_style(*status, *merging, 3))),
             ]
         })
@@ -140,8 +141,8 @@ pub(crate) fn sections() -> Vec<Section> {
         failed + 1,
         vec![
             plain("failed, stuck"),
-            capped(format!("{stuck_icon} key│S1"), palette::pill_static()),
-            Line::from(Span::styled("3", palette::fg(stuck))),
+            capped(format!("{stuck_icon} key│S1"), palette::job_pill(JobStatus::Failed, false, true)),
+            Line::from(Span::styled("3", palette::fg_clickable(stuck))),
         ],
     );
     // The counters' order is `JobCounts::counters`'s: queued, running, merging, failed, merged.
@@ -158,7 +159,7 @@ pub(crate) fn sections() -> Vec<Section> {
     jobs.push(vec![
         plain("counters row"),
         Line::from(counters),
-        Line::from(order).style(Style::new().add_modifier(Modifier::DIM)),
+        Line::from(order).style(palette::muted_text()),
     ]);
     let jobs = Section { title: "Jobs: Plan Pills And Context Counters", header: Some(["status", "Plan pill", "counter"]), rows: jobs };
     let dot = |d: Dot, frame: usize| Line::from(palette::dot_span(d, frame, false));
@@ -179,7 +180,7 @@ pub(crate) fn sections() -> Vec<Section> {
             vec![plain(""), plain(&precedence())],
         ],
     };
-    let sample = |(name, meaning): (&str, Meaning)| Line::from(Span::styled(format!("#2 {name}"), palette::fg(meaning)));
+    let sample = |(name, meaning): (&str, Meaning)| Line::from(Span::styled(format!("#2 {name}"), palette::fg_clickable(meaning)));
     let mut pr_rows: Vec<Vec<Line<'static>>> = palette::PR_LEGEND
         .iter()
         .map(|(name, state)| {
@@ -201,7 +202,7 @@ pub(crate) fn sections() -> Vec<Section> {
                 .iter()
                 .map(|(name, c)| {
                     let (icon, meaning) = palette::checks(*c);
-                    Line::from(vec![Span::styled(icon, palette::fg(meaning)), format!(" {name}").into()])
+                    Line::from(vec![Span::styled(icon, palette::fg_clickable(meaning)), Span::styled(format!(" {name}"), palette::read_only_text())])
                 })
                 .collect(),
         ],
@@ -263,7 +264,7 @@ pub fn draw(f: &mut Frame, area: Rect) {
 }
 
 /// Draws the title as a section header, then the window of the body that `scroll` shows: it is fitted to `area` here
-/// and, when the body is taller than the rest of `area`, a dim `first-last/total` closes the title's line.
+/// and, when the body is taller than the rest of `area`, a muted `first-last/total` closes the title's line.
 fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
     let [head, window] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
     let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
@@ -282,7 +283,7 @@ fn draw_scrolled(f: &mut Frame, area: Rect, scroll: &mut Scroll) {
         // ends one column before the edge: the padding stays blank
         if width + 1 < title.width {
             let at = Rect::new(title.x + title.width - 1 - width, title.y, width, 1);
-            f.render_widget(Paragraph::new(position).style(palette::fg(Meaning::Nothing)), at);
+            f.render_widget(Paragraph::new(position).style(palette::muted_text()), at);
         }
     }
 }
@@ -386,8 +387,8 @@ mod tests {
                 c(Kind::Escalation),
                 c(Kind::Merged),
                 c(Kind::Other),
-                palette::fg(Meaning::Nothing).fg,
-                palette::fg(Meaning::Review).fg
+                palette::muted_text().fg,
+                palette::muted_text().fg
             ]
         );
     }
@@ -440,15 +441,15 @@ mod tests {
         let names: Vec<String> = prs.rows.iter().map(|r| text(&r[0])).collect();
         assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 closed", "#2 conflict", "#2 updating", "#2 updating"]);
         let conflict = &prs.rows[4][0].spans[0];
-        assert_eq!(conflict.style, palette::fg(palette::Meaning::Failed));
+        assert_eq!(conflict.style, palette::fg_clickable(palette::Meaning::Failed));
     }
 
     #[test]
     fn a_closed_pr_is_waiting_while_its_lead_handles_it_and_red_once_it_asks_you() {
         let prs = &sections()[3];
         let (handled, asked) = (&prs.rows[2], &prs.rows[3]);
-        assert_eq!(handled[0].spans[0].style, palette::fg(Meaning::Waiting));
-        assert_eq!(asked[0].spans[0].style, palette::fg(Meaning::Failed));
+        assert_eq!(handled[0].spans[0].style, palette::fg_clickable(Meaning::Waiting));
+        assert_eq!(asked[0].spans[0].style, palette::fg_clickable(Meaning::Failed));
         assert_eq!((text(&handled[1]), text(&asked[1])), ("its Lead handles it".to_owned(), "its Lead asks you".to_owned()));
     }
 
@@ -459,9 +460,13 @@ mod tests {
         assert_eq!((text(&failed[0]), text(&stuck[0])), ("failed".to_owned(), "failed, stuck".to_owned()));
         // the pill's body, after its left cap
         let style = |row: &Vec<Line>| row[1].spans[1].style;
-        assert_eq!((style(failed), style(stuck)), (palette::pill_static(), palette::pill_static()), "a sample pill is not interactive (hs-d530)");
+        assert_eq!(
+            (style(failed), style(stuck)),
+            (palette::job_pill(JobStatus::Failed, false, false), palette::job_pill(JobStatus::Failed, false, true)),
+            "a sample pill is the Job pill the Plan view draws (hs-d534)"
+        );
         let fg = |row: &Vec<Line>| row[2].spans[0].style.fg;
-        assert_eq!((fg(failed), fg(stuck)), (palette::fg(Meaning::Waiting).fg, palette::fg(Meaning::Failed).fg));
+        assert_eq!((fg(failed), fg(stuck)), (palette::fg_clickable(Meaning::Waiting).fg, palette::fg_clickable(Meaning::Failed).fg));
     }
 
     #[test]
@@ -640,7 +645,7 @@ mod tests {
             ]
         );
         let colours: Vec<_> = inbox.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
-        let c = |m| Some(palette::color(m));
+        let c = |m| Some(palette::color_clickable(m));
         assert_eq!(colours, [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::NotStarted)], "red, yellow, magenta, white");
         let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
         let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();

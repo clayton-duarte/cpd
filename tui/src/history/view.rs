@@ -4,7 +4,6 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
@@ -40,7 +39,7 @@ impl View {
 
     pub fn draw(&mut self, f: &mut Frame) {
         let [head, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(f.area());
-        f.render_widget(Paragraph::new(Line::from(self.title.as_str()).bold()), head);
+        f.render_widget(Paragraph::new(Line::styled(self.title.as_str(), crate::palette::read_only_text().add_modifier(ratatui::style::Modifier::BOLD))), head);
         self.body.draw(f, body);
     }
 }

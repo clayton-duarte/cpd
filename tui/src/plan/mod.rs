@@ -33,7 +33,6 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event as Input, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::layout::{Constraint, Layout, Margin, Position, Rect};
-use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget};
 
@@ -103,12 +102,16 @@ impl ReviewRow {
     }
 
     fn line(&self) -> Line<'static> {
-        let mut spans = vec![
-            Span::raw(format!(" Plan review r{} ", self.number)),
-            Span::styled("pending", palette::fg(Meaning::Review)),
-        ];
-        if self.url.is_some() {
-            spans.push(format!(" {CUE}").into());
+        // linked, the row is a hit target: clickable text and the bright pending; unlinked, read-only text and the base
+        let linked = self.url.is_some();
+        let (text, pending) = if linked {
+            (palette::clickable_text(), palette::fg_clickable(Meaning::Planning))
+        } else {
+            (palette::read_only_text(), palette::fg(Meaning::Planning))
+        };
+        let mut spans = vec![Span::styled(format!(" Plan review r{} ", self.number), text), Span::styled("pending", pending)];
+        if linked {
+            spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
         Line::from(spans)
     }
@@ -192,11 +195,11 @@ fn concerns(event: &Event, centre: Option<&Centre>, pulse: Option<&Pulse>) -> bo
 /// The line at the foot of the chart: an error, ` no Lead session in the centre` (dim), `no PR yet: cpd pr add` (dim)
 /// or `no Plan yet`: lasting states of the view (commands.md §17 "No notes", rule (b)).
 fn message(error: Option<&str>, centre: Option<&Centre>) -> Option<Line<'static>> {
-    let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::note())).collect();
+    let mut parts: Vec<Span<'static>> = error.into_iter().map(|e| Span::styled(e.to_owned(), palette::error())).collect();
     match centre {
-        None => parts.push(" no Lead session in the centre".dim()),
-        Some(c) if c.plan.prs.is_empty() => parts.push("no PR yet: cpd pr add".dim()),
-        Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::note())),
+        None => parts.push(Span::styled(" no Lead session in the centre", palette::muted_text())),
+        Some(c) if c.plan.prs.is_empty() => parts.push(Span::styled("no PR yet: cpd pr add", palette::muted_text())),
+        Some(c) if c.plan.jobs.is_empty() => parts.push(Span::styled("no Plan yet", palette::muted_text())),
         Some(_) => {}
     }
     (!parts.is_empty()).then(|| Line::from(spaced(parts)))
@@ -253,9 +256,9 @@ impl Ui {
     fn draw_pulse(&mut self, f: &mut Frame, pulse: &Pulse) {
         let mut window = f.area();
         let mut parts: Vec<Span<'static>> =
-            self.error.iter().map(|e| Span::styled(e.clone(), palette::note())).collect();
+            self.error.iter().map(|e| Span::styled(e.clone(), palette::error())).collect();
         if pulse.rows.is_empty() {
-            parts.push(" no Plans yet".dim());
+            parts.push(Span::styled(" no Plans yet", palette::muted_text()));
         }
         if !parts.is_empty() {
             let [rows, message_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(window);
@@ -651,6 +654,7 @@ mod tests {
                 state: read::PrState::Open,
                 url: "https://github.com/acme/api/pull/12".into(),
                 conflicting: false,
+                clean: false,
                 lead_working: false,
                 update: None,
             }),
@@ -723,7 +727,10 @@ mod tests {
     fn a_pending_review_is_a_row_above_the_boxes_which_start_one_row_lower() {
         let row = ReviewRow { number: 2, url: Some(URL.into()) };
         assert_eq!(row.line().to_string(), " Plan review r2 pending 󰏌");
-        assert_eq!(row.line().spans[1].style.fg, palette::fg(Meaning::Review).fg);
+        assert_eq!(row.line().spans[1].style.fg, palette::fg_clickable(Meaning::Planning).fg, "linked: a hit target, magenta 13");
+        assert_eq!(row.line().spans[0].style, palette::clickable_text());
+        let unlinked = ReviewRow { number: 2, url: None }.line();
+        assert_eq!((unlinked.spans[0].style, unlinked.spans[1].style), (palette::read_only_text(), palette::fg(Meaning::Planning)), "unlinked: 7 and magenta 5");
 
         let without = drawn(&centre(None));
         let (buf, rows, ui) = drawn(&centre(Some(row)));
@@ -735,8 +742,8 @@ mod tests {
         assert_eq!(without.1[0], "");
         assert_eq!((ui.body.y, ui.body.height), (1, 6), "clicks and scrolling use the area between the row and the message row");
         assert_eq!(without.2.body.y, 0);
-        // `pending` is yellow, `󰏌` links to the plannotator page; the title's `󰏌` still links to the pull request
-        assert_eq!(buf[(18, 0)].fg, palette::fg(Meaning::Review).fg.unwrap());
+        // `pending` is magenta, `󰏌` links to the plannotator page; the title's `󰏌` still links to the pull request
+        assert_eq!(buf[(18, 0)].fg, palette::fg_clickable(Meaning::Planning).fg.unwrap());
         assert_eq!(linked(&buf, 0, OPEN), (3..=26).collect::<Vec<u16>>(), "`Plan` through `󰏌`, not the blank before it");
         let pull = "\x1b]8;;https://github.com/acme/api/pull/12\x07";
         let title: Vec<char> = rows[2].chars().collect();
@@ -1080,7 +1087,7 @@ mod tests {
         let mut ui = Ui::default();
         let (buf, rows) = pulse_screen(&mut ui, &pulse_of(&[]), 5);
         assert_eq!(rows[4], "   no Plans yet");
-        assert!(buf[(3, 4)].modifier.contains(ratatui::style::Modifier::DIM));
+        assert!(crate::palette::check::is_muted(&buf[(3, 4)]));
     }
 
     #[test]

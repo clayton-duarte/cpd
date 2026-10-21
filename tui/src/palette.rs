@@ -11,7 +11,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::Span,
 };
 
@@ -33,11 +33,11 @@ pub enum Meaning {
     /// What needs the User: a stuck Job (`job-stuck`), a closed PR its Lead asked about, a conflict or failed checks on a PR
     /// no Plan owns. A failure an agent handles is [`Meaning::Waiting`] instead (hs-d303).
     Failed,
-    /// Phase `plan`.
+    /// Phase `plan`; a draft Job.
     Planning,
     /// Phase `grounding`.
     Grounding,
-    /// A draft Job, a zero count, a separator, no Plan, no checks, nothing to show.
+    /// A zero count, a separator, a cancelled Job, no Plan, no checks, nothing to show.
     Nothing,
     /// A Session that waits for another agent, not for the User (hs-d303): the waiting dot.
     Waiting,
@@ -71,46 +71,47 @@ impl Meaning {
     }
 }
 
-/// One colour per meaning, with two deliberate exceptions: grounding and not
-/// started share white, since a Plan that is still grounding has nothing
-/// running yet; done shares dark grey with nothing, the User's choice.
+/// The base colour of a meaning, on what cannot be clicked (hs-d534, §6.1.1 rule (1)); [`color_clickable`] is its bright pair.
+/// Grounding has no colour of its own: grey, the default when no meaning applies, like not started.
 pub fn color(m: Meaning) -> Color {
     match m {
-        Meaning::NotStarted => Color::White,
-        Meaning::InProgress => Color::Green,
+        Meaning::NotStarted => Color::Gray,
+        Meaning::InProgress => Color::Cyan,
         Meaning::Review => Color::Yellow,
-        Meaning::Done => Color::DarkGray,
+        Meaning::Done => Color::Green,
         Meaning::Failed => Color::Red,
         Meaning::Planning => Color::Magenta,
-        Meaning::Grounding => Color::White,
+        Meaning::Grounding => Color::Gray,
         Meaning::Nothing => Color::DarkGray,
-        // Cyan, not blue: blue means focus only (hs-d352); it is neither the red of a failure nor the yellow of attention.
+        // Cyan, not blue: blue is focus and selection only; agent activity is cyan.
         Meaning::Waiting => Color::Cyan,
     }
 }
 
-/// Foreground in the colour of a meaning.
+/// Foreground in the base colour of a meaning: for what cannot be clicked.
 pub fn fg(m: Meaning) -> Style {
     Style::new().fg(color(m))
 }
 
-/// The colour of a Pulse bar by the kind of activity in its slot (commands.md §13.2, Kinds; User, hs-d327). Green is not
-/// [`Meaning::Done`], which shares dark grey with nothing.
+/// Foreground in the bright pair of a meaning: for every coloured mark inside a clickable area.
+pub fn fg_clickable(m: Meaning) -> Style {
+    Style::new().fg(color_clickable(m))
+}
+
+/// The colour of a Pulse bar by the kind of activity in its slot (commands.md §13.2, Kinds; User, hs-d327). Pulse rows are clickable, so the bars are the bright pairs; activity, PR-opened and escalation bars are all cyan.
 pub fn pulse_kind(kind: Kind) -> Color {
     match kind {
-        Kind::Error => Color::Red,
-        Kind::Plan => Color::Magenta,
-        Kind::PrOpened => Color::Yellow,
-        Kind::Escalation => Color::Blue,
-        Kind::Merged => Color::Green,
-        Kind::Other => Color::White,
+        Kind::Error => color_clickable(Meaning::Failed),
+        Kind::Plan => color_clickable(Meaning::Planning),
+        Kind::PrOpened | Kind::Escalation | Kind::Other => color_clickable(Meaning::InProgress),
+        Kind::Merged => color_clickable(Meaning::Done),
     }
 }
 
 /// Colours that are not a status: notes and prompts, the Worker view's roles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ui {
-    /// Notes and prompts at the foot of a view.
+    /// A dialog's input refusal.
     Note,
     /// The User's lines in the Worker view.
     You,
@@ -122,94 +123,117 @@ pub enum Ui {
 
 pub fn ui(u: Ui) -> Color {
     match u {
-        Ui::Note | Ui::Tool => Color::Yellow,
-        Ui::You => Color::Cyan,
-        Ui::Agent => Color::Green,
+        Ui::Note => Color::Yellow,
+        Ui::Tool => Color::Cyan,
+        Ui::You => Color::Gray,
+        Ui::Agent => Color::Cyan,
     }
 }
 
-/// The one colour for in focus and selected (hs-d351), as the cockpit's `pane-active-border-style fg=blue`.
+/// The one colour for in focus and selection: blue, as the cockpit's `pane-active-border-style fg=blue`.
 const FOCUS: Color = Color::Blue;
 
-/// The selected row's name in the tree (hs-d351).
+/// A cursor and a selection (hs-d534, §6.1.1): the blue block, background 4, text 0, in place of reverse video.
 pub fn selected() -> Style {
+    Style::new().bg(FOCUS).fg(Color::Black)
+}
+
+/// The selected tree row's name: blue text (hs-d351, hs-d534), where [`selected`] is the block of a cursor.
+pub fn selected_name() -> Style {
     Style::new().fg(FOCUS)
 }
 
-/// STUB (hs-d534, §6.1.1 rule (1)): the bright pair of a base colour, n+8 (`Red` -> `LightRed`, `Gray` -> `White`); blue stays 4
-/// and 8 has no pair. Returns its argument until implemented.
+/// The bright pair of a base colour, n+8 (`Red` -> `LightRed`, `Gray` -> `White`); blue stays 4 and 8 has no pair.
 pub fn bright(c: Color) -> Color {
-    c
+    match c {
+        Color::Red => Color::LightRed,
+        Color::Green => Color::LightGreen,
+        Color::Yellow => Color::LightYellow,
+        Color::Magenta => Color::LightMagenta,
+        Color::Cyan => Color::LightCyan,
+        Color::Gray => Color::White,
+        other => other,
+    }
 }
 
-/// STUB (hs-d534, §6.1.1 rule (1)): the colour of a meaning on a clickable mark, its bright pair. Returns the base colour until implemented.
+/// The colour of a meaning on a clickable mark: its bright pair.
 pub fn color_clickable(m: Meaning) -> Color {
-    color(m)
+    bright(color(m))
 }
 
-/// STUB (hs-d534, §6.1.1 rule (2)): clickable text, colour 15.
+/// Clickable text, colour 15.
 pub fn clickable_text() -> Style {
-    Style::new()
+    Style::new().fg(Color::White)
 }
 
-/// STUB (hs-d534, §6.1.1 rule (2)): read-only text, colour 7.
+/// Read-only text, colour 7.
 pub fn read_only_text() -> Style {
-    Style::new()
+    Style::new().fg(Color::Gray)
 }
 
-/// STUB (hs-d534, §6.1.1 rule (2)): an asleep Session's row, colour 7.
+/// An asleep Session's row, colour 7.
 pub fn asleep_text() -> Style {
-    Style::new()
+    read_only_text()
 }
 
-/// STUB (hs-d534, §6.1.1 rule (2)): the fold toggles `╰󰁋 expand` / `╰󰁣 collapse`, colour 7.
+/// The fold toggles `╰󰁋 expand` / `╰󰁣 collapse`, colour 7.
 pub fn toggle_text() -> Style {
-    Style::new()
+    read_only_text()
 }
 
-/// STUB (hs-d534, §6.1.1 rule (2)): muted text and lines (separators, ages, times, scroll cues, placeholders), colour 8; replaces `DIM`.
+/// Muted text and lines (separators, ages, times, scroll cues, placeholders, rails), colour 8; it replaces `DIM`.
 pub fn muted_text() -> Style {
-    Style::new()
+    Style::new().fg(Color::DarkGray)
 }
 
-/// STUB (hs-d534, §6.1.1 rule (2)): an archived row, colour 8.
+/// An archived row, colour 8.
 pub fn archived_text() -> Style {
-    Style::new()
+    muted_text()
 }
 
-/// STUB (hs-d534, §6.1.1 "Job pills"): the pill of a Job: its status colour's bright pair (queued 15, cancelled 8), text 0.
-/// `merging` is a running Job whose Attempt is merging; `stuck` a failed Job whose `job-stuck` item is open.
-/// Returns today's pill until implemented.
+/// The pill of a Job (hs-d534, §6.1.1 "Job pills"): its status colour's bright pair (queued 15, cancelled 8), text 0. A draft is
+/// magenta. `merging` is a running Job whose Attempt is merging; `stuck` a failed Job whose `job-stuck` item is open.
 pub fn job_pill(status: JobStatus, merging: bool, stuck: bool) -> Style {
-    if stuck && status == JobStatus::Failed { pill(JOB_STUCK.1) } else { pill(job_status(status, merging).1) }
+    let meaning = if stuck && status == JobStatus::Failed { JOB_STUCK.1 } else { job_status(status, merging).1 };
+    pill_clickable(meaning)
 }
 
-/// Notes and prompts at the foot of a view.
+/// The error line of a view that cannot load or read its data (hs-d534: red, blocking, not clickable).
+pub fn error() -> Style {
+    fg(Meaning::Failed)
+}
+
+/// A dialog's input refusal (hs-d534: yellow).
 pub fn note() -> Style {
     Style::new().fg(ui(Ui::Note))
 }
 
-/// A Plan pill: black on the colour of a meaning. No view draws it since hs-d530; the cli's tui tests still name it.
+/// A pill: text 0 on the colour of a meaning, its base colour (read-only); its caps are drawn in the background colour.
 pub fn pill(m: Meaning) -> Style {
     Style::new().fg(Color::Black).bg(color(m))
 }
 
-/// A non-interactive pill (hs-d530 R1): background 8 (`DarkGray`), text 7 (`Gray`); its caps are drawn in its background colour.
-pub fn pill_static() -> Style {
-    Style::new().bg(Color::DarkGray).fg(Color::Gray)
+/// A clickable pill: text 0 on the bright pair of a meaning.
+pub fn pill_clickable(m: Meaning) -> Style {
+    Style::new().fg(Color::Black).bg(color_clickable(m))
 }
 
-/// An interactive pill (hs-d530 R2): background 15 (`White`), text 0 (`Black`); its caps are drawn in its background colour.
+/// A read-only pill (hs-d534 rule (3)): background 7 (`Gray`), text 0 (`Black`); its caps are drawn in its background colour.
+pub fn pill_static() -> Style {
+    Style::new().bg(Color::Gray).fg(Color::Black)
+}
+
+/// An interactive pill (hs-d534 rule (3)): background 15 (`White`), text 0 (`Black`); its caps are drawn in its background colour.
 pub fn pill_interactive() -> Style {
     Style::new().bg(Color::White).fg(Color::Black)
 }
 
-/// The focused pane's title pill (hs-d530 R3): background 4 (`Blue`), text 0 (`Black`).
+/// The focused pane's title pill: the blue block, as [`selected`].
 pub fn pill_focus() -> Style {
-    Style::new().bg(Color::Blue).fg(Color::Black)
+    selected()
 }
 
-/// The terminal colour numbers of hs-d530, for the tests of `pill_colours`, which may not name a colour themselves.
+/// The terminal colour numbers of hs-d534, for the tests of `pill_colours` and `palette::colours`, which may not name a colour themselves.
 #[cfg(test)]
 pub(crate) mod numbered {
     use ratatui::style::Color;
@@ -228,6 +252,23 @@ pub(crate) mod numbered {
     pub(crate) const C13: Color = Color::LightMagenta;
     pub(crate) const C14: Color = Color::LightCyan;
     pub(crate) const C15: Color = Color::White;
+}
+
+/// What the views' tests ask of a drawn cell, by the palette's own styles (no colour named outside this file).
+#[cfg(test)]
+pub(crate) mod check {
+    use ratatui::buffer::Cell;
+
+    /// The cell is part of a blue block: background 4, text 0 (a cursor or a selection).
+    pub(crate) fn is_selected(cell: &Cell) -> bool {
+        let block = super::selected();
+        (Some(cell.bg), Some(cell.fg)) == (block.bg, block.fg)
+    }
+
+    /// The cell's text is muted, colour 8.
+    pub(crate) fn is_muted(cell: &Cell) -> bool {
+        Some(cell.fg) == super::muted_text().fg
+    }
 }
 
 // Job pill icons (Nerd Fonts, Material Design; hs-d235). https://www.nerdfonts.com/cheat-sheet
@@ -264,7 +305,7 @@ pub fn job_status(status: JobStatus, merging: bool) -> (&'static str, Meaning) {
         (JobStatus::Merged, _) => (MERGED, Meaning::Done),
         // an agent handles a failed Job (its Lead retries or cancels it): waiting; it is red only once `job-stuck` is open
         (JobStatus::Failed, _) => (FAILED, Meaning::Waiting),
-        (JobStatus::Draft, _) => (DRAFT, Meaning::Nothing),
+        (JobStatus::Draft, _) => (DRAFT, Meaning::Planning),
         (JobStatus::Cancelled, _) => (CANCELLED, Meaning::Nothing),
     }
 }
@@ -330,7 +371,7 @@ pub const TIER_YELLOW: &str = "\u{F069A}";
 /// Red: a blocker only the User can clear.
 pub const TIER_RED: &str = "\u{F0362}";
 
-/// The tier glyph of `urgency`, in the colour of its urgency (the colours of the tree's dots).
+/// The tier glyph of `urgency`, in the bright colour of its urgency (the Inbox row is clickable; the colours of the tree's dots).
 pub fn tier_span(urgency: Urgency) -> Span<'static> {
     let (glyph, meaning) = match urgency {
         Urgency::Red => (TIER_RED, Meaning::Failed),
@@ -338,7 +379,7 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
         Urgency::Magenta => (TIER_MAGENTA, Meaning::Planning),
         Urgency::White => (TIER_WHITE, Meaning::NotStarted),
     };
-    Span::styled(glyph, fg(meaning))
+    Span::styled(glyph, fg_clickable(meaning))
 }
 
 /// How long one frame of the spinner lasts, in milliseconds.
@@ -350,47 +391,54 @@ pub fn frame(now: SystemTime) -> usize {
     ((ms / FRAME_MS) % SPINNER.len() as u128) as usize
 }
 
-/// The tree's dot (commands.md §17): [`NEEDS_YOU`] red, yellow, magenta or white; [`SPINNER`] (frame `frame`) in the
-/// terminal's foreground when working; [`WAITING`] in the colour of [`Meaning::Waiting`]; [`IDLE`] in the terminal's foreground; [`STOPPED`] dim. An `archived` row keeps its glyph, never
-/// animated (the first frame when working), in the colour of [`Meaning::Nothing`].
+/// The tree's dot (commands.md §17), on a clickable row so every colour is the bright one (hs-d534): [`NEEDS_YOU`] red (9),
+/// yellow (11), magenta (13) or white (15); [`SPINNER`] (frame `frame`) cyan (14) when working; [`WAITING`] in the colour of
+/// [`Meaning::Waiting`]; [`IDLE`] 15; [`STOPPED`] 8. An `archived` row keeps its glyph, never animated (the first
+/// frame when working), in colour 8.
 pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
     let (glyph, style) = match dot {
-        Dot::Red => (NEEDS_YOU, Style::new().fg(Color::Red)),
-        Dot::Yellow => (NEEDS_YOU, Style::new().fg(Color::Yellow)),
-        Dot::Magenta => (NEEDS_YOU, Style::new().fg(Color::Magenta)),
-        Dot::White => (NEEDS_YOU, Style::new().fg(Color::White)),
-        Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], Style::new()),
-        Dot::Waiting => (WAITING, fg(Meaning::Waiting)),
-        Dot::Idle => (IDLE, Style::new()),
-        Dot::Stopped => (STOPPED, Style::new().add_modifier(Modifier::DIM)),
+        Dot::Red => (NEEDS_YOU, fg_clickable(Meaning::Failed)),
+        Dot::Yellow => (NEEDS_YOU, fg_clickable(Meaning::Review)),
+        Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
+        Dot::White => (NEEDS_YOU, clickable_text()),
+        Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
+        Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
+        Dot::Idle => (IDLE, clickable_text()),
+        Dot::Stopped => (STOPPED, muted_text()),
     };
-    Span::styled(glyph, if archived { fg(Meaning::Nothing) } else { style })
+    Span::styled(glyph, if archived { archived_text() } else { style })
 }
 
 /// The `⋅` between the tree's counters.
 pub fn separator() -> Span<'static> {
-    Span::styled("⋅", fg(Meaning::Nothing))
+    Span::styled("⋅", muted_text())
 }
 
-/// Style of a counter: its status colour, or nothing when the count is zero.
+/// Style of a counter (the tree's, inside a clickable row): its status colour's bright pair, or colour 8 when the count is zero.
 pub fn count_style(status: JobStatus, merging: bool, n: usize) -> Style {
-    fg(if n == 0 { Meaning::Nothing } else { job_status(status, merging).1 })
+    if n == 0 { muted_text() } else { fg_clickable(job_status(status, merging).1) }
 }
 
 /// Style of the failed counter: [`count_style`]'s waiting colour while an agent handles the failed Jobs, red when one of
 /// them is `stuck` (a `job-stuck` item is open, audit Q3), nothing when the count is zero.
 pub fn failed_count_style(n: usize, stuck: bool) -> Style {
-    if stuck && n > 0 { fg(JOB_STUCK.1) } else { count_style(JobStatus::Failed, false, n) }
+    if stuck && n > 0 { fg_clickable(JOB_STUCK.1) } else { count_style(JobStatus::Failed, false, n) }
 }
 
 /// Meaning of a PR's state.
 pub fn pr_state(state: PrState) -> Meaning {
     match state {
-        PrState::Open => Meaning::Review,
+        // an open pull request is colourless (grey) until it is ready to merge: `pr_open`
+        PrState::Open => Meaning::NotStarted,
         PrState::Merged => Meaning::Done,
         // its Lead handles a closed pull request (asks the User only if it must): waiting, see `PR_CLOSED_ASKED`
         PrState::Closed => Meaning::Waiting,
     }
+}
+
+/// Meaning of an open pull request's `open` word: yellow only when it is `clean`, ready to merge (hs-d534), else colourless.
+pub fn pr_open(clean: bool) -> Meaning {
+    if clean { Meaning::Review } else { Meaning::NotStarted }
 }
 
 /// A closed-unmerged pull request whose Plan's Lead has an open `dialog` item (it asks the User about it), or that no Plan
@@ -446,13 +494,13 @@ mod tests {
     #[test]
     fn every_meaning_has_its_colour() {
         let table = [
-            (Meaning::NotStarted, Color::White),
-            (Meaning::InProgress, Color::Green),
+            (Meaning::NotStarted, Color::Gray),
+            (Meaning::InProgress, Color::Cyan),
             (Meaning::Review, Color::Yellow),
-            (Meaning::Done, Color::DarkGray),
+            (Meaning::Done, Color::Green),
             (Meaning::Failed, Color::Red),
             (Meaning::Planning, Color::Magenta),
-            (Meaning::Grounding, Color::White),
+            (Meaning::Grounding, Color::Gray),
             (Meaning::Nothing, Color::DarkGray),
             (Meaning::Waiting, Color::Cyan),
         ];
@@ -470,7 +518,7 @@ mod tests {
             (JobStatus::Running, true, MERGING, Meaning::Review),
             (JobStatus::Merged, false, MERGED, Meaning::Done),
             (JobStatus::Failed, false, FAILED, Meaning::Waiting),
-            (JobStatus::Draft, false, DRAFT, Meaning::Nothing),
+            (JobStatus::Draft, false, DRAFT, Meaning::Planning),
             (JobStatus::Cancelled, false, CANCELLED, Meaning::Nothing),
         ];
         for (status, merging, icon, m) in table {
@@ -503,27 +551,32 @@ mod tests {
     }
 
     #[test]
-    fn a_needs_you_dot_is_filled_and_coloured_by_its_case_and_nothing_else_is() {
-        for (dot, colour) in [(Dot::Red, Color::Red), (Dot::Yellow, Color::Yellow), (Dot::Magenta, Color::Magenta), (Dot::White, Color::White)] {
+    fn a_tree_dot_is_its_bright_colour_and_a_stopped_or_archived_one_is_muted() {
+        for (dot, colour) in [
+            (Dot::Red, Color::LightRed),
+            (Dot::Yellow, Color::LightYellow),
+            (Dot::Magenta, Color::LightMagenta),
+            (Dot::White, Color::White),
+        ] {
             assert_eq!(dot_span(dot, 0, false), Span::styled(NEEDS_YOU, Style::new().fg(colour)), "{dot:?}");
         }
-        assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled(IDLE, Style::new()), "the terminal's foreground");
+        assert_eq!(dot_span(Dot::Idle, 0, false), Span::styled(IDLE, Style::new().fg(Color::White)), "clickable text, 15");
         assert_eq!(
             dot_span(Dot::Waiting, 0, false),
-            Span::styled(WAITING, Style::new().fg(Color::Cyan)),
+            Span::styled(WAITING, Style::new().fg(Color::LightCyan)),
             "cyan, never the focus blue: not red, not the yellow of attention, and not a filled dot"
         );
         assert_ne!(WAITING, NEEDS_YOU);
         assert_ne!(color(Meaning::Waiting), color(Meaning::Failed));
         assert_ne!(color(Meaning::Waiting), color(Meaning::Review));
-        assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled(STOPPED, Style::new().add_modifier(Modifier::DIM)), "dim, no colour");
+        assert_eq!(dot_span(Dot::Stopped, 0, false), Span::styled(STOPPED, Style::new().fg(Color::DarkGray)), "stopped: 8");
     }
 
     #[test]
-    fn a_working_dot_turns_with_the_frame_in_the_terminals_foreground() {
+    fn a_working_dot_turns_with_the_frame_in_bright_cyan() {
         let glyphs: Vec<_> = (0..10).map(|f| dot_span(Dot::Working, f, false).content.into_owned()).collect();
         assert_eq!(glyphs, [SPINNER.to_vec(), vec![SPINNER[0]]].concat());
-        assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new());
+        assert_eq!(dot_span(Dot::Working, 2, false).style, Style::new().fg(Color::LightCyan));
         assert_eq!(SPINNER.len(), 9);
         assert_eq!((SPINNER[0], SPINNER[8]), ("\u{F0766}", "\u{F0AA5}"));
         assert_eq!((IDLE, STOPPED, NEEDS_YOU), (SPINNER[0], SPINNER[0], SPINNER[8]));
@@ -558,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn an_archived_dot_keeps_its_glyph_in_the_darker_grey_and_never_turns() {
+    fn an_archived_dot_keeps_its_glyph_in_colour_8_and_never_turns() {
         let grey = Style::new().fg(Color::DarkGray);
         for (dot, glyph) in [
             (Dot::Red, NEEDS_YOU),
@@ -586,7 +639,8 @@ mod tests {
     #[test]
     fn counters_are_in_their_status_colour_and_nothing_when_zero() {
         assert_eq!(count_style(JobStatus::Queued, false, 3), Style::new().fg(Color::White));
-        assert_eq!(count_style(JobStatus::Draft, false, 3), Style::new().fg(Color::DarkGray));
+        assert_eq!(count_style(JobStatus::Draft, false, 3), Style::new().fg(Color::LightMagenta));
+        assert_eq!(count_style(JobStatus::Cancelled, false, 3), Style::new().fg(Color::DarkGray));
         assert_eq!(count_style(JobStatus::Failed, false, 0), Style::new().fg(Color::DarkGray));
         assert_eq!(separator(), Span::styled("⋅", Style::new().fg(Color::DarkGray)));
     }
@@ -595,19 +649,21 @@ mod tests {
     fn a_failed_job_and_its_counter_are_waiting_until_it_is_stuck() {
         assert_eq!(job_status(JobStatus::Failed, false), (FAILED, Meaning::Waiting), "its Lead handles it");
         assert_eq!(JOB_STUCK, (FAILED, Meaning::Failed), "job-stuck: the User's");
-        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::Cyan));
-        assert_eq!(failed_count_style(2, true), Style::new().fg(Color::Red));
+        assert_eq!(failed_count_style(2, false), Style::new().fg(Color::LightCyan));
+        assert_eq!(failed_count_style(2, true), Style::new().fg(Color::LightRed));
         assert_eq!(failed_count_style(0, true), Style::new().fg(Color::DarkGray), "nothing failed: nothing to show");
-        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::Cyan));
+        assert_eq!(count_style(JobStatus::Failed, false, 1), Style::new().fg(Color::LightCyan));
     }
 
     #[test]
     fn every_pr_state_and_check_has_its_icon_and_meaning() {
-        let states = [(PrState::Open, Meaning::Review), (PrState::Merged, Meaning::Done), (PrState::Closed, Meaning::Waiting)];
+        let states = [(PrState::Open, Meaning::NotStarted), (PrState::Merged, Meaning::Done), (PrState::Closed, Meaning::Waiting)];
         for (s, m) in states {
             assert_eq!(pr_state(s), m, "{s:?}");
         }
         assert_eq!(PR_LEGEND.map(|(_, s)| s), states.map(|(s, _)| s));
+        assert_eq!(pr_open(true), Meaning::Review);
+        assert_eq!(pr_open(false), Meaning::NotStarted);
         assert_eq!(PR_CONFLICT, ("conflict", Meaning::Failed));
         assert_eq!(PR_CLOSED_ASKED, ("closed", Meaning::Failed));
         assert_eq!(PR_CONFLICT_OWNED, ("conflict", Meaning::Waiting));
@@ -629,14 +685,14 @@ mod tests {
     }
 
     #[test]
-    fn a_pulse_bar_is_red_magenta_yellow_blue_green_or_white_by_its_kind() {
+    fn a_pulse_bar_is_the_bright_red_magenta_green_or_cyan_by_its_kind() {
         let table = [
-            (Kind::Error, Color::Red),
-            (Kind::Plan, Color::Magenta),
-            (Kind::PrOpened, Color::Yellow),
-            (Kind::Escalation, Color::Blue),
-            (Kind::Merged, Color::Green),
-            (Kind::Other, Color::White),
+            (Kind::Error, Color::LightRed),
+            (Kind::Plan, Color::LightMagenta),
+            (Kind::PrOpened, Color::LightCyan),
+            (Kind::Escalation, Color::LightCyan),
+            (Kind::Merged, Color::LightGreen),
+            (Kind::Other, Color::LightCyan),
         ];
         for (kind, colour) in table {
             assert_eq!(pulse_kind(kind), colour, "{kind:?}");
@@ -674,18 +730,20 @@ mod tests {
     #[test]
     fn a_pill_is_black_on_the_colour() {
         assert_eq!(pill(Meaning::Review), Style::new().fg(Color::Black).bg(Color::Yellow));
+        assert_eq!(pill_clickable(Meaning::Review), Style::new().fg(Color::Black).bg(Color::LightYellow));
     }
 
     #[test]
     fn every_ui_role_has_its_colour() {
-        let table = [(Ui::Note, Color::Yellow), (Ui::You, Color::Cyan), (Ui::Agent, Color::Green), (Ui::Tool, Color::Yellow)];
+        let table = [(Ui::Note, Color::Yellow), (Ui::You, Color::Gray), (Ui::Agent, Color::Cyan), (Ui::Tool, Color::Cyan)];
         for (u, c) in table {
             assert_eq!(ui(u), c, "{u:?}");
         }
     }
 
     #[test]
-    fn a_note_is_yellow() {
+    fn a_note_is_yellow_and_an_error_red() {
         assert_eq!(note(), Style::new().fg(Color::Yellow));
+        assert_eq!(error(), Style::new().fg(Color::Red));
     }
 }

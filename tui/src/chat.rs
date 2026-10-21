@@ -6,7 +6,6 @@
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event};
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Padding, Paragraph, Wrap};
 
@@ -29,10 +28,10 @@ fn show(terminal: &mut ratatui::DefaultTerminal) -> std::io::Error {
     }
 }
 
-/// Draws the placeholder: [`PLACEHOLDER_TEXT`], dim, wrapped to the pane one
+/// Draws the placeholder: [`PLACEHOLDER_TEXT`], muted, wrapped to the pane one
 /// column in from its left edge.
 fn draw(frame: &mut Frame) {
-    let text = Paragraph::new(Line::from(PLACEHOLDER_TEXT).dim()).wrap(Wrap { trim: true });
+    let text = Paragraph::new(Line::styled(PLACEHOLDER_TEXT, crate::palette::muted_text())).wrap(Wrap { trim: true });
     frame.render_widget(text.block(Block::new().padding(Padding::left(1))), frame.area());
 }
 
@@ -40,7 +39,6 @@ fn draw(frame: &mut Frame) {
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use ratatui::style::Modifier;
 
     use super::*;
 
@@ -61,7 +59,7 @@ mod tests {
         let rows = rows(&buffer);
         assert_eq!(rows[0].trim_end(), " No Lead here: pick a Plan in the session tree", "{rows:?}");
         assert!(rows[1..].iter().all(|r| r.trim().is_empty()), "{rows:?}");
-        assert!(buffer[(1, 0)].modifier.contains(Modifier::DIM));
+        assert!(crate::palette::check::is_muted(&buffer[(1, 0)]));
     }
 
     #[test]

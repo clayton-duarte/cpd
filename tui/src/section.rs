@@ -8,12 +8,13 @@
 //! The spacing is the caller's layout, in rows: one empty row above and one below a title outside a collapsible widget
 //! (`crate::fold` has its own margins); the body has no vertical spacing.
 //!
-//! Pure: it only builds a line. The pill is grey: the corner, the lines and the caps are muted
-//! (`palette::fg(Meaning::Nothing)`), the pill's text is the muted block with the background colour on it (reverse video).
+//! Pure: it only builds a line. The pill is a read-only block (hs-d534): background 7, text 0, its caps colour 7; the corner and
+//! the lines are muted (colour 8).
 
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-use crate::palette::{self, Meaning};
+use crate::palette;
 
 /// The start of a collapsible title's row: the corner and one line.
 const LEAD: &str = "╭─";
@@ -45,7 +46,9 @@ pub fn collapsible_title(title: &str, count: Option<usize>, width: usize) -> Lin
 
 /// The row both forms share: `lead` (two cells) is all that differs.
 fn row(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    let muted = palette::fg(Meaning::Nothing);
+    let muted = palette::muted_text();
+    let pill_style = palette::pill_static();
+    let cap = Style::new().fg(pill_style.bg.expect("a pill has a colour"));
     let pad = usize::from(width >= 2);
     let width = width - 2 * pad;
     let lead: String = lead.chars().take(width).collect();
@@ -57,15 +60,15 @@ fn row(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'sta
     let fill = left - if count.is_empty() { 0 } else { count.chars().count() + 2 };
     let mut spans = vec![Span::raw(PAD.repeat(pad)), Span::styled(lead, muted)];
     if pill {
-        spans.push(Span::styled(CAP_LEFT, muted));
-        spans.push(Span::styled(text, palette::pill_static()));
-        spans.push(Span::styled(CAP_RIGHT, muted));
+        spans.push(Span::styled(CAP_LEFT, cap));
+        spans.push(Span::styled(text, pill_style));
+        spans.push(Span::styled(CAP_RIGHT, cap));
     }
     spans.push(Span::styled(RULE.repeat(fill), muted));
     if !count.is_empty() {
-        spans.push(Span::styled(CAP_LEFT, muted));
-        spans.push(Span::styled(count, palette::pill_static()));
-        spans.push(Span::styled(CAP_RIGHT, muted));
+        spans.push(Span::styled(CAP_LEFT, cap));
+        spans.push(Span::styled(count, pill_style));
+        spans.push(Span::styled(CAP_RIGHT, cap));
     }
     spans.push(Span::raw(PAD.repeat(pad)));
     Line::from(spans)
@@ -76,23 +79,21 @@ fn row(lead: &str, title: &str, count: Option<usize>, width: usize) -> Line<'sta
 pub(crate) mod check {
     use ratatui::buffer::Buffer;
     use ratatui::buffer::Cell;
-    use ratatui::style::Modifier;
 
     use super::{CAP_LEFT, CAP_RIGHT};
-    use crate::palette::{self, Meaning};
+    use crate::palette;
 
     /// The pill whose left cap is at (`x`, `y`) of `buf` reads `text` between its two caps, with no padding spaces, and is grey:
-    /// the caps are muted; the text is the static pill's (hs-d530).
+    /// the caps are the pill's background colour; the text is the static pill's (hs-d534).
     pub(crate) fn grey_pill(buf: &Buffer, x: u16, y: u16, text: &str) {
-        let grey = palette::color(Meaning::Nothing);
+        let grey = palette::pill_static().bg.unwrap();
         let reset = Cell::EMPTY.bg; // the terminal's own background, which no colour names (no colour outside the palette)
         let width = u16::try_from(text.chars().count()).unwrap();
         let drawn: String = (x..x + width + 2).map(|x| buf[(x, y)].symbol()).collect();
         assert_eq!(drawn, format!("{CAP_LEFT}{text}{CAP_RIGHT}"), "the pill at ({x}, {y})");
         for cap in [x, x + width + 1] {
             let cell = &buf[(cap, y)];
-            assert_eq!((cell.fg, cell.bg), (grey, reset), "the cap at ({cap}, {y}) is muted: {cell:?}");
-            assert!(!cell.modifier.contains(Modifier::REVERSED), "a cap is not inverted: {cell:?}");
+            assert_eq!((cell.fg, cell.bg), (grey, reset), "the cap at ({cap}, {y}) is the pill's colour: {cell:?}");
         }
         let pill = palette::pill_static();
         for at in x + 1..=x + width {
@@ -122,7 +123,7 @@ mod tests {
     }
 
     fn muted(span: &Span<'_>) -> bool {
-        span.style.fg == palette::fg(Meaning::Nothing).fg
+        span.style.fg == palette::muted_text().fg
     }
 
     #[test]
@@ -163,14 +164,14 @@ mod tests {
     }
 
     #[test]
-    fn the_pills_text_the_caps_and_the_lines_are_all_muted_and_only_the_text_is_inverted() {
+    fn the_pills_text_and_caps_are_the_static_pills_and_the_lines_are_muted() {
         for l in [collapsible_title("Inbox", Some(35), 22), title("Inbox", Some(35), 22)] {
             let find = |what: &str| l.spans.iter().find(|s| s.content.contains(what)).unwrap_or_else(|| panic!("no span with {what:?}: {:?}", l.spans));
             let pill = find("Inbox");
             assert_eq!(pill.style, palette::pill_static(), "the title text is the static pill's");
             for cap in [CAP_LEFT, CAP_RIGHT] {
                 let cap = find(cap);
-                assert!(muted(cap) && !cap.style.add_modifier.contains(ratatui::style::Modifier::REVERSED), "a cap is muted, not inverted: {cap:?}");
+                assert_eq!(cap.style.fg, palette::pill_static().bg, "a cap is the pill's colour: {cap:?}");
             }
             let lines: Vec<_> = l.spans.iter().filter(|s| !s.content.is_empty() && s.content.chars().all(|c| c == '╭' || c == '─')).collect();
             assert!(lines.iter().any(|s| s.content.contains('─')), "the lines: {:?}", l.spans);
@@ -202,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn the_collapsible_pill_is_grey_its_block_muted_its_text_the_background_colour_and_its_caps_muted() {
+    fn the_collapsible_pill_is_grey_with_black_text_and_caps_in_its_colour() {
         let buf = buffer_of(collapsible_title("Inbox", Some(35), 22), 22);
         let row: String = (0..22).map(|x| buf[(x, 0)].symbol()).collect();
         assert!(row.starts_with(" ╭─"), "{row:?}");
@@ -215,7 +216,7 @@ mod tests {
         let row: String = (0..22).map(|x| buf[(x, 0)].symbol()).collect();
         assert!(row.starts_with(" ──"), "{row:?}");
         for x in [1, 2] {
-            assert_eq!((buf[(x, 0)].symbol(), buf[(x, 0)].fg), ("─", palette::color(Meaning::Nothing)), "the muted `──` at column {x}");
+            assert_eq!((buf[(x, 0)].symbol(), buf[(x, 0)].fg), ("─", palette::muted_text().fg.unwrap()), "the muted `──` at column {x}");
         }
         check::grey_pill(&buf, 3, 0, "Logs");
     }

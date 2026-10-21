@@ -72,6 +72,11 @@ fn env() -> TestEnv {
     env
 }
 
+/// Whether the styled screen has the blue block of a selection (hs-d534, §6.1.1): background 4, as tmux prints it.
+fn is_selected(styled: &str) -> bool {
+    styled.contains("48;5;4m") || styled.contains(";44m") || styled.contains("[44m")
+}
+
 fn tmux_out(env: &TestEnv, args: &[&str]) -> String {
     let out = env.tmux(args);
     assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -342,9 +347,9 @@ fn a_plan_with_no_pr_yet_says_so() {
     let screen = screen_when(&env, &pane, "the message", |s| s.iter().any(|l| l.contains("no PR yet")));
     assert!(screen.iter().any(|l| l.trim() == "no PR yet: cpd pr add"), "{}", screen.join("\n"));
     assert!(!screen.iter().any(|l| l.contains('╭') || l.contains("No Plan")), "{}", screen.join("\n"));
-    // dim
+    // muted, colour 8
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    assert!(styled.contains("2mno PR yet: cpd pr add"), "{styled}");
+    assert!(styled.contains("38;5;8mno PR yet: cpd pr add"), "{styled}");
 }
 
 #[test]
@@ -579,7 +584,7 @@ fn no_lead_in_the_chat_slot_says_so() {
     // in the message row, the pane's last row, indented by the margin; nothing above it
     assert_eq!(screen.iter().filter(|l| !l.is_empty()).collect::<Vec<_>>(), [&"   no Lead session in the centre".to_owned()], "{}", screen.join("\n"));
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
-    assert!(styled.contains("2m no Lead session in the centre"), "{styled}");
+    assert!(styled.contains("38;5;8m no Lead session in the centre"), "{styled}");
 }
 
 #[test]
@@ -636,7 +641,7 @@ fn each_plan_keeps_its_scroll_offset_while_the_view_runs_and_its_selection_is_re
     s += &lead_row("lead-side", "ctx", "side", "2026-01-02T00:00:05.000Z");
     s += &job_row("side", "other", "queued", "O3");
     env.sql(&s);
-    let selected = |styled: &str| styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m");
+    let selected = is_selected;
     let pane = start_view(&env);
     let top = screen_when(&env, &pane, "the top of the chart", |s| s.len() > 2 && s[2].contains(" j10│"));
 
@@ -692,7 +697,7 @@ fn scroll_file(env: &TestEnv) -> std::path::PathBuf {
 fn the_scroll_offset_survives_a_restart_of_the_view_and_the_selection_does_not() {
     let env = env();
     env.sql(&tall_plan());
-    let selected = |styled: &str| styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m");
+    let selected = is_selected;
     let pane = start_view(&env);
     let top = screen_when(&env, &pane, "the top of the chart", |s| s.len() > 2 && s[2].contains(" j10│"));
 
@@ -946,7 +951,7 @@ fn pulse_rows_have_no_icon_and_bars_take_the_colour_of_their_kind_with_a_grey_lo
     let bars = bars_with_colours(styled.lines().nth(1).expect("the first row"));
     assert_eq!(bars.len(), n);
     let coloured: Vec<&str> = bars.iter().filter(|(_, c)| c != "8").map(|(_, c)| c.as_str()).collect();
-    assert_eq!(coloured, ["15", "3", "1", "5", "4", "2"], "white, yellow, red, magenta, blue, green: {bars:?}");
+    assert_eq!(coloured, ["14", "14", "9", "13", "14", "10"], "other, PR opened, error, plan, escalation, merged (the bright pairs): {bars:?}");
     assert!(bars.iter().filter(|(_, c)| c == "8").all(|(g, _)| *g == '▁'), "an empty slot is a grey ▁: {bars:?}");
     assert!(bars.iter().any(|(_, c)| c == "8"), "{bars:?}");
 }
@@ -961,7 +966,7 @@ fn q_does_not_quit_the_view() {
     tmux_out(&env, &["send-keys", "-t", &pane, "q", "j"]);
     wait_until("the pill selected", || {
         let styled = styled_screen(&env, &pane);
-        styled.contains("\x1b[1;7m") || styled.contains("\x1b[7;1m") || styled.contains("\x1b[7m")
+        is_selected(&styled)
     });
     assert_eq!(tmux_out(&env, &["display", "-p", "-t", &pane, "#{pane_dead}"]).trim(), "0");
     assert!(screen(&env, &pane)[2].contains(" a│"));

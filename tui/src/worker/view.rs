@@ -4,11 +4,10 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
-use crate::palette::{self, Meaning};
+use crate::palette;
 use crate::scroll::Scroller;
 
 pub(super) struct View {
@@ -41,9 +40,9 @@ impl View {
         let [body, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(f.area());
         self.body.draw(f, body);
         let line = if self.note.is_empty() {
-            Line::from(format!(" {}", self.status)).dim()
+            Line::styled(format!(" {}", self.status), palette::muted_text())
         } else {
-            Line::styled(format!(" {}", self.note), palette::fg(Meaning::Failed))
+            Line::styled(format!(" {}", self.note), palette::error())
         };
         f.render_widget(Paragraph::new(line), foot);
     }

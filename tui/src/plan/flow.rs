@@ -26,7 +26,7 @@ use cpd_core::config::Tier;
 use crate::read::{AttemptStatus, JobNode, JobStatus};
 use cpd_core::ids::JobKey;
 
-/// A Job's status as the chart draws it. A `cancelled` Job is drawn muted, in its place; a `running` Job whose Attempt is
+/// A Job's status as the chart draws it. A `cancelled` Job is a colour 8 pill, in its place; a `running` Job whose Attempt is
 /// `merging` is `Merging` (the cockpit's `in_review`); a `failed` Job is `Failed` while its Lead handles it (the waiting
 /// colour) and `Stuck` once `job-stuck` is open (red: it needs the User, audit Q3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +53,20 @@ impl Live {
             Live::Failed => palette::job_status(JobStatus::Failed, false),
             Live::Stuck => palette::JOB_STUCK,
             Live::Cancelled => palette::job_status(JobStatus::Cancelled, false),
+        }
+    }
+
+    /// The pill's colours (hs-d534): the status colour's bright pair as the background, text 0 (the palette's [`palette::job_pill`]).
+    pub fn pill(self) -> Style {
+        match self {
+            Live::Draft => palette::job_pill(JobStatus::Draft, false, false),
+            Live::Queued => palette::job_pill(JobStatus::Queued, false, false),
+            Live::Running => palette::job_pill(JobStatus::Running, false, false),
+            Live::Merging => palette::job_pill(JobStatus::Running, true, false),
+            Live::Merged => palette::job_pill(JobStatus::Merged, false, false),
+            Live::Failed => palette::job_pill(JobStatus::Failed, false, false),
+            Live::Stuck => palette::job_pill(JobStatus::Failed, false, true),
+            Live::Cancelled => palette::job_pill(JobStatus::Cancelled, false, false),
         }
     }
 
@@ -431,7 +445,7 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     }
 
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-    let lines = palette::fg(Meaning::Nothing);
+    let lines = palette::muted_text();
     for y in 0..height {
         for x in 0..width {
             if mask.at(x, y) != 0 {
@@ -446,17 +460,11 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
                 let rect = Rect::new(xs[l], top[c] + k as u16, rect_w(i, l), 1);
                 // a cap on each side in the status colour, on the default background; between them the icon and key to
-                // the left, the tier (and `aN`) to the right, whatever the column's width. A cancelled Job is no pill: its
-                // text alone, muted, where the pill would be
-                let style = if jobs[i].status == Live::Cancelled {
-                    lines
-                } else {
-                    let style = palette::pill_interactive();
-                    let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
-                    buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
-                    buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
-                    style
-                };
+                // the left, the tier (and `aN`) to the right, whatever the column's width. A cancelled Job's is colour 8
+                let style = jobs[i].status.pill();
+                let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+                buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
+                buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
                 let body = body_of(rect);
                 Line::from(parts[i].0.as_str()).style(style).left_aligned().render(body, &mut buf);
                 Line::from(parts[i].1.as_str()).style(style).right_aligned().render(body, &mut buf);
@@ -579,7 +587,7 @@ impl Chart {
         (fit(ox, r.x.saturating_sub(1), r.right() + 1, w), fit(oy, r.y, r.bottom(), h))
     }
 
-    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill's body bold and reversed (its caps keep the status colour). Offsets are clamped to
+    /// Copy the window at (`ox`, `oy`) into `dst` at `area`, the selected pill the blue block, its body bold (its caps blue). Offsets are clamped to
     /// the chart; the clamped offsets are returned. (Hand-written: ratatui has no widget that copies a window of a `Buffer`.)
     pub fn blit(&self, dst: &mut Buffer, area: Rect, (ox, oy): (u16, u16), selected: Option<usize>) -> (u16, u16) {
         let ox = ox.min(self.buf.area.width.saturating_sub(area.width));
@@ -589,11 +597,19 @@ impl Chart {
                 dst[(area.x + x, area.y + y)] = self.buf[(x + ox, y + oy)].clone();
             }
         }
-        if let Some(r) = selected.map(|i| body_of(self.pills[i].rect)) {
-            let seen = Rect::new(ox, oy, area.width, area.height).intersection(r);
-            if !seen.is_empty() {
-                let on_dst = Rect::new(area.x + seen.x - ox, area.y + seen.y - oy, seen.width, seen.height);
-                dst.set_style(on_dst, Style::new().add_modifier(Modifier::BOLD | Modifier::REVERSED));
+        if let Some(pill) = selected.map(|i| self.pills[i].rect) {
+            let window = Rect::new(ox, oy, area.width, area.height);
+            // the body is the blue block, bold; the caps are blue too (the block's colour as foreground)
+            let blue = Style::new().fg(palette::pill_focus().bg.expect("a pill has a colour"));
+            for (rect, style) in [
+                (body_of(pill), palette::pill_focus().add_modifier(Modifier::BOLD)),
+                (Rect::new(pill.x, pill.y, 1, 1), blue),
+                (Rect::new(pill.right() - 1, pill.y, 1, 1), blue),
+            ] {
+                let seen = window.intersection(rect);
+                if !seen.is_empty() {
+                    dst.set_style(Rect::new(area.x + seen.x - ox, area.y + seen.y - oy, seen.width, seen.height), style);
+                }
             }
         }
         (ox, oy)
@@ -629,7 +645,7 @@ mod tests {
 
     #[test]
     fn a_pill_has_the_icon_and_colour_of_its_status() {
-        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed, Live::Stuck];
+        let statuses = [Live::Draft, Live::Queued, Live::Running, Live::Merging, Live::Merged, Live::Failed, Live::Stuck, Live::Cancelled];
         let jobs: Vec<FlowJob> = statuses.iter().map(|s| FlowJob { status: *s, ..job(&format!("{s:?}"), &[]) }).collect();
         let c = layout(&jobs, 0);
         for (p, status) in c.pills.iter().zip(statuses) {
@@ -637,11 +653,11 @@ mod tests {
             assert_eq!(c.buf[(p.rect.x + 1, p.rect.y)].symbol(), icon, "{status:?}");
             // the body keeps the pill's colours
             let cell = &c.buf[(p.rect.x + 1, p.rect.y)];
-            assert_eq!((Some(cell.fg), Some(cell.bg)), (palette::pill_interactive().fg, palette::pill_interactive().bg), "{status:?}");
+            assert_eq!((Some(cell.fg), Some(cell.bg)), (status.pill().fg, status.pill().bg), "{status:?}");
             // a rounded cap on each end: the status colour on the default background
             for (x, glyph) in [(p.rect.x, "\u{e0b6}"), (p.rect.right() - 1, "\u{e0b4}")] {
                 let cap = &c.buf[(x, p.rect.y)];
-                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, palette::pill_interactive().bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
+                assert_eq!((cap.symbol(), Some(cap.fg), cap.bg), (glyph, status.pill().bg, ratatui::buffer::Cell::default().bg), "{status:?} cap at {x}");
             }
         }
     }
@@ -692,7 +708,8 @@ mod tests {
         let c = layout(&[FlowJob { status: Live::Failed, ..job("a", &[]) }, FlowJob { status: Live::Stuck, ..job("b", &[]) }], 0);
         // the body, after the left cap
         let bg = |i: usize| c.buf[(c.pills[i].rect.x + 1, c.pills[i].rect.y)].bg;
-        assert_eq!((bg(0), bg(1)), (palette::pill_interactive().bg.unwrap(), palette::pill_interactive().bg.unwrap()), "an interactive pill whatever its state");
+        let bright = |m| Some(palette::color_clickable(m));
+        assert_eq!((Some(bg(0)), Some(bg(1))), (bright(Meaning::Waiting), bright(Meaning::Failed)), "the status colour's bright pair");
     }
 
     /// The icon of the first pill of a chart of one Job in `status`, at `frame`.
@@ -997,9 +1014,10 @@ mod tests {
         let mut dst = Buffer::empty(Rect::new(0, 0, 30, 3));
         let (ox, oy) = c.blit(&mut dst, Rect::new(2, 1, 20, 1), (0, 100), Some(3)); // clamped to the chart
         assert_eq!((ox, oy), (0, 6));
-        // the pill's body is reversed, its caps are not
-        assert!(dst[(4, 1)].modifier.contains(Modifier::REVERSED | Modifier::BOLD));
-        assert!(!dst[(3, 1)].modifier.contains(Modifier::REVERSED));
+        // the pill's body is the blue block, bold; its caps are blue text on the terminal's background
+        assert_eq!((dst[(4, 1)].bg, dst[(4, 1)].fg), (palette::pill_focus().bg.unwrap(), palette::pill_focus().fg.unwrap()));
+        assert!(dst[(4, 1)].modifier.contains(Modifier::BOLD));
+        assert_eq!((dst[(3, 1)].fg, dst[(3, 1)].bg), (palette::pill_focus().bg.unwrap(), ratatui::buffer::Cell::default().bg));
         assert_eq!(dst[(3, 0)].symbol(), " "); // the padding is untouched
     }
 

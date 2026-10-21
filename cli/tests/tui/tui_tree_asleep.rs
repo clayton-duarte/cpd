@@ -118,7 +118,7 @@ fn words(w: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn asleep_row_is_muted_among_live_rows() {
+fn asleep_row_is_colour_7_among_live_rows() {
     let env = env();
     populate(&env);
     let pane = Pane::start(&env);
@@ -127,13 +127,14 @@ fn asleep_row_is_muted_among_live_rows() {
     assert!(asleep < live && live < archived, "the asleep row keeps its place among the live rows, the archived one is after them: {plain:?}");
 
     let styled = pane.capture(true);
-    // A live row's glyph is outside its muted branch's grey run; an asleep row's, like an archived one's, is inside it.
-    let grey_run_ends_after_the_branch = |row: &str| row.contains("├─\x1b[39m");
-    assert!(grey_run_ends_after_the_branch(&styled[live]), "a live idle row: {:?}", styled[live]);
-    assert!(!grey_run_ends_after_the_branch(&styled[asleep]), "an asleep row: {:?}", styled[asleep]);
-    let (asleep, archived) = (escapes(&styled[asleep]), escapes(&styled[archived]));
-    assert!(!archived.is_empty(), "the archived row is coloured: {archived:?}");
-    assert_eq!(asleep, archived, "an asleep row is drawn as an archived one: muted, grey glyph");
+    // Contract §6.1.1: a live idle row's dot and name are clickable text (15); an asleep row's marks are all 7 (inactive text);
+    // an archived row's are all 8 (muted); the branch `├─` is a line, 8, on all three.
+    let (live_row, asleep_row, archived_row) = (&styled[live], &styled[asleep], &styled[archived]);
+    assert!(live_row.contains("├─\x1b[38;5;15m") && live_row.contains("\x1b[38;5;15mship·f-li"), "a live idle row: {live_row:?}");
+    assert!(asleep_row.contains("├─\x1b[38;5;7m") && !asleep_row.contains("\x1b[39mship·f-sl"), "an asleep row (one colour 7 run from the dot to the name): {asleep_row:?}");
+    assert!(!asleep_row.contains("38;5;15"), "an asleep row has no clickable-text mark: {asleep_row:?}");
+    assert!(archived_row.contains("38;5;8m") && !archived_row.contains("38;5;7m") && !archived_row.contains("38;5;15"), "an archived row: {archived_row:?}");
+    assert_ne!(escapes(asleep_row), escapes(archived_row), "an asleep row is inactive (7), an archived one muted (8)");
 }
 
 #[test]

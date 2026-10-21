@@ -2169,9 +2169,9 @@ fn the_selected_plan_rows_name_is_blue_and_no_chat_mark_is_drawn() {
     let screen = pane.styled_screen();
     assert!(!screen.contains(ACTIVE_MARK), "no marker in column 0: {screen:?}");
     assert_eq!(blue_text(&screen), ["ship"], "the one blue thing is the name of the Plan whose Lead is in the chat slot: {screen:?}");
-    assert_eq!(fg_of(&screen, " sketch", "sketch"), None, "an unselected row's name is the terminal's colour");
-    assert_eq!(fg_of(&screen, " ship ", "1"), Some(15), "the row keeps its counters' colours (the queued Job: white)");
-    assert_eq!(fg_of(&screen, " ship ", "2"), Some(8), "(the merged Jobs: dark grey)");
+    assert_eq!(fg_of(&screen, " sketch", "sketch"), Some(15), "an unselected row's name is clickable text, colour 15");
+    assert_eq!(fg_of(&screen, " ship ", "1"), Some(15), "the row keeps its counters' colours (the queued Job: 15)");
+    assert_eq!(fg_of(&screen, " ship ", "2"), Some(10), "(the merged Jobs: bright green)");
 }
 
 #[test]

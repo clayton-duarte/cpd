@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use ratatui::{
     buffer::Buffer,
     layout::{Margin, Rect},
-    style::Stylize,
+    style::Modifier,
     text::{Line, Span},
     widgets::{Block, BorderType, Widget},
 };
@@ -111,37 +111,45 @@ fn state_word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
             None => palette::PR_CONFLICT_OWNED,
         },
         PrState::Closed if asked => palette::PR_CLOSED_ASKED,
+        PrState::Open => (state_text(PrState::Open), palette::pr_open(pull.clean)),
         state => (state_text(state), palette::pr_state(state)),
     }
 }
 
 /// The box's title: ` <key> · <repo name> 󱦰 <base> · <pull request> `, the key bold; `#<number> <state> 󰏌` once the PR has
 /// a pull request, the state in the palette's PR state colour (`conflict`, waiting, for an open one that conflicts; `closed`,
-/// waiting, red when the Plan's Lead `asked` the User, see [`state_word`]), else the PR's status, dim. While the Plan's Lead
+/// waiting, red when the Plan's Lead `asked` the User, see [`state_word`]), else the PR's status, muted. While the Plan's Lead
 /// works (`Pull::lead_working`) the Lead's dot, `palette::SPINNER[frame]`, follows the state word: `#12 open 󰝦 󰏌`.
 pub fn title(pr: &PrNode, asked: bool, frame: usize) -> Line<'static> {
-    let mut spans: Vec<Span<'static>> =
-        vec![" ".into(), pr.key.to_string().bold(), format!(" · {} {TO} {} · ", pr.repo_name, pr.base).into()];
+    let read_only = palette::read_only_text();
+    let mut spans: Vec<Span<'static>> = vec![
+        " ".into(),
+        Span::styled(pr.key.to_string(), read_only.add_modifier(Modifier::BOLD)),
+        Span::styled(format!(" · {} {TO} {} · ", pr.repo_name, pr.base), read_only),
+    ];
     match &pr.pull {
         Some(pull) => {
-            spans.push(format!("#{} ", pull.number).into());
+            // the title is a hit target (the link): clickable text and the bright pairs
+            spans.push(Span::styled(format!("#{} ", pull.number), palette::clickable_text()));
             let (word, meaning) = state_word(pull, asked);
-            spans.push(Span::styled(word, palette::fg(meaning)));
+            spans.push(Span::styled(word, palette::fg_clickable(meaning)));
             if pull.lead_working {
                 spans.extend([" ".into(), palette::dot_span(Dot::Working, frame, false)]);
             }
-            spans.push(format!(" {CUE}").into());
+            spans.push(Span::styled(format!(" {CUE}"), palette::clickable_text()));
         }
         None => spans.push(match (pr.status, &pr.superseded_by) {
             (PrStatus::Cancelled, Some(by)) => format!("cancelled · superseded by {by}").into(),
-            (PrStatus::Waiting, _) if !pr.waiting_on.is_empty() => format!("waiting on {}", pr.waiting_on.join(", ")).dim(),
-            (status, _) => status.as_str().dim(),
+            (PrStatus::Waiting, _) if !pr.waiting_on.is_empty() => {
+                Span::styled(format!("waiting on {}", pr.waiting_on.join(", ")), palette::muted_text())
+            }
+            (status, _) => Span::styled(status.as_str(), palette::muted_text()),
         }),
     }
     spans.push(" ".into());
     if pr.status == PrStatus::Cancelled {
         // the whole title is muted: the PR is shown, counted nowhere
-        spans.iter_mut().for_each(|s| s.style = s.style.patch(palette::fg(Meaning::Nothing)));
+        spans.iter_mut().for_each(|s| s.style = s.style.patch(palette::muted_text()));
     }
     Line::from(spans)
 }
@@ -227,7 +235,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
     }
 
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-    let lines = palette::fg(Meaning::Nothing);
+    let lines = palette::muted_text();
     for (i, chart) in charts.iter().enumerate() {
         let rect = Rect::new(at[i].0, at[i].1, size[i].0, size[i].1);
         Block::bordered().border_type(BorderType::Rounded).border_style(lines).title(titles[i].clone()).render(rect, &mut buf);
@@ -240,7 +248,7 @@ pub fn layout(prs: &[PrNode], jobs: &[JobNode], needs_user: &NeedsUser, frame: u
         }
         let inner = rect.inner(Margin { horizontal: 1, vertical: 1 });
         if chart.pills.is_empty() {
-            Line::from(NO_JOBS.dim()).render(inner, &mut buf);
+            Line::from(Span::styled(NO_JOBS, palette::muted_text())).render(inner, &mut buf);
         }
         for y in 0..chart.buf.area.height {
             for x in 0..chart.buf.area.width {
@@ -346,7 +354,7 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, lead_working: false, update: None }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, clean: false, lead_working: false, update: None }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {
@@ -542,7 +550,7 @@ mod tests {
 ╭ api · api-repo 󱦰 main · dispatch ╮
 │ no Jobs                          │
 ╰──────────────────────────────────╯");
-        assert!(c.buf[(1, 1)].modifier.contains(Modifier::DIM));
+        assert!(crate::palette::check::is_muted(&c.buf[(1, 1)]));
         assert!((c.pills.len(), c.columns.len()) == (0, 0));
         assert_eq!(layout(&[], &[], &NeedsUser::default(), 0).chart.buf.area.area(), 0);
     }
@@ -550,13 +558,13 @@ mod tests {
     #[test]
     fn an_open_pull_request_that_conflicts_reads_conflict_in_the_waiting_colour() {
         // every box is a PR a Plan owns: its Lead fixes the conflict (hs-d302), so it is waiting, never red
-        let failed = palette::fg(Meaning::Waiting).fg;
+        let failed = palette::fg_clickable(Meaning::Waiting).fg;
         let mut p = pr("api", &[]);
         p.pull = Some(Pull { conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 conflict 󰏌 ");
         assert_eq!(t.spans[4].style.fg, failed);
-        assert_ne!(t.spans[4].style.fg, palette::fg(Meaning::Failed).fg);
+        assert_ne!(t.spans[4].style.fg, palette::fg_clickable(Meaning::Failed).fg);
         // `unknown` and `mergeable` are `conflicting: false`: `open`, not in the waiting colour
         p.pull = Some(pull(12, PrState::Open));
         let t = title(&p, false, 0);
@@ -567,7 +575,7 @@ mod tests {
             p.pull = Some(Pull { conflicting: true, ..pull(12, state) });
             let t = title(&p, false, 0);
             assert_eq!(t.spans[4].content, word);
-            assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(state)).fg);
+            assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(state)).fg);
         }
     }
 
@@ -578,13 +586,13 @@ mod tests {
         for frame in 0..palette::SPINNER.len() {
             let t = title(&p, false, frame);
             assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 open {} 󰏌 ", palette::SPINNER[frame]), "frame {frame}");
-            assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(PrState::Open)).fg, "the state keeps its colour");
+            assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(PrState::Open)).fg, "the state keeps its colour");
         }
         // the dot goes with the state, in the waiting colour of `conflict` too
         p.pull = Some(Pull { lead_working: true, conflicting: true, ..pull(12, PrState::Open) });
         let t = title(&p, false, 3);
         assert_eq!(t.to_string(), format!(" api · api-repo 󱦰 main · #12 conflict {} 󰏌 ", palette::SPINNER[3]));
-        assert_eq!(t.spans[4].style.fg, palette::fg(Meaning::Waiting).fg);
+        assert_eq!(t.spans[4].style.fg, palette::fg_clickable(Meaning::Waiting).fg);
     }
 
     #[test]
@@ -624,8 +632,8 @@ mod tests {
         let mut p = pr("api", &[]);
         p.pull = Some(pull(12, PrState::Closed));
         let colour = |asked| title(&p, asked, 0).spans[4].style.fg;
-        assert_eq!(colour(false), palette::fg(Meaning::Waiting).fg, "its Lead handles it");
-        assert_eq!(colour(true), palette::fg(Meaning::Failed).fg, "its Lead has a dialog open: it asks the User");
+        assert_eq!(colour(false), palette::fg_clickable(Meaning::Waiting).fg, "its Lead handles it");
+        assert_eq!(colour(true), palette::fg_clickable(Meaning::Failed).fg, "its Lead has a dialog open: it asks the User");
         // the question concerns the closed pull request only
         for state in [PrState::Open, PrState::Merged] {
             p.pull = Some(pull(12, state));
@@ -638,8 +646,8 @@ mod tests {
             let x = (0..c.buf.area.width).find(|&x| c.buf[(x, 0)].symbol().contains("\x07cl")).unwrap();
             c.buf[(x, 0)].fg
         };
-        assert_eq!(cell(&NeedsUser::default()), palette::color(Meaning::Waiting));
-        assert_eq!(cell(&NeedsUser { lead_dialog: true, ..NeedsUser::default() }), palette::color(Meaning::Failed));
+        assert_eq!(cell(&NeedsUser::default()), palette::color_clickable(Meaning::Waiting));
+        assert_eq!(cell(&NeedsUser { lead_dialog: true, ..NeedsUser::default() }), palette::color_clickable(Meaning::Failed));
     }
 
     #[test]
@@ -657,8 +665,9 @@ mod tests {
         };
         let none = NeedsUser::default();
         let one = NeedsUser { stuck_jobs: vec![stuck.key.clone()], ..NeedsUser::default() };
-        assert_eq!((bg(&none, 0), bg(&none, 1)), (palette::pill_interactive().bg.unwrap(), palette::pill_interactive().bg.unwrap()));
-        assert_eq!((bg(&one, 0), bg(&one, 1)), (palette::pill_interactive().bg.unwrap(), palette::pill_interactive().bg.unwrap()), "a Job pill is interactive whatever its state (hs-d530)");
+        let (cyan, red) = (palette::color_clickable(Meaning::Waiting), palette::color_clickable(Meaning::Failed));
+        assert_eq!((bg(&none, 0), bg(&none, 1)), (cyan, cyan), "its Lead handles a failed Job: cyan");
+        assert_eq!((bg(&one, 0), bg(&one, 1)), (red, cyan), "red only for the stuck one (hs-d534)");
         // a queued Job is never stuck, whatever the list says
         let queued = job("api", "stuck", &[]);
         let c = layout(&[pr("api", &[])], &[queued], &one, 0);
@@ -672,18 +681,18 @@ mod tests {
         let t = title(&open, false, 0);
         assert_eq!(t.to_string(), " api · api-repo 󱦰 main · #12 open 󰏌 ");
         assert!(t.spans[1].style.add_modifier.contains(Modifier::BOLD), "the key is bold");
-        assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(PrState::Open)).fg);
+        assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(PrState::Open)).fg);
         for (state, word) in [(PrState::Merged, "merged"), (PrState::Closed, "closed")] {
             open.pull = Some(pull(12, state));
             let t = title(&open, false, 0);
             assert_eq!(t.spans[4].content, word);
-            assert_eq!(t.spans[4].style.fg, palette::fg(palette::pr_state(state)).fg);
+            assert_eq!(t.spans[4].style.fg, palette::fg_clickable(palette::pr_state(state)).fg);
         }
         let mut waiting = pr("web", &["api"]);
         waiting.status = PrStatus::Waiting;
         let t = title(&waiting, false, 0);
         assert_eq!(t.to_string(), " web · web-repo 󱦰 main · waiting ");
-        assert!(t.spans[3].style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(t.spans[3].style, palette::muted_text(), "the status before a pull request exists is muted");
     }
 
     /// The chart with its OSC 8 link sequences stripped, so it reads as plain text.

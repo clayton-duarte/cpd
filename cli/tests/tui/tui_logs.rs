@@ -84,8 +84,8 @@ fn the_log_lists_the_events_one_line_each_newest_last() {
         rows(&buf),
         [" 00:00:00 context-created", " 00:00:01 Plan ship: dispatch", " 00:00:02 store busy", "", ""]
     );
-    // the time is dim, an `error` Event is in the failed colour and the others are not
-    assert!(buf[(1, 3)].modifier.contains(Modifier::DIM) && !buf[(10, 3)].modifier.contains(Modifier::DIM));
+    // the time is muted (colour 8), an `error` Event is in the failed colour and the others are read-only text (7)
+    assert!(buf[(1, 3)].fg == palette::muted_text().fg.unwrap() && buf[(10, 3)].fg == palette::read_only_text().fg.unwrap());
     assert_eq!(buf[(10, 5)].fg, palette::fg(Meaning::Failed).fg.unwrap());
     assert_ne!(buf[(10, 4)].fg, palette::fg(Meaning::Failed).fg.unwrap());
 }
@@ -404,17 +404,18 @@ fn the_logs_action_opens_the_popup_on_the_clicking_client() {
 
 // ---------- opening at an Event (`--event <id>`, the Inbox click of an engine-error or engine-down item) ----------
 
-/// The row indexes (under the title) of `buf` whose first and last cell are reversed.
-fn reversed_rows(buf: &Buffer) -> Vec<u16> {
+/// The row indexes (under the title) of `buf` whose first and last cell are the blue block (background 4, text 0).
+fn selected_rows(buf: &Buffer) -> Vec<u16> {
     let width = buf.area.width;
+    let block = palette::selected();
     (HEAD..buf.area.height)
-        .filter(|&y| buf[(0, y)].modifier.contains(Modifier::REVERSED) && buf[(width - 1, y)].modifier.contains(Modifier::REVERSED))
+        .filter(|&y| [0, width - 1].iter().all(|&x| (Some(buf[(x, y)].bg), Some(buf[(x, y)].fg)) == (block.bg, block.fg)))
         .map(|y| y - HEAD)
         .collect()
 }
 
 #[test]
-fn opened_at_an_event_its_line_is_reversed_in_the_middle_of_the_view_and_the_view_does_not_follow() {
+fn opened_at_an_event_its_line_is_the_blue_block_in_the_middle_of_the_view_and_the_view_does_not_follow() {
     let env = TestEnv::new();
     let mut store = open(&env);
     append_numbered(&mut store, 0, 30);
@@ -426,7 +427,7 @@ fn opened_at_an_event_its_line_is_reversed_in_the_middle_of_the_view_and_the_vie
         rows(&buf),
         [" 00:00:08 event 8", " 00:00:09 event 9", " 00:00:10 event 10", " 00:00:11 event 11", " 00:00:12 event 12"]
     );
-    assert_eq!(reversed_rows(&buf), [2], "its whole line, and only it");
+    assert_eq!(selected_rows(&buf), [2], "its whole line, and only it");
     assert!(!log.follows());
     // new Events do not move what is shown; scrolling to the bottom follows again
     append_numbered(&mut store, 30, 2);
@@ -447,16 +448,16 @@ fn an_event_at_either_end_fills_the_view_and_one_that_does_not_exist_opens_at_th
     let mut log = Log::at(events.clone(), first);
     let buf = render(20, 5, &mut log);
     assert_eq!((rows(&buf)[0].as_str(), rows(&buf)[4].as_str()), (" 00:00:00 event 0", " 00:00:04 event 4"));
-    assert_eq!(reversed_rows(&buf), [0]);
+    assert_eq!(selected_rows(&buf), [0]);
     let mut log = Log::at(events.clone(), last);
     let buf = render(20, 5, &mut log);
     assert_eq!(rows(&buf)[4], " 00:00:29 event 29");
-    assert_eq!(reversed_rows(&buf), [4]);
+    assert_eq!(selected_rows(&buf), [4]);
     assert!(log.follows(), "its line is the bottom one");
     let mut log = Log::at(events, 9999);
     let buf = render(20, 5, &mut log);
     assert_eq!(rows(&buf)[4], " 00:00:29 event 29");
-    assert!(reversed_rows(&buf).is_empty() && log.follows());
+    assert!(selected_rows(&buf).is_empty() && log.follows());
 }
 
 #[test]

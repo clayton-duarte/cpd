@@ -4,7 +4,6 @@
 //! the logs and the legend popups.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 /// Rows a wheel notch moves (the Worker and Plan views' notch).
@@ -17,7 +16,7 @@ pub(crate) enum Cue {
     Below,
 }
 
-/// The one scroll indicator of cpd (commands.md §17, "Scroll cues"; hs-d348): `▲ <n> more` / `▼ <n> more`, dim,
+/// The one scroll indicator of cpd (commands.md §17, "Scroll cues"; hs-d348): `▲ <n> more` / `▼ <n> more`, muted (colour 8),
 /// **right-aligned** in a row of `width` cells (blank to its left, so it never cuts a line drawn there). Every region
 /// that scrolls draws its cues with this; a cue wider than the row is cut at its right edge.
 pub(crate) fn cue(which: Cue, n: usize, width: usize) -> Line<'static> {
@@ -27,7 +26,7 @@ pub(crate) fn cue(which: Cue, n: usize, width: usize) -> Line<'static> {
     };
     let text: String = format!("{arrow} {n} more").chars().take(width).collect();
     let pad = " ".repeat(width - text.chars().count());
-    Line::from(vec![Span::raw(pad), Span::styled(text, Style::new().add_modifier(Modifier::DIM))])
+    Line::from(vec![Span::raw(pad), Span::styled(text, crate::palette::muted_text())])
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -235,9 +234,9 @@ mod tests {
     }
 
     #[test]
-    fn a_cue_is_dim() {
+    fn a_cue_is_muted() {
         let line = cue(Cue::Below, 2, 20);
         let cue_span = line.spans.iter().find(|s| s.content.contains("more")).expect("the cue's text");
-        assert!(cue_span.style.add_modifier.contains(ratatui::style::Modifier::DIM), "{cue_span:?}");
+        assert_eq!(cue_span.style, crate::palette::muted_text(), "{cue_span:?}");
     }
 }

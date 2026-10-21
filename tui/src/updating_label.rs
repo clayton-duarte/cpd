@@ -27,6 +27,7 @@ fn node(update: Option<UpdateState>) -> PrNode {
             state: PrState::Open,
             url: "https://github.com/acme/repo/pull/12".into(),
             conflicting: true,
+            clean: false,
             lead_working: false,
             update,
         }),
@@ -69,7 +70,7 @@ fn a_box_with_a_running_update_job_reads_updating_in_the_running_colour() {
     let (title, style) = box_word(Some(UpdateState::Running), "updating");
     assert!(title.contains("#12 updating"), "{title:?}");
     assert!(!title.contains("conflict"), "{title:?}");
-    assert_eq!(style.expect("an `updating` span"), palette::fg(RUNNING));
+    assert_eq!(style.expect("an `updating` span"), palette::fg_clickable(RUNNING));
 }
 
 #[test]
@@ -77,14 +78,14 @@ fn a_box_with_a_queued_update_job_reads_updating_in_the_waiting_colour() {
     let (title, style) = box_word(Some(UpdateState::Queued), "updating");
     assert!(title.contains("#12 updating"), "{title:?}");
     assert!(!title.contains("conflict"), "{title:?}");
-    assert_eq!(style.expect("an `updating` span"), palette::fg(Meaning::Waiting));
+    assert_eq!(style.expect("an `updating` span"), palette::fg_clickable(Meaning::Waiting));
 }
 
 #[test]
 fn a_box_with_no_update_job_still_reads_conflict() {
     let (title, style) = box_word(None, "conflict");
     assert!(title.contains("#12 conflict") && !title.contains("updating"), "{title:?}");
-    assert_eq!(style.expect("a `conflict` span"), palette::fg(Meaning::Waiting));
+    assert_eq!(style.expect("a `conflict` span"), palette::fg_clickable(Meaning::Waiting));
     // and only the absence of the update Job: with one, the same box no longer reads `conflict`
     let (with, _) = box_word(Some(UpdateState::Queued), "updating");
     assert!(with.contains("#12 updating") && !with.contains("conflict"), "{with:?}");
@@ -96,11 +97,11 @@ fn a_column_pr_with_an_update_job_reads_updating() {
         let [_, second] = column::pr_lines(&open_pr(Some(update), Some("l-a")), 60, 0);
         let text = second.to_string();
         assert!(text.contains(" updating") && !text.contains("conflict"), "{update:?}: {text:?}");
-        assert_eq!(span_of(&second, "updating").expect("an `updating` span").style, palette::fg(meaning), "{update:?}");
+        assert_eq!(span_of(&second, "updating").expect("an `updating` span").style, palette::fg_clickable(meaning), "{update:?}");
     }
     // no update Job: `conflict` as before; a pull request no Plan owns has none and keeps it red
     let [_, owned] = column::pr_lines(&open_pr(None, Some("l-a")), 60, 0);
-    assert_eq!(span_of(&owned, "conflict").unwrap().style, palette::fg(Meaning::Waiting));
+    assert_eq!(span_of(&owned, "conflict").unwrap().style, palette::fg_clickable(Meaning::Waiting));
     let [_, unowned] = column::pr_lines(&open_pr(None, None), 60, 0);
     assert!(!unowned.to_string().contains("updating"));
 }
@@ -118,8 +119,8 @@ fn the_legend_lists_updating_in_both_colours() {
             .unwrap_or_else(|| panic!("no `{word}` row saying {says:?}: {:?}", prs.rows.iter().map(cell).collect::<Vec<_>>()));
         r[0].spans[0].style
     };
-    assert_eq!(row("#2 updating", "its update Job is fixing the conflict"), palette::fg(RUNNING));
-    assert_eq!(row("#2 updating", "its update Job is queued"), palette::fg(Meaning::Waiting));
+    assert_eq!(row("#2 updating", "its update Job is fixing the conflict"), palette::fg_clickable(RUNNING));
+    assert_eq!(row("#2 updating", "its update Job is queued"), palette::fg_clickable(Meaning::Waiting));
 }
 
 fn fixture(store: &mut Store, sql: &str) {

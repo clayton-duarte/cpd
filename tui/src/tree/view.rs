@@ -748,7 +748,7 @@ impl View {
         let across = Rect { x: f.area().x, width: f.area().width, ..inbox_area };
         inbox::draw(f, across, &self.tree.inbox, self.shape(), inbox_cursor, now, &|item| self.merges(item).then_some(frame));
         if footer_height > 0 {
-            f.render_widget(Paragraph::new(footer).style(palette::note()).wrap(Wrap { trim: false }), footer_area);
+            f.render_widget(Paragraph::new(footer).style(palette::error()).wrap(Wrap { trim: false }), footer_area);
         }
         let cursor = self.cursor_shown() && self.inbox_cursor.is_none();
         // the tree has more or fewer rows when the section was expanded or folded or an item came or went: it scrolls to
@@ -967,7 +967,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(44, 14)).unwrap();
         terminal.draw(|f| view.draw(f, 0)).unwrap();
         let cell = &terminal.backend().buffer()[(1, 13)];
-        assert_eq!((cell.fg, cell.modifier.contains(Modifier::BOLD)), (palette::ui(palette::Ui::Note), false));
+        assert_eq!((cell.fg, cell.modifier.contains(Modifier::BOLD)), (palette::error().fg.unwrap(), false));
     }
 
     /// tui-W8: the footer's height is counted in display columns, as it wraps.
@@ -1111,7 +1111,7 @@ mod tests {
         let buf = buffer(&mut view, 44, 12);
         let ship: String = (0..44).map(|x| buf[(x, 2)].symbol()).collect();
         assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(42) == Some('5'), "{ship:?}");
-        let reversed: Vec<u16> = (0..44).filter(|x| buf[(*x, 2)].modifier.contains(Modifier::REVERSED)).collect();
+        let reversed: Vec<u16> = (0..44).filter(|x| crate::palette::check::is_selected(&buf[(*x, 2)])).collect();
         assert_eq!(reversed, (1..43).collect::<Vec<u16>>());
     }
 
@@ -1389,7 +1389,7 @@ mod tests {
         let reversed = |view: &mut View, x, y| {
             let mut terminal = Terminal::new(TestBackend::new(44, 16)).unwrap();
             terminal.draw(|f| view.draw(f, 0)).unwrap();
-            terminal.backend().buffer()[(x, y)].modifier.contains(Modifier::REVERSED)
+            crate::palette::check::is_selected(&terminal.backend().buffer()[(x, y)])
         };
         assert!(reversed(&mut view, 10, 6), "the first item is selected");
         press(&mut view, KeyCode::Down);
@@ -2024,7 +2024,8 @@ mod tests {
         for x in 1..12 {
             let cell = &buf[(x, 14)];
             if cell.symbol() != " " {
-                assert_eq!(cell.fg, palette::color(crate::palette::Meaning::Nothing), "`╰󰁋 expand` is muted: column {x}");
+                let want = if cell.symbol() == "╰" { palette::muted_text() } else { palette::toggle_text() }.fg.unwrap();
+                assert_eq!(cell.fg, want, "`╰󰁋 expand`: a muted corner, then colour 7: column {x}");
                 assert!(!cell.modifier.contains(Modifier::BOLD));
             }
         }
@@ -2091,7 +2092,7 @@ mod tests {
         let buf = draw_now(&mut with_inbox(5), 43, 16);
         let rows = text_rows(&buf);
         let muted = palette::color(palette::Meaning::Nothing);
-        for (y, glyph, colour) in [(11, palette::TIER_RED, palette::Meaning::Failed), (12, palette::TIER_RED, palette::Meaning::Failed), (13, palette::TIER_YELLOW, palette::Meaning::Review)].map(|(y, g, m)| (y, g, palette::color(m))) {
+        for (y, glyph, colour) in [(11, palette::TIER_RED, palette::Meaning::Failed), (12, palette::TIER_RED, palette::Meaning::Failed), (13, palette::TIER_YELLOW, palette::Meaning::Review)].map(|(y, g, m)| (y, g, palette::color_clickable(m))) {
             assert!(rows[y].starts_with(&format!(" │  {glyph} ")), "the glyph in row {y}: {rows:?}");
             assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted), "the branch of row {y}");
             assert_eq!((buf[(4, y as u16)].symbol(), buf[(4, y as u16)].fg), (glyph, colour), "the glyph of row {y}");
@@ -2350,17 +2351,17 @@ mod tests {
         let mut view = with_inbox(3);
         into_the_inbox(&mut view); // the dialog: its label is no link (a link's cells are written in pieces)
         let buf = draw_now(&mut view, 43, 16);
-        let reversed = |y: u16| (1..42).all(|x| buf[(x, y)].modifier.contains(Modifier::REVERSED));
+        let reversed = |y: u16| (1..42).all(|x| crate::palette::check::is_selected(&buf[(x, y)]));
         assert!(reversed(inbox_row(&view, 0)));
         assert!(!reversed(inbox_row(&view, 1)) && !reversed(inbox_row(&view, 2)));
-        let tree_row_reversed = (1..16).any(|y| y < view.inbox_area.y && buf[(5, y)].modifier.contains(Modifier::REVERSED));
+        let tree_row_reversed = (1..16).any(|y| y < view.inbox_area.y && crate::palette::check::is_selected(&buf[(5, y)]));
         assert!(!tree_row_reversed, "no Session row is inverted while the cursor is in the Inbox");
         // a click hides it; the first arrow shows it again where it was
         let header = view.inbox_area.y + 1;
         click(&mut view, 20, header);
         let buf = draw_now(&mut view, 43, 16);
         // (row 10 is the title, whose pill is inverted by design)
-        let lit: Vec<_> = (0..16).filter(|&y| y != 10).flat_map(|y| (0..43).map(move |x| (x, y))).filter(|&(x, y)| buf[(x, y)].modifier.contains(Modifier::REVERSED)).collect();
+        let lit: Vec<_> = (0..16).filter(|&y| y != 10).flat_map(|y| (0..43).map(move |x| (x, y))).filter(|&(x, y)| crate::palette::check::is_selected(&buf[(x, y)])).collect();
         assert!(lit.is_empty(), "{lit:?}");
         assert_eq!(view.inbox_cursor, Some(0));
         press(&mut view, KeyCode::Down);
@@ -2596,7 +2597,7 @@ mod tests {
         let rows = text_rows(&buf);
         let shown = rows.iter().position(|r| r.contains(&format!("item {at:02}"))).expect("the cursor's item is drawn");
         assert!((16..37).contains(&shown), "between the cues: {rows:?}");
-        assert!(buf[(5, shown as u16)].modifier.contains(Modifier::REVERSED));
+        assert!(crate::palette::check::is_selected(&buf[(5, shown as u16)]));
         // down to the last item, then back up to the first
         for _ in 0..60 {
             press(&mut view, KeyCode::Down);
@@ -2604,14 +2605,14 @@ mod tests {
         let buf = draw_now(&mut view, 43, 40);
         let rows = text_rows(&buf);
         assert_eq!(label(&rows[37]), "item 49", "{rows:?}");
-        assert!(buf[(5, 37)].modifier.contains(Modifier::REVERSED));
+        assert!(crate::palette::check::is_selected(&buf[(5, 37)]));
         for _ in 0..49 {
             press(&mut view, KeyCode::Up);
         }
         let buf = draw_now(&mut view, 43, 40);
         let rows = text_rows(&buf);
         assert_eq!((label(&rows[15]), rows[37].as_str()), ("item 00", cue_row('▼', 28).as_str()));
-        assert!(buf[(5, 15)].modifier.contains(Modifier::REVERSED));
+        assert!(crate::palette::check::is_selected(&buf[(5, 15)]));
     }
 
     // ---------- the tree and the Inbox share the column (hs-d307) ----------
@@ -2743,7 +2744,7 @@ mod tests {
         let rows = text_rows(&buf);
         let at = rows.iter().position(|r| r.contains("p39")).expect("the cursor's Session is drawn");
         assert!((2..23).contains(&at), "between the cues: {rows:?}");
-        assert!(buf[(5, at as u16)].modifier.contains(Modifier::REVERSED));
+        assert!(crate::palette::check::is_selected(&buf[(5, at as u16)]));
         assert!(rows[1].trim_start().starts_with('▲') && rows[23].trim_start().starts_with('▼'), "{rows:?}");
         assert_eq!((rows[1].as_str(), rows[23].as_str()), (cue_row_at('▲', 20).as_str(), cue_row_at('▼', 20).as_str()), "right-aligned: {rows:?}");
         let before = rows.clone();

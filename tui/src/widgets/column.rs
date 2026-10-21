@@ -5,16 +5,16 @@
 use cpd_core::ids::SessionId;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph};
 
 use super::host::Usage;
 use crate::dialog::scroll::{self, Cue};
 use crate::link;
-use crate::palette;
+use crate::palette::{self, Meaning};
 use crate::section;
-use crate::read::{Dot, OpenPr, PrState, ReviewDecision, UpdateState};
+use crate::read::{Dot, OpenPr, ReviewDecision, UpdateState};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
@@ -123,11 +123,11 @@ impl Machine {
 }
 
 fn bold(text: impl Into<String>) -> Span<'static> {
-    Span::styled(text.into(), Style::new().add_modifier(Modifier::BOLD))
+    Span::styled(text.into(), palette::read_only_text().add_modifier(Modifier::BOLD))
 }
 
-pub(crate) fn dim(text: impl Into<String>) -> Span<'static> {
-    Span::styled(text.into(), Style::new().add_modifier(Modifier::DIM))
+pub(crate) fn muted(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), palette::muted_text())
 }
 
 /// `text` cut to `max` characters, ending in `…` when cut.
@@ -145,9 +145,11 @@ fn truncate(text: &str, max: usize) -> String {
 /// One open pull request, two lines (commands.md §13.2): ` owner/repo#n` with `󰏌` in the last column, then
 /// `  <open|draft> <checks> <review>  <title>`, the title cut first to fit `width`; the name is cut so it never reaches the `󰏌`.
 /// A `clean` one ends the second line in the merge icon, in the last column; the title is cut so it never reaches it.
-/// A conflicting one adds ` conflict` after the review (the colour is kept under the active and dim styles). A pull request
-/// a Plan owns draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them, hs-d302); one no Plan owns, in red.
-/// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
+/// A conflicting one adds ` conflict` after the review. A pull request a Plan owns is clickable, so its colourless text is 15 and
+/// its coloured marks the bright pairs, and it draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them,
+/// hs-d302); one no Plan owns is read-only: text 7, base colours, red `conflict` and failed checks (hs-d534). An `open` word is
+/// yellow only when the PR is `clean`, ready to merge. An `active` one (a PR of the chat slot's Plan) is the blue block, bold,
+/// across both lines, with no colour of its own.
 /// One whose Lead is working shows the Lead's dot, `palette::SPINNER[frame]` (the tree's), after the state word: `  open 󰝦 …`.
 pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
@@ -167,23 +169,26 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
         (None, false) => palette::PR_CONFLICT,
     };
     let conflict = format!(" {word}");
+    // the colour of a mark that has a meaning, and the colourless text: bright and 15 when the PR is owned (clickable)
+    let mark = |m| if owned { palette::fg_clickable(m) } else { palette::fg(m) };
+    let text = if owned { palette::clickable_text() } else { palette::read_only_text() };
     let dot = pr.lead_working.then(|| palette::dot_span(Dot::Working, frame, false));
     let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
     let mut spans = vec![
         "  ".into(),
-        Span::styled(state_text, palette::fg(palette::pr_state(PrState::Open))),
+        Span::styled(state_text, mark(if pr.draft { Meaning::Planning } else { palette::pr_open(pr.clean) })),
     ];
     if let Some(dot) = dot {
         spans.extend([" ".into(), dot]);
     }
     spans.extend([
         " ".into(),
-        Span::styled(icon, palette::fg(checks)),
+        Span::styled(icon, mark(checks)),
         " ".into(),
-        review.into(),
+        Span::styled(review, text),
     ]);
     if pr.conflicting {
-        spans.push(Span::styled(conflict, palette::fg(conflict_meaning)));
+        spans.push(Span::styled(conflict, mark(conflict_meaning)));
     }
     let reserved = if pr.clean { 2 } else { 0 };
     let room = width.saturating_sub(used + 2 + reserved);
@@ -191,23 +196,30 @@ pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static
     if room >= 4 {
         let title = format!("  {}", truncate(&pr.title, room));
         shown += title.chars().count();
-        spans.push(if pr.active { Span::raw(title) } else { dim(title) });
+        spans.push(muted(title));
     }
     if pr.clean {
         spans.push(" ".repeat(width.saturating_sub(shown + 1)).into());
         // While its merge runs the cell is the spinner (hs-d495), turning with the shared clock.
-        spans.push(if pr.merging { palette::SPINNER[frame % palette::SPINNER.len()] } else { MERGE }.into());
+        spans.push(if pr.merging {
+            Span::styled(palette::SPINNER[frame % palette::SPINNER.len()], palette::fg_clickable(Meaning::Review))
+        } else {
+            Span::styled(MERGE, palette::clickable_text())
+        });
     }
-    let first = Line::from(vec![bold(name), gap.into(), link::CUE.into()]);
+    let first = Line::from(vec![Span::styled(name, text.add_modifier(Modifier::BOLD)), gap.into(), Span::styled(link::CUE, palette::clickable_text())]);
     let second = Line::from(spans);
-    let style = if pr.active {
-        Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD)
-    } else if pr.lead.is_none() {
-        Style::new().add_modifier(Modifier::DIM)
-    } else {
-        Style::new()
-    };
-    [first.patch_style(style), second.patch_style(style)]
+    [first, second].map(|line| if pr.active { block(line, width) } else { line })
+}
+
+/// `line` as the blue block, bold, `width` cells wide: every span takes the block's colours, so no mark keeps a colour of its own
+/// (rule (3)), and a span of spaces fills the rest of the row.
+fn block(mut line: Line<'static>, width: usize) -> Line<'static> {
+    let style = palette::selected().add_modifier(Modifier::BOLD);
+    line.style = style;
+    line.spans.iter_mut().for_each(|s| s.style = s.style.patch(style));
+    line.spans.push(Span::styled(" ".repeat(width.saturating_sub(line.width())), style));
+    line
 }
 
 fn render_header(f: &mut Frame, area: Rect, title: &str, count: Option<usize>) {
@@ -280,7 +292,7 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
     ])
     .areas(area);
     render_header(f, prs_header, "PRs", Some(open.len()));
-    f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::from(machine.usage_line())]), home);
+    f.render_widget(Paragraph::new(vec![Line::from(bold(format!(" {}", machine.name))), Line::styled(machine.usage_line(), palette::read_only_text())]), home);
     let height = usize::from(prs.height);
     let win = window(open.len(), height, 2, scroll);
     // The list sits under the `▲` row, if any; whole pull requests only.
@@ -312,7 +324,7 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
         }
     }
     if open.is_empty() {
-        text.push(Line::from(dim(" no open PRs")));
+        text.push(Line::from(muted(" no open PRs")));
     }
     f.render_widget(Paragraph::new(text), list);
     if win.cue_above {
@@ -333,15 +345,16 @@ pub fn draw(f: &mut Frame, area: Rect, open: &[OpenPr], machine: &Machine, scrol
 
 
 /// The snapshot's `error`, a lasting state of the column (commands.md §17 "No notes", rule (b)): it replaces the last row
-/// of `area`, in `palette::note()`, over what [`draw`] drew.
+/// of `area`, in `palette::error()`, over what [`draw`] drew.
 pub fn draw_error(f: &mut Frame, area: Rect, error: &str) {
     let last = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1.min(area.height));
     f.render_widget(Clear, last);
-    f.render_widget(Paragraph::new(Span::styled(error.to_owned(), palette::note())), last);
+    f.render_widget(Paragraph::new(Span::styled(error.to_owned(), palette::error())), last);
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::read::PrState;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -433,7 +446,7 @@ mod tests {
         assert!(buf[(1, 1)].modifier.contains(Modifier::BOLD), "the hostname is bold");
         for x in 0..20 {
             let cell = &buf[(x, 2)];
-            assert!(!cell.modifier.contains(Modifier::BOLD | Modifier::DIM) && cell.fg == buf[(0, 0)].fg, "no style on the usage row, x={x}");
+            assert!(!cell.modifier.contains(Modifier::BOLD) && (cell.symbol() == " " || cell.fg == palette::read_only_text().fg.unwrap()), "read-only text, no bold, on the usage row, x={x}");
         }
         assert!(!got.iter().any(|r| r.contains("git") || r.contains("Jira") || r.contains("future") || r.contains("load")));
     }
@@ -466,13 +479,13 @@ mod tests {
     }
 
     #[test]
-    fn an_unowned_pr_is_dim_on_both_lines_and_has_no_hit_area() {
+    fn an_unowned_pr_is_read_only_text_on_both_lines_an_owned_one_clickable_and_only_it_has_a_hit_area() {
         let (buf, hits) = drawn(30, 20, &[pr(7, None), pr(8, Some("l-a"))]);
-        for (y, dim) in [(6, true), (7, true), (8, false), (9, false)] {
-            assert_eq!(buf[(1, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
-            assert_eq!(buf[(2, y)].modifier.contains(Modifier::DIM), dim, "row {y}");
+        for (y, owned) in [(6, false), (7, false), (8, true), (9, true)] {
+            let want = if owned { palette::clickable_text() } else { palette::read_only_text() }.fg.unwrap();
+            assert_eq!(buf[(2, y)].fg, want, "row {y}");
         }
-        assert!(buf[(29, 6)].modifier.contains(Modifier::DIM) && buf[(29, 6)].symbol().contains(link::CUE), "the arrow stays");
+        assert!(buf[(29, 6)].fg == palette::clickable_text().fg.unwrap() && buf[(29, 6)].symbol().contains(link::CUE), "the arrow stays clickable");
         let [hit] = &hits[..] else { panic!("{hits:?}") };
         assert_eq!(hit.lead.as_str(), "l-a");
         assert_eq!((hit.area, hit.arrow, hit.icon), (Rect::new(0, 8, 30, 2), Position::new(29, 8), None));
@@ -499,7 +512,7 @@ mod tests {
             .unwrap();
         let buf = terminal.backend().buffer().clone();
         assert_eq!(row(&buf, 14), "no_cockpit: nothing here");
-        assert_eq!(buf[(0, 14)].fg, palette::note().fg.unwrap());
+        assert_eq!(buf[(0, 14)].fg, palette::error().fg.unwrap());
         assert_eq!(row(&buf, 6), " no open PRs", "the rest is as drawn");
     }
 
@@ -517,9 +530,9 @@ mod tests {
         assert_eq!(line, format!("  open {} no review conflict  A title", palette::CHECKS_PASSED));
         let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
         for dx in 0..8 {
-            assert_eq!(buf[(x + dx, 7)].fg, palette::color(Meaning::Waiting), "its Lead fixes it: waiting, not red");
+            assert_eq!(buf[(x + dx, 7)].fg, palette::color_clickable(Meaning::Waiting), "its Lead fixes it: waiting, not red");
         }
-        assert_ne!(buf[(x - 2, 7)].fg, palette::color(Meaning::Waiting), "the review is not waiting");
+        assert_ne!(buf[(x - 2, 7)].fg, palette::color_clickable(Meaning::Waiting), "the review is not waiting");
     }
 
     #[test]
@@ -540,23 +553,31 @@ mod tests {
             p.checks = crate::read::Checks::Failed;
             let (line, buf) = second_line(&p, 40);
             let x = line.find(palette::CHECKS_FAILED).map(|b| line[..b].chars().count() as u16).unwrap();
-            assert_eq!(buf[(x, 7)].fg, palette::color(meaning), "{lead:?}");
+            let colour = if lead.is_some() { palette::color_clickable(meaning) } else { palette::color(meaning) };
+            assert_eq!(buf[(x, 7)].fg, colour, "{lead:?}");
         }
     }
 
     #[test]
-    fn conflict_keeps_its_colour_under_the_active_and_dim_styles() {
-        for (active, lead, modifier, meaning) in
-            [(true, Some("l-a"), Modifier::REVERSED | Modifier::BOLD, Meaning::Waiting), (false, None, Modifier::DIM, Meaning::Failed)]
+    fn conflict_is_cyan_on_an_owned_pr_red_on_an_unowned_one_and_no_colour_in_the_active_block() {
+        for (active, lead, colour) in
+            [(false, Some("l-a"), palette::color_clickable(Meaning::Waiting)), (false, None, palette::color(Meaning::Failed))]
         {
             let mut p = pr(7, lead);
             p.conflicting = true;
             p.active = active;
             let (line, buf) = second_line(&p, 40);
             let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
-            assert_eq!(buf[(x, 7)].fg, palette::color(meaning));
-            assert!(buf[(x, 7)].modifier.contains(modifier));
+            assert_eq!(buf[(x, 7)].fg, colour);
         }
+        // the active block: background 4, text 0 and bold on every cell of both lines, whatever the mark was
+        let mut p = pr(7, Some("l-a"));
+        p.conflicting = true;
+        p.active = true;
+        let (line, buf) = second_line(&p, 40);
+        let x = line.find("conflict").map(|b| line[..b].chars().count() as u16).unwrap();
+        assert!((0..40).all(|x| palette::check::is_selected(&buf[(x, 7)]) && palette::check::is_selected(&buf[(x, 6)])));
+        assert!(buf[(x, 7)].modifier.contains(Modifier::BOLD));
     }
 
     #[test]
@@ -581,7 +602,7 @@ mod tests {
         for frame in 0..palette::SPINNER.len() {
             let (line, buf) = second_at(&p, 40, frame);
             assert_eq!(line, format!("  open {} {} no review  A title", palette::SPINNER[frame], palette::CHECKS_PASSED), "frame {frame}");
-            assert_eq!(buf[(2, 7)].fg, palette::color(palette::pr_state(PrState::Open)), "the state keeps its colour");
+            assert_eq!(buf[(2, 7)].fg, palette::color_clickable(palette::pr_state(PrState::Open)), "the state keeps its colour");
         }
         // the frame is the only change between two draws
         assert_ne!(second_at(&p, 40, 1).1, second_at(&p, 40, 2).1);
@@ -724,7 +745,7 @@ mod tests {
         assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"), "{got:#?}");
         assert!(!got.iter().any(|r| r.contains('▲')));
         let y = 6 + 4;
-        assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "the cue is dim");
+        assert!((22..30).all(|x| crate::palette::check::is_muted(&buf[(x, y)])), "the cue is dim");
         assert_eq!(d.prs, Rect::new(0, 6, 30, 5));
         assert_eq!(d.max_scroll, 3);
     }
@@ -737,7 +758,7 @@ mod tests {
         // 5 rows less both cues leave 3: one pull request, and a spare row
         assert_eq!(names(&got), ["acme/repo#2"]);
         assert_eq!(got.last().unwrap(), &format!("{:>30}", "▼ 3 more"));
-        assert!(buf[(29, 6)].modifier.contains(Modifier::DIM));
+        assert!(crate::palette::check::is_muted(&buf[(29, 6)]));
     }
 
     #[test]
@@ -843,7 +864,7 @@ mod tests {
         let (buf, _) = scrolled(30, height(5), &many(5), 0);
         let y = all_rows(&buf).iter().position(|r| r.contains('▼')).expect("a ▼ cue row") as u16;
         assert!((0..22).all(|x| buf[(x, y)].symbol() == " "), "nothing on the left of the cue");
-        assert!((22..30).all(|x| buf[(x, y)].modifier.contains(Modifier::DIM)), "`▼ 3 more` is dim and ends at the last column");
+        assert!((22..30).all(|x| crate::palette::check::is_muted(&buf[(x, y)])), "`▼ 3 more` is dim and ends at the last column");
     }
 
     // ---- the Deploy column's PRs title v4 (hs-d475, hs-d476): red until the column draws a grey pill inside its padding ----

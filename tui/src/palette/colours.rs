@@ -109,7 +109,7 @@ fn read_only_pills_are_grey_blocks_with_black_text() {
     }
 }
 
-/// No `DIM` anywhere under `tui/` (it becomes colour 8) and no `REVERSED` outside `palette.rs` (a cursor is a blue block).
+/// No `DIM` anywhere under `tui/` (it becomes colour 8) and no `REVERSED` outside the palette module, `palette.rs` and `palette/` (a cursor is a blue block).
 #[test]
 fn no_dim_or_reversed_outside_the_palette() {
     let dim = [format!("Modifier::{}", "DIM"), format!(".{}()", "dim")];
@@ -121,7 +121,7 @@ fn no_dim_or_reversed_outside_the_palette() {
             if path.is_dir() {
                 walk(&path, dim, reversed, offenders);
             } else if path.extension().is_some_and(|e| e == "rs") {
-                let in_palette = path.file_name().is_some_and(|n| n == "palette.rs");
+                let in_palette = path.file_name().is_some_and(|n| n == "palette.rs") || path.ancestors().any(|a| a.file_name().is_some_and(|n| n == "palette"));
                 let text = std::fs::read_to_string(&path).unwrap();
                 for (n, line) in text.lines().enumerate() {
                     let named = dim.iter().any(|s| line.contains(s)) || (!in_palette && reversed.iter().any(|s| line.contains(s)));

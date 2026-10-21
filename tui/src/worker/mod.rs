@@ -22,7 +22,6 @@ use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event};
-use ratatui::style::Style;
 use ratatui::text::Line;
 
 use super::read::{self, AttemptStatus, Outcome, Worker};
@@ -189,7 +188,7 @@ fn refresh(view: &mut View, shown: &mut Option<Stamp>, snapshot: Option<&Worker>
 }
 
 fn placeholder(text: &str) -> Line<'static> {
-    Line::styled(format!(" {text}"), Style::new().dim())
+    Line::styled(format!(" {text}"), crate::palette::muted_text())
 }
 
 #[cfg(test)]
