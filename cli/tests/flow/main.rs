@@ -11,6 +11,7 @@ mod context_distill;
 mod context_manager;
 mod context_pending;
 mod context;
+mod driver_idle;
 mod driver_reload;
 mod driver;
 mod job;
