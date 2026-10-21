@@ -218,13 +218,13 @@ export class Fixture {
   }
 
   /** Start the adapter under test with fast timing; into `pi` (default the fixture's) to run a second adapter on the same fake `cpd`. */
-  load(options: Options = {}, pi: FakePi = this.pi): void {
+  load(options: Options = {}, pi: FakePi = this.pi, adapterFn: typeof adapter = adapter): void {
     const start = options.spawn ?? spawn;
     // The caller's own `reload` object, completed: the adapter reads it at every poll, so a test can change `timeoutMs` while it runs.
     const reload = options.reload ?? {};
-    reload.dir ??= this.adapterDir;
+    if (!("dir" in reload)) reload.dir = this.adapterDir; // an explicit `dir: undefined` leaves the adapter's own default path
     reload.intervalMs ??= 20;
-    adapter(pi, {
+    adapterFn(pi, {
       ...options,
       spawn: ((...args: Parameters<typeof spawn>) => pi.track(start(...args))) as typeof spawn,
       timing: { restartInitialMs: 30, restartMaxMs: 120, requestTimeoutMs: 300, pollMs: 30, shutdownWaitMs: 200, callTimeoutMs: 10_000, ...options.timing },

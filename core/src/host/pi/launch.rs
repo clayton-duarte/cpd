@@ -156,8 +156,9 @@ fn lead_env(launch: &LeadLaunch) -> BTreeMap<String, String> {
 
 /// A Worker: contract §6.5's last two rows (a review Job's Worker forks the Lead).
 pub fn worker(launch: &WorkerLaunch) -> Launch {
-    let mut argv: Vec<String> =
-        ["pi", "--approve", "--no-skills", "--exclude-tools", WORKER_EXCLUDED_TOOLS].map(str::to_owned).into();
+    // hs-d528: tmux's server starts the pane, so the idle prefix goes in the argv.
+    let mut argv: Vec<String> = crate::host::priority::idle_prefix().iter().map(|s| (*s).to_owned()).collect();
+    argv.extend(["pi", "--approve", "--no-skills", "--exclude-tools", WORKER_EXCLUDED_TOOLS].map(str::to_owned));
     push_extensions(&mut argv, launch.extensions);
     let attempt = launch.attempt;
     let spec = launch.home.worker_spec(launch.plan, attempt);
@@ -455,14 +456,14 @@ mod tests {
         });
         assert_eq!(
             launch.argv,
-            strs(&[
+            [crate::host::priority::idle_prefix(), &[
                 "pi", "--approve", "--no-skills", "--exclude-tools",
                 "ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox",
                 "-e", "/opt/cpd/pi",
                 "--model", "github-copilot/claude-sonnet-5.5:xhigh",
                 "--session-id", ID, "-n", "cpd2 rs-host a2", "--",
                 "Read /cpd-home/run/cpd2/specs/rs-host-a2.md and follow it exactly. Your attempt id is rs-host-a2.",
-            ])
+            ]].concat().into_iter().map(str::to_owned).collect::<Vec<_>>()
         );
         assert_eq!(
             launch.env,

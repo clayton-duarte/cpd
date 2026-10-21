@@ -9,6 +9,7 @@
 //! - [`exe`]: the running executable and the reload after an install (§6.7);
 //! - [`limit`]: the test overrides of fixed limits and polls (contract §1.2, debug builds only);
 //! - [`layout`]: window names, `@cpd_*` options and the chat slot (§6.2);
+//! - [`priority`]: the idle priority prefix of an Attempt's processes (hs-d528);
 //! - [`pi`]: pi's argv and environment per role, and the `[-e …]` rule (§6.5).
 
 pub mod addr;
@@ -18,6 +19,7 @@ pub mod git_guard;
 pub mod layout;
 pub mod limit;
 pub mod pi;
+pub mod priority;
 pub mod tmux;
 
 pub use layout::{View, chat_slot, session_pane, view_pane};

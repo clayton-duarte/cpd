@@ -20,6 +20,7 @@ use crate::error::{CpdError, ErrorCode};
 use crate::events::{BasePull, NewEvent, append};
 use crate::git;
 use crate::home::CpdHome;
+use crate::inbox::model as inbox;
 use crate::host::layout::attempt_window;
 use crate::host::tmux::Tmux;
 use crate::ids::{AttemptId, JobKey, PlanId, PrKey};
@@ -210,6 +211,9 @@ fn apply(
         let polled = &listed.pr;
         let Some(change) = pulls::upsert(tx, &listed)? else { continue };
         let after = &change.after;
+        if after.state == "merged" {
+            inbox::close_pr_ready(tx, &after.repo, after.number)?;
+        }
         out.changed.push(json!({
             "repo": after.repo, "number": after.number, "state": after.state, "draft": after.draft,
             "checks": after.checks, "review_decision": after.review_decision,
@@ -368,7 +372,7 @@ fn update_for_conflict(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey, change: &C
 /// The PR `key` of the Plan is merged on GitHub (§7.6): `prs` `merged`,
 /// `pr-merged`, and, when it was the last PR, the Plan `done` with `plan-done`
 /// (§3.1). Whether the Plan became `done`.
-fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest) -> Result<bool, CpdError> {
+pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest) -> Result<bool, CpdError> {
     let moved = tx.execute(
         "UPDATE prs SET status = 'merged', merged_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE plan = ?1 AND key = ?2 AND status = 'open'",
@@ -402,7 +406,7 @@ fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::PullRequest)
 /// The unstack of the PRs with no pull request yet that were stacked on the PR `key` of `plan`, which this transaction
 /// merged (§7.6 step 6, hs-d301): every `waiting` or `dispatch` PR of any Plan whose `base` is its Lead Branch, told to
 /// its own Plan, so that engine E7 of the same tick already sees the new base.
-fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
+pub(super) fn unstack_stacked_on(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<(), CpdError> {
     let mut stmt = tx.prepare(
         "SELECT r.plan, r.key FROM prs r, prs m
           WHERE m.plan = ?1 AND m.key = ?2 AND r.repo = m.repo AND r.base = m.lead_branch AND r.status IN ('waiting', 'dispatch')
