@@ -1095,6 +1095,7 @@ CREATE TABLE contexts (
   created_at    TEXT NOT NULL,
   created_on    TEXT NOT NULL,
   archived_at   TEXT,                         -- see migration 0010 (§4.5) for the columns it dropped
+  deleted_at    TEXT,                         -- migration `context-deleted` (hs-d527): null, or the time the Context was deleted
   owner         TEXT CHECK (owner IS NULL OR length(owner) BETWEEN 1 AND 39)  -- GitHub login, the policy key (§8.3, hs-d288); NULL only for a Context created before the migration of the policy keys (§4.5), an ADD COLUMN, so last among the columns
 ) STRICT;
 
@@ -1132,6 +1133,7 @@ CREATE TABLE plans (
   locked_at     TEXT,
   done_at       TEXT,
   archived_at   TEXT,                          -- migration 3 (archive)
+  deleted_at    TEXT,                          -- migration `plan-deleted` (hs-d527): null, or the time the Plan was deleted
   outline       TEXT CHECK (outline IS NULL OR (json_valid(outline) AND json_type(outline) = 'object')),  -- migration `plan-outline` (additive, so last): the canonical JSON of the Plan's outline (§2.2); null until `plan outline`
   CHECK ((phase IN ('grounding', 'plan')) = (locked_at IS NULL)),
   CHECK ((phase = 'done') = (done_at IS NOT NULL))
@@ -1489,6 +1491,7 @@ INSERT INTO event_kinds (name) VALUES
 -- what later named migrations insert:
 INSERT INTO event_kinds (name) VALUES ('session-titled');   -- session-titles
 INSERT INTO event_kinds (name) VALUES ('plan-outlined');    -- plan-outline
+INSERT INTO event_kinds (name) VALUES ('plan-deleted'), ('context-deleted');   -- plan-deleted, context-deleted (hs-d527)
 INSERT INTO record_kinds (name) VALUES ('decision'), ('note'), ('question'), ('answer'), ('plan'), ('brief');
 INSERT INTO history_tables (name, no_delete) VALUES
   ('contexts', 1), ('context_records', 1), ('plans', 1), ('pull_requests', 0), ('prs', 1), ('pr_needs', 0),
@@ -2015,6 +2018,8 @@ Common fields on every Event: `id`, `at`, `kind`, `context`, `plan`, `job`, `att
 | `plan-archived` | `plan archive` or `unarchive`, or the cascade of the Context's, for each Plan | context, plan | `{archived: bool}` |
 | `session-archived` | `session archive` or `unarchive`, or a cascade, for each Session | context, plan?, session | `{archived: bool}` |
 | `session-asleep` | engine E13 puts to sleep a Lead or Manager Session that is finished and the User is not looking at (§3.7; hs-d515, hs-d520); appended once when it puts it to sleep | context, plan?, session | `{}`; no data fields. The Session stays live and unarchived. `text`: `Session <id> is asleep and out of view.` |
+| `plan-deleted` | `plan delete --yes` (hs-d527) deletes the Plan, its rows, worktrees and branches | context, plan | `{jobs, attempts, sessions, worktrees, disk_freed_mb}`; counts and estimated disk freed in MB. `text`: `Plan <plan> deleted: <jobs> Jobs, <attempts> Attempts, <sessions> Sessions, <worktrees> worktrees, ~<disk> MB.` |
+| `context-deleted` | `context delete --yes` (hs-d527) deletes the Context, its Plans and Manager | context | `{plans, jobs, attempts, sessions, worktrees, disk_freed_mb}`; counts. `text`: `Context <context> deleted: <plans> Plans, <jobs> Jobs, <attempts> Attempts, <sessions> Sessions, <worktrees> worktrees, ~<disk> MB.` |
 | `session-message` | `session send` (commands.md §10.13): one message to a Lead or a Manager; also the engine's report of a step's failure and of a stuck Job, to the Manager (§3.7, hs-d314, hs-d318; `from` null, `wake` false) (engine E4's escalation of an unopened PR to the Manager, hs-d334, is retired by hs-d340) | context, plan?, session = the target | `{from, text, wake}`; `from` is the sender Session's id or null (the User); `wake` is a boolean, true only for `session send --wake` (hs-d209). |
 | `inbox-opened` | E8 inserts an Inbox item (§3.7) | context?, plan?, job?, session? | `{item, kind, urgency, label}` |
 | `inbox-closed` | E8 closes an Inbox item | context?, plan?, job?, session? | `{item, kind}` |
