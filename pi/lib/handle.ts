@@ -5,6 +5,7 @@ import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
 import { checkProtocol } from "./protocol.ts";
 import { decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
+import { noteRetier } from "./retier.ts";
 import type { Run } from "./run.ts";
 
 // The follower's lines (§15.2, §15.3).
@@ -68,6 +69,10 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
   const own = ev.session === r.id;
   if (ev.kind === "session-message") {
     if (own && (r.info.role === "lead" || r.info.role === "manager")) await deliverSessionMessage(host, r, ev);
+    return;
+  }
+  if (ev.kind === "session-retiered") {
+    if (own && (r.info.role === "lead" || r.info.role === "manager")) await noteRetier(host, r);
     return;
   }
   if (ev.kind === "session-renamed") {

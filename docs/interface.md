@@ -77,6 +77,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session archive` | Archive a Lead Session (§10.10) | | yes |
 | `cpd session unarchive` | Unarchive a Lead Session (§10.11) | | yes |
 | `cpd session send` | Send a message to a Lead (§10.13) | Lead, Manager | |
+| `cpd session retier` | Move live Leads and Managers to the Tier the config names now (§10.15) | Manager | |
 | `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
 | `cpd session state` | Report a Session's agent state (pi adapter) (§10.6) | internal | |
 | `cpd session retitle` | Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14) | internal | |

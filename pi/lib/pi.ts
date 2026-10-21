@@ -7,12 +7,15 @@ export type Ctx = Pick<ExtensionContext, "mode" | "isIdle" | "hasPendingMessages
   sessionManager: Pick<ExtensionContext["sessionManager"], "getSessionId" | "getEntries">;
 };
 
+/** The context handed to `session_start`: `Ctx` and pi's model registry, which the model switch reads (commands.md §15.3 `session-retiered`). */
+export type ModelCtx = Ctx & Pick<ExtensionContext, "modelRegistry">;
+
 /** The context of an extension command: the only one with `reload()`. It is stale once `reload()` has resolved. */
 export type CommandCtx = Ctx & Pick<ExtensionCommandContext, "reload">;
 
 export type PiApi = Pick<
   ExtensionAPI,
-  "on" | "events" | "exec" | "sendMessage" | "appendEntry" | "setSessionName" | "getSessionName" | "registerMessageRenderer" | "registerTool" | "registerCommand" | "sendUserMessage"
+  "on" | "events" | "exec" | "sendMessage" | "appendEntry" | "setSessionName" | "getSessionName" | "registerMessageRenderer" | "registerTool" | "registerCommand" | "sendUserMessage" | "setModel" | "setThinkingLevel"
 >;
 
 export type Exec = PiApi["exec"];
