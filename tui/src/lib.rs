@@ -145,9 +145,9 @@ pub enum View {
     Chat,
 }
 
-pub fn run(args: Args, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+pub fn run(args: Args, version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
     match args.command {
-        None => cockpit::run(args.attach, args.respawn, run_command, restart),
+        None => cockpit::run(args.attach, args.respawn, version, run_command, restart),
         Some(Command::View(view)) => backed_off(match view {
             View::Tree => tree::run(),
             View::Plan => plan::run(run_command),
@@ -181,8 +181,8 @@ fn backed_off(result: Result<Output, CpdError>) -> Result<Output, CpdError> {
 }
 
 /// `cpd` with no arguments, in a terminal (commands.md §13.3): the follow-ups of an update, then attach.
-pub fn bare(run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
-    cockpit::bare(run_command, restart)
+pub fn bare(version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+    cockpit::bare(version, run_command, restart)
 }
 
 /// `not_a_terminal`: a command that owns its terminal was not given one.

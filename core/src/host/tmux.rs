@@ -197,9 +197,11 @@ macro_rules! preview_width { () => { "#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview}
 // the closing `─`'s cell, the left group's 12 and a fill of at least 1 (14 in all), and the preview.
 macro_rules! long_fits {
     () => {
-        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},14},", preview_width!(), "}}")
+        concat!("#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},", preview_width!(), "},", version_width!(), "}}")
     };
 }
+// The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
+macro_rules! version_width { () => { "#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}" }; }
 // A join: one grey `─`, outside the click ranges.
 macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 
@@ -225,6 +227,10 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// `preview: `). Styles inside a conditional are one attribute per `#[…]`, because a
 /// comma there would split the branch.
 ///
+/// While `@cpd_version` is set (`cpd tui` sets it to `cpd --version`'s `version`), a third
+/// right-hand pill, the version in dim text, follows the workers pill, joined by a single
+/// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
+///
 /// `push-default` makes `bg=colour236` the pill's default, so that the `#[default]`
 /// the engine's texts end their coloured parts with does not end the pill.
 pub const STATUS_FORMAT: &str = concat!(
@@ -235,7 +241,7 @@ pub const STATUS_FORMAT: &str = concat!(
     join!(),
     "#[range=user|logs]#[fg=colour8]\u{e0b6}#[reverse]", logs_glyph!(), "#[noreverse]\u{e0b4}#[default]#[norange]",
     "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]\u{e0b6}#[reverse]preview: #{@cpd_preview}#[noreverse]\u{e0b4}#[default],}",
-    "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},",
+    "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},",
     "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}",
     "#[default]#[align=right]",
     "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]#{@cpd_inbox}#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]",
@@ -243,6 +249,7 @@ pub const STATUS_FORMAT: &str = concat!(
     "#[fg=colour236]\u{e0b6}#[fg=default,bg=colour236]#[push-default]",
     "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}",
     "#[pop-default]#[fg=colour236,bg=default]\u{e0b4}#[default]",
+    "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour236]\u{e0b6}#[fg=colour8]#[bg=colour236]#{@cpd_version}#[fg=colour236]#[bg=default]\u{e0b4}#[default],}",
     join!()
 );
 
@@ -567,8 +574,9 @@ impl Tmux {
 
     /// Sets [`STATUS_OPTIONS`] on session `session` (`set -t =<session>:`;
     /// `set` resolves its target as a pane, so a bare `=<session>` is refused):
-    /// the StatusBar, on that session only. Rerunning is safe.
-    pub fn apply_status_line(&self, session: &str) -> Result<(), CpdError> {
+    /// the StatusBar, on that session only, and the global `@cpd_version` the version pill shows. Rerunning is safe.
+    pub fn apply_status_line(&self, session: &str, version: &str) -> Result<(), CpdError> {
+        self.run(&strings(&["set", "-g", "@cpd_version", version]))?;
         for (option, value) in STATUS_OPTIONS {
             self.run(&strings(&["set", "-t", &format!("={session}:"), option, value]))?;
         }
@@ -964,6 +972,33 @@ fn strings(args: &[&str]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The version pill (§6.1): last on the right, after the workers pill, one `─` join, then the closing `─`, only while `@cpd_version` is set.
+    #[test]
+    fn the_version_pill_is_last_on_the_right_and_only_while_the_option_is_set() {
+        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour236]\u{e0b6}";
+        let at = STATUS_FORMAT.find(pill).unwrap_or_else(|| panic!("no version pill in {STATUS_FORMAT}"));
+        let workers = STATUS_FORMAT.rfind("#{@cpd_workers_short}}").expect("the workers pill");
+        assert!(at > workers, "the version pill follows the workers pill: {STATUS_FORMAT}");
+        let tail = &STATUS_FORMAT[at..];
+        assert!(tail.contains("#{@cpd_version}"), "{tail}");
+        assert!(tail.contains("fg=colour8") && tail.contains("bg=colour236") && tail.contains("\u{e0b4}"), "{tail}");
+        assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
+        assert_eq!(STATUS_FORMAT.matches("bg=colour236]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
+    }
+
+    /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.
+    #[test]
+    fn the_fill_and_long_fits_subtract_the_version_pills_width() {
+        let width = "#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}";
+        let long_fits = STATUS_FORMAT.matches("#{?#{e|>=:#{client_width}").count();
+        assert_eq!(STATUS_FORMAT.matches(width).count(), long_fits + 1, "the fill and each long_fits: {STATUS_FORMAT}");
+        let fill = STATUS_FORMAT.find("#{R:").unwrap();
+        let fill_end = STATUS_FORMAT[fill..].find("#[default]#[align=right]").unwrap() + fill;
+        assert!(STATUS_FORMAT[fill..fill_end].contains(width), "the fill: {}", &STATUS_FORMAT[fill..fill_end]);
+        let fits = STATUS_FORMAT.find("#{?#{e|>=:#{client_width}").unwrap();
+        assert!(STATUS_FORMAT[fits..fits + 200].contains(width), "long_fits: {}", &STATUS_FORMAT[fits..]);
+    }
 
     #[test]
     fn a_split_is_placed_by_its_flags() {

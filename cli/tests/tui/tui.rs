@@ -136,7 +136,7 @@ fn assert_status_line(env: &TestEnv) {
         "#[range=user|logs]",
         "#[align=right]",
         "#{@cpd_inbox}",
-        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
         "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=yellow]",
         "#{R:\u{2500},",
     ] {
@@ -314,6 +314,15 @@ fn assert_window_title(env: &TestEnv) {
     assert_eq!(tmux_out(env, &["show", "-gv", "@cpd_machine"]).trim_end_matches('\n'), "m1");
     let format = tmux_out(env, &["show", "-gv", "set-titles-string"]);
     assert_eq!(tmux_out(env, &["display", "-p", format.trim_end_matches('\n')]).trim_end_matches('\n'), "cpd · m1");
+}
+
+/// After `cpd tui`: the global `@cpd_version` is the `version` of `cpd --version` (§6.1, hs-d299).
+#[test]
+fn tui_sets_cpd_version_to_the_binarys_version() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let want = env.cpd(&["--version"]).ok()["version"].as_str().unwrap().to_owned();
+    assert_eq!(tmux_out(&env, &["show", "-gv", "@cpd_version"]).trim_end_matches('\n'), want);
 }
 
 #[test]
@@ -1000,6 +1009,8 @@ fn env_with_workers() -> (TestEnv, Flock<File>) {
     tmux_out(&env, &["new-session", "-d", "-s", "cpd", "-n", "park-pay", "-x", "215", "-y", "62", "sleep", "3600"]);
     let tui = env.cpd(&["tui"]).ok();
     assert_eq!(tui["watch"], json!({"started": false, "already": true}), "{tui}");
+    // These tests pin the line without the version pill (its own tests set it): `tui` set it, so unset it.
+    tmux_out(&env, &["set", "-gu", "@cpd_version"]);
     for (option, value) in [
         ("@cpd_inbox", "#[fg=red]inbox 2#[default]"),
         ("@cpd_workers", "#[dim]workers #[nodim,fg=green]6#[default,dim]/6 · #[nodim,fg=yellow]4#[default,dim] waiting · 9 queued#[default]"),
