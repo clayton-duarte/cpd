@@ -137,10 +137,10 @@ impl NewEvent {
         make(Kind::JobEdited, text, json!({"fields": fields}))
     }
 
-    /// `cancel_too_late` is in `data` only when true. `pull` is the pull request an `open` Job's merge opened, `(pr, number, url)`: its
+    /// `turn` is whether the Lead should take a turn (hs-d514). `cancel_too_late` is in `data` only when true. `pull` is the pull request an `open` Job's merge opened, `(pr, number, url)`: its
     /// `pr`, `number` and `url` are in `data` only then (§5.2).
-    pub fn job_merged(text: impl Into<String>, sha: &str, tier: &str, kind: &str, cancel_too_late: bool, pull: Option<(&str, i64, &str)>) -> NewEvent {
-        let mut data = json!({"sha": sha, "tier": tier, "kind": kind});
+    pub fn job_merged(text: impl Into<String>, sha: &str, tier: &str, kind: &str, turn: bool, cancel_too_late: bool, pull: Option<(&str, i64, &str)>) -> NewEvent {
+        let mut data = json!({"sha": sha, "tier": tier, "kind": kind, "turn": turn});
         if cancel_too_late {
             data["cancel_too_late"] = json!(true);
         }
@@ -379,6 +379,11 @@ impl NewEvent {
         make(Kind::SessionMessage, text, json!({"from": from, "text": message, "wake": wake}))
     }
 
+    /// A `session-message` of `cpd session send`: it always wakes, so it carries `unblocks` and no `wake` (hs-d514).
+    pub fn session_message_unblocking(text: impl Into<String>, from: impl Serialize, message: &str, unblocks: &str) -> NewEvent {
+        make(Kind::SessionMessage, text, json!({"from": from, "text": message, "unblocks": unblocks}))
+    }
+
     pub fn inbox_opened(text: impl Into<String>, item: i64, kind: &str, urgency: &str, label: &str) -> NewEvent {
         make(Kind::InboxOpened, text, json!({"item": item, "kind": kind, "urgency": urgency, "label": label}))
     }
@@ -444,7 +449,7 @@ mod tests {
                 NewEvent::job_added_by_cpd(T, s, s, s, s, Some(s)),
             ],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
-            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, None), NewEvent::job_merged(T, s, s, s, true, Some((s, n, s)))],
+            Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, false, None), NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s)))],
             Kind::JobFailed => vec![NewEvent::job_failed(T, s, s, s, n)],
             Kind::JobRetried => vec![NewEvent::job_retried(T, s)],
             Kind::JobCancelRequested => vec![NewEvent::job_cancel_requested(T, s)],
@@ -486,7 +491,7 @@ mod tests {
             Kind::ContextArchived => vec![NewEvent::context_archived(T, b)],
             Kind::PlanArchived => vec![NewEvent::plan_archived(T, b)],
             Kind::SessionArchived => vec![NewEvent::session_archived(T, b)],
-            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b)],
+            Kind::SessionMessage => vec![NewEvent::session_message(T, s, s, b), NewEvent::session_message_unblocking(T, s, s, s)],
             Kind::InboxOpened => vec![NewEvent::inbox_opened(T, 1, s, s, s)],
             Kind::InboxClosed => vec![NewEvent::inbox_closed(T, 1, s)],
             Kind::InboxSnoozed => vec![NewEvent::inbox_snoozed(T, 1, s)],

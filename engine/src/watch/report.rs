@@ -160,7 +160,7 @@ fn untold(conn: &Connection, stuck: &StuckJob) -> Result<bool, CpdError> {
     Ok(!sent)
 }
 
-/// Tells the live Manager of `stuck`'s Context, by the path of a step's failure (one message from the User's side, no wake,
+/// Tells the live Manager of `stuck`'s Context, by the path of a step's failure (one waking message from the User's side,
 /// [`tell_managers`]), once until the Job leaves `failed` (contract §3.7 "A stuck Job", hs-d318): the record that it was
 /// told is the message itself ([`untold`]), so a later tick or a restarted engine sends nothing. With no live Manager
 /// nothing is sent and nothing is written (the next tick looks again). Returns whether a message was sent.
@@ -212,16 +212,8 @@ impl Report {
             failure.message,
             about.see()
         );
-        // The Manager hears it in the same transaction, once per `error` Event (hs-d314): the Inbox shows no engine error.
-        let to_managers = format!(
-            "Engine error at {step} for {}: {}. It tries again at every tick. See: cpd events list --kind error",
-            about.describe(),
-            failure.message.trim_end_matches('.')
-        );
         let appended = store.write(SOURCE, |tx| {
-            let event = events::append(tx, about.event(text.clone(), &failure))?;
-            tell_managers(tx, event, &to_managers)?;
-            Ok(event)
+            events::append(tx, about.event(text.clone(), &failure))
         });
         match appended {
             Ok(event) => {
@@ -368,9 +360,9 @@ mod tests {
             .unwrap()
     }
 
-    /// hs-d314: a step's error reaches the Manager of its Context as one message from the User, no wake, once while it stays.
+    /// hs-d514: an engine error is an Event only, sent to no Manager.
     #[test]
-    fn a_step_error_is_sent_once_to_the_manager_of_its_context() {
+    fn a_step_error_is_an_event_and_sends_no_message() {
         let dir = tempfile::tempdir().unwrap();
         let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
         let mut log = Log::open(&home).unwrap();
@@ -378,57 +370,11 @@ mod tests {
         managers(&mut store, false);
         let mut report = Report::new(Duration::from_secs(600));
         let about = About::Plan(PlanId::parse("plan-a").unwrap());
-
         for _ in 0..3 {
             report.fail(&mut store, &mut log, Step::E3, about.clone(), failure("store_failed"));
         }
-        assert_eq!(errors(&mut store), 1);
-        let sent = messages(&mut store);
-        assert_eq!(
-            sent,
-            [(
-                "mgr-a".to_owned(),
-                None,
-                false,
-                "Engine error at E3 (scheduling) for Plan plan-a: It failed. It tries again at every tick. See: cpd events list --kind error"
-                    .to_owned()
-            )]
-        );
-
-        // Cleared and failing again within the repeat period: no new `error` Event, so no new message.
-        report.clear(Step::E3, &about);
-        report.fail(&mut store, &mut log, Step::E3, about.clone(), failure("store_failed"));
-        assert_eq!(messages(&mut store).len(), 1);
-
-        // Another Context's Plan reaches that Context's Manager only; the Context `c` has none.
-        report.fail(&mut store, &mut log, Step::E3, About::Plan(PlanId::parse("plan-c").unwrap()), failure("store_failed"));
-        assert_eq!(messages(&mut store).len(), 1, "a Context with no Manager: nothing is sent");
-        assert_eq!(errors(&mut store), 2, "the log keeps it");
-    }
-
-    #[test]
-    fn a_machine_error_reaches_every_live_manager_and_an_archived_one_gets_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        let mut log = Log::open(&home).unwrap();
-        let mut store = Store::open(&home, 5000).unwrap();
-        managers(&mut store, false);
-        let mut report = Report::new(Duration::from_secs(600));
-
         report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
-        report.fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
-        let sent = messages(&mut store);
-        assert_eq!(sent.iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-a", "mgr-b"]);
-        assert!(sent.iter().all(|m| m.1.is_none() && !m.2 && m.3.starts_with("Engine error at E2 (liveness) for the machine: It failed.")));
-
-        // An archived Manager is not live.
-        let dir = tempfile::tempdir().unwrap();
-        let home = CpdHome::resolve(Some(dir.path().into()), None).unwrap();
-        let mut log = Log::open(&home).unwrap();
-        let mut store = Store::open(&home, 5000).unwrap();
-        managers(&mut store, true);
-        Report::new(Duration::from_secs(600)).fail(&mut store, &mut log, Step::E2, About::Machine, failure("tmux_failed"));
-        assert_eq!(messages(&mut store).iter().map(|m| m.0.as_str()).collect::<Vec<_>>(), ["mgr-a"]);
+        assert_eq!((errors(&mut store), messages(&mut store).len()), (2, 0));
     }
 
     #[test]
@@ -498,7 +444,7 @@ mod tests {
         let failed = job_failed(&mut store, "ctx-a", "plan-a", "a");
 
         assert!(tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", failed, 12)).unwrap());
-        assert_eq!(messages(&mut store), [("mgr-a".to_owned(), None, false, text_of("plan-a", "a", 12))]);
+        assert_eq!(messages(&mut store), [("mgr-a".to_owned(), None, true, text_of("plan-a", "a", 12))]);
         for minutes in [12, 13, 600] {
             assert!(!tell_stuck_job(&mut store, &stuck("ctx-a", "plan-a", "a", failed, minutes)).unwrap(), "{minutes} min");
         }

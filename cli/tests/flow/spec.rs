@@ -215,7 +215,7 @@ Your worktree is `/w/pay--api-schema-a1`. Your current directory is that worktre
 
 ## Rules
 
-- Work only in this worktree, and touch only the files listed under "Files you may touch".
+- Work only in this worktree, and touch the files listed under "Files you may touch". You may change another file only when a test named in your acceptance cannot pass without it (a migration only this Job creates, a helper script the test uses, a stub of a new module): list each such file and why in your commit message, instead of asking the Lead. Never a guarded or protected path.
 - Commit your work. Uncommitted changes are refused at submit.
 - Before submitting, run the quick check yourself, from this worktree. It is the `pre-commit` hook of `.config/wt.toml`; its commands, verbatim:
 
@@ -293,7 +293,7 @@ Your worktree is `/w/pay--api-schema-a3`. Your current directory is that worktre
 
 ## Rules
 
-- Work only in this worktree, and touch only the files listed under "Files you may touch".
+- Work only in this worktree, and touch the files listed under "Files you may touch". You may change another file only when a test named in your acceptance cannot pass without it (a migration only this Job creates, a helper script the test uses, a stub of a new module): list each such file and why in your commit message, instead of asking the Lead. Never a guarded or protected path.
 - Commit your work. Uncommitted changes are refused at submit.
 - Before submitting, run the quick check yourself. This repo defines no quick check.
 - Never edit the protected paths. A diff that touches one is refused. They are:

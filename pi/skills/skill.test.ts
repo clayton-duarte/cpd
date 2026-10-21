@@ -151,10 +151,10 @@ test("cpd-manager starts Plans with a brief, messages Leads and never answers fo
   const text = skillFiles("cpd-manager")[0]!.text;
   assert.match(text, /Never answer for the User/);
   assert.match(text, /never moves the chat slot/);
-  assert.match(text, /--wake/);
+  assert.match(text, /--unblocks/);
   const keep = text.split("\n").find((l) => l.startsWith("- **Keep the work moving.**"));
   assert.ok(keep, "the keep-moving rule exists");
-  assert.match(keep, /cpd session send --wake/);
+  assert.ok(keep.includes("--unblocks"));
 });
 
 test("cpd-manager may create Leads and open sessions, and states its focus", () => {

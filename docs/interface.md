@@ -51,6 +51,10 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd attempt run` | The Attempt driver (internal) (§6.4) | internal | |
 | `cpd ask` | Ask the Lead a question and wait for the answer (Worker) (commands.md §8.1) | Worker | |
 | `cpd answer` | Answer a Worker's Escalation (Lead) (commands.md §8.2) | Lead | |
+| `cpd board` | The message board (commands.md §10a) | | |
+| `cpd board post` | Post a message to a Session (it never starts a turn) | Lead, Manager | |
+| `cpd board list` | List the posts to a Session | Lead, Manager | |
+| `cpd board take` | Return and mark as read the unread posts to a Session (internal) | internal | |
 | `cpd pr` | Pull requests (commands.md §9) | | |
 | `cpd pr add` | Add a PR to the Plan (§9.4) | Lead | |
 | `cpd pr edit` | Change a waiting PR before the lock (§9.5) | Lead | |

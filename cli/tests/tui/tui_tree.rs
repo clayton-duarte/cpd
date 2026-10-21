@@ -1850,6 +1850,31 @@ fn a_stopped_engine_is_not_restarted_by_the_tree_and_no_note_says_so_and_no_engi
     assert!(!screen.iter().any(|r| r.contains("engine was down") || r.contains("engine is down")), "{screen:?}");
 }
 
+/// hs-d514: the engine down past its supervisor goes as a message that wakes **one** Manager, the most recently active
+/// (the newest `state_at`), not one per Manager. The 60 s of the tree's rule are waited out: no override exists.
+#[test]
+fn engine_down_wakes_only_the_most_recently_active_manager() {
+    let env = env_without_engine();
+    populate(&env);
+    sql(
+        &mut open(&env),
+        "UPDATE sessions SET state_at = '2026-01-05T00:00:00.000Z' WHERE id = 'm-beta';
+         UPDATE sessions SET state_at = '2026-01-04T00:00:00.000Z' WHERE id = 'm-alpha';",
+    );
+    fake_cpd(&env, r#"{"ok":true}"#);
+    let pane = Pane::start(&env, 46, 20);
+    pane.ready();
+    // time-claim: the engine-down message is sent after 60 s of a free engine lock; no signal from the view says it is due.
+    std::thread::sleep(std::time::Duration::from_secs(66));
+    wait_for_calls(&env, 1);
+    pane.settled();
+    let sent: Vec<_> = calls(&env).into_iter().filter(|c| c.starts_with(&words(&["session", "send"]))).collect();
+    assert_eq!(sent.len(), 1, "one message, to one Manager: {sent:?}");
+    assert_eq!(sent[0][2], "m-beta", "the most recently active Manager: {sent:?}");
+    assert!(sent[0].iter().any(|a| a == "--unblocks"), "a message to a Manager says what it unblocks: {sent:?}");
+    assert!(!sent[0].iter().any(|a| a == "--wake"), "send always wakes, with no flag: {sent:?}");
+}
+
 /// An Attempt of Job `job` of `ship`, ended failed with `cause` (`Some`), or running.
 fn attempt_row(job: &str, number: u32, ended: Option<&str>) -> String {
     let (status, outcome, ended_at) = match ended {

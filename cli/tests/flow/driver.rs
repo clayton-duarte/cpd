@@ -354,6 +354,94 @@ fn a_dispatched_attempt_runs_its_worker_merges_and_ends_merged() {
     assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("attempt-")), "{left:?}");
 }
 
+// ---------- job-merged's data.turn (contract §5.2, hs-d514) ----------
+
+impl Fx {
+    /// A `draft` Job `key` in PR `pr` of Plan `pay`.
+    fn add_draft(&self, pr: &str, key: &str) {
+        self.fixture(&format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, created_txn, created_at)
+             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 0, cpd_txn(), 't');"
+        ));
+    }
+
+    /// `data` of the one `job-merged` Event of Job `key`.
+    fn merged_data(&self, key: &str) -> Value {
+        let all: Vec<Value> = self
+            .store()
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT data FROM events WHERE plan = 'pay' AND job = ?1 AND kind = 'job-merged'")?;
+                let rows = stmt.query_map([key], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows.iter().map(|d| serde_json::from_str(d).unwrap()).collect())
+            })
+            .unwrap();
+        assert_eq!(all.len(), 1, "one job-merged for {key}: {all:?}");
+        all[0].clone()
+    }
+}
+
+#[test]
+fn job_merged_turns_when_the_plan_has_drafts_and_nothing_queued_or_running() {
+    let fx = fx();
+    fx.pi(WORKER);
+    fx.add_draft("repo", "later");
+    let attempt = run_job(&fx, JOB);
+    assert_eq!(attempt["outcome"], "merged", "{attempt}");
+    assert_eq!(fx.merged_data(JOB)["turn"], json!(true), "{}", fx.merged_data(JOB));
+}
+
+#[test]
+fn job_merged_does_not_turn_while_other_jobs_run() {
+    let fx = fx();
+    fx.pi(WORKER);
+    fx.add_draft("repo", "later");
+    fx.add_job("web", &[]); // queued: the Plan still has work in flight
+    let attempt = run_job(&fx, JOB);
+    assert_eq!(attempt["outcome"], "merged", "{attempt}");
+    assert_eq!(fx.merged_data(JOB)["turn"], json!(false), "{}", fx.merged_data(JOB));
+}
+
+#[test]
+fn a_merged_review_job_turns() {
+    let fx = fx();
+    // A review Job's Worker is a fork of the Lead: it waits for the Lead's session file to show a finished turn.
+    let file = fx.env.home().join(".pi/agent/sessions/lead/2026_lead1.jsonl");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "{\"type\":\"session\"}\n{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"stopReason\":\"stop\"}}\n").unwrap();
+    File::options().write(true).open(&file).unwrap().set_modified(std::time::SystemTime::UNIX_EPOCH).unwrap();
+    fx.fixture(&format!(
+        "UPDATE sessions SET file = '{}' WHERE id = 'lead1';
+         INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, review, created_txn, created_at)
+         VALUES ('pay', 'repo', 'final', 'Title of final', 'S2', 'Review it.', 'Because.', '[\"run/pay/reviews/final.md\"]', '[\"findings written\"]', '[]', 'draft', 1, 1, cpd_txn(), 't');",
+        file.display()
+    ));
+    let plan = PlanId::parse(PLAN).unwrap();
+    let all = fx.store().read(|conn| jobs::load(conn, &plan)).unwrap();
+    let job = all.iter().find(|j| j.key == "final").unwrap();
+    fx.fixture(&format!("UPDATE jobs SET status = 'queued', fingerprint = '{}' WHERE plan = 'pay' AND key = 'final';", locked_fingerprint(job)));
+    fx.pi(
+        r#"mkdir -p "$CPD_HOME/run/pay/reviews"
+echo "- one finding" > "$CPD_HOME/run/pay/reviews/final.md"
+"$CPD" attempt submit "$CPD_ATTEMPT" > ../submit-$CPD_ATTEMPT.json 2>&1 || exit 4
+sleep 120"#,
+    );
+    let attempt = run_job(&fx, "final");
+    assert_eq!(attempt["outcome"], "merged", "{attempt}");
+    // No draft Job exists and `api` is queued: only the review makes it a turn.
+    assert_eq!(fx.merged_data("final")["turn"], json!(true), "{}", fx.merged_data("final"));
+}
+
+#[test]
+fn a_merged_open_job_does_not_turn() {
+    let (fx, _origin) = open_fx();
+    fx.pi(SUBMIT_ONLY);
+    fx.add_pr("other");
+    fx.add_draft("other", "later"); // a draft elsewhere in the Plan, nothing queued: a Job's merge would turn
+    let attempt = run_job(&fx, "open-repo");
+    assert_eq!((&attempt["outcome"], &attempt["cause"]), (&json!("merged"), &json!("merged")), "{attempt}");
+    assert_eq!(fx.merged_data("open-repo")["turn"], json!(false), "{}", fx.merged_data("open-repo"));
+}
+
 /// Puts a `git` first on the env's `PATH` that runs the real git, except that a merge's
 /// compare-and-swap (`update-ref -m "cpd: merge …"`) waits until `release` exists (at most
 /// 60 s). There is no per-repo lock to hold any more (hs-d243), so a test that must see the

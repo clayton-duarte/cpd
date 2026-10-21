@@ -15,7 +15,7 @@ fn store(env: &TestEnv) -> Store {
     Store::open(&home, 5000).unwrap()
 }
 
-fn exec_sql(env: &TestEnv, sql: &str) {
+pub(crate) fn exec_sql(env: &TestEnv, sql: &str) {
     store(env)
         .write("fixture", |tx| {
             tx.execute_batch(sql)?;
@@ -26,7 +26,7 @@ fn exec_sql(env: &TestEnv, sql: &str) {
 
 /// Context `ctx`; Plans `pay` (Lead `lead1`, idle, with a side fork `fork1`) and
 /// `other` (Lead `lead2`, stopped); Worker `worker1` of `pay`.
-fn setup(env: &TestEnv) {
+pub(crate) fn setup(env: &TestEnv) {
     fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"m1\"\nlead_pi_packages = []\n").unwrap();
     let fp = "a".repeat(64);
     let mut store = store(env);
@@ -57,7 +57,7 @@ fn setup(env: &TestEnv) {
         .unwrap();
 }
 
-fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
+pub(crate) fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
     let mut cmd = env.command(CPD);
     for (k, v) in vars {
         cmd.env(k, v);
@@ -70,7 +70,7 @@ fn cpd_with(env: &TestEnv, vars: &[(&str, &str)], args: &[&str]) -> Run {
     }
 }
 
-fn messages(env: &TestEnv) -> Vec<Value> {
+pub(crate) fn messages(env: &TestEnv) -> Vec<Value> {
     env.cpd(&["events", "list", "--kind", "session-message"]).ok()["events"].as_array().unwrap().clone()
 }
 
@@ -84,44 +84,32 @@ fn follow(env: &TestEnv, session: &str) -> Vec<Value> {
 fn a_send_appends_one_session_message_from_cpd_session() {
     let env = TestEnv::new();
     setup(&env);
-    let out = cpd_with(&env, &[("CPD_SESSION", "lead2")], &["session", "send", "lead1", "hi there"]).ok();
+    let out = cpd_with(&env, &[("CPD_SESSION", "lead2")], &["session", "send", "lead1", "hi there", "--unblocks", "u"]).ok();
     let events = messages(&env);
     assert_eq!(events.len(), 1);
     let event = &events[0];
-    assert_eq!(out, json!({"ok": true, "event": event["id"], "session": "lead1", "from": "lead2", "wake": false}));
+    assert_eq!(out, json!({"ok": true, "event": event["id"], "session": "lead1", "from": "lead2", "unblocks": "u"}));
     assert_eq!(event["kind"], "session-message");
     assert_eq!((&event["session"], &event["context"], &event["plan"]), (&json!("lead1"), &json!("ctx"), &json!("pay")));
     assert_eq!((&event["job"], &event["attempt"]), (&Value::Null, &Value::Null));
-    assert_eq!(event["data"], json!({"from": "lead2", "text": "hi there", "wake": false}));
-    assert_eq!(event["text"], "Message for Lead one from Lead two (lead2): hi there");
-}
-
-#[test]
-fn wake_is_false_by_default_and_true_with_the_flag() {
-    let env = TestEnv::new();
-    setup(&env);
-    let quiet = env.cpd(&["session", "send", "lead1", "x"]).ok();
-    let woken = env.cpd(&["session", "send", "lead1", "y", "--wake"]).ok();
-    assert_eq!((&quiet["wake"], &woken["wake"]), (&json!(false), &json!(true)));
-    let events = messages(&env);
-    assert_eq!(events.len(), 2);
-    assert_eq!((&events[0]["data"]["wake"], &events[1]["data"]["wake"]), (&json!(false), &json!(true)));
+    assert_eq!(event["data"], json!({"from": "lead2", "text": "hi there", "unblocks": "u"}));
+    assert!(event["text"].as_str().unwrap().contains("(unblocks: u)"), "{event}");
 }
 
 #[test]
 fn from_is_pi_session_id_when_cpd_session_is_unset_and_null_for_the_user() {
     let env = TestEnv::new();
     setup(&env);
-    let pi = cpd_with(&env, &[("PI_SESSION_ID", "worker1")], &["session", "send", "lead1", "from pi"]).ok();
+    let pi = cpd_with(&env, &[("PI_SESSION_ID", "worker1")], &["session", "send", "lead1", "from pi", "--unblocks", "u"]).ok();
     assert_eq!(pi["from"], "worker1");
-    let both = cpd_with(&env, &[("CPD_SESSION", "lead2"), ("PI_SESSION_ID", "worker1")], &["session", "send", "lead1", "both"]).ok();
+    let both = cpd_with(&env, &[("CPD_SESSION", "lead2"), ("PI_SESSION_ID", "worker1")], &["session", "send", "lead1", "both", "--unblocks", "u"]).ok();
     assert_eq!(both["from"], "lead2");
-    let user = env.cpd(&["session", "send", "lead1", "from the user"]).ok();
+    let user = env.cpd(&["session", "send", "lead1", "from the user", "--unblocks", "u"]).ok();
     assert_eq!(user["from"], Value::Null);
     let events = messages(&env);
     assert_eq!(events.len(), 3);
-    assert_eq!(events[2]["data"], json!({"from": null, "text": "from the user", "wake": false}));
-    assert_eq!(events[2]["text"], "Message for Lead one from the User: from the user");
+    assert_eq!(events[2]["data"], json!({"from": null, "text": "from the user", "unblocks": "u"}));
+    assert!(events[2]["text"].as_str().unwrap().contains("(unblocks: u)"), "{}", events[2]);
 }
 
 #[test]
@@ -129,9 +117,10 @@ fn the_event_text_quotes_the_first_60_characters() {
     let env = TestEnv::new();
     setup(&env);
     let message = format!("{}{}", "é".repeat(60), "tail");
-    env.cpd(&["session", "send", "lead1", &message]).ok();
+    env.cpd(&["session", "send", "lead1", &message, "--unblocks", "u"]).ok();
     let event = &messages(&env)[0];
-    assert_eq!(event["text"], format!("Message for Lead one from the User: {}", "é".repeat(60)));
+    assert!(event["text"].as_str().unwrap().contains(&"é".repeat(60)), "{event}");
+    assert!(!event["text"].as_str().unwrap().contains("tail"), "{event}");
     assert_eq!(event["data"]["text"], message);
 }
 
@@ -141,7 +130,7 @@ fn a_message_can_come_from_a_file_as_written() {
     setup(&env);
     let path = env.root().join("message.md");
     fs::write(&path, "line one\nline two\n").unwrap();
-    let out = env.cpd(&["session", "send", "lead1", "--file", path.to_str().unwrap()]).ok();
+    let out = env.cpd(&["session", "send", "lead1", "--file", path.to_str().unwrap(), "--unblocks", "u"]).ok();
     assert_eq!(out["session"], "lead1");
     assert_eq!(messages(&env)[0]["data"]["text"], "line one\nline two\n");
 }
@@ -150,8 +139,8 @@ fn a_message_can_come_from_a_file_as_written() {
 fn each_call_is_one_more_message() {
     let env = TestEnv::new();
     setup(&env);
-    let a = env.cpd(&["session", "send", "lead1", "same"]).ok();
-    let b = env.cpd(&["session", "send", "lead1", "same"]).ok();
+    let a = env.cpd(&["session", "send", "lead1", "same", "--unblocks", "u"]).ok();
+    let b = env.cpd(&["session", "send", "lead1", "same", "--unblocks", "u"]).ok();
     assert_ne!(a["event"], b["event"]);
     assert_eq!(messages(&env).len(), 2);
 }
@@ -161,7 +150,7 @@ fn every_kind_of_lead_is_accepted_a_stopped_one_too() {
     let env = TestEnv::new();
     setup(&env);
     for lead in ["lead1", "lead2", "fork1"] {
-        let out = env.cpd(&["session", "send", lead, "hello"]).ok();
+        let out = env.cpd(&["session", "send", lead, "hello", "--unblocks", "u"]).ok();
         assert_eq!(out["session"], lead);
     }
     let events = messages(&env);
@@ -178,14 +167,14 @@ fn a_manager_is_a_target_and_an_archived_one_is_refused() {
         "INSERT INTO sessions (id, role, context, plan, attempt, name, cwd, tier, state, state_at, created_at, forked_from)
          VALUES ('mgr1', 'manager', 'ctx', NULL, NULL, 'ctx-manager', '/', 'O5', 'stopped', 't5', 't5', NULL)",
     );
-    let out = cpd_with(&env, &[("CPD_SESSION", "lead1")], &["session", "send", "mgr1", "done"]).ok();
+    let out = cpd_with(&env, &[("CPD_SESSION", "lead1")], &["session", "send", "mgr1", "done", "--unblocks", "u"]).ok();
     assert_eq!(out["session"], "mgr1");
     let events = messages(&env);
     assert_eq!(events.len(), 1);
     assert_eq!((&events[0]["session"], &events[0]["context"], &events[0]["plan"]), (&json!("mgr1"), &json!("ctx"), &Value::Null));
-    assert_eq!(events[0]["data"], json!({"from": "lead1", "text": "done", "wake": false}));
+    assert_eq!(events[0]["data"], json!({"from": "lead1", "text": "done", "unblocks": "u"}));
     exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'mgr1'");
-    refused(&env.cpd(&["session", "send", "mgr1", "again"]), "archived", 3);
+    refused(&env.cpd(&["session", "send", "mgr1", "again", "--unblocks", "u"]), "archived", 3);
     assert_eq!(messages(&env).len(), 1);
 }
 
@@ -193,18 +182,18 @@ fn a_manager_is_a_target_and_an_archived_one_is_refused() {
 fn the_refusals_write_nothing() {
     let env = TestEnv::new();
     setup(&env);
-    let error = refused(&env.cpd(&["session", "send", "nope", "hi"]), "session_not_found", 4);
+    let error = refused(&env.cpd(&["session", "send", "nope", "hi", "--unblocks", "u"]), "session_not_found", 4);
     assert_eq!(error["details"]["session"], "nope");
-    let error = refused(&env.cpd(&["session", "send", "worker1", "hi"]), "not_a_lead", 3);
+    let error = refused(&env.cpd(&["session", "send", "worker1", "hi", "--unblocks", "u"]), "not_a_lead", 3);
     assert_eq!(error["details"]["role"], "worker");
     assert!(error["message"].as_str().unwrap().ends_with("is a worker, not a Lead or a Manager."), "{error}");
     exec_sql(&env, "UPDATE sessions SET archived_at = 't' WHERE id = 'fork1'");
-    let error = refused(&env.cpd(&["session", "send", "fork1", "hi"]), "archived", 3);
+    let error = refused(&env.cpd(&["session", "send", "fork1", "hi", "--unblocks", "u"]), "archived", 3);
     assert_eq!(error["details"]["next"], "cpd session unarchive fork1");
     assert!(messages(&env).is_empty());
     // Unarchived, it is accepted again.
     env.cpd(&["session", "unarchive", "fork1"]).ok();
-    env.cpd(&["session", "send", "fork1", "hi"]).ok();
+    env.cpd(&["session", "send", "fork1", "hi", "--unblocks", "u"]).ok();
     assert_eq!(messages(&env).len(), 1);
 }
 
@@ -215,15 +204,15 @@ fn exactly_one_of_text_and_file_and_the_text_limits() {
     let path = env.root().join("m.md");
     fs::write(&path, "x").unwrap();
     let file = path.to_str().unwrap();
-    refused(&env.cpd(&["session", "send", "lead1"]), "usage", 2);
-    refused(&env.cpd(&["session", "send", "lead1", "hi", "--file", file]), "usage", 2);
-    refused(&env.cpd(&["session", "send", "lead1", ""]), "usage", 2);
-    refused(&env.cpd(&["session", "send", "lead1", &"a".repeat(20_001)]), "usage", 2);
+    refused(&env.cpd(&["session", "send", "lead1", "--unblocks", "u"]), "usage", 2);
+    refused(&env.cpd(&["session", "send", "lead1", "hi", "--file", file, "--unblocks", "u"]), "usage", 2);
+    refused(&env.cpd(&["session", "send", "lead1", "", "--unblocks", "u"]), "usage", 2);
+    refused(&env.cpd(&["session", "send", "lead1", &"a".repeat(20_001), "--unblocks", "u"]), "usage", 2);
     fs::write(&path, "").unwrap();
-    refused(&env.cpd(&["session", "send", "lead1", "--file", file]), "usage", 2);
-    refused(&env.cpd(&["session", "send", "lead1", "--file", "/nonexistent/m.md"]), "file_unreadable", 2);
+    refused(&env.cpd(&["session", "send", "lead1", "--file", file, "--unblocks", "u"]), "usage", 2);
+    refused(&env.cpd(&["session", "send", "lead1", "--file", "/nonexistent/m.md", "--unblocks", "u"]), "file_unreadable", 2);
     assert!(messages(&env).is_empty());
-    env.cpd(&["session", "send", "lead1", &"a".repeat(20_000)]).ok();
+    env.cpd(&["session", "send", "lead1", &"a".repeat(20_000), "--unblocks", "u"]).ok();
     assert_eq!(messages(&env).len(), 1);
 }
 
@@ -231,14 +220,96 @@ fn exactly_one_of_text_and_file_and_the_text_limits() {
 fn the_targets_follower_sees_the_message_and_the_senders_does_not() {
     let env = TestEnv::new();
     setup(&env);
-    cpd_with(&env, &[("CPD_SESSION", "lead2")], &["session", "send", "lead1", "ping"]).ok();
+    cpd_with(&env, &[("CPD_SESSION", "lead2")], &["session", "send", "lead1", "ping", "--unblocks", "u"]).ok();
     let seen = follow(&env, "lead1");
     assert_eq!(seen.len(), 1, "{seen:?}");
     assert_eq!((&seen[0]["kind"], &seen[0]["session"], &seen[0]["data"]["text"]), (&json!("session-message"), &json!("lead1"), &json!("ping")));
     assert!(follow(&env, "lead2").is_empty());
     // A side fork of the same Plan receives only what is addressed to it.
     assert!(follow(&env, "fork1").is_empty());
-    cpd_with(&env, &[("CPD_SESSION", "lead2")], &["session", "send", "fork1", "pong"]).ok();
+    cpd_with(&env, &[("CPD_SESSION", "lead2")], &["session", "send", "fork1", "pong", "--unblocks", "u"]).ok();
     assert_eq!(follow(&env, "fork1").len(), 1);
     assert_eq!(follow(&env, "lead1").len(), 2); // the Plan's Lead sees the Plan's Events
+}
+
+const AGENT: &[(&str, &str)] = &[("CPD_SESSION", "lead2")];
+
+#[test]
+fn a_send_without_unblocks_is_a_usage_error() {
+    let env = TestEnv::new();
+    setup(&env);
+    env.cpd(&["session", "send", "lead1", "ok", "--unblocks", "u"]).ok();
+    refused(&env.cpd(&["session", "send", "lead1", "hi"]), "usage", 2);
+    refused(&env.cpd(&["session", "send", "lead1", "hi", "--unblocks", ""]), "usage", 2);
+    refused(&env.cpd(&["session", "send", "lead1", "hi", "--unblocks", &"a".repeat(201)]), "usage", 2);
+    assert_eq!(messages(&env).len(), 1);
+}
+
+#[test]
+fn every_send_wakes_and_carries_its_unblocks() {
+    let env = TestEnv::new();
+    setup(&env);
+    let out = env.cpd(&["session", "send", "lead1", "x", "--unblocks", "PR #210 opened"]).ok();
+    assert_eq!(out["unblocks"], "PR #210 opened");
+    assert!(out.get("wake").is_none(), "{out}");
+    let event = &messages(&env)[0];
+    assert_eq!(event["data"], json!({"from": null, "text": "x", "unblocks": "PR #210 opened"}));
+    assert!(event["text"].as_str().unwrap().contains("(unblocks: PR #210 opened)"), "{event}");
+}
+
+#[test]
+fn the_wake_flag_is_gone() {
+    let env = TestEnv::new();
+    setup(&env);
+    env.cpd(&["session", "send", "lead1", "x", "--unblocks", "u"]).ok();
+    refused(&env.cpd(&["session", "send", "lead1", "y", "--unblocks", "u", "--wake"]), "usage", 2);
+    assert_eq!(messages(&env).len(), 1);
+}
+
+#[test]
+fn a_send_to_the_lead_of_a_done_plan_is_refused_plan_inactive() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(&env, "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+         UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'");
+    let error = refused(&cpd_with(&env, AGENT, &["session", "send", "lead1", "hi", "--unblocks", "u"]), "plan_inactive", 3);
+    assert_eq!(error["details"]["plan"], "pay");
+    assert_eq!(error["details"]["phase"], "done");
+    assert!(messages(&env).is_empty());
+}
+
+#[test]
+fn the_same_text_to_a_second_session_is_refused_broadcast() {
+    let env = TestEnv::new();
+    setup(&env);
+    cpd_with(&env, AGENT, &["session", "send", "lead1", "news", "--unblocks", "u"]).ok();
+    let error = refused(&cpd_with(&env, AGENT, &["session", "send", "fork1", " news ", "--unblocks", "u"]), "broadcast", 3);
+    assert_eq!(error["details"]["session"], "lead1");
+    assert_eq!(messages(&env).len(), 1);
+}
+
+#[test]
+fn the_same_text_to_the_same_session_within_an_hour_is_refused_duplicate() {
+    let env = TestEnv::new();
+    setup(&env);
+    cpd_with(&env, AGENT, &["session", "send", "lead1", "news", "--unblocks", "u"]).ok();
+    let error = refused(&cpd_with(&env, AGENT, &["session", "send", "lead1", "news", "--unblocks", "u"]), "duplicate", 3);
+    assert!(error["details"]["at"].is_string(), "{error}");
+    assert_eq!(messages(&env).len(), 1);
+}
+
+#[test]
+fn the_user_without_a_session_is_not_guarded() {
+    let env = TestEnv::new();
+    setup(&env);
+    exec_sql(&env, "UPDATE plans SET phase = 'plan' WHERE id = 'pay';
+         UPDATE plans SET phase = 'dispatch', locked_at = 't' WHERE id = 'pay';
+         UPDATE plans SET phase = 'deploy' WHERE id = 'pay';
+         UPDATE plans SET phase = 'done', done_at = 't' WHERE id = 'pay'");
+    env.cpd(&["session", "send", "lead1", "same", "--unblocks", "u"]).ok();
+    env.cpd(&["session", "send", "lead1", "same", "--unblocks", "u"]).ok();
+    env.cpd(&["session", "send", "fork1", "same", "--unblocks", "u"]).ok();
+    assert_eq!(messages(&env).len(), 3);
 }

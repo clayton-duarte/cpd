@@ -119,8 +119,8 @@ pub enum Action {
     CopyUrl(String),
     /// `watch --ensure` (§12): a click on an `engine-down` item starts the engine; idempotent.
     EnsureWatch,
-    /// `session send <manager> <text>` (§10.13): the engine's failure to start, to a live Manager. No sender, so `from` is the
-    /// User's side, and no `--wake`. Only a step of the tree's own restart of the engine.
+    /// `session send <manager> --unblocks <why> -- <text>` (§10.13): the engine's failure to start, to the most recently active live
+    /// Manager. No sender, so `from` is the User's side; send always wakes. Only a step of the tree's own restart of the engine.
     Tell { manager: SessionId, text: String },
     /// `inbox snooze <id> <15m|1h|tomorrow>` (§21.3): the Inbox menu's and `s`'s Snooze entries.
     Snooze { item: i64, until: Until },
@@ -160,7 +160,15 @@ impl Action {
             Action::Unarchive(subject) => subject.command("unarchive"),
             Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
             Action::EnsureWatch => words(&["watch", "--ensure"]),
-            Action::Tell { manager, text } => vec!["session".into(), "send".into(), manager.to_string(), text.clone()],
+            Action::Tell { manager, text } => vec![
+                "session".into(),
+                "send".into(),
+                manager.to_string(),
+                "--unblocks".into(),
+                "the engine has been down 60 s".into(),
+                "--".into(),
+                text.clone(),
+            ],
             Action::Snooze { item, until } => words(&["inbox", "snooze", &item.to_string(), until.arg()]),
             Action::Dismiss(item) => words(&["inbox", "dismiss", &item.to_string()]),
         }
@@ -256,7 +264,7 @@ impl Runner {
         store
             .read(|conn| {
                 let mut stmt =
-                    conn.prepare("SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL ORDER BY created_at, id")?;
+                    conn.prepare("SELECT id FROM sessions WHERE role = 'manager' AND archived_at IS NULL ORDER BY state_at DESC, id LIMIT 1")?;
                 let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(ids)
             })
@@ -472,7 +480,7 @@ mod tests {
             (Action::Snooze { item: 7, until: Until::Tomorrow }, vec!["inbox", "snooze", "7", "tomorrow"]),
             (Action::Dismiss(12), vec!["inbox", "dismiss", "12"]),
             (Action::EnsureWatch, vec!["watch", "--ensure"]),
-            (Action::Tell { manager: sid("m-alpha"), text: "The engine is down.".into() }, vec!["session", "send", "m-alpha", "The engine is down."]),
+            (Action::Tell { manager: sid("m-alpha"), text: "The engine is down.".into() }, vec!["session", "send", "m-alpha", "--unblocks", "the engine has been down 60 s", "--", "The engine is down."]),
         ];
         for (action, argv) in cases {
             assert_eq!(action.argv(), argv, "{action:?}");

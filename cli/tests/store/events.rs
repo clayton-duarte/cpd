@@ -229,7 +229,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("context-archived", "c", "", &["archived"], &[]),
     ("plan-archived", "cp", "", &["archived"], &[]),
     ("session-archived", "cs", "p", &["archived"], &[]),
-    ("session-message", "cs", "p", &["from", "text", "wake"], &[]),
+    ("session-message", "cs", "p", &["from", "text"], &["unblocks", "wake"]),
     ("inbox-opened", "", "cpjs", &["item", "kind", "urgency", "label"], &[]),
     ("inbox-closed", "", "cpjs", &["item", "kind"], &[]),
     ("inbox-snoozed", "", "cpjs", &["item", "until"], &[]),

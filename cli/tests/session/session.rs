@@ -1931,7 +1931,7 @@ fn an_ambiguous_prefix_is_refused_with_its_candidates() {
     refused(&env.cpd(&["session", "rename", "x", "--session", "a1b2"]), "session_ambiguous", 3);
     refused(&env.cpd(&["session", "archive", "a1b2"]), "session_ambiguous", 3);
     refused(&env.cpd(&["session", "open", "a1b2"]), "session_ambiguous", 3);
-    refused(&env.cpd(&["session", "send", "a1b2", "hi"]), "session_ambiguous", 3);
+    refused(&env.cpd(&["session", "send", "a1b2", "hi", "--unblocks", "u"]), "session_ambiguous", 3);
     assert_eq!(events(&env, "session-renamed").len(), 0);
     assert_eq!(events(&env, "session-message").len(), 0);
 }
@@ -1976,8 +1976,8 @@ fn every_session_command_accepts_the_short_forms() {
     let out = cpd_with(&env, &[("CPD_SESSION", "other")], &["session", "show"]).ok();
     assert_eq!(out["session"]["id"], LEAD2);
     // send, to a Lead by its Plan id and to the Manager by a bare prefix.
-    assert_eq!(env.cpd(&["session", "send", "pay", "hi"]).ok()["session"], LEAD1);
-    assert_eq!(env.cpd(&["session", "send", "mana", "hi"]).ok()["session"], MANAGER);
+    assert_eq!(env.cpd(&["session", "send", "pay", "hi", "--unblocks", "u"]).ok()["session"], LEAD1);
+    assert_eq!(env.cpd(&["session", "send", "mana", "hi", "--unblocks", "u"]).ok()["session"], MANAGER);
     // close (no pane: nothing to do), archive and unarchive.
     assert_eq!(env.cpd(&["session", "close", "other"]).ok(), json!({"ok": true, "session": LEAD2, "pane": null, "already": true}));
     let out = env.cpd(&["session", "archive", "pay.a1b2c3d4-0000-4000-8000-000000000001"]).ok();
