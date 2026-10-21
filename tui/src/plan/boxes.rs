@@ -23,7 +23,7 @@ use ratatui::{
 use super::flow::{self, Chart, Dir, Mask, Pill, free_row, glyph};
 use crate::link::{CUE, link};
 use crate::palette::{self, Meaning};
-use crate::read::{Dot, JobNode, NeedsUser, PrNode, PrState, PrStatus, Pull};
+use crate::read::{Dot, JobNode, NeedsUser, PrNode, PrState, PrStatus, Pull, UpdateState};
 
 /// Rows between two rows of boxes: the run of lines, then the arrowheads.
 const GAP: u16 = 2;
@@ -98,13 +98,18 @@ fn state_text(state: PrState) -> &'static str {
     }
 }
 
-/// The word and colour of a pull request's state in a title: `conflict` (waiting: every box's pull request is one a
+/// The word and colour of a pull request's state in a title: `updating` for a conflict while its update Job is not ended
+/// (hs-d532; running or waiting colour), else `conflict` (waiting: every box's pull request is one a
 /// Plan owns, so its Lead fixes it, hs-d302) for an open one that conflicts, else
 /// its state in the palette's PR state colour; a `closed` one is waiting too, and red only when `asked`: its Plan's Lead
 /// has an open `dialog` item, it asks the User (audit Q4). The title and its link's width both use it.
 fn state_word(pull: &Pull, asked: bool) -> (&'static str, Meaning) {
     match pull.state {
-        PrState::Open if pull.conflicting => palette::PR_CONFLICT_OWNED,
+        PrState::Open if pull.conflicting => match pull.update {
+            Some(UpdateState::Running) => palette::PR_UPDATING_RUNNING,
+            Some(UpdateState::Queued) => palette::PR_UPDATING_QUEUED,
+            None => palette::PR_CONFLICT_OWNED,
+        },
         PrState::Closed if asked => palette::PR_CLOSED_ASKED,
         state => (state_text(state), palette::pr_state(state)),
     }
@@ -341,7 +346,7 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, lead_working: false }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, lead_working: false, update: None }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {

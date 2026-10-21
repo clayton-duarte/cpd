@@ -28,6 +28,8 @@ pub mod menu;
 pub mod merge;
 pub mod palette;
 #[cfg(test)]
+mod updating_label;
+#[cfg(test)]
 mod pill_colours;
 mod plan;
 pub mod read;

@@ -121,6 +121,13 @@ pub struct PrNode {
     pub superseded_by: Option<String>,
 }
 
+/// The state of a PR's update Job (`jobs.kind = 'update'`) that is not ended (hs-d532).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateState {
+    Queued,
+    Running,
+}
+
 /// A PR's pull request, for its box's title.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pull {
@@ -133,6 +140,18 @@ pub struct Pull {
     /// The Plan's Lead Session has `state = 'working'` (contract §3.6), read with the rest: the title shows the Lead's
     /// working dot beside the state (hs-d335).
     pub lead_working: bool,
+    /// The PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
+    pub update: Option<UpdateState>,
+}
+
+/// The [`UpdateState`] of a `jobs.status` read for a not-ended update Job (`None`: there is none).
+pub(super) fn update_state(what: &str, status: Option<&str>) -> Result<Option<UpdateState>, CpdError> {
+    match status {
+        None => Ok(None),
+        Some("queued") => Ok(Some(UpdateState::Queued)),
+        Some("running") => Ok(Some(UpdateState::Running)),
+        Some(other) => Err(bad_row(format!("{what} has an update Job with status {other:?}"))),
+    }
 }
 
 /// Whether a `pull_requests.mergeable` value is a conflict; a value outside the column's set is an error.
@@ -276,7 +295,9 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         needs.entry(pr).or_default().push(id("PR key", &need, PrKey::parse)?);
     }
     let mut stmt = conn.prepare(
-        "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable
+        "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable,
+                (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'update'
+                    AND j.status IN ('queued', 'running') ORDER BY j.status = 'running' DESC LIMIT 1)
            FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
           WHERE r.plan = ?1 ORDER BY r.key",
     )?;
@@ -286,6 +307,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         let (key, repo, base, status): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
         let (number, row_state, url, mergeable): (Option<i64>, Option<String>, Option<String>, Option<String>) =
             (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
+        let update: Option<String> = r.get(8)?;
         let what = format!("PR {plan}/{key}");
         let status = match status.as_str() {
             "waiting" => PrStatus::Waiting,
@@ -306,6 +328,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
                     lead_working,
+                    update: update_state(&what, update.as_deref())?,
                 })
             })
             .transpose()?;

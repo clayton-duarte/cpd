@@ -49,10 +49,10 @@ const INTRO: &str = "Legend: What The Cockpit's Colours And Icons Mean (Any Key 
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
 
-struct Section {
-    title: &'static str,
-    header: Option<[&'static str; 3]>,
-    rows: Vec<Vec<Line<'static>>>,
+pub(crate) struct Section {
+    pub(crate) title: &'static str,
+    pub(crate) header: Option<[&'static str; 3]>,
+    pub(crate) rows: Vec<Vec<Line<'static>>>,
 }
 
 impl Section {
@@ -113,7 +113,7 @@ fn precedence() -> String {
 }
 
 /// The sections, built only from the palette and the read model's counters.
-fn sections() -> Vec<Section> {
+pub(crate) fn sections() -> Vec<Section> {
     let meanings = Section {
         title: "Meanings → Colour (One Source For Every View)",
         header: None,
@@ -190,6 +190,8 @@ fn sections() -> Vec<Section> {
         .collect();
     pr_rows.push(vec![sample(palette::PR_CLOSED_ASKED), plain("its Lead asks you")]);
     pr_rows.push(vec![sample(palette::PR_CONFLICT)]);
+    pr_rows.push(vec![sample(palette::PR_UPDATING_RUNNING), plain("its update Job is fixing the conflict")]);
+    pr_rows.push(vec![sample(palette::PR_UPDATING_QUEUED), plain("its update Job is queued")]);
     let prs = Section { title: "PRs (Dispatch)", header: None, rows: pr_rows };
     let checks = Section {
         title: "PR Checks",
@@ -436,7 +438,7 @@ mod tests {
     fn the_pr_states_list_conflict_in_the_failed_colour_after_the_others() {
         let prs = &sections()[3];
         let names: Vec<String> = prs.rows.iter().map(|r| text(&r[0])).collect();
-        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 closed", "#2 conflict"]);
+        assert_eq!(names, ["#2 open", "#2 merged", "#2 closed", "#2 closed", "#2 conflict", "#2 updating", "#2 updating"]);
         let conflict = &prs.rows[4][0].spans[0];
         assert_eq!(conflict.style, palette::fg(palette::Meaning::Failed));
     }

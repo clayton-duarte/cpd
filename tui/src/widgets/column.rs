@@ -14,7 +14,7 @@ use crate::dialog::scroll::{self, Cue};
 use crate::link;
 use crate::palette;
 use crate::section;
-use crate::read::{Dot, OpenPr, PrState, ReviewDecision};
+use crate::read::{Dot, OpenPr, PrState, ReviewDecision, UpdateState};
 
 /// The glyph in the last column of a clean PR's second line: md-source_merge, U+F062D (Material Design Nerd Font).
 const MERGE: &str = "\u{F062D}";
@@ -149,7 +149,7 @@ fn truncate(text: &str, max: usize) -> String {
 /// a Plan owns draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them, hs-d302); one no Plan owns, in red.
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
 /// One whose Lead is working shows the Lead's dot, `palette::SPINNER[frame]` (the tree's), after the state word: `  open 󰝦 …`.
-fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
+pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
     let gap = " ".repeat(width.saturating_sub(name.chars().count() + 1));
     let state_text = if pr.draft { "draft" } else { "open" };
@@ -160,7 +160,13 @@ fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     };
     let owned = pr.lead.is_some();
     let (icon, checks) = palette::checks_of(pr.checks, owned);
-    let conflict = " conflict";
+    let (word, conflict_meaning) = match (pr.update, owned) {
+        (Some(UpdateState::Running), _) => palette::PR_UPDATING_RUNNING,
+        (Some(UpdateState::Queued), _) => palette::PR_UPDATING_QUEUED,
+        (None, true) => palette::PR_CONFLICT_OWNED,
+        (None, false) => palette::PR_CONFLICT,
+    };
+    let conflict = format!(" {word}");
     let dot = pr.lead_working.then(|| palette::dot_span(Dot::Working, frame, false));
     let used = 2 + state_text.chars().count() + if dot.is_some() { 2 } else { 0 } + 3 + review.chars().count() + if pr.conflicting { conflict.chars().count() } else { 0 };
     let mut spans = vec![
@@ -177,8 +183,7 @@ fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
         review.into(),
     ]);
     if pr.conflicting {
-        let (_, meaning) = if owned { palette::PR_CONFLICT_OWNED } else { palette::PR_CONFLICT };
-        spans.push(Span::styled(conflict, palette::fg(meaning)));
+        spans.push(Span::styled(conflict, palette::fg(conflict_meaning)));
     }
     let reserved = if pr.clean { 2 } else { 0 };
     let room = width.saturating_sub(used + 2 + reserved);
@@ -379,6 +384,7 @@ mod tests {
             checks: crate::read::Checks::Passed,
             review_decision: ReviewDecision::None,
             conflicting: false,
+            update: None,
             clean: false,
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),

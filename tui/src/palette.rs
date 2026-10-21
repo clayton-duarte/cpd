@@ -350,6 +350,11 @@ pub const PR_CONFLICT: (&str, Meaning) = ("conflict", Meaning::Failed);
 /// red. [`PR_CONFLICT`] is the one no Plan owns, the User's to fix.
 pub const PR_CONFLICT_OWNED: (&str, Meaning) = ("conflict", Meaning::Waiting);
 
+/// What a conflicting pull request reads while its PR has an update Job that is not ended (hs-d532): the running colour
+/// while the Job runs, the waiting colour while it is queued.
+pub const PR_UPDATING_RUNNING: (&str, Meaning) = ("updating", Meaning::InProgress);
+pub const PR_UPDATING_QUEUED: (&str, Meaning) = ("updating", Meaning::Waiting);
+
 /// [`checks`] of a pull request that is `owned` by a Plan or not: owned failed checks are `Waiting` (the Lead fixes
 /// them, hs-d302), not red; every other value is [`checks`]'.
 pub fn checks_of(c: Checks, owned: bool) -> (&'static str, Meaning) {

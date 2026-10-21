@@ -18,7 +18,7 @@
 //! dies is started again by the `pane-died` hook (contract §6.1), so the view never exits on a key.
 
 mod actions;
-mod boxes;
+pub(crate) mod boxes;
 pub(crate) mod flow;
 pub(crate) mod pulse;
 
@@ -652,6 +652,7 @@ mod tests {
                 url: "https://github.com/acme/api/pull/12".into(),
                 conflicting: false,
                 lead_working: false,
+                update: None,
             }),
         }];
         let plan = PlanBoxes {

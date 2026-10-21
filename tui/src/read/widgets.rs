@@ -86,6 +86,8 @@ pub struct OpenPr {
     pub review_decision: ReviewDecision,
     /// `pull_requests.mergeable` is `'conflicting'` (`'unknown'` is not a conflict).
     pub conflicting: bool,
+    /// The owning PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
+    pub update: Option<super::UpdateState>,
     /// `pull_requests.merge_state` is `'clean'` (GitHub's mergeStateStatus CLEAN): the merge icon shows (commands.md §13.2).
     pub clean: bool,
     /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
@@ -205,7 +207,10 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
                 (SELECT p.lead_session FROM prs r JOIN plans p ON p.id = r.plan
                   WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1),
                 COALESCE((SELECT s.state = 'working' FROM prs r JOIN plans p ON p.id = r.plan JOIN sessions s ON s.id = p.lead_session
-                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0)
+                           WHERE r.pull_request = q.id ORDER BY p.created_at DESC, p.id DESC LIMIT 1), 0),
+                (SELECT j.status FROM prs r JOIN jobs j ON j.plan = r.plan AND j.pr = r.key
+                  WHERE r.pull_request = q.id AND j.kind = 'update' AND j.status IN ('queued', 'running')
+                  ORDER BY j.status = 'running' DESC LIMIT 1)
            FROM pull_requests q WHERE q.state = 'open' AND q.authored = 1 ORDER BY q.created_at, q.repo, q.number",
     )?;
     let mut rows = stmt.query([])?;
@@ -226,6 +231,7 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             },
             url: r.get(6)?,
             conflicting: r.get(7)?,
+            update: super::flow::update_state(&what, r.get::<_, Option<String>>(12)?.as_deref())?,
             clean: r.get(8)?,
             active: r.get(9)?,
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,
