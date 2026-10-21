@@ -541,6 +541,55 @@ Effects: **rows**, one transaction, with a compare-and-swap on `owner IS NULL`: 
 
 Idempotent: yes; the same owner again returns `"already": true` and writes nothing.
 
+### 3.14 `context delete`
+
+```
+cpd context delete <id> [--yes]
+```
+
+Deletes a Context and all its Plans, Sessions, records and run files from the database and filesystem (hs-d527). Deletion is permanent and cannot be undone. Without `--yes` the command prints what would be deleted (a preview); with `--yes` it deletes.
+
+| Flag | Meaning |
+|---|
+| `<id>` | Context id (§2.1) |
+| `--yes` | perform the delete; without it, print the preview only |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Context exists | `context_not_found` | 4 |
+| **archived or asleep**: every Plan of the Context is archived, or every Plan is asleep (all `asleep_at` or `archived_at` not null, or Context itself archived); `details: {blockers: [{kind, id}]}` lists what is not | `archive_blocked` | 3 |
+| **nothing running**: no Job `queued` or `running`, no Attempt not `ended`, no Session `working`, `waiting` or `blocked`, every Escalation closed, no Plan review pending; `details.blockers` | `archive_blocked` | 3 |
+| **no open PR**: every PR of every Plan is `merged` or `cancelled`; if a PR of another Plan names this one's as base PR or need, that PR must also be `merged` or `cancelled`; `details.blockers` | `archive_blocked` | 3 |
+| **Manager not in chat**: the Context's Manager (§3.10) is not in the chat slot; `details.next = cpd session park` | `in_chat_slot` | 3 |
+
+Effects, with `--yes` only (**without it, no rows or files are written**):
+1. **Re-check preconditions** in one transaction (race safety).
+2. **Delete rows** (all or nothing) in this order, each `DELETE FROM <table> WHERE ...`:
+   - For each Plan of the Context: every Job, Attempt, Escalation, Context record about it
+   - For each Plan: every PR, PR need, Plan review, Attempt board post, Attempt Inbox item, Event about it
+   - For each Plan: every Session, Session board post
+   - All Event rows about the Context or any of its Plans
+   - All Inbox item rows about the Context or any record
+   - All `context_records` rows of the Context (the Context row itself gets `deleted_at` set, never deleted; records are append-only)
+   - The Manager Session row and its board posts
+   - The Context row: `deleted_at = now()`
+3. **Record in history** (§4.4): every `DELETE` statement writes a `history` row with the deleted ids and values, and one `context-deleted` Event is appended in the same transaction with counts.
+4. **Delete session files** (after commit): every file under `$CPD_HOME/run/<plan>/` for each deleted Plan, and under `$CPD_HOME/run/context-digests/<context>/`; files that do not exist are skipped.
+5. **Delete run files** (after commit): every `.md` file of each deleted Plan (summary, render, reviews, messages, board posts), distill artifacts.
+6. **Delete local worktrees and branches** (after commit, crash-safe idempotent): `rm -rf` every Attempt worktree and PR Lead worktree; `git branch -D cpd/<plan>/<key>` and `git branch -D cpd/<plan>--<attempt>` from their repos (not on the remote); delete the directory `$CPD_HOME/run/<plan>/` and `$CPD_HOME/run/context-digests/<context>/`.
+
+On crash or failure, steps 4–6 are incomplete: rerunning with `--yes` resumes and completes them (idempotent: missing files/directories cause no error).
+
+Output without `--yes` (preview) or with `--yes` after a delete:
+
+```json
+{"ok": true, "preview": true, "plans": [{"id": "cpd2", "jobs": 47, "attempts": 121}], "jobs": 47, "attempts": 121, "sessions": 3, "worktrees": 11, "disk_freed_mb": 342}
+```
+
+With `--yes` after first delete: `"preview": false`, `"already": false`. On idempotent rerun: `"already": true`, nothing written.
+
+Idempotent: yes; a Context already deleted returns `"already": true`.
+
 ## 4. `plan`
 
 A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) and `plan` group.
@@ -1004,6 +1053,55 @@ Effects:
 ```
 
 `outline` is the stored object. Idempotent: yes. The same file twice changes nothing and writes one Event only the first time (`"already": true` the second time, `replaced` absent).
+
+### 4.14 `plan delete`
+
+```
+cpd plan delete <id> [--yes]
+```
+
+Deletes a Plan and all its Jobs, Attempts, Sessions, worktrees and branches from the database and filesystem (hs-d527). Deletion is permanent and cannot be undone. Without `--yes` the command prints what would be deleted (a preview); with `--yes` it deletes.
+
+| Flag | Meaning |
+|---|
+| `<id>` | Plan id (§2.1) |
+| `--yes` | perform the delete; without it, print the preview only |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Plan exists | `plan_not_found` | 4 |
+| **archived or asleep**: the Plan is archived, or every Session of the Plan is asleep; `details: {blockers: [{kind, id}]}` lists what is not | `archive_blocked` | 3 |
+| **nothing running**: no Job `queued` or `running`, no Attempt not `ended`, no Session `working`, `waiting` or `blocked`, every Escalation closed, no Plan review pending; `details.blockers` | `archive_blocked` | 3 |
+| **no open PR**: every PR of the Plan is `merged` or `cancelled`; if a PR of another Plan names any of these as base PR or need, that PR must also be `merged` or `cancelled`; `details.blockers` | `archive_blocked` | 3 |
+| **Lead not in chat**: the Plan's Lead Session (§3.1) is not in the chat slot; `details.next = cpd session park` | `in_chat_slot` | 3 |
+
+Effects, with `--yes` only (**without it, no rows or files are written**):
+1. **Re-check preconditions** in one transaction (race safety).
+2. **Delete rows** (all or nothing) in this order:
+   - Every Job, Attempt, Escalation of the Plan
+   - Every PR and PR need of the Plan
+   - Every Plan review
+   - Every Attempt board post, Inbox item about a Job
+   - Every Session board post
+   - Every Event about the Plan
+   - Every Session of the Plan (except the Lead; it is kept and its `plan` is cleared)
+   - The Plan row: `deleted_at = now()`
+3. **Record in history** (§4.4): every `DELETE` statement writes a history row, and one `plan-deleted` Event is appended in the same transaction with counts.
+4. **Delete session files** (after commit): every file under `$CPD_HOME/run/<plan>/`; files that do not exist are skipped.
+5. **Delete run files** (after commit): every `.md` file (summary, render, reviews, messages, board posts), specs, logs, distill artifacts.
+6. **Delete local worktrees and branches** (after commit, crash-safe idempotent): `rm -rf` every Attempt worktree and PR Lead worktree; `git branch -D cpd/<plan>/<key>` and `git branch -D cpd/<plan>--<attempt>` from their repos (not on the remote); delete the directory `$CPD_HOME/run/<plan>/`.
+
+On crash or failure, steps 4–6 are incomplete: rerunning with `--yes` resumes and completes them (idempotent: missing files/directories cause no error).
+
+Output without `--yes` (preview) or with `--yes` after a delete:
+
+```json
+{"ok": true, "preview": true, "jobs": 47, "attempts": 121, "sessions": 3, "worktrees": 11, "disk_freed_mb": 342}
+```
+
+With `--yes` after first delete: `"preview": false`, `"already": false`. On idempotent rerun: `"already": true`, nothing written.
+
+Idempotent: yes; a Plan already deleted returns `"already": true`.
 
 ## 5. `job`
 
