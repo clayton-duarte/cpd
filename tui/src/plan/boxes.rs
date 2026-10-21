@@ -341,7 +341,7 @@ mod tests {
     }
 
     fn pull(number: i64, state: PrState) -> Pull {
-        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, lead_working: false }
+        Pull { number, state, url: format!("https://github.com/acme/repo/pull/{number}"), conflicting: false, lead_working: false, update: None }
     }
 
     fn job(pr: &str, key: &str, needs: &[&str]) -> JobNode {

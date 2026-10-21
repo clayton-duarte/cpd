@@ -86,6 +86,8 @@ pub struct OpenPr {
     pub review_decision: ReviewDecision,
     /// `pull_requests.mergeable` is `'conflicting'` (`'unknown'` is not a conflict).
     pub conflicting: bool,
+    /// The owning PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
+    pub update: Option<super::UpdateState>,
     /// `pull_requests.merge_state` is `'clean'` (GitHub's mergeStateStatus CLEAN): the merge icon shows (commands.md §13.2).
     pub clean: bool,
     /// A PR of the Plan whose Lead is in the chat slot points to this pull request.
@@ -226,6 +228,7 @@ fn open_pr_rows(conn: &Connection) -> Result<Vec<OpenPr>, CpdError> {
             },
             url: r.get(6)?,
             conflicting: r.get(7)?,
+            update: None,
             clean: r.get(8)?,
             active: r.get(9)?,
             lead: r.get::<_, Option<String>>(10)?.map(|lead| id("Session id", &lead, SessionId::parse)).transpose()?,

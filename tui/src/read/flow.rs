@@ -121,6 +121,13 @@ pub struct PrNode {
     pub superseded_by: Option<String>,
 }
 
+/// The state of a PR's update Job (`jobs.kind = 'update'`) that is not ended (hs-d532).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateState {
+    Queued,
+    Running,
+}
+
 /// A PR's pull request, for its box's title.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Pull {
@@ -133,6 +140,8 @@ pub struct Pull {
     /// The Plan's Lead Session has `state = 'working'` (contract §3.6), read with the rest: the title shows the Lead's
     /// working dot beside the state (hs-d335).
     pub lead_working: bool,
+    /// The PR's not-ended update Job, if any: a conflict reads `updating` while it is `Some` (hs-d532).
+    pub update: Option<UpdateState>,
 }
 
 /// Whether a `pull_requests.mergeable` value is a conflict; a value outside the column's set is an error.
@@ -306,6 +315,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
                     lead_working,
+                    update: None,
                 })
             })
             .transpose()?;

@@ -149,7 +149,7 @@ fn truncate(text: &str, max: usize) -> String {
 /// a Plan owns draws `conflict` and failed checks in `Meaning::Waiting` (its Lead fixes them, hs-d302); one no Plan owns, in red.
 /// An `active` one (a PR of the chat slot's Plan) is reversed and bold, as the active tab is; one no Plan owns is dim.
 /// One whose Lead is working shows the Lead's dot, `palette::SPINNER[frame]` (the tree's), after the state word: `  open 󰝦 …`.
-fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
+pub(crate) fn pr_lines(pr: &OpenPr, width: usize, frame: usize) -> [Line<'static>; 2] {
     let name = truncate(&format!(" {}#{}", pr.repo, pr.number), width.saturating_sub(2));
     let gap = " ".repeat(width.saturating_sub(name.chars().count() + 1));
     let state_text = if pr.draft { "draft" } else { "open" };
@@ -379,6 +379,7 @@ mod tests {
             checks: crate::read::Checks::Passed,
             review_decision: ReviewDecision::None,
             conflicting: false,
+            update: None,
             clean: false,
             active: false,
             lead: lead.map(|l| SessionId::parse(l).unwrap()),

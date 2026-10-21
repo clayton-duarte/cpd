@@ -15,7 +15,7 @@
 //!   the StatusBar's button (`cpd tui action legend`) open in a tmux popup (the columns are narrower than the legend);
 //! - the colours and icons are [`crate::palette`]'s.
 
-mod column;
+pub(crate) mod column;
 mod host;
 pub mod legend;
 
@@ -430,6 +430,7 @@ mod tests {
             checks: read::Checks::Passed,
             review_decision: read::ReviewDecision::None,
             conflicting: false,
+            update: None,
             clean: false,
             active: false,
             lead: Some(SessionId::parse("l-a").unwrap()),

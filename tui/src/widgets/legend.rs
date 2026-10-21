@@ -49,10 +49,10 @@ const INTRO: &str = "Legend: What The Cockpit's Colours And Icons Mean (Any Key 
 /// The popup's command: the legend view, run like every pane of the cockpit (by `PATH`).
 const COMMAND: [&str; 4] = [PROGRAM, "tui", "view", "legend"];
 
-struct Section {
-    title: &'static str,
-    header: Option<[&'static str; 3]>,
-    rows: Vec<Vec<Line<'static>>>,
+pub(crate) struct Section {
+    pub(crate) title: &'static str,
+    pub(crate) header: Option<[&'static str; 3]>,
+    pub(crate) rows: Vec<Vec<Line<'static>>>,
 }
 
 impl Section {
@@ -113,7 +113,7 @@ fn precedence() -> String {
 }
 
 /// The sections, built only from the palette and the read model's counters.
-fn sections() -> Vec<Section> {
+pub(crate) fn sections() -> Vec<Section> {
     let meanings = Section {
         title: "Meanings → Colour (One Source For Every View)",
         header: None,
