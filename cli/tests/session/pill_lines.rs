@@ -18,8 +18,8 @@ fn pane_and_popup_borders_are_colour7_and_the_active_border_blue() {
 
 #[test]
 fn border_format_title_pills_follow_the_rule() {
-    const CAP: &str = "#{?pane_active,#[fg=blue],#[fg=colour8]}";
-    const TEXT: &str = "#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}";
+    const CAP: &str = "#{?pane_active,#[fg=blue],#[fg=colour7]}";
+    const TEXT: &str = "#[fg=colour0]#{?pane_active,#[bg=blue],#[bg=colour7]}";
     let pill = |title: &str| format!("{CAP}━\u{e0b6}{TEXT}{title}{CAP}#[bg=default]\u{e0b4}");
     let want = format!(
         "#{{?#{{@cpd_session}},#{{?#{{@cpd_title}},{lead},}},\
@@ -40,7 +40,17 @@ fn status_line_pills_follow_the_rule() {
     let button = |range: &str, glyph: &str| {
         format!("#[range=user|{range}]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]{glyph}#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]")
     };
-    let pill = |text: &str| format!("#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]{text}#[fg=colour8]#[bg=default]\u{e0b4}#[default]");
+    let pill = |colour: &str, text: &str| {
+        format!("#[fg={colour}]\u{e0b6}#[fg=colour0]#[bg={colour}]{text}#[fg={colour}]#[bg=default]\u{e0b4}#[default]")
+    };
+    let tier = |style: &str| {
+        format!(
+            "#{{?#{{==:#{{@cpd_inbox_tier}},red}},#[{style}=colour1],#{{?#{{==:#{{@cpd_inbox_tier}},yellow}},#[{style}=colour3],\
+             #{{?#{{==:#{{@cpd_inbox_tier}},magenta}},#[{style}=colour5],#{{?#{{==:#{{@cpd_inbox_tier}},white}},#[{style}=colour7],\
+             #[{style}=colour8]}}}}}}}}"
+        )
+    };
+    let inbox = format!("{}\u{e0b6}#[fg=colour0]{}#{{@cpd_inbox}}{}#[bg=default]\u{e0b4}#[default]", tier("fg"), tier("bg"), tier("fg"));
     let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}}";
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}\
@@ -54,13 +64,13 @@ fn status_line_pills_follow_the_rule() {
         button("reset", cpd_core::host::tmux::RESET_GLYPH),
         button("legend", cpd_core::host::tmux::LEGEND_GLYPH),
         button("logs", cpd_core::host::tmux::LOGS_GLYPH),
-        pill("preview: #{@cpd_preview}"),
-        pill("#{@cpd_inbox}"),
-        pill(&format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
-        pill("#{@cpd_version}"),
+        pill("colour3", "preview: #{@cpd_preview}"),
+        inbox,
+        pill("colour7", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
+        pill("colour7", "#{@cpd_version}"),
     );
     assert_eq!(STATUS_FORMAT, want);
-    for old in ["reverse", "colour236", "yellow", "push-default", "pop-default"] {
+    for old in ["reverse", "colour236", "push-default", "pop-default"] {
         assert!(!STATUS_FORMAT.contains(old), "{old} is gone from the status format");
     }
 }

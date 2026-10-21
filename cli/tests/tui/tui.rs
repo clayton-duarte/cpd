@@ -137,7 +137,7 @@ fn assert_status_line(env: &TestEnv) {
         "#[align=right]",
         "#{@cpd_inbox}",
         "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
-        "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}",
+        "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}",
         "#{R:\u{2500},",
     ] {
         assert!(format.contains(range), "{range} in {format}");
@@ -193,7 +193,7 @@ fn tui_builds_the_cockpit_once_and_starts_the_engine() {
     // tmux expands the format of the tree pane to its title pill (hs-d530 R1, R3).
     let expanded = tmux_out(&env, &["display", "-p", "-t", &view(&panes, "tree").id, "-F", &border]);
     // (the colours, grey or blue, are the pane's focus: `pane_active`)
-    assert!(expanded.contains("━\u{e0b6}#[fg=colour7]#[bg=colour8]Context#[fg=colour8]#[bg=default]\u{e0b4}"), "{expanded}");
+    assert!(expanded.contains("#[fg=colour0]#[bg=colour7]Context#[fg=colour7]#[bg=default]"), "{expanded}");
     assert!(!border.contains("statusbar"), "{border}");
     // The StatusBar is the cockpit session's status line; a click on a pane is tmux's default again.
     assert_status_line(&env);
@@ -626,7 +626,13 @@ fn visible(row: &str) -> String {
 fn pill(row: &str, title: &str) -> (usize, String, String) {
     let (head, after) = row.split_once(&format!("m{title}\x1b[")).unwrap_or_else(|| panic!("{title} in {row:?}"));
     let (before, _) = head.rsplit_once('\u{e0b6}').unwrap_or_else(|| panic!("a left cap before {title} in {row:?}"));
-    let in_force = |text: &str| text.rsplit("\x1b[").next().and_then(|s| s.split_once('m')).map_or(String::new(), |(p, _)| p.to_owned());
+    // The foreground in force: the last foreground SGR (tmux sends none when it already holds, so a bg reset may come last).
+    let in_force = |text: &str| {
+        text.rsplit("\x1b[")
+            .filter_map(|s| s.split_once('m').map(|(p, _)| p))
+            .find(|p| p.len() == 2 && (p.starts_with('3') || p.starts_with('9')) && *p != "39")
+            .map_or(String::new(), str::to_owned)
+    };
     let (right, _) = after.split_once('\u{e0b4}').unwrap_or_else(|| panic!("a right cap after {title} in {row:?}"));
     let first = right.split_once('m').map_or(String::new(), |(p, _)| p.to_owned());
     (visible(before).chars().count(), in_force(before), first)
@@ -662,11 +668,11 @@ fn a_pane_title_is_an_unpadded_pill_grey_and_blue_when_focused_three_columns_fro
     };
     let titled = [("Context", tree.id.as_str()), ("Plan", plan.id.as_str()), ("Deploy", widgets.id.as_str()), ("Retry Payouts", lead)];
     // Every pill starts three columns from its pane's edge (hs-d478): three border cells, then the left cap. Its caps
-    // and block are grey (colour 8, SGR 90) and, on the focused pane, blue (SGR 34), whatever the border's colour is.
+    // and block are colour 7 (SGR 37) and, on the focused pane, blue (SGR 34), whatever the border's colour is.
     let check = |focused: &str| {
         for (title, id) in titled {
             let (row, left) = at(id);
-            let colour = if id == focused { "34" } else { "90" };
+            let colour = if id == focused { "34" } else { "37" };
             let (column, left_cap, right_cap) = pill(&styled_row(&outer, row), title);
             assert_eq!((column, left_cap.as_str(), right_cap.as_str()), (left + 3, colour, colour), "{title} (focus on {focused})");
         }
@@ -1059,7 +1065,7 @@ fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_fro
         let (line, styled) = status_line(&env, width as u16, "queued");
         assert_eq!(line, row(width, None, LONG_ITEMS, LONG_WIDTH), "at {width}: {line:?}");
         assert_eq!(line.chars().count(), width, "{line:?}");
-        assert!(styled.contains("\x1b[37m\x1b[100minbox 2"), "the counter in colour 7 on the pill: {styled:?}");
+        assert!(styled.contains("\x1b[30m\x1b[100minbox 2"), "the counter, colour 0 on colour 8 (no tier), on the pill: {styled:?}");
     }
 }
 
@@ -1070,7 +1076,7 @@ fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_be
         let (line, styled) = status_line(&env, width as u16, "6/6");
         assert!(!line.contains("workers"), "{line:?}");
         assert_eq!(line, row(width, None, SHORT_ITEMS, SHORT_WIDTH), "at {width}: {line:?}");
-        assert!(styled.contains("\x1b[37m\x1b[100minbox 2"), "the counter in colour 7 on the pill: {styled:?}");
+        assert!(styled.contains("\x1b[30m\x1b[100minbox 2"), "the counter, colour 0 on colour 8 (no tier), on the pill: {styled:?}");
     }
 }
 
@@ -1087,8 +1093,8 @@ fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_w
         assert!(!line.contains("\u{e0b4} \u{e0b6}"), "no space between two pills: {line:?}");
         // The leading `─`, the joins and the fill are colour 8 (bright black, SGR 90), the pills' caps too.
         assert!(styled.contains("\x1b[90m\u{2500}\x1b[97m\u{e0b6}"), "the leading line cell, grey, then a button's white cap: {styled:?}");
-        assert!(styled.contains("\u{e0b4}\u{2500}\u{e0b6}"), "{styled:?}");
-        assert!(styled.trim_end().ends_with("\x1b[90m\x1b[49m\u{e0b4}\u{2500}"), "the closing line cell, grey: {styled:?}");
+        assert!(styled.contains("\u{e0b4}\u{2500}\x1b[37m\u{e0b6}"), "{styled:?}");
+        assert!(styled.trim_end().ends_with("\x1b[37m\x1b[49m\u{e0b4}\x1b[90m\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
     }
 }
 
@@ -1120,7 +1126,7 @@ fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_o
         assert!(line.starts_with(&format!("{}\u{2500}{pill}\u{2500}", buttons())), "a `─` join after the buttons, then the pill, then the line: {line:?}");
         assert!(line.ends_with(items), "at {width}: {line:?}");
         assert_eq!(line, row(width, Some(PREVIEW), items, items_width), "the row stays full at {width}: {line:?}");
-        assert!(styled.contains(&format!("\x1b[37m\x1b[100mpreview: {PREVIEW}")), "colour 7 on 8, unpadded: {styled:?}");
+        assert!(styled.contains(&format!("\x1b[30m\x1b[43mpreview: {PREVIEW}")), "colour 0 on 3, unpadded: {styled:?}");
     }
 }
 

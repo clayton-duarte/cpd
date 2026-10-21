@@ -131,7 +131,7 @@ fn the_popup_and_menu_styles_are_server_options_set_to_default_after_the_active_
     let want: [&[&str]; 3] = [
         &["set", "-gq", "popup-style", "default"],
         &["set", "-gq", "popup-border-style", "fg=colour7"],
-        &["set", "-gq", "menu-style", "default"],
+        &["set", "-gq", "menu-style", "fg=colour15"],
     ];
     assert_eq!(&SERVER_OPTIONS[at + 1..at + 4], &want);
 }
@@ -143,7 +143,11 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
     for option in ["popup-style", "popup-border-style", "menu-style"] {
         let shown = s.env.tmux(&["show", "-gv", option]);
         if shown.status.success() {
-            let want = if option == "popup-border-style" { "fg=colour7" } else { "default" };
+            let want = match option {
+                "popup-border-style" => "fg=colour7",
+                "menu-style" => "fg=colour15",
+                _ => "default",
+            };
             assert_eq!(String::from_utf8_lossy(&shown.stdout).trim(), want, "{option}");
         } else {
             eprintln!("{option} not asserted: this tmux does not know the option");
@@ -155,12 +159,12 @@ fn a_server_started_by_cpd_reads_the_popup_and_menu_styles_back_as_default() {
 /// (colour 8) and blue on the focused pane, set in the format itself; one `━` in the pill's colour before the left
 /// cap, so the cap is the fourth cell of the border row, three columns in counted from the pane's edge.
 const BORDER_FORMAT_WANT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}#{@cpd_title}#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4},},\
+#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[fg=colour0]#{?pane_active,#[bg=blue],#[bg=colour7]}#{@cpd_title}#{?pane_active,#[fg=blue],#[fg=colour7]}#[bg=default]\u{e0b4},},\
 #{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}\
+#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[fg=colour0]#{?pane_active,#[bg=blue],#[bg=colour7]}\
 #{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
 #{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
-#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4}}}}";
+#{?pane_active,#[fg=blue],#[fg=colour7]}#[bg=default]\u{e0b4}}}}";
 
 /// Every option, binding and hook of contract §6.1: the reference's
 /// `tui/scripts/tmux.conf` lines 2–17, renamed, with the conditional hook.
@@ -517,16 +521,16 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
             cpd_core::host::tmux::RESET_GLYPH,
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
-        ) + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]preview: #{@cpd_preview}#[fg=colour8]#[bg=default]\u{e0b4}#[default],}\
+        ) + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[fg=colour0]#[bg=colour3]preview: #{@cpd_preview}#[fg=colour3]#[bg=default]\u{e0b4}#[default],}\
          #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}},\
          #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
          #[default]#[align=right]\
-         #[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]#{@cpd_inbox}#[fg=colour8]#[bg=default]\u{e0b4}#[default]\
+         #{?#{==:#{@cpd_inbox_tier},red},#[fg=colour1],#{?#{==:#{@cpd_inbox_tier},yellow},#[fg=colour3],#{?#{==:#{@cpd_inbox_tier},magenta},#[fg=colour5],#{?#{==:#{@cpd_inbox_tier},white},#[fg=colour7],#[fg=colour8]}}}}\u{e0b6}#[fg=colour0]#{?#{==:#{@cpd_inbox_tier},red},#[bg=colour1],#{?#{==:#{@cpd_inbox_tier},yellow},#[bg=colour3],#{?#{==:#{@cpd_inbox_tier},magenta},#[bg=colour5],#{?#{==:#{@cpd_inbox_tier},white},#[bg=colour7],#[bg=colour8]}}}}#{@cpd_inbox}#{?#{==:#{@cpd_inbox_tier},red},#[fg=colour1],#{?#{==:#{@cpd_inbox_tier},yellow},#[fg=colour3],#{?#{==:#{@cpd_inbox_tier},magenta},#[fg=colour5],#{?#{==:#{@cpd_inbox_tier},white},#[fg=colour7],#[fg=colour8]}}}}#[bg=default]\u{e0b4}#[default]\
          #[fg=colour8]\u{2500}#[default]\
-         #[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]\
+         #[fg=colour7]\u{e0b6}#[fg=colour0]#[bg=colour7]\
          #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
-         #[fg=colour8]#[bg=default]\u{e0b4}#[default]\
-         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]#{@cpd_version}#[fg=colour8]#[bg=default]\u{e0b4}#[default],}\
+         #[fg=colour7]#[bg=default]\u{e0b4}#[default]\
+         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour7]\u{e0b6}#[fg=colour0]#[bg=colour7]#{@cpd_version}#[fg=colour7]#[bg=default]\u{e0b4}#[default],}\
          #[fg=colour8]\u{2500}#[default]"
     );
 }
