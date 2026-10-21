@@ -2723,8 +2723,8 @@ The lines (`╭`, `│`, `╰`), the arrows and the words are muted; the pill an
   | Row | Items | Command each runs |
   |---|---|---|
   | Inbox item | Snooze 15 min, Snooze 1 h, Snooze until tomorrow 09:00, Dismiss | `inbox snooze <id> 15m`, `inbox snooze <id> 1h`, `inbox snooze <id> tomorrow`, `inbox dismiss <id>` (§21.3, §21.4) |
-  | Context | New Plan…, Rename…, Copy id, Archive | `plan new` (§4.1), `context rename` (§3.7), `context archive` (§3.8) |
-  | Plan | New session…, Rename…, Copy id, Archive | `session fork <the Plan's Lead>` (§10.3), `plan rename` (§4.9), `plan archive` (§4.10) |
+  | Context | New Plan…, Rename…, Copy id, Archive, Delete | `plan new` (§4.1), `context rename` (§3.7), `context archive` (§3.8), `context delete` (§3.14) |
+  | Plan | New session…, Rename…, Copy id, Archive, Delete | `session fork <the Plan's Lead>` (§10.3), `plan rename` (§4.9), `plan archive` (§4.10), `plan delete` (§4.14) |
   | Fork (side Session) | Open, Rename…, Fork…, Copy id, Close, Archive | `session open` (§10.4), `session rename` (§10.7, `--session <id>`), `session fork` (§10.3), `session close` (§10.9), `session archive` (§10.10) |
   | empty tree area | New Context… | `context new` (§3.1) |
   | any archived row | Rename…, Copy id, Unarchive | `context rename` (§3.7), `plan rename` (§4.9) or `session rename` (§10.7), `Copy id` (no cpd command; below), and `context unarchive` (§3.9), `plan unarchive` (§4.11) or `session unarchive` (§10.11); the rename commands accept archived objects (F4) |
