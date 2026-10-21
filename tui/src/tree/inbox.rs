@@ -13,7 +13,6 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Margin, Rect};
-use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use time::OffsetDateTime;
@@ -24,7 +23,7 @@ use super::rows::truncate;
 use crate::fold;
 use crate::link::link;
 use crate::merge::Pull;
-use crate::palette::{self, Meaning};
+use crate::palette;
 use crate::read::Tree;
 use crate::section;
 use crate::dialog::scroll::{Cue, cue};
@@ -251,14 +250,15 @@ fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line
     let mut glyph = palette::tier_span(item.urgency);
     if let Some(frame) = spin {
         glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();
+        glyph.style = palette::fg_clickable(palette::Meaning::Review); // a merge runs: yellow, whatever the tier
     }
     let line = fold::content(fold::BRANCH, Line::from(vec![
         "  ".into(),
         glyph,
         " ".into(),
-        label.into(),
+        Span::styled(label, palette::clickable_text()),
         " ".repeat(gap).into(),
-        Span::styled(age.to_owned(), palette::fg(Meaning::Nothing)),
+        Span::styled(age.to_owned(), palette::muted_text()),
     ]));
     (line, label_width)
 }
@@ -271,7 +271,7 @@ fn cue_line(which: Cue, n: usize, width: usize) -> Line<'static> {
 /// Draws the section into `area`, the panel's full width (its first row is the empty one; rows that do not fit are cut;
 /// the title keeps the padding of one column on each side, the rows are drawn inside it): `items` are the
 /// snapshot's visible open items, `now` the clock the ages are taken from, `cursor` the item the keyboard cursor
-/// is on (its row is inverted across its width). `shape` is the section's, as capped and scrolled. `spinning` says, of an
+/// is on (its row is the blue block across its width). `shape` is the section's, as capped and scrolled. `spinning` says, of an
 /// item whose merge runs, the frame of the spinner its glyph cell shows instead of its tier glyph (hs-d495).
 pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Option<usize>, now: OffsetDateTime, spinning: &dyn Fn(&Item) -> Option<usize>) {
     let win = shape.window();
@@ -290,7 +290,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
                 let (line, label_width) = item_line(item, &age_of(&item.opened_at, now), width, spinning(item));
                 f.render_widget(Paragraph::new(line), row);
                 if cursor == Some(i) {
-                    f.buffer_mut().set_style(row, Modifier::REVERSED);
+                    f.buffer_mut().set_style(row, palette::selected());
                 }
                 if let (true, Some(url)) = (is_link(item.kind), &item.url) {
                     let label = Rect::new(row.x + LEAD_WIDTH as u16, row.y, label_width as u16, 1);
@@ -340,6 +340,7 @@ pub(super) fn item(id: i64, kind: Kind, urgency: cpd_core::inbox::model::Urgency
 
 #[cfg(test)]
 mod tests {
+    use crate::palette::Meaning;
     use std::cell::RefCell;
     use std::io::{self, Write};
     use std::rc::Rc;

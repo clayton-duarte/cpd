@@ -154,7 +154,7 @@ fn box_inside(screen: &[String], title: &str) -> Vec<String> {
 }
 
 #[test]
-fn cancelled_job_is_drawn_muted_with_its_reason() {
+fn cancelled_job_is_a_colour_8_pill_with_its_reason_muted() {
     let env = env();
     plan(&env, &[("api", "api")], &[("api", "a", "queued", "work", &[]), ("api", "gone", "cancelled", "work", &[])]);
     let pane = start_view(&env);
@@ -164,9 +164,10 @@ fn cancelled_job_is_drawn_muted_with_its_reason() {
     assert!(text.contains("cancelled"), "with its status:\n{text}");
     assert!(text.contains("gone is not needed"), "and its reason:\n{text}");
     let styled = styled_screen(&env, &pane);
-    for word in ["gone", "cancelled", "gone is not needed"] {
+    // the pill is colour 8 with text 0 (contract §6.1.1: a cancelled Job's pill); the status and the reason beside it are muted, 8
+    for (word, colour) in [("gone", "0"), ("cancelled", "8"), ("gone is not needed", "8")] {
         let colours = colours_of(&styled, word).unwrap_or_else(|| panic!("{word} not on the styled screen:\n{styled}"));
-        assert!(colours.iter().all(|c| c == "8"), "{word} is muted (dark grey): {colours:?}");
+        assert!(colours.iter().all(|c| c == colour), "{word} is {colour}: {colours:?}");
     }
     // the live Job is not muted
     assert!(colours_of(&styled, " a│").unwrap().iter().any(|c| c != "8"), "{styled}");

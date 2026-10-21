@@ -6,7 +6,6 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Alignment, Position, Rect};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -94,7 +93,7 @@ impl Field {
         Some(edit)
     }
 
-    /// The row of the field in `width` columns: the text around the cursor, the cursor reversed (a space past the end).
+    /// The row of the field in `width` columns: the text around the cursor (clickable text), the cursor the blue block (a space past the end).
     fn line(&self, width: usize) -> Line<'static> {
         let width = width.max(1);
         let start = (self.cursor + 1).saturating_sub(width);
@@ -103,9 +102,9 @@ impl Field {
         let part = |from: usize, to: usize| shown[from.min(shown.len())..to.min(shown.len())].iter().collect::<String>();
         let cursor = shown.get(at).map_or(" ".to_owned(), char::to_string);
         Line::from(vec![
-            Span::raw(format!(" {}", part(0, at))),
-            Span::styled(cursor, Style::new().add_modifier(Modifier::REVERSED)),
-            Span::raw(part(at + 1, shown.len())),
+            Span::styled(format!(" {}", part(0, at)), palette::clickable_text()),
+            Span::styled(cursor, palette::selected()),
+            Span::styled(part(at + 1, shown.len()), palette::clickable_text()),
         ])
     }
 }
@@ -224,7 +223,7 @@ impl Dialog {
         match &self.mode {
             Mode::Input { field, refused, .. } => {
                 for (n, text) in rows.iter().enumerate() {
-                    f.render_widget(Paragraph::new(format!(" {text}")), row(n));
+                    f.render_widget(Paragraph::new(format!(" {text}")).style(palette::read_only_text()), row(n));
                 }
                 f.render_widget(Paragraph::new(field.line(width)), row(rows.len()));
                 if let Some(why) = refused {
@@ -237,12 +236,12 @@ impl Dialog {
             _ => {
                 let first = self.scroll.offset();
                 for (n, text) in rows.iter().skip(first).take(self.scroll.page()).enumerate() {
-                    f.render_widget(Paragraph::new(format!(" {text}")), row(n));
+                    f.render_widget(Paragraph::new(format!(" {text}")).style(palette::read_only_text()), row(n));
                 }
             }
         }
         for (n, (label, rect)) in self.labels().iter().zip(self.buttons(area)).enumerate() {
-            let style = if n == 0 { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() };
+            let style = if n == 0 { palette::selected() } else { palette::clickable_text() };
             f.render_widget(Paragraph::new(label.as_str()).style(style), rect);
         }
         if self.scroll.scrollable() {
@@ -250,8 +249,8 @@ impl Dialog {
             let position = format!("{}-{}/{} ", self.scroll.offset() + 1, last, self.scroll.total());
             let taken = self.buttons(area).last().map_or(0, |r| r.x + r.width - area.x);
             if usize::from(taken) + position.chars().count() < usize::from(area.width) {
-                let dim = Paragraph::new(position).alignment(Alignment::Right).style(Style::new().add_modifier(Modifier::DIM));
-                f.render_widget(dim, parts.buttons);
+                let muted = Paragraph::new(position).alignment(Alignment::Right).style(palette::muted_text());
+                f.render_widget(muted, parts.buttons);
             }
         }
     }
@@ -498,8 +497,8 @@ mod tests {
             [" Fork cpd-ui into a new Plan, name:", " abc", "", "", "", "  [OK]   [Cancel]"][..]
         );
         // the cursor is the reversed cell after the text
-        assert!(buf[(4, 4)].modifier.contains(Modifier::REVERSED));
-        assert!(!buf[(3, 4)].modifier.contains(Modifier::REVERSED));
+        assert!(crate::palette::check::is_selected(&buf[(4, 4)]));
+        assert!(!crate::palette::check::is_selected(&buf[(3, 4)]));
     }
 
     #[test]

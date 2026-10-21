@@ -4,7 +4,6 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -126,8 +125,8 @@ impl Log {
     }
 }
 
-fn dim(text: impl Into<String>) -> Span<'static> {
-    Span::styled(text.into(), Style::new().add_modifier(Modifier::DIM))
+fn muted(text: impl Into<String>) -> Span<'static> {
+    Span::styled(text.into(), palette::muted_text())
 }
 
 /// `HH:MM:SS` (UTC) of an RFC 3339 time, as the Events carry it.
@@ -147,7 +146,7 @@ fn addressed_to_lead(e: &Event) -> bool {
     e.plan.is_some() && (field("source") != Some("watch") || field("code").is_some_and(|c| LEAD_CODES.contains(&c)))
 }
 
-/// The Event's line, as the Dispatch column showed it: its time of day (dim), then its `text`, or its kind when
+/// The Event's line, as the Dispatch column showed it: its time of day (muted), then its `text`, or its kind when
 /// the `text` is empty; an `error` Event in the failed colour, in the waiting colour when it is addressed to a Lead (who
 /// handles it). Cut to `width` columns with `…`.
 fn line(e: &Event, width: usize) -> Line<'static> {
@@ -155,7 +154,7 @@ fn line(e: &Event, width: usize) -> Line<'static> {
     let style = match (e.kind.as_str(), addressed_to_lead(e)) {
         ("error", true) => palette::fg(Meaning::Waiting),
         ("error", false) => palette::fg(Meaning::Failed),
-        _ => Style::new(),
+        _ => palette::read_only_text(),
     };
     let room = width.saturating_sub(" 00:00:00 ".len());
     let text = if text.chars().count() <= room {
@@ -163,7 +162,7 @@ fn line(e: &Event, width: usize) -> Line<'static> {
     } else {
         text.chars().take(room.saturating_sub(1)).chain(['…']).collect()
     };
-    Line::from(vec![" ".into(), dim(clock(&e.at)), " ".into(), Span::styled(text, style)])
+    Line::from(vec![" ".into(), muted(clock(&e.at)), " ".into(), Span::styled(text, style)])
 }
 
 /// Draws the title, then the visible Events, in `area`, and the error in its last row. Call [`Log::fit`] with its
@@ -175,21 +174,21 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let area = match &log.error {
         Some(error) => {
             let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
-            f.render_widget(Paragraph::new(Span::styled(format!(" {error}"), palette::note())), foot);
+            f.render_widget(Paragraph::new(Span::styled(format!(" {error}"), palette::error())), foot);
             events
         }
         None => area,
     };
     let lines: Vec<Line<'static>> = if log.events.is_empty() {
-        vec![Line::from(dim(" none yet"))]
+        vec![Line::from(muted(" none yet"))]
     } else {
         log.visible().iter().map(|e| line(e, usize::from(area.width))).collect()
     };
     f.render_widget(Paragraph::new(lines), area);
-    // the Event the view was opened at is reversed across its whole line
+    // the Event the view was opened at is the blue block across its whole line
     if let Some(i) = log.visible().iter().position(|e| log.selected == Some(e.id)) {
         let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
-        f.buffer_mut().set_style(row.intersection(area), Modifier::REVERSED);
+        f.buffer_mut().set_style(row.intersection(area), palette::selected());
     }
 }
 
@@ -331,8 +330,8 @@ mod tests {
         assert_eq!(row(2).trim_end(), "");
         assert!(row(3).starts_with(" 00:00:08 event 8"), "{}", row(3));
         // the selected Event (id 11, `event 10`) is reversed, in the middle of the five rows
-        assert!(row(5).contains("event 10") && got[(0, 5)].modifier.contains(Modifier::REVERSED));
-        assert!(!got[(0, 4)].modifier.contains(Modifier::REVERSED));
+        assert!(row(5).contains("event 10") && crate::palette::check::is_selected(&got[(0, 5)]));
+        assert!(!crate::palette::check::is_selected(&got[(0, 4)]));
     }
 
     // ---- the logs popup's title v4 (hs-d475, hs-d476): red until it is `Logs`, a grey pill inside the padding ----
@@ -406,6 +405,6 @@ mod error_colour {
 
     #[test]
     fn other_events_have_no_colour() {
-        assert_eq!(colour(&event("job-failed", Some("pay"), json!({}))), None);
+        assert_eq!(colour(&event("job-failed", Some("pay"), json!({}))), palette::read_only_text().fg, "read-only text, colour 7");
     }
 }

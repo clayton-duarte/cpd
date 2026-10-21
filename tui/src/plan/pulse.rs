@@ -7,7 +7,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
@@ -64,19 +64,19 @@ pub fn age_text(minutes: i64) -> String {
     }
 }
 
-/// The age cell, [`AGE_WIDTH`] wide, right-aligned: dim, or `quiet <age>` in the Review colour.
+/// The age cell, [`AGE_WIDTH`] wide, right-aligned: muted, as is `quiet <age>` (hs-d534: no longer a yellow).
 fn age_cell(row: &PulseRow) -> Span<'static> {
     let age = row.age_minutes.map(age_text);
     if row.quiet {
         let text = age.map_or("quiet".to_owned(), |a| format!("quiet {a}"));
-        return Span::styled(format!("{text:>AGE_WIDTH$}"), palette::fg(Meaning::Review));
+        return Span::styled(format!("{text:>AGE_WIDTH$}"), palette::muted_text());
     }
-    Span::styled(format!("{:>AGE_WIDTH$}", age.unwrap_or_default()), Style::new().add_modifier(Modifier::DIM))
+    Span::styled(format!("{:>AGE_WIDTH$}", age.unwrap_or_default()), palette::muted_text())
 }
 
 /// One row's line with `n` buckets: the last `n` of the row's, blank on the left when it has fewer.
 pub fn row_line(row: &PulseRow, id_width: usize, n: usize, max: u32) -> Line<'static> {
-    let mut spans = vec![Span::raw(format!("{:<id_width$}  ", row.plan.as_str()))];
+    let mut spans = vec![Span::styled(format!("{:<id_width$}  ", row.plan.as_str()), palette::clickable_text())];
     let shown = &row.buckets[row.buckets.len().saturating_sub(n)..];
     if shown.len() < n {
         spans.push(Span::raw(" ".repeat(n - shown.len())));
@@ -124,7 +124,7 @@ pub fn draw(buf: &mut Buffer, area: Rect, pulse: &Pulse, offset: usize) -> usize
 
 /// What the legend shows for `quiet`: the label of a quiet Plan's age cell.
 pub fn quiet_sample() -> Span<'static> {
-    Span::styled("quiet 41m", palette::fg(Meaning::Review))
+    Span::styled("quiet 41m", palette::muted_text())
 }
 
 /// The legend's entries: the sample and its meaning. The kinds are in the order of precedence.
@@ -245,16 +245,16 @@ mod tests {
         assert_eq!(text(&Line::from(age_cell(&r))), "         ", "no activity ever: blank");
         r.age_minutes = Some(0);
         let cell = age_cell(&r);
-        assert_eq!((cell.content.as_ref(), cell.style.add_modifier), ("       0m", Modifier::DIM));
+        assert_eq!((cell.content.as_ref(), cell.style), ("       0m", palette::muted_text()));
     }
 
     #[test]
-    fn a_quiet_row_reads_quiet_and_its_age_in_the_review_colour() {
+    fn a_quiet_row_reads_quiet_and_its_age_muted() {
         let mut r = row("api", vec![]);
         r.quiet = true;
         r.age_minutes = Some(41);
         let cell = age_cell(&r);
-        assert_eq!((cell.content.as_ref(), cell.style), ("quiet 41m", palette::fg(Meaning::Review)));
+        assert_eq!((cell.content.as_ref(), cell.style), ("quiet 41m", palette::muted_text()));
     }
 
     #[test]
@@ -309,7 +309,7 @@ mod tests {
                 ("▄", Some(palette::pulse_kind(Kind::Merged))),
                 ("▄", Some(palette::pulse_kind(Kind::Other))),
                 ("▁", palette::fg(Meaning::Nothing).fg),
-                ("quiet 41m", palette::fg(Meaning::Review).fg)
+                ("quiet 41m", palette::muted_text().fg)
             ]
         );
     }

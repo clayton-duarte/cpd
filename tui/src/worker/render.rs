@@ -25,7 +25,7 @@ pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
         }
         let role = entry["message"]["role"].as_str().unwrap_or("");
         let time = entry["timestamp"].as_str().unwrap_or("").get(11..19).unwrap_or("");
-        let time = || format!("{time} ").dim();
+        let time = || Span::styled(format!("{time} "), palette::muted_text());
         let parts = entry["message"]["content"].as_array().map_or(&[][..], Vec::as_slice);
         for part in parts {
             let text = part["text"].as_str().unwrap_or("");
@@ -38,7 +38,7 @@ pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
                 ("assistant", "text") => {
                     let agent = Style::new().fg(palette::ui(Ui::Agent));
                     lines.push(Line::from(vec![time(), Span::styled("agent", agent).bold()]));
-                    lines.extend(text.lines().map(|l| Line::from(format!("      {l}"))));
+                    lines.extend(text.lines().map(|l| Line::styled(format!("      {l}"), palette::read_only_text())));
                 }
                 ("assistant", "toolCall") => {
                     let name = part["name"].as_str().unwrap_or("tool");
@@ -46,11 +46,11 @@ pub(crate) fn render(text: &str) -> Vec<Line<'static>> {
                     let arg = arguments["command"].as_str().or(arguments["path"].as_str()).unwrap_or("");
                     let arg: String = arg.lines().next().unwrap_or("").chars().take(160).collect();
                     let tool = Style::new().fg(palette::ui(Ui::Tool));
-                    lines.push(Line::from(vec![time(), Span::styled(format!("→ {name} "), tool), arg.into()]));
+                    lines.push(Line::from(vec![time(), Span::styled(format!("→ {name} "), tool), Span::styled(arg, palette::read_only_text())]));
                 }
                 ("toolResult", "text") => {
                     let last = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
-                    lines.push(Line::styled(format!("        {RESULT} {}", last.chars().take(160).collect::<String>()), Style::new().dim()));
+                    lines.push(Line::styled(format!("        {RESULT} {}", last.chars().take(160).collect::<String>()), palette::muted_text()));
                 }
                 _ => {}
             }
@@ -132,6 +132,10 @@ mod tests {
         assert_eq!(lines[1].style.fg, Some(palette::ui(Ui::You)), "the User's words");
     }
 
+    fn muted() -> ratatui::style::Color {
+        palette::muted_text().fg.unwrap()
+    }
+
     /// The reference's `render_session` (`tui/src/main.rs` on `main`), verbatim but for reading `text` instead of a path.
     fn reference_render_session(text: &str) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
@@ -147,15 +151,15 @@ mod tests {
             for part in content {
                 match (role, part["type"].as_str().unwrap_or("")) {
                     ("user", "text") => {
-                        lines.push(Line::from(vec![format!("{ts} ").dim(), "you  ".fg(palette::ui(Ui::You)).bold()]));
+                        lines.push(Line::from(vec![format!("{ts} ").fg(muted()), "you  ".fg(palette::ui(Ui::You)).bold()]));
                         for l in part["text"].as_str().unwrap_or("").lines().take(12) {
                             lines.push(Line::from(format!("      {l}")).fg(palette::ui(Ui::You)));
                         }
                     }
                     ("assistant", "text") => {
-                        lines.push(Line::from(vec![format!("{ts} ").dim(), "agent".fg(palette::ui(Ui::Agent)).bold()]));
+                        lines.push(Line::from(vec![format!("{ts} ").fg(muted()), "agent".fg(palette::ui(Ui::Agent)).bold()]));
                         for l in part["text"].as_str().unwrap_or("").lines() {
-                            lines.push(Line::from(format!("      {l}")));
+                            lines.push(Line::from(format!("      {l}")).fg(palette::read_only_text().fg.unwrap()));
                         }
                     }
                     ("assistant", "toolCall") => {
@@ -163,16 +167,16 @@ mod tests {
                         let arg = part["arguments"]["command"].as_str().or(part["arguments"]["path"].as_str()).unwrap_or("");
                         let arg: String = arg.lines().next().unwrap_or("").chars().take(160).collect();
                         lines.push(Line::from(vec![
-                            format!("{ts} ").dim(),
+                            format!("{ts} ").fg(muted()),
                             format!("→ {name} ").fg(palette::ui(Ui::Tool)),
-                            arg.into(),
+                            arg.fg(palette::read_only_text().fg.unwrap()),
                         ]));
                     }
                     ("toolResult", "text") => {
                         let t = part["text"].as_str().unwrap_or("");
                         let last: String =
                             t.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(160).collect();
-                        lines.push(Line::from(format!("        {RESULT} {last}")).dim());
+                        lines.push(Line::from(format!("        {RESULT} {last}")).fg(muted()));
                     }
                     _ => {}
                 }

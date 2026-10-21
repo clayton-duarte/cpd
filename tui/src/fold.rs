@@ -10,9 +10,9 @@
 //! - **Folded:** the title row (`╭󰝦 dotfiles`), then `╰󰁋 expand`.
 //! - **Nothing to fold:** a block of rows has no closing row, its last row's branch is the `╰─` ([`LAST_BRANCH`]); a
 //!   block with no row at all, and the Inbox with 3 items or fewer, close with a plain `╰─` ([`plain`]).
-//! - **Muted** is `palette::fg(Meaning::Nothing)`: the lines (`╭`, `├─`, `│`, `╰`), the arrows and the words `expand`
-//!   and `collapse`. The content is not muted, and a row the widget wraps keeps its own glyphs and colours: the fold
-//!   only adds muted lines.
+//! - **Muted** is `palette::muted_text()` (colour 8): the lines (`╭`, `├─`, `│`, `╰`). The toggle's arrow and word
+//!   (`expand`, `collapse`) are `palette::toggle_text()` (colour 7, hs-d534). The content is not muted, and a row the widget
+//!   wraps keeps its own glyphs and colours: the fold only adds muted lines.
 //! - **Toggling:** only the closing row toggles. [`Drawn::toggle`] is its row, so the caller can hit-test it; a click
 //!   on the title row keeps the caller's own action.
 //!
@@ -21,7 +21,7 @@
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::palette::{self, Meaning};
+use crate::palette;
 
 /// The branch of a content row that has no glyph of its own (the Inbox's).
 pub const BRANCH: &str = "│";
@@ -46,7 +46,7 @@ const DOWN: &str = "\u{F004B}";
 const UP: &str = "\u{F0063}";
 
 fn muted() -> Style {
-    palette::fg(Meaning::Nothing)
+    palette::muted_text()
 }
 
 /// A title row: the muted `╭` and `content` (the glyph and the name, for example); [`Fold`] makes the content bold.
@@ -57,10 +57,10 @@ pub fn title(content: Line<'static>) -> Line<'static> {
     Line { spans, ..content }
 }
 
-/// The closing row: a muted `╰󰁋 expand` when folded, `╰󰁣 collapse` when expanded.
+/// The closing row: `╰󰁋 expand` when folded, `╰󰁣 collapse` when expanded: the muted `╰`, then the arrow and the word in colour 7.
 pub fn toggle(expanded: bool) -> Line<'static> {
     let (arrow, word) = if expanded { (UP, "collapse") } else { (DOWN, "expand") };
-    Line::from(Span::styled(format!("{CLOSE}{arrow} {word}"), muted()))
+    Line::from(vec![Span::styled(CLOSE, muted()), Span::styled(format!("{arrow} {word}"), palette::toggle_text())])
 }
 
 /// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
@@ -147,7 +147,7 @@ mod tests {
     }
 
     fn is_muted(span: &Span<'_>) -> bool {
-        span.style.fg == Some(palette::color(Meaning::Nothing))
+        span.style.fg == palette::muted_text().fg
     }
 
     fn bold(span: &Span<'_>) -> bool {
@@ -181,9 +181,9 @@ mod tests {
             assert!(is_muted(&spans[0]), "the branch is muted");
             assert!(spans[1..].iter().all(|s| !is_muted(s) && s.style.fg.is_none()), "the content is not");
         }
-        assert!(drawn.lines[3].spans.iter().all(is_muted), "the closing row is muted, the lines and the word");
+        assert!(is_muted(&drawn.lines[3].spans[0]), "the closing row's corner is muted");
         assert!(!drawn.lines[3].spans.iter().any(bold));
-        assert!(bare(Fold::new(Line::from("x"), vec![], false).drawn()).lines[1].spans.iter().all(is_muted), "folded too");
+        assert!(is_muted(&bare(Fold::new(Line::from("x"), vec![], false).drawn()).lines[1].spans[0]), "folded too");
     }
 
     #[test]
@@ -202,7 +202,7 @@ mod tests {
     fn the_toggle_row_alone_is_what_the_inbox_draws() {
         assert_eq!(flat(&toggle(false)), "╰\u{F004B} expand");
         assert_eq!(flat(&toggle(true)), "╰\u{F0063} collapse");
-        assert!(toggle(true).spans.iter().all(is_muted));
+        assert_eq!(toggle(true).spans[1].style, palette::toggle_text());
     }
 
     // ---- section look v3 (commands.md §17, "Collapsible blocks"; hs-d349, hs-d345): red until `fold` draws the arrows ----
@@ -219,10 +219,11 @@ mod tests {
     }
 
     #[test]
-    fn the_closing_row_lines_arrows_and_words_are_all_muted() {
+    fn the_closing_rows_corner_is_muted_and_its_arrow_and_word_are_colour_7() {
         for expanded in [false, true] {
             let row = toggle(expanded);
-            assert!(row.spans.iter().all(is_muted), "expanded {expanded}: {:?}", row.spans);
+            assert!(is_muted(&row.spans[0]), "expanded {expanded}: {:?}", row.spans);
+            assert!(row.spans[1..].iter().all(|s| s.style == palette::toggle_text()), "expanded {expanded}: {:?}", row.spans);
             assert!(!row.spans.iter().any(bold));
             assert!(!flat(&row).contains("╰─"), "the arrow replaces the `─` of the old `╰─ word`: {:?}", flat(&row));
         }
@@ -249,9 +250,9 @@ mod tests {
     fn a_wrapped_row_keeps_its_own_glyphs_and_colours_and_the_fold_only_adds_muted_lines() {
         let item = Line::from(vec![
             Span::raw(" "),
-            Span::styled(palette::NEEDS_YOU, palette::fg(Meaning::Failed)),
+            Span::styled(palette::NEEDS_YOU, palette::fg(palette::Meaning::Failed)),
             Span::raw(" cpd#129 merge conflict"),
-            Span::styled("  18m", palette::fg(Meaning::Nothing)),
+            Span::styled("  18m", palette::muted_text()),
         ]);
         let drawn = bare(Fold::new(Line::from("title"), vec![item.clone()], true).drawn());
         let row = &drawn.lines[1];
@@ -259,7 +260,7 @@ mod tests {
         assert_eq!(row.spans[0].content, BRANCH);
         assert!(is_muted(&row.spans[0]), "only the line is added, and it is muted");
         assert_eq!(&row.spans[1..], &item.spans[..], "every span of the wrapped row, as it was: glyph, colour and age");
-        assert_eq!(row.spans[2].style.fg, Some(palette::color(Meaning::Failed)), "the icon keeps its colour");
+        assert_eq!(row.spans[2].style.fg, Some(palette::color(palette::Meaning::Failed)), "the icon keeps its colour");
         assert_eq!(flat(drawn.lines.last().unwrap()), format!("╰{UP} collapse"), "and the block closes with the arrow row");
     }
 

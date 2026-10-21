@@ -137,6 +137,8 @@ pub struct Pull {
     pub url: String,
     /// `pull_requests.mergeable = 'conflicting'` as of the last poll; `unknown` is not a conflict.
     pub conflicting: bool,
+    /// `pull_requests.merge_state = 'clean'` (GitHub's mergeStateStatus CLEAN): the PR is ready to merge; its `open` is yellow.
+    pub clean: bool,
     /// The Plan's Lead Session has `state = 'working'` (contract §3.6), read with the rest: the title shows the Lead's
     /// working dot beside the state (hs-d335).
     pub lead_working: bool,
@@ -296,6 +298,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
     }
     let mut stmt = conn.prepare(
         "SELECT r.key, r.repo, r.base, r.status, r.pr_number, q.state, q.url, q.mergeable,
+                COALESCE(q.merge_state = 'clean', 0),
                 (SELECT j.status FROM jobs j WHERE j.plan = r.plan AND j.pr = r.key AND j.kind = 'update'
                     AND j.status IN ('queued', 'running') ORDER BY j.status = 'running' DESC LIMIT 1)
            FROM prs r LEFT JOIN pull_requests q ON q.id = r.pull_request
@@ -307,7 +310,8 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
         let (key, repo, base, status): (String, String, String, String) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?);
         let (number, row_state, url, mergeable): (Option<i64>, Option<String>, Option<String>, Option<String>) =
             (r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
-        let update: Option<String> = r.get(8)?;
+        let clean: bool = r.get(8)?;
+        let update: Option<String> = r.get(9)?;
         let what = format!("PR {plan}/{key}");
         let status = match status.as_str() {
             "waiting" => PrStatus::Waiting,
@@ -327,6 +331,7 @@ fn pr_nodes(conn: &Connection, plan: &PlanId, lead_working: bool) -> Result<Vec<
                     state: PrState::of(status == PrStatus::Merged, row_state.as_deref()),
                     url,
                     conflicting: conflicting(&what, &mergeable)?,
+                    clean,
                     lead_working,
                     update: update_state(&what, update.as_deref())?,
                 })

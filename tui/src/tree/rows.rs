@@ -44,13 +44,13 @@ use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, StatefulWidget, Widget};
 use tui_tree_widget::{Tree as TreeWidget, TreeItem, TreeState};
 
 use crate::fold;
-use crate::palette::{self, Meaning};
+use crate::palette;
 use crate::dialog::scroll::{Cue, cue};
 use crate::widgets::{Window, max_scroll, window};
 use cpd_core::plan::Phase;
@@ -341,9 +341,9 @@ fn row_text(r: RowText, width: u16) -> Line<'static> {
     Line::from(spans)
 }
 
-/// A row's name: blue when `selected` (hs-d351), else the terminal's own colour.
+/// A row's name: blue when `selected` (hs-d351), else clickable text, colour 15 (the row is a hit target).
 fn selectable_name(name: String, selected: bool) -> Span<'static> {
-    if selected { Span::styled(name, palette::selected()) } else { name.into() }
+    Span::styled(name, if selected { palette::selected_name() } else { palette::clickable_text() })
 }
 
 /// A Context's title (after the `╭`): its dot (the most urgent of its live Sessions, grey when the Context is
@@ -477,12 +477,12 @@ fn scroll_to(i: usize, n: usize, height: usize, scroll: usize) -> usize {
 
 /// Draw the column into `area`: the tree from the row `scroll` says (the cursor's Session is brought into view when it
 /// moved), with the cue rows, then the counters and the guides of each visible
-/// row, the archived rows muted, then the cursor's Session row inverted when
+/// row, the archived rows muted, then the cursor's Session row as the blue block when
 /// `cursor` says it is shown (a Context row never is). `frame` is the animation frame of the working dots.
 pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, cursor: bool, frame: usize, scroll: &mut Scroll) {
     if tree.contexts.is_empty() {
         scroll.max = 0;
-        f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", Style::new().add_modifier(Modifier::DIM)))), area);
+        f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", palette::muted_text()))), area);
         return;
     }
     let items = items(tree, state.opened(), area.width, frame);
@@ -528,15 +528,19 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
             counters(plan, has_stuck_job(tree, plan)).right_aligned().render(rect, buf);
         }
         if row.muted() {
-            // muted, except the selected name: selection beats the muted colour
+            // archived: colour 8 on every mark; asleep: colour 7 on every mark, the fold's lines (the branch) staying 8; either way
+            // except the selected name: selection beats the muted colour
+            let archived = row.archived();
+            let style = if archived { palette::archived_text() } else { palette::asleep_text() };
             for x in rect.x..rect.right() {
-                if buf[(x, y)].fg != palette::selected().fg.unwrap_or_default() {
-                    buf[(x, y)].set_style(palette::fg(Meaning::Nothing));
+                let branch = x < rect.x + 3 && "╭├╰│─".contains(buf[(x, y)].symbol());
+                if buf[(x, y)].fg != palette::selected_name().fg.unwrap_or_default() && (archived || !branch) {
+                    buf[(x, y)].set_style(style);
                 }
             }
         }
         if cursor && row.selectable() && path.as_slice() == state.selected() {
-            buf.set_style(rect, Modifier::REVERSED);
+            buf.set_style(rect, palette::selected());
         }
     }
 }
@@ -613,12 +617,12 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
-    use ratatui::style::Color;
+    use ratatui::style::{Color, Modifier};
 
     use super::super::fixture::{WHEN, archived, context, plan, sample, session, tree, managed};
     use super::*;
     use cpd_core::session::State;
-    use crate::palette::{IDLE, NEEDS_YOU, SPINNER, STOPPED, color};
+    use crate::palette::{IDLE, Meaning, NEEDS_YOU, SPINNER, STOPPED, color};
 
     const WORKING: &str = SPINNER[0];
     use crate::read::{Dot, Place};
@@ -676,7 +680,7 @@ mod tests {
     }
 
     fn reversed(buf: &Buffer, y: u16) -> Vec<bool> {
-        (0..buf.area.width).map(|x| buf[(x, y)].modifier.contains(Modifier::REVERSED)).collect()
+        (0..buf.area.width).map(|x| crate::palette::check::is_selected(&buf[(x, y)])).collect()
     }
 
     /// The closing toggle `╰󰁋 expand` of a Context with archived rows, as the fold widget draws it.
@@ -719,7 +723,7 @@ mod tests {
                 row_of(&format!("╰─{IDLE} ui"), "1⋅0⋅2⋅0⋅3", 31),
             ]
         );
-        assert_eq!(buf[(4, 2)].fg, palette::selected().fg.unwrap(), "the name of the centre row is blue");
+        assert_eq!(buf[(4, 2)].fg, palette::selected_name().fg.unwrap(), "the name of the centre row is blue");
         assert!(!buf[(4, 2)].modifier.contains(Modifier::BOLD), "not bold");
         assert!(buf[(2, 0)].modifier.contains(Modifier::BOLD), "and a Context's title");
         assert!(!buf[(4, 1)].modifier.contains(Modifier::BOLD));
@@ -855,7 +859,8 @@ mod tests {
         let t = tree(vec![context("cc", vec![lone("pp", "p", Phase::Plan, [4, 0, 0, 0, 0, 0])])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
         assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} pp"), "4⋅0⋅0⋅0⋅0", 20));
-        assert_eq!(fg(&buf, 11, 1), color(Meaning::Nothing));
+        assert_eq!(fg(&buf, 11, 1), palette::color_clickable(Meaning::Planning), "the drafts of phase `plan` are magenta (13)");
+        assert_eq!(fg(&buf, 13, 1), color(Meaning::Nothing), "the zero");
     }
 
     #[test]
@@ -909,18 +914,29 @@ mod tests {
             }
         }
         assert_eq!(drawn_dot(Dot::Red).0, format!("{NEEDS_YOU}"));
-        assert_eq!(drawn_dot(Dot::Idle), (format!("{IDLE}").to_owned(), Default::default()), "the terminal's foreground");
+        assert_eq!(drawn_dot(Dot::Idle), (format!("{IDLE}").to_owned(), palette::clickable_text().fg.unwrap()), "clickable text, 15");
     }
 
     #[test]
-    fn a_stopped_dot_is_dim() {
+    fn a_stopped_dot_is_muted() {
         let t = tree(vec![managed(context("cc", vec![with_dot("pp", Dot::Stopped)]), Dot::Stopped)]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
         assert_eq!((buf[(2, 1)].symbol(), buf[(1, 0)].symbol()), (STOPPED, STOPPED));
-        assert!(buf[(2, 1)].modifier.contains(Modifier::DIM) && buf[(1, 0)].modifier.contains(Modifier::DIM));
+        assert!(crate::palette::check::is_muted(&buf[(2, 1)]) && crate::palette::check::is_muted(&buf[(1, 0)]));
         let t = tree(vec![context("cc", vec![with_dot("pp", Dot::Idle)])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
-        assert!(!buf[(2, 1)].modifier.contains(Modifier::DIM));
+        assert!(!crate::palette::check::is_muted(&buf[(2, 1)]));
+    }
+
+    #[test]
+    fn an_asleep_row_is_colour_7_on_every_mark_and_an_archived_one_colour_8() {
+        let mut t = tree(vec![context("cc", vec![with_dot("pp", Dot::Stopped)])]);
+        t.contexts[0].plans[0].sessions[0].asleep_at = Some(WHEN.to_owned());
+        let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
+        // the dot, the name and the counters are 7; the branch is a line, 8
+        let marks: Vec<Color> = (0..20).filter(|&x| !" ╭├╰│─".contains(buf[(x, 1)].symbol())).map(|x| fg(&buf, x, 1)).collect();
+        assert!(!marks.is_empty() && marks.iter().all(|c| Some(*c) == palette::asleep_text().fg), "{marks:?}");
+        assert_eq!(fg(&buf, 0, 1), palette::muted_text().fg.unwrap(), "the branch");
     }
 
     #[test]
@@ -985,7 +1001,8 @@ mod tests {
         let colours: Vec<Color> = (0..5).map(|i| fg(&buf, at(i), 1)).collect();
         assert_eq!(
             colours,
-            [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Waiting), color(Meaning::Done)]
+            [Meaning::NotStarted, Meaning::InProgress, Meaning::Review, Meaning::Waiting, Meaning::Done].map(palette::color_clickable),
+            "the tree's rows are clickable: the bright pairs"
         );
         assert!((0..4).all(|i| fg(&buf, at(i) + 1, 1) == color(Meaning::Nothing)));
         assert!((0..5).all(|i| fg(&buf, at(i), 2) == color(Meaning::Nothing)));
@@ -1000,16 +1017,16 @@ mod tests {
         // counters "1⋅0⋅2⋅2⋅5": the failed one is the 4th, in column 11 + 2 * 3
         let failed = |t: &Tree, row: u16| fg(&render(t, &mut state_for(t, &[], &[]), 20, 3, false), 17, row);
         let handled = tree(counters());
-        assert_eq!((failed(&handled, 1), failed(&handled, 2)), (color(Meaning::Waiting), color(Meaning::Waiting)), "its Lead handles it");
+        assert_eq!((failed(&handled, 1), failed(&handled, 2)), (palette::color_clickable(Meaning::Waiting), palette::color_clickable(Meaning::Waiting)), "its Lead handles it");
         let stuck_for = |plan: &str, kind: Kind| {
             let mut t = tree(counters());
             t.inbox = vec![cpd_core::inbox::model::Item { plan: Some(PlanId::parse(plan).unwrap()), ..item(1, kind, Urgency::Red, "x", WHEN) }];
             t
         };
         let stuck = stuck_for("aa", Kind::JobStuck);
-        assert_eq!((failed(&stuck, 1), failed(&stuck, 2)), (color(Meaning::Failed), color(Meaning::Waiting)), "red for the Plan with the open job-stuck only");
+        assert_eq!((failed(&stuck, 1), failed(&stuck, 2)), (palette::color_clickable(Meaning::Failed), palette::color_clickable(Meaning::Waiting)), "red for the Plan with the open job-stuck only");
         let other = stuck_for("aa", Kind::Dialog);
-        assert_eq!(failed(&other, 1), color(Meaning::Waiting), "another item is not job-stuck");
+        assert_eq!(failed(&other, 1), palette::color_clickable(Meaning::Waiting), "another item is not job-stuck");
     }
 
     #[test]
@@ -1032,7 +1049,7 @@ mod tests {
     }
 
     #[test]
-    fn the_selected_session_row_is_reversed_across_the_full_width_and_no_other_row() {
+    fn the_selected_session_row_is_the_blue_block_across_the_full_width_and_no_other_row() {
         let tree = sample();
         for (selected, y) in [(&["alpha", "ship"][..], 1), (&["alpha", "f-idle"], 4)] {
             let buf = render(&tree, &mut state_for(&tree, &[], selected), 44, 9, true);
@@ -1040,11 +1057,9 @@ mod tests {
                 assert_eq!(reversed(&buf, row), vec![row == y; 44], "{selected:?}, row {row}");
             }
         }
-        // every element keeps its colour: the zero counter and the separator are still dark grey
+        // no mark keeps a colour of its own: every cell of the row is text 0 on the blue block
         let buf = render(&tree, &mut state_for(&tree, &[], &["alpha", "ship"]), 44, 9, true);
-        assert_eq!(fg(&buf, 41, 1), color(Meaning::Nothing), "the zero");
-        assert_eq!(fg(&buf, 38, 1), color(Meaning::Nothing), "a separator");
-        assert_eq!(fg(&buf, 37, 1), color(Meaning::InProgress), "the running Jobs");
+        assert!((0..44).all(|x| fg(&buf, x, 1) == palette::selected().fg.unwrap()), "the zero, a separator, the running Jobs: all text 0");
     }
 
     #[test]
@@ -1112,7 +1127,7 @@ mod tests {
         let counters: Vec<Color> = (0..5).map(|i| fg(&buf, 35 + 2 * i, 1)).collect();
         assert_eq!(
             counters,
-            [color(Meaning::NotStarted), color(Meaning::InProgress), color(Meaning::Review), color(Meaning::Nothing), color(Meaning::Done)]
+            [palette::color_clickable(Meaning::NotStarted), palette::color_clickable(Meaning::InProgress), palette::color_clickable(Meaning::Review), color(Meaning::Nothing), palette::color_clickable(Meaning::Done)]
         );
         assert!((0..4).all(|i| fg(&buf, 36 + 2 * i, 1) == grey), "the separators");
     }
@@ -1444,7 +1459,10 @@ mod tests {
         for y in 14..18 {
             for x in 0..44 {
                 if buf[(x, y)].symbol() != " " {
-                    assert_eq!(fg(&buf, x, y), color(Meaning::Nothing), "({x}, {y})");
+                    // the closing row's arrow and word are the fold toggle's colour 7; everything else is muted
+                    let toggle = text(&buf, y).contains("expand") || text(&buf, y).contains("collapse");
+                    let want = if toggle && buf[(x, y)].symbol() != "╰" { palette::toggle_text().fg.unwrap() } else { color(Meaning::Nothing) };
+                    assert_eq!(fg(&buf, x, y), want, "({x}, {y})");
                 }
             }
         }

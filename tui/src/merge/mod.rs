@@ -20,7 +20,8 @@ use ratatui::crossterm::event::{
     MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
+use crate::palette;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use rusqlite::OptionalExtension;
@@ -148,14 +149,14 @@ fn draw(f: &mut Frame, area: Rect, pull: &Pull, title: Option<&str>) {
     fn row(f: &mut Frame, area: Rect, n: u16, line: Line<'static>) {
         f.render_widget(Paragraph::new(line), Rect::new(area.x, area.y + n, area.width, 1).intersection(area));
     }
-    row(f, area, 0, Line::from(Span::styled(format!(" {}", cut(&pull.to_string(), width)), Style::new().add_modifier(Modifier::BOLD))));
+    row(f, area, 0, Line::from(Span::styled(format!(" {}", cut(&pull.to_string(), width)), palette::read_only_text().add_modifier(Modifier::BOLD))));
     if let Some(title) = title {
-        row(f, area, 1, Line::from(format!(" {}", cut(title, width))));
+        row(f, area, 1, Line::styled(format!(" {}", cut(title, width)), palette::read_only_text()));
     }
-    row(f, area, 2, Line::from(format!(" method: {METHOD}")));
+    row(f, area, 2, Line::styled(format!(" method: {METHOD}"), palette::read_only_text()));
     let [merge, cancel] = buttons(area);
-    f.render_widget(Paragraph::new(MERGE).style(Style::new().add_modifier(Modifier::REVERSED)), merge);
-    f.render_widget(Paragraph::new(CANCEL), cancel);
+    f.render_widget(Paragraph::new(MERGE).style(palette::selected()), merge);
+    f.render_widget(Paragraph::new(CANCEL).style(palette::clickable_text()), cancel);
 }
 
 /// The popup's size, border included, at most the client's `(columns, rows)`.

@@ -6,7 +6,7 @@
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
-use ratatui::style::Modifier;
+use crate::palette::{self, Meaning};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
@@ -142,17 +142,29 @@ impl<E: Entry> Menu<E> {
             .iter()
             .enumerate()
             .map(|(i, item)| {
-                let label = if item.busy() {
-                    format!("{} {}", item.label(), crate::palette::SPINNER[frame % crate::palette::SPINNER.len()])
+                let width = usize::from(rect.width.saturating_sub(4));
+                let mut spans = vec![Span::raw(" ")];
+                if item.busy() {
+                    // the spinner is a mark of its own (yellow, a merge); the label and the padding are the entry's
+                    let spinner = crate::palette::SPINNER[frame % crate::palette::SPINNER.len()];
+                    spans.push(Span::raw(format!("{} ", item.label())));
+                    spans.push(Span::styled(spinner, palette::fg_clickable(Meaning::Review)));
+                    spans.push(Span::raw(" ".repeat(width.saturating_sub(item.label().chars().count() + 2))));
                 } else {
-                    item.label().to_owned()
-                };
-                let line = Line::from(format!(" {label:<w$} ", w = usize::from(rect.width.saturating_sub(4))));
-                if i == self.selected { line.style(Modifier::REVERSED) } else { line }
+                    spans.push(Span::raw(format!("{:<width$}", item.label())));
+                }
+                spans.push(Span::raw(" "));
+                let line = Line::from(spans);
+                // clickable text, or the blue block (a mark inside it keeps no colour of its own)
+                if i == self.selected {
+                    Line::from(line.spans.into_iter().map(|s| Span::styled(s.content, palette::selected())).collect::<Vec<_>>()).style(palette::selected())
+                } else {
+                    line.style(palette::clickable_text())
+                }
             })
             .collect();
         f.render_widget(Clear, rect);
-        f.render_widget(Paragraph::new(lines).block(Block::new().borders(Borders::ALL)), rect);
+        f.render_widget(Paragraph::new(lines).block(Block::new().borders(Borders::ALL).border_style(palette::muted_text())), rect);
     }
 }
 
@@ -291,8 +303,8 @@ mod tests {
             ["xxxxxxxxxxxxxxxxxxxx", "xxx┌───────────┐xxxx", "xxx│ New Plan… │xxxx", "xxx│ Rename…   │xxxx", "xxx│ Copy id   │xxxx", "xxx│ Archive   │xxxx", "xxx└───────────┘xxxx"]
                 .map(|r| r.chars().take(20).collect::<String>()),
         );
-        assert!(buf[(5, 2)].modifier.contains(Modifier::REVERSED), "the selected item");
-        assert!(!buf[(5, 3)].modifier.contains(Modifier::REVERSED));
+        assert_eq!((buf[(5, 2)].bg, buf[(5, 2)].fg), (palette::selected().bg.unwrap(), palette::selected().fg.unwrap()), "the selected item: the blue block");
+        assert_eq!((buf[(5, 3)].bg, buf[(5, 3)].fg), (ratatui::buffer::Cell::EMPTY.bg, palette::clickable_text().fg.unwrap()), "the others: clickable text");
     }
 
     // ---- a busy entry (hs-d495): the spinner in place of the button, and not selectable ----

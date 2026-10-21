@@ -76,25 +76,37 @@ pub const OPT_VIEW: &str = "@cpd_view";
 /// The pane option naming the Session a history pane shows (commands.md §10.12).
 pub const OPT_HISTORY: &str = "@cpd_history";
 
+// A pane's title pill (§6.1.1 R3): the `━` before it, the caps and the block are colour 7, or blue on the focused pane, the text
+// is colour 0; one attribute per `#[…]`, since a comma inside a conditional would split the branch.
+macro_rules! title_pill {
+    ($($text:expr),+) => {
+        concat!(
+            "#{?pane_active,#[fg=blue],#[fg=colour7]}━\u{e0b6}#[fg=colour0]#{?pane_active,#[bg=blue],#[bg=colour7]}",
+            $($text,)+
+            "#{?pane_active,#[fg=blue],#[fg=colour7]}#[bg=default]\u{e0b4}"
+        )
+    };
+}
+
 /// The pane border titles (contract §6.1), keyed by the pane options, first
 /// match: a Lead's pane (`@cpd_session`) shows its `@cpd_title` when set, else
 /// nothing; the chat placeholder and a history pane have none, since pi and
 /// the placeholder say what they are; the views have their column titles; any
 /// other pane shows its command. Every title is a pill (hs-d266, hs-d475): the
-/// text reversed (`#[reverse]`..`#[noreverse]`) with no padding, between a
-/// rounded cap on each side, `\u{e0b6}` and `\u{e0b4}`. The pill is grey (colour 8)
+/// text (colour 0) on a block with no padding, between a rounded cap on each
+/// side, `\u{e0b6}` and `\u{e0b4}`. The pill is grey (colour 7, hs-d534)
 /// and blue on the focused pane, set in the format itself (`pane_active`), so the
 /// caps and the block take it whatever the border lines' colour is. tmux draws two
 /// border line characters before the format; one `━` more in the pill's colour
 /// puts the left cap at column 3 from the pane's edge (hs-d478, checked on a
 /// private server).
-pub const BORDER_FORMAT: &str = "#{?#{@cpd_session},#{?#{@cpd_title},\
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}#{@cpd_title}#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4},},\
-#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,\
-#{?pane_active,#[fg=blue],#[fg=colour8]}━\u{e0b6}#{?pane_active,#[fg=colour0]#[bg=blue],#[fg=colour7]#[bg=colour8]}\
-#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,\
-#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}\
-#{?pane_active,#[fg=blue],#[fg=colour8]}#[bg=default]\u{e0b4}}}}";
+pub const BORDER_FORMAT: &str = concat!(
+    "#{?#{@cpd_session},#{?#{@cpd_title},", title_pill!("#{@cpd_title}"), ",},",
+    "#{?#{==:#{@cpd_view},chat},,#{?#{==:#{@cpd_view},history},,",
+    title_pill!("#{?#{==:#{@cpd_view},worker},Worker · #{@cpd_job} (Read-Only),#{?#{==:#{@cpd_view},tree},Context,",
+    "#{?#{==:#{@cpd_view},plan},Plan,#{?#{==:#{@cpd_view},widgets},Deploy,#{pane_current_command}}}}}"),
+    "}}}"
+);
 
 /// What the supervising hooks run when the engine's pane died or its window is
 /// gone (contract §6.6): `watch --ensure --wait`, which starts the engine again
@@ -156,7 +168,11 @@ pub const SERVER_OPTIONS: &[&[&str]] = &[
     // background (User, hs-d353); the popup frame is colour 7, a draggable line (§6.1.1 R4). `-q`: an older tmux does not know them.
     &["set", "-gq", "popup-style", "default"],
     &["set", "-gq", "popup-border-style", "fg=colour7"],
-    &["set", "-gq", "menu-style", "default"],
+    // Menus and copy mode follow the palette (hs-d534): entries are clickable text, the border a muted line, a selection the blue block.
+    &["set", "-gq", "menu-style", "fg=colour15"],
+    &["set", "-gq", "menu-border-style", "fg=colour8"],
+    &["set", "-gq", "menu-selected-style", "bg=blue,fg=colour0"],
+    &["set", "-gq", "mode-style", "bg=blue,fg=colour0"],
     &["set", "-g", "remain-on-exit", "on"],
     &["set", "-g", "set-titles", "on"],
     &["set", "-g", "set-titles-string", SET_TITLES_STRING],
@@ -209,10 +225,27 @@ macro_rules! button {
         concat!("#[range=user|", $range, "]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]", $glyph, "#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]")
     };
 }
-// A non-interactive pill (R1): bg 8, text 7, caps 8.
+// A non-interactive pill (R3): its colour as the block, text 0, caps in the colour. `$colour` is a literal such as `"colour7"`.
 macro_rules! pill {
-    ($($text:expr),+) => {
-        concat!("#[fg=colour8]\u{e0b6}#[fg=colour7]#[bg=colour8]", $($text,)+ "#[fg=colour8]#[bg=default]\u{e0b4}#[default]")
+    ($colour:literal, $($text:expr),+) => {
+        concat!("#[fg=", $colour, "]\u{e0b6}#[fg=colour0]#[bg=", $colour, "]", $($text,)+ "#[fg=", $colour, "]#[bg=default]\u{e0b4}#[default]")
+    };
+}
+// The Inbox counter's tier colour (`@cpd_inbox_tier`, §6.1.1): red 1, yellow 3, magenta 5, white 7, and 8 for `none`, for an unset
+// option and for any other value. `$style` is `fg` or `bg`; one attribute per `#[…]`, as in a conditional.
+macro_rules! tier {
+    ($style:literal) => {
+        concat!(
+            "#{?#{==:#{@cpd_inbox_tier},red},#[", $style, "=colour1],#{?#{==:#{@cpd_inbox_tier},yellow},#[", $style, "=colour3],",
+            "#{?#{==:#{@cpd_inbox_tier},magenta},#[", $style, "=colour5],#{?#{==:#{@cpd_inbox_tier},white},#[", $style, "=colour7],",
+            "#[", $style, "=colour8]}}}}"
+        )
+    };
+}
+// The Inbox counter's pill: the tier's colour as the block and the caps, text 0.
+macro_rules! inbox_pill {
+    ($text:expr) => {
+        concat!(tier!("fg"), "\u{e0b6}#[fg=colour0]", tier!("bg"), $text, tier!("fg"), "#[bg=default]\u{e0b4}#[default]")
     };
 }
 macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
@@ -228,7 +261,7 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// the left group's 12, the preview pill and the right group in the form drawn (the
 /// engine's width plus the closing `\u{2500}`). At the right, each its own pill on
 /// bg 8 (text 7), joined by a single `\u{2500}`: the Inbox counter the engine keeps in
-/// `@cpd_inbox`, then the workers counts (User, hs-d198): the long form in
+/// `@cpd_inbox` (its colour is `@cpd_inbox_tier`), then the workers counts (User, hs-d198): the long form in
 /// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
 /// least `@cpd_workers_width` plus 14), else the short form in `@cpd_workers_short`,
 /// whose width is `@cpd_workers_short_width`.
@@ -243,7 +276,8 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// right-hand pill, the version, follows the workers pill, joined by a single
 /// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
 ///
-/// Colours follow §6.1.1 (hs-d530): buttons bg 15 text 0, the other pills bg 8 text 7, lines colour 8.
+/// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the Inbox counter its tier's colour, the workers and version pills bg 7,
+/// the preview pill bg 3, all text 0; lines colour 8.
 pub const STATUS_FORMAT: &str = concat!(
     join!(),
     button!("reset", reset_glyph!()),
@@ -251,14 +285,14 @@ pub const STATUS_FORMAT: &str = concat!(
     button!("legend", legend_glyph!()),
     join!(),
     button!("logs", logs_glyph!()),
-    "#{?#{@cpd_preview},#[fg=colour8]\u{2500}", pill!("preview: #{@cpd_preview}"), ",}",
+    "#{?#{@cpd_preview},#[fg=colour8]\u{2500}", pill!("colour3", "preview: #{@cpd_preview}"), ",}",
     "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},",
     "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}",
     "#[default]#[align=right]",
-    pill!("#{@cpd_inbox}"),
+    inbox_pill!("#{@cpd_inbox}"),
     join!(),
-    pill!("#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}"),
-    "#{?#{@cpd_version},#[fg=colour8]\u{2500}", pill!("#{@cpd_version}"), ",}",
+    pill!("colour7", "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}"),
+    "#{?#{@cpd_version},#[fg=colour8]\u{2500}", pill!("colour7", "#{@cpd_version}"), ",}",
     join!()
 );
 
@@ -987,21 +1021,24 @@ fn strings(args: &[&str]) -> Vec<String> {
 }
 
 #[cfg(test)]
+mod palette;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     /// The version pill (§6.1): last on the right, after the workers pill, one `─` join, then the closing `─`, only while `@cpd_version` is set.
     #[test]
     fn the_version_pill_is_last_on_the_right_and_only_while_the_option_is_set() {
-        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}";
+        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour7]\u{e0b6}";
         let at = STATUS_FORMAT.find(pill).unwrap_or_else(|| panic!("no version pill in {STATUS_FORMAT}"));
         let workers = STATUS_FORMAT.rfind("#{@cpd_workers_short}}").expect("the workers pill");
         assert!(at > workers, "the version pill follows the workers pill: {STATUS_FORMAT}");
         let tail = &STATUS_FORMAT[at..];
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
-        assert!(tail.contains("fg=colour8") && tail.contains("bg=colour8") && tail.contains("\u{e0b4}"), "{tail}");
+        assert!(tail.contains("fg=colour7") && tail.contains("bg=colour7") && tail.contains("\u{e0b4}"), "{tail}");
         assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
-        assert_eq!(STATUS_FORMAT.matches("bg=colour8]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
+        assert_eq!(STATUS_FORMAT.matches("bg=colour7]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
     }
 
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.

@@ -350,7 +350,7 @@ fn a_draft_shows_draft_and_the_others_open() {
 }
 
 #[test]
-fn the_pr_of_the_plan_in_the_chat_slot_is_reversed_and_bold_and_the_others_are_not() {
+fn the_pr_of_the_plan_in_the_chat_slot_is_the_blue_block_and_bold_and_the_others_are_not() {
     let env = TestEnv::new();
     let mut store = prs_store(&env);
     let w = read::widgets(&mut store, 3, 0).unwrap();
@@ -359,13 +359,13 @@ fn the_pr_of_the_plan_in_the_chat_slot_is_reversed_and_bold_and_the_others_are_n
     let style = |needle: &str| {
         let (x, y) = find(&buf, needle);
         let m = buf[(x, y)].modifier;
-        (m.contains(Modifier::REVERSED), m.contains(Modifier::BOLD))
+        (buf[(x, y)].bg == palette::selected().bg.unwrap(), m.contains(Modifier::BOLD))
     };
-    // Both lines of the active one: reversed and bold.
+    // Both lines of the active one: the blue block (background 4) and bold.
     assert_eq!(style("acme/repo#20"), (true, true));
     assert_eq!(style("Mine to review"), (true, true));
     assert_eq!(style("no review"), (true, true));
-    // The others: the name bold, the second line neither reversed nor bold.
+    // The others: the name bold, the second line neither the block nor bold.
     assert_eq!(style("acme/web#4"), (false, true));
     assert_eq!(style("acme/repo#9"), (false, true));
     for line_two in ["Older web fix", "approved", "Middle one"] {
@@ -377,7 +377,7 @@ fn the_pr_of_the_plan_in_the_chat_slot_is_reversed_and_bold_and_the_others_are_n
     assert!(w.prs.iter().all(|p| !p.active));
     let buf = render(46, 25, &w);
     let at = find(&buf, "Mine to review");
-    assert!(!buf[at].modifier.contains(Modifier::REVERSED));
+    assert_ne!(buf[at].bg, palette::selected().bg.unwrap());
 }
 
 #[test]
@@ -435,7 +435,7 @@ fn no_open_pull_request_says_so() {
     let buf = render(46, 25, &w);
     let got = rows(&buf);
     assert_eq!(got[4..7], [header("PRs", Some(0)).as_str(), "", " no open PRs"], "{got:#?}");
-    assert!(buf[find(&buf, "no open PRs")].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[find(&buf, "no open PRs")].fg, palette::muted_text().fg.unwrap(), "muted, colour 8");
 }
 
 #[test]
@@ -462,8 +462,8 @@ fn the_column_takes_every_colour_from_the_palette() {
     let fg = |at: (u16, u16)| buf[at].fg;
     let c = palette::color;
     // The PRs: state and checks.
-    assert_eq!(fg(find(&buf, "open")), c(Meaning::Review));
-    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), c(Meaning::Waiting), "`acme/repo#7` is a Plan's: its Lead fixes failed checks (hs-d302)");
+    assert_eq!(fg(find(&buf, "open")), palette::clickable_text().fg.unwrap(), "an owned PR's `open` is 15 (yellow only when it is ready to merge)");
+    assert_eq!(fg(find(&buf, palette::CHECKS_FAILED)), palette::color_clickable(Meaning::Waiting), "`acme/repo#7` is a Plan's: its Lead fixes failed checks (hs-d302)");
     assert_eq!(fg(find(&buf, palette::CHECKS_NONE)), c(Meaning::Nothing));
     // The titles: the corner and the line grey, the title inverted inside its caps.
     for title in ["PRs"] {
@@ -474,9 +474,9 @@ fn the_column_takes_every_colour_from_the_palette() {
         assert_eq!((word.fg, word.bg), (palette::pill_static().fg.unwrap(), palette::pill_static().bg.unwrap()), "{title}");
         assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD), "{title}");
     }
-    let dim = |at: (u16, u16)| buf[at].modifier.contains(Modifier::DIM);
+    let dim = |at: (u16, u16)| buf[at].fg == c(Meaning::Nothing);
     let bold = |at: (u16, u16)| buf[at].modifier.contains(Modifier::BOLD);
-    // Bold: the machine and the pull request names (the section titles are bold too); dim: the title of the PR.
+    // Bold: the machine and the pull request names (the section titles are bold too); muted (colour 8): the title of the PR.
     for title in ["homeserver", "acme/repo#7"] {
         assert!(bold(find(&buf, title)), "{title}");
         assert!(!dim(find(&buf, title)), "{title}");
@@ -485,7 +485,7 @@ fn the_column_takes_every_colour_from_the_palette() {
         assert!(dim(find(&buf, faint)), "{faint}");
         assert!(!bold(find(&buf, faint)), "{faint}");
     }
-    // Plain: the review decision and the CPU and memory %.
+    // Plain: the review decision and the CPU and memory %: not bold, not muted.
     for plain in ["no review", "changes requested", "23%", "41%"] {
         let at = find(&buf, plain);
         assert!(!dim(at) && !bold(at), "{plain}");
@@ -543,7 +543,7 @@ fn every_pr_row_ends_its_first_line_in_an_arrow_linking_to_the_pull_request() {
 }
 
 #[test]
-fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
+fn an_unowned_pr_is_read_only_text_on_both_lines_with_its_arrow_clickable_and_an_owned_one_is_clickable_text() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
     assert_eq!(
@@ -552,14 +552,20 @@ fn an_unowned_pr_is_dim_on_both_lines_with_its_arrow_and_an_owned_one_is_not() {
         "`mine` owns acme/repo#20; no Plan owns the other two"
     );
     let buf = render(46, 25, &w);
-    let dim = |x: u16, y: u16| buf[(x, y)].modifier.contains(Modifier::DIM);
+    let (read_only, clickable) = (palette::read_only_text().fg.unwrap(), palette::clickable_text().fg.unwrap());
+    let fg = |x: u16, y: u16| buf[(x, y)].fg;
     for y in [6, 8] {
-        assert!([1, 2, 12, 45].iter().all(|x| dim(*x, y)), "row {y} is dim: the name and the arrow");
-        assert!([2, 3, 12, 20].iter().all(|x| dim(*x, y + 1)), "row {} is dim: the second line", y + 1);
+        assert!([1, 2, 10].iter().all(|x| fg(*x, y) == read_only), "row {y} is 7: the name");
+        assert_eq!(fg(45, y), clickable, "row {y}: the arrow is 15, a modifier-click target");
+        // the state word: `draft` is magenta 5 (base, the PR is no Plan's), `open` is 7 (it is not ready to merge)
+        let word = if y == 6 { palette::color(Meaning::Planning) } else { read_only };
+        assert_eq!(fg(2, y + 1), word, "row {}: the second line's state word", y + 1);
     }
     assert_eq!(plain(buf[(45, 6)].symbol()), "󰏌", "the arrow stays on an unowned PR");
-    // The owned one (here also the active one) is not dim.
-    assert!([1, 2, 12, 45].iter().all(|x| !dim(*x, 10)) && [2, 20].iter().all(|x| !dim(*x, 11)));
+    // The owned one (here also the active one) is the blue block: text 0 on background 4 across both lines.
+    let block = palette::selected();
+    assert!([1, 2, 12, 45].iter().all(|x| (Some(buf[(*x, 10)].bg), Some(fg(*x, 10))) == (block.bg, block.fg)));
+    assert!([2, 20].iter().all(|x| (Some(buf[(*x, 11)].bg), Some(fg(*x, 11))) == (block.bg, block.fg)));
 }
 
 /// The column drawn at spinner frame `frame`.
@@ -603,7 +609,7 @@ fn only_an_owned_pr_has_a_hit_area_its_two_rows_except_the_arrow() {
 }
 
 #[test]
-fn a_snapshot_error_is_the_last_row_in_the_note_colour() {
+fn a_snapshot_error_is_the_last_row_in_red() {
     let env = TestEnv::new();
     let w = read::widgets(&mut prs_store(&env), 3, 0).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(46, 25)).unwrap();
@@ -615,7 +621,7 @@ fn a_snapshot_error_is_the_last_row_in_the_note_colour() {
         .unwrap();
     let buf = terminal.backend().buffer().clone();
     assert_eq!(row(&buf, 24).trim_end(), "no cockpit");
-    assert_eq!(buf[(0, 24)].fg, palette::note().fg.unwrap());
+    assert_eq!(buf[(0, 24)].fg, palette::color(Meaning::Failed), "red, colour 1");
     assert_eq!(row(&buf, 23).trim_end(), "", "the rest is as without it");
 }
 
@@ -799,7 +805,7 @@ fn wheel(env: &TestEnv, pane: &str, down: bool, column: u16, row: u16) {
 }
 
 #[test]
-fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
+fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_muted_cue_rows() {
     let env = pane_env();
     let mut store = open(&env);
     let mut s = String::new();
@@ -821,7 +827,7 @@ fn the_wheel_over_the_prs_scrolls_them_one_at_a_time_between_dim_cue_rows() {
     });
     let styled = tmux_out(&env, &["capture-pane", "-p", "-e", "-t", &pane]);
     let cue = styled.lines().find(|l| l.contains("▼ 5 more")).unwrap();
-    assert!(cue.contains("\x1b[2m"), "the cue is dim: {cue:?}");
+    assert!(cue.contains("38;5;8m"), "the cue is muted, colour 8: {cue:?}");
 
     // A notch outside the section does nothing; one inside moves by one pull request.
     wheel(&env, &pane, true, 3, 1);
@@ -1232,18 +1238,19 @@ fn every_job_status_is_a_pill_and_a_counter_from_the_palette() {
         let text = row(&buf, y);
         let pill_at = text.chars().position(|c| c.to_string() == icon).unwrap() as u16;
         assert!(pill_at > x, "{name}: the pill follows the name");
-        assert_eq!(buf[(pill_at, y)].bg, palette::pill_static().bg.unwrap(), "{name}: pill");
-        assert_eq!(buf[(pill_at, y)].fg, palette::pill_static().fg.unwrap(), "{name}: pill text");
+        let pill = palette::job_pill(status, merging, false);
+        assert_eq!(buf[(pill_at, y)].bg, pill.bg.unwrap(), "{name}: pill");
+        assert_eq!(buf[(pill_at, y)].fg, pill.fg.unwrap(), "{name}: pill text");
         // the compact pill (hs-d474): no padding inside the caps
         assert!(text.contains(&format!("\u{e0b6}{icon} key│S1\u{e0b4}")), "{name}: {text}");
-        // a rounded cap on each end, in the status colour on the default background
+        // a rounded cap on each end, in the pill's colour on the default background
         let (left, right) = (pill_at - 1, pill_at + 1 + " key│S1".chars().count() as u16);
         for (cap_at, glyph) in [(left, "\u{e0b6}"), (right, "\u{e0b4}")] {
             let cap = &buf[(cap_at, y)];
-            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, palette::pill_static().bg.unwrap(), Color::Reset), "{name}: cap at {cap_at}: {text}");
+            assert_eq!((cap.symbol(), cap.fg, cap.bg), (glyph, pill.bg.unwrap(), Color::Reset), "{name}: cap at {cap_at}: {text}");
         }
         let counter = text.chars().collect::<Vec<_>>().iter().rposition(|c| *c == '3').unwrap() as u16;
-        assert_eq!(buf[(counter, y)].fg, palette::color(palette::job_status(status, merging).1), "{name}: counter");
+        assert_eq!(buf[(counter, y)].fg, palette::count_style(status, merging, 3).fg.unwrap(), "{name}: counter");
     }
     let counters = row(&buf, find(&buf, "counters row").1);
     assert!(counters.contains("1⋅1⋅2⋅0⋅3"), "{counters}");
@@ -1300,14 +1307,14 @@ fn the_session_dots_are_listed_in_their_colours() {
 fn the_pr_states_and_checks_are_listed_in_their_colours() {
     let buf = legend_buffer();
     for (name, state) in palette::PR_LEGEND {
-        assert_eq!(buf[find(&buf, &format!("#2 {name}"))].fg, palette::color(palette::pr_state(state)), "{name}");
+        assert_eq!(buf[find(&buf, &format!("#2 {name}"))].fg, palette::color_clickable(palette::pr_state(state)), "{name}");
     }
     let checks = find(&buf, "PR Checks").1;
     for (name, c) in palette::CHECKS_LEGEND {
         let (icon, m) = palette::checks(c);
         let (x, y) = find_after(&buf, checks, &format!(" {name}"));
         assert_eq!(buf[(x - 1, y)].symbol(), icon, "{name}");
-        assert_eq!(buf[(x - 1, y)].fg, palette::color(m), "{name}");
+        assert_eq!(buf[(x - 1, y)].fg, palette::color_clickable(m), "{name}");
     }
 }
 

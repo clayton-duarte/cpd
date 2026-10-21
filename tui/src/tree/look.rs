@@ -75,7 +75,9 @@ fn is_muted_line(buf: &Buffer, y: u16, from: u16, to: u16) {
         let cell = &buf[(x, y)];
         if cell.symbol() != " " {
             seen = true;
-            assert_eq!(cell.fg, muted(), "column {x} of row {y} ({:?}) is muted", cell.symbol());
+            // the rule glyphs are muted (8); the toggle's arrow and word are read-only text (7)
+            let want = if "╭├╰│─".contains(cell.symbol()) { muted() } else { palette::toggle_text().fg.unwrap() };
+            assert_eq!(cell.fg, want, "column {x} of row {y} ({:?}) is muted, or the toggle's 7", cell.symbol());
             assert!(!cell.modifier.contains(Modifier::BOLD), "column {x} of row {y} is not bold");
         }
     }
@@ -332,7 +334,7 @@ fn an_overflowing_inbox_draws_its_cue_at_the_right_end_of_its_row_with_the_line_
     assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted()), "the line is not cut by the cue");
     assert_eq!(buf[(41, y as u16)].symbol(), "e", "the cue ends at the last inner column");
     let width = format!("▼ {n} more").chars().count() as u16;
-    assert!((42 - width..42).all(|x| buf[(x, y as u16)].modifier.contains(Modifier::DIM)), "and is dim");
+    assert!((42 - width..42).all(|x| crate::palette::check::is_muted(&buf[(x, y as u16)])), "and is dim");
 }
 
 #[test]
@@ -364,10 +366,10 @@ fn a_scrolled_inbox_has_both_cues_right_aligned_and_every_row_of_the_block_keeps
 /// colour of its urgency, through the palette.
 fn tiers() -> [(Urgency, &'static str, Color); 4] {
     [
-        (Urgency::Red, "\u{F0362}", palette::color(Meaning::Failed)),
-        (Urgency::Yellow, "\u{F069A}", palette::color(Meaning::Review)),
-        (Urgency::Magenta, "\u{F173A}", palette::color(Meaning::Planning)),
-        (Urgency::White, "\u{F0366}", palette::color(Meaning::NotStarted)),
+        (Urgency::Red, "\u{F0362}", palette::color_clickable(Meaning::Failed)),
+        (Urgency::Yellow, "\u{F069A}", palette::color_clickable(Meaning::Review)),
+        (Urgency::Magenta, "\u{F173A}", palette::color_clickable(Meaning::Planning)),
+        (Urgency::White, "\u{F0366}", palette::color_clickable(Meaning::NotStarted)),
     ]
 }
 

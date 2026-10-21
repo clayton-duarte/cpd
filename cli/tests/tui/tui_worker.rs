@@ -188,9 +188,9 @@ fn the_session_file_of_the_worker_is_rendered_read_only() {
     );
 }
 
-/// `you` and the User's text are cyan, `agent` green, `→ tool` yellow (the reference's `Ui` palette).
+/// `you` and the User's text are grey (7), `agent` and `→ tool` cyan (6): contract §6.1.1.
 #[test]
-fn the_roles_are_in_the_reference_colours() {
+fn the_roles_are_in_the_palettes_colours() {
     let env = env();
     let file = session_file(&env);
     populate(&env, Some(&file));
@@ -199,11 +199,11 @@ fn the_roles_are_in_the_reference_colours() {
     let out = env.tmux(&["capture-pane", "-p", "-e", "-t", SESSION]);
     let raw = String::from_utf8(out.stdout).unwrap();
     let row_with = |text: &str| raw.lines().find(|l| l.contains(text)).unwrap_or_else(|| panic!("no row with {text}:\n{raw}")).to_owned();
-    // tmux reports the 16 ANSI colours as `38;5;N`: cyan 6, green 2, yellow 3
-    assert!(row_with("you").contains("\x1b[38;5;6myou"), "you: {raw:?}");
-    assert!(row_with("Implement the API.").contains("\x1b[38;5;6m      Implement"), "the User's text: {raw:?}");
-    assert!(row_with("agent").contains("\x1b[38;5;2magent"), "agent: {raw:?}");
-    assert!(row_with("→ bash").contains("\x1b[38;5;3m→ bash"), "tool: {raw:?}");
+    // tmux reports the 16 ANSI colours as `38;5;N`: grey 7, cyan 6
+    assert!(row_with("you").contains("\x1b[38;5;7myou"), "you: {raw:?}");
+    assert!(row_with("Implement the API.").contains("\x1b[38;5;7m      Implement"), "the User's text: {raw:?}");
+    assert!(row_with("agent").contains("\x1b[38;5;6magent"), "agent: {raw:?}");
+    assert!(row_with("→ bash").contains("\x1b[38;5;6m→ bash"), "tool: {raw:?}");
 }
 
 /// A Worker that asked its Lead waits for an agent, not for the User (hs-d303): the foot reads `waiting <label>`.
