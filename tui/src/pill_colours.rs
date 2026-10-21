@@ -78,7 +78,7 @@ fn section_title_draws_bg8_fg7_with_caps_8() {
 fn job_pill_draws_bg15_fg0_with_caps_15() {
     let jobs: Vec<FlowJob> = [Live::Running, Live::Draft]
         .into_iter()
-        .map(|status| FlowJob { key: format!("{status:?}").to_lowercase(), status, tier: None, needs: vec![], attempt: 2 })
+        .map(|status| FlowJob { key: format!("{status:?}").to_lowercase(), status, tier: None, needs: vec![], attempt: 2, aside: None })
         .collect();
     let chart = layout(&jobs, 0);
     assert_eq!(chart.pills.len(), 2);
