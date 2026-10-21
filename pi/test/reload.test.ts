@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, symlinkSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { type Options } from "../lib/adapter.ts";
 import { identityOf, LONG_REFUSAL_NOTICE, LOAD_TIMEOUT_MS, pollAdapter, refusal, RELOAD_COMMAND, reloadLogPath, validatePackage, type Guard } from "../lib/reload.ts";
+import * as reloadModule from "../lib/reload.ts";
 import { Fixture, ID, planShow, waitFor } from "./fake.ts";
 
 const GOOD = "export default function (pi: unknown): void {}\n";
@@ -498,4 +499,54 @@ test("a log that cannot be written is notified once per run, starts no turn, and
   await c.after(5); // many polls of the new run: and it is only one
   assert.equal(failures().length, 2, "the new run notifies again");
   assert.deepEqual(f.pi.errors(), [], "no message, so no turn");
+});
+
+// watchedDir is a new export; read through the namespace so its absence fails these tests only, not the file's load.
+const watchedDir = (argv: string[], dir: string): string =>
+  (reloadModule as unknown as { watchedDir: (argv: string[], dir: string) => string }).watchedDir(argv, dir);
+
+/** An install layout: versioned dirs `pi.A` and `pi.B`, and the link `pi` -> `pi.A`. */
+function linked(): { root: string; link: string; a: string; b: string } {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "cpd-watched-")));
+  mkdirSync(join(root, "pi.A"));
+  mkdirSync(join(root, "pi.B"));
+  symlinkSync("pi.A", join(root, "pi"));
+  return { root, link: join(root, "pi"), a: realpathSync(join(root, "pi.A")), b: realpathSync(join(root, "pi.B")) };
+}
+
+test("the watched path is the -e argument that resolves to the adapter directory", () => {
+  const { root, link, a } = linked();
+  try {
+    assert.equal(watchedDir(["node", "pi", "-e", link], a), link);
+    assert.equal(watchedDir(["node", "pi", "--extension", link], a), link);
+    assert.equal(watchedDir(["node", "pi", "-e", "npm:x", "-e", link], a), link);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("with no matching -e argument the watched path is the adapter directory", () => {
+  const { root, a, b } = linked();
+  try {
+    assert.equal(watchedDir(["node", "pi"], a), a);
+    assert.equal(watchedDir(["node", "pi", "-e", b], a), a);
+    assert.equal(watchedDir(["node", "pi", "-e", "npm:x"], a), a);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a swap of the adapter link is a new identity of the watched path", () => {
+  const { root, link, a } = linked();
+  try {
+    const watched = watchedDir(["node", "pi", "-e", link], a);
+    const before = identityOf(watched);
+    const beforeReal = identityOf(a);
+    symlinkSync("pi.B", join(root, "pi.tmp"));
+    renameSync(join(root, "pi.tmp"), link);
+    assert.notEqual(identityOf(watched), before);
+    assert.equal(identityOf(a), beforeReal);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
