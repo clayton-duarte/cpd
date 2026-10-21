@@ -15,7 +15,7 @@ use time::format_description::well_known::Rfc3339;
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, distill, escalations, inbox, liveness, open, pr, restart, schedule, team, titles, workers};
+use super::{SOURCE, archive, distill, escalations, inbox, liveness, open, pr, restart, schedule, team, titles, workers};
 use cpd_core::clock;
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
@@ -92,7 +92,7 @@ impl Engine {
     /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5 and E7–E11 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 12] = [
+        let steps: [fn(&mut Engine); 13] = [
             restart::drain,
             workers::run,
             escalations::run,
@@ -105,6 +105,7 @@ impl Engine {
             distill::run,
             titles::run,
             team::run,
+            archive::run,
         ];
         for step in steps {
             if stopping() {
