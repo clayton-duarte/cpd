@@ -333,7 +333,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let calls = fx.pi_calls();
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert_eq!(flag(&calls[0], "--session-id"), Some(lead_session.as_str()));
-    assert_eq!(flag(&calls[0], "--model"), Some("p/opus:high"));
+    assert_eq!(flag(&calls[0], "--model"), Some("p/opus:medium"));
     assert_eq!(flag(&calls[0], "-n"), Some(PLAN));
     let message_file = fx.env.cpd_home().join("run/pay/lead-message.md");
     assert_eq!(calls[0][calls[0].len() - 2..], ["--".to_owned(), format!("@{}", message_file.display())]);

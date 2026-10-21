@@ -185,7 +185,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
 
     // The Lead: stopped, in its parked window, with its pane recorded, in the caller's cwd.
     let lead = env.cpd(&["session", "show", &session]).ok()["session"].clone();
-    assert_eq!((&lead["role"], &lead["plan"], &lead["state"], &lead["tier"]), (&json!("lead"), &json!("pay"), &json!("stopped"), &json!("O3")));
+    assert_eq!((&lead["role"], &lead["plan"], &lead["state"], &lead["tier"]), (&json!("lead"), &json!("pay"), &json!("stopped"), &json!("O2")));
     assert_eq!((&lead["cwd"], &lead["tmux_pane"], &lead["place"]), (&json!(cwd), &json!(pane), &json!("parked")));
     assert_eq!(panes(&env), vec![(pane.to_owned(), "park-pay".to_owned(), session.clone())], "the cockpit is created with the Lead's window");
     pane_env(&env, &session);
@@ -214,7 +214,7 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
     let registered = events(&env, "session-registered");
     assert_eq!(registered.len(), 1);
     assert_eq!((&registered[0]["plan"], &registered[0]["session"]), (&json!("pay"), &json!(session)));
-    assert_eq!(registered[0]["data"], json!({"role": "lead", "name": "pay", "forked_from": null, "tier": "O3"}));
+    assert_eq!(registered[0]["data"], json!({"role": "lead", "name": "pay", "forked_from": null, "tier": "O2"}));
     assert_eq!(registered[0]["id"].as_i64().unwrap(), created["id"].as_i64().unwrap() + 1);
     let moved = events(&env, "session-moved");
     assert_eq!(moved[0]["data"], json!({"pane": pane, "window": window, "place": "parked"}));
@@ -1771,7 +1771,7 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     // A follow-up batch is registered at once: two stubs, one with its Tier, and a stub that is dropped again.
     let out = stub(&env, "next-1", &[]);
     assert_eq!((&out["job"]["status"], &out["job"]["tier"], &out["job"]["appended"]), (&json!("draft"), &Value::Null, &json!(true)));
-    stub(&env, "next-2", &["--tier", "O3", "--needs", "next-1"]);
+    stub(&env, "next-2", &["--tier", "S3", "--needs", "next-1"]);
     stub(&env, "dropped", &[]);
     env.cpd(&["job", "cancel", "dropped", "--reason", "Not needed.", "--plan", "pay"]).ok();
     add_draft(&env, "pay", "done-1", &["a"], true);
@@ -1858,7 +1858,7 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
     new_plan(&env, "pay", &repo);
     env.cpd(&["plan", "phase", "plan", "--plan", "pay"]).ok();
     stub(&env, "bare", &[]);
-    stub(&env, "tiered", &["--tier", "O3"]);
+    stub(&env, "tiered", &["--tier", "S3"]);
     add_job(&env, "pay", "full", &[]);
     // Another Plan's stub in the same repo does not break the overlap check.
     new_plan(&env, "oth", &repo);
@@ -1870,10 +1870,10 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
     let text = fs::read_to_string(home(&env).plan_md(&pid("pay"))).unwrap();
     // The table row and the section show a missing Tier as `—`; the Spec of a stub is not written yet.
     assert!(text.contains("| `bare` | Planned bare | work | — | draft | none | — |"), "{text}");
-    assert!(text.contains("| `tiered` | Planned tiered | work | O3 | draft | none | — |"), "{text}");
+    assert!(text.contains("| `tiered` | Planned tiered | work | S3 | draft | none | — |"), "{text}");
     assert!(text.contains("| `full` | Job full | work | S2 | draft | none | `src/full.rs` |"), "{text}");
     assert!(text.contains("\n### `bare`: Planned bare\n\nStatus: `draft` · Tier: — · Needs: none\n\nSpec: not written yet\n"), "{text}");
-    assert!(text.contains("\n### `tiered`: Planned tiered\n\nStatus: `draft` · Tier: `O3` · Needs: none\n\nSpec: not written yet\n"), "{text}");
+    assert!(text.contains("\n### `tiered`: Planned tiered\n\nStatus: `draft` · Tier: `S3` · Needs: none\n\nSpec: not written yet\n"), "{text}");
     assert!(text.contains("\n### `full`: Job full\n\nStatus: `draft` · Tier: `S2` · Needs: none\n\n#### Goal\n\nGoal of full.\n"), "{text}");
     assert_eq!(text.matches("Spec: not written yet").count(), 2, "{text}");
 
@@ -1885,7 +1885,7 @@ fn render_shows_what_a_stub_lacks_and_the_fingerprint_covers_it_as_it_is() {
     };
     let full = "{\"acceptance\":[\"cargo test\"],\"context\":\"Context of full.\",\"goal\":\"Goal of full.\",\"key\":\"full\",\"needs\":[],\"out_of_scope\":[],\"pr\":\"pay\",\"tier\":\"S2\",\"title\":\"Job full\",\"touches\":[\"src/full.rs\"]}";
     let prs = format!("[{{\"base\":\"{pr_base}\",\"key\":\"pay\",\"needs\":[],\"repo\":{},\"shape\":\"config\"}}]", serde_json::to_string(&pr_repo).unwrap());
-    assert_eq!(out["fingerprint"], sha256(&format!("{{\"jobs\":[{},{full},{}],\"prs\":{prs}}}", null_spec("bare", "null"), null_spec("tiered", "\"O3\""))));
+    assert_eq!(out["fingerprint"], sha256(&format!("{{\"jobs\":[{},{full},{}],\"prs\":{prs}}}", null_spec("bare", "null"), null_spec("tiered", "\"S3\""))));
 
     // Completing a stub changes it, and the render shows the Tier and the Spec.
     env.cpd(&["job", "edit", "bare", "--tier", "S2", "--spec", &spec_file(&env, "bare"), "--plan", "pay"]).ok();
