@@ -40,7 +40,7 @@ fn deletes_the_context_its_plans_and_its_manager() {
         assert_eq!(plan_rows(&env, &w.plan), 0, "{}", w.plan);
         assert!(!w.run_dir.exists() && !w.lead_worktree.exists() && !w.attempt_worktree.exists(), "{}", w.plan);
     }
-    assert_eq!(count(&env, "SELECT count(*) FROM sessions WHERE context = 'ctx'"), 0, "the Manager and every Session");
+    assert_eq!(count(&env, "SELECT count(*) FROM sessions WHERE context = 'ctx' AND role <> 'lead'"), 0, "the Manager and every Session but the Leads");
     assert_eq!(count(&env, "SELECT count(*) FROM context_records WHERE context = 'ctx'"), 0, "the Context's records");
     assert_ne!(env.query::<Option<String>>("SELECT deleted_at FROM contexts WHERE id = 'ctx'"), None, "the Context row is marked");
     assert_eq!(events(&env, "context-deleted").len(), 1);

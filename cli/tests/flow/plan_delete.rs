@@ -61,6 +61,11 @@ pub fn remote_branches(env: &TestEnv, w: &World) -> Vec<String> {
 /// merged with its Attempt `m-a1` ended, a Lead worktree and an Attempt worktree exist with their local branches, the
 /// Lead Branch is also on the local bare `origin`, and `run/<plan>/` holds files. The Lead is `stopped`, not archived.
 pub fn world(env: &TestEnv, plan: &str) -> World {
+    world_ending(env, plan, true)
+}
+
+/// [`world`] whose PR ends `merged` or, when `merged` is false, `open` with its pull request open (a PR never goes back from `merged`).
+fn world_ending(env: &TestEnv, plan: &str, merged: bool) -> World {
     let lead = env.cpd(&["plan", "new", plan, "--context", "ctx", "--title", &format!("Plan {plan}")]).ok()["lead"]["session"]
         .as_str()
         .unwrap()
@@ -106,11 +111,14 @@ pub fn world(env: &TestEnv, plan: &str) -> World {
                VALUES ('{plan}', 'm-a1', 'm', 1, 'S2', 'ladder', 'ended', 'merged', 'merged', 'c0ffee', '{branch}', '{attempt_wt}', 't', 't');
              UPDATE jobs SET status = 'merged', merged_sha = 'c0ffee' WHERE plan = '{plan}' AND key = 'm';
              INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at)
-               VALUES ('acme/{plan}', 11, 'https://github.com/acme/{plan}/pull/11', 'T', 0, 'merged', 'none', 'none', 't', 't', 't');
+               VALUES ('acme/{plan}', 11, 'https://github.com/acme/{plan}/pull/11', 'T', 0, '{state}', 'none', 'none', 't', {merged_at}, 't');
              UPDATE prs SET status = 'open', pr_number = 11, pr_url = 'https://github.com/acme/{plan}/pull/11', pr_opened_at = 't',
                     pull_request = (SELECT id FROM pull_requests WHERE repo = 'acme/{plan}' AND number = 11)
               WHERE plan = '{plan}' AND key = 'api';
-             UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = '{plan}' AND key = 'api';",
+             {finish}",
+            finish = if merged { format!("UPDATE prs SET status = 'merged', merged_at = 't' WHERE plan = '{plan}' AND key = 'api';") } else { String::new() },
+            state = if merged { "merged" } else { "open" },
+            merged_at = if merged { "'t'" } else { "NULL" },
             lead_wt = w.lead_worktree.display(),
             attempt_wt = w.attempt_worktree.display(),
             branch = w.attempt_branch(),
@@ -121,15 +129,7 @@ pub fn world(env: &TestEnv, plan: &str) -> World {
 
 /// [`world`] whose PR is still `open`, with its pull request open.
 pub fn world_with_open_pr(env: &TestEnv, plan: &str) -> World {
-    let w = world(env, plan);
-    fixture(
-        env,
-        &format!(
-            "UPDATE pull_requests SET state = 'open', merged_at = NULL WHERE repo = 'acme/{plan}';
-             UPDATE prs SET status = 'open', merged_at = NULL WHERE plan = '{plan}' AND key = 'api';"
-        ),
-    );
-    w
+    world_ending(env, plan, false)
 }
 
 pub fn archive(env: &TestEnv, plan: &str) {
@@ -142,8 +142,10 @@ pub fn count(env: &TestEnv, sql: &str) -> i64 {
 
 /// The rows the Plan owns, in the tables the delete empties.
 pub fn plan_rows(env: &TestEnv, plan: &str) -> i64 {
-    ["jobs", "attempts", "prs", "events"].iter().map(|t| count(env, &format!("SELECT count(*) FROM {t} WHERE plan = '{plan}'"))).sum::<i64>()
-        + count(env, &format!("SELECT count(*) FROM sessions WHERE plan = '{plan}'"))
+    // the Lead's row and the `plan-deleted` Event stay (commands.md §4.14): they are not what the delete empties
+    ["jobs", "attempts", "prs"].iter().map(|t| count(env, &format!("SELECT count(*) FROM {t} WHERE plan = '{plan}'"))).sum::<i64>()
+        + count(env, &format!("SELECT count(*) FROM events WHERE plan = '{plan}' AND kind <> 'plan-deleted'"))
+        + count(env, &format!("SELECT count(*) FROM sessions WHERE plan = '{plan}' AND id NOT IN (SELECT lead_session FROM plans)"))
 }
 
 pub fn events(env: &TestEnv, kind: &str) -> Vec<Value> {
