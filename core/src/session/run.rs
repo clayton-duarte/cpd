@@ -99,8 +99,6 @@ pub(super) fn run(args: RunArgs) -> Result<Output, CpdError> {
             // A new cpd: re-exec at once, before any store access, and keep pi running (§6.7 "Reload on install").
             // `may_exec` asks the new cpd, so it comes after the cheaper test.
             if exe.replaced() && may_exec(&exe) {
-                print!("  new cpd installed: reloading for {}, pi keeps running…\n", row.name);
-                let _ = std::io::stdout().flush();
                 // Returns only when the `exec` failed; pi still runs, so the wrapper carries on.
                 logged.once::<()>(Err(reload(&exe, &row.id, Some((&pi, pi_stale)))), "cannot reload");
             }

@@ -19,7 +19,6 @@ export function registerReloadCommand(host: Host): void {
         return r.reload?.retry();
       }
       r.log("command: reloading");
-      ctx.ui.notify("cpd: adapter updated, reloading");
       try {
         await ctx.reload(); // `ctx` is stale from here on
       } finally {
