@@ -7,7 +7,8 @@
 //! The menu's Open, Close, Archive, Unarchive, Rename…, Fork…, New session…, New Plan… and New Context… are
 //! the same commands (all but Open and Unarchive after a dialog popup, [`super::ask`]); Copy id is the one that runs `tmux set-buffer -w` instead (OSC 52). After New Plan…, Fork… and
 //! New session… succeed, the new Lead is opened in the chat slot (`session open`, then the focus, as Open does). Two flows run more than one: an Archive of the chat slot's Lead frees the slot first
-//! ([`Free`], F3), and a click on an archived Session runs `session history` and focuses the chat (F5).
+//! ([`Free`], F3), and a click on an archived row unarchives its outermost archived object and opens its Session ([`Action::Resume`]).
+//! `session history` is no click any more (hs-d515); it stays a command.
 //!
 //! The Inbox's menu and keys (`s`, `d`) run `inbox snooze <id> <15m|1h|tomorrow>` and `inbox dismiss <id>`.
 //!
@@ -111,6 +112,9 @@ pub enum Action {
     Archive { subject: Subject, free: Option<Free> },
     /// `context|plan|session unarchive` (§3.9, §4.11, §10.11): the menu's Unarchive.
     Unarchive(Subject),
+    /// A click on an archived row: `unarchive` of its outermost archived object, then `then` (the Open of its Session, or
+    /// the OpenManager of a Context row): one action that resumes the chat (contract §2.2 "Asleep", hs-d515).
+    Resume { unarchive: Subject, then: Box<Action> },
     /// `tmux set-buffer -w -- <id>` (hs-d102): the menu's Copy id; the id is the one the row shows. The only action
     /// that is no `cpd` command.
     CopyId(String),
@@ -157,7 +161,7 @@ impl Action {
             Action::Fork { source, name } => vec!["session".into(), "fork".into(), source.to_string(), format!("--name={name}")],
             Action::Close(id) => words(&["session", "close", id.as_str()]),
             Action::Archive { subject, .. } => subject.command("archive"),
-            Action::Unarchive(subject) => subject.command("unarchive"),
+            Action::Unarchive(subject) | Action::Resume { unarchive: subject, .. } => subject.command("unarchive"),
             Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
             Action::EnsureWatch => words(&["watch", "--ensure"]),
             Action::Tell { manager, text } => vec![
@@ -200,6 +204,11 @@ impl Action {
                 },
                 Action::Archive { subject: subject.clone(), free: None },
             ],
+            Action::Resume { unarchive, then } => {
+                let mut steps = vec![Action::Unarchive(unarchive.clone())];
+                steps.extend(then.steps());
+                steps
+            }
             action => vec![action.clone()],
         }
     }
@@ -207,7 +216,7 @@ impl Action {
     /// What the log says when the command succeeded, from its reply: the reference's words. The view draws nothing.
     pub fn done(&self, reply: &Value) -> String {
         match self {
-            Action::Open(_) | Action::OpenManager(_) | Action::Park | Action::History(_) => String::new(),
+            Action::Open(_) | Action::OpenManager(_) | Action::Park | Action::History(_) | Action::Resume { .. } => String::new(),
             Action::NewPlan { id, .. } => format!("forking {id} in window park-{id}"),
             Action::NewContext { id, .. } => format!("created {id}"),
             Action::RenameContext { .. } | Action::RenamePlan { .. } | Action::RenameSession { .. } if reply["already"] == true => {

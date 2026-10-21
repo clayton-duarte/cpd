@@ -20,7 +20,7 @@ fn migration_adds_asleep_at_and_the_event_kind() {
     assert!(columns.contains(&"asleep_at".to_owned()), "sessions.asleep_at: {columns:?}");
 
     let kind: Option<String> = store
-        .read(|c| Ok(c.query_row("SELECT kind FROM event_kinds WHERE kind = 'session-asleep'", [], |r| r.get(0)).ok()))
+        .read(|c| Ok(c.query_row("SELECT name FROM event_kinds WHERE name = 'session-asleep'", [], |r| r.get(0)).ok()))
         .unwrap();
     assert_eq!(kind.as_deref(), Some("session-asleep"));
 
