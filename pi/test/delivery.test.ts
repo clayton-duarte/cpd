@@ -205,7 +205,7 @@ test("a message delivered to this Session is what a restart's cursor reads back"
 const message = (id: number, from: string | null, over: Record<string, unknown> = {}) =>
   event(id, "session-message", { session: ID, text: "ship it", data: { from, text: "ship it", wake: false }, ...over });
 
-test("session-message for this Lead: one cpd message with no turn, followUp, from the sender's name and id", async (t) => {
+test("session-message for this Lead: one cpd message that starts a turn, followUp, from the sender's name and id", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f, "lead");
@@ -220,19 +220,24 @@ test("session-message for this Lead: one cpd message with no turn, followUp, fro
   assert.equal(s.message.content, `Message from the manager (${OTHER}): ship it`);
   assert.equal((s.message.details as any).delivered_to, ID);
   assert.equal((s.message.details as any).id, 101);
-  assert.deepEqual(s.options, { triggerTurn: false, deliverAs: "followUp" });
+  assert.deepEqual(s.options, { triggerTurn: true, deliverAs: "followUp" });
   assert.equal(f.argvs().filter((a) => a[1] === "show" && a[2] === OTHER).length, 1, "the sender is read once");
 });
 
-test("session-message: a turn only when data.wake is true; a missing wake is false (hs-d209, D3)", async (t) => {
+test("every session-message starts a turn, whatever data.wake (hs-d514)", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f, "lead");
-  f.emit(message(101, null, { data: { from: null, text: "ship it", wake: true } }), message(102, null, { data: { from: null, text: "ship it" } }), message(103, null, { data: { from: null, text: "ship it", wake: "yes" } }));
-  await waitFor("three messages", () => f.pi.delivered().length === 3);
+  f.emit(
+    message(101, null, { data: { from: null, text: "ship it", wake: true } }),
+    message(102, null, { data: { from: null, text: "ship it", wake: false } }),
+    message(103, null, { data: { from: null, text: "ship it" } }),
+    message(104, null, { data: { from: null, text: "ship it", wake: "yes" } }),
+  );
+  await waitFor("four messages", () => f.pi.delivered().length === 4);
   assert.deepEqual(
     f.pi.delivered().map((s) => s.options),
-    [{ triggerTurn: true, deliverAs: "followUp" }, { triggerTurn: false, deliverAs: "followUp" }, { triggerTurn: false, deliverAs: "followUp" }],
+    Array(4).fill({ triggerTurn: true, deliverAs: "followUp" }),
   );
 });
 
@@ -270,7 +275,7 @@ test("session-message reaches a side fork (role lead, not the Plan's Lead) too",
   await waitFor("the message", () => f.pi.delivered().length === 1);
   await f.drain(asMessage);
   assert.equal(f.pi.sent.length, 1, "the Plan's Events are not its");
-  assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
+  assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
 });
 
 test("session-message reaches a Manager (no Plan) too", async (t) => {
@@ -282,10 +287,10 @@ test("session-message reaches a Manager (no Plan) too", async (t) => {
   await waitFor("the follower", () => f.follows().length > 0);
   f.emit(message(101, null));
   await waitFor("the message", () => f.pi.delivered().length === 1);
-  assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
+  assert.deepEqual(f.pi.delivered()[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
 });
 
-test("a Manager's session-message with wake starts a turn", async (t) => {
+test("a Manager's session-message starts a turn", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false }));

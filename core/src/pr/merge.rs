@@ -1,6 +1,6 @@
 //! `pr merge` (commands.md §9.10): squash-merge one pull request on GitHub, after
-//! re-reading it. It needs no Plan, no Context and no store, and writes nothing:
-//! the next `pr poll` records the merge.
+//! re-reading it. It needs no Plan and no Context. It stores the merge (hs-d526) from its
+//! own success or from a precheck that reads MERGED, as the poll would: one transaction.
 
 use std::fmt;
 use std::path::Path;
@@ -9,6 +9,13 @@ use std::str::FromStr;
 use serde_json::json;
 
 use super::gh;
+use super::poll;
+use super::pulls;
+use crate::home::CpdHome;
+use crate::store::Store;
+use crate::ids::{PlanId, PrKey};
+use crate::inbox::model::close_pr_ready;
+use crate::store::WriteTxn;
 use crate::error::{CpdError, ErrorCode};
 use crate::output::Output;
 
@@ -59,6 +66,9 @@ pub(super) fn merge(args: MergeArgs) -> Result<Output, CpdError> {
     // `--repo` names the repository: any directory will do.
     let cwd = Path::new(".");
     let view = gh::view_for_merge(cwd, &repo, number)?;
+    if view.state == "MERGED" {
+        store_merge(&repo, number, view.merged_at.as_deref())?;
+    }
     if view.state != "OPEN" || view.merge_state != "CLEAN" {
         return Err(CpdError::new(
             ErrorCode::MergeNotClean,
@@ -70,7 +80,41 @@ pub(super) fn merge(args: MergeArgs) -> Result<Output, CpdError> {
         .with("merge_state", view.merge_state));
     }
     gh::merge_pr(cwd, &repo, number, &view.head)?;
+    store_merge(&repo, number, None)?;
     Ok(Output::success(json!({"repo": repo, "number": number, "method": "squash", "branch_deleted": true})))
+}
+
+const STORE_BUSY_MS: u64 = 5000;
+
+/// The merge of `repo#number`, in one transaction: its `pull_requests` row (when stored and not merged yet) `merged` at
+/// GitHub's time, else the transaction's; the `prs` row that points to it, merged as the poll does; its open `pr-ready` item.
+fn store_merge(repo: &str, number: i64, merged_at: Option<&str>) -> Result<(), CpdError> {
+    // The store alone, not `Env`: `pr merge` needs no config (the default of `timeouts.store_busy_ms`).
+    let mut store = Store::open(&CpdHome::from_env()?, STORE_BUSY_MS)?;
+    store.write("pr merge", |tx| store_merge_in(tx, repo, number, merged_at))
+}
+
+fn store_merge_in(tx: &WriteTxn<'_>, repo: &str, number: i64, merged_at: Option<&str>) -> Result<(), CpdError> {
+    let Some(row) = pulls::find(tx, repo, number)? else { return Ok(()) };
+    if row.state == "merged" {
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE pull_requests SET state = 'merged', merged_at = coalesce(?1, (SELECT at FROM txns WHERE id = cpd_txn())),
+                changed_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?2",
+        rusqlite::params![merged_at, row.id],
+    )?;
+    let after = pulls::load(tx, row.id)?;
+    let owners: Vec<(String, String)> = {
+        let mut stmt = tx.prepare("SELECT plan, key FROM prs WHERE pull_request = ?1 AND status = 'open'")?;
+        stmt.query_map([row.id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    for (plan, key) in owners {
+        let (plan, key): (PlanId, PrKey) = (plan.parse()?, key.parse()?);
+        poll::merge(tx, &plan, &key, &after)?;
+        poll::unstack_stacked_on(tx, &plan, &key)?;
+    }
+    close_pr_ready(tx, repo, number)
 }
 
 #[cfg(test)]

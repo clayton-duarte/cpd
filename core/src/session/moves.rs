@@ -239,6 +239,7 @@ pub(super) fn open(args: OpenArgs) -> Result<Output, CpdError> {
             pane_gone(tx, &other.id, other.state.as_str(), other.tmux_pane.as_deref(), &why)?;
         }
         moved(tx, &lead, &pane, &slot.window, "chat")?;
+        tx.execute("UPDATE sessions SET asleep_at = NULL WHERE id = ?1 AND asleep_at IS NOT NULL", [lead.id.as_str()])?;
         if let (Some(other), false) = (&displaced, slot.dead) {
             moved(tx, other, &slot.pane, &from_window, "parked")?;
         }

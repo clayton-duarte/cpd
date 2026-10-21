@@ -387,6 +387,26 @@ fn a_squash_merged_pr_whose_lead_worktree_holds_a_commit_beyond_the_recorded_hea
 }
 
 #[test]
+fn a_squash_merged_pr_whose_lead_worktree_holds_only_a_rule_s_merge_after_the_recorded_head_is_removed() {
+    let fx = fx(&["api"]);
+    let api = fx.pr("api");
+    fx.recorded_head(&fx.git(&api.lead, &["rev-parse", "HEAD"]));
+    // The base moves, and rule S merges it into the Lead worktree after the recorded head: one local merge commit,
+    // no work of its own.
+    fx.git(&fx.repo, &["-c", "user.name=t", "-c", "user.email=t@cpd.invalid", "commit", "-q", "--allow-empty", "-m", "base moves"]);
+    fx.git(&fx.repo, &["push", "-q", "origin", "main"]);
+    fx.git(&api.lead, &["merge", "-q", "--no-ff", "-m", "Merge remote-tracking branch 'origin/main'", "origin/main"]);
+    assert_eq!(fx.git(&api.lead, &["rev-list", "--min-parents=2", "--count", "HEAD", "--not", "--remotes=origin"]), "1");
+    fx.delete_remote_branch("api");
+    fx.github(&[], &["api"]);
+
+    fx.poll();
+
+    assert_eq!(fx.gone("api"), (true, true), "a merge of the base is not unpushed work");
+    assert_eq!(fx.errors(), Vec::<Value>::new(), "no cleanup_failed `unpushed`");
+}
+
+#[test]
 fn a_locked_attempt_worktree_survives_until_it_is_unlocked() {
     let fx = fx(&["api"]);
     let api = fx.pr("api");

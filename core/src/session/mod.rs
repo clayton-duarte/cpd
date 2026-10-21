@@ -178,6 +178,7 @@ pub struct UnarchiveArgs {
 }
 
 #[derive(clap::Args, Debug)]
+#[command(override_usage = "cpd session send <id> (<text> | --file <f>) --unblocks <reason>")]
 #[command(group(clap::ArgGroup::new("message").required(true).multiple(false).args(["text", "file"])))]
 pub struct SendArgs {
     /// The Lead Session to send to

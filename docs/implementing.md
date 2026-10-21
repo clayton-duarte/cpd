@@ -105,6 +105,8 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   - `env.tmux(&[…])` and `env.tmux_socket()`: a private tmux server (own `TMUX_TMPDIR` and socket name, killed when the `TestEnv` drops). Put the socket name in the test's `config.toml` as `tmux.socket`.
   - `env.fake_pi(body)`, `env.fake_gh(body)`, `env.fake(name, body)`: shell scripts on `PATH` that record their argv (`env.calls("pi")`) and then run `body`.
   - `env.command(program)`: any other program in the same environment.
+  - `TestEnv::kill_tmux_server()` (§3.4 A3, hs-d519): `tmux set-hook -gu pane-died` and `-gu window-unlinked` before `kill-server` to disarm the supervising hooks (§6.1) before killing the server, so they do not restart a new engine after the test kills its own. This is also called first in `TEARDOWN_SH`'s `stop_tmux`, so a test's teardown disarms the hooks that would otherwise fire when the test's server goes away. A test that kills its own server must call this, never a bare `kill-server`.
+  - **Process group and reaper** (hs-d519): every child process a test starts goes through `env.command`, which spawns it in a process group (`setsid` via `nix::unistd::setsid`) so the test's teardown can reap it (`killpg`). The group keeps a test from leaving a tmux server, a driver or any long-lived process behind when it ends or is killed. A `Wrapper::run` of `cli/tests/pr/git_guard.rs` builds on `TestEnv` so its wrapper's process is in that group.
 - **The area table** (the binaries of `cli/tests/`; a module is in the binary whose row matches its file name):
 
   | binary (`cli/tests/<area>/`) | modules |
@@ -115,7 +117,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   | `session` | `session*`, `host`, `board`, `pill_lines` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |
-  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version` |
+  | `tooling` | `*_script`, `cargo_script`, `npm_fresh`, `install_script`, `harness`, `dead_code`, `interface`, `no_repo_lock`, `slot`, `e2e*`, `layout`, `version`, `gate_run`, `pi_check` |
 
 - **A Worker's targeted build is `--test <area>`**: it builds and links only that area's binary (`scripts/cargo.sh nextest run -p cpd --test flow plan_cancel::`, or `scripts/cargo.sh build -p cpd --test flow`), not every area's. Run the binary of the area you changed, and with a module or test name after it to run less (the Gate runs all of them). A change to `cli/tests/common/` is every binary's: say so in the Spec's acceptance and run the binaries it touches.
 - The harness needs the `sqlite3` CLI on `PATH`: its teardown reads the env's store for the drivers' pids (the first `TestEnv::new()` panics without it).
@@ -126,6 +128,14 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   - **Measure with `scripts/test-time.sh`** (`scripts/test-time.sh -E 'binary_id(cpd::flow)'` for a subset): it prints the load, the wall (nextest's run time) and the sum, the 30 slowest tests and each binary's sum. Put the wall and the sum before and after in the commit message of a speed change; a change without a measured gain is not made.
   - **Measure paired.** hs is shared, and the same suite's sum moves 10-75 % with the load (the load average is in the report: say it). Compare two builds in the same conditions, interleaved (A, B, A, B, ...), never one run before and one after at different hours; for one test, run it alone 5-7 times per build (`scripts/cargo.sh nextest run -p cpd --test flow <name>`) and compare medians. Keep both builds as commits or a patch file (`git diff > /tmp/x.patch`, `git apply -R`), never `git stash`. No synthetic load, at most 2 test runs at once.
   - **The per-test limit** is `slow-timeout` in `.config/nextest.toml` (the default profile): a test over it fails the run. The numbers it comes from and the reason are beside the setting; raise it only with a measurement. The `priority` override there lists the tests that wait for a real limit, so they start first; `=name` drops out silently when a test is renamed, so check it with `scripts/cargo.sh nextest list --workspace -E '<the filter>'`.
+
+## The Gate leak check
+
+(hs-d519, docs/research/hygiene.md). The Gate notes what its own test run creates and fails when any is left at the end; nothing hunts machine-wide. A new `scripts/gate-run.sh '<command…>'`, and `package.json`'s `verify` becomes `scripts/gate-run.sh npm run verify:steps` (the present chain moves unchanged to `verify:steps`). The Gate's pre-merge hook (`.config/wt.toml`, protected, unchanged) already runs `npm run verify`, so the check runs in every Gate and in `npm run verify` by hand, once, after the last step.
+
+**How a run's own leftovers are identified from other runs'.** One random run id, made by the script and inherited by everything the run starts: `RUN=$(mktemp -d "${TMPDIR:-/dev/shm}/gate-run.XXXXXX")`; `GATE_RUN=${RUN##*.}` (6 random characters); `export GATE_RUN TMPDIR=$RUN`. Directories are keyed on that id: `tempfile::tempdir()`, `mktemp` and `scripts/pi-check.sh` honour `TMPDIR` and create entries under it. `ENVS_DIR` in `cli/tests/common/mod.rs:201` becomes `$TMPDIR` when set (else `/dev/shm` as today). At the end, anything under `$RUN` is a leftover. Processes carry the id: every `TestEnv::command` call and tmux server inherit the `GATE_RUN` variable; the script scans `/proc/[0-9]*/environ` of its own uid for the exact entry `GATE_RUN=<id>` and excludes itself and its ancestors. For tmux sockets, `TestEnv` names them `cpdt-$GATE_RUN-<pid>-<n>` and `pi-check.sh` `pi-check-${GATE_RUN:-x}-$$`.
+
+**What it prints on failure** (stderr, then exit 1): `gate-run: FAIL: this run (GATE_RUN=aB3dE9) left 3 things behind:`, one line per leftover (process, socket, path), then `gate-run: the test that left them:…`, then `gate-run: stopped 2 process(es) and removed 2 path(s) of this run`. It then `SIGKILL`s only the pids it listed and removes only the listed sockets and `$RUN`, so the failure itself leaks nothing; a clean run prints nothing and removes the empty `$RUN`. Cite hs-d519 and docs/research/hygiene.md in the docs.
 
 ## Dependencies
 

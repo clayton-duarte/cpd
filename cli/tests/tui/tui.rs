@@ -495,7 +495,7 @@ fn a_failing_action_prints_nothing_exits_0_and_tells_the_client() {
     assert!(env.calls("tmux").iter().all(|c| !c.iter().any(|a| a == "display-popup")));
 
     // with no tmux server at all, even the message fails: still nothing printed, exit 0
-    tmux_out(&env, &["kill-server"]);
+    env.kill_tmux_server();
     action(&env, &["reset", "--client", "/dev/pts/77"]);
 }
 

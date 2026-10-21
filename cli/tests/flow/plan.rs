@@ -527,7 +527,7 @@ fn new_again_with_the_same_flags_is_already_and_redoes_missing_steps() {
     // A crash after the first transaction: no pane, no message. Rerunning redoes both.
     store(&env).write("fixture", |tx| exec(tx, &format!("UPDATE sessions SET tmux_pane = NULL WHERE id = '{session}';"))).unwrap();
     fs::remove_file(home(&env).lead_message(&pid("pay"))).unwrap();
-    env.tmux(&["kill-server"]);
+    env.kill_tmux_server();
     let redone = env.cpd_in(&repo, &["plan", "new", "pay", "--context", "ctx", "--title", "Plan pay"]).ok();
     assert_eq!(redone["already"], true);
     assert_eq!(redone["lead"]["cwd"], first["lead"]["cwd"]);
@@ -889,7 +889,8 @@ fn render_writes_the_plan_markdown_and_its_fingerprint() {
     assert!(text.contains("\n### `a`: Job a\n"), "{text}");
     assert!(text.contains("\n#### Goal\n\nGoal of b.\n"), "{text}");
     assert_eq!(out["prs"], 1);
-    assert!(!text.contains("gone"), "cancelled Jobs are left out: {text}");
+    // a cancelled Job is shown with its status, and drawn in no graph (hs-d518)
+    assert!(text.contains("| `gone` |") && !text.contains("[\"gone\"]"), "{text}");
 
     // Idempotent: the same Jobs render the same file.
     let again = env.cpd(&["plan", "render", "--plan", "pay"]).ok();
@@ -1049,7 +1050,8 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     assert!(text.contains("| `c` | Job c | work | S2 | draft | `a` | `src/c.rs` | **under review** |"), "{text}");
     assert!(text.contains("| `a` | Job a | work | S2 | queued | none | `src/a.rs` | Locked |"), "{text}");
     assert!(text.contains("\nStatus: `draft` · **under review** · Tier: `S2` · Needs: `c`\n"), "{text}");
-    assert!(text.contains("\nStatus: `queued` · Locked · Tier: `S2` · Needs: `a`\n"), "{text}");
+    // `b` is queued but cannot start until `a` merges: shown as waiting (hs-d521)
+    assert!(text.contains("\nStatus: `waiting` · waiting on [`a`](#a-job-a) · Locked · Tier: `S2` · Needs: `a`\n"), "{text}");
     assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 2);
 
     // A PR appended after the lock is not reviewed: the review stays current.

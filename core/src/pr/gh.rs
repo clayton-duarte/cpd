@@ -282,7 +282,7 @@ pub fn retitle_pr(cwd: &Path, repo: &str, number: i64, title: &str) -> Result<()
     run(cwd, &["api", "-X", "PATCH", &endpoint, "-f", &field]).map(drop)
 }
 
-/// `gh pr view <n> --repo <repo> --json state,mergeStateStatus,headRefOid,title`: what `pr merge` re-checks (`title` is selected, as the docs say, and not kept).
+/// `gh pr view <n> --repo <repo> --json state,mergeStateStatus,headRefOid,title,mergedAt`: what `pr merge` re-checks (`title` is selected, as the docs say, and not kept).
 #[derive(Debug, Deserialize)]
 pub struct MergeView {
     /// `OPEN`, `CLOSED` or `MERGED`.
@@ -292,12 +292,15 @@ pub struct MergeView {
     pub merge_state: String,
     #[serde(rename = "headRefOid")]
     pub head: String,
+    /// GitHub's merge time, when it is merged.
+    #[serde(rename = "mergedAt", default)]
+    pub merged_at: Option<String>,
 }
 
 /// The pull request `number` of `repo`, read fresh from GitHub.
 pub fn view_for_merge(cwd: &Path, repo: &str, number: i64) -> Result<MergeView, CpdError> {
     let n = number.to_string();
-    let args = ["pr", "view", &n, "--repo", repo, "--json", "state,mergeStateStatus,headRefOid,title"];
+    let args = ["pr", "view", &n, "--repo", repo, "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"];
     parse(&args, &run(cwd, &args)?)
 }
 

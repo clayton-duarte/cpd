@@ -34,6 +34,7 @@ pub fn session(id: &str, name: &str, state: State, label: Option<&str>, place: P
         plan_lead: false,
         dot: Dot::glyph(state),
         archived_at: None,
+        asleep_at: None,
     }
 }
 
@@ -75,6 +76,7 @@ pub fn context(id: &str, plans: Vec<PlanNode>) -> ContextNode {
     ContextNode {
         dot: Dot::Stopped, // no Manager; `managed` gives it one
         manager_place: None,
+        manager_asleep: false,
         id: ContextId::parse(id).unwrap(),
         title: titled(id),
         jira: None,

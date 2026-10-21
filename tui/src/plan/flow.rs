@@ -26,7 +26,7 @@ use cpd_core::config::Tier;
 use crate::read::{AttemptStatus, JobNode, JobStatus};
 use cpd_core::ids::JobKey;
 
-/// A Job's status as the chart draws it. A cancelled Job is not drawn, so it has none; a `running` Job whose Attempt is
+/// A Job's status as the chart draws it. A `cancelled` Job is drawn muted, in its place; a `running` Job whose Attempt is
 /// `merging` is `Merging` (the cockpit's `in_review`); a `failed` Job is `Failed` while its Lead handles it (the waiting
 /// colour) and `Stuck` once `job-stuck` is open (red: it needs the User, audit Q3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +38,7 @@ pub enum Live {
     Merged,
     Failed,
     Stuck,
+    Cancelled,
 }
 
 impl Live {
@@ -51,12 +52,13 @@ impl Live {
             Live::Merged => palette::job_status(JobStatus::Merged, false),
             Live::Failed => palette::job_status(JobStatus::Failed, false),
             Live::Stuck => palette::JOB_STUCK,
+            Live::Cancelled => palette::job_status(JobStatus::Cancelled, false),
         }
     }
 
-    /// `None` for a cancelled Job. `stuck`: the Job has an open `job-stuck` item.
-    pub fn of(job: &JobNode, stuck: bool) -> Option<Live> {
-        Some(match job.status {
+    /// `stuck`: the Job has an open `job-stuck` item.
+    pub fn of(job: &JobNode, stuck: bool) -> Live {
+        match job.status {
             JobStatus::Draft => Live::Draft,
             JobStatus::Queued => Live::Queued,
             JobStatus::Running if job.active_attempt().is_some_and(|a| a.status == AttemptStatus::Merging) => Live::Merging,
@@ -64,8 +66,8 @@ impl Live {
             JobStatus::Merged => Live::Merged,
             JobStatus::Failed if stuck => Live::Stuck,
             JobStatus::Failed => Live::Failed,
-            JobStatus::Cancelled => return None,
-        })
+            JobStatus::Cancelled => Live::Cancelled,
+        }
     }
 }
 
@@ -79,6 +81,9 @@ pub struct FlowJob {
     pub needs: Vec<String>,
     /// How many Attempts the Job has had; the pill shows `aN` from the second on.
     pub attempt: usize,
+    /// What the row says after its pill, muted (the palette's `Meaning::Nothing`): `waiting on <keys>` for a Job that
+    /// cannot start yet, `cancelled: <reason>` for a cancelled one.
+    pub aside: Option<String>,
 }
 
 pub struct Pill {
@@ -87,17 +92,34 @@ pub struct Pill {
     pub column: usize,
 }
 
-/// Jobs (one PR's) as the chart draws them, in creation order: cancelled Jobs are left out, with the needs on them. `stuck`
-/// are the keys of the Jobs with an open `job-stuck` item.
+/// The most characters of a cancelled Job's reason a row shows, the rest cut with `…`.
+const REASON_WIDTH: usize = 40;
+
+/// Jobs (one PR's) as the chart draws them, in creation order: a cancelled Job is drawn muted, in its place, with its
+/// reason; the needs on it, and its own, are not drawn (they count for nothing). `stuck` are the keys of the Jobs with an
+/// open `job-stuck` item.
 pub fn flow_jobs<'a>(jobs: impl IntoIterator<Item = &'a JobNode>, stuck: &[JobKey]) -> Vec<FlowJob> {
-    let live: Vec<(&JobNode, Live)> = jobs.into_iter().filter_map(|j| Some((j, Live::of(j, stuck.contains(&j.key))?))).collect();
-    live.iter()
-        .map(|&(j, status)| FlowJob {
+    let all: Vec<&JobNode> = jobs.into_iter().collect();
+    let cancelled = |key: &JobKey| all.iter().any(|j| &j.key == key && j.status == JobStatus::Cancelled);
+    all.iter()
+        .map(|j| FlowJob {
             key: j.key.to_string(),
-            status,
+            status: Live::of(j, stuck.contains(&j.key)),
             tier: j.tier,
-            needs: j.needs.iter().filter(|n| live.iter().any(|(l, _)| &l.key == *n)).map(|n| n.to_string()).collect(),
+            needs: if j.status == JobStatus::Cancelled {
+                Vec::new()
+            } else {
+                j.needs.iter().filter(|n| all.iter().any(|l| &l.key == *n) && !cancelled(n)).map(|n| n.to_string()).collect()
+            },
             attempt: j.attempts.len(),
+            aside: match j.status {
+                JobStatus::Cancelled => Some(match &j.cancel_reason {
+                    Some(reason) => format!("cancelled: {}", truncate(reason, REASON_WIDTH)),
+                    None => "cancelled".to_owned(),
+                }),
+                JobStatus::Queued if !j.waiting_on.is_empty() => Some(format!("waiting on {}", j.waiting_on.join(", "))),
+                _ => None,
+            },
         })
         .collect()
 }
@@ -315,7 +337,16 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     // x: the left bracket column, then each column's pills, `GAP` + both bracket columns between columns
     let parts: Vec<(String, String)> = jobs.iter().map(|j| pill_parts(j, usize::MAX, frame)).collect();
     let pill_w = |i: usize| (Line::from(parts[i].0.as_str()).width() + Line::from(parts[i].1.as_str()).width()) as u16;
-    let col_w: Vec<u16> = cols.iter().map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| pill_w(i) + 2).max().unwrap_or(0)).collect();
+    // a column's live pills are as wide as the widest of them; a cancelled Job's is as wide as itself, so it never widens the
+    // others; an aside follows its pill, one column apart, and the column's lines leave after the longest row
+    let live_w: Vec<u16> = cols
+        .iter()
+        .map(|cs| cs.iter().flat_map(|&c| &cards[c].jobs).filter(|&&i| jobs[i].status != Live::Cancelled).map(|&i| pill_w(i) + 2).max().unwrap_or(0))
+        .collect();
+    let rect_w = |i: usize, l: usize| if jobs[i].status == Live::Cancelled { pill_w(i) + 2 } else { live_w[l] };
+    let aside_w = |i: usize| jobs[i].aside.as_deref().map_or(0, |n| Line::from(n).width() as u16);
+    let row_w = |i: usize, l: usize| rect_w(i, l) + if aside_w(i) > 0 { aside_w(i) + 1 } else { 0 };
+    let col_w: Vec<u16> = cols.iter().enumerate().map(|(l, cs)| cs.iter().flat_map(|&c| &cards[c].jobs).map(|&i| row_w(i, l)).max().unwrap_or(0)).collect();
     let spacing = GAP + 2;
     let inner_w = col_w.iter().sum::<u16>() + spacing * ncols.saturating_sub(1) as u16;
     let xs: Vec<u16> = starts(1, col_w.iter().copied(), spacing);
@@ -413,16 +444,26 @@ pub fn layout(all: &[FlowJob], frame: usize) -> Chart {
     for (l, cs) in cols.iter().enumerate() {
         for &c in cs {
             for (k, &i) in cards[c].jobs.iter().enumerate() {
-                let rect = Rect::new(xs[l], top[c] + k as u16, col_w[l], 1);
-                let style = palette::pill_interactive();
+                let rect = Rect::new(xs[l], top[c] + k as u16, rect_w(i, l), 1);
                 // a cap on each side in the status colour, on the default background; between them the icon and key to
-                // the left, the tier (and `aN`) to the right, whatever the column's width
-                let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
-                buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
-                buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
+                // the left, the tier (and `aN`) to the right, whatever the column's width. A cancelled Job is no pill: its
+                // text alone, muted, where the pill would be
+                let style = if jobs[i].status == Live::Cancelled {
+                    lines
+                } else {
+                    let style = palette::pill_interactive();
+                    let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+                    buf[(rect.x, rect.y)].set_symbol(CAP_L).set_style(cap);
+                    buf[(rect.right() - 1, rect.y)].set_symbol(CAP_R).set_style(cap);
+                    style
+                };
                 let body = body_of(rect);
                 Line::from(parts[i].0.as_str()).style(style).left_aligned().render(body, &mut buf);
                 Line::from(parts[i].1.as_str()).style(style).right_aligned().render(body, &mut buf);
+                if let Some(aside) = &jobs[i].aside {
+                    let at = Rect::new(rect.right() + 1, rect.y, aside_w(i), 1);
+                    Line::from(aside.as_str()).style(lines).render(at, &mut buf);
+                }
                 pills[i] = Some(Pill { key: jobs[i].key.clone(), rect, column: l });
                 columns[l].push(i);
             }
@@ -570,6 +611,7 @@ mod tests {
             tier: Some(Tier::parse("S1").unwrap()),
             needs: needs.iter().map(|s| s.to_string()).collect(),
             attempt: 1,
+            aside: None,
         }
     }
 

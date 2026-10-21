@@ -313,3 +313,17 @@ fn the_user_without_a_session_is_not_guarded() {
     env.cpd(&["session", "send", "fork1", "same", "--unblocks", "u"]).ok();
     assert_eq!(messages(&env).len(), 3);
 }
+
+#[test]
+fn the_help_usage_puts_the_id_first() {
+    let env = TestEnv::new();
+    let run = env.cpd(&["session", "send", "--help"]);
+    let text = format!("{}{}", run.stdout, run.stderr);
+    let usage = text
+        .lines()
+        .find(|l| l.contains("Usage:"))
+        .unwrap_or_else(|| panic!("no usage line: {text}"));
+    let id = usage.find("<id>").unwrap_or_else(|| panic!("no <id> in: {usage}"));
+    let unblocks = usage.find("--unblocks").unwrap_or_else(|| panic!("no --unblocks in: {usage}"));
+    assert!(id < unblocks, "usage must put the id first, as the parser does: {usage}");
+}

@@ -291,7 +291,7 @@ fn a_session_without_its_file_yet_says_so_and_shows_it_once_it_exists() {
     populate(&env, Some(&file));
     let pane = Pane::start(&env, 60, 5);
     let screen = pane.wait("the placeholder", |s| s.iter().any(|r| r.contains("No session file at")));
-    assert!(screen[0].starts_with(" No session file at ") && screen[0].contains("later.jsonl"), "{screen:?}");
+    assert!(screen[0].starts_with(" No session file at ") && screen.join("").replace(' ', "").contains("later.jsonl"), "{screen:?}"); // the path may wrap in a long test root
     std::fs::write(&file, entry("user", json!({"type": "text", "text": "Hello."}))).unwrap();
     pane.wait("the file", |s| s.iter().any(|r| r.contains("Hello.")));
 }
