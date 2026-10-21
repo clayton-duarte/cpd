@@ -305,7 +305,7 @@ fn a_working_lead_survives_an_install_the_wrapper_re_execs_and_pi_is_never_signa
 
     wait_until("the new binary", || !f.runs().is_empty());
     assert_eq!(f.runs(), [format!("{pid} session run {LEAD} --adopt {old_pi}")]);
-    assert!(f.screen().contains("new cpd installed"), "{}", f.screen());
+    assert!(!f.screen().contains("new cpd installed"), "{}", f.screen());
     // Several polls: the Lead is working, pi runs on and nothing else happens.
     // time-claim: the Lead is working, so pi runs on and nothing else happens over five polls of the new wrapper;
     // no per-poll signal from `session run`.
