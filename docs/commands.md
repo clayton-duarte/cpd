@@ -1891,12 +1891,12 @@ Effects: none; one read transaction.
 
 ```json
 {"ok": true, "sessions": [
-  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "waiting", "state_label": "cpd: Worker question", "state_at": "…", "archived_at": null,
+  {"id": "596d007f-…", "role": "lead", "context": "building-cpd", "plan": "cpd2", "attempt": null, "name": "cpd rust lead", "state": "waiting", "state_label": "cpd: Worker question", "state_at": "…", "archived_at": null, "asleep_at": null,
    "place": "chat", "tmux_pane": "%12", "file": "/home/clayton/.pi/agent/sessions/…_596d007f-….jsonl", "forked_from": null, "plan_lead": true, "tier": "O3", "cwd": "/home/clayton/projects/cpd", "title": "Dynamic session titles contract", "titled_at": "…"}],
  "events_cursor": 48213}
 ```
 
-`role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. Read-only.
+`role` is `lead`, `worker` or `manager` (B3-A1; a Manager has `plan` null, `attempt` null and `plan_lead` false; `--role manager` lists them). `plan_lead` is true for the Session that is its Plan's `lead_session`. `title` and `titled_at` are the dynamic title (contract §2.2, hs-d257) and when it was written, both null until the first `session retitle`. `archived_at` and `asleep_at` are null unless the Session is archived or asleep. Read-only.
 
 ### 10.2 `session show`
 
@@ -1966,7 +1966,7 @@ Effects:
 - In the chat slot already: nothing; `"already": true`.
 - **tmux:** when the Session has no live pane (`stopped`, or its pane is gone): first `kill-pane` on a dead pane of the Lead, if one is still there, so it never adds a second window; then `new-window -d -t =cpd: -n park-<label> … -- cpd session run <id>` first, which resumes it (`pi --session <file>`, §6.5), and `tmux_pane` is recorded; the pane's `@cpd_title` is set by the precedence of contract §6.1 (the dynamic `title`, else the Plan's title or the name). Then `swap-pane -d -s <its pane> -t <chat slot pane>`, and `rename-window -t <window> park-<displaced label>` for the window that now holds the displaced Lead. When the displaced pane is the placeholder or a history pane (`@cpd_view` `chat` or `history`, §10.12), `kill-pane` on it instead, which closes the now-empty park window with it, so placeholders and history panes never pile up in park windows.
 - If a step after the new window is created fails (`set-option -p @cpd_session`, the swap, the row or the `session-moved` write), that new window is killed (`kill-window`) before the error is returned (teardown G11).
-- **Rows**, one transaction: **Events** `session-moved` `{place: "chat"}` for this Session and `{place: "parked"}` for the displaced one.
+- **Rows**, one transaction: clear `asleep_at` when the Session was asleep (hs-d515); **Events** `session-moved` `{place: "chat"}` for this Session and `{place: "parked"}` for the displaced one.
 
 ```json
 {"ok": true, "session": "8d0e…", "pane": "%41", "displaced": "596d007f-…"}
@@ -2115,7 +2115,7 @@ Archives one Session (contract §2.2 "Archived"); `<id>` accepts the short forms
 Effects, in this order:
 1. **Check** the rule above; nothing is written if it blocks.
 2. **tmux:** a live pane is closed as `session close` does (§10.9).
-3. **Rows**, one transaction that re-checks the rule: `sessions.archived_at` = now; **Event** `session-archived` `{archived: true}`.
+3. **Rows**, one transaction that re-checks the rule: `sessions.archived_at` = now, `sessions.asleep_at` = null (hs-d515); **Event** `session-archived` `{archived: true}`.
 
 ```json
 {"ok": true, "archived": [{"kind": "session", "id": "a41b…"}], "closed": ["%52"]}
@@ -2137,7 +2137,7 @@ cpd session unarchive <id>
 | it is a `lead` | `not_a_lead` | 3 |
 | its Plan is not archived (nor its Context); `details.next` = `cpd plan unarchive --plan <p>` or `cpd context unarchive <c>` | `archived` | 3 |
 
-Effects: **rows**, one transaction: `sessions.archived_at = NULL`; **Event** `session-archived` `{archived: false}`. No tmux: no pane is started; `session open` resumes the Lead (§10.4).
+Effects: **rows**, one transaction: `sessions.archived_at = NULL`, `sessions.asleep_at = NULL` (hs-d515); **Event** `session-archived` `{archived: false}`. No tmux: no pane is started; `session open` resumes the Lead (§10.4).
 
 ```json
 {"ok": true, "archived": [{"kind": "session", "id": "a41b…"}], "closed": []}
