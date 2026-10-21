@@ -678,7 +678,7 @@ fn every_tmux_method_runs_tmux_with_u_first() {
     let _ = tmux.ensure_session("cpd", "main", &spawn);
     let _ = tmux.create_session("cpd", "main", &spawn);
     let _ = tmux.apply_server_options();
-    let _ = tmux.apply_status_line("cpd");
+    let _ = tmux.apply_status_line("cpd", "0.0.5-abc");
     let _ = tmux.preview();
     let _ = tmux.server_version();
     let _ = tmux.global_option("status");
@@ -700,6 +700,17 @@ fn every_tmux_method_runs_tmux_with_u_first() {
     assert!(calls.len() >= 20, "the fake tmux saw {} calls", calls.len());
     let bare: Vec<String> = calls.iter().filter(|c| c.first().map(String::as_str) != Some("-u")).map(|c| c.join(" ")).collect();
     assert!(bare.is_empty(), "tmux calls that are not UTF-8 clients (`-u` first):\n{}", bare.join("\n"));
+}
+
+/// `apply_status_line` sets the global user option `@cpd_version` to the version it is given (§6.1).
+#[test]
+fn apply_status_line_sets_the_global_cpd_version_option() {
+    let env = TestEnv::new();
+    let fake = env.fake("tmux-recorder", "exit 0");
+    let tmux = Tmux::with_tmpdir("cpdt-version", env.root().join("tmux")).with_program(&fake);
+    tmux.apply_status_line("cpd", "0.0.5-5ba3a1d3").unwrap();
+    let calls: Vec<String> = env.calls("tmux-recorder").iter().map(|c| c.join(" ")).collect();
+    assert!(calls.iter().any(|c| c.ends_with("set -g @cpd_version 0.0.5-5ba3a1d3")), "{calls:#?}");
 }
 
 /// Writes `$CPD_HOME/config.toml` of `env` for the fake-tmux runs below.

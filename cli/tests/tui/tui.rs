@@ -316,6 +316,15 @@ fn assert_window_title(env: &TestEnv) {
     assert_eq!(tmux_out(env, &["display", "-p", format.trim_end_matches('\n')]).trim_end_matches('\n'), "cpd · m1");
 }
 
+/// After `cpd tui`: the global `@cpd_version` is the `version` of `cpd --version` (§6.1, hs-d299).
+#[test]
+fn tui_sets_cpd_version_to_the_binarys_version() {
+    let env = env();
+    env.cpd(&["tui"]).ok();
+    let want = env.cpd(&["--version"]).ok()["version"].as_str().unwrap().to_owned();
+    assert_eq!(tmux_out(&env, &["show", "-gv", "@cpd_version"]).trim_end_matches('\n'), want);
+}
+
 #[test]
 fn a_server_started_by_plan_new_has_every_server_option() {
     let env = env();

@@ -133,7 +133,7 @@ fn ensure(
     tmux.apply_server_options()?;
     // The window title's machine name (contract §6.1, hs-d300): SERVER_OPTIONS is static.
     tmux.run(&["set".to_owned(), "-g".to_owned(), "@cpd_machine".to_owned(), machine.to_owned()])?;
-    tmux.apply_status_line(cockpit)?;
+    tmux.apply_status_line(cockpit, "")?;
     if chat_added {
         if let Some(lead) = store.read(last_chat_lead)? {
             open_lead(run_command, &lead)?;
