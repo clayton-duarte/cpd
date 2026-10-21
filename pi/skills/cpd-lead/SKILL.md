@@ -61,6 +61,14 @@ cpd session send <manager-id> "<text>"
 
 Find its id with `cpd session list --role manager --context <c>` (`<c>` is your Plan's Context, in `cpd plan show`; `--context` is only a filter here). The Manager never answers for the User: you still ask the User directly, and a message from the Manager is not the User's decision unless it quotes one.
 
+### Communication rules
+
+Three ways to communicate are distinct:
+
+- **Message** (`cpd session send`): only to unblock another agent, with `--unblocks "<reason>"`. A message always wakes an idle agent; send sparingly. No broadcasts, no FYI, no acks.
+- **Board** (`cpd board post --to <session>`): for information another agent needs at its next turn. A board post does not wake; it arrives when the agent's turn starts.
+- **Record** (`cpd context decide`, `cpd context note`): facts and rules for everyone. Written to the Context, records live as long as the Context and reach all agents at their turn start.
+
 ## 1. Context
 
 Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [Specifying](#specifying); they end with `cpd plan phase plan`. At the Epic level the Context's Manager did them for the Context; you do them for your Plan.
