@@ -39,6 +39,38 @@ fn pane<'a>(panes: &'a [Pane], id: &PaneId) -> &'a Pane {
     panes.iter().find(|p| &p.pane == id).unwrap_or_else(|| panic!("no pane {id} in {panes:?}"))
 }
 
+/// Stops the server `-L <socket>` in tmux's default directory (`/tmp/tmux-<uid>`) and removes its socket file, when
+/// dropped: a server started where no teardown looks is ended here.
+struct DefaultDirServer(String);
+
+impl DefaultDirServer {
+    fn socket_file(&self) -> std::path::PathBuf {
+        Path::new("/tmp").join(format!("tmux-{}", { use std::os::unix::fs::MetadataExt; std::fs::metadata("/proc/self").unwrap().uid() })).join(&self.0)
+    }
+}
+
+impl Drop for DefaultDirServer {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("tmux").args(["-L", &self.0, "kill-server"]).env_remove("TMUX_TMPDIR").env_remove("TMUX").output();
+        let _ = std::fs::remove_file(self.socket_file());
+    }
+}
+
+/// hygiene.md 3b: tmux falls back to `/tmp/tmux-<uid>/` for a `TMUX_TMPDIR` that does not exist, so a late start escapes
+/// every teardown; cpd refuses instead.
+#[test]
+fn a_tmux_call_whose_tmux_tmpdir_is_missing_is_refused_and_starts_no_server_in_tmp() {
+    let env = TestEnv::new();
+    let socket = format!("cpdt-missing-tmpdir-{}", std::process::id());
+    let guard = DefaultDirServer(socket.clone());
+    let tmux = Tmux::with_tmpdir(socket, env.root().join("no-such-tmux-dir"));
+
+    let err = tmux.ensure_session("cpd", "main", &sleeper(env.root())).unwrap_err();
+
+    assert_eq!(err.code(), ErrorCode::TmuxFailed, "{err:?}");
+    assert!(!guard.socket_file().exists(), "a server started in {}", guard.socket_file().display());
+}
+
 #[test]
 fn starts_the_server_once_with_the_contract_options() {
     let s = server();

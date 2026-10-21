@@ -426,6 +426,36 @@ fn ensure_starts_the_engine_in_the_work_session_once() {
 
 /// engine-W10: both calls probe the lock before either engine has taken it (the fake `cpd` is slow to start), so both create
 /// a window and one engine loses the lock (`watch_running`, its pane dies). Both calls succeed, one engine runs, no dead window.
+/// Kills the server `-L <socket>` under `tmux_tmpdir` when dropped: what the test starts, it ends.
+struct KillServer {
+    socket: &'static str,
+    tmux_tmpdir: PathBuf,
+}
+
+impl Drop for KillServer {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("tmux")
+            .args(["-L", self.socket, "kill-server"])
+            .env("TMUX_TMPDIR", &self.tmux_tmpdir)
+            .env_remove("TMUX")
+            .output();
+    }
+}
+
+/// hygiene.md 3c: the late supervising `ensure` of a test whose env was removed must not make `$CPD_HOME` again.
+#[test]
+fn ensure_in_a_home_that_does_not_exist_fails_and_creates_nothing() {
+    let env = TestEnv::new();
+    let missing = env.root().join("gone-home");
+    // Without a config the server is `-L cpd`, in the env's own TMUX_TMPDIR: stopped here, whatever the run does.
+    let _server = KillServer { socket: "cpd", tmux_tmpdir: env.root().join("tmux") };
+
+    let run = env.cpd_with(env.root(), &["watch", "--ensure"], &[("CPD_HOME", missing.to_str().unwrap())]);
+
+    assert_ne!(run.exit, 0, "ensure succeeded in a home that does not exist: {run:?}");
+    assert!(!missing.exists(), "ensure created {}: {:?}", missing.display(), fs::read_dir(&missing).map(|d| d.count()));
+}
+
 #[test]
 fn two_concurrent_ensures_both_succeed_and_leave_one_engine() {
     let fx = fx("");

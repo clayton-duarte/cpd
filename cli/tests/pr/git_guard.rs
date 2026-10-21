@@ -1,62 +1,17 @@
 //! The `git` wrapper that refuses `git stash` (contract §6.5, hs-d310).
 
 use std::env;
-use std::ffi::OsString;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::path::Path;
+use std::process::Command;
 
 use cpd_core::home::CpdHome;
 use cpd_core::host::git_guard::{self, NO_GIT, REFUSAL};
 
 use crate::common;
-use common::{output, poll, spawn, write_executable};
+use common::{output, write_executable};
 
-/// How long one call of the wrapper may take: a few `sh` builtins and one `exec`, milliseconds. A call that is not
-/// over in this is wrappers that `exec` each other for ever (hs-d341), not a slow machine: the test fails at once
-/// instead of at the suite's 90 s.
-const BOUND: Duration = Duration::from_secs(10);
-
-struct Wrapper {
-    _tmp: tempfile::TempDir,
-    home: CpdHome,
-}
-
-impl Wrapper {
-    fn new() -> Wrapper {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = CpdHome::resolve(Some(tmp.path().join("cpd-home").into()), None).unwrap();
-        // The harness writes what the tests execute (`install` is tested below, never executed).
-        fs::create_dir_all(home.bin_dir()).unwrap();
-        write_executable(&home.git_wrapper(), git_guard::WRAPPER);
-        Wrapper { _tmp: tmp, home }
-    }
-
-    fn bin(&self) -> PathBuf {
-        self.home.bin_dir()
-    }
-
-    /// Runs `git <args>` the way a Session does, with `path` as `PATH`: (exit code, stdout, stderr). Panics when the
-    /// call is not over in [`BOUND`].
-    fn run(&self, path: &OsString, cwd: &Path, args: &[&str]) -> (i32, String, String) {
-        let mut cmd = Command::new(self.home.git_wrapper());
-        cmd.args(args).current_dir(cwd).env("PATH", path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = spawn(&mut cmd).unwrap();
-        if poll(BOUND, || child.try_wait().unwrap()).is_none() {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            panic!("`git {args:?}` through {} is not over after {BOUND:?}: wrappers that exec each other, PATH {path:?}", self.home.git_wrapper().display());
-        }
-        // Already reaped: `wait_with_output` reads what is left in the pipes.
-        let out = child.wait_with_output().unwrap();
-        (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
-    }
-
-    fn session_path(&self) -> OsString {
-        git_guard::path_with_bin(&self.home, Some(common::inherited_path().to_owned())).into()
-    }
-}
+use common::GitWrapper as Wrapper;
 
 /// A repo with one commit, made by the real git (the one on the test's own `PATH`).
 fn repo(dir: &Path) {

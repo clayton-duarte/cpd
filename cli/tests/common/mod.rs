@@ -471,6 +471,54 @@ pub fn sql(store: &mut Store, text: &str) {
         .unwrap();
 }
 
+/// A cpd `git` wrapper (`$CPD_HOME/bin/git`, [`git_guard::WRAPPER`]) in a directory of its own, and the way to run it
+/// as a Session does. Shared by the `pr` tests of the wrapper and the harness's test of what a killed test leaves.
+pub struct GitWrapper {
+    _tmp: TempDir,
+    home: CpdHome,
+}
+
+/// How long one call of the wrapper may take: a few `sh` builtins and one `exec`, milliseconds. A call that is not
+/// over in this is wrappers that `exec` each other for ever (hs-d341), not a slow machine.
+pub const GIT_WRAPPER_BOUND: Duration = Duration::from_secs(10);
+
+impl GitWrapper {
+    pub fn new() -> GitWrapper {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(tmp.path().join("cpd-home").into()), None).unwrap();
+        fs::create_dir_all(home.bin_dir()).unwrap();
+        write_executable(&home.git_wrapper(), git_guard::WRAPPER);
+        GitWrapper { _tmp: tmp, home }
+    }
+
+    pub fn bin(&self) -> PathBuf {
+        self.home.bin_dir()
+    }
+
+    /// Runs `git <args>` the way a Session does, with `path` as `PATH`: (exit code, stdout, stderr). Panics when the
+    /// call is not over in [`GIT_WRAPPER_BOUND`].
+    pub fn run(&self, path: &OsString, cwd: &Path, args: &[&str]) -> (i32, String, String) {
+        let mut cmd = Command::new(self.home.git_wrapper());
+        cmd.args(args).current_dir(cwd).env("PATH", path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = spawn(&mut cmd).unwrap();
+        if poll(GIT_WRAPPER_BOUND, || child.try_wait().unwrap()).is_none() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!(
+                "`git {args:?}` through {} is not over after {GIT_WRAPPER_BOUND:?}: wrappers that exec each other, PATH {path:?}",
+                self.home.git_wrapper().display()
+            );
+        }
+        // Already reaped: `wait_with_output` reads what is left in the pipes.
+        let out = child.wait_with_output().unwrap();
+        (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+    }
+
+    pub fn session_path(&self) -> OsString {
+        git_guard::path_with_bin(&self.home, Some(inherited_path().to_owned())).into()
+    }
+}
+
 pub struct TestEnv {
     dir: TempDir,
     tmux_socket: String,
@@ -830,6 +878,11 @@ impl TestEnv {
         if rewritten.stdout.is_empty() && self.git(repo, &["remote"]).lines().any(|r| r == "origin") {
             self.git(repo, &["remote", "remove", "origin"]);
         }
+    }
+
+    /// Kills this env's tmux server. STUB: only `kill-server`; the fix disarms the supervising hooks first (hygiene.md 3a).
+    pub fn kill_tmux_server(&self) {
+        self.tmux(&["kill-server"]);
     }
 
     /// `tmux -L <private socket> <args>` in this env.
