@@ -305,8 +305,12 @@ fn spawn(home: &CpdHome, plan: &PlanId, attempt: &AttemptId, lock: &Starter) -> 
         .map_err(|e| format!("cannot open {}: {e}", log_path.display()))?;
     let stdout = log.try_clone().map_err(|e| format!("cannot use {}: {e}", log_path.display()))?;
 
-    let mut command = Command::new(exe);
+    // hs-d528: nice and ionice exec, so the recorded pid is the driver's.
+    let prefix = crate::host::priority::idle_prefix();
+    let mut command = Command::new(prefix[0]);
     command
+        .args(&prefix[1..])
+        .arg(&exe)
         .args(["attempt", "run", &attempt.to_string(), "--plan", plan.as_str()])
         .current_dir(home.root())
         .env("CPD_HOME", home.root())
