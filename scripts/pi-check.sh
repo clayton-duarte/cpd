@@ -16,7 +16,7 @@
 #   requiring fails `npm test` and this check together.
 # - It never starts a model turn: every pi command runs under `env -i` with an
 #   allow-list (PATH LANG LC_ALL LC_CTYPE TERM when set, plus HOME TMPDIR
-#   PI_CODING_AGENT_DIR PI_OFFLINE PI_SKIP_VERSION_CHECK CPD_SESSION CPD_HOME,
+#   TMUX_TMPDIR GATE_RUN (when set) PI_CODING_AGENT_DIR PI_OFFLINE PI_SKIP_VERSION_CHECK CPD_SESSION CPD_HOME,
 #   which it sets itself): no provider key, no proxy, no base URL.
 # - It runs on macOS too: scripts/check-portable.sh covers this file.
 # - A pass stays a pass (hs-d463; docs/implementing.md "Checking a pi version"): the
@@ -52,7 +52,7 @@ case $pi_bin in
 esac
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/pi-check.XXXXXX")
-socket="pi-check-$$"
+socket="pi-check-${GATE_RUN:-x}-$$"
 
 shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
@@ -64,7 +64,10 @@ for name in PATH LANG LC_ALL LC_CTYPE TERM; do
   eval "value=\$$name"
   allow="$allow $name=$(shq "$value")"
 done
-allow="$allow HOME=$(shq "$tmp/home") TMPDIR=$(shq "$tmp") PI_CODING_AGENT_DIR=$(shq "$tmp/agent") PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1"
+# GATE_RUN (the Gate's run id, scripts/gate-run.sh) stays, so the run finds this check's processes; TMUX_TMPDIR is inside
+# $tmp, so the server's socket is removed with it (tmux leaves a socket file when its server exits; hygiene.md bug 4).
+if [ -n "${GATE_RUN:-}" ]; then allow="$allow GATE_RUN=$(shq "$GATE_RUN")"; fi
+allow="$allow HOME=$(shq "$tmp/home") TMPDIR=$(shq "$tmp") TMUX_TMPDIR=$(shq "$tmp/tmux") PI_CODING_AGENT_DIR=$(shq "$tmp/agent") PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1"
 cleanenv() { eval "env -i $allow \"\$@\""; }
 tmx() { cleanenv tmux -u -L "$socket" "$@"; }
 
@@ -119,7 +122,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-mkdir "$tmp/agent" "$tmp/bin" "$tmp/home"
+mkdir "$tmp/agent" "$tmp/bin" "$tmp/home" "$tmp/tmux"
 
 version=$(cleanenv $pi_cmd --version 2>&1) || fail "step 1 (version): '$pi_cmd --version' failed: $version"
 echo "$pi_cmd --version: $version"

@@ -135,10 +135,15 @@ stop() {
   done 2>/dev/null
 }
 
-# stop_tmux: stops the tmux server and its panes (a session each), whose pids tmux gives.
+# stop_tmux: stops the tmux server and its panes (a session each), whose pids tmux gives. The
+# supervising hooks go first: a hook that runs while the server dies starts a new server, where
+# no teardown looks (hygiene.md 3a).
 stop_tmux() {
   for _s in "$dir"/tmux/*/"$socket"; do
     [ -S "$_s" ] || return 0
+    for _h in pane-died window-unlinked; do
+      TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" set-hook -gu "$_h" >/dev/null 2>&1
+    done
     _g=
     for _p in $(TMUX_TMPDIR="$dir/tmux" tmux -L "$socket" list-panes -a -F '#{pid} #{pane_pid}' 2>/dev/null); do
       _g="$_g -$_p"
@@ -195,10 +200,18 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Where every env's directory is made: a tmpfs, so the `fsync`s of the store's writes (several per `cpd` command
+/// Where every env's directory is made: the `TMPDIR` of the test process when set (the Gate's run directory,
+/// `scripts/gate-run.sh`, which fails the run for what is left in it), else a tmpfs, so the `fsync`s of the store's writes (several per `cpd` command
 /// that writes) and git's cost no disk flush. On a disk shared with builds and other test runs one such `fsync` waits
 /// for their writeback, from tens of ms to seconds; no test claims durability across a power loss.
-const ENVS_DIR: &str = "/dev/shm";
+fn envs_dir() -> PathBuf {
+    std::env::var_os("TMPDIR").filter(|d| !d.is_empty()).map_or_else(|| PathBuf::from("/dev/shm"), PathBuf::from)
+}
+
+/// The Gate's run id (`scripts/gate-run.sh`), which every socket name carries so that the run finds its own.
+fn gate_run_id() -> Option<String> {
+    std::env::var("GATE_RUN").ok().filter(|id| !id.is_empty())
+}
 
 static NEXT_SOCKET: AtomicUsize = AtomicUsize::new(0);
 
@@ -474,7 +487,7 @@ pub fn sql(store: &mut Store, text: &str) {
 /// A cpd `git` wrapper (`$CPD_HOME/bin/git`, [`git_guard::WRAPPER`]) in a directory of its own, and the way to run it
 /// as a Session does. Shared by the `pr` tests of the wrapper and the harness's test of what a killed test leaves.
 pub struct GitWrapper {
-    _tmp: TempDir,
+    env: TestEnv,
     home: CpdHome,
 }
 
@@ -483,12 +496,13 @@ pub struct GitWrapper {
 pub const GIT_WRAPPER_BOUND: Duration = Duration::from_secs(10);
 
 impl GitWrapper {
+    /// In a [`TestEnv`], so that a call runs in the env's process group and a killed test's reaper stops it (hygiene.md 1b).
     pub fn new() -> GitWrapper {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = CpdHome::resolve(Some(tmp.path().join("cpd-home").into()), None).unwrap();
+        let env = TestEnv::empty();
+        let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
         fs::create_dir_all(home.bin_dir()).unwrap();
         write_executable(&home.git_wrapper(), git_guard::WRAPPER);
-        GitWrapper { _tmp: tmp, home }
+        GitWrapper { env, home }
     }
 
     pub fn bin(&self) -> PathBuf {
@@ -498,7 +512,7 @@ impl GitWrapper {
     /// Runs `git <args>` the way a Session does, with `path` as `PATH`: (exit code, stdout, stderr). Panics when the
     /// call is not over in [`GIT_WRAPPER_BOUND`].
     pub fn run(&self, path: &OsString, cwd: &Path, args: &[&str]) -> (i32, String, String) {
-        let mut cmd = Command::new(self.home.git_wrapper());
+        let mut cmd = self.env.command(self.home.git_wrapper());
         cmd.args(args).current_dir(cwd).env("PATH", path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = spawn(&mut cmd).unwrap();
         if poll(GIT_WRAPPER_BOUND, || child.try_wait().unwrap()).is_none() {
@@ -592,9 +606,13 @@ impl TestEnv {
     /// A new env whose `$CPD_HOME` is an empty directory: the first command creates the store.
     pub fn empty() -> TestEnv {
         let sqlite3 = sqlite3();
-        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(ENVS_DIR).unwrap_or_else(|e| panic!("a temp dir in {ENVS_DIR}: {e}"));
+        let envs_dir = envs_dir();
+        let dir = tempfile::Builder::new().prefix("cpd-test-").tempdir_in(&envs_dir).unwrap_or_else(|e| panic!("a temp dir in {}: {e}", envs_dir.display()));
         let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
-        let tmux_socket = format!("cpdt-{}-{n}", std::process::id());
+        let tmux_socket = match gate_run_id() {
+            Some(run) => format!("cpdt-{run}-{}-{n}", std::process::id()),
+            None => format!("cpdt-{}-{n}", std::process::id()),
+        };
         let script = dir.path().join("teardown.sh");
         fs::write(
             &script,
@@ -880,8 +898,12 @@ impl TestEnv {
         }
     }
 
-    /// Kills this env's tmux server. STUB: only `kill-server`; the fix disarms the supervising hooks first (hygiene.md 3a).
+    /// Kills this env's tmux server, after unsetting the supervising hooks (`pane-died`, `window-unlinked`): a hook that
+    /// runs while the server dies starts a new one, where no teardown looks (hygiene.md 3a).
     pub fn kill_tmux_server(&self) {
+        for hook in ["pane-died", "window-unlinked"] {
+            self.tmux(&["set-hook", "-gu", hook]);
+        }
         self.tmux(&["kill-server"]);
     }
 

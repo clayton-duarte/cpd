@@ -617,7 +617,7 @@ pub enum LeadRemoval {
 /// Removes the Lead worktree of a merged PR and its local Lead Branch (contract
 /// §7.2, hs-d142). A worktree with uncommitted changes or commits not on
 /// `origin` is kept untouched, unless `HEAD` is the pull request's head commit or an ancestor of it (`recorded_head`,
-/// called only when `rev-list` is not empty and `None` when GitHub's answer is unavailable; after a squash merge the
+/// called only when `rev-list` is not empty (merge commits do not count, hygiene.md 8a) and `None` when GitHub's answer is unavailable; after a squash merge the
 /// head branch is deleted and `origin/<branch>` pruned, so the PR's own commits look unpushed); the check is `git --no-optional-locks status`,
 /// which takes no `index.lock` (hs-d243). Otherwise `git -C <repo> worktree remove` (no
 /// `--force`: git does not count ignored files as changes) and `git -C <repo>
@@ -633,7 +633,7 @@ pub fn remove_merged_lead(
         if !ok(path, &["--no-optional-locks", "status", "--porcelain"])?.trim().is_empty() {
             return Ok(LeadRemoval::Kept(Kept::Dirty));
         }
-        if !ok(path, &["rev-list", "HEAD", "--not", "--remotes=origin"])?.trim().is_empty() && !head_is_recorded(path, recorded_head)? {
+        if has_unpushed_work(path, recorded_head)? {
             return Ok(LeadRemoval::Kept(Kept::Unpushed));
         }
     } else {
@@ -644,15 +644,24 @@ pub fn remove_merged_lead(
     Ok(LeadRemoval::Removed)
 }
 
-/// Whether `HEAD` of `worktree` equals the pull request's head commit `oid`, or the object is local and `HEAD` is its
-/// ancestor (contract §7.2 "The recorded head"); no `oid`, or an object this repo does not have, is not.
-fn head_is_recorded(worktree: &Path, recorded_head: impl FnOnce() -> Option<String>) -> Result<bool, CpdError> {
-    let Some(oid) = recorded_head() else { return Ok(false) };
-    if rev_parse(worktree, "HEAD")? == oid {
+/// Whether `HEAD` of `worktree` holds work that is nowhere else: non-merge commits outside `origin/*` and outside the
+/// pull request's recorded head `oid` (contract §7.2 "The recorded head"; no `oid`, or an object this repo does not
+/// have, excludes nothing). A merge commit is not work: a lone local merge of the base (rule S) is no reason to keep a
+/// merged PR's worktree (hygiene.md 8a).
+fn has_unpushed_work(worktree: &Path, recorded_head: impl FnOnce() -> Option<String>) -> Result<bool, CpdError> {
+    let list = |extra: Option<&str>| -> Result<bool, CpdError> {
+        let mut args = vec!["rev-list", "--no-merges", "HEAD", "--not", "--remotes=origin"];
+        args.extend(extra);
+        Ok(!ok(worktree, &args)?.trim().is_empty())
+    };
+    if !list(None)? {
+        return Ok(false);
+    }
+    let Some(oid) = recorded_head() else { return Ok(true) };
+    if run(worktree, &["cat-file", "-e", &format!("{oid}^{{commit}}")])?.code != 0 {
         return Ok(true);
     }
-    let local = run(worktree, &["cat-file", "-e", &format!("{oid}^{{commit}}")])?.code == 0;
-    Ok(local && run(worktree, &["merge-base", "--is-ancestor", "HEAD", &oid])?.code == 0)
+    list(Some(&oid))
 }
 
 /// `force` is `--force` on the worktree; `delete` is `branch -D` rather than `-d`.

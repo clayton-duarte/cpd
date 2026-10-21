@@ -667,7 +667,7 @@ fn an_engine_killed_with_its_tmux_server_is_back_once_the_cockpit_is_rebuilt() {
     fx.manager("mgr1");
     fx.env.cpd(&["tui"]).ok();
     wait_until("the engine", || fx.count("watch-started") == 1);
-    fx.env.tmux(&["kill-server"]);
+    fx.env.kill_tmux_server();
     wait_until("the engine to stop with its server", || fx.count("watch-stopped") == 1);
 
     fx.env.cpd(&["tui"]).ok();
