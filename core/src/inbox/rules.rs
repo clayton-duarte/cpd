@@ -358,14 +358,15 @@ fn pull_request_conditions(
     Ok(out)
 }
 
-/// `pr-ready` (hs-d481): GitHub would merge the pull request now. It is open, not a draft, authored, its merge state is
-/// clean, unstable or has_hooks, and its review decision is approved or none. Checks and `pr.feedback.checks` are not read.
+/// `pr-ready` (hs-d481, hs-d525): GitHub would merge the pull request now. It is open, not a draft, authored, its merge state is
+/// clean (unstable and has_hooks are not: `pr merge` refuses them), and its review decision is approved or none. Checks and
+/// `pr.feedback.checks` are not read.
 fn pr_ready(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     pull_request_conditions(
         conn,
         Kind::PrReady,
         Urgency::Yellow,
-        "r.authored = 1 AND r.draft = 0 AND r.merge_state IN ('clean', 'unstable', 'has_hooks')
+        "r.authored = 1 AND r.draft = 0 AND r.merge_state IN ('clean')
          AND r.review_decision IN ('approved', 'none')",
         |name, n| format!("{name}#{n} ready to merge"),
     )
@@ -1144,13 +1145,14 @@ mod tests {
             set(&mut f, 1, &format!("merge_state = '{merge_state}'"));
             !f.of(Kind::PrReady).is_empty()
         };
-        for merge_state in ["clean", "unstable", "has_hooks"] {
+        // hs-d525: only clean is ready; unstable and has_hooks are not.
+        for merge_state in ["clean"] {
             for review in ["approved", "none"] {
                 assert!(ready(merge_state, review), "{merge_state} {review} is ready");
             }
             assert!(!ready(merge_state, "changes_requested"), "{merge_state} with changes requested is not ready");
         }
-        for merge_state in ["blocked", "behind", "dirty", "unknown", "draft"] {
+        for merge_state in ["blocked", "behind", "dirty", "unknown", "draft", "unstable", "has_hooks"] {
             for review in ["approved", "none", "changes_requested"] {
                 assert!(!ready(merge_state, review), "{merge_state} {review} is not ready");
             }
@@ -1167,8 +1169,9 @@ mod tests {
             pull_request(&mut f, n, checks, "mergeable", "none");
         }
         own(&mut f, 1);
-        set(&mut f, 1, "merge_state = 'unstable'");
-        assert_eq!(f.of(Kind::PrReady).len(), 2, "clean or unstable is ready under `any`, whatever the checks");
+        set(&mut f, 1, "merge_state = 'clean'");
+        set(&mut f, 2, "merge_state = 'clean'");
+        assert_eq!(f.of(Kind::PrReady).len(), 2, "clean is ready under `any`, whatever the checks (hs-d525)");
     }
 
     #[test]
