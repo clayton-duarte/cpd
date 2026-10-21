@@ -2187,9 +2187,9 @@ Every call below runs as `tmux -u -L <socket> -f /dev/null …` (§6.1, hs-d463)
 |---|---|---|
 | A Plan's Lead | the cockpit: a `park-<label>` window, or the chat slot of `cpd:main`; cwd = the directory `plan new` ran from, usually `~` (R34, A12): a Plan may span several repos, so its Lead starts in none of them | `plan new` (§3.1); `session open` resumes a `stopped` one |
 | A Context's Manager | the cockpit: window `ctx-<context>` while not in the chat slot, else the chat slot; cwd = the directory `context manager` ran from, usually `~`. `context manager` never moves the chat slot (hs-d103); `session open` does | `context manager` (§3.1); `session open` resumes a `stopped` one |
-| A Worker | `cpd-work`, window `<plan>--<attempt>`, its only pane, cwd = Attempt worktree | driver A3 |
+| A Worker | `cpd-work`, window `<plan>--<attempt>`, its only pane, cwd = Attempt worktree; the pi process and all its children start with the priority prefix of §6.5 (hs-d528) | driver A3 |
 | `cpd watch` | `cpd-work`, window `watch` | `plan lock`, `cpd tui` and `cpd watch --ensure`: each starts it when `locks/watch.lock` is free |
-| Attempt drivers | detached processes (`setsid`), not in tmux; logs in `run/<plan>/logs/` | E3 |
+| Attempt drivers | detached processes (`setsid`), not in tmux; logs in `run/<plan>/logs/`; started at nice 19 and I/O class idle with the prefix of §6.5 (hs-d528), so the recorded pid is the driver's | E3 |
 | The tmux restart (`cpd watch --restart-tmux`) | a detached process (`setsid`), not in tmux, since it kills the server the engine runs in; log `run/tmux-restart.log`; also in the process of a bare `cpd` when it is safe at once | E3's drain (§3.7), or bare `cpd` (§6.1) |
 | Distill runs (`context distill`) | detached processes (`setsid`) when the engine starts them, not in tmux; log `run/context-digests/<context>/distill.log`; on demand, in the caller's process | E9, or anyone on demand (§4.6) |
 | Retitle runs (`session retitle`) | detached processes (`setsid`), not in tmux; log `run/titles/<session>.log`; lock `locks/title-<session>.lock` | E10 (§3.7) |
@@ -2198,7 +2198,24 @@ Every call below runs as `tmux -u -L <socket> -f /dev/null …` (§6.1, hs-d463)
 
 `session close <id>` ends a Lead's pane: `kill-pane` (pi stops, and the Session's file stays, so `session open` resumes it later), then the Session is `stopped` with no pane, and `session-moved` `{pane: null, window: null, place: "none"}` is appended, the rows E2 writes for a pane that is gone (§3.6). It refuses the Session in the chat slot (commands.md §10.9).
 
-### 6.5 How cpd starts pi
+### 6.5 Priority (hs-d528)
+
+Attempt process trees stay responsive by running at low priority, so the cockpit never freezes (hs-d528, User 2026-10-21). Every Attempt's process tree (the driver, the Worker's pi and every tool it runs, cargo and rustc, the Gate's test run) starts at nice 19 and I/O class idle: the prefix, on Linux `['nice', '-n', '19', 'ionice', '-c', '3']`, on macOS `['nice', '-n', '19']` (macOS has no ionice; I/O priority is skipped there explicitly), is applied at spawn (the driver spawn, the Worker tmux pane argv, every hook command) so every child inherits it. The engine (`cpd watch`), the TUI, tmux server, Lead and Manager Sessions stay at normal priority.
+
+**How.** One helper in cpd-core returns the priority prefix as argv (A1). It is applied at exactly three spawn points:
+- (a) the driver spawn (`cpd attempt run`; nice and ionice exec, so the recorded pid is the driver's, core/src/driver/start.rs fn spawn);
+- (b) the Worker's tmux pane argv (core/src/host/pi/launch.rs fn worker: the prefix goes before `pi` in the argv, including a review Job's forked Worker);
+- (c) every hook command, core/src/git/hooks/exec.rs fn start (`sh -c` becomes `<prefix> sh -c`).
+
+Both run types use the helper: the test `[tests]` runs of a `test` or `impl` Job at submit (§7.7), and the Gate (`pre-merge`) runs of `pr open`, `pr rebase`, `pr push` and the repair `pr open` (§7.6) or a Lead's `cpd pr push` / `pr rebase` / `pr open` repair.
+
+**No config key.** The prefix is not configurable; on Linux a missing nice or ionice fails the spawn loudly (a hook ends `NotStarted`, the driver spawn returns its error), as any missing tool does. On macOS, nice is built in; ionice is not available.
+
+**macOS note.** Apple's macOS (air, pro) has no ionice; nice works and I/O priority is skipped explicitly (a code comment and the contract say so). Only CPU priority applies there.
+
+**Linux note.** The idle I/O class (ionice -c 3) only takes effect when the system runs an I/O scheduler that honours ioprio: BFQ honours it fully; mq-deadline partly; 'none' ignores it. Every scheduler that exists on a machine where cpd runs should work, but only when the user has permission to set I/O priority (unprivileged users can set it, docs: man ionice; verified on the homeserver).
+
+### 6.6 How cpd starts pi
 
 | Role | argv (after `pi`) | Environment added |
 |---|---|---|
@@ -2207,7 +2224,7 @@ Every call below runs as `tmux -u -L <socket> -f /dev/null …` (§6.1, hs-d463)
 | Lead (resume) | `--model <tiers[L]>:<level of the row's tier> --session <file>` and the `[-e …]` arguments, no first message (hs-d506) | same |
 | A side fork with a Plan (`session fork --plan`) | `--fork <source file>` added to the Lead (fresh) row (§6.7) | a Lead's: it gets the Plan's port |
 | Worker (review Job, B2) | `--fork <lead session file>` added to the Worker's argv below, with the same exclusions (`--approve --no-skills --exclude-tools …`), model, `--session-id`, `-n` and first message; started only after the §6.7 idle wait | same as a Worker |
-| Worker | `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `PI_SKIP_VERSION_CHECK=1` |
+| Worker | `<prefix>` followed by `--approve --no-skills --exclude-tools ask_user_question,cpd_plan_review,plannotator,plannotator_mark_done,plannotator_submit_plan,plannotator_inbox [-e …] --model <model:level> --session-id <id> -n "<plan> <job> a<n>" -- "Read <spec path> and follow it exactly. Your attempt id is <attempt>."` (the `<prefix>` of §6.5 hs-d528 goes before `--approve`) | `CPD_HOME`, `CPD_SESSION`, `CPD_PLAN`, `CPD_ATTEMPT`, `PI_SKIP_VERSION_CHECK=1` |
 | Title writer (§3.7 E10, hs-n95) | `--print --no-session --no-extensions --model <tiers[H]>:<the level of the lowest effort `cpd tiers` lists for H> -- "<prompt>"`, with the conversation text on **stdin**; the prompt asks for a title of 3–7 words for the conversation's current subject, answered as one line `TITLE: <title>` (commands.md §10.14). cpd never calls a model API itself, only pi (hs-n95). No `-e`: it needs no adapter | `PI_SKIP_VERSION_CHECK=1` only: no `CPD_*` (it is no Session) |
 | Distiller (§4.6, D5) | `--mode json --no-session --no-extensions --no-skills --no-context-files --no-tools --model <tiers[L]>:<level of context_distill_tier> -- @prompt.md @records.md` (the repair turn of §4.6 step 5: `-- @repair-prompt.md @digest.md @missing.md @problem.md`); cwd `run/context-digests/<context>/`; stdout (JSON lines) read by cpd, which writes the final assistant text to `<upto_seq>.md.tmp` and the usage to `runs.jsonl` (§4.6; hs-d244 D-d). No `-e`: it needs no adapter and no package. No tools and no context files, so its only input is the two files and it writes nothing itself (flags read in pi 1.3.0 `--help`; their effect on a model run is unverified) | `PI_SKIP_VERSION_CHECK=1` only: no `CPD_*` (it is no Session) |
 
@@ -2421,7 +2438,7 @@ Every other table (`post-*`, `pre-switch`, `pre-remove`, aliases, `[list]` and s
 The hook's result is the first failing command's exit code in file order, or 0. Output lines of concurrent commands are prefixed `<name> │ ` as wt does, and the whole output is written to `run/<plan>/logs/<attempt>.<hook>.log`; results carry its last 60 lines.
 
 **How each command runs:**
-- `sh -c <command>` (verified: wt runs `sh`), cwd = the worktree root.
+- `<prefix> sh -c <command>` (verified: wt runs `sh`; the `<prefix>` of §6.5 (hs-d528) is omitted when running outside an Attempt: a Lead's `cpd pr push` / `pr rebase` / `pr open` repair has no prefix), cwd = the worktree root.
 - stdin: the hook's template variables as one JSON object (verified: wt passes the JSON context on stdin).
 - Environment: cpd's own environment, minus `TMUX`, `TMUX_PANE`, every `PI_*` and every `CPD_*` variable, so a test suite run by the Gate cannot reach the real cockpit, pi session or cpd database. wt adds no variables of its own (verified). cpd adds one, in a Gate's `pre-start` and `pre-merge` only: `CPD_TEST_SLOT=<i>`, the slot the Gate holds (§7.6 "The test slot"); it is set after the removal, so it is the only `CPD_*` variable a hook sees.
 - Templates: `{{ … }}` and `{% … %}` are rendered before running, with the variables `branch`, `worktree_path`, `worktree_name`, `commit`, `short_commit`, `repo`, `repo_path`, `primary_worktree_path`, `default_branch`, `remote`, `remote_url`, `cwd`, `hook_type`, `hook_name`, `args` (`[]`), plus `base` and `base_worktree_path` for `pre-start`, `target` and `target_worktree_path` for `pre-commit` (the Lead Branch and Lead worktree), and `target` and `target_worktree_path` for `pre-merge` (the PR's `base`, and the worktree that has it checked out; when none has, `target_worktree_path` is undefined, as in wt). For a **stacked** PR `base` is its base PR's Lead Branch (§2.2), so `target` is that branch and `target_worktree_path` the base PR's Lead worktree while it exists (hs-d324). Their values follow wt's table (docs). **In a gate worktree** (§7.6) `HEAD` is detached, so `branch` is not read from it: cpd passes the PR's Lead Branch as `branch`, for `pre-start` and `pre-merge` alike, so `{{ branch }}` means what it meant when the Gate ran in the Lead worktree (also for a stacked PR: `branch` is the branch under test, the PR's own, and the base PR's Lead Branch is `target`, §3.8 "Stacked PRs" step 5); `worktree_path` and `worktree_name` are the gate worktree's, `commit` the gated commit, and `base` and `base_worktree_path` of its `pre-start` are those of the PR's start (hs-d243). worktrunk's own filters and functions (`sanitize`, `sanitize_db`, `sanitize_hash`, `hash`, `hash_port`, `codename`, `worktree_path_of_branch`) and `vars.*` are not provided: a command that uses one, or an undefined variable, fails before anything runs with `hook_invalid`. User hooks in `~/.config/worktrunk/config.toml` are not run: the repo owns its setup and Gate (R5), and a machine-local hook would make Gates differ between machines. There are no approvals (cpd behaves as `wt --yes`).

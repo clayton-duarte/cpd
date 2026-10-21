@@ -1347,7 +1347,7 @@ Both are read-only.
 cpd attempt run <attempt> --plan <id>
 ```
 
-The Attempt driver, steps A1–A9 of §3.4, started detached by E3 or `job dispatch` with the driver lock as fd 3. Not for agents.
+The Attempt driver, steps A1–A9 of §3.4, started detached by E3 or `job dispatch` with the driver lock as fd 3. It starts at nice 19 and I/O class idle (§6.5 hs-d528), set at spawn so its process tree (the Worker's pi, cargo, rustc and every tool) inherits it. Not for agents.
 
 | Precondition | Code | Exit |
 |---|---|---|
