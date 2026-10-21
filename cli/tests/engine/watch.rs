@@ -527,14 +527,9 @@ impl Fx {
         ));
     }
 
-    /// The one message the Manager `mgr1` got, a downtime that says `how`.
-    fn manager_heard(&self, how: &str) {
-        let messages = self.messages();
-        assert_eq!(messages.len(), 1, "{messages:?}");
-        let (session, _, data) = &messages[0];
-        let text = data["text"].as_str().unwrap();
-        assert_eq!((session.as_str(), data["wake"].clone()), ("mgr1", json!(false)), "{messages:?}");
-        assert!(text.contains("The engine was down for ") && text.contains(how), "{text}");
+    /// The Manager `mgr1` got no downtime message: a restart is in the `watch-started` Event and the log only (hs-d514).
+    fn manager_heard_nothing(&self) {
+        assert_eq!(self.messages(), [], "a restart sends no session-message");
     }
 
     /// The messages the engine sent: `(session, context, data)`.
@@ -574,7 +569,7 @@ fn an_engine_that_got_sigterm_is_back_within_seconds() {
     kill(Pid::from_raw(pid as i32), Signal::SIGTERM).unwrap();
     fx.back_after(1);
     assert_eq!(fx.count("watch-stopped"), 1);
-    fx.manager_heard("it stopped at");
+    fx.manager_heard_nothing();
 }
 
 #[test]
@@ -584,7 +579,7 @@ fn an_engine_that_got_sigkill_is_back_within_seconds() {
     let pid = fx.supervised();
     kill(Pid::from_raw(pid as i32), Signal::SIGKILL).unwrap();
     fx.back_after(1);
-    fx.manager_heard("it was last alive");
+    fx.manager_heard_nothing();
 }
 
 /// The work session holds nothing else: tmux would exit with its last window, and the server stays so that its hook can run (`exit-empty off`).
@@ -654,7 +649,7 @@ fn an_engine_killed_with_its_tmux_server_is_back_once_the_cockpit_is_rebuilt() {
 
     fx.env.cpd(&["tui"]).ok();
     fx.back_after(1);
-    fx.manager_heard("it stopped at");
+    fx.manager_heard_nothing();
 }
 
 #[test]
@@ -675,75 +670,76 @@ fn an_engine_that_cannot_start_is_tried_once_every_few_seconds_not_in_a_loop() {
 // ---------- the downtime message (hs-d328) ----------
 
 #[test]
-fn the_first_engine_tells_nobody_and_the_next_one_tells_each_manager_how_long_it_was_down() {
+fn a_restart_sends_no_downtime_notice() {
     let fx = fx("");
     fx.manager("mgr1");
-    fx.fixture(
-        "INSERT INTO sessions (id, role, context, name, cwd, tier, state, state_at, created_at, archived_at)
-           VALUES ('mgr0', 'manager', 'ctx', 'Old', '/', 'O3', 'stopped', 't', 't', 't');
-         UPDATE contexts SET archived_at = NULL;",
-    );
     let first = fx.start();
-    assert_eq!(fx.messages(), [], "no engine before it");
-    let started = fx.texts("watch-started");
-    assert!(!started[0].contains("down for"), "{started:?}");
     let _ = first.stop();
-    assert_eq!(fx.messages(), []);
-
     let second = fx.start();
-    let messages = fx.messages();
-    assert_eq!(messages.len(), 1, "one message, to the one Manager that is not archived: {messages:?}");
-    let (session, context, data) = &messages[0];
-    assert_eq!((session.as_str(), context.as_deref()), ("mgr1", Some("ctx")));
-    assert_eq!(data["wake"], false);
-    assert_eq!(data["from"], Value::Null);
-    let text = data["text"].as_str().unwrap();
     let stopped_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-stopped'");
-    assert!(text.contains(&format!("it stopped at {stopped_at}")), "{text}");
-    // The downtime is the time between the stop and the second start.
-    let started_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-started' ORDER BY id DESC LIMIT 1");
-    let secs: f64 = text.split("down for ").nth(1).unwrap().split(" s").next().unwrap().parse().unwrap();
-    let between = (parse_time(&started_at) - parse_time(&stopped_at)).as_seconds_f64();
-    assert!((secs - between).abs() < 0.5, "{secs} s said, {between} s between {stopped_at} and {started_at}: {text}");
-    // Without a Manager the same sentence is in the Event, which is enough.
-    assert!(fx.texts("watch-started")[1].contains(&format!("down for {secs:.1} s")), "{:?}", fx.texts("watch-started"));
+    // The record is the Event's text, not a message (hs-d514: the Managers are not told of a restart).
+    assert!(fx.texts("watch-started")[1].contains(&format!("it stopped at {stopped_at}")), "{:?}", fx.texts("watch-started"));
+    assert_eq!(fx.messages(), [], "no Manager is sent the downtime");
     let _ = second.stop();
 }
 
 #[test]
-fn an_engine_that_died_without_a_watch_stopped_is_told_from_the_last_time_it_was_alive() {
+fn an_engine_that_died_without_a_watch_stopped_sends_no_notice() {
     let fx = fx("");
     fx.manager("mgr1");
     let first = fx.start();
-    // Its ticks mark the lock file: the time it was last seen alive is its newest tick, not its start.
-    let started_at = fx.env.query::<String>("SELECT at FROM events WHERE kind = 'watch-started'");
-    let lock = fx.env.cpd_home().join("locks/watch.lock");
-    wait_until("a tick after its start marked the lock", || {
-        let marked = OffsetDateTime::from(fs::metadata(&lock).unwrap().modified().unwrap());
-        marked - parse_time(&started_at) > time::Duration::milliseconds(500)
-    });
     first.signal(Signal::SIGKILL);
     let mut first = first;
     let _ = first.child.take().unwrap().wait();
-    // The kill may have come while the engine was spawning a child: between its fork and its exec the child still
-    // holds the engine's lock descriptor, and an engine started now is refused (`watch_running`). A start waits for
-    // the lock to be free, as `cpd install` does before it starts the new engine (contract §6.6), and the lock is
-    // free once the child has exec'd (close-on-exec).
+    let lock = fx.env.cpd_home().join("locks/watch.lock");
     wait_until("the killed engine's lock to be free", || {
         let file = OpenOptions::new().read(true).write(true).open(&lock).unwrap();
         Flock::lock(file, FlockArg::LockExclusiveNonblock).is_ok()
     });
-    assert_eq!(fx.count("watch-stopped"), 0);
-
     let second = fx.start();
-    // `watch-started` comes first, then the message to the Managers.
-    wait_until("the message to the Manager", || !fx.messages().is_empty());
+    fx.env.wait_whole_ticks(2);
+    assert_eq!(fx.messages(), []);
+    assert!(fx.texts("watch-started")[1].contains("it was last alive"), "{:?}", fx.texts("watch-started"));
+    let _ = second.stop();
+}
+
+#[test]
+fn an_engine_error_sends_no_message_to_a_manager() {
+    let fx = fx("");
+    fx.add_manager();
+    fx.add_job_on("O3", "repo", "api", &[], "");
+    let engine = fx.start();
+    wait_until("the error", || fx.count("error") == 1);
+    fx.env.wait_whole_ticks(2);
+    engine.stop();
+    assert_eq!(fx.events("error").len(), 1);
+    assert_eq!(fx.messages(), [], "an engine error is an Event only (hs-d514)");
+}
+
+/// hs-d514: a stuck Job is blocked work, so its message to the Context's Manager wakes it.
+#[test]
+fn a_stuck_job_wakes_its_context_manager() {
+    let fx = fx("[inbox]\nstuck_job_minutes = 1\n");
+    fx.add_manager();
+    fx.add_job(
+        "api",
+        &[],
+        "UPDATE jobs SET status = 'running' WHERE key = 'api';
+         UPDATE jobs SET status = 'failed', failed_cause = 'crashed' WHERE key = 'api';",
+    );
+    fx.fixture(&format!(
+        "INSERT INTO events (txn, at, kind, context, plan, job, text, data)
+         VALUES (cpd_txn(), '{}', 'job-failed', 'ctx', 'pay', 'api', 'x', '{{}}');",
+        ago(2)
+    ));
+    let engine = fx.start();
+    wait_until("the message", || !fx.messages().is_empty());
+    engine.stop();
     let messages = fx.messages();
     assert_eq!(messages.len(), 1, "{messages:?}");
-    let text = messages[0].2["text"].as_str().unwrap();
-    assert!(text.contains("it was last alive (it left no watch-stopped: a crash or a kill) at "), "{text}");
-    assert!(!text.contains(&started_at), "alive since its ticks, not since its start: {text}\nstarted {started_at}");
-    let _ = second.stop();
+    let (session, _, data) = &messages[0];
+    assert_eq!((session.as_str(), data["from"].clone(), data["wake"].clone()), ("mgr1", Value::Null, json!(true)), "{data}");
+    assert!(data["text"].as_str().unwrap().starts_with("Job pay/api failed "), "{data}");
 }
 
 // ---------- @cpd_workers ----------
@@ -2428,10 +2424,7 @@ fn e5_raises_one_error_after_ten_minutes_of_the_same_call_failing_and_none_befor
     assert_eq!(details["argv"].as_array().unwrap()[..3], ["gh", "api", "graphql"]);
     assert!(details["stderr"].as_str().unwrap().contains(GH_502_LINE), "{details}");
 
-    let sent = messages(&fx);
-    assert_eq!(sent.len(), 1, "{sent:?}");
-    assert!(sent[0].starts_with("Engine error at "), "{}", sent[0]);
-    assert!(sent[0].contains(&format!("pr poll: gh search has failed for 11 minutes (HTTP 502): {GH_502_LINE}")), "{}", sent[0]);
+    assert_eq!(messages(&fx), Vec::<String>::new(), "an engine error is an Event only (hs-d514)");
     // The failure stays: the record keeps its first time, the polls (and their log lines) go on.
     assert_eq!(failing(&fx).unwrap()["since"], since);
     assert!(watch_log(&fx).matches("failed transiently (HTTP 502)").count() >= 2, "{}", watch_log(&fx));
@@ -2517,13 +2510,7 @@ fn e5_a_cut_gh_response_is_an_error_only_after_the_window_and_then_once() {
         (&json!("search"), &since, &json!(11), &json!("unexpected end of JSON input"), &json!(1))
     );
     assert!(details["stderr"].as_str().unwrap().contains("unexpected end of JSON input"), "{details}");
-    let sent = messages(&fx);
-    assert_eq!(sent.len(), 1, "{sent:?}");
-    assert!(
-        sent[0].contains("pr poll: gh search has failed for 11 minutes (unexpected end of JSON input): unexpected end of JSON input"),
-        "{}",
-        sent[0]
-    );
+    assert_eq!(messages(&fx), Vec::<String>::new(), "an engine error is an Event only (hs-d514)");
     assert_eq!(failing(&fx).unwrap()["since"], since);
 }
 
@@ -3378,9 +3365,9 @@ impl Fx {
         self.texts("watch-started").pop().unwrap()
     }
 
-    /// Every Manager (`mgr1`) got one downtime message that says `how`.
-    fn told_with(&self, how: &str) {
-        self.manager_heard(how);
+    /// No Manager got a downtime message, whatever `how` the engine stopped.
+    fn told_with(&self, _how: &str) {
+        self.manager_heard_nothing();
     }
 }
 
