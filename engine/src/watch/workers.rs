@@ -3,10 +3,10 @@
 //! compute: the styled Inbox counter `inbox <n>` (commands.md §13.2), the
 //! styled `workers N/M · W waiting · Q queued` text, its short form `N/M·W·Q`
 //! and the width of the long right side. Every tick, `<n>` is the open,
-//! visible Inbox items (the read of `cpd inbox list`), in the colour of the
-//! most urgent of them, `N` is the Attempts not `ended` (the slots of the
+//! visible Inbox items (the read of `cpd inbox list`), whose most urgent tier is
+//! `@cpd_inbox_tier`, `N` is the Attempts not `ended` (the slots of the
 //! `widgets` view), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
-//! `Q` the `queued` Jobs; the four options are set in one `tmux set` call only
+//! `Q` the `queued` Jobs; the options are set in one `tmux set` call only
 //! when one of them differs from what was last set (the first tick always
 //! sets them, and so does the first tick after a tmux failure or a missing
 //! server: a new server starts without them). No row, no Event, except an `error` when tmux
@@ -29,6 +29,7 @@ use cpd_core::inbox::model::{self, Filter, State, Urgency};
 /// the right items (the Inbox counter's pill, one space and the workers' pill, each pill with its two caps) in the
 /// long form and in the short form.
 const INBOX: &str = "@cpd_inbox";
+const TIER: &str = "@cpd_inbox_tier";
 const LONG: &str = "@cpd_workers";
 const SHORT: &str = "@cpd_workers_short";
 const WIDTH: &str = "@cpd_workers_width";
@@ -65,10 +66,9 @@ impl Inbox {
     }
 
     /// The tier `@cpd_inbox_tier` holds (contract §6.1.1): the urgency of the most urgent item, `red`, `yellow`,
-    /// `magenta` or `white`, and `none` at 0. A stub: a fixed, wrong value.
-    #[allow(dead_code)]
+    /// `magenta` or `white`, and `none` at 0.
     fn tier(self) -> &'static str {
-        "stub"
+        self.urgency.map_or("none", Urgency::as_str)
     }
 
     /// The visible width in cells.
@@ -130,8 +130,9 @@ pub(super) fn run(engine: &mut Engine) {
     // The status line draws each text in a pill and puts one space between the two pills.
     let right = |workers: usize| (inbox.width() + CAPS + 1 + workers + CAPS).to_string();
     let (width, short_width) = (right(counts.width()), right(counts.short_width()));
-    // What was last set: the five values, one string (no value holds a newline).
-    let state = format!("{styled}\n{long}\n{short}\n{width}\n{short_width}");
+    let tier = inbox.tier();
+    // What was last set: the six values, one string (no value holds a newline).
+    let state = format!("{styled}\n{tier}\n{long}\n{short}\n{width}\n{short_width}");
     if engine.workers.as_deref() == Some(state.as_str()) {
         return;
     }
@@ -145,7 +146,7 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return failed(engine, &e),
     }
     // One call, so a status line never draws a width that belongs to another text.
-    let args = ["set", "-g", INBOX, &styled, ";", "set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width, ";", "set", "-g", SHORT_WIDTH, &short_width]
+    let args = ["set", "-g", INBOX, &styled, ";", "set", "-g", TIER, tier, ";", "set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width, ";", "set", "-g", SHORT_WIDTH, &short_width]
         .map(str::to_owned);
     let set: Result<String, CpdError> = engine.tmux.run(&args);
     match set {
