@@ -15,7 +15,7 @@ export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean; deliverAs: Sen
   escalation: { turn: true, deliverAs: "steer" },
 };
 
-/** The rule of an Event for a Plan Lead; `undefined`: no message (every other kind, and a `job-merged` whose `data.turn` is not true, hs-d514). */
+/** The rule of an Event for a Plan Lead; `undefined`: no message (every other kind, and a `job-merged` whose `data.turn` is not true). */
 export const leadRule = (ev: CpdEvent) => (ev.kind === "job-merged" && ev.data.turn !== true ? undefined : LEAD_MESSAGES[ev.kind]);
 
 export const FOLLOW_UP = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "followUp" });
