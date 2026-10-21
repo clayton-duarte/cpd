@@ -1146,11 +1146,11 @@ fn copied_scripts() -> tempfile::TempDir {
 
 #[test]
 fn the_covered_scripts_of_the_repository_pass() {
-    // The Gate's run: no argument checks the covered list (ten scripts; the Linux-only ones are listed with a reason each).
+    // The Gate's run: no argument checks the covered list (eleven scripts; the Linux-only ones are listed with a reason each).
     let root = Path::new(SCRIPTS).join("..");
     let run = run_check(&Path::new(SCRIPTS).join("check-portable.sh"), &root, &[]);
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(run.all().contains("check-portable: ok (10 files, "), "{}", run.all());
+    assert!(run.all().contains("check-portable: ok (11 files, "), "{}", run.all());
 }
 
 #[test]
@@ -1159,7 +1159,7 @@ fn a_script_in_neither_list_fails_so_a_new_script_cannot_skip_the_decision() {
     let script = dir.path().join("scripts/check-portable.sh");
     let before = run_check(&script, dir.path(), &[]);
     assert_eq!(before.exit, 0, "the copy passes before the new script: {}", before.stderr);
-    assert!(before.all().contains("check-portable: ok (10 files, "), "{}", before.all());
+    assert!(before.all().contains("check-portable: ok (11 files, "), "{}", before.all());
 
     fs::write(dir.path().join("scripts/brand-new.sh"), "#!/bin/sh\nexit 0\n").unwrap();
     let run = run_check(&script, dir.path(), &[]);
@@ -1179,7 +1179,7 @@ fn a_linux_only_script_is_not_covered_and_a_covered_one_is_checked_by_the_defaul
     fs::write(dir.path().join("scripts/test-time.sh"), text).unwrap();
     let run = run_check(&script, dir.path(), &[]);
     assert_eq!(run.exit, 0, "{}", run.stderr);
-    assert!(run.all().contains("check-portable: ok (10 files, "), "{}", run.all());
+    assert!(run.all().contains("check-portable: ok (11 files, "), "{}", run.all());
 
     let mut text = fs::read_to_string(dir.path().join("scripts/npm-fresh.sh")).unwrap();
     text.push_str("\nreadlink -f \"$0\"\n");

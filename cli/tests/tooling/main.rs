@@ -19,4 +19,5 @@ mod prune_script;
 mod release_script;
 mod slot;
 mod test_changed_script;
+mod tests_script;
 mod version;

@@ -1704,9 +1704,9 @@ fn a_store_busy_for_longer_than_store_busy_ms_never_ends_the_engine_or_loses_an_
     wait_until("E5's poll", || marker.exists());
 
     // A step: the second tick's E4 meets the lock, taken while E5 of the first tick is still running. The first tick added `open-repo`;
-    // cancelling it is how the Lead starts over, so E4 has a Job to add (a write) at the second tick.
+    // an open Job that merged on a PR still `dispatch` counts for nothing, so E4 has a Job to add (a write) at the second tick.
     assert_eq!(fx.jobs_of_kind("open").len(), 1);
-    fx.fixture("UPDATE jobs SET status = 'cancelled', cancel_reason = 'start over', cancel_requested_at = 't' WHERE key = 'open-repo';");
+    fx.fixture("UPDATE jobs SET status = 'running' WHERE key = 'open-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'open-repo';");
     let busy = watch_log(&fx).matches("store_busy: ").count();
     let held = hold_write_lock(&fx);
     fs::write(&go, "").unwrap();
@@ -1792,9 +1792,14 @@ impl Fx {
     /// Job `key` of PR `repo` as cpd adds an `open` or `update` Job (`kind`): `appended`, no Dependencies, `queued` with its
     /// fingerprint, then moved by `then` (SQL).
     fn add_cpd_job(&self, key: &str, kind: &str, then: &str) {
+        self.add_cpd_job_in("repo", key, kind, then);
+    }
+
+    /// `add_cpd_job` in PR `pr`.
+    fn add_cpd_job_in(&self, pr: &str, key: &str, kind: &str, then: &str) {
         self.fixture(&format!(
             "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, created_txn, created_at)
-             VALUES ('pay', 'repo', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
+             VALUES ('pay', '{pr}', '{key}', 'Title of {key}', 'S2', 'Do {key}.', 'Because.', '[\"{key}.txt\"]', '[\"it works\"]', '[]', 'draft', 1, '{kind}', cpd_txn(), 't');"
         ));
         let plan = PlanId::parse(PLAN).unwrap();
         let all = self.store().read(|conn| jobs::load(conn, &plan)).unwrap();
@@ -1891,27 +1896,100 @@ fn e4_adds_no_open_job_to_a_pr_whose_open_job_is_queued_or_failed() {
     }
 }
 
-/// An open Job that is `cancelled` is how the Lead starts over: the next tick adds a fresh one, `open-repo-2`. So does a `merged` one on a
-/// PR that is still `dispatch` (its merge died before it opened the pull request).
+/// A `merged` open Job on a PR that is still `dispatch` (its merge died before it opened the pull request, §7.4 R) counts for nothing:
+/// the next tick adds a fresh one, `open-repo-2`. Only a `merged` one: a `cancelled` one is the Lead's and stands (next tests).
 #[test]
-fn e4_adds_a_fresh_open_job_after_a_cancelled_one_or_a_merged_one_on_a_pr_still_dispatch() {
-    for (then, status) in [
-        ("UPDATE jobs SET status = 'cancelled', cancel_reason = 'start over', cancel_requested_at = 't' WHERE key = 'open-repo';", "cancelled"),
-        ("UPDATE jobs SET status = 'running' WHERE key = 'open-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'open-repo';", "merged"),
-    ] {
-        let fx = fx("");
-        fx.add_merged_api();
-        fx.add_draft("later");
-        fx.add_cpd_job("open-repo", "open", then);
+fn e4_adds_a_fresh_open_job_after_a_merged_one_on_a_pr_still_dispatch() {
+    let fx = fx("");
+    fx.add_merged_api();
+    fx.add_draft("later");
+    fx.add_cpd_job("open-repo", "open", "UPDATE jobs SET status = 'running' WHERE key = 'open-repo'; UPDATE jobs SET status = 'merged', merged_sha = 'abc' WHERE key = 'open-repo';");
 
+    let engine = fx.start();
+    wait_until("a fresh open Job", || fx.jobs_of_kind("open").len() == 2);
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+
+    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "merged".to_owned()), ("open-repo-2".to_owned(), "queued".to_owned())]);
+    assert_eq!(fx.count("job-added"), 1);
+}
+
+/// PR `repo` (an `open` Job the Lead cancelled) beside PR `web`, which has none: `web`'s own `open-web` is what shows the engine has
+/// looked at both.
+fn fx_cancelled_open_job() -> Fx {
+    let fx = fx("");
+    fx.add_merged_api();
+    fx.add_cpd_job("open-repo", "open", "UPDATE jobs SET status = 'cancelled', cancel_reason = 'never to be opened', cancel_requested_at = 't' WHERE key = 'open-repo';");
+    fx.fixture(&format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
+        fx.repo.display(),
+        fx.lead.display()
+    ));
+    fx.add_draft_in("web", "later-web");
+    fx
+}
+
+/// The Lead's cancel of a PR's `open` Job stands (§3.7 E4, hs-d301): the PR stays `dispatch` and no `open-repo-2` follows, over several
+/// ticks and across an engine restart. Seen: Plan ui-design's `open-proto` was cancelled and `open-proto-2` came four seconds later.
+#[test]
+fn e4_adds_no_open_job_to_a_dispatch_pr_whose_open_job_the_lead_cancelled() {
+    let fx = fx_cancelled_open_job();
+
+    for _ in 0..2 {
         let engine = fx.start();
-        wait_until("a fresh open Job", || fx.jobs_of_kind("open").len() == 2);
+        wait_until("the open Job of PR web", || fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-web"));
         fx.env.wait_whole_ticks(3);
         engine.stop();
-
-        assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), status.to_owned()), ("open-repo-2".to_owned(), "queued".to_owned())]);
-        assert_eq!(fx.count("job-added"), 1, "{status}");
     }
+
+    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "cancelled".to_owned()), ("open-web".to_owned(), "queued".to_owned())]);
+    assert_eq!(fx.count("job-added"), 1, "only PR web's was added");
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'repo'"), "dispatch");
+}
+
+/// The ways on after that cancel (§3.8, §7.6): `pr open --pr repo` is the repair and is not refused `open_job_live` (no `open` Job is
+/// live); E4 still adds nothing, before or after it.
+#[test]
+fn the_way_back_from_a_cancelled_open_job_is_pr_open_which_is_not_refused_open_job_live() {
+    let fx = fx_cancelled_open_job();
+    let engine = fx.start();
+    wait_until("the open Job of PR web", || fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-web"));
+    fx.env.wait_whole_ticks(2);
+
+    let run = fx.env.cpd(&["pr", "open", "--pr", "repo", "--plan", "pay"]);
+    fx.env.wait_whole_ticks(2);
+    engine.stop();
+
+    let json = run.json();
+    assert_ne!(json["error"]["code"], "open_job_live", "{run:?}");
+    let open: Vec<String> = fx.jobs_of_kind("open").into_iter().map(|(key, _)| key).collect();
+    assert_eq!(open, ["open-repo", "open-web"], "no fresh open Job for PR repo");
+}
+
+/// The other way on is `pr cancel`: it cancels the PR's own queued `open` Job with the PR, and E4 re-adds nothing (the PR is no longer
+/// `dispatch`), over several ticks. PR `repo` is the one the engine is seen to look at.
+#[test]
+fn pr_cancel_cancels_the_prs_own_open_job_with_it_and_e4_adds_none() {
+    let fx = fx("");
+    fx.add_merged_api();
+    fx.fixture(&format!(
+        "INSERT INTO prs (plan, key, repo, base, status, lead_branch, lead_worktree, title, shape, created_txn, created_at, started_at)
+           VALUES ('pay', 'web', '{}', 'main', 'dispatch', 'cpd/pay/web', '{}', 'Show the receipt', 'config', cpd_txn(), 't', 't');",
+        fx.repo.display(),
+        fx.lead.display()
+    ));
+    fx.add_cpd_job_in("web", "open-web", "open", "");
+    fx.env.cpd(&["pr", "cancel", "web", "--plan", "pay"]).ok();
+
+    let engine = fx.start();
+    wait_until("the open Job of PR repo", || fx.jobs_of_kind("open").iter().any(|(key, _)| key == "open-repo"));
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+
+    let web: Vec<_> = fx.jobs_of_kind("open").into_iter().filter(|(key, _)| key.starts_with("open-web")).collect();
+    assert_eq!(web, [("open-web".to_owned(), "cancelled".to_owned())]);
+    assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE plan = 'pay' AND key = 'web'"), "cancelled");
 }
 
 /// Only a PR that is `dispatch`, of a Plan that is not archived, gets one.
