@@ -592,7 +592,7 @@ fn list_panes_is_empty_only_when_tmux_says_no_server_runs() {
     const NAME: &str = "list_panes_is_empty_only_when_tmux_says_no_server_runs";
     const CASE: &str = "CPD_TEST_FAKE_TMUX_CASE";
     // In the child: the fake `tmux` first on `PATH`, which ignores the socket and the tmpdir.
-    let fake = || Tmux::with_tmpdir("cpd-test-fake", std::env::temp_dir().join("cpd-test-fake-unused"));
+    let fake = || Tmux::with_tmpdir("cpd-test-fake", std::env::temp_dir());
     match std::env::var(CASE).as_deref() {
         Ok("failure") => {
             assert_eq!(fake().list_panes().unwrap_err().code(), ErrorCode::TmuxFailed);
@@ -638,7 +638,7 @@ fn a_tmux_call_past_its_deadline_is_killed_with_its_group_and_is_tool_timeout() 
     }
     // No TestEnv here: its teardown would run the hanging fake `tmux` first on this process's `PATH`. The fake
     // ignores the socket and the tmpdir, and no real tmux runs.
-    let tmux = Tmux::with_tmpdir("cpd-test-deadline", std::env::temp_dir().join("cpd-test-deadline-unused"));
+    let tmux = Tmux::with_tmpdir("cpd-test-deadline", std::env::temp_dir());
     let started = std::time::Instant::now();
     let err = tmux.server_running().unwrap_err();
 
