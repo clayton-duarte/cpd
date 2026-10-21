@@ -112,7 +112,7 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
   }
 }
 
-/** §15.3 `session-message`: for every Lead and a Manager; a turn only when `data.wake` is true. The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
+/** §15.3 `session-message`: for every Lead and a Manager; a message and a turn always, whatever `data.wake` (hs-d514). The sender's name is read once, `cpd session show <from>`; the id stands in when it cannot be read. */
 async function deliverSessionMessage(host: Host, r: Run, ev: EventOf<"session-message">): Promise<void> {
   const from = ev.data.from;
   let sender: { id: string; name: string | null } | null = null;
@@ -126,5 +126,5 @@ async function deliverSessionMessage(host: Host, r: Run, ev: EventOf<"session-me
     }
   }
   if (host.run !== r) return;
-  host.pi.sendMessage(sessionMessage(ev, r.id, sender), FOLLOW_UP(ev.data.wake === true));
+  host.pi.sendMessage(sessionMessage(ev, r.id, sender), FOLLOW_UP(true));
 }
