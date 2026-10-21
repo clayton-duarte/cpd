@@ -30,7 +30,7 @@ pub(crate) fn pr(env: &TestEnv, key: &str, status: &str, base: &str, needs: &[&s
     let started = if status == "waiting" { "NULL, NULL" } else { "'/w', 't'" };
     // the needs are written in the transaction that creates the PR: after it they are Locked
     let needs: String =
-        needs.iter().map(|n| format!("INSERT INTO pr_needs (plan, pr, needs_plan, needs) VALUES ('pay', '{key}', 'pay', '{n}');")).collect();
+        needs.iter().map(|n| format!("INSERT INTO pr_needs (plan, pr, needs) VALUES ('pay', '{key}', '{n}');")).collect();
     env.sql(&format!(
         "INSERT INTO prs (plan, key, repo, name, base, status, lead_branch, lead_worktree, started_at, created_txn, created_at)
          VALUES ('pay', '{key}', '/r/{key}', '{key}', '{base}', '{status}', 'cpd/pay/{key}', {started}, cpd_txn(), 't');{needs}"
