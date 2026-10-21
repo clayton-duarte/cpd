@@ -8,7 +8,8 @@ Rules for every `ask_user_question` call (trial t5). The tool opens a dialog in 
 - **`multiSelect: true` only when the picks are independent.** A `preview` goes on single-select options only, and stays to a few lines (the box is capped at 20 rows and does not scroll). It is not a place to read a table or a Plan; the Plan goes through `cpd_plan_review`.
 - **Ask the whole frontier at once.** Put every question whose answer does not depend on another open question into the same round. A dependent question waits for the next round.
 - **Do not ask what you can look up.** Read the repo and the User's material first. Ask for decisions, not facts.
-- **Never approve a Plan with this tool.** Plan approval is `cpd_plan_review`.
+- **Every open decision is a round.** Ask it at any phase, also while the Plan has draft Jobs. Put the recommended option first, its description starting `Recommended:`.
+- **Never approve a Plan with this tool.** Plan approval is `cpd_plan_review`: it shows the summary in chat and the User decides in its dialog.
 
 ## Reading the result
 
@@ -31,6 +32,17 @@ ask_user_question({questions: [
      {label: "CLI", description: "Scriptable; no UI work"},
      {label: "HTTP API", description: "Needed by the web app; adds auth scope"},
      {label: "Web UI", description: "Largest Job; depends on the HTTP API"}]}]})
+```
+
+Decision round (the recommended option first; the User may still type another answer):
+
+```ts
+ask_user_question({questions: [
+  {header: "Retries", question: "How should a failed upload retry?",
+   options: [
+     {label: "Backoff", description: "Recommended: three tries with growing delay; fewest duplicate uploads"},
+     {label: "Fixed", description: "One retry after 5 s; simplest, fails more often"},
+     {label: "None", description: "Report the failure at once; the caller retries"}]}]})
 ```
 
 Assumptions (list them in the chat first, as a table or list; the preview holds at most a few lines, or only the count):

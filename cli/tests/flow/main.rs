@@ -16,6 +16,7 @@ mod driver;
 mod job;
 mod metrics;
 mod plan_cancel;
+mod plan_outline;
 mod plan_overlap;
 mod plan;
 mod plan_show;

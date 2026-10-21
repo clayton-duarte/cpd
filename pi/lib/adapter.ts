@@ -1,12 +1,10 @@
-import { draftJobs, draftReason, tooLong } from "./askguard.ts";
-import { toCpdError } from "./cpd.ts";
+import { tooLong } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
-import { createHost, type Host, type Options } from "./host.ts";
+import { createHost, type Options } from "./host.ts";
 import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
-import type { Run } from "./run.ts";
 import { registerReloadCommand } from "./reload-command.ts";
 import { start, stop, trackers } from "./startup.ts";
 import { reasonText as testReasonText, unfilteredTestRun } from "./testguard.ts";
@@ -45,7 +43,10 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     const role = host.run?.info.role;
     const pn = pnVerdict({ env: host.env, live: host.run !== undefined, store: globalThis as Record<string, unknown> }, event);
     if (pn) return pn;
-    if (host.run && event.toolName === "ask_user_question") return askVerdict(host, host.run, event.input);
+    if (host.run && event.toolName === "ask_user_question") {
+      const long = tooLong(event.input);
+      return long === undefined ? undefined : { block: true, reason: long };
+    }
     if ((role !== "manager" && role !== "worker") || event.toolName !== "bash") return undefined;
     const input = event.input as { command?: unknown; timeout?: unknown };
     const command = typeof input.command === "string" ? input.command : "";
@@ -66,18 +67,4 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   });
 
   registerAgentState(host);
-}
-
-/** §15.13: G2 (any Session) before G1 (a Lead with a Plan: one `plan show`, best effort, a failed read refuses nothing). */
-async function askVerdict(host: Host, r: Run, input: unknown): Promise<{ block: true; reason: string } | undefined> {
-  const long = tooLong(input);
-  if (long !== undefined) return { block: true, reason: long };
-  if (r.info.role !== "lead" || r.info.plan === null) return undefined;
-  try {
-    const drafts = draftJobs(await host.call(["plan", "show", "--plan", r.info.plan]));
-    return drafts > 0 ? { block: true, reason: draftReason(drafts) } : undefined;
-  } catch (e) {
-    r.log(`ask guard: plan show failed: ${toCpdError(e).message}`);
-    return undefined;
-  }
 }

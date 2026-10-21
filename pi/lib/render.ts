@@ -2,7 +2,7 @@ import { type Component, MouseRegion, sliceByColumn, stripTerminalSequences, tru
 import { loadConfig } from "../compact-tools/extensions/compact-tools-config.ts";
 import type { DisplayStyle } from "../compact-tools/extensions/compact-tools-types.ts";
 import { isObject } from "./cpd.ts";
-import { DECISION_TYPE } from "./plan-review.ts";
+import { DECISION_TYPE, SUMMARY_TYPE } from "./plan-review.ts";
 import type { MessageRenderer, RenderedMessage, Theme } from "./pi.ts";
 import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
 
@@ -16,7 +16,7 @@ import { CONTEXT_TYPE, countsOf, summaryLine } from "./updates.ts";
  */
 
 /** Every `customType` the adapter sends with `display: true`. */
-export const RENDERED_TYPES: readonly string[] = ["cpd", CONTEXT_TYPE, DECISION_TYPE];
+export const RENDERED_TYPES: readonly string[] = ["cpd", CONTEXT_TYPE, DECISION_TYPE, SUMMARY_TYPE];
 
 // ---- the style: the extension's effective config, read once ----
 
@@ -65,6 +65,9 @@ function summaryOf(message: RenderedMessage, content: string): string | undefine
   if (message.customType === CONTEXT_TYPE) {
     const counts = countsOf(message.details);
     return counts === undefined ? undefined : summaryLine(counts);
+  }
+  if (message.customType === SUMMARY_TYPE) {
+    return typeof d.review === "string" ? `Plan review ${d.review} summary` : oneLine(content);
   }
   if (message.customType === DECISION_TYPE) {
     if (typeof d.review === "string" && typeof d.approved === "boolean") return `Plan review ${d.review} ${d.approved ? "approved" : "rejected"}`;
@@ -182,8 +185,8 @@ export class Rendering {
     const content = contentOf(message);
     const summary = summaryOf(message, content);
     const rows = rowsOf(summary ?? CONTEXT_TYPE, content, theme);
-    // No summary: the row is always open, with no closing row and no toggle (§15.9 "No summary").
-    const open = summary === undefined;
+    // No summary, and always the Plan review's summary, which the User reads to decide: the row is always open, with no closing row and no toggle (§15.9 "No summary").
+    const open = summary === undefined || message.customType === SUMMARY_TYPE;
     const state = this.states.get(message) ?? { expanded, host: expanded };
     this.states.set(message, state);
     // Ctrl+O hands the renderer `expanded`; the message follows it both ways (the extension's group rule).

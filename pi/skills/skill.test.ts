@@ -330,6 +330,9 @@ function configDefaults(): Map<string, string> {
 function vocabulary(): { causes: Set<string>; reasons: Set<string>; configKeys: Set<string>; fields: Set<string>; tools: Set<string> } {
   const fields = new Set<string>();
   for (const line of section(contractDoc, "### 2.2 Objects").split("\n")) for (const w of wordsOfCell(cells(line)?.[0] ?? "") ?? []) fields.add(w);
+  // The outline file's fields (commands.md §4.13).
+  const outline = section(commandsDoc, "### 4.13 `plan outline`");
+  for (const line of outline.split("\n")) for (const w of wordsOfCell(cells(line)?.[0] ?? "") ?? []) fields.add(w);
   const reasons = /reasons` is a subset of `\[([^\]]+)\]`/.exec(kindRows().get("pr-feedback")!)![1]!.match(/[a-z_]+/g)!;
   const tools = /--exclude-tools ([a-z_,]+)/.exec(contractDoc)![1]!.split(",");
   return {
@@ -625,15 +628,18 @@ test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and
   assert.match(manager, /small follow-up goes into its area's existing PR, not a new one/);
 });
 
-test("both skills: plans go to plannotator, ask_user_question is for a few short choices, and the adapter refuses two cases", () => {
+test("both skills: decisions are ask rounds at any phase, only the 1500-character guard stays, plannotator is for long documents", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   const manager = skillFiles("cpd-manager")[0]!.text;
   for (const text of [lead, manager]) {
-    assert.match(text, /go to the User only with `cpd_plan_review` \(plannotator\)/);
-    assert.match(text, /`ask_user_question` is for a few short choices/);
-    assert.match(text, /over 1500 characters/);
+    assert.match(text, /every open decision goes to the User as an ask round/);
+    assert.match(text, /refuses only an `ask_user_question` over 1500 characters/);
+    assert.doesNotMatch(text, /refuses `ask_user_question` for a Lead whose Plan has draft/);
   }
-  assert.match(lead, /refuses `ask_user_question` for a Lead whose Plan has draft Jobs/);
+  const approving = section(lead, "### Approving");
+  assert.match(approving, /cpd plan outline --file/);
+  assert.match(approving, /`Approve`[\s\S]*`Change`[\s\S]*`Open full plan`/);
+  assert.match(approving, /outline_missing[\s\S]*outline_incomplete/);
 });
 
 test("cpd-lead merges the base only on a conflict; ready is its own Gate and no conflict", () => {

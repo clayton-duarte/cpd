@@ -331,6 +331,7 @@ fn the_plan_review_file_carries_the_overlaps_and_nothing_is_refused() {
     pr(&env, "busy", "svc", "/r/api", "dispatch");
     job(&env, "busy", "svc", "y", "queued", &["core/src/"]);
 
+    env.outline_for_review("mine");
     let out = env.cpd(&["plan", "review", "--plan", "mine", "--title", "Review title"]).ok();
     let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
     assert!(text.contains("| `x` | `busy` | `svc` | `y` (queued) | `core/src/x.rs` |"), "{text}");

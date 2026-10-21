@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ToolDefin
 import type { Component } from "@earendil-works/pi-tui";
 
 export type Ctx = Pick<ExtensionContext, "mode" | "isIdle" | "hasPendingMessages" | "cwd" | "isProjectTrusted"> & {
-  ui: Pick<ExtensionContext["ui"], "notify" | "getEditorText">;
+  ui: Pick<ExtensionContext["ui"], "notify" | "getEditorText" | "select" | "editor">;
   sessionManager: Pick<ExtensionContext["sessionManager"], "getSessionId" | "getEntries">;
 };
 

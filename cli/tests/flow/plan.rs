@@ -906,12 +906,13 @@ fn review_requests_a_pending_review_once_per_fingerprint() {
     refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
     add_job(&env, "pay", "a", &[]);
 
+    env.outline_for_review("pay");
     let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let fingerprint = env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
     let review_path = home(&env).plan_review_md(&pid("pay"), ReviewId::parse("r1").unwrap());
     assert_eq!((&out["review"]["id"], &out["review"]["status"], &out["review"]["fingerprint"]), (&json!("r1"), &json!("pending"), &fingerprint));
     assert_eq!(out["path"], review_path.display().to_string());
-    assert_eq!(out["next"], "The User reviews the plan in plannotator. Stop and wait for the decision message.");
+    assert_eq!(out["next"], "The User reviews the plan summary in your chat and decides there. Stop and wait for the decision message.");
     // The review's copy opens with the review's title and the Plan line; `plan.md` keeps its own heading (hs-d291).
     let (copy, plan_md) = (fs::read_to_string(&review_path).unwrap(), fs::read_to_string(home(&env).plan_md(&pid("pay"))).unwrap());
     let plan_title = show(&env, "pay")["plan"]["title"].as_str().unwrap().to_owned();
@@ -929,6 +930,7 @@ fn review_requests_a_pending_review_once_per_fingerprint() {
     // Changed Jobs: a new review; the copy of r1 is what the User saw.
     let r1 = fs::read_to_string(&review_path).unwrap();
     edit_goal(&env, "pay", "a", "A new goal.");
+    env.outline_for_review("pay");
     let r2 = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     assert_eq!(r2["review"]["id"], "r2");
     assert_ne!(r2["review"]["fingerprint"], fingerprint);
@@ -950,6 +952,7 @@ fn review_requires_a_title_and_stores_it() {
         refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", bad]), "usage", 2);
     }
     assert!(events(&env, "plan-review").is_empty(), "a refused request changes nothing");
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", &"x".repeat(72)]).ok();
     let db = rusqlite::Connection::open(env.cpd_home().join("cpd.db")).unwrap();
     let title: String = db.query_row("SELECT title FROM plan_reviews WHERE plan = 'pay' AND id = 'r1'", [], |r| r.get(0)).unwrap();
@@ -961,6 +964,7 @@ fn decide_records_the_decision_once() {
     let env = TestEnv::new();
     let repo = setup(&env);
     planned(&env, &repo, "pay");
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let feedback = env.root().join("feedback.md");
     fs::write(&feedback, "Split job b.").unwrap();
@@ -984,6 +988,7 @@ fn decide_records_the_decision_once() {
     assert_eq!(events(&env, "plan-review").len(), 2);
 
     // Approved, then the Jobs change: no longer current, so no plan lock.
+    env.outline_for_review("pay");
     let r2 = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     assert_eq!(r2["review"]["id"], "r2");
     let out = env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
@@ -1019,14 +1024,16 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     add_draft(&env, "pay", "c", &["a"], true);
     add_draft(&env, "pay", "d", &["c"], true);
+    env.outline_for_review("pay");
     let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let spec = |key: &str, needs: &str| {
         format!(
             "{{\"acceptance\":[\"cargo test\"],\"context\":\"Context of {key}.\",\"goal\":\"Goal of {key}.\",\"key\":\"{key}\",\"needs\":[{needs}],\"out_of_scope\":[],\"pr\":\"pay\",\"tier\":\"S2\",\"title\":\"Job {key}\",\"touches\":[\"src/{key}.rs\"]}}"
         )
     };
-    // The fingerprint covers exactly the drafts, and no PR.
-    let fingerprint = sha256(&format!("{{\"jobs\":[{},{}],\"prs\":[]}}", spec("c", "\"a\""), spec("d", "\"c\"")));
+    // The fingerprint covers exactly the drafts, and no PR, and the outline (contract §2.3) that `outline_for_review` set.
+    let outline = "{\"assumptions\":[],\"decided\":[],\"decisions\":[],\"done_when\":{\"pay\":[\"Done\"]},\"goal\":\"Goal\",\"out_of_scope\":[],\"risks\":[]}";
+    let fingerprint = sha256(&format!("{{\"jobs\":[{},{}],\"outline\":{outline},\"prs\":[]}}", spec("c", "\"a\""), spec("d", "\"c\"")));
     assert_eq!((&out["review"]["id"], &out["review"]["status"], &out["review"]["fingerprint"]), (&json!("r2"), &json!("pending"), &json!(fingerprint)));
     assert_eq!(events(&env, "plan-review").last().unwrap()["data"], json!({"review": "r2", "fingerprint": fingerprint, "status": "pending"}));
 
@@ -1053,6 +1060,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     // Approved and current: in one transaction exactly the drafts are queued with their fingerprints.
     let phase_events = events(&env, "plan-phase").len();
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     let out = env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
     assert_eq!((&out["review"]["status"], &out["current"], &out["next"], &out["jobs"]), (&json!("approved"), &json!(true), &Value::Null, &json!(["c", "d"])));
@@ -1076,6 +1084,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 
     // A stale approval queues nothing and asks for a new review.
     add_draft(&env, "pay", "e", &[], true);
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     edit_goal(&env, "pay", "e", "Changed.");
     let out = env.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
@@ -1090,6 +1099,7 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
 /// A Plan `pay` in phase `plan` with an approved, current review.
 fn approved(env: &TestEnv, repo: &Path) {
     planned(env, repo, "pay");
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     env.cpd(&["plan", "decide", "r1", "--approve", "--plan", "pay"]).ok();
 }
@@ -1323,11 +1333,13 @@ fn lock_refusals_change_nothing() {
     add_job(&env, "pay", "a", &["b"]);
     let error = refused(&lock(), "plan_not_approved", 3);
     assert_eq!(error["details"]["review"], Value::Null);
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     refused(&lock(), "plan_not_approved", 3);
     env.cpd(&["plan", "decide", "r1", "--reject", "--plan", "pay"]).ok();
     let error = refused(&lock(), "plan_not_approved", 3);
     assert_eq!(error["details"]["review"]["status"], "rejected");
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     edit_goal(&env, "pay", "a", "Changed after approval.");
@@ -1335,11 +1347,13 @@ fn lock_refusals_change_nothing() {
 
     // A cycle (b needs a, a needs b), approved.
     store(&env).write("fixture", |tx| exec(tx, "INSERT INTO dependencies (plan, job, needs) VALUES ('pay', 'b', 'a');")).unwrap();
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     env.cpd(&["plan", "decide", "r3", "--approve", "--plan", "pay"]).ok();
     let error = refused(&lock(), "dependency_cycle", 3);
     assert_eq!(error["details"]["cycle"].as_array().unwrap().len(), 3);
     store(&env).write("fixture", |tx| exec(tx, "DELETE FROM dependencies WHERE plan = 'pay' AND job = 'b';")).unwrap();
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     env.cpd(&["plan", "decide", "r4", "--approve", "--plan", "pay"]).ok();
 
@@ -1795,6 +1809,7 @@ fn a_stub_added_in_dispatch_refuses_the_review_until_it_is_completed_then_is_app
     assert_eq!(error["details"]["jobs"], json!([{"key": "next-2", "missing": ["spec"]}]));
     let spec_2 = spec_file(&env, "next-2");
     env.cpd(&["job", "edit", "next-2", "--spec", &spec_2, "--plan", "pay"]).ok();
+    env.outline_for_review("pay");
     let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     assert_eq!((&out["review"]["id"], &out["review"]["status"]), (&json!("r2"), &json!("pending")));
     assert_ne!(out["review"]["fingerprint"], before, "completing a stub changes the plan fingerprint");
@@ -1833,6 +1848,7 @@ fn a_stub_in_phase_plan_refuses_the_review_and_the_lock_and_is_never_queued() {
     // Cancelled, a stub is no draft and blocks nothing; the other is completed.
     env.cpd(&["job", "cancel", "later", "--reason", "No.", "--plan", "pay"]).ok();
     env.cpd(&["job", "edit", "also", "--spec", &spec_file(&env, "also"), "--plan", "pay"]).ok();
+    env.outline_for_review("pay");
     env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
     env.cpd(&["plan", "decide", "r2", "--approve", "--plan", "pay"]).ok();
     let out = lock().ok();

@@ -87,6 +87,7 @@ impl Fx {
 
     /// Reviews and approves the Plan as it is.
     fn approve(&self) {
+        self.env.outline_for_review("pay");
         let review = self.env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
         let id = review["review"]["id"].as_str().unwrap().to_owned();
         self.env.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay"]).ok();

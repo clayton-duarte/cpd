@@ -192,6 +192,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("plan-created", "cp", "", &["title", "jira", "lead_session", "forked_from", "cwd"], &[]),
     ("plan-phase", "cp", "", &["from", "to"], &["jobs", "pr"]),
     ("plan-review", "cp", "", &["review", "fingerprint", "status"], &["feedback"]),
+    ("plan-outlined", "cp", "", &["replaced"], &[]),
     ("plan-done", "cp", "", &["prs"], &[]),
     ("job-added", "cpj", "", &["pr", "status", "appended", "tier", "needs", "review", "urgent"], &[]),
     ("job-edited", "cpj", "", &["fields"], &[]),

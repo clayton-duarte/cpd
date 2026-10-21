@@ -2,14 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Fixture, planShow, sessionShow, waitFor } from "./fake.ts";
 
-// commands.md §15.13: a Lead's `ask_user_question` while its Plan has draft Jobs (G1), and any Session's one over 1500 characters (G2), are refused.
+// commands.md §15.13 (hs-d502, hs-d503): G1 (a Lead with draft Jobs) is deleted; any Session's `ask_user_question` over 1500 characters (G2) is refused.
 
 type Option = { label: string; description: string; preview?: string };
 type Question = { question: string; header: string; options: Option[]; multiSelect?: boolean };
 type Verdict = { block?: boolean; reason?: string } | undefined;
 
 const LIMIT = 1500;
-const G1 = (n: number) => `cpd: a Plan with draft Jobs is presented for review with cpd_plan_review (plannotator), not ask_user_question; refused: ${n} draft Jobs`;
 const G2 = (n: number) => `cpd: ask_user_question is for a few short choices; put anything larger in plannotator; refused: ${n} characters (limit ${LIMIT})`;
 
 const job = (key: string, status: string) => ({ key, pr: "api", title: key, status, tier: "S3", needs: [] });
@@ -42,58 +41,38 @@ async function call(f: Fixture, questions: Question[], toolName = "ask_user_ques
   return (await f.pi.fireWith("tool_call", { toolName, toolCallId: "t", input }))[0] as Verdict;
 }
 
-// ---- G1: a Plan with draft Jobs ----
+// ---- G1 is gone (hs-d502): a Lead with draft Jobs may ask ----
 
-test("G1: a Lead whose Plan has 2 draft Jobs is refused, with the count in a one-line reason", async (t) => {
+test("a Lead whose Plan has draft Jobs may call ask_user_question; the Plan is not read for it", async (t) => {
   const f = await started("lead", withJobs("draft", "queued", "draft", "merged"));
   t.after(() => f.close());
   const before = planReads(f);
-  const r = await call(f, [ask(10, 5)]);
-  assert.deepEqual(r, { block: true, reason: G1(2) });
-  assert.equal(r?.reason?.includes("\n"), false);
-  assert.equal(planReads(f), before + 1, "the Plan is read when the call is made");
+  assert.equal(await call(f, [ask(10, 5)]), undefined);
+  assert.equal(planReads(f), before, "the adapter no longer reads cpd plan show for the guard");
 });
 
-test("G1: the Plan is read at each call, so the verdict follows its Jobs", async (t) => {
+test("a Lead is not refused whatever its Jobs are, nor when plan show fails", async (t) => {
   const f = await started("lead", withJobs("draft"));
   t.after(() => f.close());
-  assert.deepEqual(await call(f, [ask(10, 5)]), { block: true, reason: G1(1) });
-  f.respond("plan-show", withJobs("queued"));
-  assert.equal(await call(f, [ask(10, 5)]), undefined);
-});
-
-test("G1: a Lead whose Plan has no draft Job is not refused", async (t) => {
-  const f = await started("lead", withJobs("queued", "running", "merged", "failed", "cancelled"));
-  t.after(() => f.close());
-  assert.equal(await call(f, [ask(10, 5)]), undefined);
-});
-
-test("G1: a Lead whose Plan has no Job is not refused", async (t) => {
-  const f = await started("lead", withJobs());
-  t.after(() => f.close());
-  assert.equal(await call(f, [ask(10, 5)]), undefined);
-});
-
-test("G1: a failed `plan show` refuses nothing", async (t) => {
-  const f = await started("lead", withJobs("draft", "draft"));
-  t.after(() => f.close());
+  for (const statuses of [["draft"], ["queued", "running", "merged", "failed", "cancelled"], []]) {
+    f.respond("plan-show", withJobs(...statuses));
+    assert.equal(await call(f, [ask(10, 5)]), undefined);
+  }
   f.respond("plan-show", { ok: false, error: { code: "store_busy", message: "busy" } }, { exit: 1 });
   assert.equal(await call(f, [ask(10, 5)]), undefined);
-  f.respond("plan-show", "not json at all");
+});
+
+test("a Manager is not refused for drafts", async (t) => {
+  const f = await started("manager", withJobs("draft", "draft"));
+  t.after(() => f.close());
   assert.equal(await call(f, [ask(10, 5)]), undefined);
 });
 
-test("G1: only the tool `ask_user_question` is refused; a bash call is unaffected", async (t) => {
+test("other tools are unaffected by a Plan with drafts", async (t) => {
   const f = await started("lead", withJobs("draft", "draft"));
   t.after(() => f.close());
   assert.equal(await call(f, [], "bash"), undefined);
   assert.equal(await call(f, [ask(10, 5)], "cpd_plan_review"), undefined);
-});
-
-test("G1: a Manager is not refused for drafts (it has no Plan)", async (t) => {
-  const f = await started("manager", withJobs("draft", "draft"));
-  t.after(() => f.close());
-  assert.equal(await call(f, [ask(10, 5)]), undefined);
 });
 
 // ---- G2: a long question ----
@@ -145,8 +124,8 @@ test("G2: a long label and a long header count", async (t) => {
   assert.deepEqual(await call(f, [ask(1, 2000)]), { block: true, reason: G2(2001) });
 });
 
-test("G2: a Lead with no draft Job over the limit is refused with G2's reason, not G1's", async (t) => {
-  const f = await started("lead", withJobs("queued"));
+test("G2: a Lead with draft Jobs over the limit is refused with G2's reason only", async (t) => {
+  const f = await started("lead", withJobs("draft", "queued"));
   t.after(() => f.close());
   assert.deepEqual(await call(f, [ask(2000, 0)]), { block: true, reason: G2(2000) });
 });

@@ -608,6 +608,7 @@ fn edit_title_works_after_the_lock_in_any_status_and_keeps_the_review_and_the_lo
     let fx = fx("plan");
     fx.add("api", &fx.pay, &[]).ok();
     fx.job("a", "api", "draft");
+    fx.env.outline_for_review("pay-1");
     let id = fx.env.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok()["review"]["id"].as_str().unwrap().to_owned();
     fx.env.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay-1"]).ok();
     let fingerprint = fx.fingerprint();
@@ -1063,6 +1064,7 @@ fn a_plan_review_goes_stale_when_a_pr_changes() {
     fx.add("api", &fx.pay, &[]).ok();
     fx.add("web", &fx.pay, &[]).ok();
     fx.job("a", "api", "draft");
+    fx.env.outline_for_review("pay-1");
     let review = fx.env.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok();
     let id = review["review"]["id"].as_str().unwrap().to_owned();
     assert_eq!(review["review"]["fingerprint"], fx.fingerprint());
@@ -1077,6 +1079,7 @@ fn a_plan_review_goes_stale_when_a_pr_changes() {
         let lock = fx.env.cpd(&["plan", "lock", "--plan", "pay-1"]);
         assert_eq!(lock.error()["code"], "plan_not_approved", "{lock:?}");
         // A new review of what the PRs are now, approved, is current again.
+        fx.env.outline_for_review("pay-1");
         let id = fx.env.cpd(&["plan", "review", "--plan", "pay-1", "--title", "Review title"]).ok()["review"]["id"].as_str().unwrap().to_owned();
         fx.env.cpd(&["plan", "decide", &id, "--approve", "--plan", "pay-1"]).ok();
         assert_eq!(current(&fx), true, "{args:?}");

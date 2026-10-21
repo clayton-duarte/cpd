@@ -94,6 +94,11 @@ impl NewEvent {
         make(Kind::PlanReview, text, data)
     }
 
+    /// `plan outline`: the Plan's outline was set (`replaced` false) or replaced.
+    pub fn plan_outlined(text: impl Into<String>, replaced: bool) -> NewEvent {
+        make(Kind::PlanOutlined, text, json!({"replaced": replaced}))
+    }
+
     pub fn plan_done(text: impl Into<String>, prs: impl Serialize) -> NewEvent {
         make(Kind::PlanDone, text, json!({"prs": prs}))
     }
@@ -407,6 +412,7 @@ mod tests {
                 NewEvent::plan_review_decided(T, s, s, s, s, None::<Vec<&str>>),
                 NewEvent::plan_review_decided(T, s, s, s, s, Some([s])),
             ],
+            Kind::PlanOutlined => vec![NewEvent::plan_outlined(T, b)],
             Kind::PlanDone => vec![NewEvent::plan_done(T, [s])],
             Kind::JobAdded => vec![NewEvent::job_added(T, s, s, b, Some(s), [s], b, b), NewEvent::job_added(T, s, s, b, None, [s], b, b)],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
