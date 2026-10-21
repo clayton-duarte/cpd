@@ -223,6 +223,7 @@ const SPEC: &[(&str, &str, &str, &[&str], &[&str])] = &[
     ("session-renamed", "cs", "p", &["name"], &[]),
     ("session-titled", "cs", "p", &["title"], &[]),
     ("session-retiered", "cs", "p", &["from", "to"], &[]),
+    ("session-asleep", "cs", "p", &[], &[]),
     ("context-renamed", "c", "", &["title"], &[]),
     ("context-owner", "c", "", &["owner"], &[]),
     ("plan-renamed", "cp", "", &["title"], &[]),

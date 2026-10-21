@@ -60,7 +60,7 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
     // nothing), before the Gate, under `pr.gate` `ci` as under `local`; 2. the Gate on G, in a gate worktree of its own.
     let repo = Path::new(&pr.repo);
     let again = format!("cpd pr open --pr {key}");
-    require_base_on_remote(&mut env, repo, pr, &format!("Its Lead pushes it (cpd pr push), then run {again} again. Nothing was gated, pushed or opened."))?;
+    require_base_on_remote(&mut env, &id, repo, pr, &format!("Its Lead pushes it (cpd pr push), then run {again} again. Nothing was gated, pushed or opened."))?;
     let base_sha = fresh_base(repo, &pr.base)?;
     let sha = git::run::rev_parse(repo, &format!("refs/heads/{branch}"))?;
     require_no_conflict(repo, &lead, pr, &base_sha, &sha, &again, "the Lead Branch")?;
@@ -101,8 +101,8 @@ pub(super) fn open(args: Args) -> Result<Output, CpdError> {
 /// A stacked PR's base branch, its base PR's Lead Branch, is on the remote (contract §7.6 `pr open` step 1), else
 /// `base_not_found` (exit 4): the pull request targets it, and the base PR's Lead pushes it. A PR that is not stacked
 /// has its base fetched next, and a repo with no `origin` has no pull request to target a branch of.
-fn require_base_on_remote(env: &mut Env, repo: &Path, pr: &PrRow, then: &str) -> Result<(), CpdError> {
-    let Some(base_pr) = env.store.read(|conn| base_pr(conn, pr))? else { return Ok(()) };
+fn require_base_on_remote(env: &mut Env, plan: &PlanId, repo: &Path, pr: &PrRow, then: &str) -> Result<(), CpdError> {
+    let Some(base_pr) = env.store.read(|conn| base_pr(conn, plan, pr))? else { return Ok(()) };
     if !git::run::has_origin(repo)? {
         return Ok(());
     }
@@ -453,7 +453,7 @@ pub fn submit_checks(env: &mut Env, plan: &PlanId, attempt: &AttemptId, job: &jo
         }
     }
     // 4. The base check: a stacked PR's base is on the remote; the base is merged only on a conflict.
-    require_base_on_remote(env, repo, pr, &format!("Its Lead pushes it (cpd pr push): ask the Lead (cpd ask), then run {again} again."))?;
+    require_base_on_remote(env, plan, repo, pr, &format!("Its Lead pushes it (cpd pr push): ask the Lead (cpd ask), then run {again} again."))?;
     let base_sha = fresh_base(repo, &pr.base)?;
     require_no_conflict(repo, root, pr, &base_sha, sha, &again, "your branch")?;
     // 5. The Gate on HEAD, when the PR's policy runs it here: in a gate worktree, in a test slot.

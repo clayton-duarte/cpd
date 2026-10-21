@@ -1,5 +1,5 @@
 //! The engine's loop (contract §3.7; commands.md §12): `locks/watch.lock`,
-//! `watch-started`, then E1–E5 and E7–E11 (E6 was removed) every
+//! `watch-started`, then E1–E5, E7–E11, E12 and E13 (E6 was removed) every
 //! `tick_seconds` until SIGTERM, SIGINT or SIGHUP, then `watch-stopped`.
 
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ use time::format_description::well_known::Rfc3339;
 use super::lock::WatchLock;
 use super::log::Log;
 use super::report::{About, Failure, Report, Step};
-use super::{SOURCE, distill, escalations, inbox, liveness, open, pr, restart, schedule, team, titles, workers};
+use super::{SOURCE, archive, distill, escalations, inbox, liveness, open, pr, restart, schedule, sleep, team, titles, workers};
 use cpd_core::clock;
 use cpd_core::config::{Catalog, Config, load_catalog};
 use cpd_core::error::{CpdError, ErrorCode};
@@ -89,10 +89,10 @@ impl Engine {
         Ok(catalog)
     }
 
-    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5 and E7–E11 (§3.7; E6 is removed), each reporting its own failures.
+    /// One tick: the tmux restart's drain, the `@cpd_workers` step, then E1–E5, E7–E11, E12 and E13 (§3.7; E6 is removed), each reporting its own failures.
     fn tick(&mut self) {
         self.catalog = None;
-        let steps: [fn(&mut Engine); 12] = [
+        let steps: [fn(&mut Engine); 14] = [
             restart::drain,
             workers::run,
             escalations::run,
@@ -105,6 +105,8 @@ impl Engine {
             distill::run,
             titles::run,
             team::run,
+            archive::run,
+            sleep::run,
         ];
         for step in steps {
             if stopping() {

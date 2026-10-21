@@ -71,7 +71,7 @@ test("a different protocol: one message that names both numbers and /reload; fol
     `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol ${PROTOCOL + 1}, this adapter ${PROTOCOL}; reload pi (/reload)`,
   );
   assert.deepEqual(m!.message.details, { kind: "error", code: "protocol_mismatch", cpd: PROTOCOL + 1, adapter: PROTOCOL });
-  f.emit(ev(101, "job-merged"));
+  f.emit(ev(101, "job-merged", { data: { turn: true } }));
   await waitFor("an Event delivered", () => f.pi.delivered().length === 1);
 });
 

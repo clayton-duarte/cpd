@@ -4,6 +4,7 @@ import { KINDS } from "../lib/event.ts";
 import { ev, Fixture, ID, OTHER, planShow, sessionShow, stateCalls, waitFor } from "./fake.ts";
 
 const DATA: Record<string, Record<string, unknown>> = {
+  "job-merged": { turn: true },
   escalation: { escalation: "j-a1-q1", question: "q?" },
   "escalation-answered": { escalation: "j-a1-q1" },
   "escalation-expired": { escalation: "j-a1-q1", reason: "timeout" },
@@ -14,19 +15,14 @@ const DATA: Record<string, Record<string, unknown>> = {
 };
 const event = (id: number, kind: string, over: Record<string, unknown> = {}) => ev(id, kind, { data: DATA[kind] ?? {}, ...over });
 
-// commands.md §15.3: message and turn, per kind, for a Plan Lead.
-const LEAD: Record<string, "turn" | "no turn"> = {
+// commands.md §15.3: the kinds that are a message with a turn for a Plan Lead; every other kind is no message (hs-d514).
+const LEAD: Record<string, "turn"> = {
   "job-merged": "turn",
   "job-failed": "turn",
   "pr-feedback": "turn",
   "plan-done": "turn",
   error: "turn",
   escalation: "turn",
-  "attempt-retry": "no turn",
-  "job-cancelled": "no turn",
-  "pr-started": "no turn",
-  "pr-base-changed": "no turn",
-  "pr-merged": "no turn",
 };
 
 /** Last Events of a `drain` for a Worker (which only reads its own nudge) and for a Session that only reads its own messages. */
@@ -70,13 +66,43 @@ test("Plan Lead: every kind of §15.3's table", async (t) => {
   assert.equal(f.pi.sent.length, expected.length);
 });
 
+test("job-merged with data.turn false adds no message and starts no turn", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.emit(event(101, "job-merged", { data: { turn: false } }));
+  await f.drain();
+  assert.deepEqual(f.pi.delivered(), []);
+  assert.deepEqual(f.pi.sent, []);
+});
+
+test("job-merged with data.turn true starts a turn", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.emit(event(101, "job-merged", { data: { turn: false } }), event(102, "job-merged", { data: { turn: true } }));
+  await waitFor("a delivery", () => f.pi.delivered().length >= 1);
+  await f.drain();
+  assert.deepEqual(f.pi.delivered().map((s) => [(s.message.details as any).id, s.options]), [[102, { triggerTurn: true, deliverAs: "followUp" }]]);
+});
+
+test("pr-started, pr-merged, pr-base-changed, job-cancelled and attempt-retry add no message", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await started(f, "lead");
+  f.emit(...["pr-started", "pr-merged", "pr-base-changed", "job-cancelled", "attempt-retry"].map((kind, i) => event(101 + i, kind)));
+  await f.drain();
+  assert.deepEqual(f.pi.delivered(), []);
+  assert.deepEqual(f.pi.sent, []);
+});
+
 test("Plan Lead: a busy Lead gets pr-feedback (every reason) and escalation steered, job-merged as a follow-up, and an old all-merged nothing; each still triggers a turn (hs-d276)", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await started(f, "lead");
   await f.pi.busy();
   const reasons = ["checks-failed", "changes-requested", "closed", "conflict"];
-  f.emit(...reasons.map((reason, i) => event(101 + i, "pr-feedback", { data: { reason } })), event(105, "escalation"), event(106, "all-merged"), event(107, "job-merged"));
+  f.emit(...reasons.map((reason, i) => event(101 + i, "pr-feedback", { data: { reason } })), event(105, "escalation"), event(106, "all-merged"), event(107, "job-merged", { data: { turn: true } }));
   await waitFor("six deliveries", () => f.pi.delivered().length === 6);
   assert.deepEqual(
     f.pi.delivered().map((s) => [(s.message.details as any).kind, s.options]),
@@ -92,7 +118,7 @@ test("Plan Lead: the details are the whole Event plus delivered_to", async (t) =
   const f = new Fixture();
   t.after(() => f.close());
   await started(f, "lead");
-  const e = ev(101, "job-merged", { job: "j", attempt: "j-a1", data: { sha: "c0ffee1", tier: "O3" } });
+  const e = ev(101, "job-merged", { job: "j", attempt: "j-a1", data: { sha: "c0ffee1", tier: "O3", turn: true } });
   f.emit(e);
   await waitFor("delivery", () => f.pi.delivered().length === 1);
   assert.deepEqual(f.pi.delivered()[0]!.message.details, { ...e, delivered_to: ID });
@@ -166,7 +192,7 @@ test("a message delivered to this Session is what a restart's cursor reads back"
   const f = new Fixture();
   t.after(() => f.close());
   await started(f, "lead");
-  f.emit(event(101, "job-merged"), event(102, "attempt-retry"));
+  f.emit(event(101, "job-merged", { data: { turn: true } }), event(102, "job-failed"));
   await waitFor("two messages", () => f.pi.delivered().length === 2);
   await f.pi.fire("session_shutdown");
 
@@ -228,7 +254,7 @@ test("session-message arrives in id order though the sender is read first", asyn
   t.after(() => f.close());
   await started(f, "lead");
   f.respond(`session-show-${OTHER}`, { ok: true, session: { id: OTHER, name: "slow" } }, { delay: 100 });
-  f.emit(message(101, OTHER), event(102, "job-merged"));
+  f.emit(message(101, OTHER), event(102, "job-failed"));
   await waitFor("both", () => f.pi.delivered().length === 2);
   assert.deepEqual(f.pi.delivered().map((s) => (s.message.details as any).id), [101, 102]);
 });

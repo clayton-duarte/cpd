@@ -142,7 +142,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   const entries = ctx.sessionManager.getEntries();
   r.cursor = cursorFrom(info.registeredEvent, entries, id);
 
-  if (info.role === "manager") registerUpdates(host);
+  if (info.role === "manager" || info.role === "lead") registerUpdates(host);
 
   // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
   let chatToReopen: { reviews: string[]; title: string | undefined } = { reviews: [], title: undefined };

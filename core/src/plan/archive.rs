@@ -41,6 +41,14 @@ impl Object {
         }
     }
 
+    /// What archiving and unarchiving also set: a Session loses its `asleep_at` (contract §2.2 "Asleep").
+    fn wakes(&self) -> &'static str {
+        match self {
+            Object::Session(_) => ", asleep_at = NULL",
+            _ => "",
+        }
+    }
+
     fn kind(&self) -> &'static str {
         match self {
             Object::Context(_) => "context",
@@ -219,8 +227,9 @@ pub fn archive_keeping(
         let mut changed = Vec::new();
         for object in &all {
             let sql = format!(
-                "UPDATE {} SET archived_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND archived_at IS NULL",
-                object.table()
+                "UPDATE {} SET archived_at = (SELECT at FROM txns WHERE id = cpd_txn()){} WHERE id = ?1 AND archived_at IS NULL",
+                object.table(),
+                object.wakes()
             );
             if tx.execute(&sql, [object.id()])? > 0 {
                 append(tx, object.event(tx, true)?)?;
@@ -257,7 +266,7 @@ pub fn unarchive(store: &mut Store, command: &str, objects: &Objects, parent: Op
         }
         let mut changed = Vec::new();
         for object in archived {
-            tx.execute(&format!("UPDATE {} SET archived_at = NULL WHERE id = ?1", object.table()), [object.id()])?;
+            tx.execute(&format!("UPDATE {} SET archived_at = NULL{} WHERE id = ?1", object.table(), object.wakes()), [object.id()])?;
             append(tx, object.event(tx, false)?)?;
             changed.push(object.clone());
         }

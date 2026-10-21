@@ -46,7 +46,7 @@ test("no replay at or below session-registered: a source's messages never lift t
   t.after(() => f.close());
   f.pi.entries = [cpdMessage(500, OTHER)];
   f.respond("plan-show", planShow());
-  f.emit(ev(99, "job-merged"), ev(100, "job-merged"), ev(101, "job-merged"));
+  f.emit(ev(99, "job-merged", { data: { turn: true } }), ev(100, "job-merged", { data: { turn: true } }), ev(101, "job-merged", { data: { turn: true } }));
   f.load();
   await f.pi.fire("session_start");
   await waitFor("event 101 delivered", () => f.pi.delivered().length >= 1);
