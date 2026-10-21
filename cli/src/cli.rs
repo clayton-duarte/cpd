@@ -92,7 +92,7 @@ fn run_with(argv: impl IntoIterator<Item = OsString>, terminal: bool) -> Result<
     let root_help = matches!(argv.get(1..), Some([word]) if ["--help", "-h", "help"].iter().any(|h| word == h));
     match Cli::try_parse_from(&argv) {
         Ok(Cli { command: Some(command) }) => dispatch(command),
-        Ok(Cli { command: None }) if terminal => cpd_tui::bare(run_command, RESTART),
+        Ok(Cli { command: None }) if terminal => cpd_tui::bare(version(), run_command, RESTART),
         Ok(Cli { command: None }) => {
             let required = Cli::command().subcommand_required(true).arg_required_else_help(true);
             match required.try_get_matches_from(&argv) {
@@ -123,7 +123,7 @@ fn dispatch(command: Command) -> Result<Output, CpdError> {
         Command::Events(c) => events::run(c),
         Command::Inbox(c) => inbox::cmd::run(c),
         Command::Watch(a) => watch::run(a),
-        Command::Tui(a) => cpd_tui::run(a, run_command, RESTART),
+        Command::Tui(a) => cpd_tui::run(a, version(), run_command, RESTART),
         Command::Doctor(a) => doctor::run(a),
         Command::Config(a) => config::config(a),
         Command::Tiers(a) => config::tiers(a),

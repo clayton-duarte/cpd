@@ -53,7 +53,7 @@ use cpd_core::store::Store;
 /// `worker` view is not part of it: it is opened and closed by the plan view.
 const LAYOUT: [View; 4] = [View::Tree, View::Plan, View::Widgets, View::Chat];
 
-pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+pub(super) fn run(attach: bool, respawn: bool, version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
     if attach && !on_a_terminal() {
         return Err(not_a_terminal("tui --attach"));
     }
@@ -63,7 +63,7 @@ pub(super) fn run(attach: bool, respawn: bool, run_command: RunCommand, restart:
     let tmux = Tmux::new(config.tmux.socket.clone());
     let cockpit = config.tmux.cockpit_session.as_str();
 
-    let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), respawn, run_command)?;
+    let (built, respawned) = ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), respawn, version, run_command)?;
     let watch = command(run_command, &["watch", "--ensure"])?;
     if respawn {
         if let Some(preview) = tmux.preview()? {
@@ -114,6 +114,7 @@ fn ensure(
     cockpit: &str,
     machine: &str,
     respawn: bool,
+    version: &str,
     run_command: RunCommand,
 ) -> Result<(bool, Vec<PaneId>), CpdError> {
     let main = main_panes(tmux, cockpit)?;
@@ -133,7 +134,7 @@ fn ensure(
     tmux.apply_server_options()?;
     // The window title's machine name (contract §6.1, hs-d300): SERVER_OPTIONS is static.
     tmux.run(&["set".to_owned(), "-g".to_owned(), "@cpd_machine".to_owned(), machine.to_owned()])?;
-    tmux.apply_status_line(cockpit, "")?;
+    tmux.apply_status_line(cockpit, version)?;
     if chat_added {
         if let Some(lead) = store.read(last_chat_lead)? {
             open_lead(run_command, &lead)?;
@@ -507,7 +508,7 @@ fn exec_attach(tmux: &Tmux, cockpit: &str, program: Option<&Path>) -> CpdError {
 /// then attaches this terminal to the cockpit. Each follow-up's failure is one
 /// line on stderr and the attach still happens when the cockpit exists (A3).
 /// Inside the cockpit's own server it attaches nothing (A2).
-pub(super) fn bare(run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
+pub(super) fn bare(version: &str, run_command: RunCommand, restart: Restart) -> Result<Output, CpdError> {
     let home = CpdHome::from_env()?;
     let config = Config::load(&home)?;
     let mut store = Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
@@ -520,7 +521,7 @@ pub(super) fn bare(run_command: RunCommand, restart: Restart) -> Result<Output, 
         eprintln!("cpd: the engine did not start: {}", e.message());
     }
     // 2. The cockpit.
-    let built = match ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), false, run_command) {
+    let built = match ensure(&tmux, &home, &mut store, cockpit, config.machine.as_str(), false, version, run_command) {
         Ok((built, _)) => built,
         Err(e) if matches!(tmux.has_session(cockpit), Ok(true)) => {
             eprintln!("cpd: the cockpit is not complete: {}", e.message());
