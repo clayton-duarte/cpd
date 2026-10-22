@@ -95,6 +95,8 @@ import(entry).then((m) => {
 export { ID, policyShow, sessionShow, shown };
 export const OTHER = "11111111-2222-4333-8444-555555555555";
 
+export type Report = { argv: string[]; what?: string; code?: string; message?: string; session?: string; details?: Record<string, unknown> };
+
 export type Call = { phase: "start" | "end"; argv: string[]; since?: string; feedback?: string; t: number };
 
 export class Fixture {
@@ -126,6 +128,7 @@ export class Fixture {
     for (const [key, answer] of Object.entries(answers())) this.respond(key, answer); // the same answers as pi-check's fake (answers.ts)
     this.respond("board-take", { ok: true, session: ID, taken: [] }); // a Lead or Manager takes its board posts at every turn start (commands.md §15.7)
     this.respond("events-list", { ok: true, events: [], next: 0 });
+    this.respond("session-report", { ok: true, event: "4823" }); // a Lead's adapter reports its errors to the Manager (commands.md §10.18)
   }
 
   /** A new install of the fake `cpd`: the same program in a file of another size and mtime. */
@@ -193,6 +196,21 @@ export class Fixture {
   argvs(): string[][] {
     const mentions = (a: string[]) => a[1] === "list" && ["plan", "context"].includes(a[0]!) || (a[0] === "session" && a[1] === "list" && a.includes("--archived"));
     return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events" && c.argv[0] !== "--version" && c.argv[0] !== "policy" && !mentions(c.argv)).map((c) => c.argv);
+  }
+
+  /** The `cpd session report` calls that started (commands.md §10.18), in order, each with its argv and its flags read by name (`details` parsed). */
+  reports(): Report[] {
+    return this.argvs().filter((a) => a[0] === "session" && a[1] === "report").map((argv) => {
+      const flag = (n: string) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined);
+      const details = flag("--details");
+      return { argv, what: flag("--what"), code: flag("--code"), message: flag("--message"), session: flag("--session"), details: details === undefined ? undefined : JSON.parse(details) };
+    });
+  }
+
+  /** The lines of the adapter log `$CPD_HOME/run/adapter/<session>.log` (commands.md §15.6 "Log"), each `<time> <line>`; none when the file does not exist. */
+  adapterLog(): string[] {
+    const path = join(this.cpdHome, "run", "adapter", `${ID}.log`);
+    return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : [];
   }
 
   /** argv of the `cpd policy …` calls that started. */

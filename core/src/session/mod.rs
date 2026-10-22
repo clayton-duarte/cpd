@@ -26,6 +26,7 @@ mod reload;
 mod resolve;
 mod resume;
 mod retier;
+mod report;
 mod retitle;
 mod row;
 pub(crate) mod run;
@@ -96,6 +97,9 @@ pub enum Command {
     /// Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14)
     #[command(hide = true)]
     Retitle(RetitleArgs),
+    /// Report an adapter error to the Manager (pi adapter) (§10.18)
+    #[command(hide = true)]
+    Report(ReportArgs),
     /// The program in every Lead pane (internal; owns its terminal) (§10.8)
     #[command(hide = true)]
     Run(RunArgs),
@@ -287,6 +291,25 @@ pub struct RetitleArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct ReportArgs {
+    /// What failed
+    #[arg(long, value_name = "text")]
+    what: report::Short,
+    /// The adapter's error code
+    #[arg(long, value_name = "code")]
+    code: report::Code,
+    /// The error's message
+    #[arg(long, value_name = "text")]
+    message: report::Short,
+    /// More details, a JSON object
+    #[arg(long, value_name = "json")]
+    details: Option<report::Details>,
+    /// The Session reporting [default: $CPD_SESSION]
+    #[arg(long, value_name = "id", env = "CPD_SESSION", hide_env = true)]
+    session: Option<SessionRef>,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RunArgs {
     /// The Lead Session this pane runs
     #[arg(value_name = "id")]
@@ -318,6 +341,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::State(args) => state::state(args),
         Command::FirstMessage(args) => first_message::first_message(args),
         Command::Retitle(args) => retitle::retitle(args),
+        Command::Report(args) => report::report(args),
         Command::Run(args) => run::run(args),
     }
 }

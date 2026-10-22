@@ -5,7 +5,8 @@ import { ev, Fixture, ID, planShow, waitFor } from "./fake.ts";
 // commands.md §15.2: a `store_too_new` failure line of a follower started before an install is not delivered (the restart runs the new cpd).
 
 const failure = JSON.stringify({ ok: false, error: { code: "store_too_new", message: "store_too_new happened.", details: { x: 1 } } });
-const errorsOf = (f: Fixture) => f.pi.errors().filter((e) => (e.message.details as any).code === "store_too_new");
+/** A Lead's adapter errors are reported to the Manager, never delivered to its chat (commands.md §15.1, hs-d573). */
+const errorsOf = (f: Fixture) => f.reports().filter((r) => r.code === "store_too_new");
 
 async function started(f: Fixture, delays: number[]) {
   f.respond("plan-show", planShow());
@@ -25,12 +26,12 @@ test("store_too_new from a follower started before an install is not delivered a
   f.file("exit-next", "3"); // the old cpd prints the line and exits
   await waitFor("the restart", () => f.follows().length === 2);
   await f.quiet();
-  assert.deepEqual(errorsOf(f), [], "nothing is delivered");
+  assert.deepEqual(errorsOf(f), [], "nothing is reported");
   assert.equal(f.pi.errors().length, 0, "the exit that follows adds nothing");
   assert.deepEqual(delays, [30], "restarted after the initial delay");
 });
 
-test("store_too_new with the same installed cpd is still delivered once", async (t) => {
+test("store_too_new with the same installed cpd is still reported once", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   const delays: number[] = [];
@@ -44,6 +45,7 @@ test("store_too_new with the same installed cpd is still delivered once", async 
   await waitFor("a third start", () => f.follows().length === 3);
   await f.quiet();
   assert.equal(errorsOf(f).length, 1, "once per code");
+  assert.deepEqual(f.pi.errors(), [], "reported to the Manager, not delivered to the Lead's chat");
 });
 
 // commands.md §15.14: the mention ids are reloaded only on an Event that changes them (hs-n423), and at `session_start`.

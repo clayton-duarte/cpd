@@ -2542,6 +2542,34 @@ Exactly one of the two: neither, or both, is `usage` (exit 2).
 
 Idempotent: yes; run again, nothing changes (`"already": true`).
 
+### 10.18 `session report` (internal)
+
+```
+cpd session report --what <text> --code <code> --message <text> [--details <json>] [--session <id>]
+```
+
+Reports an adapter error to the Manager (hs-d573, M4): the adapter of a Lead runs this when it hits an error (not to its chat, M3), once per distinct (`what`, `code`), keyed by `host.report`'s memory in pi/lib/host.ts.
+
+| Flag | Meaning |
+|---|---|
+| `--what <text>` | what failed (1–2000 characters); `code` and `message` are from the error; combined as `cpd adapter: <what>: <code>: <message>` in the Event's `text` |
+| `--code <code>` | error code (the adapter's code, not a command's exit code): `^[a-z][a-z0-9_]{0,63}$`, else `usage` |
+| `--message <text>` | error message (1–2000 characters), else `usage` |
+| `--details <json>` | additional details as a JSON object, else `usage`; the report adds `what`, `session` and `plan` (null if the Lead's Plan is none) |
+| `--session <id>` | the Session reporting the error; default `CPD_SESSION` (§1.3) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+
+Effects: **Rows**, one transaction: `events` (one `error` Event, source `adapter`; context = the Session's Context; **plan null and session null** so no Lead's follower, which follows its Plan's Events and those addressed to it, ever receives it back; data `{source: "adapter", code, message, details}` with `details` = the given object plus `{what, session, plan}`; text `cpd adapter: <what>: <code>: <message>`). Not idempotent by design: every call appends an Event.
+
+Output:
+
+```json
+{"ok": true, "event": "4823"}
+```
+
 ### 10.17 `session resume`
 
 ```
@@ -3183,7 +3211,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 - **The empty last row** (User, hs-d567; contract §6.1 "The blank row", Q2-Q3): in its `session_start` handler (`pi/lib/adapter.ts`), the adapter calls `ctx.ui.setStatus("cpd-pad", "")` (`ctx.mode` `tui`; it knows nothing of the chat slot, so a parked pane has the extra empty row too). pi's footer draws one more line, empty, when its extension statuses are not empty, so pi's last row is empty; a `/reload` runs `session_start` again and sets it again, and a resize needs nothing (verified in real pi, contract §6.1 evidence). The key `cpd-pad` is ours; another extension's status text would share the line.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
 - **Calls:** one-shot commands through `pi.exec("cpd", args)`, whose stdout is parsed as the JSON envelope at the boundary (a non-JSON stdout, or `ok: false`, is an error with the code). Each call passes a timeout of 30 s and the abort signal of the adapter's run (aborted at `session_shutdown`); a call that times out or is aborted is reported like a failed call (the error delivery below, code `tool_timeout` for a timeout). The follower is a child process (`node:child_process` `spawn`, argv, stdin `/dev/null`) read line by line.
-- **Errors** (hs-d552) are delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: false, deliverAs: "followUp"})`: no turn started, shown as a follow-up. An error identical to the last one shown in this Session (same `what` and `code`) is not shown again until a different error has been shown; one memory per Session, cleared at reload. The adapter never throws into pi.
+- **Errors** (hs-d552) for a **Manager** or **Worker**: delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: false, deliverAs: "followUp"})`: no turn started, shown as a follow-up. An error identical to the last one shown in this Session (same `what` and `code`) is not shown again until a different error has been shown; one memory per Session, cleared at reload. For a **Lead** (hs-d573 cause A): one line appended to the adapter log `$CPD_HOME/run/adapter/<session>.log` (15.6 'Log'): `<time> error: <what>: <code>: <message>`, and reported to the Manager with `cpd session report` (§10.18), once per (`what`, `code`) by memory (`host.report`): the same error again is neither logged again nor reported again until a different one has been. If the report itself fails, that is one log line (`<time> report failed: <code>: <message>`), never delivered and never reported again (no recursion); the next different error tries again. The adapter never throws into pi.
 
 ### 15.2 Start-up and the cursor
 
@@ -3337,7 +3365,10 @@ Decision hs-d141 (research: `docs/research/pi-reload.md`), superseding its first
 **Logged.** Nothing is delivered to the Session and no `cpd` command is run for it. On a normal reload after an install, the wrapper prints nothing on re-exec and the adapter notifies nothing to the pane; the status line's version pill (#210, @cpd_version) is the only notice (hs-d533). When a reload fails, the adapter notifies with `ctx.ui.notify` (level `error`, `cpd: adapter update not loaded: <reason>`, `cpd: cannot write the reload log: …`, or the long refusal `cpd: a new adapter is installed; reload when free (/reload)`), the wrapper logs `reload skipped: …`, and pi's "Reload failed: …" is pi's own message. `ctx.ui.notify` is not written to the session file, so the notice is not evidence afterwards: the log below is.
 
 **Log** (hs-d141, finding of `docs/research/pi-reload.md` "Why a busy Lead did not reload"). Every reload decision is one line appended to `$CPD_HOME/run/adapter/<session id>.log` (`CPD_HOME` default `~/.cpd`, `CPD_SESSION`; created with its directory at the first line; one file per Session, never rotated, small because a waiting or refusing line is not repeated while it is the last one). A line is `<ISO-8601 UTC time> <text>`; the texts, in the order they occur:
-- `start: <reason>`: the adapter started (`session_start`; `reload` after a reload, `startup` or `new`, `resume`, `fork` otherwise); `poll: watching <dir> (<identity>) every <ms> ms`: the poll began, with the identity it will compare with;
+- `start: <reason>`: the adapter started (`session_start`; `reload` after a reload, `startup` or `new`, `resume`, `fork` otherwise);
+- `error: <what>: <code>: <message>` (hs-d573): adapter error logged for a Lead Session, once per (`what`, `code`), keyed by `host.report`'s memory; the next different error is logged; if the error is a second occurrence, nothing is logged (G1's memory prevents it);
+- `report failed: <code>: <message>` (hs-d573): the `cpd session report` command to the Manager failed with that code, never delivered and never reported again; the next different error tries again;
+- `poll: watching <dir> (<identity>) every <ms> ms`: the poll began, with the identity it will compare with;
 - `poll: the adapter directory is missing (an install in progress); waiting`;
 - `poll: the identity changed <old> -> <new>; not stable yet` (also `changed again`);
 - `poll: <identity> is stable; validating the package`, then `poll: pre-validation passed` or `poll: pre-validation failed: <reason>` (the reason of the visible error above);
@@ -3381,7 +3412,7 @@ PRs:
 
 Summary of the collapsed row (§15.9): `cpd-context: <n> decisions · <n> board posts · <n> PRs opened`, zero parts omitted; every part always shown.
 
-**Managers: compressed digest** (hs-d514, hs-d86; narrowed by hs-d507). At pi's `before_agent_start`, for a Session of role `manager`, one `cpd-context` message holding: (1) records (as Leads see them, in full); (2) pending board posts (from `cpd board take`), each in full with sender; (3) a `Plans:` section, one line per Plan with Event counts by kind in a fixed order (no per-Job lines), e.g. `- cross-repo: 2 PRs opened (#210, #211), 1 Job failed, 1 Escalation, done`; (4) a `Pending work:` section, one line per active Plan with Job counts, e.g. `- inbox (dispatch): PR mainfix 2 running, 1 queued; PR prlink open #207`; (5) a new line `Errors: <n> (<code> x<k>, ...): cpd events list --kind error --since <id>` counting error Events since the cursor, for its Context and the machine-wide ones.
+**Managers: compressed digest** (hs-d514, hs-d86; narrowed by hs-d507). At pi's `before_agent_start`, for a Session of role `manager`, one `cpd-context` message holding: (1) records (as Leads see them, in full); (2) pending board posts (from `cpd board take`), each in full with sender; (3) a `Plans:` section, one line per Plan with Event counts by kind in a fixed order (no per-Job lines), e.g. `- cross-repo: 2 PRs opened (#210, #211), 1 Job failed, 1 Escalation, done`; (4) a `Pending work:` section, one line per active Plan with Job counts, e.g. `- inbox (dispatch): PR mainfix 2 running, 1 queued; PR prlink open #207`; (5) a new line `Errors: <n> (<code> x<k>, ...): cpd events list --kind error --since <id>` (hs-d573) counting `error` Events since the cursor, for its Context (including adapter errors from Leads, §15.1) and the machine-wide ones.
 
 Format:
 

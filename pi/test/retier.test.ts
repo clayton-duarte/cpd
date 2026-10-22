@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { LEAD_MESSAGES } from "../lib/delivery.ts";
 import { KINDS, PROTOCOL } from "../lib/event.ts";
 import { ev, Fixture, ID, OTHER, planShow, shown, waitFor } from "./fake.ts";
+import { adapterErrors } from "./lead-errors.ts";
 
 // hs-d506, commands.md §15.3 `session-retiered`: a Session whose Tier `cpd session retier` changed switches pi's model and thinking level at its next
 // idle, once, with no message and no restart. The model and level are the ones `cpd session show` reports (`model`, `thinking`, commands.md §10.2); the adapter
@@ -100,21 +101,20 @@ test("a model pi cannot find is one error message and sets nothing, not even the
   const f = await started(t);
   f.pi.knownModels.clear();
   f.emit(retiered(200));
-  const e = await waitFor("an error", () => f.pi.errors()[0], WAIT);
-  assert.equal((e.message.details as any).code, "model_unavailable");
-  assert.equal(e.options.triggerTurn, false, "an adapter error is delivered as every one is (commands.md §15.1)");
+  const e = await waitFor("an error", () => adapterErrors(f)[0], WAIT);
+  assert.equal(e.code, "model_unavailable");
   await f.drain();
-  assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet, f.pi.errors().length], [[], [], 1]);
+  assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet, adapterErrors(f).length], [[], [], 1]);
 });
 
 test("a setModel that answers false (no authentication) is one error message and sets no level", async (t) => {
   const f = await started(t);
   f.pi.modelAccepted = false;
   f.emit(retiered(200));
-  const e = await waitFor("an error", () => f.pi.errors()[0], WAIT);
-  assert.equal((e.message.details as any).code, "model_unavailable");
+  const e = await waitFor("an error", () => adapterErrors(f)[0], WAIT);
+  assert.equal(e.code, "model_unavailable");
   await f.drain();
-  assert.deepEqual([f.pi.thinkingSet, f.pi.errors().length], [[], 1]);
+  assert.deepEqual([f.pi.thinkingSet, adapterErrors(f).length], [[], 1]);
 });
 
 test("the protocol was raised past 8 and session-retiered is a known kind delivered as no message", () => {

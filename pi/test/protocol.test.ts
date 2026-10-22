@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { installedIdentity } from "../lib/cpd.ts";
 import { LEAD_MESSAGES } from "../lib/delivery.ts";
 import { KINDS, PROTOCOL } from "../lib/event.ts";
-import { ev, Fixture, planShow, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, planShow, waitFor } from "./fake.ts";
 
 const KIND_RS = new URL("../../core/src/events/kind.rs", import.meta.url);
 const source = () => readFileSync(KIND_RS, "utf8");
@@ -23,8 +23,8 @@ test("the adapter's KINDS are exactly core's Event kinds", () => {
   assert.deepEqual([...KINDS].sort(), [...core].sort(), "pi/lib/event.ts KINDS differs from core's kinds: update it, and raise PROTOCOL");
 });
 
-test("hs-d571: the protocol is 12 and session-resumed is a known kind", () => {
-  assert.equal(PROTOCOL, 12);
+test("hs-d573: the protocol is 13 and session-resumed is a known kind", () => {
+  assert.equal(PROTOCOL, 13); // hs-d573 raised it from 12: the adapter runs `session report`; hs-d571 added session-resumed
   assert.ok((KINDS as readonly string[]).includes("session-resumed"), "session-resumed is not in KINDS");
   // the message exists only while the breaker is tripped (commands.md §15.15 L6): the adapter's own rule, not a table entry
   assert.equal((LEAD_MESSAGES as Record<string, unknown>)["session-resumed"], undefined, "session-resumed is not a LEAD_MESSAGES entry");
@@ -36,7 +36,8 @@ test("hs-d571: the protocol is 12 and session-resumed is a known kind", () => {
 
 // ---- the adapter's check (commands.md §15.2, step 0) ----
 
-const mismatches = (f: Fixture) => f.pi.errors().filter((e) => (e.message.details as any).code === "protocol_mismatch");
+/** A Lead's adapter errors are reported to the Manager, not delivered (commands.md §15.1, hs-d573). */
+const mismatches = (f: Fixture) => f.reports().filter((r) => r.code === "protocol_mismatch");
 
 async function started(f: Fixture) {
   f.respond("plan-show", planShow());
@@ -68,12 +69,12 @@ test("a different protocol: one message that names both numbers and /reload; fol
   t.after(() => f.close());
   f.respond("--version", version(PROTOCOL + 1));
   await started(f);
-  const [m] = await waitFor("the message", () => (mismatches(f).length ? mismatches(f) : undefined));
-  assert.equal(
-    m!.message.content,
-    `cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks protocol ${PROTOCOL + 1}, this adapter ${PROTOCOL}; reload pi (/reload)`,
-  );
-  assert.deepEqual(m!.message.details, { kind: "error", code: "protocol_mismatch", cpd: PROTOCOL + 1, adapter: PROTOCOL });
+  const [m] = await waitFor("the report", () => (mismatches(f).length ? mismatches(f) : undefined));
+  assert.equal(m!.what, "protocol mismatch");
+  assert.equal(m!.message, `cpd speaks protocol ${PROTOCOL + 1}, this adapter ${PROTOCOL}; reload pi (/reload)`);
+  assert.equal(m!.session, ID);
+  assert.deepEqual(m!.details, { cpd: PROTOCOL + 1, adapter: PROTOCOL });
+  assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
   f.emit(ev(101, "job-merged", { data: { turn: true } }));
   await waitFor("an Event delivered", () => f.pi.delivered().length === 1);
 });
@@ -108,9 +109,10 @@ test("a `--version` without protocol is a message", async (t) => {
   t.after(() => f.close());
   f.respond("--version", version());
   await started(f);
-  const [m] = await waitFor("the message", () => (mismatches(f).length ? mismatches(f) : undefined));
-  assert.match(String(m!.message.content), new RegExp(String.raw`^cpd adapter: protocol mismatch: protocol_mismatch: cpd speaks no protocol .*this adapter ${PROTOCOL}; reload pi \(\/reload\)$`));
-  assert.equal((m!.message.details as any).cpd, null);
+  const [m] = await waitFor("the report", () => (mismatches(f).length ? mismatches(f) : undefined));
+  assert.match(String(m!.message), new RegExp(String.raw`^cpd speaks no protocol .*this adapter ${PROTOCOL}; reload pi \(\/reload\)$`));
+  assert.equal(m!.details?.cpd, null);
+  assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
   await restart(f);
   await f.quiet(); // `restart` returns once the next follower started, after its `--version` check
   assert.equal(mismatches(f).length, 1);
@@ -123,7 +125,8 @@ test("a failing `--version` is an ordinary error once per code; following goes o
   await started(f);
   await restart(f);
   await f.quiet(); // `restart` returns once the next follower started, after its `--version` check
-  assert.equal(f.pi.errors().filter((e) => (e.message.details as any).code === "boom").length, 1);
+  assert.deepEqual(f.reports().filter((r) => r.code === "boom").map((r) => [r.what, r.message]), [["protocol check", "it broke."]]);
+  assert.deepEqual(f.pi.errors(), [], "reported to the Manager, not delivered to the Lead's chat");
   assert.equal(mismatches(f).length, 0);
 });
 

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Fixture, ID, planShow, stateCalls, ev, waitFor } from "./fake.ts";
+import { adapterErrors } from "./lead-errors.ts";
 
 const REVIEW_LABEL = "blocked:cpd: plan review";
 const pending = (id = "r1", over: Record<string, unknown> = {}) => planShow({ review: { id, status: "pending", fingerprint: "ff", current: true, ...over } });
@@ -101,11 +102,10 @@ for (const [name, answer, code, text] of [
     plannotator(f, () => answer);
     await lead(f);
     f.emit(reviewEvent(101));
-    await waitFor("the error", () => f.pi.errors().length === 1, 4000);
-    const e = f.pi.errors()[0]!;
+    await waitFor("the error", () => adapterErrors(f).length === 1, 4000);
+    const e = adapterErrors(f)[0]!;
     assert.match(e.message.content, new RegExp(`^cpd adapter: plan review r1: ${code}: `));
     assert.match(e.message.content, text);
-    assert.deepEqual(e.options, { triggerTurn: false, deliverAs: "followUp" });
     assert.deepEqual(entries(f), []);
     assert.equal(stateCalls(f).includes(REVIEW_LABEL), false);
     assert.equal(f.argvs().some((a) => a[1] === "decide"), false);
@@ -120,8 +120,8 @@ test("an unreadable plan file is an error", async (t) => {
   f.load();
   await f.pi.fire("session_start");
   f.emit(reviewEvent(101));
-  await waitFor("the error", () => f.pi.errors().length === 1);
-  assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: plan review r1: file_unreadable: /);
+  await waitFor("the error", () => adapterErrors(f).length === 1);
+  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan review r1: file_unreadable: /);
   assert.equal(requests(f).length, 0);
 });
 
@@ -193,7 +193,7 @@ test("review_decided: another caller decided it; the adapter continues with that
   await waitFor("the decision message", () => decisions(f).length === 1);
   assert.equal(decisions(f)[0]!.message.content, "Plan review r1 was REJECTED.\nFeedback from the reviewer:\nNot yet.\nRevise the plan (job edit, job add, job cancel), then call cpd_plan_review again.");
   assert.equal(entries(f).at(-1).status, "rejected");
-  assert.equal(f.pi.errors().length, 0);
+  assert.equal(adapterErrors(f).length, 0);
 });
 
 test("any other failure of plan decide is an error and leaves the review pending, so a later result retries", async (t) => {
@@ -202,8 +202,8 @@ test("any other failure of plan decide is an error and leaves the review pending
   await opens(f);
   f.respond("plan-decide", { ok: false, error: { code: "store_failed", message: "Disk full.", details: {} } }, { exit: 1 });
   result(f, { reviewId: "pn-1", approved: true });
-  await waitFor("the error", () => f.pi.errors().length === 1);
-  assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: plan decide r1: store_failed: Disk full\.$/);
+  await waitFor("the error", () => adapterErrors(f).length === 1);
+  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan decide r1: store_failed: Disk full\.$/);
   assert.equal(entries(f).at(-1).status, "pending");
   assert.equal(decisions(f).length, 0);
   assert.equal(stateCalls(f).at(-1), REVIEW_LABEL, "still blocked");
@@ -252,7 +252,7 @@ for (const [status, feedback, text] of [
     assert.equal(decisions(f).length, 1);
     assert.equal(f.argvs().some((a) => a[1] === "decide"), false, "never a second plan decide");
     assert.equal(entries(f).filter((e: any) => e.status === status).length, 1);
-    assert.equal(f.pi.errors().length, 0);
+    assert.equal(adapterErrors(f).length, 0);
   });
 }
 
@@ -424,11 +424,11 @@ test("recovery: plannotator not answering is reported once and polling goes on",
   t.after(() => f.close());
   seeded(f);
   await lead(f);
-  await waitFor("the error", () => f.pi.errors().length === 1, 4000);
+  await waitFor("the error", () => adapterErrors(f).length === 1, 4000);
   // The error is delivered once, however often the polling goes on: wait for polls after it (each one times out, which would report again).
   await waitFor("two more polls", () => requests(f, "review-status").length >= 3);
-  assert.equal(f.pi.errors().length, 1);
-  assert.match(f.pi.errors()[0]!.message.content, /plannotator_timeout/);
+  assert.equal(adapterErrors(f).length, 1);
+  assert.match(adapterErrors(f)[0]!.message.content, /plannotator_timeout/);
 });
 
 // ---- the tool ----
@@ -485,7 +485,8 @@ test("the tool: `already` with no pending entry opens the review itself, so a re
 
   const first = await f.pi.runTool(tool, { title: "T" });
   assert.equal(first.text, "wait");
-  assert.equal(f.pi.errors().length, 1, "the failed open is delivered");
+  await waitFor("the report", () => adapterErrors(f).length === 1); // the failed open is reported, not delivered
+  assert.equal(adapterErrors(f).length, 1);
   assert.deepEqual(entries(f), []);
 
   answer = opened();
@@ -524,7 +525,7 @@ test("a decision, failing or not, creates no temp directory", async (t) => {
   f.respond("plan-decide", { error: { code: "store_error", message: "boom" } }, { exit: 1 });
   result(f, { reviewId: "pn-1", approved: false, feedback: "Nope." });
   await waitFor("the decide call", () => f.argvs().some((a) => a[1] === "decide"));
-  await waitFor("the error", () => f.pi.errors().length === 1);
+  await waitFor("the error", () => adapterErrors(f).length === 1);
   assert.deepEqual(feedbackDirs(), before);
   assert.equal(readFileSync(join(f.cpdHome, "run", "p1", "feedback-r1.md"), "utf8"), "Nope.");
 });
@@ -557,7 +558,7 @@ test("an Event-only superseded closes the reason and the dialog, records the ent
   assert.equal(f.argvs().some((a) => a[1] === "decide"), false);
   await f.drain();
   assert.equal(f.pi.sent.length, sentBefore, "no message and no turn");
-  assert.equal(f.pi.errors().length, 0);
+  assert.equal(adapterErrors(f).length, 0);
 });
 
 test("a superseded Event for a review this session has no pending entry for changes nothing", async (t) => {
@@ -585,7 +586,7 @@ test("a superseded Event for a review this session has no pending entry for chan
   f.respond("plan-show", pending("r1", { status: "superseded" }));
   f.emit(supersededEvent(103, "r1")); // the same Event for r1 does act: the contrast pins that the r9 one was ignored on purpose
   await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle", 3000);
-  assert.equal(f.pi.errors().length, 0);
+  assert.equal(adapterErrors(f).length, 0);
 });
 
 test("a restart with plan show reporting the latest review superseded does not block or reopen it", async (t) => {
@@ -607,5 +608,5 @@ test("a restart with plan show reporting the latest review superseded does not b
   await f.drain();
   assert.deepEqual(stateCalls(f), ["idle"]);
   assert.deepEqual({ sent: f.pi.sent.length, entries: entries(f).length, dialogs: f.pi.dialogs.length }, before);
-  assert.equal(f.pi.errors().length, 0);
+  assert.equal(adapterErrors(f).length, 0);
 });

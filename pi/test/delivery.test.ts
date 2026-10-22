@@ -4,7 +4,7 @@ import { CpdError } from "../lib/cpd.ts";
 import { KINDS } from "../lib/event.ts";
 import { createHost } from "../lib/host.ts";
 import { Run } from "../lib/run.ts";
-import { ev, FakePi, Fixture, ID, OTHER, planShow, shown, stateCalls, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, OTHER, planShow, shown, stateCalls, waitFor } from "./fake.ts";
 
 const DATA: Record<string, Record<string, unknown>> = {
   "job-merged": { turn: true },
@@ -314,9 +314,11 @@ test("a Worker ignores session-message", async (t) => {
   assert.deepEqual(f.pi.sent, []);
 });
 
-/** commands.md §15.1 "Errors" (hs-d552 G1): `host.deliver` on a real Host and Run with a fake pi. */
-function errorHost() {
-  const pi = new FakePi();
+/** commands.md §15.1 "Errors" (hs-d552 G1, hs-d573): `host.deliver` on a real Host and a Lead's Run, with a fake pi and the fake `cpd` of the Fixture: a Lead's error is reported to the Manager, never delivered. */
+async function errorHost(t: { after(fn: () => unknown): void }) {
+  const f = new Fixture();
+  t.after(() => f.close());
+  const pi = f.pi;
   const host = createHost(pi, {});
   host.run = new Run({
     id: ID,
@@ -327,29 +329,38 @@ function errorHost() {
     log: () => {},
     follow: { hooks: () => ({}) as never, timing: host.timing },
   });
-  return { host, pi };
+  const reports = async (n: number) => {
+    await waitFor(`${n} report(s)`, () => f.reports().length >= n, 3000);
+    await f.quiet();
+    return f.reports();
+  };
+  return { host, pi, f, reports };
 }
 
-test("G1: an adapter error starts no turn", () => {
-  const { host, pi } = errorHost();
+test("G1: an adapter error starts no turn", async (t) => {
+  const { host, pi, reports } = await errorHost(t);
   host.deliver("policy show", new CpdError("bad_output", "one"));
-  assert.equal(pi.sent.length, 1);
-  assert.deepEqual(pi.sent[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
+  assert.deepEqual(pi.sent, [], "a Lead's chat shows no error and no turn starts");
+  assert.deepEqual((await reports(1)).map((r) => [r.what, r.code, r.message]), [["policy show", "bad_output", "one"]]);
 });
 
-test("G1: the same what and code twice shows once", () => {
-  const { host, pi } = errorHost();
+test("G1: the same what and code twice is reported once", async (t) => {
+  const { host, pi, reports } = await errorHost(t);
   host.deliver("policy show", new CpdError("bad_output", "first message"));
   host.deliver("policy show", new CpdError("bad_output", "another message"));
-  assert.equal(pi.errors().length, 1);
+  assert.equal((await reports(1)).length, 1);
+  assert.deepEqual(pi.sent, []);
 });
 
-test("G1: a different error shows, then the first shows again", () => {
-  const { host, pi } = errorHost();
+test("G1: a different error is reported, then the first is reported again", async (t) => {
+  const { host, pi, reports } = await errorHost(t);
   const a = new CpdError("bad_output", "a");
   const b = new CpdError("lock_timeout", "b");
   host.deliver("policy show", a);
+  await reports(1);
   host.deliver("policy show", b);
+  await reports(2);
   host.deliver("policy show", a);
-  assert.equal(pi.errors().length, 3);
+  assert.deepEqual((await reports(3)).map((r) => r.code), ["bad_output", "lock_timeout", "bad_output"]);
+  assert.deepEqual(pi.sent, []);
 });

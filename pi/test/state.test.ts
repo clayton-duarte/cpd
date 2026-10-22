@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Reporter } from "../lib/state.ts";
 import { ev, Fixture, ID, planShow, shown, stateCalls, waitFor } from "./fake.ts";
+import { adapterErrors } from "./lead-errors.ts";
 
 async function started(f: Fixture) {
   f.respond("plan-show", planShow());
@@ -57,17 +58,17 @@ test("a refused call is reported once and the next change is tried normally", as
   f.respond("session-state", { ok: false, error: { code: "illegal_transition", message: "stopped to working.", details: {} } }, { exit: 3 });
 
   await f.pi.fire("agent_start");
-  await waitFor("the error", () => f.pi.errors().length === 1);
-  assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: session state: illegal_transition: stopped to working\.$/);
+  await waitFor("the error", () => adapterErrors(f).length === 1);
+  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: session state: illegal_transition: stopped to working\.$/);
   await f.quiet();
-  assert.equal(f.pi.errors().length, 1, "once");
+  assert.equal(adapterErrors(f).length, 1, "once");
 
   f.respond("session-state", { ok: true });
   f.pi.idle = true;
   await f.pi.fire("agent_settled", { aborted: false });
   await waitFor("the next change", () => stateCalls(f).length === 3);
   assert.deepEqual(stateCalls(f), ["idle", "working", "idle"]);
-  assert.equal(f.pi.errors().length, 1);
+  assert.equal(adapterErrors(f).length, 1);
 });
 
 test("a refused state wanted again is sent again (pi-ci-W2)", async () => {

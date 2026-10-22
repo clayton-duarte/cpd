@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Fixture, planShow, ev, waitFor } from "./fake.ts";
+import { Fixture, ID, planShow, ev, waitFor } from "./fake.ts";
 
 async function started(f: Fixture, options = {}) {
   f.respond("plan-show", planShow());
@@ -11,7 +11,8 @@ async function started(f: Fixture, options = {}) {
 }
 
 const failure = (code: string) => JSON.stringify({ ok: false, error: { code, message: `${code} happened.`, details: { x: 1 } } });
-const errorsOf = (f: Fixture, code: string) => f.pi.errors().filter((e) => (e.message.details as any).code === code);
+/** A Lead's adapter errors are reported to the Manager, never delivered to its chat (commands.md §15.1, hs-d573). */
+const errorsOf = (f: Fixture, code: string) => f.reports().filter((r) => r.code === code);
 
 test("EOF restarts the follower with the in-memory cursor, also past Events handled without a message", async (t) => {
   const f = new Fixture();
@@ -48,8 +49,9 @@ test("a failure line is delivered once per code until a line is read again; the 
   await waitFor("three starts", () => f.follows().length >= 3);
   await waitFor("the error", () => errorsOf(f, "store_too_new").length === 1);
   const e = errorsOf(f, "store_too_new")[0]!;
-  assert.equal(e.message.content, "cpd adapter: events follow: store_too_new: store_too_new happened.");
-  assert.deepEqual(e.options, { triggerTurn: false, deliverAs: "followUp" });
+  assert.deepEqual([e.what, e.message], ["events follow", "store_too_new happened."]);
+  assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
+  assert.ok(f.adapterLog().some((l) => / error: events follow: store_too_new: store_too_new happened\.$/.test(l)), "logged");
   assert.equal(errorsOf(f, "follower_exit").length, 0, "the exit after a failure line adds nothing");
   assert.equal(errorsOf(f, "store_too_new").length, 1, "once, however often it restarts");
 
@@ -87,7 +89,9 @@ test("a non-zero exit without a failure line is delivered as an error, once per 
   await started(f);
   f.file("exit-next", "2");
   await waitFor("the error", () => errorsOf(f, "follower_exit").length === 1);
-  assert.match(errorsOf(f, "follower_exit")[0]!.message.content, /^cpd adapter: events follow: follower_exit: .*exit 2/);
+  assert.deepEqual([errorsOf(f, "follower_exit")[0]!.what, errorsOf(f, "follower_exit")[0]!.session], ["events follow", ID]);
+  assert.match(errorsOf(f, "follower_exit")[0]!.message!, /exit 2/);
+  assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
   f.file("exit-next", "2");
   await waitFor("a third start", () => f.follows().length >= 3); // the second exit was reported (or not) before this start
   assert.equal(errorsOf(f, "follower_exit").length, 1);
@@ -105,8 +109,10 @@ test("a malformed line is an error and is skipped; the cursor moves past it", as
     ev(104, "job-merged", { data: { turn: true } }),
   );
   await waitFor("the good event after four bad lines", () => f.pi.delivered().length === 1);
-  assert.equal(f.pi.errors().length, 1, "bad lines with the same what and code show one error (§15.1)");
-  for (const e of f.pi.errors()) assert.match(e.message.content, /^cpd adapter: events follow: invalid_event: /);
+  await f.quiet();
+  assert.equal(f.reports().length, 1, "bad lines with the same what and code are reported once (§15.1)");
+  for (const r of f.reports()) assert.deepEqual([r.what, r.code], ["events follow", "invalid_event"]);
+  assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
   assert.equal((f.pi.delivered()[0]!.message.details as any).id, 104);
 
   f.file("exit-next", "0");
@@ -151,7 +157,10 @@ test("a follower that cannot be started is an error, once, and is retried", asyn
   });
   await f.pi.fire("session_start");
   await waitFor("retries", () => starts >= 3);
+  await waitFor("the report", () => errorsOf(f, "spawn_failed").length > 0, 3000);
+  await f.quiet();
   assert.equal(errorsOf(f, "spawn_failed").length, 1);
+  assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
 });
 
 test("session_shutdown kills the follower and it is not restarted", async (t) => {

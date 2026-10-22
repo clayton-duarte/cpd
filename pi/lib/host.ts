@@ -1,8 +1,11 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { callCpd, toCpdError } from "./cpd.ts";
 import { errorMessage, gated } from "./delivery.ts";
 import { DEFAULT_TIMING, type Schedule, type Spawn, type Timing } from "./follower.ts";
 import type { Exec, ModelCtx, PiApi } from "./pi.ts";
 import type { Validation } from "./reload.ts";
+import { appendLog, reloadLogPath } from "./reload.ts";
 import { Rendering } from "./render.ts";
 import type { Run } from "./run.ts";
 
@@ -77,6 +80,26 @@ export function createHost(pi: PiApi, options: Options): Host {
         const key = `${what}\n${code}`;
         if (r.lastError === key) return;
         r.lastError = key;
+      }
+      // A Lead's errors go to the log and to the Manager, never to its chat. Before a run there is no role: CPD_PLAN is a Lead's pane (§6.5).
+      const id = r?.id ?? host.env.CPD_SESSION;
+      if (id && (r ? r.info.role === "lead" : !!host.env.CPD_PLAN)) {
+        const log = (line: string) => {
+          if (r) return r.log(line);
+          try {
+            appendLog(reloadLogPath(host.env.CPD_HOME || join(homedir(), ".cpd"), id), line);
+          } catch (e) {
+            host.ctx?.ui.notify(`cpd: cannot write the adapter log: ${toCpdError(e).message}`, "error");
+          }
+        };
+        const oneLine = (s: string) => s.replace(/\s*\n\s*/g, " ");
+        log(`error: ${oneLine(what)}: ${code}: ${oneLine(message)}`);
+        const args = ["session", "report", "--what", what, "--code", code, "--message", message, ...(Object.keys(extra).length > 0 ? ["--details", JSON.stringify(extra)] : []), "--session", id];
+        host.call(args).catch((e) => {
+          const err = toCpdError(e);
+          log(`report failed: ${err.code}: ${oneLine(err.message)}`);
+        });
+        return;
       }
       const m = errorMessage(what, code, message, extra);
       pi.sendMessage(m.message, gated(r, m.options));

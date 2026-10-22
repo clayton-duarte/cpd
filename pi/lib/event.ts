@@ -6,7 +6,7 @@ import { errorOfEnvelope, isObject, type CpdError } from "./cpd.ts";
  * or the output of a command the adapter runs changes in a way the adapter depends on.
  * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`.
  */
-export const PROTOCOL = 12;
+export const PROTOCOL = 13;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
