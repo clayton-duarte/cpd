@@ -789,6 +789,13 @@ impl Tmux {
         self.run(&strings(&["kill-window", "-t", window.as_str()])).map(drop)
     }
 
+    /// `#{pane_width}` of `pane`: its width in columns (the chat slot's, for E10's retitle, hs-d543).
+    pub fn pane_width(&self, pane: &PaneId) -> Result<u32, CpdError> {
+        let args = strings(&["display-message", "-p", "-t", pane.as_str(), "#{pane_width}"]);
+        let out = self.run(&args)?;
+        out.trim().parse().map_err(|_| self.unexpected(&args, out.trim()))
+    }
+
     /// `list-panes -a`: every pane of the server; none only when tmux says no
     /// server runs ([`Tmux::server_running`]), else `tmux_failed`.
     pub fn list_panes(&self) -> Result<Vec<Pane>, CpdError> {

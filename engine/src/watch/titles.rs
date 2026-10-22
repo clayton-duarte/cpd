@@ -1,4 +1,4 @@
-//! E10, Session titles (contract §3.7; hs-d257): starts `cpd session retitle <id>` for each Lead or Manager
+//! E10, Session titles (contract §3.7; hs-d257): starts `cpd session retitle <id> --width <cols>` (the chat slot's width, hs-d543; no slot, no run) for each Lead or Manager
 //! Session that is idle, whose latest finished turn is newer than its title (or that has none) and whose
 //! title is at least 10 minutes old. It only decides and spawns, as E9 does; the run holds
 //! `locks/title-<session>.lock`, runs pi and writes the title itself. What E10 adds is the caps (one run
@@ -20,6 +20,7 @@ use super::engine::{Engine, stopping};
 use super::report::{About, Failure, Step};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::home::CpdHome;
+use cpd_core::host::chat_slot;
 use cpd_core::host::limit::limit;
 use cpd_core::ids::SessionId;
 
@@ -116,6 +117,15 @@ pub(super) fn run(engine: &mut Engine) {
         Ok(held) => held,
         Err(e) => return engine.fail(Step::E10, About::Machine, &e),
     };
+    if due_now.is_empty() {
+        return;
+    }
+    // hs-d543: the title is as wide as the chat slot; with no slot nothing is shown, so no retitle starts (the Sessions stay due).
+    let width = match chat_slot_width(engine) {
+        Ok(Some(width)) => width,
+        Ok(None) => return,
+        Err(e) => return engine.fail(Step::E10, About::Machine, &e),
+    };
     let mut free = AT_ONCE.saturating_sub(held.len());
     for session in due_now {
         if stopping() || free == 0 {
@@ -124,7 +134,7 @@ pub(super) fn run(engine: &mut Engine) {
         if held.contains(session.as_str()) {
             continue;
         }
-        match spawn(engine, &session) {
+        match spawn(engine, &session, width) {
             Ok(run) => {
                 engine.log.line(&format!("E10: started the retitle of Session {session} (pid {})", run.child.id()));
                 engine.titles.running.insert(session, run);
@@ -133,6 +143,12 @@ pub(super) fn run(engine: &mut Engine) {
             Err(e) => engine.fail(Step::E10, About::TitleRun(session), &e),
         }
     }
+}
+
+/// The width in columns of the chat slot pane (contract §6.2), read from tmux; None when the cockpit has no chat slot pane.
+fn chat_slot_width(engine: &Engine) -> Result<Option<u32>, CpdError> {
+    let panes = engine.tmux.list_panes()?;
+    chat_slot(&panes, &engine.config.tmux.cockpit_session).map(|p| engine.tmux.pane_width(&p.pane)).transpose()
 }
 
 /// The Sessions with a run in flight: the runs this engine started, and any other holding its
@@ -235,9 +251,9 @@ fn lost_the_lock(output: &str) -> bool {
     })
 }
 
-/// Spawns `cpd session retitle <session>` detached (`setsid`), stdin from `/dev/null`, stdout and stderr appended
+/// Spawns `cpd session retitle <session> --width <width>` detached (`setsid`), stdin from `/dev/null`, stdout and stderr appended
 /// to the Session's `run/titles/<session>.log`.
-fn spawn(engine: &Engine, session: &SessionId) -> Result<Run, CpdError> {
+fn spawn(engine: &Engine, session: &SessionId, width: u32) -> Result<Run, CpdError> {
     let failed = |why: String| {
         CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the retitle run of Session {session}: {why}.")).with("session", session.as_str())
     };
@@ -250,7 +266,7 @@ fn spawn(engine: &Engine, session: &SessionId) -> Result<Run, CpdError> {
     let stdout = log.try_clone().map_err(|e| failed(format!("cannot use {}: {e}", log_path.display())))?;
     let mut command = Command::new(exe);
     command
-        .args(["session", "retitle", session.as_str()])
+        .args(["session", "retitle", session.as_str(), "--width", &width.to_string()])
         .current_dir(engine.home.root())
         .env("CPD_HOME", engine.home.root())
         // The caller's own identity is not the run's.
