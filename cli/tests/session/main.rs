@@ -15,4 +15,5 @@ mod session_retier;
 mod session;
 mod session_send;
 mod session_titles;
+mod session_titles_glance;
 mod session_watchdog;

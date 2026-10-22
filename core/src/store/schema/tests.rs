@@ -2153,6 +2153,70 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
 }
 
+// ---------- named migration `session-title-length` (hs-d543) ----------
+
+#[test]
+fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_200() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-session-title-length")).collect();
+    assert!(earlier.len() < NAMED.len(), "session-title-length is a built-in migration");
+    drop(crate::store::tests::open_named(&home, &earlier).unwrap());
+
+    // A Manager with a title of 60 characters, a Lead with a short one and a Lead with none, one asleep.
+    let sixty = "t".repeat(60);
+    let conn = connection(&home.db());
+    conn.execute_batch(&format!(
+        "BEGIN;
+         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+         INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead', 't');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane, state, state_label, state_at, created_at, archived_at, title, titled_at, asleep_at)
+           VALUES ('mgr',  'manager', 'ctx', NULL, NULL, 'Manager', '/f/m', NULL, '/', 'O3', '%1', 'idle',    NULL, 't1', 't', NULL, '{sixty}', 'u1', NULL),
+                  ('lead', 'lead',    'ctx', 'pl', NULL, 'Lead',    '/f/l', NULL, '/', 'O3', '%2', 'blocked', 'dialog', 't2', 't', NULL, 'Short', 'u2', 'a'),
+                  ('bare', 'lead',    'ctx', 'pl', NULL, 'Bare',    NULL,   NULL, '/', 'O3', NULL, 'stopped', NULL, 't3', 't', 'a', NULL, NULL, NULL);
+         COMMIT;"
+    ))
+    .unwrap();
+    let before = session_rows(&conn);
+    let history: i64 = conn.query_row("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap();
+    assert_eq!((before.len(), history), (3, 3));
+    drop(conn);
+
+    // The rebuild keeps every row and column and writes no history; the schema check passes and the triggers are back.
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-session-title-length")));
+    let conn = connection(&home.db());
+    // `by_user` is a later migration's column (`session-by-user`), 0 on every row.
+    let after: Vec<Value> = session_rows(&conn)
+        .into_iter()
+        .map(|mut row| {
+            assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
+            row
+        })
+        .collect();
+    assert_eq!(after, before);
+    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap(), history);
+    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
+    let objects = names(&conn, "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name");
+    for expected in ["sessions_plan", "sessions_one_manager", "sessions_live", "sessions_hist_ins", "sessions_hist_upd", "sessions_no_delete"] {
+        assert!(objects.contains(expected), "{expected} in {objects:?}");
+    }
+    drop(conn);
+
+    // A title is 1–200 characters now; 201 and the empty one are refused.
+    write(&mut store, &format!("UPDATE sessions SET title = '{}' WHERE id = 'lead'", "t".repeat(200))).unwrap();
+    for bad in [format!("UPDATE sessions SET title = '{}' WHERE id = 'lead'", "t".repeat(201)), "UPDATE sessions SET title = '' WHERE id = 'lead'".to_owned()] {
+        let message = sqlite_message(&refused(&mut store, &bad));
+        assert!(message.starts_with("CHECK constraint failed"), "{bad}: {message}");
+    }
+    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+    drop(store);
+
+    // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
+    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+}
+
 // ---------- migration 6: pull_requests and prs.pull_request, on a version 5 database with polled PRs ----------
 
 fn names(conn: &Connection, sql: &str) -> std::collections::BTreeSet<String> {
@@ -2830,9 +2894,9 @@ fn a_store_before_session_titles_migrates_keeping_every_session_with_no_title_an
     assert_eq!(count(&mut store, "SELECT count(*) FROM sessions WHERE title IS NOT NULL OR titled_at IS NOT NULL"), 0);
     assert_eq!(count(&mut store, "SELECT count(*) FROM pragma_foreign_key_check"), 0);
     write(&mut store, "INSERT INTO events (txn, at, kind, text, data) VALUES (cpd_txn(), 't', 'session-titled', 'x', '{\"title\":\"T\"}')").unwrap();
-    // The title is 1–60 characters, and the history lists both new columns.
+    // The title is 1–200 characters (`session-title-length` widened it from 60, hs-d543), and the history lists both new columns.
     write(&mut store, &format!("UPDATE sessions SET title = '{}', titled_at = 't' WHERE id = 'l'", "é".repeat(60))).unwrap();
-    for bad in [String::new(), "x".repeat(61)] {
+    for bad in [String::new(), "x".repeat(201)] {
         let error = refused(&mut store, &format!("UPDATE sessions SET title = '{bad}' WHERE id = 'm'"));
         assert!(sqlite_message(&error).contains("CHECK constraint failed"), "{bad:?}: {error:?}");
     }

@@ -135,8 +135,7 @@ fn assert_status_line(env: &TestEnv) {
         "#[range=user|legend]",
         "#[range=user|logs]",
         "#[align=right]",
-        "#{@cpd_inbox}",
-        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
+        "#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}",
         "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}",
         "#{R:\u{2500},",
     ] {
@@ -1019,11 +1018,10 @@ fn env_with_workers() -> (TestEnv, Flock<File>) {
     // These tests pin the line without the version pill (its own tests set it): `tui` set it, so unset it.
     tmux_out(&env, &["set", "-gu", "@cpd_version"]);
     for (option, value) in [
-        ("@cpd_inbox", "inbox 2"),
         ("@cpd_workers", "workers 6/6 · 4 waiting · 9 queued"),
         ("@cpd_workers_short", "6/6·4·9"),
-        ("@cpd_workers_width", "46"),
-        ("@cpd_workers_short_width", "19"),
+        ("@cpd_workers_width", "36"),
+        ("@cpd_workers_short_width", "9"),
     ] {
         tmux_out(&env, &["set", "-g", option, value]);
     }
@@ -1036,13 +1034,13 @@ fn buttons() -> String {
     format!("\u{2500}\u{e0b6}{RESET_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LEGEND_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LOGS_GLYPH}\u{e0b4}")
 }
 
-/// The right group in the long form: two pills (`inbox 2`, `workers 6/6 · 4 waiting · 9 queued`) joined by a single
-/// `─`, then the closing `─`: 46 cells (the engine's width, whose one space is now the join) plus 1.
-const LONG_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4}\u{2500}\u{e0b6}workers 6/6 · 4 waiting · 9 queued\u{e0b4}\u{2500}";
-/// The same in the short form: 19 + 1 cells.
-const SHORT_ITEMS: &str = "\u{e0b6}inbox 2\u{e0b4}\u{2500}\u{e0b6}6/6·4·9\u{e0b4}\u{2500}";
-const LONG_WIDTH: usize = 46 + 1;
-const SHORT_WIDTH: usize = 19 + 1;
+/// The right group in the long form: the workers pill (`workers 6/6 · 4 waiting · 9 queued`), then the closing `─`:
+/// 36 cells (the engine's width) plus 1.
+const LONG_ITEMS: &str = "\u{e0b6}workers 6/6 · 4 waiting · 9 queued\u{e0b4}\u{2500}";
+/// The same in the short form: 9 + 1 cells.
+const SHORT_ITEMS: &str = "\u{e0b6}6/6·4·9\u{e0b4}\u{2500}";
+const LONG_WIDTH: usize = 36 + 1;
+const SHORT_WIDTH: usize = 9 + 1;
 const LEFT_WIDTH: usize = 12;
 
 /// The whole row of a client of `width` columns: the left group, `preview` (the pill with its join, or nothing), the
@@ -1056,27 +1054,25 @@ fn row(width: usize, preview: Option<&str>, items: &str, items_width: usize) -> 
     format!("{}{pill}{}{items}", buttons(), "\u{2500}".repeat(fill))
 }
 
-// The right group is 47 cells wide in the long form (two texts of 7 and 34 cells, 4 caps, one join, the closing `─`):
-// with the left group's 12 and a fill of at least 1 it needs a client of 60 columns; one less gets the short form.
+// The right group is 37 cells wide in the long form (a text of 34 cells, 2 caps, the closing `─`):
+// with the left group's 12 and a fill of at least 1 it needs a client of 50 columns; one less gets the short form.
 #[test]
-fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_from_60_columns() {
+fn the_status_line_is_one_full_line_of_joined_pills_in_the_long_workers_form_from_50_columns() {
     let (env, _engine) = env_with_workers();
-    for width in [60usize, 80, 120, 200] {
-        let (line, styled) = status_line(&env, width as u16, "queued");
+    for width in [50usize, 80, 120, 200] {
+        let (line, _) = status_line(&env, width as u16, "queued");
         assert_eq!(line, row(width, None, LONG_ITEMS, LONG_WIDTH), "at {width}: {line:?}");
         assert_eq!(line.chars().count(), width, "{line:?}");
-        assert!(styled.contains("\x1b[30m\x1b[100minbox 2"), "the counter, colour 0 on colour 8 (no tier), on the pill: {styled:?}");
     }
 }
 
 #[test]
-fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_below_60_columns() {
+fn the_status_line_is_one_full_line_of_joined_pills_in_the_short_workers_form_below_50_columns() {
     let (env, _engine) = env_with_workers();
-    for width in [59usize, 40] {
-        let (line, styled) = status_line(&env, width as u16, "6/6");
+    for width in [49usize, 40] {
+        let (line, _) = status_line(&env, width as u16, "6/6");
         assert!(!line.contains("workers"), "{line:?}");
         assert_eq!(line, row(width, None, SHORT_ITEMS, SHORT_WIDTH), "at {width}: {line:?}");
-        assert!(styled.contains("\x1b[30m\x1b[100minbox 2"), "the counter, colour 0 on colour 8 (no tier), on the pill: {styled:?}");
     }
 }
 
@@ -1088,12 +1084,11 @@ fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_w
         assert!(line.starts_with(&format!("\u{2500}\u{e0b6}{RESET_GLYPH}\u{e0b4}\u{2500}\u{e0b6}{LEGEND_GLYPH}")), "{line:?}");
         assert!(line.ends_with("queued\u{e0b4}\u{2500}"), "{line:?}");
         // The right pills are joined by one `─` (never a space), and the left group by the buttons' two.
-        assert!(line.contains("\u{e0b6}inbox 2\u{e0b4}\u{2500}\u{e0b6}workers"), "{line:?}");
+        assert!(!line.contains("inbox"), "{line:?}");
         assert!(line.starts_with(&buttons()), "{line:?}");
         assert!(!line.contains("\u{e0b4} \u{e0b6}"), "no space between two pills: {line:?}");
         // The leading `─`, the joins and the fill are colour 8 (bright black, SGR 90), the pills' caps too.
         assert!(styled.contains("\x1b[90m\u{2500}\x1b[97m\u{e0b6}"), "the leading line cell, grey, then a button's white cap: {styled:?}");
-        assert!(styled.contains("\u{e0b4}\u{2500}\x1b[37m\u{e0b6}"), "{styled:?}");
         assert!(styled.trim_end().ends_with("\x1b[37m\x1b[49m\u{e0b4}\x1b[90m\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
     }
 }
@@ -1102,26 +1097,26 @@ fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_w
 fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
     let (env, _engine) = env_with_workers();
     for width in [40u16, 100] {
-        let (line, styled) = status_line(&env, width, "inbox 2");
+        let (line, styled) = status_line(&env, width, if width >= 50 { "queued" } else { "6/6" });
         assert_eq!(line.chars().count(), usize::from(width), "{line:?}");
-        let used = LEFT_WIDTH + if width >= 60 { LONG_WIDTH } else { SHORT_WIDTH };
+        let used = LEFT_WIDTH + if width >= 50 { LONG_WIDTH } else { SHORT_WIDTH };
         let fill = "\u{2500}".repeat(usize::from(width) - used);
-        // The last button's cap, the fill (the join is its first cell), then the Inbox counter's pill.
-        assert!(line.contains(&format!("\u{e0b4}{fill}\u{e0b6}inbox")), "{line:?}");
-        assert!(styled.contains(&format!("\x1b[90m{fill}\u{e0b6}")), "{styled:?}");
+        // The last button's cap, the fill (the join is its first cell), then the workers' pill.
+        assert!(line.contains(&format!("\u{e0b4}{fill}\u{e0b6}")), "{line:?}");
+        assert!(styled.contains(&format!("\x1b[90m{fill}\x1b[37m\u{e0b6}")), "{styled:?}");
     }
 }
 
 const PREVIEW: &str = "cpd.tui-visuals.box-order 6c43886";
 
 // The preview pill is `preview: <value>` between caps, no padding, joined to the buttons by a `─`: 45 cells with
-// 33 of value. With the left group's 12, the long form's 47 and a fill of 1 it needs 105 columns.
+// 33 of value. With the left group's 12, the long form's 37 and a fill of 1 it needs 95 columns.
 #[test]
 fn the_status_line_shows_the_unpadded_preview_pill_after_the_buttons_while_the_option_is_set() {
     let (env, _engine) = env_with_workers();
     tmux_out(&env, &["set", "-g", "@cpd_preview", PREVIEW]);
     let pill = format!("\u{e0b6}preview: {PREVIEW}\u{e0b4}");
-    for (width, items, items_width) in [(104usize, SHORT_ITEMS, SHORT_WIDTH), (105, LONG_ITEMS, LONG_WIDTH), (120, LONG_ITEMS, LONG_WIDTH), (200, LONG_ITEMS, LONG_WIDTH)] {
+    for (width, items, items_width) in [(94usize, SHORT_ITEMS, SHORT_WIDTH), (95, LONG_ITEMS, LONG_WIDTH), (120, LONG_ITEMS, LONG_WIDTH), (200, LONG_ITEMS, LONG_WIDTH)] {
         let (line, styled) = status_line(&env, width as u16, "preview:");
         assert!(line.starts_with(&format!("{}\u{2500}{pill}\u{2500}", buttons())), "a `─` join after the buttons, then the pill, then the line: {line:?}");
         assert!(line.ends_with(items), "at {width}: {line:?}");

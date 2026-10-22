@@ -505,7 +505,7 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
 
 /// The status line's format, exactly (hs-d479): one grey `─` line across the row, starting and ending with a `─`; the
 /// three button pills each in its own range, joined by a single `─` outside the ranges; the optional unpadded
-/// preview pill after a join; the fill; then the Inbox counter's pill, a join, the workers' pill and the closing `─`
+/// preview pill after a join; the fill; then the workers' pill and the closing `─`
 /// (long form from `@cpd_workers_width` + 14: the left group's 12, the closing `─` and a fill of 1).
 #[test]
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
@@ -522,13 +522,11 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
         ) + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[fg=colour0]#[bg=colour3]preview: #{@cpd_preview}#[fg=colour3]#[bg=default]\u{e0b4}#[default],}\
-         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}},\
-         #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
+         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},\
+         #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
          #[default]#[align=right]\
-         #{?#{==:#{@cpd_inbox_tier},red},#[fg=colour1],#{?#{==:#{@cpd_inbox_tier},yellow},#[fg=colour3],#{?#{==:#{@cpd_inbox_tier},magenta},#[fg=colour5],#{?#{==:#{@cpd_inbox_tier},white},#[fg=colour7],#[fg=colour8]}}}}\u{e0b6}#[fg=colour0]#{?#{==:#{@cpd_inbox_tier},red},#[bg=colour1],#{?#{==:#{@cpd_inbox_tier},yellow},#[bg=colour3],#{?#{==:#{@cpd_inbox_tier},magenta},#[bg=colour5],#{?#{==:#{@cpd_inbox_tier},white},#[bg=colour7],#[bg=colour8]}}}}#{@cpd_inbox}#{?#{==:#{@cpd_inbox_tier},red},#[fg=colour1],#{?#{==:#{@cpd_inbox_tier},yellow},#[fg=colour3],#{?#{==:#{@cpd_inbox_tier},magenta},#[fg=colour5],#{?#{==:#{@cpd_inbox_tier},white},#[fg=colour7],#[fg=colour8]}}}}#[bg=default]\u{e0b4}#[default]\
-         #[fg=colour8]\u{2500}#[default]\
          #[fg=colour7]\u{e0b6}#[fg=colour0]#[bg=colour7]\
-         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
+         #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[fg=colour7]#[bg=default]\u{e0b4}#[default]\
          #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour7]\u{e0b6}#[fg=colour0]#[bg=colour7]#{@cpd_version}#[fg=colour7]#[bg=default]\u{e0b4}#[default],}\
          #[fg=colour8]\u{2500}#[default]"

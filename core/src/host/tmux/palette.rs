@@ -169,36 +169,12 @@ fn title_pills_are_grey_blocks_unfocused_and_blue_blocks_focused() {
     }
 }
 
-/// §6.1.1 `TIER`: the Inbox counter's block is its tier's colour, text 0: red 1, yellow 3, magenta 5, white 7, and 8 for
-/// `none`, for an unset option and for a value the engine does not set; the caps take the block's colour.
-#[test]
-fn the_inbox_pill_takes_its_tier_colour_inverted() {
-    let server = Server::new(1);
-    server.run(&["set", "-g", "@cpd_workers", "workers 1/2 · 0 waiting · 3 queued"]);
-    server.run(&["set", "-g", "@cpd_workers_short", "1/2·0·3"]);
-    server.run(&["set", "-g", "@cpd_workers_width", "34"]);
-    server.run(&["set", "-g", "@cpd_workers_short_width", "7"]);
-    let tiers = [(Some("red"), 1), (Some("yellow"), 3), (Some("magenta"), 5), (Some("white"), 7), (Some("none"), 8), (Some("other"), 8), (None, 8)];
-    for (tier, colour) in tiers {
-        match tier {
-            Some(tier) => server.run(&["set", "-g", "@cpd_inbox_tier", tier]),
-            None => server.run(&["set", "-gu", "@cpd_inbox_tier"]),
-        };
-        let text = if tier == Some("none") { "inbox 0" } else { "inbox 3" };
-        server.run(&["set", "-g", "@cpd_inbox", text]);
-        pill(&server.status(300), text, colour);
-    }
-}
-
-/// §6.1.1: the workers pill (long and short form) and the version pill are blocks of 7 with text 0, whatever the Inbox's
-/// tier, with no colour inside; the preview pill is yellow (3) with text 0.
+/// §6.1.1: the workers pill (long and short form) and the version pill are blocks of 7 with text 0, with no colour inside; the preview pill is yellow (3) with text 0.
 #[test]
 fn the_workers_and_version_pills_are_grey_blocks_with_black_text() {
     let server = Server::new(1);
     let (long, short) = ("workers 1/2 · 0 waiting · 3 queued", "1/2·0·3");
     for (option, value) in [
-        ("@cpd_inbox", "inbox 3"),
-        ("@cpd_inbox_tier", "red"),
         ("@cpd_workers", long),
         ("@cpd_workers_short", short),
         ("@cpd_workers_width", "34"),
