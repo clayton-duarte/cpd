@@ -50,13 +50,13 @@ Within your area you may add files (`<crate>/src/<area>/foo.rs`, declared in you
 
 `attempt run` and `job dispatch` are declared in `attempt` and `job` but their argument types (`driver::RunArgs`, `driver::DispatchArgs`) and functions (`driver::run`, `driver::dispatch`) are the driver's, so the driver Job never edits those modules.
 
-**The distilled Context** (contract §4.6, hs-d194) lives in the `context` area:
-- `core/src/context/inforce.rs`: the records in force as of a `seq` (D2), pure over the records read in one transaction;
-- `core/src/context/digest.rs`: the digest files (find the latest, write `.md.tmp`, rename, prune), the validation (citations, size; D3) and the one rendering of "the Context" for a first message (D6), which `plan new` (`core/src/plan/`) and `context manager` call;
-- `core/src/context/distill.rs`: `context distill` (D4, D5): the lock, `prompt.md` and `records.md`, the pi run and its timeout, the `error` Event;
-- `core/src/context/distill_prompt.md`: the distiller's prompt, embedded with `include_str!`;
-- engine E9 in `engine/src/watch/distill.rs` (it only decides and spawns, as E3 does);
-- paths through new `CpdHome` methods (`context_digest_dir(context)`, `distill_lock(context)`), and `context_distill_tier` and `timeouts.distill_minutes` in `config`: shared modules and other areas, so the Job that builds it asks the Lead for those edits (the one-area rule).
+**The distilled Context** (contract §4.6, hs-d549, hs-d551; replacing hs-d194) lives in the `context` area:
+- `core/src/context/inforce.rs`: the records in force as of a `seq`, pure over the records read in one transaction (hs-d549, hs-d551);
+- `core/src/context/digest.rs`: the digest renderer (build the text from short forms, size limit, hs-d549, hs-d551), and the one function that renders "the Context" for a first message (FX7), which `plan new` and `context manager` call; the distiller's curation checks (FX1-FX3, hs-d549, hs-d551);
+- `core/src/context/distill.rs`: `context distill` (hs-d549, hs-d551): the lock, batch.md/known.md/docs.md input, the pi run and its timeout, the distiller's output validation and check (FX1-FX3, hs-d549, hs-d551), the `propose` function and retirement (FX2), the `error` Event;
+- `core/src/context/distill_prompt.md`: the distiller's prompt rules (FX9: ids from headers, batch.md record order, duplicate target is older, topic lowercase/digits/dash only, answer short form names question, doc flag rule, four examples, hs-d549, hs-d551), embedded with `include_str!`;
+- engine E9 in `engine/src/watch/distill.rs` (FX4: batch parameter, retry smaller batches 60-30-15-5-1 on failure, hs-d549, hs-d551; it only decides and spawns, as E3 does);
+- paths through new `CpdHome` methods (`context_distill_dir(context)`, `distill_lock(context)`), and `context_distill_tier` and `timeouts.distill_minutes` in `config`: shared modules and other areas, so the Job that builds it asks the Lead for those edits (the one-area rule).
 
 ## The command tree
 
