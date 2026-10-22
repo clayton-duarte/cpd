@@ -10,7 +10,7 @@
 //! - [`widgets()`]: slots, the engine, the Plans, the open pull requests, open Escalations and the latest Events
 //!   (`plan list`); the views read only what they draw: [`open_prs()`] (the Dispatch column) and [`slots()`] (the StatusBar);
 //! - [`logs()`] and [`logs_after()`]: the Event log, the latest Events and those after a cursor (`events list`);
-//! - [`worker()`]: the worker view, an Attempt and its Worker Session (`attempt show`); [`latest_attempt()`]: the Attempt
+//! - [`worker()`]: the worker view, an Attempt or a Job, and its Worker Session (`attempt show`); [`latest_attempt()`]: the Attempt
 //!   a Job's Worker pane opens (the tree's `job-stuck` click).
 //!
 //! Each read is one [`Store::read`] transaction (contract §4.2): it takes no
@@ -52,4 +52,4 @@ pub use tree::{ContextNode, PlanNode, Tree, snooze_end, tree};
 pub use widgets::{
     Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, open_pulls, slots, widgets,
 };
-pub use worker::{AttemptDetail, AttemptEscalation, Worker, latest_attempt, worker};
+pub use worker::{AttemptDetail, AttemptEscalation, Target, Worker, WorkerJob, latest_attempt, worker};
