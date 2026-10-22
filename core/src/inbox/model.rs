@@ -38,6 +38,8 @@ pub enum Kind {
     CurateRetire,
     /// A Context has pending documentation candidates (hs-d551).
     CurateDocs,
+    /// A Lead or Manager blocked by the loop guard (hs-d552, hs-d571); always red.
+    LoopGuard,
 }
 
 impl Kind {
@@ -58,12 +60,13 @@ impl Kind {
             Kind::ReviewRequested => "review-requested",
             Kind::CurateRetire => "curate-retire",
             Kind::CurateDocs => "curate-docs",
+            Kind::LoopGuard => "loop-guard",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs]
+        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs, LoopGuard]
             .into_iter()
             .find(|k| k.as_str() == s)
     }

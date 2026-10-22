@@ -285,6 +285,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
             })
         }
         Kind::CurateRetire | Kind::CurateDocs => item.context.as_ref().map(|c| Jump::Curate(item.kind, c.clone())),
+        // stub: the red tests want `Jump::Run(Action::SessionResume(<the item's Session>))`
+        Kind::LoopGuard => None,
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
@@ -826,6 +828,21 @@ mod tests {
     fn a_curate_click_asks_cpd_for_at_most_ten_entries() {
         let alpha = ContextId::parse("alpha").unwrap();
         assert_eq!(curation_argv(&alpha), ["context", "curation", "--context=alpha", "--limit=10"].map(String::from).to_vec());
+    }
+
+    #[test]
+    fn a_loop_guard_item_click_runs_session_resume_in_the_background() {
+        let tree = sample();
+        let mut guard = item(1, Kind::LoopGuard, Urgency::Red, "m-alpha: loop guard tripped", OPENED);
+        assert_eq!(jump(&tree, &guard), None, "no Session: nowhere to go");
+        guard.session = Some(sid("m-alpha"));
+        // one command, no dialog and no `session open`: the Session's pane does not open
+        let resume = Action::SessionResume(sid("m-alpha"));
+        assert_eq!(jump(&tree, &guard), Some(Jump::Run(resume.clone())));
+        assert_eq!(resume.argv(), ["session", "resume", "m-alpha"].map(String::from).to_vec());
+        // an archived Session is resumed too: it is never opened
+        guard.session = Some(sid("f-blocked"));
+        assert_eq!(jump(&archived(), &guard), Some(Jump::Run(Action::SessionResume(sid("f-blocked")))));
     }
 
     /// The glyph span of the row `item_line` draws for `item`.
