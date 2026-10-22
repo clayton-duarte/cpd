@@ -376,7 +376,7 @@ fn each_job_status_has_its_icon_and_a_cancelled_job_is_drawn_muted_after_them() 
     );
     assert_eq!(chart_rows(&screen, 11), want.strip_prefix('\n').unwrap(), "{}", screen.join("\n"));
     // the cancelled Job keeps its place, with its status (hs-d518; `tui_plan_cancelled` pins how)
-    assert!(screen.iter().any(|l| l.contains("gone") && l.contains("cancelled")), "a cancelled Job is drawn:\n{}", screen.join("\n"));
+    assert!(screen.iter().any(|l| l.contains("gone") && !l.contains("cancelled")), "a cancelled Job is drawn as a pill with no note:\n{}", screen.join("\n"));
 }
 
 #[test]
