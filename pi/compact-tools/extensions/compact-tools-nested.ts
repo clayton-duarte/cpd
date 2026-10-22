@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
-import { chromePainter, nestedCountPainter, nestedTitlePainter } from "./compact-tools-palette.ts";
+import { chrome, ink } from "./compact-tools-indices.ts";
 
 const SUMMARY_KEY = Symbol.for("pi-compact-tools.nested-summaries.v1");
 const MAX_PARENTS = 2_000;
@@ -136,11 +136,10 @@ export class NestedCallSummaries {
 		}
 		const editIndex = groups.findIndex((group) => group.name === "edit");
 		if (editIndex >= 0) groups.push(...groups.splice(editIndex, 1));
-		const title = nestedTitlePainter(theme);
-		const chrome = chromePainter(theme);
-		const success = nestedCountPainter(theme, "success");
-		const error = nestedCountPainter(theme, "error");
-		const warning = nestedCountPainter(theme, "warning");
+		const title = (text: string) => ink("toolTitle", text);
+		const success = (text: string) => ink("success", text);
+		const error = (text: string) => ink("error", text);
+		const warning = (text: string) => ink("warning", text);
 		const parts = groups.map((group) => {
 			const name = stripTerminalSequences(group.name).replace(/[\x00-\x20\x7f-\x9f]/gu, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/gu, "").trim() || "tool";
 

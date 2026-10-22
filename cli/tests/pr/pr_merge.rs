@@ -33,12 +33,13 @@ fn a_clean_open_pull_request_is_squash_merged_with_the_head_it_was_checked_at() 
     let env = TestEnv::new();
     gh(&env, &view("OPEN", "CLEAN"), 0);
     let run = env.cpd(&["pr", "merge", REF]);
-    assert_eq!(run.ok(), json!({"ok": true, "repo": "acme/api", "number": 7, "method": "squash", "branch_deleted": true}));
+    assert_eq!(run.ok(), json!({"ok": true, "repo": "acme/api", "number": 7, "method": "squash", "branch_deleted": true, "stored": false}));
     assert_eq!(
         env.calls("gh"),
         [
             argv(&["pr", "view", "7", "--repo", "acme/api", "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"]),
             argv(&["pr", "merge", "7", "--repo", "acme/api", "--squash", "--delete-branch", "--match-head-commit", SHA]),
+            argv(&["pr", "view", "7", "--repo", "acme/api", "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"]),
         ]
     );
 }
@@ -119,6 +120,28 @@ fn view_merged_at(state: &str, merge_state: &str, merged_at: Option<&str>) -> St
     json!({"state": state, "mergeStateStatus": merge_state, "headRefOid": SHA, "title": "Add the thing", "mergedAt": merged_at}).to_string()
 }
 
+/// A `gh` whose `pr view` answers `before` until `pr merge` ran and `after` from then on; `api graphql` runs `graphql` (a shell snippet).
+fn gh_read_back(env: &TestEnv, before: &str, after: &str, graphql: &str) {
+    let flag = env.root().join("merged.flag");
+    env.fake_gh(&format!(
+        "case \"$1 $2\" in\n\"pr view\") if [ -e '{f}' ]; then echo '{after}'; else echo '{before}'; fi; exit 0;;\n\"pr merge\") touch '{f}'; exit 0;;\n\"api graphql\") {graphql};;\nesac\nexit 9",
+        f = flag.display()
+    ));
+}
+
+/// The GraphQL search answer listing acme/api#7 with `state`, mergeable UNKNOWN, mergeStateStatus CLEAN.
+fn search_listing(env: &TestEnv, state: &str) -> String {
+    let node = format!(
+        r#"{{"repository":{{"nameWithOwner":"acme/api"}},"number":7,"url":"https://github.com/acme/api/pull/7","title":"Add the thing","isDraft":false,"state":"{state}","createdAt":"t","mergedAt":null,"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN","commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
+    );
+    let search = format!(
+        r#"{{"data":{{"search":{{"issueCount":1,"nodes":[{node}]}},"reviewRequests":{{"issueCount":0,"nodes":[]}},"rateLimit":{{"cost":1,"remaining":4987,"resetAt":"2026-10-22T11:00:00Z"}}}}}}"#
+    );
+    let file = env.root().join("listing.json");
+    std::fs::write(&file, search).unwrap();
+    format!("cat '{}'; exit 0", file.display())
+}
+
 /// A stored open, clean, authored pull request row of acme/api#7, with an open pr-ready item opened as E8 does.
 fn row_with_ready_item(env: &TestEnv) {
     let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
@@ -155,7 +178,7 @@ fn assert_stored_merged(env: &TestEnv, merged_at: Option<&str>) {
 fn a_successful_merge_stores_the_merge_and_closes_its_pr_ready_item_when_the_poll_after_it_fails_hs_d526() {
     let env = TestEnv::new();
     row_with_ready_item(&env);
-    gh_failing_poll(&env, &view_merged_at("OPEN", "CLEAN", None));
+    gh_read_back(&env, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), "exit 1");
     env.cpd(&["pr", "merge", REF]).ok();
     assert_ne!(env.cpd(&["pr", "poll"]).exit, 0, "the poll fails");
     assert_stored_merged(&env, None);
@@ -187,7 +210,7 @@ fn a_merge_of_an_owned_pull_request_records_the_prs_merge_hs_d526() {
            VALUES ('pay-1', 'api', '/r', 'main', 'api', 'open', 'cpd/pay-1/api', '/w', cpd_txn(), 't', 't',
                    7, 'https://github.com/acme/api/pull/7', 't', (SELECT id FROM pull_requests WHERE number = 7));",
     );
-    gh_failing_poll(&env, &view_merged_at("OPEN", "CLEAN", None));
+    gh_read_back(&env, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), "exit 1");
     env.cpd(&["pr", "merge", REF]).ok();
     assert_ne!(env.cpd(&["pr", "poll"]).exit, 0, "the poll fails");
     assert_eq!(env.query::<String>("SELECT status FROM prs WHERE key = 'api'"), "merged");
@@ -210,4 +233,67 @@ fn a_poll_that_finds_the_pull_request_merged_closes_its_pr_ready_item_in_the_sam
     env.fake_gh(&format!("cat '{}'", file.display()));
     env.cpd(&["pr", "poll"]).ok();
     assert_stored_merged(&env, None);
+}
+
+#[test]
+fn a_poll_whose_search_still_lists_a_stored_merge_open_leaves_it_merged_and_e8_opens_no_pr_ready_hs_d550() {
+    let env = TestEnv::new();
+    row_with_ready_item(&env);
+    let open = view_merged_at("OPEN", "CLEAN", None);
+    let merged = view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT));
+    gh_read_back(&env, &open, &merged, "exit 1");
+    env.cpd(&["pr", "merge", REF]).ok();
+    let listing = search_listing(&env, "OPEN");
+    gh_read_back(&env, &open, &merged, &listing);
+    env.cpd(&["pr", "poll"]).ok();
+    assert_eq!(env.query::<String>("SELECT state FROM pull_requests WHERE number = 7"), "merged");
+    assert_eq!(env.query::<Option<String>>("SELECT merged_at FROM pull_requests WHERE number = 7").as_deref(), Some(MERGED_AT));
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    let mut store = Store::open(&home, 5000).unwrap();
+    let found = conditions(&mut store, &home).unwrap();
+    reconcile(&mut store, &found, "2026-10-21T15:00:05.000Z").unwrap();
+    assert_eq!(
+        env.query::<i64>(&format!("SELECT count(*) FROM inbox_items WHERE kind = 'pr-ready' AND subject = '{SUBJECT}' AND closed_at IS NULL")),
+        0,
+        "no pr-ready item is open"
+    );
+}
+
+#[test]
+fn a_merge_whose_read_back_still_reads_open_stores_nothing_hs_d550() {
+    let env = TestEnv::new();
+    row_with_ready_item(&env);
+    let open = view_merged_at("OPEN", "CLEAN", None);
+    gh_read_back(&env, &open, &open, "exit 1");
+    let out = env.cpd(&["pr", "merge", REF]).ok();
+    assert_eq!(out["stored"], false, "{out}");
+    assert_eq!(env.query::<String>("SELECT state FROM pull_requests WHERE number = 7"), "open");
+    assert_eq!(env.query::<Option<String>>(&item("closed_at")), None);
+}
+
+#[test]
+fn a_merge_stores_the_merged_at_its_read_back_reads_hs_d550() {
+    let env = TestEnv::new();
+    row_with_ready_item(&env);
+    gh_read_back(&env, &view_merged_at("OPEN", "CLEAN", None), &view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT)), "exit 1");
+    let out = env.cpd(&["pr", "merge", REF]).ok();
+    assert_eq!(out["stored"], true, "{out}");
+    assert_stored_merged(&env, Some(MERGED_AT));
+}
+
+#[test]
+fn a_poll_that_lists_a_stored_merge_open_opens_no_write_transaction_hs_d550() {
+    let env = TestEnv::new();
+    row_with_ready_item(&env);
+    let open = view_merged_at("OPEN", "CLEAN", None);
+    let merged = view_merged_at("MERGED", "UNKNOWN", Some(MERGED_AT));
+    gh_read_back(&env, &open, &merged, "exit 1");
+    env.cpd(&["pr", "merge", REF]).ok();
+    let listing = search_listing(&env, "OPEN");
+    gh_read_back(&env, &open, &merged, &listing);
+    let row = "SELECT state || '|' || ifnull(merged_at, '') || '|' || changed_at || '|' || merge_state || '|' || review_decision FROM pull_requests WHERE number = 7";
+    let (txns, before) = (env.query::<i64>("SELECT count(*) FROM txns"), env.query::<String>(row));
+    env.cpd(&["pr", "poll"]).ok();
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM txns"), txns, "no write transaction");
+    assert_eq!(env.query::<String>(row), before);
 }

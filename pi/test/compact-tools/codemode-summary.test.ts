@@ -4,7 +4,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { NestedCallSummaries } from "../../compact-tools/extensions/compact-tools-nested.ts";
-import { chromePainter, completionPainter, nestedCountPainter, nestedTitlePainter } from "../../compact-tools/extensions/compact-tools-palette.ts";
+import { chrome, ink } from "../../compact-tools/extensions/compact-tools-indices.ts";
+
+const nestedTitle = (text: string) => ink("toolTitle", text);
+const count = (color: "success" | "error" | "warning") => (text: string) => ink(color, text);
 import { advance, announce, loadExtension, makeRow, restoreClocks, shutdown, text } from "./indicator-harness.ts";
 import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 
@@ -71,8 +74,8 @@ for (const style of ["compact", "claude", "codex"] as const) {
 					assert.ok(lines.every(line => visibleWidth(line) <= width), `fits ${width}`);
 					if (width === 120) {
 						const output = plain(lines).join("\n");
-						assert.ok(lines.join("\n").includes(completionPainter(theme)("Done in 1.234s")), "duration uses brighter completion metadata paint");
-						assert.ok(lines.join("\n").includes(completionPainter(theme)(" (5 lines)")), "line count shares the brighter metadata tone");
+						assert.ok(lines.join("\n").includes(chrome("Done in 1.234s")), "duration uses brighter completion metadata paint");
+						assert.ok(lines.join("\n").includes(chrome(" (5 lines)")), "line count shares the brighter metadata tone");
 						assert.match(output, /Done in 1\.234s \(5 lines\) · read 3 · bash 1 · edit 2/u);
 						assert.doesNotMatch(output, /Failed in/u, "caught child error does not fail the script");
 						if (expanded) {
@@ -166,7 +169,7 @@ for (const style of ["compact", "claude", "codex"] as const) {
 			const drawn = plain(row.render(100)).join("\n");
 			assert.match(drawn, /read 1/u);
 			assert.doesNotMatch(drawn, /partial/u);
-			assert.ok(row.render(100).join("\n").includes(nestedCountPainter(theme, "success")("1")), "late success removes the unfinished warning");
+			assert.ok(row.render(100).join("\n").includes(count("success")("1")), "late success removes the unfinished warning");
 		} finally { shutdown(harness); }
 	});
 
@@ -263,10 +266,10 @@ test("tool summaries split green successes and red failures using only spaces", 
 	cache.note({ toolCallId: "outcomes/9", parentToolCallId: "outcomes", toolName: "edit" }, false);
 	const formatted = cache.format("outcomes", theme)!;
 	assert.equal(stripTerminalSequences(formatted), "edit 4 4 1 unfinished (partial)");
-	assert.ok(formatted.startsWith(nestedTitlePainter(theme)("edit") + chromePainter(theme)(" ") + nestedCountPainter(theme, "success")("4")));
-	for (const [color, value] of [["success", "4"], ["error", "4"], ["warning", "1 unfinished"]] as const) assert.ok(formatted.includes(nestedCountPainter(theme, color)(value)));
+	assert.ok(formatted.startsWith(nestedTitle("edit") + chrome(" ") + count("success")("4")));
+	for (const [color, value] of [["success", "4"], ["error", "4"], ["warning", "1 unfinished"]] as const) assert.ok(formatted.includes(count(color)(value)));
 	assert.doesNotMatch(stripTerminalSequences(formatted).replace(" (partial)", ""), /[()|]/u, "counts have no parentheses or pipe");
-	assert.ok(formatted.includes(chromePainter(theme)(" ")), "count spacing uses completion chrome");
+	assert.ok(formatted.includes(chrome(" ")), "count spacing uses completion chrome");
 	assert.ok(!formatted.includes("•") && !formatted.includes("\x1b[4m") && !formatted.includes("\x1b[58;"), "no circles or underlines");
 	cache.clear();
 });
@@ -277,7 +280,7 @@ test("single-outcome counts omit zeros and use only their outcome color", () => 
 		cache.restore(message(status, [1, 2].map(index => ({ id: `${status}/${index}`, name: "bash", status }))));
 		const formatted = cache.format(status, theme)!;
 		assert.equal(stripTerminalSequences(formatted), `bash 2${status === "unfinished" ? " (partial)" : ""}`);
-		assert.ok(formatted.includes(chromePainter(theme)(" ") + nestedCountPainter(theme, color)("2")));
+		assert.ok(formatted.includes(chrome(" ") + count(color)("2")));
 		assert.doesNotMatch(stripTerminalSequences(formatted), /0|\||unfinished/u, "no zero placeholders, pipes, or redundant pending notes");
 	}
 	cache.clear();
@@ -290,9 +293,9 @@ test("all tools tally interleaved calls by outcome without concatenating group l
 	calls.forEach(([name, failed], index) => record(cache, "tallies", index, name, failed));
 	const formatted = cache.format("tallies", theme)!;
 	assert.equal(stripTerminalSequences(formatted), "read 2 2 · bash 2 1 · write 2 · custom 2 · grep 1");
-	assert.ok(formatted.includes(nestedCountPainter(theme, "success")("2")) && formatted.includes(nestedCountPainter(theme, "error")("2")), "counts are colored by outcome");
+	assert.ok(formatted.includes(count("success")("2")) && formatted.includes(count("error")("2")), "counts are colored by outcome");
 	assert.ok(stripTerminalSequences(formatted).includes("grep 1"), "singleton counts remain explicit");
-	assert.ok(formatted.includes(chromePainter(theme)(" · ")), "tool groups use a quiet separator");
+	assert.ok(formatted.includes(chrome(" · ")), "tool groups use a quiet separator");
 	cache.clear();
 });
 
@@ -332,8 +335,8 @@ test("edit formatting shows only counts and ignores diff totals, including zero 
 	record(cache, "colored", 2, "edit", false, text("No changes", { diff: "   1 unchanged" }));
 	const formatted = cache.format("colored", theme)!;
 	assert.equal(stripTerminalSequences(formatted), "edit 2");
-	assert.ok(formatted.includes(nestedTitlePainter(theme)("edit")), "tool names retain title hue without bold at slightly reduced brightness");
-	assert.ok(formatted.includes(nestedCountPainter(theme, "success")("2")), "successful edit counts use success color");
+	assert.ok(formatted.includes(nestedTitle("edit")), "tool names retain title hue without bold at slightly reduced brightness");
+	assert.ok(formatted.includes(count("success")("2")), "successful edit counts use success color");
 	assert.doesNotMatch(stripTerminalSequences(formatted), /[+|]|-3|ok/u, "no per-call diffs, separators, or result labels");
 	cache.clear();
 });
@@ -348,7 +351,7 @@ test("edit counts retain every attempt and aggregate failure and unfinished stat
 	assert.equal(stripTerminalSequences(cache.format("statuses", theme)!), "edit 2 2 1 unfinished (partial)");
 	assert.equal(stripTerminalSequences(cache.format("statuses", theme, true)!), "edit 2 2 1 unfinished (partial)");
 	const failed = cache.format("statuses", theme)!;
-	assert.ok(failed.includes(nestedCountPainter(theme, "error")("2")));
+	assert.ok(failed.includes(count("error")("2")));
 	assert.ok(!failed.includes("+100"), "failed results never show claimed changes");
 	cache.restore(message("persisted-errors", [{ id: "persisted-errors/1", name: "edit", status: "error" }, { id: "persisted-errors/2", name: "edit", status: "ok" },
 		{ id: "persisted-errors/3", name: "edit", status: "error" }]));

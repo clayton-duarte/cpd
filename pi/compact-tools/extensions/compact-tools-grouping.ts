@@ -27,7 +27,7 @@ import { formatDurationMs, type RowStatus } from "./compact-tools-core.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
 import { getTextResult } from "./compact-tools-invocation.ts";
 import { outputPadLines } from "./compact-tools-layout.ts";
-import { chromePainter, paintIndicator } from "./compact-tools-palette.ts";
+import { chrome, ink, paintIndicator } from "./compact-tools-indices.ts";
 import type { ToolRuntime } from "./compact-tools-runtime.ts";
 import { findChat, isKind, isSilent } from "./compact-tools-silent.ts";
 import { captureViewport } from "./compact-tools-viewport.ts";
@@ -364,7 +364,7 @@ export class ToolGroupController {
 			const theme = this.paint?.theme ?? this.context?.ui.theme;
 			const pad = rows[0]?.outputPad;
 			const available = width + (pad === 0 ? 1 : 0);
-			return theme ? outputPadLines([truncateToWidth(theme.fg("dim", codexDisclosure(available, true)), Math.max(1, available), "…")], width, pad) : [];
+			return theme ? outputPadLines([truncateToWidth(ink("dim", codexDisclosure(available, true)), Math.max(1, available), "…")], width, pad) : [];
 		};
 		const group = new ToolGroupComponent(rows, members, state, draw, toggle, footer);
 		// Read once the group has followed Ctrl+O, which it does as it is made. A call that joins an
@@ -381,9 +381,8 @@ export class ToolGroupController {
 	private resolvePaint(): Paint | undefined {
 		const theme = this.context?.ui.theme;
 		if (!theme) return undefined;
-		const chrome = chromePainter(theme);
 		// The style is part of the key: a group drawn in one style is never reused in another.
-		const key = this.runtime.config.style + PAINT_COLORS.map((color) => theme.fg(color, "x")).join("") + theme.bold("x") + chrome("x");
+		const key = this.runtime.config.style + PAINT_COLORS.map((color) => ink(color, "x")).join("") + theme.bold("x") + chrome("x");
 		return { theme, chrome, key };
 	}
 
@@ -425,7 +424,7 @@ export class ToolGroupController {
 		const status: RowStatus = running ? "running" : statuses.includes("error") ? "error"
 			: statuses.includes("pending") ? "pending" : "success";
 		const summary = summarizeGroup(rows, undefined, this.canRun);
-		let title = ` ${paintIndicator(theme, status, this.runtime.frame)} ${theme.fg("toolTitle", theme.bold(summary))}`;
+		let title = ` ${paintIndicator(status)} ${ink("toolTitle", theme.bold(summary))}`;
 		if (running) {
 			// The folded row is not drawn, so the line that pulses for it keeps the clock going.
 			this.runtime.keepAnimating(running.toolCallId);
@@ -437,7 +436,7 @@ export class ToolGroupController {
 		const lines = ["", fit(title)];
 		const hintText = groupHint(rows, this.canRun);
 		if (hintText) lines.push(fit(chrome(`${CLAUDE_RESULT_PREFIX}${hintText}`)));
-		if (!expanded) for (const failure of groupFailures(rows)) lines.push(fit(chrome(CLAUDE_RESULT_PREFIX) + theme.fg("error", failure)));
+		if (!expanded) for (const failure of groupFailures(rows)) lines.push(fit(chrome(CLAUDE_RESULT_PREFIX) + ink("error", failure)));
 		return lines;
 	}
 
@@ -452,11 +451,11 @@ export class ToolGroupController {
 		const running = lastRunning(rows, this.canRun);
 		const statuses = rows.map((row) => memberStatus(row, this.canRun));
 		if (running) this.runtime.keepAnimating(running.toolCallId);
-		const bullet = running ? paintIndicator(theme, "running", this.runtime.frame, CODEX_BULLET)
-			: statuses.includes("pending") ? paintIndicator(theme, "pending", 0, CODEX_BULLET) : theme.fg("dim", CODEX_BULLET);
+		const bullet = running ? paintIndicator("running", CODEX_BULLET)
+			: statuses.includes("pending") ? paintIndicator("pending", CODEX_BULLET) : ink("dim", CODEX_BULLET);
 		const failed = statuses.filter((status) => status === "error").length;
 		let head = `${CODEX_MARGIN}${bullet} ${theme.bold(running ? "Exploring" : "Explored")}`;
-		if (failed > 0) head += theme.bold(theme.fg("error", ` · ${failed} failed`));
+		if (failed > 0) head += theme.bold(ink("error", ` · ${failed} failed`));
 		// Opened, Codex lists the calls themselves in place of the summary; each brings its own blank line.
 		if (expanded) return [];
 		const lines = ["", fit(head)];
@@ -473,13 +472,13 @@ export class ToolGroupController {
 			if (line.failure) segments.push({ text: line.failure.text, color: line.failure.quiet ? "dim" : "error" });
 			const available = Math.max(1, width - visibleWidth(CODEX_INDENT) - verb.length);
 			wrapSegments(segments, available, available).forEach((row, index) => {
-				details.push((index === 0 ? theme.fg("accent", verb) : " ".repeat(verb.length)) + paintSegments(row, theme));
+				details.push((index === 0 ? ink("accent", verb) : " ".repeat(verb.length)) + paintSegments(row, theme));
 			});
 		}
 		details.slice(0, CODEX_PREVIEW_ROWS).forEach((row, index) => {
-			lines.push(fit(theme.fg("dim", index === 0 ? CODEX_RESULT_PREFIX : CODEX_INDENT) + row));
+			lines.push(fit(ink("dim", index === 0 ? CODEX_RESULT_PREFIX : CODEX_INDENT) + row));
 		});
-		lines.push(fit(theme.fg("dim", codexDisclosure(width, false))));
+		lines.push(fit(ink("dim", codexDisclosure(width, false))));
 		return lines;
 	}
 }

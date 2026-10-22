@@ -62,7 +62,6 @@ export interface RowState {
 	lastResultPreview?: boolean;
 	lastResultError?: boolean;
 	lastResultConfigRevision?: object;
-	lastResultPalette?: object;
 	lastResultDurationMs?: number;
 	lastResultOutputPad?: number;
 	/** What a Codex row's head reads from its result: a command's exit code, an edit's counts. */

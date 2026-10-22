@@ -7,6 +7,7 @@ import { checkProtocol } from "./protocol.ts";
 import { decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
 import { noteRetier } from "./retier.ts";
 import type { Run } from "./run.ts";
+import { refreshMentions } from "./mentions-refresh.ts";
 
 // The follower's lines (§15.2, §15.3).
 
@@ -68,6 +69,7 @@ function handleLine(host: Host, r: Run, line: string): boolean {
 }
 
 async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
+  void refreshMentions(host, r);
   const { pi } = host;
   const own = ev.session === r.id;
   if (ev.kind === "session-message") {

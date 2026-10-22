@@ -177,6 +177,16 @@ pub fn open_prs(store: &mut Store) -> Result<(Vec<OpenPr>, i64), CpdError> {
     store.read(|conn| Ok((open_pr_rows(conn)?, highest_id(conn)?)))
 }
 
+/// The open pull requests as `<owner>/<repo>#<n>` (every `open` row of `pull_requests`): what a merged marker is
+/// compared with (hs-d550).
+pub fn open_pulls(store: &mut Store) -> Result<std::collections::BTreeSet<String>, CpdError> {
+    store.read(|conn| {
+        let mut stmt = conn.prepare("SELECT repo, number FROM pull_requests WHERE state = 'open'")?;
+        let rows = stmt.query_map([], |r| Ok(format!("{}#{}", r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    })
+}
+
 fn plan_cards(conn: &Connection) -> Result<Vec<PlanCard>, CpdError> {
     let labels = labels(conn)?;
     let mut pulls = pulls(conn)?;

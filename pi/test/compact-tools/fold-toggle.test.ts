@@ -289,7 +289,7 @@ async function thinking(config: object, source = "## **Check the implementation*
 test("thinking, folded (summary): the title, then ╰<glyph> expand", async () => {
 	const block = await thinking({ ...TOGGLE, toggle: NERD });
 	try {
-		assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation", `${BOX.close}${NERD.expand} expand`]);
+		assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation", `${BOX.close}${NERD.expand} expand`]);
 	} finally { block.end(); }
 });
 
@@ -299,7 +299,7 @@ test("thinking, expanded (detail): │ lines, then ╰<glyph> collapse · with t
 		block.draw(); // the controller learns the block has detail on its first draw, as in Pi
 		block.press();
 		assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
-			"Check the implementation",
+			"Check the implementation",
 			BOX.rail,
 			`${BOX.rail} Inspect the renderer.`,
 			`${BOX.rail} Keep the cache.`,
@@ -315,7 +315,7 @@ test("thinking: summary after detail is folded again, hidden is unchanged, the d
 		block.press();
 		assert.equal(block.draw().at(-1)!.trimEnd(), `${BOX.close}${NERD.collapse} collapse · ctrl+t toggle • click to hide`);
 		block.press();
-		assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation", `${BOX.close}${NERD.expand} expand`]);
+		assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation", `${BOX.close}${NERD.expand} expand`]);
 		assert.equal(block.press(), undefined, "summary-after-detail passes to Pi's own toggle, which hides");
 		block.press();
 	} finally { block.end(); }
@@ -334,10 +334,10 @@ test("with fold: status the thinking block is upstream's: └ ctrl+t toggle • 
 	for (const config of [STATUS]) {
 		const block = await thinking(config);
 		try {
-			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation"]);
+			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation"]);
 			block.press();
 			assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
-				"Check the implementation",
+				"Check the implementation",
 				BOX.rail,
 				`${BOX.rail} Inspect the renderer.`,
 				`${BOX.rail} Keep the cache.`,
