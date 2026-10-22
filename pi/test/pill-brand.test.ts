@@ -26,26 +26,28 @@ const render = (text: string, expanded = false): string[] => {
   const rendering = Object.assign(new Rendering(), { style: "compact" as const });
   return (rendering.render(m, { expanded, outputPad: 1 }, theme) as Component).render(200);
 };
-const pill = (title: string): string => `\x1b[35m${CAP_L}\x1b[45m\x1b[30m${title}\x1b[49m\x1b[35m${CAP_R}\x1b[39m`;
+const PILL = `\x1b[35m${CAP_L}\x1b[45m\x1b[30mcpd\x1b[49m\x1b[35m${CAP_R}\x1b[39m`;
+// the pill holds only `cpd`; the first sentence follows it outside, text 7
+const pill = (sentence: string): string => `${PILL} \x1b[37m${sentence}\x1b[39m`;
 
 test("cpd pill is magenta with text 0 and magenta caps", () => {
   const row = render("Job api-1 merged.")[0]!;
-  assert.ok(row.includes(pill("cpd Job api-1 merged.")), JSON.stringify(row));
+  assert.ok(row.includes(pill("Job api-1 merged.")), JSON.stringify(row));
 });
 
 test("cpd pill shows the first sentence of the summary", () => {
-  assert.ok(render("Job api-1 merged. The rest follows.")[0]!.includes(pill("cpd Job api-1 merged")), "cut at the first `.`");
-  assert.ok(render("Escalation from api-1: it needs a decision")[0]!.includes(pill("cpd Escalation from api-1")), "cut at the first `:`");
-  assert.ok(render("first line\nsecond line")[0]!.includes(pill("cpd first line")), "cut at the line end");
+  assert.ok(render("Job api-1 merged. The rest follows.")[0]!.includes(pill("Job api-1 merged")), "cut at the first `.`");
+  assert.ok(render("Escalation from api-1: it needs a decision")[0]!.includes(pill("Escalation from api-1")), "cut at the first `:`");
+  assert.ok(render("first line\nsecond line")[0]!.includes(pill("first line")), "cut at the line end");
 });
 
 test("cpd pill cuts a first sentence over 60 characters with an ellipsis", () => {
   const long = `${"word ".repeat(20)}end`;
   const exact = "x".repeat(60);
-  assert.ok(render(long)[0]!.includes(pill(`cpd ${long.slice(0, 59)}…`)) || render(long)[0]!.includes(pill(`cpd ${long.slice(0, 60)}…`)), "a long sentence ends with …");
-  assert.ok(render(exact)[0]!.includes(pill(`cpd ${exact}`)), "a sentence of exactly 60 is not cut");
-  const cut = render(long)[0]!.match(/\x1b\[30m(.*?)\x1b\[49m/)![1]!;
-  assert.equal(cut.length, "cpd ".length + 60 + 1, JSON.stringify(cut));
+  assert.ok(render(long)[0]!.includes(pill(`${long.slice(0, 59)}…`)) || render(long)[0]!.includes(pill(`${long.slice(0, 60)}…`)), "a long sentence ends with …");
+  assert.ok(render(exact)[0]!.includes(pill(`${exact}`)), "a sentence of exactly 60 is not cut");
+  const cut = render(long)[0]!.match(/\x1b\[37m(.*?)\x1b\[39m/)![1]!;
+  assert.equal(cut.length, 60 + 1, JSON.stringify(cut));
 });
 
 test("cpd message lead and rails are 8 and the toggle is 7", () => {

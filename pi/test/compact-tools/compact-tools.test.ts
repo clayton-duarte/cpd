@@ -262,7 +262,11 @@ test("restores hidden rows when silent mode is disposed and preserves the choice
 	assert.deepEqual(notifications, [], "toggling must not write a notice into the transcript");
 	assert.deepEqual(assistant.render(80), []);
 	assert.deepEqual(notice.render(80), []);
-	assert.deepEqual(visible(failedAnswer), ["Partial answer"], "the answer stays, its error notice goes");
+	assert.deepEqual(
+		visible(failedAnswer),
+		["╭────────────────╮", "│ Partial answer │", "│                │", "│╭───────────────╯", "╰╯"],
+		"the answer stays as a balloon, its error notice goes",
+	);
 	assert.deepEqual(failedHandoff.render(80), [], "a failed tool handoff is hidden like any other");
 	await command!("off", ctx);
 	assert.ok(visible(failedAnswer).some((line) => line.startsWith("Error: 400")), "off restores the notice");

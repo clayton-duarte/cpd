@@ -148,32 +148,37 @@ function firstSentence(summary: string): string {
 const TOP = "╭─";
 const RAIL = "│ ";
 const CLOSE = "╰";
+/** U+F005A, the 'nothing to fold' glyph; the same code point as compact-tools' own constant in `compact-tools/extensions/compact-tools-layout.ts` (not imported across the two trees). */
+const NOTHING_TO_FOLD = "\u{F005A}";
 const DOWN = "\u{F004B}";
 const UP = "\u{F0063}";
 const EXPAND = "expand";
 const COLLAPSE = "collapse";
 
-type Rows = { head: (width: number) => string[]; body: (width: number) => string[]; toggle: (width: number, expanded: boolean) => string[] };
+type Rows = { foldable: boolean; terminator: () => string[]; head: (width: number) => string[]; body: (width: number) => string[]; toggle: (width: number, expanded: boolean) => string[] };
 
 /** The fold's rows for one message. `body` is empty when `content` is. */
 function rowsOf(summary: string, content: string, theme: Theme): Rows {
   void theme;
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${GREY8(TOP)}\x1b[35m${CAP_LEFT}`;
-  const indent = " ".repeat(visibleWidth(lead));
-  // contract §6.1.1: a block is magenta 5 with text 0, caps 5, by explicit indexed SGR; lead and rails 8, toggle and content 7.
-  const pill = (line: string) => `\x1b[45m\x1b[30m${line}\x1b[49m`;
+  const lead = `${MARGIN}${GREY8(TOP)}`;
+  // contract §6.1.1: the pill is magenta 5 with text 0, caps 5, by explicit indexed SGR; the sentence follows it outside, text 7.
+  const pill = `\x1b[35m${CAP_LEFT}\x1b[45m\x1b[30mcpd\x1b[49m\x1b[35m${CAP_RIGHT}\x1b[39m`;
+  const sentence = firstSentence(summary);
   const rail = `${MARGIN}${GREY8(RAIL)}`;
   const body = text === "" ? "" : text.split("\n").map((l) => (l === "" ? l : `\x1b[37m${l}\x1b[39m`)).join("\n");
   return {
     head: (width) => {
-      const room = width - visibleWidth(lead);
-      let lines = hardWrap(`cpd ${firstSentence(summary)}`, room);
-      // The closing cap needs its own cell on the last row.
-      if (visibleWidth(lines[lines.length - 1]) + visibleWidth(CAP_RIGHT) > room) lines = hardWrap(`cpd ${firstSentence(summary)}`, room - visibleWidth(CAP_RIGHT));
-      return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? `\x1b[35m${CAP_RIGHT}\x1b[39m` : ""}`);
+      const room = Math.max(1, width - visibleWidth(lead) - visibleWidth(pill) - 1);
+      const lines = wrapTextWithAnsi(sentence, room);
+      return (lines.length === 0 ? [""] : lines).map((l, i) => {
+        const t = l === "" ? "" : `\x1b[37m${l}\x1b[39m`;
+        return i === 0 ? `${lead}${pill}${t === "" ? "" : ` ${t}`}` : `${MARGIN}${GREY8(RAIL)}${t}`;
+      });
     },
     body: text === "" ? () => [] : prefixedText(body, rail),
+    foldable: text !== "",
+    terminator: () => [`${MARGIN}${GREY8(`${CLOSE}${NOTHING_TO_FOLD}`)}`],
     toggle: (_width, expanded) => [`${MARGIN}${GREY8(CLOSE)}\x1b[37m${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}\x1b[39m`],
   };
 }
@@ -199,6 +204,7 @@ export class Rendering {
     const rows = rowsOf(summary ?? CONTEXT_TYPE, content, theme);
     // No summary, and always the Plan review's summary, which the User reads to decide: the row is always open, with no closing row and no toggle (§15.9 "No summary").
     const open = summary === undefined || message.customType === SUMMARY_TYPE;
+    const closes = open || !rows.foldable;
     const state = this.states.get(message) ?? { expanded, host: expanded };
     this.states.set(message, state);
     // Ctrl+O hands the renderer `expanded`; the message follows it both ways (the extension's group rule).
@@ -208,14 +214,14 @@ export class Rendering {
     }
     const draw = (width: number): string[] => {
       const shown = open || state.expanded;
-      const lines = [...rows.head(width), ...(shown ? rows.body(width) : []), ...(open ? [] : rows.toggle(width, shown))];
+      const lines = [...rows.head(width), ...(shown ? rows.body(width) : []), ...(closes ? rows.terminator() : rows.toggle(width, shown))];
       return withinWidth(lines, width);
     };
     const inner: Component = {
       render: (width) => (outputPad === 0 ? outputPadLines(draw(width + 1), width) : draw(width)),
       invalidate() {},
     };
-    if (open) return inner;
+    if (closes) return inner;
     // A left click toggles this one message, as pi does a tool row (`createResultRegion`).
     return new MouseRegion(inner, (event) => {
       if (event.type !== "click" || event.button !== "left") return undefined;

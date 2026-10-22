@@ -25,9 +25,10 @@ test("every row of a cpd block has the rail in 8", () => {
           const open = customType !== "cpd";
           assert.ok(rows.length >= 2, where);
           assert.ok(rows[0]!.includes(GREY("╭─")), `head lead is 8: ${where}`);
-          const body = open || expanded ? rows.slice(1, open ? undefined : -1) : [];
+          const body = open || expanded ? rows.slice(1, -1) : [];
           for (const r of body) assert.ok(r.replace(/^ /, "").startsWith(RAIL), `rail cell ${JSON.stringify(r)} in ${where}`);
-          if (!open) {
+          if (open) assert.equal(rows[rows.length - 1]!.replace(/^ /, ""), GREY("╰\u{F005A}"), `terminator: ${where}`);
+          else {
             const glyph = expanded ? "\u{F0063} collapse" : "\u{F004B} expand";
             assert.equal(rows[rows.length - 1]!.replace(/^ /, ""), `${GREY("╰")}\x1b[37m${glyph}\x1b[39m`, `closing row: ${where}`);
           }
