@@ -10,8 +10,9 @@ use common::TestEnv;
 #[test]
 fn every_tmux_call_runs_with_a_tmux_tmpdir_inside_the_checks_own_tmp_dir() {
     let env = TestEnv::new();
-    let tmp = env.root().join("tmp");
-    fs::create_dir_all(&tmp).unwrap();
+    // A short TMPDIR (a long one, as on a Mac under /var/folders, makes the check use /tmp for its tmux dir).
+    let short = tempfile::Builder::new().prefix("pc").tempdir_in("/tmp").unwrap();
+    let tmp = short.path().to_path_buf();
     let record = env.root().join("tmux-tmpdirs");
     // A pi that prints a version and exits 0, and a tmux that records the TMUX_TMPDIR each call sees; its `has-session`
     // fails, so step 3 ends at once.
