@@ -676,6 +676,40 @@ fn open_adopts_a_merged_pull_request_without_the_gate_and_the_plan_is_done() {
 }
 
 #[test]
+fn open_adopting_a_merged_pull_request_supersedes_the_pending_reviews() {
+    let (fx, marker) = fx_with_marked_hook();
+    fx.gh("list.json", MERGED_LIST);
+    fx.lookup(&[Some(pay("MERGED", None, None))]);
+    insert_pending_reviews(&fx.env, "pay");
+
+    let out = fx.pr("open").ok();
+
+    let opened_at = out["pr"]["pr"]["opened_at"].as_str().unwrap().to_owned();
+    assert_eq!(
+        out,
+        json!({"ok": true, "adopted": "merged", "plan": "pay", "phase": "done",
+               "pr": {"key": "repo", "status": "merged", "pr": {"number": 812, "url": URL, "opened_at": opened_at}}})
+    );
+    assert!(!marker.exists(), "the pre-merge hook ran");
+    assert_reviews_superseded_before_done(&fx.env, "pay");
+}
+
+#[test]
+fn poll_of_the_last_merged_pull_request_supersedes_the_pending_reviews() {
+    let fx = fx("deploy");
+    kept_attempt(&fx);
+    fx.search(&[]);
+    fx.lookup(&[Some(pay("MERGED", Some("APPROVED"), Some("SUCCESS")).replace("Pay the bills", TITLE))]);
+    insert_pending_reviews(&fx.env, "pay");
+
+    let out = fx.poll();
+
+    assert_eq!(out["merged"], json!([{"plan": "pay", "pr": "repo"}]));
+    assert_eq!((out["done"].clone(), out["feedback"].clone(), out["polled"].clone()), (json!(["pay"]), json!([]), json!(0)));
+    assert_reviews_superseded_before_done(&fx.env, "pay");
+}
+
+#[test]
 fn open_adopting_a_merged_pull_request_keeps_the_plan_in_dispatch_while_another_pr_is_not_open() {
     let fx = fx("dispatch");
     fx.add_web(Web::Dispatch);
@@ -3804,4 +3838,47 @@ fn with_two_slots_two_gates_run_together_and_a_third_waits() {
     }
     let waited = outs.iter().filter(|o| String::from_utf8_lossy(&o.stderr).contains("gate: waiting for a slot (2 of 2 busy")).count();
     assert_eq!(waited, 1, "only the third Gate waited");
+}
+
+/// Inserts pending reviews r1 and r2 of `plan` (fingerprints all `a` and all `b`).
+fn insert_pending_reviews(env: &TestEnv, plan: &str) {
+    env.sql(&format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('{plan}', 'r1', 1, '{}', 'pending', 't');
+         INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('{plan}', 'r2', 2, '{}', 'pending', 't');",
+        "a".repeat(64),
+        "b".repeat(64)
+    ));
+}
+
+/// Asserts r1 and r2 of `plan` are superseded and their `plan-review` Events come, in order, before the one `plan-done`.
+fn assert_reviews_superseded_before_done(env: &TestEnv, plan: &str) {
+    assert_eq!(env.query::<String>(&format!("SELECT phase FROM plans WHERE id = '{plan}'")), "done");
+    for (id, fingerprint) in [("r1", "a"), ("r2", "b")] {
+        assert_eq!(
+            env.query::<String>(&format!(
+                "SELECT status || '|' || (decided_at IS NOT NULL) || '|' || (feedback IS NULL) || '|' || fingerprint FROM plan_reviews WHERE plan = '{plan}' AND id = '{id}'"
+            )),
+            format!("superseded|1|1|{}", fingerprint.repeat(64)),
+            "{id}"
+        );
+    }
+    let reviews: Vec<String> = env.read(|c| {
+        let mut stmt = c.prepare(&format!("SELECT data FROM events WHERE plan = '{plan}' AND kind = 'plan-review' ORDER BY id"))?;
+        stmt.query_map([], |r| r.get::<_, String>(0))?.collect()
+    });
+    let reviews: Vec<Value> = reviews.iter().map(|d| serde_json::from_str(d).unwrap()).collect();
+    assert_eq!(
+        reviews,
+        [
+            json!({"review": "r1", "fingerprint": "a".repeat(64), "status": "superseded"}),
+            json!({"review": "r2", "fingerprint": "b".repeat(64), "status": "superseded"})
+        ]
+    );
+    assert_eq!(env.query::<i64>(&format!("SELECT count(*) FROM events WHERE plan = '{plan}' AND kind = 'plan-done'")), 1);
+    assert_eq!(
+        env.query::<i64>(&format!(
+            "SELECT (SELECT max(id) FROM events WHERE plan = '{plan}' AND kind = 'plan-review') < (SELECT id FROM events WHERE plan = '{plan}' AND kind = 'plan-done')"
+        )),
+        1
+    );
 }
