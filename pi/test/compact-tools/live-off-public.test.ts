@@ -118,7 +118,7 @@ for (const publicAPI of [false, true]) for (const initial of ["off", "claude"]) 
 		assert.equal(widgets.has("compact-tools-silent-activity-render"), false, "resuming during answer streaming must not reinsert thinking dots");
 		assert.match(stripTerminalSequences(working ?? ""), /Responding/, "the current streaming phase resumes immediately");
 		await commands.get("silent").handler("off", ctx);
-		assert.match(stripTerminalSequences(fresh.render(160).join("\n")), /⦁ bash/);
+		assert.match(stripTerminalSequences(fresh.render(160).join("\n")), /╭─\uE0B6bash/u);
 		emit("tool_execution_end", { toolCallId: "live-bash", toolName: "bash", isError: false, durationMs: 1234 });
 		row.updateResult({ content: [{ type: "text", text: "final result" }], details: undefined, isError: false, durationMs: 1234 } as never);
 		assert.match(draw(), /Done in 1\.234s/);
