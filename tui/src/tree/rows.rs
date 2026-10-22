@@ -14,8 +14,8 @@
 //! block: the title row `╭` + the Context's dot + its id, each content row `├─` + the row's dot + its name, straight
 //! against the branch (the widget indents a child by two columns; `draw` takes it back), and **one** closing row. The
 //! toggle shows and hides **only the archived rows**: the live rows always show. Folded, the closing row is the muted
-//! `╰󰁋 expand`; expanded, the archived rows (muted) and `╰󰁣 collapse`; a Context with no archived rows closes with a
-//! plain `╰─` and has no toggle. Only the closing row folds ([`Row::Toggle`], [`click_toggle`]); a click on the title
+//! `╰󰁋 expand`; expanded, the archived rows (muted) and `╰󰁣 collapse`; a Context with no archived rows closes with the
+//! terminator ` ╰󰁚` (U+F005A; hs-d574) and has no toggle. Only the closing row folds ([`Row::Toggle`], [`click_toggle`]); a click on the title
 //! row keeps the row's own action. A Context's closing row is drawn as the Context's next sibling.
 //!
 //! Labels (commands.md §13.2): a Context row shows its id, a Plan row its Plan's id, a fork its Session's id.
@@ -34,7 +34,7 @@
 //! | Path | Row |
 //! |---|---|
 //! | `[context]`, `[context, plan]`, `[context, session]` | a Context, a Plan (its row is its Lead's), a forked Session; archived or not |
-//! | `[╰─ context]` | the closing row of that Context (`╰󰁋 expand`, `╰󰁣 collapse` or `╰─`); its toggle |
+//! | `[╰─ context]` | the closing row of that Context (`╰󰁋 expand`, `╰󰁣 collapse`, or the terminator `╰󰁚`; hs-d574); its toggle |
 //!
 //! Everything here is pure except `draw`, which only writes to the frame's buffer.
 
@@ -93,7 +93,7 @@ pub enum Row<'a> {
     Plan(&'a ContextNode, &'a PlanNode),
     /// A Session forked by `session fork`, with the Plan it belongs to.
     Fork(&'a ContextNode, &'a PlanNode, &'a SessionNode),
-    /// The closing row of a Context (`╰󰁋 expand`, `╰󰁣 collapse`, or the plain `╰─` of a Context with no row): the only row that folds its archived rows.
+    /// The closing row of a Context (`╰󰁋 expand`, `╰󰁣 collapse`, or the terminator `╰󰁚` of a Context with no row; hs-d574): the only row that folds its archived rows.
     Toggle,
 }
 
@@ -375,7 +375,7 @@ fn fork_row(s: &SessionNode, width: u16, frame: usize, muted: bool) -> (Id, Line
 /// stays under the live rows (the tree widget draws a child only under an open item) and is drawn once.
 ///
 /// A Context with nothing to fold (no archived row) has no closing row when it has rows: its last row's branch is the
-/// `╰─` instead of `├─` (hs-d477). With no row at all it keeps the plain `╰─` closing row.
+/// `╰─` instead of `├─` (hs-d477). With no row at all it ends with the terminator ` ╰󰁚` (U+F005A; hs-d574).
 fn context_items(c: &ContextNode, opened: &HashSet<Vec<Id>>, width: u16, frame: usize) -> Vec<TreeItem<'static, Id>> {
     let id = c.id.to_string();
     let close = toggle_id(&id);
@@ -599,7 +599,7 @@ pub fn move_cursor(state: &mut TreeState<Id>, tree: &Tree, delta: isize) {
 }
 
 /// A click on a closing row (`╰󰁋 expand`, `╰󰁣 collapse`) shows or hides its Context's archived rows; it selects nothing.
-/// Returns whether `path` was a closing row: the only row that folds. The plain `╰─` of a Context with no row (nothing to fold)
+/// Returns whether `path` was a closing row: the only row that folds. The terminator `╰󰁚` of a Context with no row (nothing to fold)
 /// is one, and folds nothing.
 pub fn click_toggle(state: &mut TreeState<Id>, tree: &Tree, path: &[Id]) -> bool {
     let Some(Row::Context(c)) = toggle_owner(path).and_then(|owner| row(tree, &owner)) else { return false };
@@ -749,7 +749,7 @@ mod tests {
                 format!("╭{STOPPED} gamma").to_owned(),
                 PLAIN.to_owned(),
             ],
-            "no state text after a name; the last row of a Context with nothing archived ends it with `╰─`, one empty row between two Contexts, and a plain `╰─` closes a Context with no row inside"
+            "no state text after a name; the last row of a Context with nothing archived ends it with `╰─`, one empty row between two Contexts, and the terminator closes a Context with no row inside"
         );
     }
 
@@ -780,7 +780,7 @@ mod tests {
         }
         assert_ne!(fg(&buf, 4, 2), color(Meaning::Nothing), "a content row is not muted");
         assert_ne!(fg(&buf, 2, 2), color(Meaning::Nothing));
-        // a Context with no row at all keeps its plain closing row, which folds nothing
+        // a Context with no row at all ends with the terminator, which folds nothing
         let before = state.opened().clone();
         assert!(click_toggle(&mut state, &tree, &toggle_of(&["gamma"])), "it is a closing row");
         assert_eq!(state.opened(), &before, "but there is nothing to fold");

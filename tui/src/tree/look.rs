@@ -1,6 +1,6 @@
 //! The tree column's section look v3, as exact rows (commands.md §13.2 "Rows", "Inbox section", "Clicks"; §17
 //! "Collapsible blocks", "Section titles", "Scroll cues"; hs-d344 to hs-d349). Red until the tree draws them: the
-//! Context blocks fold only their archived rows and close with an arrow row (or a plain `╰─`), the Inbox's title is the
+//! Context blocks fold only their archived rows and close with an arrow row (or the terminator `╰󰁚` when no rows; hs-d574), the Inbox's title is the
 //! pill under one empty row, its item rows keep their icon and colour, and its scroll cues are right-aligned.
 //!
 //! The view is drawn on a `TestBackend` and read back cell by cell, so the rows and the styles that matter are pinned
@@ -182,13 +182,13 @@ fn a_context_with_no_archived_rows_ends_with_its_last_rows_corner_and_has_no_tog
     // alpha (five live rows), beta (one) and gamma (none): no archived row anywhere, so no closing row but gamma's
     assert!(got[6].starts_with(&format!(" ╰─{NEEDS_YOU} ship·f-bl")), "alpha's last row ends the block: {got:#?}");
     assert!(got[9].starts_with(&format!(" ╰─{NEEDS_YOU} rel")), "beta's: {got:#?}");
-    assert_eq!(got[12], " ╰─", "gamma, with no row at all, keeps its plain closing row: {got:#?}");
+    assert_eq!(got[12], " ╰─", "gamma, with no row at all, ends with the terminator: {got:#?}");
     assert!(!got.iter().any(|r| r.contains("expand") || r.contains("collapse") || r.contains(DOWN) || r.contains(UP)), "no word, no arrow: {got:#?}");
     for y in [6, 9] {
         is_muted_line(&buf, y, 1, 3);
     }
     is_muted_line(&buf, 12, 1, 4);
-    // nothing to fold: a click on the plain row changes nothing
+    // nothing to fold: a click on the terminator changes nothing
     assert_eq!(click(&mut view, 2, 12), Effect::None);
     assert_eq!(rows(&draw(&mut view, 44, 24)), got, "nothing folded");
 }
@@ -238,7 +238,7 @@ fn the_inbox_title_is_the_pill_under_one_empty_row_and_the_rows_follow_at_once()
         " ╰─".to_owned(),
         String::new(),
     ];
-    assert_eq!(&got[got.len() - want.len()..], &want[..], "one empty row, the title, three rows, a plain close (nothing to fold) and one empty row: {got:#?}");
+    assert_eq!(&got[got.len() - want.len()..], &want[..], "one empty row, the title, three rows, the terminator (nothing to fold) and one empty row: {got:#?}");
 }
 
 #[test]

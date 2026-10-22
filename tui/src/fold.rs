@@ -8,8 +8,7 @@
 //!   led by a muted branch with no indent, `├─` in the tree, which puts a glyph straight against it
 //!   (`├─󰪥 cross-repo`), or `│` (the Inbox's rows, `│ <icon> <item>`); then **one** closing row, `╰󰁣 collapse`.
 //! - **Folded:** the title row (`╭󰝦 dotfiles`), then `╰󰁋 expand`.
-//! - **Nothing to fold:** a block of rows has no closing row, its last row's branch is the `╰─` ([`LAST_BRANCH`]); a
-//!   block with no row at all, and the Inbox with 3 items or fewer, close with a plain `╰─` ([`plain`]).
+//! - **Nothing to fold:** a block of rows ends with the terminator ` ╰󰁚` (U+F005A, colour 8, no word, no toggle; hs-d574, replacing hs-d477's and hs-d459's plain `╰─` line). A tree Context block with no closing row keeps its last row's branch as `╰─` ([`LAST_BRANCH`]); a block with no row at all closes with the terminator ([`done`]).
 //! - **Muted** is `palette::muted_text()` (colour 8): the lines (`╭`, `├─`, `│`, `╰`). The toggle's arrow and word
 //!   (`expand`, `collapse`) are `palette::toggle_text()` (colour 7, hs-d534). The content is not muted, and a row the widget
 //!   wraps keeps its own glyphs and colours: the fold only adds muted lines.
@@ -69,7 +68,8 @@ pub fn plain() -> Line<'static> {
     Line::from(Span::styled(PLAIN, muted()))
 }
 
-/// The closing row of a section with nothing in it: a muted `╰`, the glyph and the word (the empty Inbox; hs-d487).
+/// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
+/// items or fewer): a muted `╰`, the terminator glyph U+F005A and the word (the empty Inbox; hs-d487, hs-d574).
 pub fn done(text: &str) -> Line<'static> {
     Line::from(Span::styled(format!("{CLOSE}{UP_TO_DATE} {text}"), muted()))
 }

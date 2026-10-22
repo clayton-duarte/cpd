@@ -2,7 +2,7 @@
 //! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
 //! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│ <glyph> <label>` (each with
 //! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
-//! the muted `╰󰁋 expand` that expands the list inline and becomes `╰󰁣 collapse`, with fewer a plain `╰─`, with none no
+//! the muted `╰󰁋 expand` that expands the list inline and becomes `╰󰁣 collapse`, with 3 or fewer the terminator `╰󰁚` (U+F005A; hs-d574), with none no
 //! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
 //! column's split gives it (the tree has two thirds, hs-d307; `View::draw_at`) and its items scroll inside the cap, with right-aligned `▲ <n> more` / `▼ <n> more` cue rows
 //! (`dialog::scroll::cue`, [`Shape`]).
@@ -89,8 +89,8 @@ impl Shape {
         self.count > SHOWN
     }
 
-    /// The rows the section wants: the empty row, the title, the items, the closing row (the toggle, a plain `╰─`, or
-    /// with no item the up-to-date row, hs-d487) and the empty row below; expanded, at most the cap, but not less than
+    /// The rows the section wants: the empty row, the title, the items, the closing row (the toggle, the terminator `╰󰁚`, or
+    /// with no item the up-to-date row, hs-d487; hs-d574) and the empty row below; expanded, at most the cap, but not less than
     /// collapsed.
     pub fn height(self) -> u16 {
         let close = 1;
@@ -137,7 +137,7 @@ impl Shape {
         scroll
     }
 
-    /// The row `row` rows below the section's first; the empty rows, a cue row and a plain closing row are none.
+    /// The row `row` rows below the section's first; the empty rows, a cue row and the terminator are none (hs-d574).
     pub fn hit(self, row: u16) -> Option<Hit> {
         let row = usize::from(row);
         let win = self.window();
@@ -256,7 +256,7 @@ fn open_or_history(tree: &Tree, id: &SessionId) -> Action {
     if archived { Action::History(id.clone()) } else { Action::Open(id.clone()) }
 }
 
-/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318). `engine-down`
+/// Where a plain click on `item` goes (commands.md §13.2, "Clicks on an Inbox item"): every kind acts, but a row of the old `engine-error` or `job-stuck` kind (hs-d314, hs-d318) or the terminator `╰󰁚` (hs-d574). `engine-down`
 /// starts the engine; `pr-ready` opens the merge popup of its pull request (`None` for a subject that is not
 /// `pr:<owner>/<repo>#<n>`); `plan-review` opens the Lead of its Plan and copies the review page's `url` (when there is
 /// one); `review-waiting` opens its Session, then copies the `url` likewise; the `url` is copied for `review-requested` (their OSC 8 link stays for the
