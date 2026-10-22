@@ -23,7 +23,8 @@ use time::OffsetDateTime;
 use self::grants::{Allowed, Approval};
 use self::rules::{Action, Grant, Op};
 use crate::args::SessionRef;
-use crate::env::Env;
+use crate::home::CpdHome;
+use crate::store::Store;
 use crate::error::{CpdError, ErrorCode};
 use crate::ids::{AttemptId, SessionId};
 use crate::output::Output;
@@ -169,9 +170,19 @@ fn env_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
+/// The store and home a secret command works in. It reads no `config.toml`: a secret command needs nothing from it,
+/// so a machine without one still has its secrets guarded.
+struct Open {
+    home: CpdHome,
+    store: Store,
+}
+
+/// `timeouts.store_busy_ms`'s default (contract §8.2).
+const STORE_BUSY_MS: u64 = 5000;
+
 /// The Session of `CPD_SESSION` and its role, with the open store. No session: `secret_session_required`, before
 /// the store is touched; unknown: `session_not_found`.
-fn identify() -> Result<(Env, Caller), CpdError> {
+fn identify() -> Result<(Open, Caller), CpdError> {
     let Some(raw) = env_var("CPD_SESSION") else {
         return Err(CpdError::new(
             ErrorCode::SecretSessionRequired,
@@ -179,7 +190,8 @@ fn identify() -> Result<(Env, Caller), CpdError> {
         ));
     };
     let reference: SessionRef = raw.parse().map_err(|_| session_not_found(&raw))?;
-    let mut env = Env::open()?;
+    let home = CpdHome::from_env()?;
+    let mut env = Open { store: Store::open(&home, STORE_BUSY_MS)?, home };
     let from_env = env_var("CPD_ATTEMPT").map(|a| AttemptId::parse(&a)).transpose()?;
     let who = env.store.read(|conn| {
         let session = session::resolve(conn, &reference)?;
