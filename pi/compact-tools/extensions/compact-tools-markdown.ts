@@ -1,3 +1,4 @@
+import { ink } from "./compact-tools-indices.ts";
 import { highlightCode, type Theme } from "@earendil-works/pi-coding-agent";
 import { languageFromPath } from "./compact-tools-language.ts";
 
@@ -19,17 +20,17 @@ function fenceLanguage(info: string): string | undefined {
 }
 
 function highlightInline(text: string, theme: Theme): string {
-	const plain = (value: string) => value ? theme.fg("toolOutput", value) : "";
-	const marker = (value: string) => theme.fg("dim", value);
+	const plain = (value: string) => value ? ink("toolOutput", value) : "";
+	const marker = (value: string) => ink("dim", value);
 	let output = "";
 	let last = 0;
 	for (const match of text.matchAll(INLINE)) {
 		output += plain(text.slice(last, match.index));
 		const [whole, ticks, code, label, url, strong, strongAlt, emphasis, emphasisAlt] = match;
 		if (ticks !== undefined) {
-			output += marker(ticks) + theme.fg("mdCode", code!) + marker(ticks);
+			output += marker(ticks) + ink("mdCode", code!) + marker(ticks);
 		} else if (label !== undefined) {
-			output += marker("[") + theme.fg("mdLink", label) + marker("](") + theme.fg("mdLinkUrl", url!) + marker(")");
+			output += marker("[") + ink("mdLink", label) + marker("](") + ink("mdLinkUrl", url!) + marker(")");
 		} else if (strong !== undefined || strongAlt !== undefined) {
 			const delimiter = whole.slice(0, 2);
 			output += marker(delimiter) + theme.bold(plain(strong ?? strongAlt!)) + marker(delimiter);
@@ -43,18 +44,18 @@ function highlightInline(text: string, theme: Theme): string {
 }
 
 function highlightProse(line: string, theme: Theme): string {
-	if (HEADING.test(line)) return theme.bold(theme.fg("mdHeading", line));
-	if (RULE.test(line)) return theme.fg("mdHr", line);
+	if (HEADING.test(line)) return theme.bold(ink("mdHeading", line));
+	if (RULE.test(line)) return ink("mdHr", line);
 	const quote = line.match(QUOTE);
-	if (quote) return theme.fg("mdQuoteBorder", quote[1]!) + theme.italic(theme.fg("mdQuote", quote[2]!));
+	if (quote) return ink("mdQuoteBorder", quote[1]!) + theme.italic(ink("mdQuote", quote[2]!));
 	const item = line.match(LIST_ITEM);
-	if (item) return item[1]! + theme.fg("mdListBullet", item[2]! + item[3]!) + highlightInline(item[4]!, theme);
+	if (item) return item[1]! + ink("mdListBullet", item[2]! + item[3]!) + highlightInline(item[4]!, theme);
 	return highlightInline(line, theme);
 }
 
 function highlightFenceBody(lines: string[], language: string | undefined, theme: Theme): string[] {
 	if (lines.length === 0) return [];
-	if (!language) return lines.map((line) => theme.fg("mdCodeBlock", line));
+	if (!language) return lines.map((line) => ink("mdCodeBlock", line));
 	return highlightCode(lines.join("\n"), language);
 }
 
@@ -77,7 +78,7 @@ export function highlightMarkdown(lines: string[], theme: Theme): string[] {
 			const close = line.match(FENCE_CLOSE);
 			if (close && close[1]![0] === fence.char && close[1]!.length >= fence.length) {
 				flush(index);
-				output[index] = theme.fg("mdCodeBlockBorder", line);
+				output[index] = ink("mdCodeBlockBorder", line);
 				fence = undefined;
 			}
 			return;
@@ -85,7 +86,7 @@ export function highlightMarkdown(lines: string[], theme: Theme): string[] {
 		const open = line.match(FENCE_OPEN);
 		if (open) {
 			fence = { char: open[1]![0]!, length: open[1]!.length, language: fenceLanguage(open[2]!), start: index + 1 };
-			output[index] = theme.fg("mdCodeBlockBorder", line);
+			output[index] = ink("mdCodeBlockBorder", line);
 			return;
 		}
 		output[index] = highlightProse(line, theme);

@@ -1,3 +1,4 @@
+import { ink } from "./compact-tools-indices.ts";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { normalizeLineEndings } from "./compact-tools-core.ts";
@@ -393,7 +394,7 @@ export type ThemeColor = Parameters<Theme["fg"]>[0];
 export type Segment = { text: string; color?: ThemeColor };
 
 export function paintSegments(segments: readonly Segment[], theme: Theme): string {
-	return segments.map((segment) => segment.color ? theme.fg(segment.color, segment.text) : segment.text).join("");
+	return segments.map((segment) => segment.color ? ink(segment.color, segment.text) : segment.text).join("");
 }
 
 /** Plain text as lines of one color each. */

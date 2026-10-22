@@ -22,7 +22,7 @@ import {
 	stripTerminalSequences,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { chromePainter } from "./compact-tools-palette.ts";
+import { chrome, fgOpen, ink, paint, TEXT } from "./compact-tools-indices.ts";
 import type { ToggleGlyphs } from "./compact-tools-types.ts";
 
 export type ThinkingView = "summary" | "detail" | "hidden";
@@ -159,7 +159,7 @@ export function hasThinkingDetail(markdown: string): boolean {
 	return sectionsHaveDetail(splitThinkingSections(markdown));
 }
 
-/** `╰<glyph> <label>`, then ` · <hint>` when there is a hint. */
+/** `╰` (rail) then `<glyph> <label>` (toggle), then ` · <hint>` when there is a hint. */
 function toggleRow(
 	style: (text: string) => string,
 	glyph: string,
@@ -167,9 +167,9 @@ function toggleRow(
 	hint: string | undefined,
 	availableWidth: number,
 ): string[] {
-	const text = style(` ${label}`) + (hint ? style(" · ") + hint : "");
+	const text = paint(TEXT, ` ${label}`) + (hint ? style(" · ") + hint : "");
 	return wrapTextWithAnsi(text, Math.max(1, availableWidth - 2)).map(
-		(line, index) => `${index === 0 ? style(`╰${glyph}`) : "  "}${line}`,
+		(line, index) => `${index === 0 ? style("╰") + paint(TEXT, glyph) : "  "}${line}`,
 	);
 }
 
@@ -252,13 +252,13 @@ export class ThinkingCycleController {
 			const sections = splitThinkingSections(markdown);
 			this.hasToggleableThinking ||= sectionsHaveDetail(sections);
 			const theme = this.theme;
-			const detailTextPrefix = theme?.getFgAnsi("thinkingText");
+			const detailTextPrefix = fgOpen(TEXT);
 			// Derived once per transform: the rail is drawn for every wrapped line of detail.
-			const rail = theme ? chromePainter(theme) : undefined;
+			const rail = theme ? chrome : undefined;
 			return renderThinkingSections(sections, thinkingViewForPhase(this.phase), context.availableWidth, {
 				// Keep thinking chrome neutral across themes: effort-level and border colors can
 				// be intentionally vivid and are not content hierarchy colors.
-				styleSummary: theme ? (summary) => theme.fg("text", theme.bold(summary)) : undefined,
+				styleSummary: theme ? (summary) => ink("text", theme.bold(summary)) : undefined,
 				// Prefix styling resets the foreground; resume the host's thinking text color.
 				// The rail and connector are the same frame the tool rows draw, so they take
 				// the same chrome tone rather than a color name of their own.
@@ -267,9 +267,9 @@ export class ThinkingCycleController {
 					: undefined,
 				controls: theme
 					? (hasDetail) => hasDetail
-						? theme.fg(
+						? ink(
 								"dim",
-								`${theme.italic("ctrl+t")} toggle • ${theme.italic("click")} to hide`,
+								"ctrl+t toggle • click to hide",
 							)
 						: undefined
 					: undefined,
@@ -289,7 +289,7 @@ export class ThinkingCycleController {
 		// this label in thinkingText, so an inner text span keeps it consistent with
 		// completed summary titles.
 		this.phase = getInitialThinkingPhase();
-		const hiddenLabel = this.theme.fg("text", this.theme.bold("Thinking..."));
+		const hiddenLabel = ink("text", this.theme.bold("Thinking..."));
 		// Pi does not currently expose transcript invalidation directly. Updating
 		// this label rebuilds assistant Markdown and requests a render without
 		// changing the message or its hidden/visible state.

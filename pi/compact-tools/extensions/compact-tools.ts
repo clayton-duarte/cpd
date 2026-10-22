@@ -26,7 +26,6 @@ import type {
 import type { Component } from "@earendil-works/pi-tui";
 import { classifyCallStatus, formatDurationMs, normalizeLineEndings, type RowStatus } from "./compact-tools-core.ts";
 import { loadConfig } from "./compact-tools-config.ts";
-import { paletteOf } from "./compact-tools-color.ts";
 import { hasAuthorRenderers, loadNativeTimerRenderers, syncNativeToolTimer } from "./compact-tools-rendering.ts";
 import { registerCompactToolsCommand } from "./compact-tools-command.ts";
 import { clearRowResolver, installToolRowPatch, setRowResolver, type RowRenderers, type ToolRow } from "./compact-tools-custom.ts";
@@ -68,7 +67,7 @@ import { CODEX_BULLET, CODEX_INDENT } from "./compact-tools-codex.ts";
 import { NestedCallSummaries } from "./compact-tools-nested.ts";
 import { renderCodexCall, renderCodexResult } from "./compact-tools-codex-rows.ts";
 import { ToolGroupController } from "./compact-tools-grouping.ts";
-import { chromePainter, completionPainter, paintChrome, paintIndicator } from "./compact-tools-palette.ts";
+import { chrome, ink, paint, paintIndicator, TEXT } from "./compact-tools-indices.ts";
 import { ProgressController } from "./compact-tools-progress.ts";
 import { findOtherCopy, standDown } from "./compact-tools-double-load.ts";
 import { ToolRuntime } from "./compact-tools-runtime.ts";
@@ -151,8 +150,8 @@ function liveIndicator(theme: Theme, ctx: RenderContext, state: RowState, glyph?
 	return () => {
 		if (settled !== undefined) return settled;
 		const status = callStatus(ctx, state);
-		const indicator = paintIndicator(theme, status,
-			runtime.syncIndicator(ctx.toolCallId, status === "running", () => ctx.invalidate()), glyph);
+		runtime.syncIndicator(ctx.toolCallId, status === "running", () => ctx.invalidate());
+		const indicator = paintIndicator(status, glyph);
 		if (status === "success" || status === "error") settled = indicator;
 		return indicator;
 	};
@@ -179,7 +178,6 @@ function canReuseResult<TArgs>(
 		&& state.lastResultPreview === state.preview
 		&& state.lastResultError === ctx.isError
 		&& state.lastResultConfigRevision === state.configRevision
-		&& state.lastResultPalette === paletteOf(theme)
 		&& state.lastResultDurationMs === state.durationMs
 		&& state.lastResultOutputPad === ctx.outputPad;
 }
@@ -192,7 +190,6 @@ function rememberResult(state: RowState, result: AgentToolResult<unknown>, optio
 	state.lastResultPreview = state.preview;
 	state.lastResultError = isError;
 	state.lastResultConfigRevision = state.configRevision;
-	state.lastResultPalette = paletteOf(theme);
 }
 
 function renderControls(
@@ -212,14 +209,13 @@ function renderControls(
 		: `${isError ? "Failed" : "Done"}${duration ? ` in ${duration}` : ""}`;
 	// A failed row already reads as an error through its output color and Pi's row
 	// background, so completion metadata stays neutral rather than repeating that signal.
-	const chrome = chromePainter(theme);
-	const metadata = running ? chrome : completionPainter(theme);
+	const metadata = chrome;
 	let details = metadata(status);
-	if (failureReason && isError && !running) details += chrome(" · ") + theme.fg("error", failureReason);
+	if (failureReason && isError && !running) details += chrome(" · ") + ink("error", failureReason);
 	// An edit reports what it changed the way a diff does: lines added and removed.
 	else if (changes && !running && !isError) {
-		details += chrome(" (") + theme.fg("toolDiffAdded", `+${changes.added}`) + chrome(" ")
-			+ theme.fg("toolDiffRemoved", `-${changes.removed}`) + chrome(")");
+		details += chrome(" (") + ink("toolDiffAdded", `+${changes.added}`) + chrome(" ")
+			+ ink("toolDiffRemoved", `-${changes.removed}`) + chrome(")");
 	}
 	// A failed call produced no result worth counting; "(0 lines)" would only mislead.
 	else if (state.resultLineSummary && !running && !isError) details += metadata(` (${state.resultLineSummary})`);
@@ -229,7 +225,7 @@ function renderControls(
 		const { expand, collapse } = runtime.config.toggle;
 		const label = state.expanded ? " collapse" : " expand";
 		const bare = !isError && !duration && !nestedSummary && !state.resultLineSummary && !changes;
-		return prefixedSentence(chrome(label) + (bare ? "" : chrome(" · ") + details), chrome(` ╰${state.expanded ? collapse : expand}`), "   ", true);
+		return prefixedSentence(paint(TEXT, label) + (bare ? "" : chrome(" · ") + details), chrome(" ╰") + paint(TEXT, state.expanded ? collapse : expand), "   ", true);
 	}
 	return nestedSummary ? prefixedSentence(details, chrome(prefix), indent, true) : prefixedText(details, chrome(prefix), indent);
 }
@@ -257,8 +253,8 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 	if (isClaude()) {
 		// Claude Code's call line: `⦁ Bash(npm test)`, `⦁ Update(src/app.ts)`.
 		const { label, argument } = claudeTitle(name, args, state.expanded === true);
-		const title = ` ${theme.fg("toolTitle", theme.bold(label))}`
-			+ (argument ? styleMultiline(`(${argument})`, (line) => theme.fg("toolOutput", line)) : "");
+		const title = ` ${ink("toolTitle", theme.bold(label))}`
+			+ (argument ? styleMultiline(`(${argument})`, (line) => ink("toolOutput", line)) : "");
 		// The title wraps under the tool's name rather than being cut to the row; only a
 		// very long command is shortened.
 		const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot + title, undefined, theme, CLAUDE_TITLE_INDENT));
@@ -266,18 +262,18 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 		if (kind === "custom" && state.expanded && hasNestedArguments(args)) container.addChild(renderArguments(args, theme, CLAUDE_INDENT));
 		return new WithinWidth(container);
 	}
-	const title = ` ${theme.fg("toolTitle", theme.bold(name))}`;
+	const title = ` ${ink("toolTitle", theme.bold(name))}`;
 	let details: string | undefined;
 	if (kind === "shell") {
 		const command = normalizeLineEndings(typeof args.command === "string" ? args.command : "");
 		details = state.expanded
-			? styleMultiline(command || "…", (line) => theme.fg("toolOutput", line))
-			: theme.fg("toolOutput", summarizeShellCommand(name, command));
+			? styleMultiline(command || "…", (line) => ink("toolOutput", line))
+			: ink("toolOutput", summarizeShellCommand(name, command));
 	} else {
 		const summary = kind === "file" ? getCallDetails(name, args) : summarizeCustomArguments(args);
-		details = summary ? styleMultiline(summary, (line) => theme.fg("toolOutput", line)) : undefined;
+		details = summary ? styleMultiline(summary, (line) => ink("toolOutput", line)) : undefined;
 	}
-	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot + title, details, theme, undefined, foldToggles() ? paintChrome(theme, "╭") : undefined));
+	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot + title, details, theme, undefined, foldToggles() ? chrome("╭") : undefined));
 	const extra = kind === "file" ? getArgumentDetails(name, args) : kind === "custom" && state.expanded ? args : {};
 	if (Object.keys(extra).length > 0) container.addChild(renderArguments(extra, theme));
 	return new WithinWidth(container);
@@ -337,7 +333,7 @@ function renderRowBody(
 }
 
 function claudeMoreLines(theme: Theme, hidden: number): string {
-	return chromePainter(theme)(`… +${hidden} ${hidden === 1 ? "line" : "lines"} (ctrl+o to expand)`);
+	return chrome(`… +${hidden} ${hidden === 1 ? "line" : "lines"} (ctrl+o to expand)`);
 }
 
 /** Output previewed in rows the way Claude Code previews it, all of it once opened. */
@@ -345,8 +341,8 @@ function claudeOutput(output: string, expanded: boolean, theme: Theme, isError: 
 	const normalized = normalizeLineEndings(output).trimEnd();
 	// Pi's bash reports an empty run as "(no output)"; Claude Code dims its own words for it.
 	const lines = !normalized || normalized === "(no output)"
-		? [chromePainter(theme)(empty)]
-		: normalized.split("\n").map((line) => theme.fg(isError ? "error" : "toolOutput", line));
+		? [chrome(empty)]
+		: normalized.split("\n").map((line) => ink(isError ? "error" : "toolOutput", line));
 	return claudeRows(lines, firstPrefix, CLAUDE_INDENT, expanded ? undefined : CLAUDE_OUTPUT_ROWS,
 		(hidden) => claudeMoreLines(theme, hidden), completion);
 }
@@ -400,7 +396,6 @@ function renderClaudeResult(
 	author: AuthorResultRenderer | undefined,
 	completion?: Component,
 ): Component {
-	const chrome = chromePainter(theme);
 	const container = new CachedContainer();
 	// One line under the call, wrapped rather than cut to the row.
 	const line = (text: string) => prefixedSentence(text, chrome(CLAUDE_RESULT_PREFIX), CLAUDE_INDENT);
@@ -413,12 +408,12 @@ function renderClaudeResult(
 		// A command's output says why beneath its exit code; another tool's message is
 		// shortened to one line, and a click shows it whole in its place.
 		if (failure.detail) {
-			container.addChild(line(theme.fg("error", failure.headline)));
+			container.addChild(line(ink("error", failure.headline)));
 			container.addChild(claudeOutput(failure.detail, expanded, theme, true, "", CLAUDE_INDENT, completion));
 		} else if (expanded && output.trim()) {
 			container.addChild(claudeOutput(`Error: ${output.trim()}`, true, theme, true, "", chrome(CLAUDE_RESULT_PREFIX), completion));
 		} else {
-			container.addChild(line(theme.fg("error", failure.headline)));
+			container.addChild(line(ink("error", failure.headline)));
 			if (completion) container.addChild(completion);
 		}
 		return container;
@@ -428,7 +423,7 @@ function renderClaudeResult(
 	const outcome = body && rowKind(name) === "custom"
 		? formatResultLineSummary(name, args, result, output) ?? "Done"
 		: claudeOutcome(name, args, result, output, (value) => theme.bold(value));
-	if (outcome !== undefined) container.addChild(line(theme.fg("toolOutput", outcome)));
+	if (outcome !== undefined) container.addChild(line(ink("toolOutput", outcome)));
 	else container.addChild(claudeOutput(output, expanded, theme, false, rowKind(name) === "shell" ? "(No output)" : "(No content)", chrome(CLAUDE_RESULT_PREFIX), completion));
 	if (body) container.addChild(body);
 	if (completion && outcome !== undefined) container.addChild(completion);
