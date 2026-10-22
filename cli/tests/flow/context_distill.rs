@@ -989,10 +989,10 @@ fn step_tiers(out: &Value) -> Vec<String> {
 #[test]
 fn the_distiller_climbs_the_ladder_until_a_digest_is_valid() {
     let fx = ladder_fx();
-    fx.env.fake_pi(&by_model(STRAY, CITES_ALL, STRAY));
+    fx.env.fake_pi(&format!("{REPLY}\ncase \"$*\" in\n*:high*) {{\n{CITES_ALL}\n}} | reply ;;\n*) {{\n{STRAY}\n}} | reply ;;\nesac"));
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3", "S1"], "{out}");
-    assert_eq!(tiers_of(&fx.runs()), ["H0", "H1", "H2", "H3", "S1"]);
+    assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3"], "{out}");
+    assert_eq!(tiers_of(&fx.runs()), ["H0", "H1", "H2", "H3"]);
     assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
     assert_eq!(fx.errors().len(), 0, "a valid step ends the run with no error Event");
 }
@@ -1009,16 +1009,17 @@ fn the_distiller_starts_at_context_distill_tier() {
 }
 
 #[test]
-fn a_run_that_fails_every_step_stops_after_s4_with_one_error_event() {
+fn a_run_that_fails_every_step_stops_after_h3_with_one_error_event() {
     let fx = ladder_fx();
     fx.env.fake_pi(&says(STRAY));
     let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
     refused(&run, "distill_invalid", 1);
     let runs = fx.runs();
-    assert_eq!(tiers_of(&runs), ["H0", "H1", "H2", "H3", "S1", "S2", "S3", "S4"]);
+    assert_eq!(tiers_of(&runs), ["H0", "H1", "H2", "H3"]);
     for r in &runs {
         let model = r["model"].to_string();
         assert!(!model.contains("opus"), "never O: {r}");
+        assert_ne!(r["tier"].as_str().unwrap_or("")[..1], *"S", "no S step (hs-d555): {r}");
         assert!(!model.contains(":max"), "never effort 5: {r}");
     }
     let events = fx.errors();
@@ -1029,8 +1030,22 @@ fn a_run_that_fails_every_step_stops_after_s4_with_one_error_event() {
 #[test]
 fn a_failed_pi_step_climbs_too() {
     let fx = ladder_fx();
-    fx.env.fake_pi(&format!("case \"$*\" in *p/haiku:*) echo 'model unavailable' >&2; exit 7 ;; esac\n{}", says(CITES_ALL)));
+    fx.env.fake_pi(&format!("case \"$*\" in *:high*) ;; *) echo 'model unavailable' >&2; exit 7 ;; esac\n{}", says(CITES_ALL)));
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3", "S1"], "{out}");
+    assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3"], "{out}");
     assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
+}
+
+#[test]
+fn a_run_starting_at_h3_has_one_step() {
+    // The full catalog (S efforts up to max) is there: the ladder still ends at H3 (hs-d555).
+    let fx = ladder_fx();
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap().replacen("lead_pi_packages", "context_distill_tier = \"H3\"\nlead_pi_packages", 1);
+    fs::write(&config, text).unwrap();
+    fx.env.fake_pi(&says(STRAY));
+    let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
+    refused(&run, "distill_invalid", 1);
+    assert_eq!(tiers_of(&fx.runs()), ["H3"]);
+    assert_eq!(fx.errors().len(), 1);
 }
