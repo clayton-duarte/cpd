@@ -357,7 +357,9 @@ test("G1: a different error is reported, then the first is reported again", asyn
   const a = new CpdError("bad_output", "a");
   const b = new CpdError("lock_timeout", "b");
   host.deliver("policy show", a);
+  await reports(1);
   host.deliver("policy show", b);
+  await reports(2);
   host.deliver("policy show", a);
   assert.deepEqual((await reports(3)).map((r) => r.code), ["bad_output", "lock_timeout", "bad_output"]);
   assert.deepEqual(pi.sent, []);
