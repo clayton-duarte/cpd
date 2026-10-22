@@ -1993,7 +1993,7 @@ Sessions (§2.2, §3.6) and their tmux panes (§6). Every tmux call is `tmux -L 
 cpd session list [--context <id>] [--plan <id>] [--role <role>] [--state <state>] [--archived]
 ```
 
-Filters combine with AND; `--role` and `--state` may repeat. Without filters: every Session except archived ones (`archived_at` is null). With `--archived`: archived Sessions only (`archived_at` is a time); both are shown together when the flag is not given or is repeated (example: `cpd session list --archived --archived`). Here `--context` and `--plan` are filters only: neither falls back to `CPD_PLAN`.
+Filters combine with AND; `--role` and `--state` may repeat. Without filters: every Session except archived ones (`archived_at` is null). With `--archived`: archived Sessions are listed too, live and archived together (hs-d516); the flag is given once (clap refuses it repeated). Here `--context` and `--plan` are filters only: neither falls back to `CPD_PLAN`.
 
 Effects: none; one read transaction.
 
@@ -3448,8 +3448,8 @@ User decision hs-d544 (2026-10-22, owner Plan `pi-theme`). Display only. In the 
 
 - **What is scanned:** the assistant's answer text (the text parts of its message, not thinking and not tool rows), **outside code**: inline code spans and fenced code blocks are left alone (decision of this Plan: a quoted command is not a mention).
 - **A mention** is a whole token (bounded by non-word characters, `[A-Za-z0-9_-]` counting as word characters, so `cpd2-x` does not match `cpd2`): a Session UUID or its 8-character prefix, a Plan id, or a Context id, of a Lead or Manager that exists, live or archived. Plan ids that are plain words (`distill`, `yield`, `delete`) light up in ordinary prose too; the User accepted that.
-- **The set of ids** comes from the commands the adapter runs: `cpd session list --archived --archived --role lead --role manager` (§10.1: `id`, so its 8-character prefix, and `plan`), `cpd plan list` (§4.2: `id`, archived ones included) and `cpd context list` (§3.2: `id`, archived included). A Plan or Context id counts only when a Lead (or Manager) Session exists for it.
-- **Refresh:** at `session_start` and on each cpd Event the adapter already receives (§15.3); a failed command keeps the previous set and shows the adapter's error as §15.1 does.
+- **The set of ids** comes from the commands the adapter runs: `cpd session list --archived --role lead --role manager` (§10.1: `id`, so its 8-character prefix, and `plan`), `cpd plan list` (§4.2: `id`, archived ones included) and `cpd context list` (§3.2: `id`, archived included). A Plan or Context id counts only when a Lead (or Manager) Session exists for it.
+- **Refresh:** at `session_start` and on each cpd Event the adapter already receives (§15.3); a failed command keeps the previous set and shows the adapter's error as §15.1 does, once: the same error again (same code and message) is not shown again until a refresh succeeds or the error changes.
 - **Drawing:** pi renders the assistant's markdown itself, so the adapter paints on the rendered lines: the assistant render override of `pi/compact-tools/extensions/compact-tools-silent.ts` (`RenderOverride`, `assistant`) wraps each rendered line's matching tokens in `ESC[35m`…`ESC[39m`, outside code. Idempotent: the same text gives the same lines.
 
 ## 16. The Worker contract
