@@ -14,6 +14,19 @@ fn fakes(env: &TestEnv) {
     env.fake_pi(&format!("exec sleep {SLEEP_SECONDS}"));
 }
 
+/// The cockpit: session `cpd`, window `main` with a tree pane and the placeholder in the chat slot.
+fn cockpit(env: &TestEnv) {
+    let ok = |args: &[&str]| {
+        let out = env.tmux(args);
+        assert!(out.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let tree = ok(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "215", "-y", "62", "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    ok(&["set", "-p", "-t", &tree, "@cpd_view", "tree"]);
+    let chat = ok(&["split-window", "-d", "-t", &tree, "-P", "-F", "#{pane_id}", &format!("sleep {SLEEP_SECONDS}")]);
+    ok(&["set", "-p", "-t", &chat, "@cpd_view", "chat"]);
+}
+
 #[test]
 fn first_message_of_a_lead_holds_header_brief_and_records_written_after_registration() {
     let env = TestEnv::new();
@@ -44,6 +57,7 @@ fn first_message_of_a_manager_holds_header_and_context() {
     fakes(&env);
     env.cpd(&["context", "new", "ctx", "--title", "Payments", "--owner", "acme"]).ok();
     env.cpd(&["context", "note", "Mind the ledger.", "--context", "ctx"]).ok();
+    cockpit(&env);
     let out = env.cpd(&["context", "manager", "--context", "ctx", "--by-user"]).ok();
     let manager = out["manager"]["session"].as_str().unwrap().to_owned();
 

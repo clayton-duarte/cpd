@@ -574,7 +574,7 @@ mod tests {
         let open = new.open_new(&reply).unwrap().unwrap();
         assert_eq!(
             [new.argv(), open.argv()],
-            [vec!["plan", "new", "pay", "--context=alpha", "--title=Pay"], vec!["session", "open", "8d0e"]]
+            [vec!["plan", "new", "pay", "--context=alpha", "--title=Pay", "--by-user"], vec!["session", "open", "8d0e"]]
         );
         let fork = Action::Fork { source: sid("l-ship"), name: "ship (fork)".into() };
         let reply = json!({"ok": true, "session": {"id": "a41b", "name": "ship (fork)", "plan": "ship", "pane": "%52"}});

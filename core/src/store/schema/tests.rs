@@ -1810,8 +1810,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
                 if values.len() == width {
                     continue;
                 }
-                // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`.
-                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free");
+                // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`; `session-by-user` one, `sessions.by_user` 0.
+                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free") || (table == "sessions" && v == 0);
                 assert!(values[width..].iter().all(default), "{table}: an added column is set: {row}");
                 values.truncate(width);
                 *row = Value::from(values).to_string();
@@ -2115,11 +2115,12 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
     let conn = connection(&home.db());
-    // `asleep_at` is a later migration's column (`session-asleep`), null on every row.
+    // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
             assert_eq!(row.as_object_mut().unwrap().remove("asleep_at"), Some(Value::Null));
+            assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
             row
         })
         .collect();

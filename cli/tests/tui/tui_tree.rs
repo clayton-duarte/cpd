@@ -633,7 +633,7 @@ fn a_click_on_a_context_title_opens_its_manager_and_only_its_closing_row_folds_i
     pane.click(8, 1); // the title row of the Context `alpha`
     assert_eq!(
         wait_for_calls(&env, 2),
-        [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]
+        [words(&["context", "manager", "--context=alpha", "--by-user"]), words(&["session", "open", "m-alpha"])]
     );
     pane.settled();
     assert_eq!(calls(&env).len(), 2, "no more commands");
@@ -661,9 +661,9 @@ fn a_refused_context_manager_logs_its_error_and_opens_nothing() {
     let pane = Pane::start(&env, 60, 14);
     pane.ready();
     pane.click(8, 1);
-    pane.wait_logged("the error", "failed: context manager --context=alpha: archived: The Context is archived.");
+    pane.wait_logged("the error", "failed: context manager --context=alpha --by-user: archived: The Context is archived.");
     assert!(!pane.footer_has("archived"), "no note: {:?}", pane.screen());
-    assert_eq!(calls(&env), [words(&["context", "manager", "--context=alpha"])], "no session open");
+    assert_eq!(calls(&env), [words(&["context", "manager", "--context=alpha", "--by-user"])], "no session open");
 }
 
 #[test]
@@ -715,7 +715,7 @@ fn n_opens_an_input_popup_for_the_plans_id_and_runs_plan_new_when_it_is_accepted
     // the Context of the cursor's Session's Plan; the name is the id and the title
     assert_eq!(
         wait_for_calls(&env, 2),
-        [words(&["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521"]), words(&["session", "open", "l-new"])],
+        [words(&["plan", "new", "pay-4521", "--context=alpha", "--title=pay-4521", "--by-user"]), words(&["session", "open", "l-new"])],
         "the new Lead is opened"
     );
     pane.wait_logged("the result", "ok: forking pay-4521 in window park-pay-4521");
@@ -1047,7 +1047,7 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
             words(&["plan", "unarchive", "--plan=old"]),
             words(&["session", "open", "l-old"]),
             words(&["context", "unarchive", "gamma"]),
-            words(&["context", "manager", "--context=gamma"])
+            words(&["context", "manager", "--context=gamma", "--by-user"])
         ],
         "only the clicks on the archived Plan and the archived Context's title ran commands"
     );
@@ -1467,7 +1467,7 @@ fn new_plan_and_fork_run_plan_new_without_a_repo_and_session_fork() {
     // `ship` is taken in the tree; no repo (R34 A12)
     assert_eq!(
         wait_for_calls(&env, 2),
-        [words(&["plan", "new", "ship-2", "--context=alpha", "--title=Ship"]), words(&["session", "open", "l-new"])]
+        [words(&["plan", "new", "ship-2", "--context=alpha", "--title=Ship", "--by-user"]), words(&["session", "open", "l-new"])]
     );
     type_in(&env, "ship fork (fork)");
     pane.right_click(8, 4); // the fork `ship fork`
@@ -1504,7 +1504,7 @@ esac"#,
     pane.wait_logged("the refusal", "failed: session open l-new: no_cockpit: There is no cockpit.");
     assert_eq!(
         calls(&env),
-        [words(&["plan", "new", "pay", "--context=alpha", "--title=Pay"]), words(&["session", "open", "l-new"])]
+        [words(&["plan", "new", "pay", "--context=alpha", "--title=Pay", "--by-user"]), words(&["session", "open", "l-new"])]
     );
 }
 
@@ -1724,7 +1724,7 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert_eq!(wait_for_calls(&env, 1), [words(&["session", "open", "f-blocked"])]);
     // question: the Context's Manager
     pane.click(10, row_of("alpha: a question"));
-    assert_eq!(wait_for_calls(&env, 3)[1..], [words(&["context", "manager", "--context=alpha"]), words(&["session", "open", "m-alpha"])]);
+    assert_eq!(wait_for_calls(&env, 3)[1..], [words(&["context", "manager", "--context=alpha", "--by-user"]), words(&["session", "open", "m-alpha"])]);
     // plan-review: its page's url is copied, and the log says how to open it; the Lead of its Plan is in the chat slot
     // already (`populate`), so no `session open` runs, as for any item whose Session is in focus
     pane.click(10, row_of("ship plan review"));

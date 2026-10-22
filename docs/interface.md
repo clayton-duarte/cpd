@@ -88,6 +88,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd session retier` | Move live Leads and Managers to the Tier the config names now (§10.15) | Manager | |
 | `cpd session rename` | Rename a Session (§10.7) | Lead | yes |
 | `cpd session state` | Report a Session's agent state (pi adapter) (§10.6) | internal | |
+| `cpd session first-message` | Render a Lead's or Manager's first message now and write its file (adapter) (§10.15) | internal | |
 | `cpd session retitle` | Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14) | internal | |
 | `cpd session run` | The program in every Lead pane (internal; owns its terminal) (§10.8) | internal | |
 | `cpd events` | Events (commands.md §11) | | |
