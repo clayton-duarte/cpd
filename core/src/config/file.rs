@@ -281,7 +281,7 @@ impl Config {
             }
             Ok(tier)
         })?;
-        let context_recent_days = r.get("context_recent_days", 1, |v| int(v, 1, u32::MAX))?;
+        let context_recent_days = r.get("context_recent_days", 1, |v| int(v, 1, 3650))?;
         let open_tier = r.get("open_tier", Tier::parse("S2").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
             tier.check_worker().map_err(|e| e.message().to_owned())?;

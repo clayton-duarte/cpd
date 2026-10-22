@@ -75,6 +75,13 @@ fn show_digest(config: &Config, store: &mut Store, context: &ContextId) -> Resul
 /// `context show --topic <t>` (§3.3): every curated record in force of the topic, oldest first.
 fn show_topic(store: &mut Store, context: &ContextId, topic: &str) -> Result<Output, CpdError> {
     let (row, found) = store.read(|conn| Ok((ContextRow::require(conn, context)?, digest::by_topic(conn, context, topic)?)))?;
+    if found.is_empty() {
+        let topics = store.read(|conn| digest::topics(conn, context))?;
+        return Err(CpdError::new(ErrorCode::TopicNotFound, format!("Context {context} has no curated record of topic {topic}."))
+            .with("context", context.as_str())
+            .with("topic", topic)
+            .with("topics", topics));
+    }
     let markdown = found.iter().map(|(id, short)| format!("- [{id}] {short}")).collect::<Vec<_>>().join("\n");
     let records: Vec<Value> = found.iter().map(|(id, short)| json!({"id": id, "short": short})).collect();
     Ok(Output::success(json!({

@@ -65,10 +65,15 @@ fn curated<'a>(loaded: &'a Loaded) -> (Vec<&'a Indexed>, Vec<Curated<'a>>) {
     (in_force, curated)
 }
 
+/// The ids of the Plans that are not done, archived or deleted.
+fn live_plans(conn: &Connection) -> Result<HashSet<String>, CpdError> {
+    let mut stmt = conn.prepare("SELECT id FROM plans WHERE deleted_at IS NULL AND archived_at IS NULL AND phase <> 'done'")?;
+    Ok(stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?)
+}
+
 /// The ids a brief of a live Plan cites: every word of its text that is a record id of the Context.
 fn brief_citations(conn: &Connection, loaded: &Loaded) -> Result<HashSet<String>, CpdError> {
-    let mut stmt = conn.prepare("SELECT id FROM plans WHERE deleted_at IS NULL AND archived_at IS NULL AND phase <> 'done'")?;
-    let live: HashSet<String> = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+    let live = live_plans(conn)?;
     let mut cited = HashSet::new();
     for (_, record) in &loaded.records {
         if record.kind() == RecordKind::Brief && record.plan().is_some_and(|p| live.contains(p.id.as_str())) {
@@ -119,27 +124,37 @@ pub fn render(conn: &Connection, context: &ContextId, recent_days: u32) -> Resul
     newest.sort_by(|a, b| b.1.cmp(&a.1));
     let topic_list: Vec<String> = counts.iter().map(|(t, n)| format!("- {t} ({n})")).collect();
 
-    let build = |dropped: usize| -> String {
+    let build = |dropped: usize, topics: usize, pointers: bool| -> String {
         let mut sections: Vec<String> = Vec::new();
         for (topic, _) in &newest {
             let mut lines = vec![format!("## {topic}")];
             lines.extend(relevant[dropped..].iter().filter(|c| c.topic == *topic).map(|c| format!("- [{}] {}", c.record.id, c.short)));
             let older = relevant[..dropped].iter().filter(|c| c.topic == *topic).count();
-            if older > 0 {
-                lines.push(format!("and {older} older: cpd context show --topic {topic}"));
+            if older > 0 && pointers {
+                lines.push(format!("and {older} older: cpd context show --context {context} --topic {topic}"));
             }
             if lines.len() > 1 {
                 sections.push(lines.join("\n"));
             }
         }
-        sections.push(format!("## Topics\n{}", topic_list.join("\n")));
+        let mut list = format!("## Topics\n{}", topic_list[..topics].join("\n"));
+        if topics < topic_list.len() {
+            list.push_str(&format!("\nand more topics: cpd context show --context {context} --digest"));
+        }
+        sections.push(list);
         sections.join("\n\n")
     };
     let mut dropped = 0;
-    let mut text = build(0);
+    let mut text = build(0, topic_list.len(), true);
     while text.len() > LIMIT && dropped < relevant.len() {
         dropped += 1;
-        text = build(dropped);
+        text = build(dropped, topic_list.len(), true);
+    }
+    // The topic list alone may be too long: drop its lines from the end.
+    let mut topics = topic_list.len();
+    while text.len() > LIMIT && topics > 0 {
+        topics -= 1;
+        text = build(dropped, topics, false);
     }
     Ok(Digest { text, records: relevant.len() - dropped })
 }
@@ -151,18 +166,37 @@ pub fn by_topic(conn: &Connection, context: &ContextId, topic: &str) -> Result<V
     Ok(curated.into_iter().filter(|c| c.topic == topic).map(|c| (c.record.id.to_string(), c.short)).collect())
 }
 
+/// The topics in use (a curated record in force has them), sorted.
+pub fn topics(conn: &Connection, context: &ContextId) -> Result<Vec<String>, CpdError> {
+    let loaded = load(conn, context)?;
+    let (_, curated) = curated(&loaded);
+    Ok(curated.into_iter().map(|c| c.topic).collect::<std::collections::BTreeSet<_>>().into_iter().collect())
+}
+
 /// "The Context" of a Lead's or Manager's first message (contract §4.6 "Consumers"): the digest, then the records in
 /// force that are not curated, raw, oldest first, at most [`NEWER_MAX`], then, when more exist,
 /// `and <K> more: cpd context show --context <c> --since <seq>`, `<seq>` the `seq` before the first record not listed.
-pub(crate) fn first_message(conn: &Connection, config: &Config, context: &ContextId) -> Result<String, CpdError> {
+pub(crate) fn first_message(conn: &Connection, config: &Config, context: &ContextId, own_plan: Option<&crate::ids::PlanId>) -> Result<String, CpdError> {
     let digest = render(conn, context, config.context_recent_days)?;
     let loaded = load(conn, context)?;
     let (in_force, _) = curated(&loaded);
+    let live = live_plans(conn)?;
+    let own = |r: &crate::context::Record| {
+        own_plan.is_some_and(|own| r.plan().is_some_and(|p| p.id == *own && p.machine == config.machine))
+    };
+    // The briefs of live Plans are not in force (never curated): listed first, short, apart from the cap; the Plan's own
+    // brief is in its Lead's message already.
+    let briefs: Vec<&Indexed> = loaded
+        .records
+        .iter()
+        .filter(|(_, r)| r.kind() == RecordKind::Brief && !own(r) && r.plan().is_some_and(|p| live.contains(p.id.as_str())))
+        .collect();
     let uncurated: Vec<&&Indexed> = in_force.iter().filter(|(_, r)| !loaded.curations.contains_key(&r.id.to_string())).collect();
     let mut parts = Vec::new();
     if !digest.text.is_empty() {
         parts.push(digest.text);
     }
+    parts.extend(briefs.iter().map(|(_, r)| raw(r)));
     parts.extend(uncurated.iter().take(NEWER_MAX).map(|(_, r)| raw(r)));
     if uncurated.len() > NEWER_MAX {
         let before = uncurated[NEWER_MAX].0 - 1;
@@ -174,6 +208,6 @@ pub(crate) fn first_message(conn: &Connection, config: &Config, context: &Contex
 /// A Manager's first message (commands.md §3.10): its header, then "the Context" as [`first_message`] renders it.
 /// The one rendering `context manager` and `session first-message` share.
 pub(crate) fn manager_message(conn: &Connection, config: &Config, context: &ContextId, title: &str) -> Result<String, CpdError> {
-    let text = first_message(conn, config, context)?;
+    let text = first_message(conn, config, context, None)?;
     Ok(format!("You are the Manager of Context {context} \"{title}\". Follow the cpd-manager skill.\n\n{text}\n"))
 }

@@ -242,7 +242,7 @@ pub(crate) fn lead_message(
     plan: &PlanRow,
     brief: Option<&str>,
 ) -> Result<String, CpdError> {
-    let context = digest::first_message(conn, config, &plan.context)?;
+    let context = digest::first_message(conn, config, &plan.context, Some(&plan.id))?;
     let mut message = vec![header(plan)];
     if let Some(brief) = brief {
         message.push(brief.trim_end().to_owned());
