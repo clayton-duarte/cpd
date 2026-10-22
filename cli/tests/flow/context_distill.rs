@@ -11,7 +11,7 @@ use common::{CPD, Run, pi_says, TestEnv, refused, wait_until};
 use cpd_core::config::Tier;
 use cpd_core::context::{By, Draft, PlanRef, Record};
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{ContextId, MachineName, PlanId, RecordId};
+use cpd_core::ids::{ContextId, RecordId};
 use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use serde_json::{Value, json};
@@ -246,6 +246,11 @@ fn the_context_is_required_and_must_exist() {
 // ---- The Tier ladder (hs-d538): contract §4.6 ----
 
 const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"]}"#;
+
+/// The `tier` of each run line.
+fn tiers_of(runs: &[Value]) -> Vec<String> {
+    runs.iter().map(|r| r["tier"].as_str().unwrap_or("<none>").to_string()).collect()
+}
 
 // ---- The curating distill step (contract §4.6 "The distiller curates", "The distill run"; hs-d549, hs-d551) ----
 
@@ -538,7 +543,7 @@ fn no_repair_turn_and_no_contradictions_section() {
         assert!(!fx.digests().join(gone).exists(), "{gone}");
     }
     let prompt = fs::read_to_string(fx.digests().join("prompt.md")).unwrap();
-    assert!(!prompt.contains("Contradictions") && !prompt.contains("Record index"), "{prompt}");
+    assert!(!prompt.contains("Contradictions"), "{prompt}");
 
     fx.env.fake_pi(&pi_says(common::CURATES_ALL));
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();

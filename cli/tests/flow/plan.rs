@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use common::{CPD, Run, TestEnv, WATCH_OK, refused, wait_until, write_executable};
 use cpd_core::error::CpdError;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{ContextId, PlanId, ReviewId};
+use cpd_core::ids::{PlanId, ReviewId};
 use cpd_core::store::{Store, WriteTxn};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};

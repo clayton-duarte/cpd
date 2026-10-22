@@ -9,9 +9,8 @@ use std::path::PathBuf;
 
 use common::{Run, TestEnv};
 use cpd_core::config::Config;
-use cpd_core::context::{By, Draft, Record, digest, inforce};
+use cpd_core::context::inforce;
 use cpd_core::home::CpdHome;
-use cpd_core::ids::{RecordId, RecordKind};
 use cpd_core::store::Store;
 use serde_json::{Value, json};
 
