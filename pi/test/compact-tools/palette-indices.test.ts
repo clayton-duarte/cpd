@@ -245,7 +245,7 @@ test("the running dot and working label are colour 6", async () => {
 				apply(match[1]!, paint);
 			}
 			if (plain(message.slice(last)) !== "") colours.add(paint.fg);
-			assert.deepEqual([...colours], [6], `the label is colour 6 in ${readable(message)}`);
+			assert.deepEqual([...colours].sort(), [0, 6], `the label is a pill: caps 6, text 0 on bg 6 in ${readable(message)}`);
 		}
 	});
 });

@@ -1061,7 +1061,7 @@ test("keeps the progress controller inert until it is bound to a TUI", () => {
 		},
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
-	assert.deepEqual(messages, ["\x1b[36mThinking…\x1b[39m"]);
+	assert.deepEqual(messages, ["\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30m Thinking… \x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m"]);
 
 	// Disposed again: later events must not reach the detached context.
 	controller.dispose();
@@ -1104,7 +1104,7 @@ test("the working label is palette index 6 whatever the thinking level", () => {
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
 	handlers.get("thinking_level_select")?.({ level: "max", previousLevel: "low" });
-	assert.equal(messages.at(-1), "\x1b[36mThinking…\x1b[39m");
+	assert.equal(messages.at(-1), "\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30m Thinking… \x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m");
 	controller.dispose();
 });
 
@@ -1125,7 +1125,8 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 			setWorkingIndicator: (value?: typeof indicator) => { indicator = value; },
 		},
 	} as unknown as ExtensionContext);
-	assert.deepEqual(indicator?.frames, []);
+	assert.equal(indicator?.frames.length, 9);
+	assert.equal(indicator?.intervalMs, 100);
 	handlers.get("agent_start")?.({});
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "thinking_delta" } });
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "thinking_delta" } });
@@ -1135,7 +1136,7 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 	handlers.get("agent_end")?.({});
 	assert.equal(messages.length, beforeAgentEnd, "a low-level run may still retry or continue");
 	handlers.get("agent_settled")?.({});
-	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…"].map((label) => `\x1b[36m${label}\x1b[39m`).concat(undefined as never));
+	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…"].map((label) => `\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30m ${label} \x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m`).concat(undefined as never));
 	controller.dispose();
 });
 
