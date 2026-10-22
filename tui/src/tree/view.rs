@@ -689,6 +689,7 @@ impl View {
             // a merge of it runs: the click, like the glyph's spinner, is its marker's (hs-d495)
             Some(Jump::Merge(pull)) if self.merging.contains(&pull.to_string()) => Effect::None,
             Some(Jump::Merge(pull)) => Effect::Merge(pull),
+            Some(Jump::Notice(..)) => todo!("the Digest dialog"),
             None => Effect::None,
         }
     }

@@ -135,6 +135,12 @@ impl Question {
         }
     }
 
+    /// The Digest dialog of a distill-tier item (hs-d547): what happened, with a button that dismisses the item.
+    pub fn distill_tier(item: i64, context: &cpd_core::ids::ContextId, notice: &cpd_core::inbox::rules::TierNotice) -> Question {
+        let _ = (item, context, notice);
+        todo!("the Digest dialog")
+    }
+
     /// `Archive <label>?` (hs-d297); `then` is the archive, with the step that frees the chat slot when it needs one.
     pub fn archive(label: &str, then: Action) -> Question {
         Question::Confirm { title: "Archive", text: format!("Archive {label}?"), yes_label: "Archive", then }
