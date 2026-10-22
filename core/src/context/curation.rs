@@ -6,6 +6,7 @@ use clap::Args;
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::{Value, json};
 
+use super::distill::State;
 use super::{ContextRow, Select};
 use crate::clock;
 use crate::env::Env;
@@ -54,7 +55,11 @@ pub struct Proposal {
 /// Writes `curations` and pending retirements for `proposals` and appends `context-curated`, in one transaction. A record that already has a
 /// retirement row (any status) gets no new proposal; a record whose doc_candidate is already set keeps it. Every
 /// proposed record has a curation (written now or before): the commands list a proposal by its short form.
-pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], proposals: &[Proposal]) -> Result<(), CpdError> {
+///
+/// A proposal whose record, or whose `duplicate`/`superseded` target, is no longer in force when this transaction
+/// reads it (the distiller runs for minutes; the User may have approved a retirement meanwhile) is dropped, not an
+/// error. Returns the number of proposals considered written (the `retire` count of the Event).
+pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], proposals: &[Proposal]) -> Result<usize, CpdError> {
     store.write("context curate", |tx| {
         let at = clock::now();
         for c in curations {
@@ -70,7 +75,15 @@ pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], p
                 rusqlite::params![context.as_str(), c.record.to_string(), c.topic, c.short, candidate, paths, at],
             )?;
         }
-        for p in proposals {
+        let force = State::read(tx, context)?.in_force_ids();
+        let proposals: Vec<&Proposal> = proposals
+            .iter()
+            .filter(|p| {
+                force.contains(&p.record.to_string())
+                    && (p.reason == Reason::Documented || force.contains(&p.target))
+            })
+            .collect();
+        for p in &proposals {
             tx.execute(
                 "INSERT INTO record_retirements (context, record, reason, target, status, proposed_at)
                  VALUES (?1, ?2, ?3, ?4, 'pending', ?5) ON CONFLICT (context, record) DO NOTHING",
@@ -96,7 +109,7 @@ pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], p
             tx,
             NewEvent::context_curated(text, context.as_str(), curations.len() as u64, proposals.len() as u64, docs as u64).context(context.clone()),
         )?;
-        Ok(())
+        Ok(proposals.len())
     })
 }
 

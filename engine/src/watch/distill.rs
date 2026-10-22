@@ -61,34 +61,44 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
+/// The batch sizes of a state's runs, largest first (FX4): a run that ends without changing its state failed, and
+/// the next run of the same state takes the next smaller batch.
+const BATCHES: [u8; 5] = [60, 30, 15, 5, 1];
+
 /// Starts the run of `context` when it is due: it has records in force that are not curated, the newest of them is
-/// quiet or `BACKLOG` of them are waiting, no run is alive, and no run was started for this state (the highest
-/// `seq` and the count of uncurated records) in this engine's life. A run that curates a batch changes the count,
-/// so the next tick starts the next batch; a failed one leaves the state as it was and is not tried again.
+/// quiet or `BACKLOG` of them are waiting, and no run is alive. The state is the highest `seq` and the count of
+/// uncurated records. A run that curates a batch changes the state, so the next tick starts the next batch at 60. A
+/// run that has ended with the state unchanged failed: the next tick starts the next run for the same state with
+/// the next smaller batch (60, 30, 15, 5, 1) and records the batch with the state; after a failed run of batch 1
+/// nothing starts until the state changes or the engine restarts. So a state has at most five runs.
 fn start_if_due(engine: &mut Engine, context: &ContextId, now: OffsetDateTime) -> Result<(), CpdError> {
     let state = engine.store.read(|conn| State::read(conn, context))?;
     let uncurated = state.uncurated();
     let Some(newest) = uncurated.last() else { return Ok(()) };
     let key = (state.highest().expect("an uncurated record is a record"), i64::try_from(uncurated.len()).unwrap_or(i64::MAX));
-    if engine.distill_started.get(context) == Some(&key) {
+    let previous = engine.distill_started.get(context).filter(|(started, _)| *started == key).map(|(_, batch)| *batch);
+    if previous == Some(BATCHES[BATCHES.len() - 1]) {
         return Ok(());
     }
     if uncurated.len() < BACKLOG && !quiet(&newest.1.at, now)? {
         return Ok(());
     }
-    if running(&engine.home, context)? {
+    // A run that is alive, or this engine's own run that has not ended yet (its pid file is still there; one an
+    // earlier engine left behind says nothing, so only a state this engine started is asked).
+    if running(&engine.home, context)? || (previous.is_some() && engine.home.distill_pid(context).exists()) {
         return Ok(());
     }
-    let pid = spawn(engine, context)?;
-    engine.distill_started.insert(context.clone(), key);
-    engine.log.line(&format!("E9: started the distill run of Context {context} up to record {} (pid {pid})", key.0));
+    let batch = previous.map_or(BATCHES[0], |last| BATCHES.iter().copied().find(|b| *b < last).expect("batch 1 stops before this"));
+    let pid = spawn(engine, context, batch)?;
+    engine.distill_started.insert(context.clone(), (key, batch));
+    engine.log.line(&format!("E9: started the distill run of Context {context} up to record {} with batch {batch} (pid {pid})", key.0));
     Ok(())
 }
 
 /// Spawns `cpd context distill --context <context>` detached (`setsid`), stdin from `/dev/null`, stdout and
 /// stderr appended to the Context's `distill.log`, its pid recorded in `distill.pid` ([`record_detached`]).
 /// Returns its pid.
-fn spawn(engine: &Engine, context: &ContextId) -> Result<u32, CpdError> {
+fn spawn(engine: &Engine, context: &ContextId, batch: u8) -> Result<u32, CpdError> {
     let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the distill run of Context {context}: {why}.")).with("context", context.as_str());
     let exe = cpd_core::host::exe::started_as()?;
     let log_path = log_path(&engine.home, context);
@@ -98,7 +108,7 @@ fn spawn(engine: &Engine, context: &ContextId) -> Result<u32, CpdError> {
     let stdout = log.try_clone().map_err(|e| failed(format!("cannot use {}: {e}", log_path.display())))?;
     let mut command = Command::new(exe);
     command
-        .args(["context", "distill", "--context", context.as_str()])
+        .args(["context", "distill", "--context", context.as_str(), "--batch", &batch.to_string()])
         .current_dir(engine.home.root())
         .env("CPD_HOME", engine.home.root())
         // The caller's own identity is not the run's.

@@ -49,6 +49,9 @@ const POLL: Duration = Duration::from_millis(50);
 pub struct DistillArgs {
     #[command(flatten)]
     select: Select,
+    /// The most records to curate in this run
+    #[arg(long, value_name = "n", default_value_t = BATCH_MAX, value_parser = clap::value_parser!(u8).range(1..=60))]
+    batch: u8,
 }
 
 /// The lock of a Context's one distill run, held while this value lives.
@@ -109,11 +112,14 @@ pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
     let _lock = Lock::take(&home, &context)?;
     let state = store.read(|conn| State::read(conn, &context))?;
     let run = Run { home: &home, config: &config, store: &mut store, context: &context };
-    run.run(&state).map(Output::success)
+    run.run(&state, usize::from(args.batch)).map(Output::success)
 }
 
 /// The most records one step curates.
-pub const BATCH_MAX: usize = 60;
+pub const BATCH_MAX: u8 = 60;
+
+/// The most bytes of record text one batch holds (the first record is always taken).
+const BATCH_BYTES: usize = 49152;
 
 /// The bounds of a curation line (contract §4.6 step 5).
 const TOPIC_MAX: usize = 40;
@@ -143,6 +149,11 @@ impl State {
     /// The highest `seq` of the Context, `None` when it has no record.
     pub fn highest(&self) -> Option<i64> {
         self.records.last().map(|(seq, _)| *seq)
+    }
+
+    /// The ids of the records in force.
+    pub fn in_force_ids(&self) -> HashSet<String> {
+        self.in_force().iter().map(|(_, r)| r.id.to_string()).collect()
     }
 
     fn in_force(&self) -> Vec<&Indexed> {
@@ -257,9 +268,8 @@ impl Batch<'_> {
                 continue;
             }
             let mut bad = Vec::new();
-            let topic_len = raw.topic.chars().count();
-            if topic_len == 0 || topic_len > TOPIC_MAX || raw.topic.contains('\n') {
-                bad.push(format!("topic must be 1 to {TOPIC_MAX} characters on one line"));
+            if raw.topic.is_empty() || raw.topic.len() > TOPIC_MAX || !raw.topic.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-')) {
+                bad.push(format!("topic {:?} must be 1 to {TOPIC_MAX} characters of lowercase letters, digits and `-`", raw.topic));
             }
             if raw.short.is_empty() || raw.short.len() > SHORT_MAX || raw.short.contains('\n') {
                 bad.push(format!("short must be 1 to {SHORT_MAX} bytes on one line"));
@@ -313,6 +323,9 @@ impl Batch<'_> {
                 if reason == Reason::Superseded && target_seq <= seq {
                     return Err(format!("superseded target {target} is not newer than the record"));
                 }
+                if reason == Reason::Duplicate && target_seq >= seq {
+                    return Err(format!("duplicate target {target} is not older than {id}: keep the first, retire the later"));
+                }
             }
         }
         Ok(Proposal { record: id.clone(), reason, target: retire.target.clone() })
@@ -321,13 +334,23 @@ impl Batch<'_> {
 
 impl Run<'_> {
     /// The run (contract §4.6 "The distill run"), the lock held.
-    fn run(mut self, state: &State) -> Result<Value, CpdError> {
+    fn run(mut self, state: &State, batch_size: usize) -> Result<Value, CpdError> {
         let uncurated = state.uncurated();
         let Some(highest) = state.highest().filter(|_| !uncurated.is_empty()) else {
             return Ok(json!({"context": self.context.as_str(), "already": true, "remaining": 0}));
         };
         let upto = u64::try_from(highest).expect("a record's seq is positive");
-        let batch_records: Vec<&Indexed> = uncurated.iter().take(BATCH_MAX).copied().collect();
+        let mut bytes = 0;
+        let batch_records: Vec<&Indexed> = uncurated
+            .iter()
+            .take(batch_size)
+            .enumerate()
+            .take_while(|(i, (_, r))| {
+                bytes += r.text.len();
+                *i == 0 || bytes <= BATCH_BYTES
+            })
+            .map(|(_, record)| *record)
+            .collect();
         let in_force = state.in_force();
         let hits = self.grep_hits(&batch_records)?;
         let dir = self.home.context_digest_dir(self.context);
@@ -356,9 +379,8 @@ impl Run<'_> {
                 });
             }
         };
-        let (curated, retire, docs) =
-            (checked.curations.len(), checked.proposals.len(), checked.curations.iter().filter(|c| c.doc_paths.is_some()).count());
-        propose(self.store, self.context, &checked.curations, &checked.proposals)?;
+        let (curated, docs) = (checked.curations.len(), checked.curations.iter().filter(|c| c.doc_paths.is_some()).count());
+        let retire = propose(self.store, self.context, &checked.curations, &checked.proposals)?;
         remove_invalid(self.home, self.context)?;
         self.log_run(&ran, upto, "valid");
         Ok(json!({
