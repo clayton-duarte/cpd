@@ -113,7 +113,7 @@ The schema changes by named migrations (contract §4.5; design `docs/research/mi
   |---|---|
   | `engine` | `watch*`, `doctor` |
   | `pr` | `pr*`, `merge`, `git*` |
-  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy`, `config` |
+  | `flow` | `plan*`, `job`, `attempt`, `driver*`, `review*`, `spec`, `ask`, `metrics`, `context*`, `policy`, `config`, `secret*` |
   | `session` | `session*`, `host`, `board`, `pill_lines` |
   | `store` | `store*`, `events` |
   | `tui` | `tui*`, `inbox*`, `bare` |

@@ -33,6 +33,8 @@ The commands serve the **CPD flow** (hs-n31): three stages, **Context** (Groundi
 20. [Sections changed by R19 and R20](#20-sections-changed-by-r19-and-r20)
 21. [`inbox`](#21-inbox)
 22. [`policy`](#22-policy)
+23. [`slot`](#23-slot)
+24. [`secret`](#24-secret)
 
 ## 1. Conventions
 
@@ -196,6 +198,13 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
+| `cpd secret get` (§24.1) | Manager, Lead, Worker | no | no |
+| `cpd secret list` (§24.2) | Manager, Lead | no | no |
+| `cpd secret create` (§24.3) | Manager, Lead | no | no |
+| `cpd secret edit` (§24.4) | Manager, Lead | no | no |
+| `cpd secret delete` (§24.5) | Manager, Lead | no | no |
+| `cpd secret allow` (§24.6) | Lead | no | no |
+| `cpd secret approve` (§24.7, internal) | none | no | yes |
 | `cpd context curation` (§3.15, internal) | none | yes | yes |
 | `cpd context retire` (§3.16, internal) | none | yes | yes |
 | `cpd context docs` (§3.17, internal) | none | yes | yes |
@@ -4136,3 +4145,312 @@ $ cpd slot -- scripts/cargo.sh nextest run
 slot: waiting for a slot (2 of 2 busy; test_concurrency 2)
 slot: slot 1 taken after 94 s
 ```
+
+## 24. `secret`
+
+Wraps 1Password's CLI `op` to manage secrets in Secure Notes. cpd enforces who may do what, in which vault, and when. Agents never call `op` (the pi adapter refuses it). Agents run `get` and `list` only; the Lead runs all commands. Workers on a permitted Attempt run `get` under an allowance. A Lead or Manager needs an approval for most vaults. cpd holds no token and never signs in; the 1Password app's per-use prompt (where it runs) is the approval. Values never appear in argv, output, Events, logs, files or the store. Area `core/src/secret/`.
+
+### 24.0 What `cpd secret` is
+
+**Caller checks** (contract §8.4 "Who the caller is"):
+
+1. `CPD_SESSION` unset or empty: `secret_session_required` (exit 3), for every command, `approve` included.
+2. Session unknown: `session_not_found` (exit 4).
+3. `CPD_ATTEMPT` set and non-empty, or the Session's role `worker`: a **Worker**. Otherwise `lead` or `manager`.
+
+**Rules** (contract §8.4, checked in order; the first that fails is the result):
+
+1. Session (above).
+2. Role check:
+   - `get`: Lead, Manager, Worker. Else `secret_role_denied` (exit 3).
+   - `list`, `create`, `edit`, `delete`: Lead, Manager only. Else `secret_role_denied` (exit 3).
+   - `allow`: Lead only. Else `secret_role_denied` (exit 3).
+   - `approve`: Lead, Manager. Else `secret_role_denied` (exit 3).
+3. Vault check (`cpd`, `homeserver` only):
+   - A Worker is refused any other vault with `secret_vault_denied` (exit 3).
+   - `allow` for another vault is refused `secret_vault_denied` (exit 3).
+   - `approve` for `cpd` or `homeserver` is refused `usage` (exit 2; needs no approval).
+   - A Lead or Manager in another vault goes to step 4.
+4. Grant check (contract §8.4):
+   - A Worker's `get` needs an **allowance** for its Attempt, vault, item and field. Missing or expired: `secret_grant_required` (exit 3), `details` `{grant: "allowance", action: "get", vault, item, field, next: "ask the Lead with cpd ask"}`.
+   - A Lead or Manager in another vault needs an **approval** for its Session, action, vault, item and field. Missing or expired: `secret_grant_required` (exit 3), `details` `{grant: "approval", action, vault, item, field, next: "approve with cpd_secret_approve"}`.
+5. op.
+
+**Also**: `allow` needs the Attempt to belong to the Lead's own Plan (`attempt_not_found`, exit 4) and not to have ended (`secret_attempt_ended`, exit 3).
+
+**Constants** (hardcoded, no config):
+
+- **Allowed vaults**: `cpd`, `homeserver`.
+- **Account**: `my.1password.com` (every `op` call carries `--account my.1password.com`).
+- **Approval lifetime**: 10 minutes.
+
+**Grants** (files under `$CPD_HOME/run/secret/`; directories 0700, files 0600, written atomically):
+
+- **`allow/<attempt-id>.json`**: a JSON array of `{vault, item, field}`. Written by `allow`, idempotent. Valid while the Attempt exists and has not ended (the store says), never consumed.
+- **`approve/<uuid>.json`**: `{session, action, vault, item, field, at}` (`item` and `field` null where the action has none). Written only by `approve` after the User chooses Allow. The first command of that Session with the same action, vault, item and field, within 10 minutes of `at`, removes the file and runs; consumed even when op then fails. An older file is ignored and removed.
+
+**op calls** (all with `--account my.1password.com`). **Evidence** (contract §1.3):
+
+- `get`: `op item get <item> --vault <v> --fields label=<f> --reveal`; stdout is the value, minus one trailing newline. **docs** (op 2.41.1, 2026-10-22).
+- `list`: `op item list --vault <v> --format json`; keep `id` and `title` from each entry. **docs**.
+- `create`: first `op item get <item> --vault <v> --format json` (success: `secret_exists`); then `op item create --vault <v> -`, JSON template on stdin: `{"title": <item>, "category": "SECURE_NOTE", "fields": [{"id": <f>, "label": <f>, "type": "CONCEALED", "value": <value>}]}`. **unverified** (no Worker has a signed-in op).
+- `edit`: `op item get <item> --vault <v> --format json` (missing: `secret_not_found`); set the field's `value` or append the new field; pipe the whole JSON to `op item edit <item> --vault <v>` on stdin. **unverified**.
+- `delete`: `op item delete <item> --vault <v> --archive` (archival: recoverable in 1Password). **unverified**.
+- **Authentication**: cpd never signs in, holds no token, passes no `--session`. The 1Password app's per-use prompt (where it runs) is the approval; a headless machine needs a signed-in op already. **unverified**.
+- **Errors**:
+  - `op` not on `PATH`: `secret_op_missing` (exit 1).
+  - op exits non-zero with stderr containing (case-insensitively) `not signed in`, `not currently signed in` or `session expired`: `secret_not_signed_in` (exit 3; the message tells the User to sign in with op).
+  - stderr containing `isn't an item`, `isn't a vault`, `isn't a field` or `could not be found`: `secret_not_found` (exit 4).
+  - any other op failure: `secret_op_failed` (exit 1), `details` `{exit, stderr}` (last 60 lines). **unverified**.
+
+**Error codes** (new; one per row in the table below):
+
+| Code | Exit | When |
+|---|---|---|
+| `secret_session_required` | 3 | `CPD_SESSION` unset or empty |
+| `secret_role_denied` | 3 | caller's role not allowed for the command |
+| `secret_vault_denied` | 3 | vault not allowed for the caller (Worker, or `allow` in another vault) |
+| `secret_grant_required` | 3 | no allowance or approval for the action; `details.next` says what to do |
+| `secret_attempt_ended` | 3 | Attempt has ended |
+| `secret_exists` | 3 | `create` on an existing item |
+| `secret_not_signed_in` | 3 | op not signed in or session expired |
+| `secret_not_found` | 4 | item, vault or field not found |
+| `secret_op_missing` | 1 | `op` not found on `PATH` |
+| `secret_op_failed` | 1 | op exited non-zero (not the specific errors above) |
+
+### 24.1 `get`
+
+```
+cpd secret get <item> --vault <v> --field <f>
+```
+
+Gets the value of one field of one Secure Note item.
+
+| Argument | Meaning |
+|---|---|
+| `<item>` | item name, 1–200 chars, no control chars, no leading `-` |
+| `--vault <v>` | vault name (required); `cpd` or `homeserver` for Workers, any for Lead/Manager (but needs approval) |
+| `--field <f>` | field label (required); 1–200 chars, no control chars, no leading `-` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| name format (item, vault, field; or `<f>` syntax like `--flag` at all) | `usage` | 2 |
+| Session and role (§24.0) | `secret_session_required`, `secret_role_denied`, `session_not_found` | 3, 3, 4 |
+| Vault allowed and grant if needed (§24.0) | `secret_vault_denied`, `secret_grant_required` | 3, 3 |
+| `op` found and responds | `secret_op_missing`, `secret_not_signed_in` | 1, 3 |
+| item and field exist | `secret_not_found`, `secret_op_failed` | 4, 1 |
+
+Effects: none. One `op item get` call; no write to the store, no Event, no file (the value enters the caller's session or transcript by design).
+
+Output:
+
+```json
+{"ok": true, "vault": "cpd", "item": "deployment", "field": "password", "value": "secret"}
+```
+
+Idempotent: yes; every run gets the current value.
+
+### 24.2 `list`
+
+```
+cpd secret list --vault <v>
+```
+
+Lists items in a vault (id and title only, no values).
+
+| Argument | Meaning |
+|---|---|
+| `--vault <v>` | vault name (required); `cpd` or `homeserver` for Workers, any for Lead/Manager (but needs approval) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| name format (vault) | `usage` | 2 |
+| Session and role (§24.0) | `secret_session_required`, `secret_role_denied`, `session_not_found` | 3, 3, 4 |
+| Vault allowed and grant if needed (§24.0) | `secret_vault_denied`, `secret_grant_required` | 3, 3 |
+| `op` found and responds | `secret_op_missing`, `secret_not_signed_in` | 1, 3 |
+| vault exists | `secret_not_found`, `secret_op_failed` | 4, 1 |
+
+Effects: none. One `op item list` call.
+
+Output:
+
+```json
+{"ok": true, "vault": "cpd", "items": [
+  {"id": "abc123def456", "title": "deployment"},
+  {"id": "xyz789uvw012", "title": "slack-webhook"}
+]}
+```
+
+Idempotent: yes.
+
+### 24.3 `create`
+
+```
+cpd secret create <item> --vault <v> --field <f>
+```
+
+Creates a Secure Note item with one concealed field. Value on stdin only. An empty value or a terminal stdin is `usage` (exit 2).
+
+| Argument | Meaning |
+|---|---|
+| `<item>` | item name (required); 1–200 chars, no control chars, no leading `-` |
+| `--vault <v>` | vault (required); `cpd` or `homeserver` for Workers, any for Lead/Manager (but needs approval) |
+| `--field <f>` | field label (required); 1–200 chars, no control chars, no leading `-` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| name format (item, vault, field) | `usage` | 2 |
+| stdin is not a terminal and not empty (minus one trailing newline) | `usage` | 2 |
+| Session and role (§24.0) | `secret_session_required`, `secret_role_denied`, `session_not_found` | 3, 3, 4 |
+| Lead or Manager only (not Worker) | `secret_role_denied` | 3 |
+| Vault allowed and grant if needed (§24.0) | `secret_vault_denied`, `secret_grant_required` | 3, 3 |
+| `op` found and responds | `secret_op_missing`, `secret_not_signed_in` | 1, 3 |
+| item does not exist | `secret_exists`, `secret_op_failed` | 3, 1 |
+| op succeeds | `secret_op_failed` | 1 |
+
+Effects: one `op item get` to check (missing is OK; success means exists), then one `op item create`. No store write, no Event.
+
+Output:
+
+```json
+{"ok": true, "vault": "cpd", "item": "deployment", "field": "password", "created": true}
+```
+
+Idempotent: no; `create` on an existing item is `secret_exists` (exit 3).
+
+### 24.4 `edit`
+
+```
+cpd secret edit <item> --vault <v> --field <f>
+```
+
+Sets the value of one field of an item. If the field doesn't exist, it is added. Value on stdin only (same preconditions as §24.3).
+
+| Argument | Meaning |
+|---|---|
+| `<item>` | item name (required); 1–200 chars, no control chars, no leading `-` |
+| `--vault <v>` | vault (required) |
+| `--field <f>` | field label (required); 1–200 chars, no control chars, no leading `-` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| name format (item, vault, field) | `usage` | 2 |
+| stdin is not a terminal and not empty (minus one trailing newline) | `usage` | 2 |
+| Session and role (§24.0) | `secret_session_required`, `secret_role_denied`, `session_not_found` | 3, 3, 4 |
+| Lead or Manager only (not Worker) | `secret_role_denied` | 3 |
+| Vault allowed and grant if needed (§24.0) | `secret_vault_denied`, `secret_grant_required` | 3, 3 |
+| `op` found and responds | `secret_op_missing`, `secret_not_signed_in` | 1, 3 |
+| item exists | `secret_not_found`, `secret_op_failed` | 4, 1 |
+| op succeeds | `secret_op_failed` | 1 |
+
+Effects: one `op item get` (missing: `secret_not_found`), then one `op item edit`. No store write, no Event.
+
+Output:
+
+```json
+{"ok": true, "vault": "cpd", "item": "deployment", "field": "password", "edited": true}
+```
+
+Idempotent: no (running it again sets the value again, which is OK semantically, but is not reported as `already`).
+
+### 24.5 `delete`
+
+```
+cpd secret delete <item> --vault <v>
+```
+
+Archives an item (recoverable in 1Password).
+
+| Argument | Meaning |
+|---|---|
+| `<item>` | item name (required); 1–200 chars, no control chars, no leading `-` |
+| `--vault <v>` | vault (required) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| name format (item, vault) | `usage` | 2 |
+| Session and role (§24.0) | `secret_session_required`, `secret_role_denied`, `session_not_found` | 3, 3, 4 |
+| Lead or Manager only (not Worker) | `secret_role_denied` | 3 |
+| Vault allowed and grant if needed (§24.0) | `secret_vault_denied`, `secret_grant_required` | 3, 3 |
+| `op` found and responds | `secret_op_missing`, `secret_not_signed_in` | 1, 3 |
+| item exists | `secret_not_found`, `secret_op_failed` | 4, 1 |
+| op succeeds | `secret_op_failed` | 1 |
+
+Effects: one `op item delete --archive` call. No store write, no Event.
+
+Output:
+
+```json
+{"ok": true, "vault": "cpd", "item": "deployment", "archived": true}
+```
+
+Idempotent: no; a second run on an archived item is `secret_not_found` (exit 4).
+
+### 24.6 `allow`
+
+```
+cpd secret allow <item> --attempt <id> --vault <v> --field <f>
+```
+
+Grants a Worker's Attempt read access to one field of one item (contract §8.4).
+
+| Argument | Meaning |
+|---|---|
+| `<item>` | item name (required); 1–200 chars, no control chars, no leading `-` |
+| `--attempt <id>` | Attempt id (required); the Attempt must belong to the Lead's own Plan |
+| `--vault <v>` | vault (required); must be `cpd` or `homeserver` (no other vault) |
+| `--field <f>` | field label (required); 1–200 chars, no control chars, no leading `-` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| name format (item, field, vault, Attempt id) | `usage` | 2 |
+| Session and role (§24.0) | `secret_session_required`, `secret_role_denied`, `session_not_found` | 3, 3, 4 |
+| Lead only (not Manager or Worker) | `secret_role_denied` | 3 |
+| Vault is `cpd` or `homeserver` (not another) | `secret_vault_denied` | 3 |
+| Attempt exists and belongs to the Lead's own Plan | `attempt_not_found` | 4 |
+| Attempt has not ended | `secret_attempt_ended` | 3 |
+
+Effects: one transaction; append or update `$CPD_HOME/run/secret/allow/<attempt>.json` atomically. It is a JSON array of `{vault, item, field}` (new entries appended, duplicates ignored). No Event, no store write.
+
+Output:
+
+```json
+{"ok": true, "attempt": "job-name-a1", "vault": "cpd", "item": "deployment", "field": "password", "already": false}
+```
+
+Idempotent: yes; an entry already listed returns `"already": true`.
+
+### 24.7 `approve` (internal)
+
+```
+cpd secret approve --action <get|list|create|edit|delete> --vault <v> [--item <i>] [--field <f>]
+```
+
+Records the User's approval for a Lead or Manager to use another vault. Called by the pi adapter after the User chooses Allow in the `cpd_secret_approve` tool. Internal; not for manual use.
+
+| Argument | Meaning |
+|---|---|
+| `--action <get|list|create|edit|delete>` | the action (required) |
+| `--vault <v>` | vault (required); must not be `cpd` or `homeserver` (no approval needed for those) |
+| `--item <i>` | item name (required for get, create, edit, delete; forbidden for list); 1–200 chars, no control chars, no leading `-` |
+| `--field <f>` | field label (required for get, create, edit; forbidden for list and delete); 1–200 chars, no control chars, no leading `-` |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| name format (action, vault, item, field) | `usage` | 2 |
+| `--item` present iff action is not `list` | `usage` | 2 |
+| `--field` present iff action is `get`, `create` or `edit` | `usage` | 2 |
+| `CPD_SESSION` is set and the Session exists | `secret_session_required`, `session_not_found` | 3, 4 |
+| caller is Lead or Manager (`secret_role_denied`) | `secret_role_denied` | 3 |
+| vault is not `cpd` or `homeserver` | `usage` | 2 |
+
+Effects: one transaction; write `$CPD_HOME/run/secret/approve/<uuid>.json` atomically, where `<uuid>` is a new v4 UUID. The file holds `{session, action, vault, item, field, at}` (`item` and `field` null as needed). The file is consumed when the first matching command of that Session runs within 10 minutes of `at` (contract §8.4).
+
+Output:
+
+```json
+{"ok": true, "action": "get", "vault": "vault-name", "item": "secret-item", "field": "secret-field", "expires_at": "2026-10-22T21:10:00.000Z"}
+```
+
+Idempotent: no; every call writes a new file.
+
