@@ -3,6 +3,7 @@ import { registerAgentState } from "./agent-state.ts";
 import { createHost, type Options } from "./host.ts";
 import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
+import { installHint } from "./hint.ts";
 import { pnVerdict } from "./pnguard.ts";
 import { RENDERED_TYPES } from "./render.ts";
 import { registerReloadCommand } from "./reload-command.ts";
@@ -22,7 +23,9 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   registerReloadCommand(host);
   registerReminderCheck(host);
 
+  let removeHint: (() => void) | undefined;
   pi.on("session_start", async (event, ctx) => {
+    removeHint ??= installHint(); // §6.1.1: before pi first draws the jump hint
     try {
       await start(host, ctx, typeof event?.reason === "string" ? event.reason : "unknown");
     } catch (e) {
@@ -31,6 +34,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   });
 
   pi.on("session_shutdown", async () => {
+    removeHint?.();
+    removeHint = undefined;
     try {
       await stop(host);
     } catch (e) {

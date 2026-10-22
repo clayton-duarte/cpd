@@ -60,56 +60,12 @@ export function classifyThinkingToggleInput(data: string): ThinkingToggleInput |
 	return isKeyRepeat(data) ? "repeat" : "toggle";
 }
 
-function plainSummary(line: string): string {
-	return line
-		.replace(/^\s{0,3}#{1,6}\s+/u, "")
-		.replace(/^\s*[-*+]\s+/u, "")
-		.replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
-		.replace(/[*_~`]/gu, "")
-		.replace(/\s+/gu, " ")
-		.trim();
-}
-
 type ThinkingSection = { summary: string; detail: string };
 
+/** One section: the title is the literal "Thinking...", the whole text is the fold's body. */
 function splitThinkingSections(markdown: string): ThinkingSection[] {
 	const normalized = markdown.includes("\r") ? markdown.replace(/\r\n?/gu, "\n") : markdown;
-	const lines = normalized.split("\n");
-	let first = -1;
-	let summary = "";
-	for (let index = 0; index < lines.length; index++) {
-		summary = plainSummary(lines[index]!);
-		if (summary) {
-			first = index;
-			break;
-		}
-	}
-	if (first < 0) return [{ summary: "Thinking...", detail: "" }];
-	const sections: ThinkingSection[] = [];
-	let detail: string[] = [];
-	let inFence = false;
-	const flush = () => {
-		sections.push({ summary, detail: detail.join("\n").trim() });
-		detail = [];
-	};
-	for (let index = first + 1; index < lines.length; index++) {
-		const line = lines[index]!;
-		const fence = /^\s*(```|~~~)/u.test(line);
-		if (!inFence) {
-			const boldHeading = line.match(/^\s*\*\*(.+?)\*\*\s*$/u)?.[1];
-			const markdownHeading = line.match(/^\s{0,3}#{1,6}\s+(.+?)\s*$/u)?.[1];
-			const heading = boldHeading ?? markdownHeading;
-			if (heading) {
-				flush();
-				summary = plainSummary(heading);
-				continue;
-			}
-		}
-		detail.push(line);
-		if (fence) inFence = !inFence;
-	}
-	flush();
-	return sections;
+	return [{ summary: "Thinking...", detail: normalized.trim() }];
 }
 
 function compactDetail(
@@ -255,26 +211,23 @@ export class ThinkingCycleController {
 			const detailTextPrefix = fgOpen(TEXT);
 			// Derived once per transform: the rail is drawn for every wrapped line of detail.
 			const rail = theme ? chrome : undefined;
+			const toggleGlyphs = toggle();
 			return renderThinkingSections(sections, thinkingViewForPhase(this.phase), context.availableWidth, {
 				// Keep thinking chrome neutral across themes: effort-level and border colors can
 				// be intentionally vivid and are not content hierarchy colors.
-				styleSummary: theme ? (summary) => thinkingPill(summary) : undefined,
+				styleSummary: theme ? (summary) => (toggleGlyphs ? chrome("╭─") : "") + thinkingPill(summary) : undefined,
 				// Prefix styling resets the foreground; resume the host's thinking text color.
 				// The rail and connector are the same frame the tool rows draw, so they take
 				// the same chrome tone rather than a color name of their own.
 				styleDetailPrefix: rail && detailTextPrefix
 					? (prefix) => rail(prefix) + detailTextPrefix
 					: undefined,
-				controls: theme
-					? (hasDetail) => hasDetail
-						? ink(
-								"dim",
-								"ctrl+t toggle • click to hide",
-							)
-						: undefined
-					: undefined,
+				// With the toggle the collapse row has no hint; the fold: status └ row keeps it.
+				controls: theme && !toggleGlyphs
+					? (hasDetail) => hasDetail ? ink("dim", "ctrl+t toggle • click to hide") : undefined
+					: () => undefined,
 				styleControlPrefix: rail,
-				toggle: toggle(),
+				toggle: toggleGlyphs,
 			});
 		});
 	}

@@ -1,7 +1,5 @@
-//! Engine step E8, the `distill-tier` Inbox item (contract §2.2 "Inbox item", §3.7, §4.6 "The run log"; hs-d539):
-//! with the engine running on a prepared store, a Context whose highest-`upto_seq` runs in `runs.jsonl` include
-//! an `S` Tier opens one magenta item; a newer run replaces it; an unreadable file or line yields no item.
-//! The "no item" tests carry a control Context that does reach `S`, so they cannot pass before E8 reads the files.
+//! No `distill-tier` Inbox item (hs-d555, superseding hs-d539): the distill ladder stops at H3, so a failed run opens
+//! nothing, whatever `runs.jsonl` holds.
 
 use crate::common;
 
@@ -100,25 +98,7 @@ impl Fx {
         json["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "distill-tier").cloned().collect()
     }
 
-    fn items_of(&self, context: &str) -> Vec<Value> {
-        self.items().into_iter().filter(|i| i["context"] == context).collect()
-    }
-
-    fn assert_item(&self, context: &str, upto: i64, tier: &str, runs: u32) {
-        wait_until("distill-tier item", || self.items_of(context).iter().any(|i| i["subject"] == format!("distill:{context}/{upto}")));
-        let items = self.items_of(context);
-        assert_eq!(items.len(), 1, "{items:?}");
-        let item = &items[0];
-        assert_eq!(item["urgency"], "magenta", "{item}");
-        assert_eq!(item["subject"], format!("distill:{context}/{upto}"), "{item}");
-        assert_eq!(item["label"], format!("{context} digest needed {tier} ×{runs}"), "{item}");
-        assert_eq!(item["context"], context, "{item}");
-        for null in ["plan", "job", "session", "record"] {
-            assert!(item[null].is_null(), "{null} must be null: {item}");
-        }
-    }
-
-    /// Two more ticks, so that a missing item had its chance to open.
+        /// Two more ticks, so that a missing item had its chance to open.
     fn two_ticks(&self) {
         std::thread::sleep(Duration::from_secs_f64(common::TICK_SECONDS.parse::<f64>().unwrap() * 2.0 + 1.0));
     }
@@ -133,57 +113,13 @@ fn runs(context: &str, upto: i64, tiers: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn a_distill_run_that_reached_s_opens_a_magenta_distill_tier_item() {
+fn a_run_that_fails_every_step_opens_no_inbox_item() {
+    // The ladder stops at H3 (hs-d555) and no distill-tier item exists: even a log with S steps opens nothing.
     let fx = fx();
-    fx.write_runs("building", &runs("building", 7, &["H0", "H1", "H2", "H3", "S1"]));
+    fx.write_runs("building", &runs("building", 7, &["H0", "H1", "H2", "H3"]));
+    fx.write_runs("control", &runs("control", 3, &["H0", "H1", "H2", "H3", "S1"]));
     let _engine = fx.start();
-    fx.assert_item("building", 7, "S1", 1);
-}
-
-#[test]
-fn a_run_that_stayed_on_h_opens_no_item() {
-    let fx = fx();
-    fx.write_runs("building", &runs("building", 7, &["H0", "H1"]));
-    fx.write_runs("control", &runs("control", 3, &["H0", "S1"]));
-    let _engine = fx.start();
-    fx.assert_item("control", 3, "S1", 1);
     fx.two_ticks();
-    assert!(fx.items_of("building").is_empty(), "{:?}", fx.items());
-}
-
-#[test]
-fn a_newer_run_replaces_the_item() {
-    let fx = fx();
-    fx.write_runs("building", &runs("building", 7, &["H0", "S1"]));
-    let _engine = fx.start();
-    fx.assert_item("building", 7, "S1", 1);
-
-    // A newer run on H only: the old item closes and none opens.
-    let mut lines = runs("building", 7, &["H0", "S1"]);
-    lines.extend(runs("building", 9, &["H0", "H1"]));
-    fx.write_runs("building", &lines);
-    wait_until("old item closed", || fx.items_of("building").is_empty());
-    fx.two_ticks();
-    assert!(fx.items_of("building").is_empty(), "{:?}", fx.items());
-
-    // A newer run that reached S2: a new item for it.
-    lines.extend(runs("building", 11, &["H0", "S1", "S2"]));
-    fx.write_runs("building", &lines);
-    fx.assert_item("building", 11, "S2", 2); // runs 7 and 11 reached S
-}
-
-#[test]
-fn an_unreadable_runs_file_opens_no_item_and_no_error() {
-    let fx = fx();
-    // `building`: a directory where the file should be; `control`: garbage lines around a valid S one.
-    fs::create_dir_all(fx.runs("building")).unwrap();
-    let mut lines = vec!["not json".to_owned(), "{\"tier\":".to_owned()];
-    lines.extend(runs("control", 3, &["S1"]));
-    lines.push("\u{1}\u{2}".to_owned());
-    fx.write_runs("control", &lines);
-    let _engine = fx.start();
-    fx.assert_item("control", 3, "S1", 1);
-    fx.two_ticks();
-    assert!(fx.items_of("building").is_empty(), "{:?}", fx.items());
+    assert!(fx.items().is_empty(), "{:?}", fx.items());
     assert_eq!(fx.errors(), 0);
 }

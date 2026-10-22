@@ -987,6 +987,12 @@ fn the_distiller_runs_on_gx_with_the_g_model() {
 fn a_gx_run_with_an_invalid_digest_stops_after_one_step() {
     let fx = ladder_fx();
     fx.env.fake_pi(&says(STRAY));
+    let start = tiers_of(&{
+        // The tier a run starts at: the one the run of a valid digest reports.
+        let probe = ladder_fx();
+        probe.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+        probe.runs()
+    });
     let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
     refused(&run, "distill_invalid", 1);
     assert_eq!(tiers_of(&fx.runs()), ["GX"]);

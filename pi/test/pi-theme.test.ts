@@ -27,8 +27,8 @@ const TABLE: Record<string, number | ""> = {
   scrollbarThumb: 8,
   searchMatchBg: 3,
   searchMatchText: 0,
-  userMessageBg: "",
-  userMessageText: 7,
+  userMessageBg: 7,
+  userMessageText: 0,
   customMessageBg: "",
   customMessageText: 7,
   customMessageLabel: 5,
@@ -100,6 +100,16 @@ test("theme cpd loads in pi", async () => {
   const theme = mod.loadThemeFromPath(THEME.pathname, "256color");
   assert.equal(theme.fg("customMessageLabel", "x"), "\x1b[38;5;5mx\x1b[39m");
   assert.equal(theme.fg("muted", "x"), "\x1b[38;5;8mx\x1b[39m");
+});
+
+test("the User's input is drawn inverted: bg 7 and text 0", async () => {
+  const pi = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const mod = (await import(pathToFileURL(join(dirname(pi), "modes/interactive/theme/theme.js")).href)) as {
+    loadThemeFromPath(path: string, mode?: string): { fg(color: string, text: string): string; bg(color: string, text: string): string };
+  };
+  const theme = mod.loadThemeFromPath(THEME.pathname, "256color");
+  assert.equal(theme.fg("userMessageText", "x"), "\x1b[38;5;0mx\x1b[39m");
+  assert.equal(theme.bg("userMessageBg", "x"), "\x1b[48;5;7mx\x1b[49m");
 });
 
 test("the adapter package declares the theme", () => {
