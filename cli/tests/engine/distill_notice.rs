@@ -87,8 +87,8 @@ fn a_newer_run_that_reached_s_replaces_the_item_counting_two() {
 #[test]
 fn a_dismissal_closes_the_item_and_the_next_s_run_counts_one() {
     let fx = fx();
-    fx.runs(&[(7, "S1", "2026-10-22T10:00:00Z")]);
-    fx.reconcile("2026-10-22T10:01:00.000Z");
+    fx.runs(&[(7, "S1", "2000-01-01T10:00:00Z")]);
+    fx.reconcile("2000-01-01T10:01:00.000Z");
     let id = fx.env.query::<i64>("SELECT id FROM inbox_items WHERE kind = 'distill-tier' AND closed_at IS NULL").to_string();
     fx.env.cpd(&["inbox", "dismiss", &id]).ok();
     fx.reconcile("2999-01-01T00:00:00.000Z");
