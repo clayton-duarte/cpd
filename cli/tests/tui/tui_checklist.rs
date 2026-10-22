@@ -172,19 +172,20 @@ fn an_items_file_with_a_short_field_is_refused() {
     let env = TestEnv::new();
     let items = env.root().join("items.json");
     let stdout = env.root().join("stdout.json");
-    let run = |rows: Value| {
+    let run = |rows: Value, redirect: bool| {
         fs::write(&items, rows.to_string()).unwrap();
-        let shell = format!("{CPD} tui view dialog checklist --title=Title --items={} --out={}/o.json > {}", items.display(), env.root().display(), stdout.display());
+        let to = if redirect { format!(" > {}", stdout.display()) } else { String::new() };
+        let shell = format!("{CPD} tui view dialog checklist --title=Title --items={} --out={}/o.json{to}", items.display(), env.root().display());
         tmux_out(&env, &["new-session", "-d", "-s", "view", "-x", "60", "-y", "12", "-P", "-F", "#{pane_id}", "sh", "-c", &shell]).trim().to_owned()
     };
-    run(json!([{"id": "r-1", "short": "use sqlite", "text": SQLITE, "detail": "duplicate r-0"}]));
+    run(json!([{"id": "r-1", "short": "use sqlite", "text": SQLITE, "detail": "duplicate r-0"}]), true);
     wait_until("the view to close", || !env.tmux(&["has-session", "-t", "view"]).status.success());
     let reply: Value = serde_json::from_str(&fs::read_to_string(&stdout).unwrap()).unwrap();
     assert_eq!(reply["ok"], json!(false), "{reply}");
     assert_eq!(reply["error"]["code"], json!("args_invalid"), "{reply}");
     assert!(reply["error"]["message"].as_str().unwrap().contains("short"), "the refusal names the field: {reply}");
     // the same entry without `short` is the shape: drawn, its text under the header
-    let pane = run(json!([{"id": "r-1", "text": SQLITE, "detail": "duplicate r-0"}]));
+    let pane = run(json!([{"id": "r-1", "text": SQLITE, "detail": "duplicate r-0"}]), false);
     let rows = wait_screen(&env, &pane, "the dialog", ready);
     let h = row_of(&rows, "[ ] r-1 — duplicate r-0");
     assert_eq!(rows[h + 1].trim(), SQLITE, "{rows:?}");

@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn the_popup_is_sized_to_the_legend_and_capped_at_the_client() {
         let (w, h) = size();
-        let args = popup_args((215, 62));
+        let args = popup_args((215, 66));
         assert_eq!(
             args,
             ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
