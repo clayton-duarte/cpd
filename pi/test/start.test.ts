@@ -96,15 +96,17 @@ test("activation: only in a tui, only with CPD_SESSION, only when it is pi's ses
   assert.deepEqual(f.pi.sent, []);
 
   process.env.CPD_SESSION = ID;
+  process.env.CPD_PLAN = "p1"; // a Lead's pane has CPD_PLAN (§6.5): this one is a Lead's, so its error is reported to the Manager (§15.1, hs-d573); the Fixture restores it
   f.pi.sessionId = OTHER;
   await f.pi.fire("session_start");
   await f.quiet();
-  assert.deepEqual(f.calls(), [], "inactive: it would report another Session's state");
-  assert.equal(f.pi.sent.length, 1);
-  const m: Sent = f.pi.sent[0]!;
-  assert.match(m.message.content, /^cpd adapter: activation: session_mismatch: /);
-  assert.deepEqual(m.options, { triggerTurn: false, deliverAs: "followUp" });
-  assert.equal((m.message.details as any).kind, "error");
+  assert.deepEqual(f.argvs().map((a) => a.slice(0, 2)), [["session", "report"]], "inactive, so no state is reported: the one call is the report of the error");
+  assert.deepEqual(f.pi.sent, [], "not delivered to the Lead's chat");
+  const [r, ...more] = f.reports();
+  assert.deepEqual(more, []);
+  assert.deepEqual([r!.what, r!.code, r!.session], ["activation", "session_mismatch", ID]);
+  assert.match(r!.message!, /^CPD_SESSION is /);
+  assert.ok(f.adapterLog().some((l) => / error: activation: session_mismatch: /.test(l)), "logged");
 });
 
 test("a failing session show is delivered as an error and nothing else starts", async (t) => {

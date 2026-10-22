@@ -103,9 +103,11 @@ test("a failed first-message read adds nothing and retries at the next run", asy
   await lead(f, { by_user: true });
   f.respond("session-first-message", { ok: false, error: { code: "store_busy", message: "database is locked" } }, { exit: 1 });
   assert.deepEqual(first(await run(f)), []);
-  assert.equal(f.pi.errors().length, 1, "reported once");
-  assert.ok((f.pi.errors()[0]!.message.content as string).includes("store_busy"));
-  assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
+  await waitFor("the report", () => f.reports().length > 0, 3000);
+  await f.quiet();
+  assert.deepEqual(f.reports().map((r) => [r.what, r.code, r.session]), [["first message", "store_busy", ID]], "reported once, to the Manager");
+  assert.deepEqual(f.pi.errors(), [], "not delivered to the Lead's chat");
+  assert.ok(f.adapterLog().some((l) => / error: first message: store_busy: /.test(l)), "logged");
   assert.equal(firstMessageCalls(f).length, 1);
 
   f.respond("session-first-message", firstMessage(130));

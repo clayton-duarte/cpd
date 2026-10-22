@@ -47,7 +47,7 @@ test("refresh lists lead and manager sessions with --archived once", async (t) =
 
 test("a mentions failure repeated after a success is not shown again", async (t) => {
   t.after(clearMentions);
-  // The real `host.deliver`: the §15.1 rule (the same what and code is shown once) is what this pins.
+  // The real `host.deliver`: the §15.1 rule (the same what and code is reported once) is what this pins; a Lead's error is reported to the Manager, never delivered (hs-d573).
   const pi = new FakePi();
   const host = createHost(pi, {});
   const live = new Run({
@@ -61,11 +61,21 @@ test("a mentions failure repeated after a success is not shown again", async (t)
   });
   host.run = live;
   let reply: Reply = failing("after-success: same");
-  (host as { call: Host["call"] }).call = ((args: string[]) => reply(args)) as Host["call"];
+  const reports: string[][] = [];
+  (host as { call: Host["call"] }).call = ((args: string[]) => {
+    if (args[0] === "session" && args[1] === "report") {
+      reports.push(args);
+      return Promise.resolve({ ok: true, event: "1" });
+    }
+    return reply(args);
+  }) as Host["call"];
   await refreshMentions(host, live);
   reply = ok;
   await refreshMentions(host, live);
   reply = failing("after-success: same");
   await refreshMentions(host, live);
-  assert.equal(pi.errors().length, 1, "same error, a success, the same error: shown once (§15.1)");
+  await new Promise((resolve) => setImmediate(resolve)); // a report is sent without being awaited
+  assert.equal(reports.length, 1, "same error, a success, the same error: reported once (§15.1)");
+  assert.deepEqual([reports[0]!.slice(0, 6), reports[0]!.includes("--session")], [["session", "report", "--what", "mentions", "--code", "adapter_failed"], true]);
+  assert.deepEqual(pi.sent, [], "not delivered to the Lead's chat");
 });
