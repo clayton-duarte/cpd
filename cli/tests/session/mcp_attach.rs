@@ -336,7 +336,10 @@ fn mcp_attach_writes_nothing_but_the_event() {
     assert_eq!(events_after.last().unwrap()["kind"], "mcp-attached");
     let rows_after = row_counts(&env);
     let changed: Vec<_> = rows_before.iter().zip(&rows_after).filter(|(a, b)| a != b).collect();
-    assert!(changed.iter().all(|(a, _)| a.0 == "events"), "only the events table grows: {changed:?}");
+    // The `txns` row is the transaction's own bookkeeping, not a row of the command (commands.md §1 Effects, contract §4.2).
+    assert!(changed.iter().all(|(a, _)| a.0 == "events" || a.0 == "txns"), "only the events table grows, and txns by its row: {changed:?}");
+    let txns = |rows: &[(String, i64)]| rows.iter().find(|r| r.0 == "txns").unwrap().1;
+    assert_eq!(txns(&rows_after), txns(&rows_before) + 1);
     assert_eq!(files_of_home(&env), files_before);
 }
 
