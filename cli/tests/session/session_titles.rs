@@ -123,8 +123,11 @@ fn answer(env: &TestEnv, stdout: &str, status: i32) {
     fs::write(env.root().join("status"), status.to_string()).unwrap();
 }
 
+/// The chat slot's width the tests retitle at: the limit is 68 - 8 = 60 characters.
+const WIDTH: &str = "68";
+
 fn retitle(env: &TestEnv, session: &str) -> Run {
-    env.cpd(&["session", "retitle", session])
+    env.cpd(&["session", "retitle", session, "--width", WIDTH])
 }
 
 fn show(env: &TestEnv, session: &str) -> Value {
@@ -170,34 +173,31 @@ fn pi_runs_once_on_the_lowest_effort_of_h_with_no_session_and_no_extensions_and_
 }
 
 #[test]
-fn stdin_holds_the_text_of_the_last_30_user_and_assistant_messages_in_order() {
+fn stdin_is_the_text_of_the_last_two_turns_in_order_and_the_whole_file_when_shorter() {
     let env = TestEnv::new();
     setup(&env);
     session_file(&env, LEAD, &numbered(40));
     retitle(&env, LEAD).ok();
-    let stdin = pi_stdin(&env);
-    let found: Vec<usize> = (1..=40).filter(|i| stdin.contains(&format!("message {i}\n")) || stdin.ends_with(&format!("message {i}"))).collect();
-    assert_eq!(found, (11..=40).collect::<Vec<_>>(), "{stdin}");
-    let at = |i: usize| stdin.find(&format!("message {i}")).unwrap();
-    assert!((11..40).all(|i| at(i) < at(i + 1)), "in order: {stdin}");
-    for other in ["TOOL OUTPUT", "CPD EVENT", "toolCall", "bash"] {
-        assert!(!stdin.contains(other), "only user and assistant text, not {other:?}: {stdin}");
-    }
+    // The second-to-last user message is message 37.
+    assert_eq!(pi_stdin(&env), "user: message 37\n\nassistant: message 38\n\nuser: message 39\n\nassistant: message 40");
+    session_file(&env, LEAD, &numbered(2));
+    retitle(&env, LEAD).ok();
+    assert_eq!(pi_stdin(&env), "user: message 1\n\nassistant: message 2");
 }
 
 #[test]
 fn stdin_is_cut_to_the_newest_8000_characters() {
     let env = TestEnv::new();
     setup(&env);
-    // 20 messages of 1 000 characters each (a multi-byte character among them), the newest last.
+    // Two turns of 4 messages of 3 000 characters each (a multi-byte character among them), the newest last.
     let messages: Vec<(&str, String)> =
-        (0..20).map(|i| (if i % 2 == 0 { "user" } else { "assistant" }, format!("{}é{}", char::from(b'a' + i as u8), "x".repeat(998)))).collect();
+        (0..8).map(|i| (if i % 2 == 0 { "user" } else { "assistant" }, format!("{}é{}", char::from(b'a' + i as u8), "x".repeat(2998)))).collect();
     session_file(&env, LEAD, &messages);
     retitle(&env, LEAD).ok();
     let stdin = pi_stdin(&env);
     assert_eq!(stdin.chars().count(), 8000, "{} characters", stdin.chars().count());
-    assert!(stdin.ends_with(&messages[19].1), "the newest is kept whole");
-    assert!(!stdin.contains(&messages[11].1), "the oldest are cut");
+    assert!(stdin.ends_with(&messages[7].1), "the newest is kept whole");
+    assert!(!stdin.contains(&messages[4].1), "the oldest are cut");
 }
 
 // ---------- the answer ----------
@@ -216,7 +216,6 @@ fn the_answer_is_the_only_marked_line_unquoted_and_anything_else_is_malformed_an
         "TITLE: First title\nTITLE: Second title\n",
         "TITLE:\n",
         "TITLE: \"\"\n",
-        "TITLE: one two three four five six seven eight nine ten eleven\n",
         "TITLE: A title that reads. As sentences\n",
         "TITLE: Ends with a full stop.\n",
     ] {
@@ -225,7 +224,7 @@ fn the_answer_is_the_only_marked_line_unquoted_and_anything_else_is_malformed_an
         assert_eq!(error["details"]["reason"], "malformed", "{said:?}");
         nothing_written(&env, LEAD);
     }
-    // The title is 60 characters at most, and exactly 60 passes.
+    // The title is 60 characters at most (the width 68 less 8), and exactly 60 passes.
     let sixty = "a".repeat(60);
     for (said, title) in [
         ("TITLE: \"Quoted session title\"\n".to_owned(), "Quoted session title".to_owned()),
@@ -280,7 +279,7 @@ fn a_pi_that_fails_is_title_failed_with_its_stderr_tail_and_writes_nothing() {
 
     // pi cannot start: its interpreter is missing. `PATH` is `bin/` alone, so no other pi is found.
     common::write_executable(&env.bin().join("pi"), "#!/nonexistent/interpreter\n");
-    let out = common::output(env.command(common::CPD).env("PATH", env.bin()).args(["session", "retitle", LEAD])).unwrap();
+    let out = common::output(env.command(common::CPD).env("PATH", env.bin()).args(["session", "retitle", LEAD, "--width", WIDTH])).unwrap();
     let run = Run {
         exit: out.status.code().unwrap(),
         stdout: String::from_utf8(out.stdout).unwrap(),

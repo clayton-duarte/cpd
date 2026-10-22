@@ -2714,6 +2714,11 @@ impl Titles {
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
             ids.push(String::from_utf8(out.stdout).unwrap().trim().to_owned());
         }
+        // E10 retitles only with a chat slot to read the width of (hs-d543): the cockpit's `main` window, its placeholder.
+        let out = fx.env.tmux(&["new-session", "-d", "-s", "cpd", "-n", "main", "-x", "100", "-y", "30", "-P", "-F", "#{pane_id}", "sleep", "600"]);
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let slot = String::from_utf8(out.stdout).unwrap().trim().to_owned();
+        assert!(fx.env.tmux(&["set", "-p", "-t", &slot, "@cpd_view", "chat"]).status.success());
         let driver = fx.live_driver("api-a1");
         fx.add_running("api", "running", &ago(1));
         Titles { fx, panes: ids, asked: 0, _driver: driver }

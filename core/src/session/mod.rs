@@ -258,10 +258,9 @@ pub struct RetitleArgs {
     /// The Lead or Manager Session to title
     #[arg(value_name = "session")]
     id: SessionRef,
-    /// The chat slot pane's width in columns (hs-d543). Stub: accepted and ignored until the implementation Job.
-    #[arg(long, value_name = "cols")]
-    #[allow(dead_code)]
-    width: Option<u32>,
+    /// The chat slot pane's width in columns (hs-d543): the title is at most this less 8 characters (at most 200)
+    #[arg(long, value_name = "cols", value_parser = clap::value_parser!(u32).range(9..))]
+    width: u32,
 }
 
 #[derive(clap::Args, Debug)]

@@ -1,6 +1,7 @@
 //! `session retitle` (commands.md §10.14; contract §2.2 Session `title`, §3.7
-//! E10; hs-d257, hs-n95): a Lead's or a Manager's **dynamic title**, a 3–7 word
-//! title of what its conversation is about now, written by a one-shot pi.
+//! E10; hs-d257, hs-n95, hs-d543): a Lead's or a Manager's **dynamic title**, a glance
+//! reminder of what was last happening in its last 2 turns, at most the chat slot's
+//! width less 8 characters, written by a one-shot pi.
 //!
 //! The run holds `locks/title-<session>.lock`, a `flock(2)` lock the kernel
 //! frees when the run dies, so a Session never has two runs and a crash leaves
@@ -25,15 +26,13 @@ use crate::home::CpdHome;
 use crate::ids::SessionId;
 use crate::output::Output;
 
-/// The messages and characters of the conversation pi reads (step 2).
-const MESSAGES: usize = 30;
+/// The turns and characters of the conversation pi reads (step 2).
+const TURNS: usize = 2;
 const CHARACTERS: usize = 8000;
 
-/// The longest title the run writes (step 4): a longer answer is malformed, never cut.
-const TITLE_CHARS: usize = 60;
-
-/// The most words a title has (step 4).
-const TITLE_WORDS: usize = 10;
+/// What the chat slot's width is cut by to make the limit (step 3), and the longest limit: a Title's maximum.
+const MARGIN: u32 = 8;
+const TITLE_MAX: u32 = 200;
 
 /// The marker of the answer's one line (step 4).
 const MARKER: &str = "TITLE:";
@@ -43,9 +42,19 @@ const TAIL_LINES: usize = 20;
 
 /// The prompt (step 3): the conversation text comes before it, on stdin (pi `cli.md`: piped stdin
 /// is prepended to the first prompt).
-const PROMPT: &str = "The text above is a conversation between a user and an AI agent. \
-Write a title of 3 to 7 words for the conversation's current subject: what it is about now, not what it started with. \
-Answer with one line, `TITLE: <3 to 7 words>`, and nothing else: plain text, no quotes, no sentences.";
+fn prompt(limit: usize) -> String {
+    format!(
+        "The text above is the last two turns of a conversation between a user and an AI agent. \
+Write a short reminder of what was last happening in it, not what it started with. \
+Answer with one line, `TITLE: <what was last happening, at most {limit} characters>`, and nothing else: plain text, no quotes, no sentences."
+    )
+}
+
+/// The longest title for a chat slot `width` columns wide: the width less [`MARGIN`], at most [`TITLE_MAX`].
+/// The command's `--width` is at least `MARGIN + 1`, so the limit is at least 1.
+fn limit(width: u32) -> usize {
+    (width - MARGIN).min(TITLE_MAX) as usize
+}
 
 /// `locks/title-<session>.lock`: held by the Session's one retitle run (contract §1.4).
 pub(crate) fn lock_path(home: &CpdHome, session: &SessionId) -> PathBuf {
@@ -118,7 +127,7 @@ pub(super) fn retitle(args: RetitleArgs) -> Result<Output, CpdError> {
     let Some(text) = conversation(read.file.as_deref())? else {
         return Ok(Output::success(json!({"session": id, "title": null, "skipped": "no_messages"})));
     };
-    let title = run_pi(&env, &id, &text)?;
+    let title = run_pi(&env, &id, &text, limit(args.width))?;
     let (event, titled_at) = env.store.write("session retitle", |tx| {
         // The Session may have been archived since it was read.
         check(&row::load(tx, &id)?)?;
@@ -162,7 +171,8 @@ fn set_header(env: &Env, id: &SessionId, title: &Title) -> Option<String> {
     })
 }
 
-/// Step 2: the text of the last [`MESSAGES`] `user` and `assistant` messages of the session file,
+/// Step 2: the text of the last [`TURNS`] turns of the session file (from the second-to-last `user` message
+/// to the end; the whole file when it has fewer), its `user` and `assistant` messages in order,
 /// at most [`CHARACTERS`] characters, the newest kept. None when there is no such text (no file
 /// yet, or none in it). Lines that are not a message (a partial last line included) are skipped.
 fn conversation(file: Option<&str>) -> Result<Option<String>, CpdError> {
@@ -181,7 +191,9 @@ fn conversation_text(content: &str) -> Option<String> {
     if messages.is_empty() {
         return None;
     }
-    let text = messages[messages.len().saturating_sub(MESSAGES)..].join("\n\n");
+    let users: Vec<usize> = messages.iter().enumerate().filter(|(_, m)| m.starts_with("user: ")).map(|(i, _)| i).collect();
+    let first = users.len().checked_sub(TURNS).map_or(0, |i| users[i]);
+    let text = messages[first..].join("\n\n");
     let skip = text.chars().count().saturating_sub(CHARACTERS);
     Some(text.chars().skip(skip).collect())
 }
@@ -211,7 +223,7 @@ fn message_text(line: &str) -> Option<String> {
 
 /// Steps 3 and 4: pi on the lowest effort of Tier `H`, the conversation on stdin, in `run/titles/`;
 /// its answer sanitised. pi's stderr is passed on to this run's stderr (the engine's log).
-fn run_pi(env: &Env, id: &SessionId, text: &str) -> Result<Title, CpdError> {
+fn run_pi(env: &Env, id: &SessionId, text: &str, limit: usize) -> Result<Title, CpdError> {
     let catalog = load_catalog(&env.config)?;
     let effort = catalog.h.efforts.first().copied().ok_or_else(|| {
         CpdError::new(ErrorCode::CatalogFailed, format!("pi's catalog lists no effort for {}.", catalog.h.model))
@@ -221,7 +233,7 @@ fn run_pi(env: &Env, id: &SessionId, text: &str) -> Result<Title, CpdError> {
     let dir = run_dir(&env.home);
     fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
     let mut command = Command::new("pi");
-    command.args(["--print", "--no-session", "--no-extensions", "--model", &model, "--", PROMPT]);
+    command.args(["--print", "--no-session", "--no-extensions", "--model", &model, "--", &prompt(limit)]);
     for (key, _) in std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("CPD_")) {
         command.env_remove(key);
     }
@@ -241,14 +253,14 @@ fn run_pi(env: &Env, id: &SessionId, text: &str) -> Result<Title, CpdError> {
     if let Err(e) = written {
         return Err(title_failed(id, Reason::Spawn, format_args!("pi did not read the conversation: {e}")).with("tail", tail));
     }
-    sanitise(&String::from_utf8_lossy(&out.stdout)).map_err(|(reason, why)| title_failed(id, reason, why).with("tail", tail))
+    sanitise(&String::from_utf8_lossy(&out.stdout), limit).map_err(|(reason, why)| title_failed(id, reason, why).with("tail", tail))
 }
 
 /// Step 4: the title is the text after the marker of the only line that starts with `TITLE:` (leading
 /// spaces allowed), trimmed and unquoted; any other line is ignored. An answer that is blank is `empty`;
-/// one with no marked line or two, or whose title is empty, over [`TITLE_CHARS`] characters or
-/// [`TITLE_WORDS`] words, reads as sentences or is not a [`Title`] is `malformed`. Nothing is cut.
-fn sanitise(answer: &str) -> Result<Title, (Reason, String)> {
+/// one with no marked line or two, or whose title is empty, over `limit` characters,
+/// reads as sentences or is not a [`Title`] is `malformed`. Nothing is cut.
+fn sanitise(answer: &str, limit: usize) -> Result<Title, (Reason, String)> {
     const QUOTES: &[char] = &['"', '\'', '`', '“', '”', '‘', '’', '«', '»'];
     if answer.trim().is_empty() {
         return Err((Reason::Empty, "pi's answer is empty".to_owned()));
@@ -261,10 +273,8 @@ fn sanitise(answer: &str) -> Result<Title, (Reason, String)> {
     let text = text.trim().trim_matches(QUOTES).trim();
     let bad = if text.is_empty() {
         Some("it is empty".to_owned())
-    } else if text.chars().count() > TITLE_CHARS {
-        Some(format!("it is over {TITLE_CHARS} characters"))
-    } else if text.split_whitespace().count() > TITLE_WORDS {
-        Some(format!("it has more than {TITLE_WORDS} words"))
+    } else if text.chars().count() > limit {
+        Some(format!("it is over {limit} characters"))
     } else if text.contains(". ") || text.ends_with(['.', '…', ':']) {
         Some("it reads as sentences".to_owned())
     } else {
@@ -288,8 +298,11 @@ mod tests {
     use super::*;
 
     fn title(answer: &str) -> Result<String, Reason> {
-        sanitise(answer).map(|t| t.as_str().to_owned()).map_err(|(reason, _)| reason)
+        sanitise(answer, LIMIT).map(|t| t.as_str().to_owned()).map_err(|(reason, _)| reason)
     }
+
+    /// The limit the unit tests use: a chat slot of 68 columns.
+    const LIMIT: usize = 60;
 
     /// The answer pi gave E10's retry of Session 4965bfc8 at 15:05:37Z: a preamble, no title (hs-d356).
     const PREAMBLE: &str = "Now I understand. I need to output just the title to stdout…";
@@ -348,17 +361,29 @@ mod tests {
     }
 
     #[test]
-    fn a_title_over_60_characters_is_malformed_and_never_cut() {
-        let sixty = "é".repeat(60);
-        assert_eq!(title(&format!("TITLE: {sixty}")), Ok(sixty));
-        assert_eq!(title(&format!("TITLE: {}", "é".repeat(61))), Err(Reason::Malformed));
+    fn a_title_over_the_limit_is_malformed_and_never_cut() {
+        let at_limit = "é".repeat(LIMIT);
+        assert_eq!(title(&format!("TITLE: {at_limit}")), Ok(at_limit));
+        assert_eq!(title(&format!("TITLE: {}", "é".repeat(LIMIT + 1))), Err(Reason::Malformed));
         assert_eq!(title(&format!("TITLE: {}", "é".repeat(300))), Err(Reason::Malformed));
     }
 
     #[test]
-    fn a_title_of_more_than_10_words_is_malformed() {
-        assert_eq!(title("TITLE: a b c d e f g h i j"), Ok("a b c d e f g h i j".to_owned()));
-        assert_eq!(title("TITLE: a b c d e f g h i j k"), Err(Reason::Malformed));
+    fn the_limit_is_the_width_less_8_at_most_200() {
+        assert_eq!(limit(9), 1);
+        assert_eq!(limit(68), 60);
+        assert_eq!(limit(208), 200);
+        assert_eq!(limit(500), 200);
+    }
+
+    #[test]
+    fn a_title_has_no_word_cap() {
+        assert_eq!(title("TITLE: a b c d e f g h i j k l"), Ok("a b c d e f g h i j k l".to_owned()));
+    }
+
+    #[test]
+    fn the_prompt_names_the_limit() {
+        assert!(prompt(115).contains("at most 115 characters"));
     }
 
     #[test]
@@ -381,16 +406,23 @@ mod tests {
     }
 
     #[test]
-    fn the_conversation_is_the_last_30_messages_with_text_newest_characters_kept() {
+    fn the_conversation_is_the_last_2_turns_with_text_newest_characters_kept() {
         let line = |role: &str, text: &str| json!({"type": "message", "message": {"role": role, "content": text}}).to_string();
         let mut lines: Vec<String> = (1..=35).map(|i| line(if i % 2 == 0 { "assistant" } else { "user" }, &format!("m{i}"))).collect();
         lines.push(line("toolResult", "out"));
         lines.push(line("assistant", "   "));
         lines.push("{\"type\":\"mess".to_owned());
         let text = conversation_text(&lines.join("\n")).unwrap();
-        assert!(text.starts_with("assistant: m6\n\nuser: m7") && text.ends_with("user: m35"), "{text}");
+        assert_eq!(text, "user: m33\n\nassistant: m34\n\nuser: m35");
         let long = line("user", &"x".repeat(9000));
         assert_eq!(conversation_text(&long).unwrap(), "x".repeat(CHARACTERS));
         assert_eq!(conversation_text(&line("toolResult", "only")), None);
+    }
+
+    #[test]
+    fn fewer_than_2_user_messages_is_the_whole_file() {
+        let line = |role: &str, text: &str| json!({"type": "message", "message": {"role": role, "content": text}}).to_string();
+        let lines = [line("assistant", "hello"), line("user", "q"), line("assistant", "a")];
+        assert_eq!(conversation_text(&lines.join("\n")).unwrap(), "assistant: hello\n\nuser: q\n\nassistant: a");
     }
 }
