@@ -413,29 +413,18 @@ fn a_note_superseding_an_unknown_record_is_record_not_found() {
     assert_eq!(events(&env, "context-record").len(), 3);
 }
 
-/// `S2` is the distiller's Tier: a fake `pi` whose digest cites every record of `records.md`.
+/// `S2` is the distiller's Tier: a fake `pi` that curates every record of `batch.md`.
 fn distilling(env: &TestEnv) {
     fs::write(
         env.cpd_home().join("config.toml"),
         "version = 1\nmachine = \"hs\"\nlead_pi_packages = []\n[tiers]\nO = \"p/opus\"\nS = \"p/sonnet\"\nH = \"p/haiku\"\n",
     )
     .unwrap();
-    env.fake_pi(
-        r##"digest() {
-  echo "# Digest"
-  while IFS= read -r line; do
-    case "$line" in "["*) echo "- $line" ;; esac
-  done < records.md
-}
-text=$(digest | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/$/\\n/' | tr -d '\n')
-printf '%s\n' '{"type":"session","version":3,"id":"x","timestamp":"2026-10-19T01:59:25.851Z","cwd":"/"}' '{"type":"agent_start"}'
-printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"%s"}],"usage":{"input":2,"output":4,"cacheRead":0,"cacheWrite":0,"totalTokens":6,"cost":{"total":0.1}},"stopReason":"stop"}}\n' "$text"
-printf '%s\n' '{"type":"agent_settled","aborted":false}'"##,
-    );
+    env.fake_pi(&crate::common::pi_says(crate::common::CURATES_ALL));
 }
 
 #[test]
-fn a_superseded_note_is_absent_from_the_records_a_distill_run_reads() {
+fn a_superseded_note_is_absent_from_the_batch_a_distill_run_reads() {
     let env = hs();
     new_context(&env);
     distilling(&env);
@@ -446,19 +435,16 @@ fn a_superseded_note_is_absent_from_the_records_a_distill_run_reads() {
     env.cpd(&["context", "decide", "Decided over a fact.", "--supersedes", "hs-n2", "--context", CTX]).ok();
 
     let out = env.cpd(&["context", "distill", "--context", CTX]).ok();
+    assert_eq!(out["distilled"], json!(true), "{out}");
     // In force: hs-d1, hs-n3, hs-d2.
-    assert_eq!((out["distilled"].clone(), out["records_in_force"].clone()), (json!(true), json!(3)), "{out}");
-    let dir = out["digest"]["file"].as_str().map(|f| PathBuf::from(f).parent().unwrap().to_owned()).expect("a digest file");
-    let records = fs::read_to_string(dir.join("records.md")).unwrap();
+    let (home, _, _) = library(&env);
+    let batch = fs::read_to_string(home.context_digest_dir(&CTX.parse().unwrap()).join("batch.md")).unwrap();
     for gone in ["[hs-n1]", "[hs-n2]", "Stale fact"] {
-        assert!(!records.contains(gone), "{gone} is out of force: {records}");
+        assert!(!batch.contains(gone), "{gone} is out of force: {batch}");
     }
     for kept in ["[hs-d1]", "[hs-n3]", "[hs-d2]"] {
-        assert!(records.contains(kept), "{kept} is in force: {records}");
+        assert!(batch.contains(kept), "{kept} is in force: {batch}");
     }
-    // No digest cites a record out of force.
-    let digest = fs::read_to_string(out["digest"]["file"].as_str().unwrap()).unwrap();
-    assert!(!digest.contains("hs-n1") && !digest.contains("hs-n2"), "{digest}");
 }
 
 #[test]
@@ -1029,40 +1015,6 @@ fn archive_and_unarchive_of_an_unknown_context_are_refused() {
 
 // ---- context show --digest (contract §4.6, commands.md §3.3) --------------
 
-fn digest_dir(env: &TestEnv) -> PathBuf {
-    let (home, _, _) = library(env);
-    home.context_digest_dir(&CTX.parse().unwrap())
-}
-
-#[test]
-fn show_digest_without_a_digest_is_null_and_not_an_error() {
-    let env = hs();
-    new_context(&env);
-    env.cpd(&["context", "note", "A note.", "--context", CTX]).ok();
-    let out = env.cpd(&["context", "show", "--context", CTX, "--digest"]).ok();
-    assert_eq!(out["context"], json!({"id": CTX, "title": "Building cpd", "jira": null}));
-    assert_eq!(out["digest"], Value::Null);
-    assert_eq!(out["markdown"], Value::Null);
-    assert!(out.get("records").is_none(), "no record is read: {out}");
-    assert!(!digest_dir(&env).exists(), "reading writes nothing");
-}
-
-#[test]
-fn show_digest_prints_the_latest_digest_file() {
-    let env = hs();
-    new_context(&env);
-    let dir = digest_dir(&env);
-    fs::create_dir_all(&dir).unwrap();
-    let text = "# Building cpd: digest\n\nOne engine per machine [hs-d7] — é.\n";
-    for (name, body) in [("9.md", "old"), ("10.md", text), ("11.md.tmp", "not yet"), ("prompt.md", "p")] {
-        fs::write(dir.join(name), body).unwrap();
-    }
-    let out = env.cpd(&["context", "show", "--context", CTX, "--digest"]).ok();
-    assert_eq!(out["digest"], json!({"upto_seq": 10, "file": dir.join("10.md"), "bytes": text.len()}));
-    assert_eq!(out["markdown"], text);
-    assert!(out.get("records").is_none());
-}
-
 #[test]
 fn show_digest_is_exclusive_with_since_and_record_and_needs_a_known_context() {
     let env = hs();
@@ -1071,50 +1023,3 @@ fn show_digest_is_exclusive_with_since_and_record_and_needs_a_known_context() {
     refused(env.cpd(&["context", "show", "--context", CTX, "--digest", "--record", "hs-d1"]), 2, "usage");
     refused(env.cpd(&["context", "show", "--context", "nope", "--digest"]), 4, "context_not_found");
 }
-
-// ---- nothing is lost (contract §4.6, D7) ------------------------------------
-
-/// The record ids `docs/research/unplanned.md` lists as decided work no Plan
-/// holds: the ids in the parentheses after each MISSING item's title, and the
-/// ones in the Records column of "Owned by a record only".
-fn unplanned_ids() -> Vec<RecordId> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/research/unplanned.md");
-    let text = fs::read_to_string(path).unwrap();
-    let section = |title: &str| {
-        let body = text.split(&format!("\n## {title}")).nth(1).unwrap_or_else(|| panic!("no section {title}"));
-        body.split("\n## ").next().unwrap().to_owned()
-    };
-    let mut ids: Vec<RecordId> = Vec::new();
-    let mut take = |from: &str| {
-        let mut rest = from;
-        while let Some(at) = rest.find("hs-") {
-            rest = &rest[at..];
-            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(rest.len());
-            if let Ok(id) = RecordId::parse(&rest[..end]) {
-                if !ids.contains(&id) {
-                    ids.push(id);
-                }
-            }
-            rest = &rest[end..];
-        }
-    };
-    for line in section("MISSING").lines().filter(|l| l.starts_with("**")) {
-        take(&line[line.rfind('(').expect("an item's title ends with its records in parentheses")..]);
-    }
-    for row in section("Owned by a record only").lines().filter(|l| l.starts_with("| ") && !l.starts_with("| Work") && !l.starts_with("|---")) {
-        take(row.split('|').nth(2).expect("a Records column"));
-    }
-    ids
-}
-
-fn record_of(id: &RecordId) -> Record {
-    let draft = match id.kind() {
-        RecordKind::Decision => Draft::Decision { supersedes: None },
-        RecordKind::Note => Draft::Note,
-        RecordKind::Question => Draft::Question,
-        RecordKind::Answer => Draft::Answer { question: "hs-q1".parse().unwrap() },
-        kind => panic!("{id} is a {kind:?} record, which is never in force"),
-    };
-    Record { id: id.clone(), at: "2026-10-18T05:53:00.000Z".into(), by: By { session: None, plan: None }, text: id.to_string(), draft }
-}
-

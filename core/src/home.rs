@@ -214,16 +214,6 @@ impl CpdHome {
         self.run_dir().join("context-digests").join(context.as_str())
     }
 
-    /// `run/context-digests/<context>/<upto_seq>.md`: the Context digest covering records up to `upto_seq`.
-    pub fn context_digest(&self, context: &ContextId, upto_seq: u64) -> PathBuf {
-        self.context_digest_dir(context).join(format!("{upto_seq}.md"))
-    }
-
-    /// `run/context-digests/<context>/<upto_seq>.md.tmp`: the distiller's output before it is validated.
-    pub fn context_digest_tmp(&self, context: &ContextId, upto_seq: u64) -> PathBuf {
-        self.context_digest_dir(context).join(format!("{upto_seq}.md.tmp"))
-    }
-
     /// `run/context-digests/<context>/<upto_seq>.jsonl.invalid`: the last invalid output of the distiller (contract §4.6 step 5).
     pub fn context_digest_invalid(&self, context: &ContextId, upto_seq: u64) -> PathBuf {
         self.context_digest_dir(context).join(format!("{upto_seq}.jsonl.invalid"))
@@ -490,8 +480,6 @@ mod tests {
         let h = home();
         let ctx = ContextId::parse("building-cpd").unwrap();
         assert_eq!(h.context_digest_dir(&ctx), p("/h/.cpd/run/context-digests/building-cpd"));
-        assert_eq!(h.context_digest(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.md"));
-        assert_eq!(h.context_digest_tmp(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.md.tmp"));
         assert_eq!(h.context_digest_invalid(&ctx, 1342), p("/h/.cpd/run/context-digests/building-cpd/1342.jsonl.invalid"));
         assert_eq!(h.distill_lock(&ctx), p("/h/.cpd/locks/distill-building-cpd.lock"));
         assert_eq!(h.distill_pid(&ctx), p("/h/.cpd/run/context-digests/building-cpd/distill.pid"));

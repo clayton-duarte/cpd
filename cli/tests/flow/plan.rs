@@ -358,13 +358,6 @@ fn notes(env: &TestEnv, from: u32, to: u32) -> Vec<i64> {
     (from..=to).map(|n| env.cpd(&["context", "note", &format!("note-{n:02}"), "--context", "ctx"]).ok()["seq"].as_i64().unwrap()).collect()
 }
 
-/// The Context's digest file `<upto>.md`, as the distiller leaves it (a first message reads it, it does not validate it).
-fn digest_at(env: &TestEnv, upto: i64, text: &str) {
-    let context = ContextId::parse("ctx").unwrap();
-    fs::create_dir_all(home(env).context_digest_dir(&context)).unwrap();
-    fs::write(home(env).context_digest(&context, u64::try_from(upto).unwrap()), text).unwrap();
-}
-
 const LEAD_HEADER: &str = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.";
 
 fn lead_message(env: &TestEnv, plan: &str) -> String {
