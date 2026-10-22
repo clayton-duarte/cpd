@@ -158,8 +158,12 @@ export class LiveCallContainer extends CachedContainer {
 	private readonly paintIndicator: () => string;
 	private readonly renderTitle: (indicator: string) => Component;
 
-	constructor(paintIndicator: () => string, renderTitle: (indicator: string) => Component) {
+	/** A closing row the call draws itself: what it shows besides the pill, and the row. */
+	private readonly closing?: { key: () => string; row: Component };
+
+	constructor(paintIndicator: () => string, renderTitle: (indicator: string) => Component, closing?: { key: () => string; row: Component }) {
 		super();
+		this.closing = closing;
 		this.paintIndicator = paintIndicator;
 		this.renderTitle = renderTitle;
 		super.addChild(this.titleLine);
@@ -174,7 +178,7 @@ export class LiveCallContainer extends CachedContainer {
 	/** The dot, painted now; the title drawn beneath it follows. */
 	protected override cacheKey(): string {
 		this.indicator = this.paintIndicator();
-		return this.indicator;
+		return this.closing ? `${this.indicator}|${this.closing.key()}` : this.indicator;
 	}
 
 	private title(): Component {

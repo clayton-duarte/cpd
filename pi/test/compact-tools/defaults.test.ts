@@ -116,10 +116,10 @@ test("with no file an expanded row closes with ╰ U+F0063 collapse · Done in �
 	}
 });
 
-test("with no file the row still opens with ╭ while it runs, and has no closing row yet", async () => {
+test("with no file the row still opens with ╭ while it runs, and closes with the loader (rail-end.test.ts)", async () => {
 	const { running } = await draw("bash");
 	assert.ok(firstLine(running).startsWith(HEAD), firstLine(running));
-	assert.ok(running.every((line) => !line.includes(CLOSE)), "no ╰ while running");
+	assert.equal(running.filter((line) => line.includes(CLOSE)).length, 1, "one ╰ while running: the loader");
 });
 
 /** The thinking block as the extension's Markdown transformer draws it, on the defaults, and Ctrl+T as the user presses it. */

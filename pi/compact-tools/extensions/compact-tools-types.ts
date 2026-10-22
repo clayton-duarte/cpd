@@ -45,6 +45,8 @@ export interface RowState {
 	expanded?: boolean;
 	preview?: boolean;
 	hasResult?: boolean;
+	/** The row's result renderer has drawn at least once: it, not the call, closes the row. */
+	resultRendered?: boolean;
 	lastHostExpanded?: boolean;
 	configRevision?: object;
 	/** The row has its final result, whether or not it was timed. */

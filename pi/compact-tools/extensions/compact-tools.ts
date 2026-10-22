@@ -148,12 +148,12 @@ function callStatus(ctx: RenderContext, state: RowState): RowStatus {
  * result, so a dot painted with the call would miss the result that arrived with
  * it; reading the row's state at draw time sees it. A settled dot never changes.
  */
-function liveIndicator(theme: Theme, ctx: RenderContext, state: RowState, glyph?: string, paintStatus?: (status: RowStatus) => string): () => string {
+function liveIndicator(theme: Theme, ctx: RenderContext, state: RowState, glyph?: string, paintStatus?: (status: RowStatus) => string, animates?: () => boolean): () => string {
 	let settled: string | undefined;
 	return () => {
 		if (settled !== undefined) return settled;
 		const status = callStatus(ctx, state);
-		runtime.syncIndicator(ctx.toolCallId, status === "running", () => ctx.invalidate());
+		runtime.syncIndicator(ctx.toolCallId, status === "running" || animates?.() === true, () => ctx.invalidate());
 		const indicator = paintStatus ? paintStatus(status) : paintIndicator(status, glyph);
 		if (status === "success" || status === "error") settled = indicator;
 		return indicator;
@@ -207,6 +207,38 @@ export function loaderRow(): Component {
 	return { render: () => [chrome(" ╰") + loaderFrame()], invalidate() {} };
 }
 
+/** The one tool whose row closes with `choose` while its question is open (pi's own name; @juicesharp/rpiv-ask-user-question). */
+const ASK_USER_QUESTION = "ask_user_question";
+/** Closing row 5: the whole row in 8, because it is not clickable. */
+const CHOOSE_ROW = " ╰\u{F004B} choose";
+/** Closing row 4: a block that cannot fold. */
+const TERMINATOR_ROW = " ╰\u{F005A}";
+
+/** What closes a row that has no result to fold: `choose` while ask_user_question's widget is open, else the loader. */
+function pendingKey(name: string, ctx: RenderContext): string {
+	return name === ASK_USER_QUESTION && ctx.executionStarted ? "choose" : `loader:${Math.floor(Date.now() / LOADER_INTERVAL_MS)}`;
+}
+
+function pendingRow(name: string, ctx: RenderContext): Component {
+	return { render: (width) => (pendingKey(name, ctx) === "choose" ? [chrome(CHOOSE_ROW)] : loaderRow().render(width)), invalidate() {} };
+}
+
+/**
+ * The closing row of a call that has rendered no result yet, drawn by the call itself because pi renders a tool's
+ * result only once one exists; nothing once a result has been rendered (its renderer closes the row then).
+ * A call that can no longer run (restored without a result) cannot show a loader: it closes with the terminator.
+ */
+function callClosing(name: string, ctx: RenderContext, state: RowState): { key: () => string; row: Component } {
+	const alive = () => runtime.canRun(ctx.toolCallId);
+	return {
+		key: () => (state.resultRendered ? "" : alive() ? pendingKey(name, ctx) : "terminator"),
+		row: {
+			render: (width) => (state.resultRendered ? [] : alive() ? pendingRow(name, ctx).render(width) : [chrome(TERMINATOR_ROW)]),
+			invalidate() {},
+		},
+	};
+}
+
 function renderControls(
 	theme: Theme,
 	state: RowState,
@@ -217,6 +249,7 @@ function renderControls(
 	nestedSummary?: string,
 	prefix = " └ ",
 	indent = "   ",
+	pending: Component = loaderRow(),
 ): Component {
 	const duration = running ? undefined : formatDuration(state);
 	const status = running
@@ -236,7 +269,7 @@ function renderControls(
 	else if (state.resultLineSummary && !running && !isError) details += metadata(` (${state.resultLineSummary})`);
 	if (nestedSummary && !running) details += chrome(" · ") + nestedSummary;
 	if (running && foldToggles() && prefix === " └ ") {
-		return loaderRow();
+		return pending;
 	}
 	if (!running && foldToggles() && prefix === " └ ") {
 		// fold: "toggle": the closing row is the toggle, and today's text becomes its metadata.
@@ -264,8 +297,11 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 	runtime.syncExpansion(state, ctx.expanded, name);
 	const kind = rowKind(name);
 	const compact = !isCodex() && !isClaude();
+	// fold "toggle": the call closes its own row until a result exists (docs/contract.md 6.9, the five closing rows).
+	const closing = compact && foldToggles() ? callClosing(name, ctx, state) : undefined;
 	const indicator = liveIndicator(theme, ctx, state, isCodex() ? CODEX_BULLET : undefined,
-		compact ? (status) => (foldToggles() ? statusPill(status, name) : `${paintIndicator(status)} ${statusPill(status, name)}`) : undefined);
+		compact ? (status) => (foldToggles() ? statusPill(status, name) : `${paintIndicator(status)} ${statusPill(status, name)}`) : undefined,
+		closing ? () => !state.resultRendered && runtime.canRun(ctx.toolCallId) : undefined);
 	// Painted once now as well, so a row that starts running starts the animation clock.
 	indicator();
 	// Codex's head reads the call's outcome, so it is worded each time it is drawn.
@@ -292,9 +328,10 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 		const summary = kind === "file" ? getCallDetails(name, args) : summarizeCustomArguments(args);
 		details = summary ? styleMultiline(summary, (line) => ink("toolOutput", line)) : undefined;
 	}
-	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot, details, theme, undefined, foldToggles() ? chrome(" ╭─") : undefined));
+	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot, details, theme, undefined, foldToggles() ? chrome(" ╭─") : undefined), closing);
 	const extra = kind === "file" ? getArgumentDetails(name, args) : kind === "custom" && state.expanded ? args : {};
 	if (Object.keys(extra).length > 0) container.addChild(renderArguments(extra, theme));
+	if (closing) container.addChild(closing.row);
 	return new WithinWidth(container);
 }
 
@@ -464,6 +501,7 @@ function renderRowResult(
 	watchNested = true,
 ): Component {
 	const state = runtime.syncRow(ctx, !options.isPartial);
+	state.resultRendered = true;
 	runtime.syncExpansion(state, ctx.expanded, name);
 	if (canReuseResult(state, result, options, theme, ctx)) return ctx.lastComponent;
 	const kind = rowKind(name);
@@ -502,7 +540,7 @@ function renderRowResult(
 		// the output shows, it already says why, and repeating it only doubles the error.
 		const failureReason = ctx.isError && !state.expanded && !state.preview ? summarizeFailure(name, output) : undefined;
 		container.addChild(renderControls(theme, state, options.isPartial, ctx.isError, failureReason,
-			name === "edit" ? countEditChanges(result) : undefined, nestedSummary));
+			name === "edit" ? countEditChanges(result) : undefined, nestedSummary, " └ ", "   ", pendingRow(name, ctx)));
 		component = new WithinWidth(container);
 	}
 	rememberResult(state, result, options, ctx.isError, theme);
