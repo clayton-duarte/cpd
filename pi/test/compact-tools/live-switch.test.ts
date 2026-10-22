@@ -57,7 +57,7 @@ const plain = (harness: Harness) => harness.chat.render(100).map(stripTerminalSe
 const HEADS = {
 	codex: [" • Explored", " • Called web_search", " • Running for i in 1 2 3; do echo tick $i; sleep 1; done"],
 	claude: [" ⦁ Searched for 1 pattern, read 1 file (click to expand)", ' ⦁ web_search(query: "pi tui")', " ⦁ Bash(for i in 1 2 3; do echo tick $i; sleep 1; done)"],
-	compact: [" ⦁ read src/app.ts", " ⦁ grep /TODO/ in src", " ⦁ web_search", " ⦁ bash Run for"],
+	compact: [" ⦁ read src/app.ts", " ⦁ grep /TODO/ in src", " ⦁ web_search", " ⦁ bash Run for"],
 } as const;
 
 function heads(harness: Harness): string[] {

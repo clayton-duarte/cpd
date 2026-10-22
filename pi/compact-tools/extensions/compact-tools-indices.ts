@@ -68,3 +68,21 @@ export const chrome = painter(RAIL);
 export function paintIndicator(status: RowStatus, glyph = indicatorGlyph(status)): string {
 	return paint(status === "success" ? INDEX.green : status === "error" ? INDEX.red : RUNNING, glyph);
 }
+
+const statusIndex = (status: RowStatus): number => (status === "success" ? INDEX.green : status === "error" ? INDEX.red : RUNNING);
+
+/** A pill: caps in the colour on the terminal background, the text on the colour as background with text 0. */
+export function pill(index: number, text: string): string {
+	const open = `\x1b[${foreground(index)}m`;
+	return `${open}\uE0B6\x1b[39m\x1b[${index < 8 ? 40 + index : 100 + index - 8}m\x1b[30m${text}\x1b[39m\x1b[49m${open}\uE0B4\x1b[39m`;
+}
+
+/** A tool row's title pill: running (and not yet started) cyan, done green, failed red. */
+export function statusPill(status: RowStatus, text: string): string {
+	return pill(statusIndex(status), text);
+}
+
+/** The Thinking title pill, cyan. */
+export function thinkingPill(text: string): string {
+	return pill(INDEX.cyan, text);
+}

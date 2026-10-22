@@ -1,19 +1,19 @@
 {
 	"compact/closed/120": [
 		"",
-		" ⦁ codemode await tools.read({path:'a.ts'})",
+		" ⦁ codemode await tools.read({path:'a.ts'})",
 		" └ Done in 1.234s (5 lines) · read 3 · bash 1 · edit 2"
 	],
 	"compact/closed/44": [
 		"",
-		" ⦁ codemode await tools.read({path:'a.ts'}",
-		" │ )",
+		" ⦁ codemode await tools.read({path:'a.ts",
+		" │ '})",
 		" └ Done in 1.234s (5 lines) · read 3 · bash",
 		"   1 · edit 2"
 	],
 	"compact/open/120": [
 		"",
-		" ⦁ codemode await tools.read({path:'a.ts'})",
+		" ⦁ codemode await tools.read({path:'a.ts'})",
 		" │ {",
 		" │   \"code\": \"await tools.read({path:'a.ts'})\"",
 		" │ }",
@@ -22,8 +22,8 @@
 	],
 	"compact/open/44": [
 		"",
-		" ⦁ codemode await tools.read({path:'a.ts'}",
-		" │ )",
+		" ⦁ codemode await tools.read({path:'a.ts",
+		" │ '})",
 		" │ {",
 		" │   \"code\": \"await",
 		" │ tools.read({path:'a.ts'})\"",
@@ -34,29 +34,29 @@
 	],
 	"compact/many-closed/120": [
 		"",
-		" ⦁ codemode",
+		" ⦁ codemode",
 		" └ Done in 0.000s (1 line) · edit 4 2"
 	],
 	"compact/many-closed/44": [
 		"",
-		" ⦁ codemode",
+		" ⦁ codemode",
 		" └ Done in 0.000s (1 line) · edit 4 2"
 	],
 	"compact/many-open/120": [
 		"",
-		" ⦁ codemode",
+		" ⦁ codemode",
 		" │ edits done",
 		" └ Done in 0.000s (1 line) · edit 4 2"
 	],
 	"compact/many-open/44": [
 		"",
-		" ⦁ codemode",
+		" ⦁ codemode",
 		" │ edits done",
 		" └ Done in 0.000s (1 line) · edit 4 2"
 	],
 	"compact/legacy/100": [
 		"",
-		" ⦁ codemode",
+		" ⦁ codemode",
 		" └ Done (1 line)"
 	],
 	"claude/closed/120": [

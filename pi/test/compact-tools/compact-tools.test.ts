@@ -836,7 +836,7 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 			);
 			assert.match(
 				stripTerminalSequences(lines[0]!),
-				new RegExp(`⦁ ${definition.name}\\b`, "u"),
+				new RegExp(`⦁ \uE0B6${definition.name}\uE0B4`, "u"),
 				`${phase.name} ${definition.name}`,
 			);
 		}
@@ -871,7 +871,7 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 	};
 	const callLines = renderCall({ path: "file.ts" }, renderTheme, resultContext).render(80);
 	// A running call's dot is palette index 6, then the title as text 7.
-	assert.match(callLines[0]!, /\x1b\[36m⦁\x1b\[39m \x1b\[37mread\x1b\[39m \x1b\[37mfile\.ts/u);
+	assert.match(callLines[0]!, /\x1b\[36m⦁\x1b\[39m \x1b\[36m\uE0B6\x1b\[39m\x1b\[46m\x1b\[30mread\x1b\[39m\x1b\[49m\x1b\[36m\uE0B4\x1b\[39m \x1b\[37mfile\.ts/u);
 	assert.doesNotMatch(stripTerminalSequences(callLines[0]!), /⦁ {2}read/u);
 
 	const firstResult = renderResult({ content }, { expanded: true, isPartial: true }, renderTheme, resultContext);
@@ -1210,9 +1210,9 @@ test("leaves Ctrl+T to Pi's visibility toggle when thinking has no detail", () =
 		availableWidth: 80,
 	});
 
-	assert.equal(render(), "\x1b[37mPlanning integration harness testing\x1b[39m");
+	assert.equal(render(), "\x1b[36m\x1b[39m\x1b[46m\x1b[30mPlanning integration harness testing\x1b[39m\x1b[49m\x1b[36m\x1b[39m");
 	assert.equal(terminalInput?.("\x14"), undefined);
-	assert.equal(render(), "\x1b[37mPlanning integration harness testing\x1b[39m");
+	assert.equal(render(), "\x1b[36m\x1b[39m\x1b[46m\x1b[30mPlanning integration harness testing\x1b[39m\x1b[49m\x1b[36m\x1b[39m");
 	assert.equal(terminalInput?.("\x14"), undefined);
 	controller.dispose();
 });
@@ -1402,7 +1402,7 @@ test("renders custom tools compactly and expands into the author's renderer", as
 			ctx: unknown,
 		) => Component;
 		const call = renderCall(args, theme, context(false)).render(80).map((line) => stripTerminalSequences(line));
-		assert.match(call[0]!, /⦁ web_search IREN news$/u);
+		assert.match(call[0]!, /⦁ web_search IREN news$/u);
 		const result = { content: [{ type: "text", text: "one\ntwo" }] };
 
 		const collapsed = renderResult(result, { expanded: false, isPartial: false }, theme, context(false))

@@ -1,30 +1,30 @@
 {
 	"compact/read/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/read/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/read/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/read/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/read/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"compact/read/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"compact/read/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -54,7 +54,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"compact/read/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -85,93 +85,93 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"compact/read/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mENOENT: no such file or directory, access 'src/app.ts'{/}"
 	],
 	"compact/read/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mENOENT: no such file",
 		"   \\e[31mor directory, access 'src/app.ts'{/}"
 	],
 	"compact/read/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access 'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/read/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access",
 		"\\e[90m │ {/}\\e[31m'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/read@offset/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/read@offset/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/read@offset/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/read@offset/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/read@offset/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/read@offset/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/read@offset/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m 40 {/}\\e[37mconst a = 1;{/}",
 		"\\e[90m │ {/}\\e[90m 41 {/}\\e[37mconst b = 2;{/}",
 		"\\e[90m │ {/}\\e[90m 42 {/}\\e[37mexport { a, b };{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/read@offset/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m 40 {/}\\e[37mconst a = 1;{/}",
 		"\\e[90m │ {/}\\e[90m 41 {/}\\e[37mconst b = 2;{/}",
 		"\\e[90m │ {/}\\e[90m 42 {/}\\e[37mexport { a, b };{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/read@offset/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mOffset 40 is beyond end of file (12 lines total){/}"
 	],
 	"compact/read@offset/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mOffset 40 is beyond",
 		"   \\e[31mend of file (12 lines total){/}"
 	],
 	"compact/read@offset/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines total){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/read@offset/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines",
 		"\\e[90m │ {/}\\e[31mtotal){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/write/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mwrite{/}{/bg}\\e[36m{/} \\e[37mnotes.md{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/write/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mwrite{/}{/bg}\\e[36m{/} \\e[37mnotes.md{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/write/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mwrite{/}{/bg}\\e[36m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -190,7 +190,7 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/write/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mwrite{/}{/bg}\\e[36m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -209,15 +209,15 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/write/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mwrite{/}{/bg}\\e[32m{/} \\e[37mnotes.md{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (15 lines){/}"
 	],
 	"compact/write/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mwrite{/}{/bg}\\e[32m{/} \\e[37mnotes.md{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (15 lines){/}"
 	],
 	"compact/write/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mwrite{/}{/bg}\\e[32m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -236,7 +236,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (15 lines){/}"
 	],
 	"compact/write/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mwrite{/}{/bg}\\e[32m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -255,43 +255,43 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (15 lines){/}"
 	],
 	"compact/write/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mEACCES: permission denied, open 'notes.md'{/}"
 	],
 	"compact/write/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mEACCES: permission",
 		"   \\e[31mdenied, open 'notes.md'{/}"
 	],
 	"compact/write/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[31mEACCES: permission denied, open 'notes.md'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/write/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[31mEACCES: permission denied, open",
 		"\\e[90m │ {/}\\e[31m'notes.md'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mapp.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/edit/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mapp.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/edit/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mapp.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/edit/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mapp.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/edit/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[90m  4  {/}\\e[37mline 4{/}",
 		"\\e[90m │ {/}\\e[31m  5 -{/}\\e[31mline 5{/}",
 		"\\e[90m │ {/}\\e[32m  5 +{/}\\e[32mchanged 5{/}",
@@ -305,7 +305,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+3{/}\\e[90m {/}\\e[31m-2{/}\\e[90m){/}"
 	],
 	"compact/edit/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[90m  4  {/}\\e[37mline 4{/}",
 		"\\e[90m │ {/}\\e[31m  5 -{/}\\e[31mline 5{/}",
 		"\\e[90m │ {/}\\e[32m  5 +{/}\\e[32mchanged 5{/}",
@@ -319,7 +319,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+3{/}\\e[90m {/}\\e[31m-2{/}\\e[90m){/}"
 	],
 	"compact/edit/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1  {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2  {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3  {/}\\e[37mline 3{/}",
@@ -345,7 +345,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+3{/}\\e[90m {/}\\e[31m-2{/}\\e[90m){/}"
 	],
 	"compact/edit/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1  {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2  {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3  {/}\\e[37mline 3{/}",
@@ -371,49 +371,49 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+3{/}\\e[90m {/}\\e[31m-2{/}\\e[90m){/}"
 	],
 	"compact/edit/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all whitespace",
 		"\\e[90m │ {/}\\e[31mand newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts.",
 		"\\e[90m │ {/}\\e[31mThe old text must match exactly including",
 		"\\e[90m │ {/}\\e[31mall whitespace and newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all whitespace",
 		"\\e[90m │ {/}\\e[31mand newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts.",
 		"\\e[90m │ {/}\\e[31mThe old text must match exactly including",
 		"\\e[90m │ {/}\\e[31mall whitespace and newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit@large/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mbig.txt{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/edit@large/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mbig.txt{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/edit@large/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mbig.txt{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/edit@large/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mbig.txt{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/edit@large/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31m  1 -{/}\\e[31mold 1{/}",
 		"\\e[90m │ {/}\\e[31m  2 -{/}\\e[31mold 2{/}",
 		"\\e[90m │ {/}\\e[31m  3 -{/}\\e[31mold 3{/}",
@@ -428,7 +428,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+20{/}\\e[90m {/}\\e[31m-20{/}\\e[90m){/}"
 	],
 	"compact/edit@large/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31m  1 -{/}\\e[31mold 1{/}",
 		"\\e[90m │ {/}\\e[31m  2 -{/}\\e[31mold 2{/}",
 		"\\e[90m │ {/}\\e[31m  3 -{/}\\e[31mold 3{/}",
@@ -443,7 +443,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+20{/}\\e[90m {/}\\e[31m-20{/}\\e[90m){/}"
 	],
 	"compact/edit@large/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31m  1 -{/}\\e[31mold 1{/}",
 		"\\e[90m │ {/}\\e[31m  2 -{/}\\e[31mold 2{/}",
 		"\\e[90m │ {/}\\e[31m  3 -{/}\\e[31mold 3{/}",
@@ -487,7 +487,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+20{/}\\e[90m {/}\\e[31m-20{/}\\e[90m){/}"
 	],
 	"compact/edit@large/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31m  1 -{/}\\e[31mold 1{/}",
 		"\\e[90m │ {/}\\e[31m  2 -{/}\\e[31mold 2{/}",
 		"\\e[90m │ {/}\\e[31m  3 -{/}\\e[31mold 3{/}",
@@ -531,59 +531,59 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+20{/}\\e[90m {/}\\e[31m-20{/}\\e[90m){/}"
 	],
 	"compact/edit@large/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31mFound 20 occurrences of the text in big.txt. The text must be unique.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit@large/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31mFound 20 occurrences of the text in",
 		"\\e[90m │ {/}\\e[31mbig.txt. The text must be unique.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit@large/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31mFound 20 occurrences of the text in big.txt. The text must be unique.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/edit@large/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31mFound 20 occurrences of the text in",
 		"\\e[90m │ {/}\\e[31mbig.txt. The text must be unique.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/bash/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun tests{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun tests{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun tests{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (26 lines){/}"
 	],
 	"compact/bash/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun tests{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (26 lines){/}"
 	],
 	"compact/bash/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
@@ -613,7 +613,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (26 lines){/}"
 	],
 	"compact/bash/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
@@ -643,16 +643,16 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (26 lines){/}"
 	],
 	"compact/bash/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun tests{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with code 1{/}"
 	],
 	"compact/bash/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun tests{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with",
 		"   \\e[31mcode 1{/}"
 	],
 	"compact/bash/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! missing script: test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! A complete log is in ~/.npm/_logs{/}",
 		"\\e[90m │ {/}\\e[31m{/}",
@@ -660,7 +660,7 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/bash/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! missing script: test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! A complete log is in",
 		"\\e[90m │ {/}\\e[31m~/.npm/_logs{/}",
@@ -669,91 +669,91 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/bash@quiet/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun true{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@quiet/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun true{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@quiet/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mtrue{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@quiet/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mtrue{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@quiet/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun true{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (1 line){/}"
 	],
 	"compact/bash@quiet/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun true{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (1 line){/}"
 	],
 	"compact/bash@quiet/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mtrue{/}",
 		"\\e[90m │ {/}\\e[37m(no output){/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (1 line){/}"
 	],
 	"compact/bash@quiet/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mtrue{/}",
 		"\\e[90m │ {/}\\e[37m(no output){/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (1 line){/}"
 	],
 	"compact/bash@quiet/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun true{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand timed out after 5 seconds{/}"
 	],
 	"compact/bash@quiet/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun true{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand timed out",
 		"   \\e[31mafter 5 seconds{/}"
 	],
 	"compact/bash@quiet/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mtrue{/}",
 		"\\e[90m │ {/}\\e[31mCommand timed out after 5 seconds{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/bash@quiet/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mtrue{/}",
 		"\\e[90m │ {/}\\e[31mCommand timed out after 5 seconds{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/bash@wide/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@wide/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more ",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37msteps{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRead file \"package.json\" + 2 mor",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37me steps{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@wide/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past t",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mhe edge of a narrow terminal'{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mthe edge of a narrow terminal'{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@wide/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' &",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37m& echo 'a very long command that keeps go",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37ming well past the edge of a narrow termin",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mal'{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mcat package.json | jq '.scripts'",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37m&& echo 'a very long command that keeps g",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37moing well past the edge of a narrow termi",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mnal'{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@wide/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/bash@wide/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more ",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37msteps{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRead file \"package.json\" + 2 mor",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37me steps{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/bash@wide/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past t",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mhe edge of a narrow terminal'{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mthe edge of a narrow terminal'{/}",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
@@ -761,10 +761,10 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/bash@wide/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' &",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37m& echo 'a very long command that keeps go",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37ming well past the edge of a narrow termin",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mal'{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mcat package.json | jq '.scripts'",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37m&& echo 'a very long command that keeps g",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37moing well past the edge of a narrow termi",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mnal'{/}",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -776,60 +776,60 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/bash@wide/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mjq: error (at <stdin>:1): Cannot index string with \"scripts\" (Command exited",
 		"   \\e[31mwith code 5){/}"
 	],
 	"compact/bash@wide/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more ",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37msteps{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRead file \"package.json\" + 2 mor",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37me steps{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mjq: error (at",
 		"   \\e[31m<stdin>:1): Cannot index string with",
 		"   \\e[31m\"scripts\" (Command exited with code 5){/}"
 	],
 	"compact/bash@wide/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past t",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mhe edge of a narrow terminal'{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mthe edge of a narrow terminal'{/}",
 		"\\e[90m │ {/}\\e[31mjq: error (at <stdin>:1): Cannot index string with \"scripts\"{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 5{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/bash@wide/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' &",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37m& echo 'a very long command that keeps go",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37ming well past the edge of a narrow termin",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mal'{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mcat package.json | jq '.scripts'",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37m&& echo 'a very long command that keeps g",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37moing well past the edge of a narrow termi",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mnal'{/}",
 		"\\e[90m │ {/}\\e[31mjq: error (at <stdin>:1): Cannot index",
 		"\\e[90m │ {/}\\e[31mstring with \"scripts\"{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 5{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/bash@four/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun seq{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@four/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun seq{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@four/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@four/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/bash@four/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun seq{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"compact/bash@four/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun seq{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"compact/bash@four/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m │ {/}\\e[37m1{/}",
 		"\\e[90m │ {/}\\e[37m2{/}",
 		"\\e[90m │ {/}\\e[37m3{/}",
@@ -837,7 +837,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"compact/bash@four/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m │ {/}\\e[37m1{/}",
 		"\\e[90m │ {/}\\e[37m2{/}",
 		"\\e[90m │ {/}\\e[37m3{/}",
@@ -845,55 +845,55 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"compact/bash@four/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun seq{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with code 1{/}"
 	],
 	"compact/bash@four/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun seq{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with",
 		"   \\e[31mcode 1{/}"
 	],
 	"compact/bash@four/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m │ {/}\\e[31mseq: invalid argument{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/bash@four/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m │ {/}\\e[31mseq: invalid argument{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/powershell/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more step{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mpowershell{/}{/bg}\\e[36m{/} \\e[37mList files \"src\" + 1 more step{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/powershell/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more st",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mep{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mpowershell{/}{/bg}\\e[36m{/} \\e[37mList files \"src\" + 1 more ",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mstep{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/powershell/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mpowershell{/}{/bg}\\e[36m{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/powershell/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Se",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mlect-Object Name{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mpowershell{/}{/bg}\\e[36m{/} \\e[37mGet-ChildItem -Path src | ",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mSelect-Object Name{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/powershell/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more step{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mpowershell{/}{/bg}\\e[32m{/} \\e[37mList files \"src\" + 1 more step{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"compact/powershell/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more st",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mep{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mpowershell{/}{/bg}\\e[32m{/} \\e[37mList files \"src\" + 1 more ",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mstep{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"compact/powershell/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mpowershell{/}{/bg}\\e[32m{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
 		"\\e[90m │ {/}\\e[37mName{/}",
 		"\\e[90m │ {/}\\e[37m----{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
@@ -901,8 +901,8 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"compact/powershell/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Se",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mlect-Object Name{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mpowershell{/}{/bg}\\e[32m{/} \\e[37mGet-ChildItem -Path src | ",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mSelect-Object Name{/}",
 		"\\e[90m │ {/}\\e[37mName{/}",
 		"\\e[90m │ {/}\\e[37m----{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
@@ -910,205 +910,205 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"compact/powershell/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more step{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mList files \"src\" + 1 more step{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with code 1{/}"
 	],
 	"compact/powershell/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more st",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mep{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mList files \"src\" + 1 more ",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mstep{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mCommand exited with",
 		"   \\e[31mcode 1{/}"
 	],
 	"compact/powershell/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
 		"\\e[90m │ {/}\\e[31mGet-ChildItem: Cannot find path 'src'{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/powershell/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Se",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mlect-Object Name{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mGet-ChildItem -Path src | ",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mSelect-Object Name{/}",
 		"\\e[90m │ {/}\\e[31mGet-ChildItem: Cannot find path 'src'{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/grep/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mgrep{/}{/bg}\\e[36m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/grep/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mgrep{/}{/bg}\\e[36m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/grep/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mgrep{/}{/bg}\\e[36m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/grep/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mgrep{/}{/bg}\\e[36m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/grep/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mgrep{/}{/bg}\\e[32m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"compact/grep/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mgrep{/}{/bg}\\e[32m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"compact/grep/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mgrep{/}{/bg}\\e[32m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts:2: // TODO: rename{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts:9: // TODO: split{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"compact/grep/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mgrep{/}{/bg}\\e[32m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts:2: // TODO: rename{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts:9: // TODO: split{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"compact/grep/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mrg: src: No such file or directory{/}"
 	],
 	"compact/grep/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mrg: src: No such file",
 		"   \\e[31mor directory{/}"
 	],
 	"compact/grep/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[31mrg: src: No such file or directory{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/grep/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[31mrg: src: No such file or directory{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/find/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfind{/}{/bg}\\e[36m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/find/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfind{/}{/bg}\\e[36m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/find/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfind{/}{/bg}\\e[36m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/find/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfind{/}{/bg}\\e[36m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/find/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfind{/}{/bg}\\e[32m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/find/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfind{/}{/bg}\\e[32m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/find/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfind{/}{/bg}\\e[32m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/util.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/deep/x.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/find/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfind{/}{/bg}\\e[32m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/util.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/deep/x.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/find/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfind{/}{/bg}\\e[31m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mfd: invalid pattern{/}"
 	],
 	"compact/find/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfind{/}{/bg}\\e[31m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mfd: invalid pattern{/}"
 	],
 	"compact/find/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfind{/}{/bg}\\e[31m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[31mfd: invalid pattern{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/find/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfind{/}{/bg}\\e[31m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[31mfd: invalid pattern{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/ls/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mls{/}{/bg}\\e[36m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/ls/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mls{/}{/bg}\\e[36m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/ls/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mls{/}{/bg}\\e[36m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/ls/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mls{/}{/bg}\\e[36m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/ls/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mls{/}{/bg}\\e[32m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/ls/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mls{/}{/bg}\\e[32m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/ls/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mls{/}{/bg}\\e[32m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts{/}",
 		"\\e[90m │ {/}\\e[37mdeep/{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/ls/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mls{/}{/bg}\\e[32m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts{/}",
 		"\\e[90m │ {/}\\e[37mdeep/{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"compact/ls/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mls{/}{/bg}\\e[31m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mPath not found: src{/}"
 	],
 	"compact/ls/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mls{/}{/bg}\\e[31m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mPath not found: src{/}"
 	],
 	"compact/ls/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mls{/}{/bg}\\e[31m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[31mPath not found: src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/ls/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mls{/}{/bg}\\e[31m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[31mPath not found: src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/custom:web_search/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mweb_search{/}{/bg}\\e[36m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/custom:web_search/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mweb_search{/}{/bg}\\e[36m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/custom:web_search/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mweb_search{/}{/bg}\\e[36m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -1116,7 +1116,7 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/custom:web_search/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mweb_search{/}{/bg}\\e[36m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -1124,15 +1124,15 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/custom:web_search/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mweb_search{/}{/bg}\\e[32m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (6 lines){/}"
 	],
 	"compact/custom:web_search/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mweb_search{/}{/bg}\\e[32m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (6 lines){/}"
 	],
 	"compact/custom:web_search/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mweb_search{/}{/bg}\\e[32m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -1146,7 +1146,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (6 lines){/}"
 	],
 	"compact/custom:web_search/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mweb_search{/}{/bg}\\e[32m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -1160,16 +1160,16 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (6 lines){/}"
 	],
 	"compact/custom:web_search/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mSearch provider unavailable{/}"
 	],
 	"compact/custom:web_search/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mSearch provider",
 		"   \\e[31munavailable{/}"
 	],
 	"compact/custom:web_search/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -1179,7 +1179,7 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/custom:web_search/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -1189,16 +1189,16 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/custom:fetch@author/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfetch{/}{/bg}\\e[36m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/custom:fetch@author/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfetch{/}{/bg}\\e[36m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mample{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/custom:fetch@author/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfetch{/}{/bg}\\e[36m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -1212,8 +1212,8 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/custom:fetch@author/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfetch{/}{/bg}\\e[36m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mample{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -1227,16 +1227,16 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"compact/custom:fetch@author/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfetch{/}{/bg}\\e[32m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"compact/custom:fetch@author/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfetch{/}{/bg}\\e[32m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mample{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"compact/custom:fetch@author/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfetch{/}{/bg}\\e[32m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -1250,8 +1250,8 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"compact/custom:fetch@author/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfetch{/}{/bg}\\e[32m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mample{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -1265,16 +1265,16 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"compact/custom:fetch@author/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfetch{/}{/bg}\\e[31m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mfetch failed: 503{/}"
 	],
 	"compact/custom:fetch@author/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfetch{/}{/bg}\\e[31m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mample{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mfetch failed: 503{/}"
 	],
 	"compact/custom:fetch@author/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfetch{/}{/bg}\\e[31m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -1288,8 +1288,8 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"compact/custom:fetch@author/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfetch{/}{/bg}\\e[31m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mample{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -1303,23 +1303,23 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/read/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/read/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/read/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/read/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1334,7 +1334,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"preview/read/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1349,7 +1349,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"preview/read/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1379,7 +1379,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"preview/read/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1410,95 +1410,95 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (25 lines){/}"
 	],
 	"preview/read/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access 'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access",
 		"\\e[90m │ {/}\\e[31m'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access 'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mENOENT: no such file or directory, access",
 		"\\e[90m │ {/}\\e[31m'src/app.ts'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read@offset/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/read@offset/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/read@offset/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/read@offset/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mread{/}{/bg}\\e[36m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/read@offset/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m 40 {/}\\e[37mconst a = 1;{/}",
 		"\\e[90m │ {/}\\e[90m 41 {/}\\e[37mconst b = 2;{/}",
 		"\\e[90m │ {/}\\e[90m 42 {/}\\e[37mexport { a, b };{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/read@offset/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m 40 {/}\\e[37mconst a = 1;{/}",
 		"\\e[90m │ {/}\\e[90m 41 {/}\\e[37mconst b = 2;{/}",
 		"\\e[90m │ {/}\\e[90m 42 {/}\\e[37mexport { a, b };{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/read@offset/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m 40 {/}\\e[37mconst a = 1;{/}",
 		"\\e[90m │ {/}\\e[90m 41 {/}\\e[37mconst b = 2;{/}",
 		"\\e[90m │ {/}\\e[90m 42 {/}\\e[37mexport { a, b };{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/read@offset/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mread{/}{/bg}\\e[32m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[90m 40 {/}\\e[37mconst a = 1;{/}",
 		"\\e[90m │ {/}\\e[90m 41 {/}\\e[37mconst b = 2;{/}",
 		"\\e[90m │ {/}\\e[90m 42 {/}\\e[37mexport { a, b };{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/read@offset/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines total){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read@offset/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines",
 		"\\e[90m │ {/}\\e[31mtotal){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read@offset/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines total){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/read@offset/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}read{/b}{/} \\e[37msrc/app.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mread{/}{/bg}\\e[31m{/} \\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[31mOffset 40 is beyond end of file (12 lines",
 		"\\e[90m │ {/}\\e[31mtotal){/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/write/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mwrite{/}{/bg}\\e[36m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1513,7 +1513,7 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/write/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mwrite{/}{/bg}\\e[36m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1528,7 +1528,7 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/write/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mwrite{/}{/bg}\\e[36m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1547,7 +1547,7 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/write/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mwrite{/}{/bg}\\e[36m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1566,7 +1566,7 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/write/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mwrite{/}{/bg}\\e[32m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1581,7 +1581,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (15 lines){/}"
 	],
 	"preview/write/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mwrite{/}{/bg}\\e[32m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1596,7 +1596,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (15 lines){/}"
 	],
 	"preview/write/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mwrite{/}{/bg}\\e[32m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1615,7 +1615,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (15 lines){/}"
 	],
 	"preview/write/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mwrite{/}{/bg}\\e[32m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[90m  1 {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2 {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3 {/}\\e[37mline 3{/}",
@@ -1634,45 +1634,45 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (15 lines){/}"
 	],
 	"preview/write/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[31mEACCES: permission denied, open 'notes.md'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/write/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[31mEACCES: permission denied, open",
 		"\\e[90m │ {/}\\e[31m'notes.md'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/write/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[31mEACCES: permission denied, open 'notes.md'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/write/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}write{/b}{/} \\e[37mnotes.md{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mwrite{/}{/bg}\\e[31m{/} \\e[37mnotes.md{/}",
 		"\\e[90m │ {/}\\e[31mEACCES: permission denied, open",
 		"\\e[90m │ {/}\\e[31m'notes.md'{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mapp.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/edit/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mapp.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/edit/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mapp.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/edit/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mapp.ts{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/edit/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[90m  4  {/}\\e[37mline 4{/}",
 		"\\e[90m │ {/}\\e[31m  5 -{/}\\e[31mline 5{/}",
 		"\\e[90m │ {/}\\e[32m  5 +{/}\\e[32mchanged 5{/}",
@@ -1686,7 +1686,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+3{/}\\e[90m {/}\\e[31m-2{/}\\e[90m){/}"
 	],
 	"preview/edit/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[90m  4  {/}\\e[37mline 4{/}",
 		"\\e[90m │ {/}\\e[31m  5 -{/}\\e[31mline 5{/}",
 		"\\e[90m │ {/}\\e[32m  5 +{/}\\e[32mchanged 5{/}",
@@ -1700,7 +1700,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+3{/}\\e[90m {/}\\e[31m-2{/}\\e[90m){/}"
 	],
 	"preview/edit/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1  {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2  {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3  {/}\\e[37mline 3{/}",
@@ -1726,7 +1726,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+3{/}\\e[90m {/}\\e[31m-2{/}\\e[90m){/}"
 	],
 	"preview/edit/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[90m  1  {/}\\e[37mline 1{/}",
 		"\\e[90m │ {/}\\e[90m  2  {/}\\e[37mline 2{/}",
 		"\\e[90m │ {/}\\e[90m  3  {/}\\e[37mline 3{/}",
@@ -1752,49 +1752,49 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+3{/}\\e[90m {/}\\e[31m-2{/}\\e[90m){/}"
 	],
 	"preview/edit/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all whitespace",
 		"\\e[90m │ {/}\\e[31mand newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts.",
 		"\\e[90m │ {/}\\e[31mThe old text must match exactly including",
 		"\\e[90m │ {/}\\e[31mall whitespace and newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts. The old text must match exactly including all whitespace",
 		"\\e[90m │ {/}\\e[31mand newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mapp.ts{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[31mCould not find the exact text in app.ts.",
 		"\\e[90m │ {/}\\e[31mThe old text must match exactly including",
 		"\\e[90m │ {/}\\e[31mall whitespace and newlines.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit@large/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mbig.txt{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/edit@large/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mbig.txt{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/edit@large/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mbig.txt{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/edit@large/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30medit{/}{/bg}\\e[36m{/} \\e[37mbig.txt{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/edit@large/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31m  1 -{/}\\e[31mold 1{/}",
 		"\\e[90m │ {/}\\e[31m  2 -{/}\\e[31mold 2{/}",
 		"\\e[90m │ {/}\\e[31m  3 -{/}\\e[31mold 3{/}",
@@ -1809,7 +1809,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+20{/}\\e[90m {/}\\e[31m-20{/}\\e[90m){/}"
 	],
 	"preview/edit@large/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31m  1 -{/}\\e[31mold 1{/}",
 		"\\e[90m │ {/}\\e[31m  2 -{/}\\e[31mold 2{/}",
 		"\\e[90m │ {/}\\e[31m  3 -{/}\\e[31mold 3{/}",
@@ -1824,7 +1824,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+20{/}\\e[90m {/}\\e[31m-20{/}\\e[90m){/}"
 	],
 	"preview/edit@large/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31m  1 -{/}\\e[31mold 1{/}",
 		"\\e[90m │ {/}\\e[31m  2 -{/}\\e[31mold 2{/}",
 		"\\e[90m │ {/}\\e[31m  3 -{/}\\e[31mold 3{/}",
@@ -1868,7 +1868,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+20{/}\\e[90m {/}\\e[31m-20{/}\\e[90m){/}"
 	],
 	"preview/edit@large/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30medit{/}{/bg}\\e[32m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31m  1 -{/}\\e[31mold 1{/}",
 		"\\e[90m │ {/}\\e[31m  2 -{/}\\e[31mold 2{/}",
 		"\\e[90m │ {/}\\e[31m  3 -{/}\\e[31mold 3{/}",
@@ -1912,57 +1912,57 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m ({/}\\e[32m+20{/}\\e[90m {/}\\e[31m-20{/}\\e[90m){/}"
 	],
 	"preview/edit@large/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31mFound 20 occurrences of the text in big.txt. The text must be unique.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit@large/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31mFound 20 occurrences of the text in",
 		"\\e[90m │ {/}\\e[31mbig.txt. The text must be unique.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit@large/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31mFound 20 occurrences of the text in big.txt. The text must be unique.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/edit@large/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}edit{/b}{/} \\e[37mbig.txt{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30medit{/}{/bg}\\e[31m{/} \\e[37mbig.txt{/}",
 		"\\e[90m │ {/}\\e[31mFound 20 occurrences of the text in",
 		"\\e[90m │ {/}\\e[31mbig.txt. The text must be unique.{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun tests{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun tests{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun tests{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
@@ -1977,7 +1977,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (26 lines){/}"
 	],
 	"preview/bash/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun tests{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
@@ -1992,7 +1992,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (26 lines){/}"
 	],
 	"preview/bash/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
@@ -2022,7 +2022,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (26 lines){/}"
 	],
 	"preview/bash/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[37m> test{/}",
 		"\\e[90m │ {/}\\e[37m> node --test{/}",
 		"\\e[90m │ {/}\\e[37mok 1{/}",
@@ -2052,7 +2052,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (26 lines){/}"
 	],
 	"preview/bash/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun tests{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! missing script: test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! A complete log is in ~/.npm/_logs{/}",
 		"\\e[90m │ {/}\\e[31m{/}",
@@ -2060,7 +2060,7 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun tests{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun tests{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! missing script: test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! A complete log is in",
 		"\\e[90m │ {/}\\e[31m~/.npm/_logs{/}",
@@ -2069,7 +2069,7 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! missing script: test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! A complete log is in ~/.npm/_logs{/}",
 		"\\e[90m │ {/}\\e[31m{/}",
@@ -2077,7 +2077,7 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mnpm test{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mnpm test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! missing script: test{/}",
 		"\\e[90m │ {/}\\e[31mnpm ERR! A complete log is in",
 		"\\e[90m │ {/}\\e[31m~/.npm/_logs{/}",
@@ -2086,84 +2086,84 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@quiet/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun true{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@quiet/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun true{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@quiet/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mtrue{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@quiet/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mtrue{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@quiet/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun true{/}",
 		"\\e[90m │ {/}\\e[37m(no output){/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (1 line){/}"
 	],
 	"preview/bash@quiet/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun true{/}",
 		"\\e[90m │ {/}\\e[37m(no output){/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (1 line){/}"
 	],
 	"preview/bash@quiet/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mtrue{/}",
 		"\\e[90m │ {/}\\e[37m(no output){/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (1 line){/}"
 	],
 	"preview/bash@quiet/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mtrue{/}",
 		"\\e[90m │ {/}\\e[37m(no output){/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (1 line){/}"
 	],
 	"preview/bash@quiet/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun true{/}",
 		"\\e[90m │ {/}\\e[31mCommand timed out after 5 seconds{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@quiet/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun true{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun true{/}",
 		"\\e[90m │ {/}\\e[31mCommand timed out after 5 seconds{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@quiet/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mtrue{/}",
 		"\\e[90m │ {/}\\e[31mCommand timed out after 5 seconds{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@quiet/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mtrue{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mtrue{/}",
 		"\\e[90m │ {/}\\e[31mCommand timed out after 5 seconds{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@wide/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@wide/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more ",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37msteps{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRead file \"package.json\" + 2 mor",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37me steps{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@wide/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past t",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mhe edge of a narrow terminal'{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mthe edge of a narrow terminal'{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@wide/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' &",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37m& echo 'a very long command that keeps go",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37ming well past the edge of a narrow termin",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mal'{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mcat package.json | jq '.scripts'",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37m&& echo 'a very long command that keeps g",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37moing well past the edge of a narrow termi",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mnal'{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@wide/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
@@ -2171,8 +2171,8 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/bash@wide/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more ",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37msteps{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRead file \"package.json\" + 2 mor",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37me steps{/}",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -2184,8 +2184,8 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/bash@wide/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past t",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mhe edge of a narrow terminal'{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mthe edge of a narrow terminal'{/}",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx{/}",
 		"\\e[90m │ {/}\\e[37m      70 /opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/README.md{/}",
@@ -2193,10 +2193,10 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/bash@wide/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' &",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37m& echo 'a very long command that keeps go",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37ming well past the edge of a narrow termin",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mal'{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mcat package.json | jq '.scripts'",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37m&& echo 'a very long command that keeps g",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37moing well past the edge of a narrow termi",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mnal'{/}",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
 		"\\e[90m │ {/}\\e[37mxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
@@ -2208,54 +2208,54 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/bash@wide/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRead file \"package.json\" + 2 more steps{/}",
 		"\\e[90m │ {/}\\e[31mjq: error (at <stdin>:1): Cannot index string with \"scripts\"{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 5{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@wide/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRead file \"package.json\" + 2 more ",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37msteps{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRead file \"package.json\" + 2 mor",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37me steps{/}",
 		"\\e[90m │ {/}\\e[31mjq: error (at <stdin>:1): Cannot index",
 		"\\e[90m │ {/}\\e[31mstring with \"scripts\"{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 5{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@wide/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past t",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mhe edge of a narrow terminal'{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mcat package.json | jq '.scripts' && echo 'a very long command that keeps going well past",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mthe edge of a narrow terminal'{/}",
 		"\\e[90m │ {/}\\e[31mjq: error (at <stdin>:1): Cannot index string with \"scripts\"{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 5{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@wide/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mcat package.json | jq '.scripts' &",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37m& echo 'a very long command that keeps go",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37ming well past the edge of a narrow termin",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mal'{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mcat package.json | jq '.scripts'",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37m&& echo 'a very long command that keeps g",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37moing well past the edge of a narrow termi",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mnal'{/}",
 		"\\e[90m │ {/}\\e[31mjq: error (at <stdin>:1): Cannot index",
 		"\\e[90m │ {/}\\e[31mstring with \"scripts\"{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 5{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@four/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun seq{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@four/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mRun seq{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@four/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@four/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mbash{/}{/bg}\\e[36m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/bash@four/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun seq{/}",
 		"\\e[90m │ {/}\\e[37m1{/}",
 		"\\e[90m │ {/}\\e[37m2{/}",
 		"\\e[90m │ {/}\\e[37m3{/}",
@@ -2263,7 +2263,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"preview/bash@four/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mRun seq{/}",
 		"\\e[90m │ {/}\\e[37m1{/}",
 		"\\e[90m │ {/}\\e[37m2{/}",
 		"\\e[90m │ {/}\\e[37m3{/}",
@@ -2271,7 +2271,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"preview/bash@four/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m │ {/}\\e[37m1{/}",
 		"\\e[90m │ {/}\\e[37m2{/}",
 		"\\e[90m │ {/}\\e[37m3{/}",
@@ -2279,7 +2279,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"preview/bash@four/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mbash{/}{/bg}\\e[32m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m │ {/}\\e[37m1{/}",
 		"\\e[90m │ {/}\\e[37m2{/}",
 		"\\e[90m │ {/}\\e[37m3{/}",
@@ -2287,49 +2287,49 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"preview/bash@four/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun seq{/}",
 		"\\e[90m │ {/}\\e[31mseq: invalid argument{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@four/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mRun seq{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mRun seq{/}",
 		"\\e[90m │ {/}\\e[31mseq: invalid argument{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@four/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m │ {/}\\e[31mseq: invalid argument{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/bash@four/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}bash{/b}{/} \\e[37mseq 1 4{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mbash{/}{/bg}\\e[31m{/} \\e[37mseq 1 4{/}",
 		"\\e[90m │ {/}\\e[31mseq: invalid argument{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/powershell/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more step{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mpowershell{/}{/bg}\\e[36m{/} \\e[37mList files \"src\" + 1 more step{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/powershell/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more st",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mep{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mpowershell{/}{/bg}\\e[36m{/} \\e[37mList files \"src\" + 1 more ",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mstep{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/powershell/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mpowershell{/}{/bg}\\e[36m{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/powershell/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Se",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mlect-Object Name{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mpowershell{/}{/bg}\\e[36m{/} \\e[37mGet-ChildItem -Path src | ",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mSelect-Object Name{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/powershell/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more step{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mpowershell{/}{/bg}\\e[32m{/} \\e[37mList files \"src\" + 1 more step{/}",
 		"\\e[90m │ {/}\\e[37mName{/}",
 		"\\e[90m │ {/}\\e[37m----{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
@@ -2337,8 +2337,8 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"preview/powershell/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more st",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mep{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mpowershell{/}{/bg}\\e[32m{/} \\e[37mList files \"src\" + 1 more ",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mstep{/}",
 		"\\e[90m │ {/}\\e[37mName{/}",
 		"\\e[90m │ {/}\\e[37m----{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
@@ -2346,7 +2346,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"preview/powershell/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mpowershell{/}{/bg}\\e[32m{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
 		"\\e[90m │ {/}\\e[37mName{/}",
 		"\\e[90m │ {/}\\e[37m----{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
@@ -2354,8 +2354,8 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"preview/powershell/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Se",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mlect-Object Name{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mpowershell{/}{/bg}\\e[32m{/} \\e[37mGet-ChildItem -Path src | ",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mSelect-Object Name{/}",
 		"\\e[90m │ {/}\\e[37mName{/}",
 		"\\e[90m │ {/}\\e[37m----{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
@@ -2363,229 +2363,229 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (4 lines){/}"
 	],
 	"preview/powershell/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more step{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mList files \"src\" + 1 more step{/}",
 		"\\e[90m │ {/}\\e[31mGet-ChildItem: Cannot find path 'src'{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/powershell/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mList files \"src\" + 1 more st",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mep{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mList files \"src\" + 1 more ",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mstep{/}",
 		"\\e[90m │ {/}\\e[31mGet-ChildItem: Cannot find path 'src'{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/powershell/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mGet-ChildItem -Path src | Select-Object Name{/}",
 		"\\e[90m │ {/}\\e[31mGet-ChildItem: Cannot find path 'src'{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/powershell/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}powershell{/b}{/} \\e[37mGet-ChildItem -Path src | Se",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mlect-Object Name{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mpowershell{/}{/bg}\\e[31m{/} \\e[37mGet-ChildItem -Path src | ",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mSelect-Object Name{/}",
 		"\\e[90m │ {/}\\e[31mGet-ChildItem: Cannot find path 'src'{/}",
 		"\\e[90m │ {/}\\e[31mCommand exited with code 1{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/grep/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mgrep{/}{/bg}\\e[36m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/grep/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mgrep{/}{/bg}\\e[36m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/grep/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mgrep{/}{/bg}\\e[36m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/grep/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mgrep{/}{/bg}\\e[36m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/grep/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mgrep{/}{/bg}\\e[32m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts:2: // TODO: rename{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts:9: // TODO: split{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"preview/grep/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mgrep{/}{/bg}\\e[32m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts:2: // TODO: rename{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts:9: // TODO: split{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"preview/grep/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mgrep{/}{/bg}\\e[32m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts:2: // TODO: rename{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts:9: // TODO: split{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"preview/grep/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mgrep{/}{/bg}\\e[32m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts:2: // TODO: rename{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts:9: // TODO: split{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"preview/grep/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[31mrg: src: No such file or directory{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/grep/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[31mrg: src: No such file or directory{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/grep/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[31mrg: src: No such file or directory{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/grep/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}grep{/b}{/} \\e[37m/TODO/ in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mgrep{/}{/bg}\\e[31m{/} \\e[37m/TODO/ in src{/}",
 		"\\e[90m │ {/}\\e[31mrg: src: No such file or directory{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/find/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfind{/}{/bg}\\e[36m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/find/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfind{/}{/bg}\\e[36m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/find/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfind{/}{/bg}\\e[36m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/find/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfind{/}{/bg}\\e[36m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/find/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfind{/}{/bg}\\e[32m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/util.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/deep/x.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/find/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfind{/}{/bg}\\e[32m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/util.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/deep/x.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/find/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfind{/}{/bg}\\e[32m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/util.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/deep/x.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/find/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfind{/}{/bg}\\e[32m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[37msrc/app.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/util.ts{/}",
 		"\\e[90m │ {/}\\e[37msrc/deep/x.ts{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/find/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfind{/}{/bg}\\e[31m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[31mfd: invalid pattern{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/find/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfind{/}{/bg}\\e[31m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[31mfd: invalid pattern{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/find/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfind{/}{/bg}\\e[31m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[31mfd: invalid pattern{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/find/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}find{/b}{/} \\e[37m*.ts in src{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfind{/}{/bg}\\e[31m{/} \\e[37m*.ts in src{/}",
 		"\\e[90m │ {/}\\e[31mfd: invalid pattern{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/ls/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mls{/}{/bg}\\e[36m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/ls/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mls{/}{/bg}\\e[36m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/ls/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mls{/}{/bg}\\e[36m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/ls/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mls{/}{/bg}\\e[36m{/} \\e[37msrc{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/ls/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mls{/}{/bg}\\e[32m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts{/}",
 		"\\e[90m │ {/}\\e[37mdeep/{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/ls/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mls{/}{/bg}\\e[32m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts{/}",
 		"\\e[90m │ {/}\\e[37mdeep/{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/ls/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mls{/}{/bg}\\e[32m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts{/}",
 		"\\e[90m │ {/}\\e[37mdeep/{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/ls/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mls{/}{/bg}\\e[32m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[37mapp.ts{/}",
 		"\\e[90m │ {/}\\e[37mutil.ts{/}",
 		"\\e[90m │ {/}\\e[37mdeep/{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (3 lines){/}"
 	],
 	"preview/ls/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mls{/}{/bg}\\e[31m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[31mPath not found: src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/ls/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mls{/}{/bg}\\e[31m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[31mPath not found: src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/ls/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mls{/}{/bg}\\e[31m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[31mPath not found: src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/ls/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}ls{/b}{/} \\e[37msrc{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mls{/}{/bg}\\e[31m{/} \\e[37msrc{/}",
 		"\\e[90m │ {/}\\e[31mPath not found: src{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/custom:web_search/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mweb_search{/}{/bg}\\e[36m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/custom:web_search/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mweb_search{/}{/bg}\\e[36m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/custom:web_search/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mweb_search{/}{/bg}\\e[36m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -2593,7 +2593,7 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/custom:web_search/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mweb_search{/}{/bg}\\e[36m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -2601,15 +2601,15 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/custom:web_search/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mweb_search{/}{/bg}\\e[32m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (6 lines){/}"
 	],
 	"preview/custom:web_search/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mweb_search{/}{/bg}\\e[32m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (6 lines){/}"
 	],
 	"preview/custom:web_search/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mweb_search{/}{/bg}\\e[32m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -2623,7 +2623,7 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (6 lines){/}"
 	],
 	"preview/custom:web_search/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mweb_search{/}{/bg}\\e[32m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -2637,16 +2637,16 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (6 lines){/}"
 	],
 	"preview/custom:web_search/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mSearch provider unavailable{/}"
 	],
 	"preview/custom:web_search/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mSearch provider",
 		"   \\e[31munavailable{/}"
 	],
 	"preview/custom:web_search/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -2656,7 +2656,7 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/custom:web_search/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}web_search{/b}{/} \\e[37mpi tui{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mweb_search{/}{/bg}\\e[31m{/} \\e[37mpi tui{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"query\": \"pi tui\",{/}",
 		"\\e[90m │ {/}\\e[37m  \"limit\": 3{/}",
@@ -2666,16 +2666,16 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/custom:fetch@author/running/closed/100": [
-		" \\e[36m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfetch{/}{/bg}\\e[36m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/custom:fetch@author/running/closed/44": [
-		" \\e[36m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfetch{/}{/bg}\\e[36m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mample{/}",
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/custom:fetch@author/running/open/100": [
-		" \\e[36m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfetch{/}{/bg}\\e[36m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -2689,8 +2689,8 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/custom:fetch@author/running/open/44": [
-		" \\e[36m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[36m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[36m⦁{/} \\e[36m{/}\\e[46m\\e[30mfetch{/}{/bg}\\e[36m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[36m{/}\\e[36m{/}\\e[46m\\e[30m{/}{/bg}\\e[36m{/}\\e[37mample{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -2704,16 +2704,16 @@
 		"\\e[90m └ {/}\\e[90mRunning{/}"
 	],
 	"preview/custom:fetch@author/done/closed/100": [
-		" \\e[32m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfetch{/}{/bg}\\e[32m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"preview/custom:fetch@author/done/closed/44": [
-		" \\e[32m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfetch{/}{/bg}\\e[32m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mample{/}",
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"preview/custom:fetch@author/done/open/100": [
-		" \\e[32m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfetch{/}{/bg}\\e[32m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -2727,8 +2727,8 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"preview/custom:fetch@author/done/open/44": [
-		" \\e[32m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[32m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[32m⦁{/} \\e[32m{/}\\e[42m\\e[30mfetch{/}{/bg}\\e[32m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[32m{/}\\e[32m{/}\\e[42m\\e[30m{/}{/bg}\\e[32m{/}\\e[37mample{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -2742,16 +2742,16 @@
 		"\\e[90m └ {/}\\e[90mDone in 1.234s{/}\\e[90m (2 lines){/}"
 	],
 	"preview/custom:fetch@author/failed/closed/100": [
-		" \\e[31m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfetch{/}{/bg}\\e[31m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mfetch failed: 503{/}"
 	],
 	"preview/custom:fetch@author/failed/closed/44": [
-		" \\e[31m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfetch{/}{/bg}\\e[31m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mample{/}",
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}\\e[90m · {/}\\e[31mfetch failed: 503{/}"
 	],
 	"preview/custom:fetch@author/failed/open/100": [
-		" \\e[31m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.example{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfetch{/}{/bg}\\e[31m{/} \\e[37mhttps://a.example, https://b.example{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",
@@ -2765,8 +2765,8 @@
 		"\\e[90m └ {/}\\e[90mFailed in 1.234s{/}"
 	],
 	"preview/custom:fetch@author/failed/open/44": [
-		" \\e[31m⦁{/} \\e[37m{b}fetch{/b}{/} \\e[37mhttps://a.example, https://b.exam",
-		"\\e[90m │ {/}\\e[31m{/}\\e[37m{b}{/b}{/}\\e[37mple{/}",
+		" \\e[31m⦁{/} \\e[31m{/}\\e[41m\\e[30mfetch{/}{/bg}\\e[31m{/} \\e[37mhttps://a.example, https://b.ex",
+		"\\e[90m │ {/}\\e[31m{/}\\e[31m{/}\\e[41m\\e[30m{/}{/bg}\\e[31m{/}\\e[37mample{/}",
 		"\\e[90m │ {/}\\e[37m{{/}",
 		"\\e[90m │ {/}\\e[37m  \"urls\": [{/}",
 		"\\e[90m │ {/}\\e[37m    \"https://a.example\",{/}",

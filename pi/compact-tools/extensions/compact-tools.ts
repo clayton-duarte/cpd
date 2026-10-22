@@ -67,7 +67,7 @@ import { CODEX_BULLET, CODEX_INDENT } from "./compact-tools-codex.ts";
 import { NestedCallSummaries } from "./compact-tools-nested.ts";
 import { renderCodexCall, renderCodexResult } from "./compact-tools-codex-rows.ts";
 import { ToolGroupController } from "./compact-tools-grouping.ts";
-import { chrome, ink, paint, paintIndicator, TEXT } from "./compact-tools-indices.ts";
+import { chrome, ink, paint, paintIndicator, statusPill, TEXT } from "./compact-tools-indices.ts";
 import { ProgressController } from "./compact-tools-progress.ts";
 import { findOtherCopy, standDown } from "./compact-tools-double-load.ts";
 import { ToolRuntime } from "./compact-tools-runtime.ts";
@@ -145,13 +145,13 @@ function callStatus(ctx: RenderContext, state: RowState): RowStatus {
  * result, so a dot painted with the call would miss the result that arrived with
  * it; reading the row's state at draw time sees it. A settled dot never changes.
  */
-function liveIndicator(theme: Theme, ctx: RenderContext, state: RowState, glyph?: string): () => string {
+function liveIndicator(theme: Theme, ctx: RenderContext, state: RowState, glyph?: string, paintStatus?: (status: RowStatus) => string): () => string {
 	let settled: string | undefined;
 	return () => {
 		if (settled !== undefined) return settled;
 		const status = callStatus(ctx, state);
 		runtime.syncIndicator(ctx.toolCallId, status === "running", () => ctx.invalidate());
-		const indicator = paintIndicator(status, glyph);
+		const indicator = paintStatus ? paintStatus(status) : paintIndicator(status, glyph);
 		if (status === "success" || status === "error") settled = indicator;
 		return indicator;
 	};
@@ -245,7 +245,9 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 	const state = runtime.syncRow(ctx);
 	runtime.syncExpansion(state, ctx.expanded, name);
 	const kind = rowKind(name);
-	const indicator = liveIndicator(theme, ctx, state, isCodex() ? CODEX_BULLET : undefined);
+	const compact = !isCodex() && !isClaude();
+	const indicator = liveIndicator(theme, ctx, state, isCodex() ? CODEX_BULLET : undefined,
+		compact ? (status) => `${paintIndicator(status)} ${statusPill(status, name)}` : undefined);
 	// Painted once now as well, so a row that starts running starts the animation clock.
 	indicator();
 	// Codex's head reads the call's outcome, so it is worded each time it is drawn.
@@ -262,7 +264,6 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 		if (kind === "custom" && state.expanded && hasNestedArguments(args)) container.addChild(renderArguments(args, theme, CLAUDE_INDENT));
 		return new WithinWidth(container);
 	}
-	const title = ` ${ink("toolTitle", theme.bold(name))}`;
 	let details: string | undefined;
 	if (kind === "shell") {
 		const command = normalizeLineEndings(typeof args.command === "string" ? args.command : "");
@@ -273,7 +274,7 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 		const summary = kind === "file" ? getCallDetails(name, args) : summarizeCustomArguments(args);
 		details = summary ? styleMultiline(summary, (line) => ink("toolOutput", line)) : undefined;
 	}
-	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot + title, details, theme, undefined, foldToggles() ? chrome("╭") : undefined));
+	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot, details, theme, undefined, foldToggles() ? chrome("╭") : undefined));
 	const extra = kind === "file" ? getArgumentDetails(name, args) : kind === "custom" && state.expanded ? args : {};
 	if (Object.keys(extra).length > 0) container.addChild(renderArguments(extra, theme));
 	return new WithinWidth(container);

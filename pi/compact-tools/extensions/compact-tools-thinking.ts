@@ -22,7 +22,7 @@ import {
 	stripTerminalSequences,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { chrome, fgOpen, ink, paint, TEXT } from "./compact-tools-indices.ts";
+import { chrome, fgOpen, ink, paint, TEXT, thinkingPill } from "./compact-tools-indices.ts";
 import type { ToggleGlyphs } from "./compact-tools-types.ts";
 
 export type ThinkingView = "summary" | "detail" | "hidden";
@@ -258,7 +258,7 @@ export class ThinkingCycleController {
 			return renderThinkingSections(sections, thinkingViewForPhase(this.phase), context.availableWidth, {
 				// Keep thinking chrome neutral across themes: effort-level and border colors can
 				// be intentionally vivid and are not content hierarchy colors.
-				styleSummary: theme ? (summary) => ink("text", theme.bold(summary)) : undefined,
+				styleSummary: theme ? (summary) => thinkingPill(summary) : undefined,
 				// Prefix styling resets the foreground; resume the host's thinking text color.
 				// The rail and connector are the same frame the tool rows draw, so they take
 				// the same chrome tone rather than a color name of their own.
