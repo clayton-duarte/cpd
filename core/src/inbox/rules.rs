@@ -235,34 +235,65 @@ pub struct TierNotice {
 }
 
 /// The notice of a Context, or `None` when its highest run did not reach an S Tier or no run counts since the last dismissal.
-pub fn tier_notice(_conn: &Connection, _home: &CpdHome, _context: &ContextId) -> Result<Option<TierNotice>, CpdError> {
-    todo!("tier_notice")
+/// A missing or unreadable file, and an unparseable line, give nothing.
+pub fn tier_notice(conn: &Connection, home: &CpdHome, context: &ContextId) -> Result<Option<TierNotice>, CpdError> {
+    let Ok(text) = std::fs::read_to_string(crate::context::distill::runs_path(home, context)) else { return Ok(None) };
+    // (upto_seq, tier, started_at) of every line with an upto_seq and a tier
+    let lines: Vec<(i64, String, Option<OffsetDateTime>)> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| {
+            let started = v.get("started_at").and_then(|s| s.as_str()).and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
+            Some((v.get("upto_seq")?.as_i64()?, v.get("tier")?.as_str()?.to_owned(), started))
+        })
+        .collect();
+    let Some(upto) = lines.iter().map(|(u, _, _)| *u).max() else { return Ok(None) };
+    let mut steps: Vec<String> = Vec::new();
+    for (_, t, _) in lines.iter().filter(|(u, _, _)| *u == upto) {
+        if !steps.contains(t) {
+            steps.push(t.clone());
+        }
+    }
+    // the highest: by number, the last of the S Tiers among equals
+    let Some(top) = steps.iter().filter(|t| t.starts_with('S')).max_by_key(|t| t[1..].parse::<u32>().unwrap_or(0)).cloned() else {
+        return Ok(None);
+    };
+    let mut stmt = conn.prepare("SELECT dismissed_at FROM inbox_items WHERE kind = 'distill-tier' AND context = ?1 AND dismissed_at IS NOT NULL")?;
+    let dismissed = stmt
+        .query_map([context.as_str()], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .filter_map(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .max();
+    let mut counted: Vec<i64> = lines
+        .iter()
+        .filter(|(_, t, _)| t.starts_with('S'))
+        .filter(|(_, _, at)| at.is_some_and(|at| dismissed.is_none_or(|d| at > d)))
+        .map(|(u, _, _)| *u)
+        .collect();
+    counted.sort_unstable();
+    counted.dedup();
+    let runs = counted.len() as u32;
+    if runs == 0 {
+        return Ok(None);
+    }
+    Ok(Some(TierNotice { upto, top, steps, runs }))
 }
 
-/// `distill-tier` (hs-d539): a Context whose highest-`upto_seq` runs in `runs.jsonl` include one on an S Tier. Yellow; the label
-/// names the highest Tier those runs reached. A missing or unreadable file, and an unparseable line, give nothing.
+/// `distill-tier` (hs-d539, hs-d546, hs-d547): a Context with a `tier_notice`. Magenta; the label names the highest Tier the
+/// latest run reached and the count of runs on an S Tier since the last dismissal.
 fn distill_tier(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
     let mut stmt = conn.prepare("SELECT id FROM contexts ORDER BY id")?;
     let ids = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut out = Vec::new();
     for raw in ids {
         let context = id("context id", &raw, ContextId::parse)?;
-        let Ok(text) = std::fs::read_to_string(crate::context::distill::runs_path(home, &context)) else { continue };
-        // (upto_seq, tier) of every parseable line; a Tier is a letter and a digit
-        let runs: Vec<(i64, String)> = text
-            .lines()
-            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .filter_map(|v| Some((v.get("upto_seq")?.as_i64()?, v.get("tier")?.as_str()?.to_owned())))
-            .collect();
-        let Some(upto) = runs.iter().map(|(u, _)| *u).max() else { continue };
-        let tiers: Vec<&str> = runs.iter().filter(|(u, _)| *u == upto).map(|(_, t)| t.as_str()).filter(|t| t.starts_with('S')).collect();
-        // the highest: by number, the last of the S Tiers among equals
-        let Some(top) = tiers.into_iter().max_by_key(|t| t[1..].parse::<u32>().unwrap_or(0)) else { continue };
+        let Some(n) = tier_notice(conn, home, &context)? else { continue };
         out.push(Condition {
             kind: Kind::DistillTier,
-            urgency: Urgency::Yellow,
-            subject: format!("distill:{context}/{upto}"),
-            label: format!("{context} digest needed {top}"),
+            urgency: Urgency::Magenta,
+            subject: format!("distill:{context}/{}", n.upto),
+            label: format!("{context} digest needed {} \u{d7}{}", n.top, n.runs),
             url: None,
             context: Some(context),
             plan: None,
