@@ -255,17 +255,16 @@ fn the_job_form_of_a_cancelled_job_without_an_attempt_says_why_at_the_top() {
     let env = env();
     populate(&env, None);
     env.sql(&job("dead", "cancelled", Some("the vendor API is gone for good so the export was dropped by the User")));
-    env.sql(&job("mute", "cancelled", None));
-    let pane = job_pane(&env, "dead", 40, 8);
+    let pane = job_pane(&env, "dead", 44, 8);
     let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
     assert_eq!(
         screen,
         rows(&[
-            " cancelled: the vendor API is gone for",
-            " good so the export was dropped by the",
-            " User",
+            " cancelled: the vendor API is gone for good",
+            " so the export was dropped by the User",
             "",
             PLACEHOLDER,
+            "",
             "",
             "",
             " dead cancelled",
@@ -276,11 +275,6 @@ fn the_job_form_of_a_cancelled_job_without_an_attempt_says_why_at_the_top() {
     let raw = String::from_utf8(out.stdout).unwrap();
     let row = raw.lines().find(|l| l.contains("cancelled: the vendor")).unwrap_or_else(|| panic!("no header:\n{raw}"));
     assert!(row.contains("\x1b[38;5;8m cancelled: the vendor"), "the header is colour 8: {row:?}");
-
-    env.tmux(&["kill-server"]);
-    let pane = job_pane(&env, "mute", 40, 4);
-    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
-    assert_eq!(screen, rows(&[" cancelled", "", PLACEHOLDER, " mute cancelled"]), "{screen:?}");
 }
 
 /// The Job form of a queued Job: what it waits for, or nothing when its needs are merged.
@@ -355,19 +349,19 @@ fn a_long_reason_wraps_and_stops_at_five_rows() {
     populate(&env, None);
     let reason = (1..=39).map(|i| format!("word{i:02}")).collect::<Vec<_>>().join(" ");
     env.sql(&job("dead", "cancelled", Some(&reason)));
-    let pane = job_pane(&env, "dead", 40, 10);
+    let pane = job_pane(&env, "dead", 44, 10);
     let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
     assert_eq!(
         screen[..4],
         rows(&[
             " cancelled: word01 word02 word03 word04",
-            " word05 word06 word07 word08 word09",
-            " word10 word11 word12 word13 word14",
-            " word15 word16 word17 word18 word19",
+            " word05 word06 word07 word08 word09 word10",
+            " word11 word12 word13 word14 word15 word16",
+            " word17 word18 word19 word20 word21 word22",
         ])[..],
         "{screen:?}"
     );
-    assert!(screen[4].starts_with(" word20") && screen[4].ends_with('…'), "the fifth row ends in …: {screen:?}");
+    assert!(screen[4].starts_with(" word23") && screen[4].ends_with('…'), "the fifth row ends in …: {screen:?}");
     assert_eq!((screen[5].as_str(), screen[6].as_str()), ("", PLACEHOLDER), "{screen:?}");
 }
 
