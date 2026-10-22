@@ -153,18 +153,20 @@ async function thinking(source = "## **Check the implementation**\n\nInspect the
 	};
 }
 
-test("with no file the thinking block's control row is the toggle: ╰ U+F004B expand, then ╰ U+F0063 collapse · ctrl+t toggle • click to hide", async () => {
+test("with no file the thinking block's control row is the toggle: ╰ U+F004B expand, then ╰ U+F0063 collapse", async () => {
 	const block = await thinking();
 	try {
-		assert.deepEqual(block.draw(), ["Check the implementation", `${CLOSE}${EXPAND} expand`]);
+		assert.deepEqual(block.draw(), ["╭─\uE0B6Thinking...\uE0B4", `${CLOSE}${EXPAND} expand`]);
 		block.draw(); // the controller learns the block has detail on its first draw, as in Pi
 		block.press();
 		assert.deepEqual(block.draw(), [
-			"Check the implementation",
+			"╭─\uE0B6Thinking...\uE0B4",
+			"\u2502",
+			"\u2502 ## **Check the implementation**",
 			"\u2502",
 			"\u2502 Inspect the renderer.",
 			"\u2502 Keep the cache.",
-			`${CLOSE}${COLLAPSE} collapse · ctrl+t toggle • click to hide`,
+			`${CLOSE}${COLLAPSE} collapse`,
 		]);
 	} finally { block.end(); }
 });

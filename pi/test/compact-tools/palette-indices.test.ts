@@ -166,7 +166,7 @@ test("tool rows draw only indexed colours 0-15", async () => {
 				}
 			}
 		}
-		assert.ok(lines.some((line) => line.includes("\u2301") || line.includes("\u2981")), "the rows are drawn");
+		assert.ok(lines.some((line) => line.includes("╭─")), "the rows are drawn");
 		assert.deepEqual(refused(lines), []);
 	});
 });
@@ -229,8 +229,8 @@ test("the running dot and working label are colour 6", async () => {
 			row.markExecutionStarted();
 			const frames: string[] = [];
 			animate([row], 6, 100, (frame) => frames.push(...frame));
-			for (const line of [...pending, ...frames].filter((l) => plain(l).includes("\u2981"))) indexedAt(line, "\u2981", 6);
-			assert.ok([...pending, ...frames].some((l) => plain(l).includes("\u2981")), `${name} draws a dot`);
+			assert.ok([...pending, ...frames].every((l) => !plain(l).includes("\u2981")), `${name} draws no dot under the fold toggle`);
+			assert.ok([...pending, ...frames].some((l) => plain(l).includes("╭─")), `${name} draws its row`);
 		}
 		const label = workingFrames();
 		assert.ok(label.length > 0);

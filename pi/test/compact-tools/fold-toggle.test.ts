@@ -342,7 +342,9 @@ test("with fold: status the thinking block is upstream's: └ ctrl+t toggle • 
 			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Thinking..."]);
 			block.press();
 			assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
-				"Check the implementation",
+				"\uE0B6Thinking...\uE0B4",
+				BOX.rail,
+				`${BOX.rail} ## **Check the implementation**`,
 				BOX.rail,
 				`${BOX.rail} Inspect the renderer.`,
 				`${BOX.rail} Keep the cache.`,

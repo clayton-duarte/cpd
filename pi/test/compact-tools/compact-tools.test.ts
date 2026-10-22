@@ -1607,7 +1607,7 @@ test("marks a finished custom tool's row as done before its result is drawn", as
 	// Pi tells extensions a tool ended, then redraws the row call first, result second.
 	handlers.get("tool_execution_end")?.({ toolCallId: "custom-finished", toolName: "web_search", result: {}, isError: false });
 	const call = renderCall({ query: "pi" }, theme, context).render(80)[0]!;
-	assert.match(call, /\x1b\[32m⦁\x1b\[39m/u, "the dot turns green without waiting for another redraw");
+	assert.match(call, /\x1b\[42m\x1b\[30mweb_search\x1b\[39m\x1b\[49m/u, "the pill turns green without waiting for another redraw");
 });
 
 test("lets auto_compact name a custom tool, overriding the custom_tools default for it", () => {

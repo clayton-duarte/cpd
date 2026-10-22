@@ -16,6 +16,10 @@ import { ThinkingCycleController } from "../../compact-tools/extensions/compact-
 
 initTheme("dark", false);
 
+// The user's own settings.json (hideThinkingBlock) must not decide the view these tests draw: an empty agent directory of their own.
+process.env.PI_CODING_AGENT_DIR = mkdtempSync(join(tmpdir(), "thinking-fold-agent-"));
+test.after(() => rmSync(process.env.PI_CODING_AGENT_DIR!, { recursive: true, force: true }));
+
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const LEFT = "\uE0B6";
 const RIGHT = "\uE0B4";
