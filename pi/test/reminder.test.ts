@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { lastAssistantText, namesKey, needsReminder, PHRASES, REMINDER_TEXT } from "../lib/reminder.ts";
-import { Fixture, planShow, sessionShow, waitFor } from "./fake.ts";
+import { Fixture, planShow, shown, waitFor } from "./fake.ts";
 
 test("every phrase of the list makes a message talk of future work, in any case", () => {
   for (const p of PHRASES) {
@@ -52,7 +52,7 @@ const plan = () => planShow({ jobs: [{ key: "reg-docs" }, { key: "reg-reminder" 
 
 async function started(over: Record<string, unknown> = {}, show: unknown = plan()) {
   const f = new Fixture();
-  f.respond("session-show", sessionShow(over));
+  f.respond("session-show", shown(over));
   f.respond("plan-show", show);
   f.load();
   await f.pi.fire("session_start");

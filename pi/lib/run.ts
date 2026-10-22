@@ -4,7 +4,7 @@ import type { ReviewEntry } from "./plan-review.ts";
 import type { Poll } from "./reload.ts";
 import type { Facts, Reporter } from "./state.ts";
 
-export type SessionInfo = { role: string; context: string; plan: string | null; planLead: boolean; registeredEvent: number; name: string | null; byUser: boolean };
+export type SessionInfo = { role: string; context: string; plan: string | null; planLead: boolean; registeredEvent: number; name: string | null; byUser: boolean; loopGuardTurns: number };
 
 /** `cpd session show` at the boundary (§15.2 step 1): the fields the adapter reads, checked once. */
 export function parseSession(show: Record<string, unknown>): SessionInfo {
@@ -13,10 +13,12 @@ export function parseSession(show: Record<string, unknown>): SessionInfo {
   if (!isObject(s) || typeof s.role !== "string" || typeof s.context !== "string" || typeof s.plan_lead !== "boolean" || (s.plan !== null && typeof s.plan !== "string") || (s.name !== null && typeof s.name !== "string")) {
     throw lacks();
   }
+  const limit = s.loop_guard_turns;
+  if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1) throw new CpdError("bad_output", "cpd session show: loop_guard_turns is not a positive integer");
   const registered = s.registered_event;
   if (typeof registered !== "number" || !Number.isSafeInteger(registered)) throw lacks();
   if (s.plan_lead && typeof s.plan !== "string") throw new CpdError("bad_output", "cpd session show: a Plan Lead without a plan");
-  return { role: s.role, context: s.context, plan: s.plan, planLead: s.plan_lead, registeredEvent: registered, name: s.name, byUser: s.by_user === true };
+  return { role: s.role, context: s.context, plan: s.plan, planLead: s.plan_lead, registeredEvent: registered, name: s.name, byUser: s.by_user === true, loopGuardTurns: limit };
 }
 
 /** One activation of the adapter: from `session_start` to `session_shutdown`. */
@@ -58,6 +60,10 @@ export class Run {
   firstFailed = false;
   /** The Event id of the first message delivered by this run: the same run's `cpd-context` update counts it before pi has the message in the session file. */
   firstEvent = 0;
+  /** §15.15 L3: the start times of the self-started turns of the last 600 000 ms. */
+  turnStarts: number[] = [];
+  /** §15.15 L4: the loop guard has tripped: a send that would start a turn is queued for the next run instead. */
+  tripped = false;
   unsubscribe: (() => void)[] = [];
   readonly id: string;
   readonly info: SessionInfo;

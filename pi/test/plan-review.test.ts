@@ -507,7 +507,7 @@ test("the tool: a refusal of plan review is thrown with its code", async (t) => 
 test("the tool is not registered for a Worker", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", { ok: true, session: { id: ID, role: "worker", context: "ctx", plan: "p1", attempt: "j-a1", name: "w", state: "stopped", plan_lead: false, grounded_lead: false, registered_event: 1 } });
+  f.respond("session-show", { ok: true, session: { id: ID, role: "worker", context: "ctx", plan: "p1", attempt: "j-a1", name: "w", state: "stopped", plan_lead: false, grounded_lead: false, registered_event: 1, loop_guard_turns: 20 } });
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);

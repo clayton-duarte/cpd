@@ -13,9 +13,9 @@ export type Options = {
   spawn?: Spawn;
   /** How the follower's restart is scheduled. Default: `setTimeout`. */
   schedule?: Schedule;
-  /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
   /** The clock of the loop guard (commands.md §15.15 L3), in ms. Default: `Date.now`. */
   now?: () => number;
+  /** The directory whose replacement means an install, how often it is polled, and how the new package is validated (§15.6). Default: the adapter's own directory, every {@link DEFAULT_POLL_MS}, jiti from pi. */
   reload?: { dir?: string; intervalMs?: number; longRefusalMs?: number } & Validation;
 };
 

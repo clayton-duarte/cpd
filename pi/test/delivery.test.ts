@@ -4,7 +4,7 @@ import { CpdError } from "../lib/cpd.ts";
 import { KINDS } from "../lib/event.ts";
 import { createHost } from "../lib/host.ts";
 import { Run } from "../lib/run.ts";
-import { ev, FakePi, Fixture, ID, OTHER, planShow, sessionShow, stateCalls, waitFor } from "./fake.ts";
+import { ev, FakePi, Fixture, ID, OTHER, planShow, shown, stateCalls, waitFor } from "./fake.ts";
 
 const DATA: Record<string, Record<string, unknown>> = {
   "job-merged": { turn: true },
@@ -34,7 +34,7 @@ const asMessage = (id: number) => message(id, null);
 
 async function started(f: Fixture, role: "lead" | "worker") {
   f.respond("plan-show", planShow());
-  if (role === "worker") f.respond("session-show", sessionShow({ role: "worker", plan_lead: false }));
+  if (role === "worker") f.respond("session-show", shown({ role: "worker", plan_lead: false }));
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
@@ -270,7 +270,7 @@ test("session-message arrives in id order though the sender is read first", asyn
 test("session-message reaches a side fork (role lead, not the Plan's Lead) too", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow({ plan_lead: false }));
+  f.respond("session-show", shown({ plan_lead: false }));
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
@@ -284,7 +284,7 @@ test("session-message reaches a side fork (role lead, not the Plan's Lead) too",
 test("session-message reaches a Manager (no Plan) too", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false }));
+  f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false }));
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
@@ -296,7 +296,7 @@ test("session-message reaches a Manager (no Plan) too", async (t) => {
 test("a Manager's session-message starts a turn", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false }));
+  f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false }));
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
@@ -320,7 +320,7 @@ function errorHost() {
   const host = createHost(pi, {});
   host.run = new Run({
     id: ID,
-    info: { role: "lead", context: "c", plan: "p1", planLead: true, registeredEvent: 0, name: null, byUser: false },
+    info: { role: "lead", context: "c", plan: "p1", planLead: true, registeredEvent: 0, name: null, byUser: false, loopGuardTurns: 20 },
     facts: {} as never,
     reporter: {} as never,
     abort: new AbortController(),

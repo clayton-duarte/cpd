@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cursorFrom } from "../lib/cursor.ts";
-import { ev, FakePi, Fixture, ID, OTHER, planShow, sessionShow, type Sent, stateCalls, waitFor } from "./fake.ts";
+import { ev, FakePi, Fixture, ID, OTHER, planShow, shown, type Sent, stateCalls, waitFor } from "./fake.ts";
 
 const cpdMessage = (id: number | undefined, deliveredTo: string | undefined) => ({
   type: "custom_message",
@@ -130,7 +130,7 @@ test("a session show that fails once then succeeds starts the adapter normally (
   await waitFor("the error", () => f.pi.errors().length === 1);
   assert.equal(f.pi.sent[0]!.message.content, "cpd adapter: session show: store_busy: Store busy.");
   await waitFor("a retry", () => f.argvs().filter((a) => a[1] === "show").length >= 3);
-  f.respond("session-show", sessionShow());
+  f.respond("session-show", shown());
   await waitFor("the follower", () => f.follows().length > 0);
   assert.equal(f.pi.errors().length, 1, "the same code is reported once, however often it is retried");
   assert.deepEqual(f.argvs().slice(-3), [["session", "state", "idle", "--session", ID], ["plan", "show", "--plan", "p1"], ["review", "list", "--session", ID]]);
@@ -185,7 +185,7 @@ test("start-up: open Escalations of the Plan block the Lead before the first sta
 test("a Worker does not read the Plan", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow({ role: "worker", plan: "p1", plan_lead: false }));
+  f.respond("session-show", shown({ role: "worker", plan: "p1", plan_lead: false }));
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
@@ -196,7 +196,7 @@ test("a Worker does not read the Plan", async (t) => {
 test("a Manager reads no Plan, registers no plan-review tool, opens no plannotator and has no blocking reason", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false }));
+  f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false }));
   f.respond("plan-show", planShow({ escalations: [{ id: "j-a1-q1" }] }));
   f.load();
   await f.pi.fire("session_start");
@@ -214,7 +214,7 @@ test("a Manager reads no Plan, registers no plan-review tool, opens no plannotat
 test("a hanging cpd call ends at the timeout and is reported as a failed call (pi-ci-W5)", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow(), { delay: 10_000 });
+  f.respond("session-show", shown(), { delay: 10_000 });
   f.load({ timing: { callTimeoutMs: 300 } });
   const began = Date.now();
   await f.pi.fire("session_start"); // returns when `session show` has failed
@@ -245,7 +245,7 @@ test("every cpd call carries pi's timeout and the abort signal of the run, abort
 test("a call in flight at session_shutdown is aborted, not waited for, and reported as failed (pi-ci-W5)", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow(), { delay: 10_000 });
+  f.respond("session-show", shown(), { delay: 10_000 });
   f.load();
   const starting = f.pi.fire("session_start");
   await waitFor("session show running", () => f.pi.execsRunning.size > 0);

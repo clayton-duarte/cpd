@@ -1,6 +1,7 @@
 import { tooLong, unseen } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
 import { createHost, type Options } from "./host.ts";
+import { registerLoopGuard } from "./loop-guard.ts";
 import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
@@ -22,6 +23,7 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   for (const type of RENDERED_TYPES) pi.registerMessageRenderer(type, host.rendering.render);
   registerReloadCommand(host);
   registerReminderCheck(host);
+  registerLoopGuard(host);
 
   let removeHint: (() => void) | undefined;
   pi.on("session_start", async (event, ctx) => {

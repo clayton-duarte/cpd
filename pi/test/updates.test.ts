@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { contextCursorFrom, contextUpdate, parsePending, parseRecords, type ContextRecord, type PendingJob, type PendingPlan, type PlanEvent, type RecordEvent } from "../lib/updates.ts";
-import { Fixture, ID, OTHER, sessionShow, waitFor } from "./fake.ts";
+import { Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
 
 const contextMessage = (event: number | undefined, deliveredTo: string | undefined, customType = "cpd-context") => ({
   type: "custom_message",
@@ -98,7 +98,7 @@ const eventsList = (ns: number[]) => ({ ok: true, events: ns.map((n) => ({ id: 2
 const contextShow = (rs: ContextRecord[]) => ({ ok: true, context: { id: "ctx" }, records: rs.map((r) => ({ ...r, machine: "hs", by: { session: r.by, plan: "p1" } })), markdown: "" });
 
 async function lead(f: Fixture, over: Record<string, unknown> = {}) {
-  f.respond("session-show", sessionShow(over));
+  f.respond("session-show", shown(over));
   f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
   f.load();
   await f.pi.fire("session_start");

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { CpdError, isObject, toCpdError } from "./cpd.ts";
-import { FOLLOW_UP } from "./delivery.ts";
+import { FOLLOW_UP, gated } from "./delivery.ts";
 import type { EventOf } from "./event.ts";
 import type { Host } from "./host.ts";
 import { DECISION_TYPE, decisionText, ELSEWHERE_CHAT_NOTE, ELSEWHERE_NOTE, ENTRY_TYPE, lostText, plannotatorId, reviewNumber, REVIEW_LABEL, SUMMARY_TYPE, type ReviewEntry } from "./plan-review.ts";
@@ -109,8 +109,8 @@ export async function openReview(host: Host, r: Run, review: string, via: "event
   }
 }
 
-const tell = (host: Host, content: string, details: Record<string, unknown>) =>
-  host.pi.sendMessage({ customType: DECISION_TYPE, content, display: true, details }, FOLLOW_UP(true));
+const tell = (host: Host, r: Run, content: string, details: Record<string, unknown>) =>
+  host.pi.sendMessage({ customType: DECISION_TYPE, content, display: true, details }, gated(r, FOLLOW_UP(true)));
 
 /** Appends the settled entry, closes the blocking reason and tells the Lead (§15.5 "Deciding" steps 2 and 3). */
 function settle(host: Host, r: Run, entry: ReviewEntry, verdict: boolean, text: string | undefined, current: boolean, elsewhere: boolean): void {
@@ -120,7 +120,7 @@ function settle(host: Host, r: Run, entry: ReviewEntry, verdict: boolean, text: 
   if (r.facts.close(`plan-review:${entry.review}`)) host.refresh(r);
   closeDialog(r, entry.review);
   const page = plannotatorId(entry);
-  tell(host, decisionText(entry.review, verdict, text, current, elsewhere ? (page === undefined ? ELSEWHERE_CHAT_NOTE : ELSEWHERE_NOTE) : undefined), {
+  tell(host, r, decisionText(entry.review, verdict, text, current, elsewhere ? (page === undefined ? ELSEWHERE_CHAT_NOTE : ELSEWHERE_NOTE) : undefined), {
     plan: entry.plan,
     review: entry.review,
     ...(page !== undefined ? { plannotator_id: page } : {}),
@@ -220,7 +220,7 @@ export async function recover(host: Host, r: Run, review: string): Promise<void>
         r.reviews.set(review, lost);
         host.pi.appendEntry(ENTRY_TYPE, lost);
         if (r.facts.close(`plan-review:${review}`)) host.refresh(r);
-        tell(host, lostText(review), { plan: entry.plan, review, plannotator_id: page, lost: true });
+        tell(host, r, lostText(review), { plan: entry.plan, review, plannotator_id: page, lost: true });
         return;
       }
     } catch (e) {
