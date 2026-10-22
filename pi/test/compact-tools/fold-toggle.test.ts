@@ -305,7 +305,6 @@ test("thinking, expanded (detail): the whole text on │ lines, then ╰<glyph> 
 		block.press();
 		assert.deepEqual(block.draw().map((line) => line.trim()), [
 			THINKING_TITLE,
-			BOX.rail,
 			`${BOX.rail} ## **Check the implementation**`,
 			BOX.rail,
 			`${BOX.rail} Inspect the renderer.`,
@@ -345,7 +344,6 @@ test("with fold: status the thinking block is upstream's: └ ctrl+t toggle • 
 			block.press();
 			assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
 				"\uE0B6Thinking…\uE0B4",
-				BOX.rail,
 				`${BOX.rail} ## **Check the implementation**`,
 				BOX.rail,
 				`${BOX.rail} Inspect the renderer.`,
