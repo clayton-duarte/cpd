@@ -783,6 +783,15 @@ fn a_plan_carries_its_open_escalations_and_its_latest_review() {
 }
 
 #[test]
+fn a_superseded_latest_review_reads_and_is_not_pending() {
+    let (_env, mut store) = fixture();
+    sql(&mut store, "UPDATE plan_reviews SET status = 'superseded', decided_at = '2026-01-02T02:00:00.000Z' WHERE plan = 'ship' AND id = 'r2'");
+    let review = read::flow(&mut store, &plan("ship")).unwrap().review.unwrap();
+    assert_eq!((review.id.as_str(), review.number, review.status.as_str()), ("r2", 2, "superseded"));
+    assert_eq!(review.decided_at.as_deref(), Some("2026-01-02T02:00:00.000Z"));
+}
+
+#[test]
 fn a_plan_carries_its_pr_and_what_the_poll_saw() {
     let (_env, mut store) = fixture();
     let rel = read::flow(&mut store, &plan("rel")).unwrap().head;

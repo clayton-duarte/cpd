@@ -3364,3 +3364,200 @@ fn delete_tombstone_keeps_every_row_and_lets_only_the_rows_of_a_deleted_plan_or_
     assert_eq!(sqlite_message(&refused(&mut store, "DELETE FROM events WHERE context = 'other'")), "append_only: events");
     assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
 }
+
+// ---------- named migration `review-superseded` ----------
+
+/// A store as every migration before `review-superseded` leaves it (the test ends here with that name: it fails
+/// while the migration is missing).
+fn before_review_superseded() -> (tempfile::TempDir, CpdHome, Vec<Named>) {
+    let (dir, home) = crate::store::tests::tmp_home();
+    let earlier: Vec<Named> = NAMED.iter().copied().take_while(|n| !n.name.ends_with("-review-superseded")).collect();
+    assert!(earlier.len() < NAMED.len(), "review-superseded is a built-in migration");
+    drop(crate::store::tests::open_named(&home, &earlier).unwrap());
+    (dir, home, earlier)
+}
+
+const REVIEW_FP: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+/// A Plan `id` in `phase` with its Lead (no PR): the SQL of one fixture.
+fn review_plan(id: &str, phase: &str) -> String {
+    let (locked, done) = match phase {
+        "grounding" | "plan" => ("NULL", "NULL"),
+        "done" => ("'2026-01-02T00:00:00.000Z'", "'2026-01-09T00:00:00.000Z'"),
+        _ => ("'2026-01-02T00:00:00.000Z'", "NULL"),
+    };
+    format!(
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at, locked_at, done_at)
+           VALUES ('{id}', 'ctx', 'Plan {id}', '{phase}', 'l-{id}', 't', {locked}, {done});
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('l-{id}', 'lead', 'ctx', '{id}', 'Lead', '/', 'O3', 'idle', 't', 't');"
+    )
+}
+
+/// One review of `plan`: `number`, `status`, a feedback and a title always set, `decided_at` unless pending.
+fn review_row(plan: &str, number: u32, status: &str) -> String {
+    let decided = if status == "pending" { "NULL" } else { "'2026-01-03T00:00:00.000Z'" };
+    format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, feedback, requested_at, decided_at, title)
+           VALUES ('{plan}', 'r{number}', {number}, '{REVIEW_FP}', '{status}', 'feedback of {plan} r{number}', '2026-01-02T00:00:00.000Z', {decided}, 'Title {number}');"
+    )
+}
+
+fn review_rows(conn: &Connection) -> Vec<Value> {
+    let columns = table_columns(conn, "plan_reviews").unwrap();
+    let pairs: Vec<String> = columns.iter().map(|(c, _)| format!("'{c}', {c}")).collect();
+    let mut stmt = conn.prepare(&format!("SELECT json_object({}) FROM plan_reviews ORDER BY plan, number", pairs.join(", "))).unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|r| serde_json::from_str(&r.unwrap()).unwrap()).collect()
+}
+
+fn review_status(conn: &Connection, plan: &str, id: &str) -> (String, Option<String>, Option<String>) {
+    conn.query_row("SELECT status, decided_at, feedback FROM plan_reviews WHERE plan = ?1 AND id = ?2", [plan, id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+}
+
+#[test]
+fn review_superseded_keeps_every_review_and_accepts_the_status() {
+    let (_dir, home, earlier) = before_review_superseded();
+    let conn = connection(&home.db());
+    conn.execute_batch(&format!(
+        "BEGIN;
+         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+         {}
+         {} {} {}
+         COMMIT;",
+        review_plan("pl", "plan"),
+        review_row("pl", 1, "rejected"),
+        review_row("pl", 2, "approved"),
+        review_row("pl", 3, "pending"),
+    ))
+    .unwrap();
+    let before = review_rows(&conn);
+    let objects = "SELECT name || ' ' || coalesce(sql, '') FROM sqlite_schema WHERE tbl_name = 'plan_reviews' AND name NOT LIKE 'sqlite_%'";
+    let objects_before = names(&conn, objects);
+    let history = |c: &Connection| c.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'plan_reviews'", [], |r| r.get(0)).unwrap();
+    let history_before = history(&conn);
+    assert_eq!((before.len(), history_before), (3, 3));
+    drop(conn);
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-review-superseded")));
+    let conn = connection(&home.db());
+    assert_eq!(review_rows(&conn), before, "every row, column for column");
+    assert_eq!(history(&conn), history_before, "the copy writes no history");
+    let after = names(&conn, objects);
+    for expected in ["plan_reviews_hist_ins", "plan_reviews_hist_upd", "plan_reviews_no_delete"] {
+        assert!(after.iter().any(|o| o.starts_with(expected)), "{expected} in {after:?}");
+    }
+    // Everything but the CHECK is as it was: the same indexes and triggers.
+    let named = |set: &std::collections::BTreeSet<String>| -> Vec<String> { set.iter().map(|o| o.split(' ').next().unwrap().to_owned()).collect() };
+    assert_eq!(named(&after), named(&objects_before));
+    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
+    drop(conn);
+
+    // `superseded` is decided: it needs `decided_at`; `pending` still has none.
+    let message = sqlite_message(&refused(&mut store, "UPDATE plan_reviews SET status = 'superseded' WHERE plan = 'pl' AND id = 'r3'"));
+    assert!(message.starts_with("CHECK constraint failed"), "{message}");
+    let message = sqlite_message(&refused(&mut store, "UPDATE plan_reviews SET status = 'pending' WHERE plan = 'pl' AND id = 'r1'"));
+    assert!(message.starts_with("CHECK constraint failed"), "{message}");
+    write(&mut store, "UPDATE plan_reviews SET status = 'superseded', decided_at = '2026-01-04T00:00:00.000Z' WHERE plan = 'pl' AND id = 'r3'").unwrap();
+    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+    drop(store);
+
+    // A binary without it cannot open the store: the migration is breaking (§4.5 A1).
+    let err = crate::store::tests::open_named(&home, &earlier).err().unwrap();
+    assert_eq!(err.code(), ErrorCode::StoreTooNew, "{err:?}");
+}
+
+#[test]
+fn review_superseded_closes_the_pending_reviews_that_are_not_the_latest_or_of_a_done_plan() {
+    let (_dir, home, _earlier) = before_review_superseded();
+    let conn = connection(&home.db());
+    conn.execute_batch(&format!(
+        "BEGIN;
+         INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+         {} {} {} {}
+         {} {}
+         {} {}
+         {}
+         {}
+         INSERT INTO events (txn, at, kind, context, plan, text, data) VALUES (1, 't', 'plan-created', 'ctx', 'pa', 'x', '{{}}');
+         COMMIT;",
+        review_plan("pa", "plan"),
+        review_plan("pb", "plan"),
+        review_plan("pc", "done"),
+        review_plan("pd", "plan"),
+        review_row("pa", 1, "pending"),
+        review_row("pa", 2, "approved"),
+        review_row("pb", 1, "pending"),
+        review_row("pb", 2, "pending"),
+        review_row("pc", 1, "pending"),
+        review_row("pd", 1, "pending"),
+    ))
+    .unwrap();
+    let before = review_rows(&conn);
+    let events: i64 = conn.query_row("SELECT count(*) FROM events", [], |r| r.get(0)).unwrap();
+    drop(conn);
+
+    let mut store = Store::open(&home, 5000).unwrap();
+    assert_eq!(store.schema_mismatch(), None);
+    let conn = connection(&home.db());
+    for (plan, id) in [("pa", "r1"), ("pb", "r1"), ("pc", "r1")] {
+        let (status, decided_at, feedback) = review_status(&conn, plan, id);
+        assert_eq!(status, "superseded", "{plan} {id}");
+        assert!(decided_at.is_some(), "{plan} {id}: decided_at");
+        assert_eq!(feedback.as_deref(), Some(format!("feedback of {plan} {id}").as_str()), "{plan} {id}: feedback is kept");
+    }
+    for (plan, id, status) in [("pa", "r2", "approved"), ("pb", "r2", "pending"), ("pd", "r1", "pending")] {
+        let row = before.iter().find(|r| r["plan"] == plan && r["id"] == id).unwrap();
+        assert_eq!(row["status"], status);
+        assert_eq!(review_rows(&conn).iter().find(|r| r["plan"] == plan && r["id"] == id), Some(row), "{plan} {id} is as it was");
+    }
+    assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM events", [], |r| r.get(0)).unwrap(), events, "no event is appended");
+    drop(conn);
+    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+}
+
+#[test]
+fn review_superseded_refuses_a_plan_done_while_a_review_is_pending() {
+    let (_dir, home) = crate::store::tests::tmp_home();
+    let mut store = Store::open(&home, 5000).unwrap();
+    write(
+        &mut store,
+        &format!(
+            "INSERT INTO contexts (id, title, created_at, created_on) VALUES ('ctx', 'Ctx', 't', 'm');
+             {} {} {}
+             {}",
+            review_plan("pa", "deploy"),
+            review_plan("pb", "deploy"),
+            review_plan("pc", "done"),
+            review_row("pa", 1, "pending"),
+        ),
+    )
+    .unwrap();
+    let done = "UPDATE plans SET phase = 'done', done_at = 't' WHERE id = ";
+
+    // A pending review of the Plan forbids `done`.
+    let message = sqlite_message(&refused(&mut store, &format!("{done}'pa'")));
+    assert!(message.contains("review_pending"), "{message}");
+    // Decided, then superseded: it goes through.
+    write(&mut store, "UPDATE plan_reviews SET status = 'approved', decided_at = 't' WHERE plan = 'pa' AND id = 'r1'").unwrap();
+    write(&mut store, &format!("{done}'pa'")).unwrap();
+    write(
+        &mut store,
+        &format!(
+            "{} {}
+             UPDATE plan_reviews SET status = 'superseded', decided_at = 't' WHERE plan = 'pb' AND id = 'r1';
+             {done}'pb';",
+            review_row("pb", 1, "pending"),
+            review_row("pb", 2, "approved")
+        ),
+    )
+    .unwrap();
+
+    // A Plan that is done already is not blocked by a pending review it holds, nor is another phase.
+    write(&mut store, &review_row("pc", 1, "pending")).unwrap();
+    write(&mut store, "UPDATE plans SET phase = 'done' WHERE id = 'pc'").unwrap();
+    write(&mut store, "UPDATE plans SET phase = 'dispatch', done_at = NULL WHERE id = 'pc'").unwrap();
+    assert_eq!(store.tamper().unwrap(), Vec::<Value>::new());
+}
