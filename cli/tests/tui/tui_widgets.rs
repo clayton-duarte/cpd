@@ -1352,3 +1352,34 @@ fn the_views_need_a_terminal() {
         assert_eq!(error["details"]["command"], format!("tui view {view}"), "{view}");
     }
 }
+
+/// The columns (by character) of the menu box's `┌` and `┐` on `screen`.
+fn menu_columns(screen: &[String]) -> (usize, usize) {
+    let top = screen.iter().find(|r| r.contains('┌')).unwrap_or_else(|| panic!("no menu: {screen:#?}"));
+    let chars: Vec<char> = top.chars().collect();
+    (chars.iter().position(|&c| c == '┌').unwrap(), chars.iter().position(|&c| c == '┐').unwrap())
+}
+
+#[test]
+fn the_deploy_columns_menu_keeps_one_blank_column_on_each_side_of_the_pane() {
+    let env = pane_env();
+    clean_prs(&env);
+    let view = start(&env, "cpd");
+    let shown = wait_for_screen(&env, &view, "the PRs", |s| s.iter().any(|r| r.contains("acme/repo#20")));
+    let width = usize::from(tmux_out(&env, &["display", "-p", "-t", &view, "#{pane_width}"]).parse::<u16>().unwrap());
+    let blocked = first_line_of(&shown, " acme/web#4");
+
+    // A right click in the pane's last column: the box ends one column before the edge, which stays blank.
+    right_click(&env, &view, u16::try_from(width - 1).unwrap(), blocked);
+    let open = wait_for_screen(&env, &view, "the menu", |s| !menu_labels(s).is_empty());
+    let (_, right) = menu_columns(&open);
+    assert_eq!(right, width - 2, "the box's right wall is one column from the pane's edge: {open:#?}");
+    tmux_out(&env, &["send-keys", "-t", &view, "Escape"]);
+    wait_for_screen(&env, &view, "the menu closed", the_menu_is_closed);
+
+    // A right click in column 0: the box starts in column 1.
+    right_click(&env, &view, 0, blocked);
+    let open = wait_for_screen(&env, &view, "the menu", |s| !menu_labels(s).is_empty());
+    let (left, _) = menu_columns(&open);
+    assert_eq!(left, 1, "the box's left wall is one column from the pane's edge: {open:#?}");
+}

@@ -543,6 +543,9 @@ fn show(
 }
 
 #[cfg(test)]
+mod margin_tests;
+
+#[cfg(test)]
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
