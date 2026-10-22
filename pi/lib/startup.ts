@@ -20,6 +20,7 @@ import { decide, QUESTION_LABEL, recover, registerTool, showDialog } from "./rev
 import { Run, parseSession, type SessionInfo } from "./run.ts";
 import { Facts } from "./state.ts";
 import { registerUpdates } from "./turns.ts";
+import { clearMentions, refreshMentions } from "./mentions-refresh.ts";
 
 // Start-up and shutdown (§15.2).
 
@@ -143,6 +144,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   r.cursor = cursorFrom(info.registeredEvent, entries, id);
 
   if (info.role === "manager" || info.role === "lead") registerUpdates(host);
+  void refreshMentions(host, r);
 
   // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
   let chatToReopen: { reviews: string[]; title: string | undefined } = { reviews: [], title: undefined };
@@ -236,6 +238,7 @@ export async function stop(host: Host): Promise<void> {
   if (!r) return;
   host.run = undefined;
   host.ctx = undefined;
+  clearMentions();
   r.log("stop");
   r.reload?.stop();
   r.follower.stop();
