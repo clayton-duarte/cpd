@@ -2348,7 +2348,7 @@ The one palette of the cockpit, the pi window included (User, tui-visuals, 2026-
 
 **The rules.**
 
-- **(1) Base for read-only, bright for clickable.** A colour *n* (1-7) is *n* on what cannot be clicked and *n*+8 on what can. Clickable is the **whole hit target**, so every coloured mark inside a clickable area is bright: a red dot is 9 in the tree (the Plan row is clickable), while the status line's unclickable workers pill is 8 (hs-d561; it was 7). Blue is the exception hs-d534 itself states: it is **always 4** (the focus and selection colour, hs-d351), clickable or not; a blue block's text is 0.
+- **(1) Base for read-only, bright for clickable.** A colour *n* (1-7) is *n* on what cannot be clicked and *n*+8 on what can. Clickable is the **whole hit target**, so every coloured mark inside a clickable area is bright: a red dot is 9 in the tree (the Plan row is clickable), while the status line's unclickable workers pill is 8 (hs-d561; it was 7). Blue is the exception hs-d534 itself states: it is **always 4** (the focus and selection colour, hs-d351), clickable or not, **except the focused input box's border is bright blue 12** (hs-d575); a blue block's text is 0.
 - **(2) Colourless text follows one hierarchy of attention: 15 > 7 > 8 > 0.** **15** is clickable text. **7** is read-only text, inactive (asleep) rows and the fold toggles (`╰󰁋 expand`, `╰󰁣 collapse`). **8** is muted: lines, rails, borders, separators, archived and cancelled rows, zero counts and secondary text (ages, times, scroll cues, placeholders, the former `DIM` text). **0** is the background (and the text on a block). **Interactive lines**, the draggable pane borders and popup frames, are **7** (hs-d531); every other line is 8.
 - **(3) Colour goes on the text or on the background, never both.** A block (a pill, a selection) is the colour its text would have, **inverted, with text 0**: a read-only title pill is background 7, text 0 (replacing hs-d531's 8 and 7); a clickable pill is 15, text 0; a coloured pill is its colour, text 0 (its bright pair when clickable); a selection is the blue block (background 4, text 0). **Coloured text never sits on a coloured block**: every mark inside a block is text 0, so a pill carries no coloured text and a cursor row shows no state colours. A pill's caps (U+E0B6, U+E0B4) are the block's colour as foreground, on the terminal's background.
 
@@ -2671,6 +2671,50 @@ The SGR of the elements (n is the colour; the block's text is 0):
 **The jump hint** (hs-d557 item 4; Lead's assumption A7, which the User is asked at the Plan review; if the User chooses another option the docs and the hint Jobs of the PR `chatfix` follow it). pi draws ` ↓ Jump to latest message · Ctrl+End ` with `theme.bg("selectedBg", theme.fg("text", label))` (`tui-renderer.js`), so a theme cannot make it text-only 8 without changing `selectedBg` (the selectors) or `text` (every dialog label). Like the scroll hint (`▼ 3 more`) it is text only, colour 8, no background: the adapter wraps `Theme.prototype.bg` (`Theme` is exported by pi) so that this one label, recognised by its text ` ↓ Jump to latest message`, is drawn `ESC[90m` text with no background. Every other `bg` call is untouched.
 
 **Corrections to the rows above** (hs-d537): `customMessageBg` is the terminal default `""` (A4), not 0; the message has no fill.
+
+### The input widget (hs-d575, hs-d576)
+
+**The box.** `W` is the width in cells of the area the box is drawn in (every row of the box is exactly `W` cells wide); `tw = W - 6` is the text width (the width available for text, measured in characters, wrapping by characters at `tw`).
+
+**Geometry.**
+- Top row: a margin cell, the corner `╭`, one `─`, the label as a pill (cap U+E0B6, the label text, cap U+E0B4; drawn with `palette::pill_static()` for the text, colour 7 for the caps, as the Inbox title's pill, `tui/src/section.rs`), then `─` up to the closing corner `╮`, and a margin cell. The left cap sits three columns from the edge, as in the Inbox's ` ╭─Inbox───…`. The fill is `W - label chars - 7` cells. A label wider than the room is cut to `W - 7` cells; with fewer than 1 cell of room there is no pill. No label (empty): ` ╭` + `─` × (W - 4) + `╮ `.
+- Text rows: ` │ ` (margin, wall, one padding cell), `tw` text cells, ` │ ` (padding, wall, margin). No padding row above or below the text (padding is 1 column and 1 row; zero above and below).
+- Bottom row: ` ╰` + `─` × (W - 4) + `╯ `.
+
+**Colours.** The border (`╭ ─ ╮ │ ╰ ╯`; not the pill, not the margin or padding cells) is colour 15 when not focused and bright blue 12 when focused (hs-d575). Text is clickable text 15 (the blue block's inner text, `palette::selected()`, is an exception when the cursor is in the field). The cursor is one cell, the blue block (`palette::selected()`, background 4, text 0), a space past the end of the text. The pill's text and caps: text 0 inside the pill (`palette::pill_static()`), caps colour 7 on the terminal background.
+
+**Growth.** The text wraps by characters at `tw` (row k holds characters k·tw to (k+1)·tw − 1); the box has `len / tw + 1` text rows (integer division, `len` the characters held), so a text that exactly fills its rows grows the box by one empty row for the cursor. The box never scrolls inside; its height is the text rows plus 2.
+
+**Worked examples** (`█` is the cursor cell, the caps are U+E0B6 and U+E0B4, each row is exactly `W` cells):
+
+Example 1, `W` = 44, label `Title`, text `abc`, cursor after it:
+```
+ ╭─Title────────────────────────────────────╮ 
+ │ abc█                                    │ 
+ ╰────────────────────────────────────────╯ 
+```
+
+Example 2, `W` = 20 (`tw` = 14), label `Name`, the 20 characters `abcdefghijklmnopqrst`, cursor after them (20 / 14 + 1 = 2 text rows):
+```
+ ╭─Name───────────╮ 
+ │ abcdefghijklmn │ 
+ │ opqrst█         │ 
+ ╰────────────────╯ 
+```
+
+Example 3, `W` = 20, no label, the 14 characters `abcdefghijklmn`, cursor after them (14 / 14 + 1 = 2 text rows):
+```
+ ╭────────────────╮ 
+ │ abcdefghijklmn │ 
+ │ █               │ 
+ ╰────────────────╯ 
+```
+
+**In the dialog kit's `input` (the box in a popup).** The popup's inside is `W` cells wide and `H` rows tall; `Dialog::draw` lays it out as: row 0 empty; row 1 the title as a section title; row 2 empty; from row 3 the box (its label is the prompt, below); directly under the box's bottom row the refusal rows (up to 2, `palette::note()`, a leading space, cut at the width); the rows left over blank; row H-2 blank; row H-1 the buttons `[OK]` `[Cancel]` as today. There is no prompt row any more: the prompt moved into the box's top border. **The label** is the prompt with its trailing whitespace trimmed, then one trailing `:` removed, then trailing whitespace trimmed again (`Title: ` gives `Title`; `Fork cpd-ui into a new Plan, name:` gives `Fork cpd-ui into a new Plan, name`); an empty result means no label. The label is one line, cut at the room, never wrapped. **The box in a short area:** the body is rows 3 to H-3 (`H - 5` rows); the box may use `avail = max(H - 5 - 2 - REFUSAL_ROWS, 1)` text rows; when the text needs more, the box shows `avail` consecutive text rows: from `start = max(0, cursor row + 1 - avail)` where the cursor row is `cursor / tw`. The box is always focused (border 12). The keys are unchanged: typing, Backspace, Delete, Left, Right, Home and End; Up and Down do nothing; Enter accepts and Esc cancels.
+
+**The popup's size** for an `input` (function `input_popup_size(client, title, prompt, initial, validator)` in `tui/src/dialog/mod.rs`, which `input()` calls): `natural = max(label chars, initial chars) + 5`; the inside width `W` is `popup_size`'s rule, `(natural + 2).max(title chars + 6).clamp(40, 76)`; `tw = W - 6`; `m = max(the validator's longest accepted value in characters (Plan id 24, title 200, name 80), initial chars)`; the box height is `m / tw + 1 + 2`; the body is that plus `REFUSAL_ROWS`; the inside height is the body plus 5; the popup is the inside plus 2 each way, each capped by the client. So the popup always has room for the longest value the validator accepts, and the box grows into it.
+
+Worked sizes (client wide and tall enough): title `Rename`, prompt `Title:`, no initial text: validator title gives (42, 17), name gives (42, 14), plan-id gives (42, 12); prompt `Fork Plan sketch into a new Plan, name:` (38 chars), plan-id, no initial text, title `Fork`: (47, 12); prompt `Name:`, validator name, an initial text of 100 characters, title `Rename`: (78, 13); client 30 columns by 8 rows, title validator, title `Rename`, prompt `Title:`: (30, 8).
 
 ### 6.2 Sessions, windows and panes
 
