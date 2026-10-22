@@ -77,6 +77,8 @@ pub enum Urgency {
     Magenta,
     Yellow,
     Red,
+    // Stub (hs-d570 BL1): belongs between White and Magenta; the implementation moves it and the tests pin it.
+    Blue,
 }
 
 impl Urgency {
@@ -86,6 +88,7 @@ impl Urgency {
             Urgency::Magenta => "magenta",
             Urgency::Yellow => "yellow",
             Urgency::Red => "red",
+            Urgency::Blue => "blue",
         }
     }
 
@@ -478,8 +481,10 @@ mod tests {
     }
 
     #[test]
-    fn urgency_ranks_white_below_magenta_below_yellow_below_red() {
-        assert!(Urgency::White < Urgency::Magenta && Urgency::Magenta < Urgency::Yellow && Urgency::Yellow < Urgency::Red);
+    fn urgency_orders_white_blue_magenta_yellow_red_and_parses_blue() {
+        assert!(Urgency::White < Urgency::Blue && Urgency::Blue < Urgency::Magenta && Urgency::Magenta < Urgency::Yellow && Urgency::Yellow < Urgency::Red);
+        assert_eq!(Urgency::parse("blue"), Some(Urgency::Blue));
+        assert_eq!(Urgency::Blue.as_str(), "blue");
     }
 
     #[test]
@@ -490,7 +495,7 @@ mod tests {
         ] {
             assert_eq!(Kind::parse(name).unwrap().as_str(), name);
         }
-        for name in ["white", "magenta", "yellow", "red"] {
+        for name in ["white", "blue", "magenta", "yellow", "red"] {
             assert_eq!(Urgency::parse(name).unwrap().as_str(), name);
         }
         assert_eq!((Kind::parse("nope"), Urgency::parse("nope")), (None, None));

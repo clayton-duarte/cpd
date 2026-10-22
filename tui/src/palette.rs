@@ -382,6 +382,7 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
         Urgency::Yellow => (TIER_YELLOW, Meaning::Review),
         Urgency::Magenta => (TIER_MAGENTA, Meaning::Planning),
         Urgency::White => (TIER_WHITE, Meaning::NotStarted),
+        Urgency::Blue => (TIER_WHITE, Meaning::NotStarted), // stub (hs-d570): the blue tier is Job blue-impl-tui
     };
     Span::styled(glyph, fg_clickable(meaning))
 }
