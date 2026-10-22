@@ -1212,7 +1212,7 @@ test("a one-paragraph thinking block is the Thinking pill 7 with its text inside
 
 	// hs-d557 item 1: the one title is the Thinking pill (bg 7, text 0); the paragraph is inside the fold.
 	const view = render();
-	assert.ok(view?.includes("\x1b[47m\x1b[30mThinking...") && !view.includes("Planning"), JSON.stringify(view));
+	assert.ok(view?.includes("\x1b[47m\x1b[30mThinking…") && !view.includes("Planning"), JSON.stringify(view));
 	controller.dispose();
 });
 
@@ -1224,20 +1224,20 @@ test("detects whether provider thinking includes expandable detail", () => {
 
 test("renders each thinking view without changing source content", () => {
 	const thinking = "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.";
-	assert.equal(renderThinkingView(thinking, "summary", 80), "Thinking...");
+	assert.equal(renderThinkingView(thinking, "summary", 80), "Thinking…");
 	assert.equal(
 		renderThinkingView(thinking, "detail", 80),
-		"Thinking...  \n│  \n│ ## **Check the implementation**  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
+		"Thinking…  \n│  \n│ ## **Check the implementation**  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
 	);
-	assert.equal(renderThinkingView(thinking, "hidden", 80), "Thinking...");
+	assert.equal(renderThinkingView(thinking, "hidden", 80), "Thinking…");
 	assert.equal(thinking, "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.");
 });
 
-test("the title is Thinking... and the whole text is the detail, never truncated", () => {
+test("the title is Thinking… and the whole text is the detail, never truncated", () => {
 	const paragraph = "I need to check the config loader first because project settings are ignored when untrusted.";
-	assert.equal(renderThinkingView(paragraph, "summary", 16), "Thinking...");
+	assert.equal(renderThinkingView(paragraph, "summary", 16), "Thinking…");
 	const rendered = renderThinkingView(paragraph, "detail", 16);
-	assert.ok(rendered.startsWith("Thinking..."), rendered);
+	assert.ok(rendered.startsWith("Thinking…"), rendered);
 	assert.ok(rendered.replace(/[│└\s]+/gu, " ").includes("config loader"));
 	assert.ok(!rendered.includes("…"));
 });
@@ -1260,7 +1260,7 @@ test("headings inside thinking are text, not sections: one styled title", () => 
 			return `<thinking>${summary}</thinking>`;
 		},
 	});
-	assert.ok(rendered.startsWith("<thinking>Thinking...</thinking>"), rendered);
+	assert.ok(rendered.startsWith("<thinking>Thinking…</thinking>"), rendered);
 	assert.ok(rendered.includes("│ **Detail heading**"));
 	assert.deepEqual(styledSections, [0]);
 });

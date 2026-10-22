@@ -1,8 +1,8 @@
 /**
- * The Thinking fold (docs/contract.md section 6.9, hs-d557 item 1): one title pill `Thinking...`
- * (bg 7, text 0, caps 7), all the thinking text inside the fold, folded `╭─[Thinking...]` then
+ * The Thinking fold (docs/contract.md section 6.9, hs-d557 item 1): one title pill `Thinking…`
+ * (bg 7, text 0, caps 7), all the thinking text inside the fold, folded `╭─[Thinking…]` then
  * `╰󰁋 expand`, expanded the whole text on rails 8 in text 7 then `╰󰁣 collapse`. Headings stay text.
- * The hidden view (hideThinkingBlock: true) stays the plain `Thinking...` with no toggle.
+ * The hidden view (hideThinkingBlock: true) stays the plain `Thinking…` with no toggle.
  * Rows may carry the cockpit's one leading space, so rows are compared without it.
  */
 import assert from "node:assert/strict";
@@ -65,7 +65,7 @@ function expanded(source: string): string {
 
 test("a thinking block folds to one Thinking pill and an expand toggle", () => {
 	for (const source of [SOURCE, PARAGRAPH]) {
-		assert.deepEqual(rows(folded(source)), [`╭─${LEFT}Thinking...${RIGHT}`, `╰${EXPAND} expand`], source);
+		assert.deepEqual(rows(folded(source)), [`╭─${LEFT}Thinking…${RIGHT}`, `╰${EXPAND} expand`], source);
 	}
 });
 
@@ -87,7 +87,7 @@ test("a one-paragraph thinking block is one pill of Thinking, not its text", () 
 		const lines = view.split("\n");
 		const pills = lines.filter((line) => line.includes(LEFT));
 		assert.equal(pills.length, 1, JSON.stringify(rows(view)));
-		assert.equal(plain(pills[0]!).trim(), `╭─${LEFT}Thinking...${RIGHT}`);
+		assert.equal(plain(pills[0]!).trim(), `╭─${LEFT}Thinking…${RIGHT}`);
 	}
 	assert.ok(!plain(folded(PARAGRAPH)).includes("pill to be one"), "the text is inside the fold, not shown folded");
 });
@@ -95,7 +95,7 @@ test("a one-paragraph thinking block is one pill of Thinking, not its text", () 
 test("an expanded thinking block shows its whole text on rails 8 in text 7", () => {
 	const view = expanded(SOURCE);
 	const lines = view.split("\n");
-	assert.equal(plain(lines[0]!).trim(), `╭─${LEFT}Thinking...${RIGHT}`);
+	assert.equal(plain(lines[0]!).trim(), `╭─${LEFT}Thinking…${RIGHT}`);
 	for (const text of ["Weighing the options.", "Check the code", "Inspect the renderer.", "Next", "Keep the cache."]) {
 		const row = lines.find((line) => plain(line).includes(text));
 		assert.ok(row, `${text} is shown: ${JSON.stringify(rows(view))}`);
@@ -125,7 +125,7 @@ test("headings inside thinking stay text and make no pill", () => {
 	assert.ok(rows(expanded(SOURCE)).some((row) => row.startsWith("│ ") && row.includes("Check the code")));
 });
 
-test("the hidden view stays plain Thinking...", () => {
+test("the hidden view stays plain Thinking…", () => {
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	const dir = mkdtempSync(join(tmpdir(), "thinking-fold-"));
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -139,11 +139,11 @@ test("the hidden view stays plain Thinking...", () => {
 			ui: { theme, setHiddenThinkingLabel: (value?: string) => { label = value; }, onTerminalInput: () => () => {} },
 		} as unknown as ExtensionContext);
 		const view = transform!(SOURCE, { messageType: "assistant-thinking", isStreaming: false, availableWidth: 80 });
-		assert.equal(view, "Thinking...", "no pill, no toggle, no rails");
+		assert.equal(view, "Thinking…", "no pill, no toggle, no rails");
 		assert.ok(label, "the hidden label is set");
-		assert.equal(plain(label), "Thinking...");
+		assert.equal(plain(label), "Thinking…");
 		assert.ok(!label.includes(LEFT) && !label.includes(RIGHT), "no pill");
-		assert.equal(label, `${ESC}37mThinking...${ESC}39m`, "plain text 7: no bold, no faint");
+		assert.equal(label, `${ESC}37mThinking…${ESC}39m`, "plain text 7: no bold, no faint");
 	} finally {
 		controller.dispose();
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -151,5 +151,5 @@ test("the hidden view stays plain Thinking...", () => {
 		rmSync(dir, { recursive: true, force: true });
 	}
 	// The first step out of hidden: visible again, a one-paragraph block is the one pill and the toggle.
-	assert.deepEqual(rows(folded(PARAGRAPH)), [`╭─${LEFT}Thinking...${RIGHT}`, `╰${EXPAND} expand`]);
+	assert.deepEqual(rows(folded(PARAGRAPH)), [`╭─${LEFT}Thinking…${RIGHT}`, `╰${EXPAND} expand`]);
 });
