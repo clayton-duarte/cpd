@@ -30,8 +30,13 @@ pub fn parse_scope(file: &Path, text: &str) -> Result<Scope, CpdError> {
     match Value::Table(table.clone()).try_into::<Scope>() {
         Ok(scope) => Ok(scope),
         Err(e) => {
-            let key = bad_key::<Scope>(&table).join(".");
-            Err(policy_invalid(file, Some(&key), e.message()))
+            let path = bad_key::<Scope>(&table);
+            let why = if path.first().is_some_and(|k| k == "mcp") {
+                "`mcp` is set in a machine file (policy/machines/<machine>.toml), not in an owner or repo file".to_owned()
+            } else {
+                e.message().to_owned()
+            };
+            Err(policy_invalid(file, Some(&path.join(".")), why))
         }
     }
 }
@@ -39,7 +44,7 @@ pub fn parse_scope(file: &Path, text: &str) -> Result<Scope, CpdError> {
 /// The deepest key path that makes `table` fail to read as `T`, found by
 /// reading one entry at a time (a table entry is descended into only when it
 /// is acceptable empty: an unknown table is itself the bad key).
-fn bad_key<T: DeserializeOwned>(table: &Table) -> Vec<String> {
+pub(super) fn bad_key<T: DeserializeOwned>(table: &Table) -> Vec<String> {
     fn nest(path: &[String], leaf: Value) -> Table {
         path.iter().rev().fold(leaf, |acc, k| Value::Table(Table::from_iter([(k.clone(), acc)]))).try_into().unwrap_or_default()
     }

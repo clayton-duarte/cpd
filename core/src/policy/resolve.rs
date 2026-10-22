@@ -136,5 +136,5 @@ pub fn check_file_names(home: &CpdHome) -> Result<(), crate::error::CpdError> {
             key_of_scope_file(home, &file)?;
         }
     }
-    Ok(())
+    super::machine::check_machine_names(home)
 }
