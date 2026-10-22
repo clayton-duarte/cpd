@@ -80,6 +80,10 @@ impl PullRequest {
     /// Whether the row already holds what `listed` reports. `created_at` is not compared:
     /// it is written once, with the row, and never changes (§2.2, store-W5).
     pub(super) fn holds(&self, listed: &Listed) -> Result<bool, CpdError> {
+        // GitHub never un-merges: a stored merge is final against any listing that is not MERGED (hs-d550).
+        if self.state == "merged" && listed.pr.state != super::status::PrState::Merged {
+            return Ok(true);
+        }
         let same_but_created_at = PolledPr { created_at: self.created_at.clone(), ..listed.pr.clone() };
         Ok(self.polled()? == same_but_created_at && self.membership() == listed.membership)
     }

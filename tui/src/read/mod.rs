@@ -50,6 +50,6 @@ pub use logs::{Logs, logs, logs_after};
 pub use pulse::{BUCKET_MINUTES, Bucket, Kind, ManagerSlot, Pulse, PulseRow, QUIET_MINUTES, manager_slot, pulse};
 pub use tree::{ContextNode, PlanNode, Tree, snooze_end, tree};
 pub use widgets::{
-    Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, slots, widgets,
+    Engine, HeldSlot, MachineEscalation, OpenPr, PlanCard, PolledPr, PrRow, ReviewDecision, Slots, Widgets, open_prs, open_pulls, slots, widgets,
 };
 pub use worker::{AttemptDetail, AttemptEscalation, Worker, latest_attempt, worker};

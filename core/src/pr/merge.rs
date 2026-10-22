@@ -80,8 +80,15 @@ pub(super) fn merge(args: MergeArgs) -> Result<Output, CpdError> {
         .with("merge_state", view.merge_state));
     }
     gh::merge_pr(cwd, &repo, number, &view.head)?;
-    store_merge(&repo, number, None)?;
-    Ok(Output::success(json!({"repo": repo, "number": number, "method": "squash", "branch_deleted": true})))
+    // The merge happened; store it only from what GitHub reads back (hs-d550). A failed read stores nothing.
+    let stored = match gh::view_for_merge(cwd, &repo, number) {
+        Ok(read) if read.state == "MERGED" => {
+            store_merge(&repo, number, read.merged_at.as_deref())?;
+            true
+        }
+        _ => false,
+    };
+    Ok(Output::success(json!({"repo": repo, "number": number, "method": "squash", "branch_deleted": true, "stored": stored})))
 }
 
 const STORE_BUSY_MS: u64 = 5000;

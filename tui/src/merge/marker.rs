@@ -25,6 +25,16 @@ pub fn path(home: &CpdHome, pull: &Pull) -> PathBuf {
 /// Writes the marker of `pull` for this process (`{"pid": <this pid>, "at": <RFC 3339 now>}`), atomically (a temporary
 /// file, then a rename), replacing any marker there, a stale one included.
 pub fn write(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
+    write_with(home, pull, false)
+}
+
+/// Rewrites the marker of `pull` as `{"pid", "at", "merged": true}` (hs-d550): `pr merge` succeeded, and the marker
+/// holds until a read stores the merge. Atomic, as [`write`].
+pub fn write_merged(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
+    write_with(home, pull, true)
+}
+
+fn write_with(home: &CpdHome, pull: &Pull, merged: bool) -> Result<(), CpdError> {
     let target = path(home, pull);
     let pid = std::process::id();
     let at = OffsetDateTime::now_utc().format(&Rfc3339).expect("a UTC time is RFC 3339");
@@ -36,7 +46,11 @@ pub fn write(home: &CpdHome, pull: &Pull) -> Result<(), CpdError> {
     std::fs::create_dir_all(dir).map_err(failed)?;
     // The temporary name does not end in `.json`, so no reader takes it for a marker; the pid keeps two writers apart.
     let temporary = dir.join(format!(".{pid}.tmp"));
-    let text = serde_json::json!({ "pid": pid, "at": at }).to_string();
+    let mut json = serde_json::json!({ "pid": pid, "at": at });
+    if merged {
+        json["merged"] = true.into();
+    }
+    let text = json.to_string();
     std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, &target)).map_err(|e| {
         let _ = std::fs::remove_file(&temporary);
         failed(e)
@@ -48,10 +62,10 @@ pub fn remove(home: &CpdHome, pull: &Pull) {
     let _ = std::fs::remove_file(path(home, pull));
 }
 
-/// The pull requests, as `<owner>/<repo>#<n>`, that have a live marker: one whose `pid` is alive. A stale one is none,
-/// and so is a file that is not a marker (a view cannot fail on it, and the next merge action replaces it).
-pub fn live(home: &CpdHome) -> BTreeSet<String> {
-    let Ok(entries) = std::fs::read_dir(path_dir(home)) else { return BTreeSet::new() };
+/// Every readable marker: its file, its pull request as `<owner>/<repo>#<n>` and its content. A file that is not a
+/// marker is none (a view cannot fail on it, and the next merge action replaces it).
+fn markers(home: &CpdHome) -> Vec<(PathBuf, String, Marker)> {
+    let Ok(entries) = std::fs::read_dir(path_dir(home)) else { return Vec::new() };
     entries
         .flatten()
         .filter_map(|entry| {
@@ -59,15 +73,37 @@ pub fn live(home: &CpdHome) -> BTreeSet<String> {
             let (owner_repo, number) = name.strip_suffix(".json")?.rsplit_once("__")?;
             let (owner, repo) = owner_repo.split_once("__")?;
             let marker: Marker = serde_json::from_str(&std::fs::read_to_string(entry.path()).ok()?).ok()?;
-            alive(marker.pid).then(|| format!("{owner}/{repo}#{number}"))
+            Some((entry.path(), format!("{owner}/{repo}#{number}"), marker))
         })
         .collect()
 }
 
-/// A marker file's content: only the `pid` is read (`at` is for whoever reads the file).
+/// The pull requests, as `<owner>/<repo>#<n>`, that are merging (hs-d550): a marker whose `pid` is alive, or one marked
+/// `merged` whose pull request is in `open` (the open rows of `pull_requests`: no read has stored the merge yet). A
+/// stale marker, and a `merged` one whose pull request is not open, are none.
+pub fn live(home: &CpdHome, open: &BTreeSet<String>) -> BTreeSet<String> {
+    markers(home)
+        .into_iter()
+        .filter(|(_, pull, marker)| alive(marker.pid) || (marker.merged && open.contains(pull)))
+        .map(|(_, pull, _)| pull)
+        .collect()
+}
+
+/// Removes every marker marked `merged` whose pull request is not in `open`: the only clean-up of one left behind.
+pub fn remove_settled(home: &CpdHome, open: &BTreeSet<String>) {
+    for (file, pull, marker) in markers(home) {
+        if marker.merged && !open.contains(&pull) {
+            let _ = std::fs::remove_file(file);
+        }
+    }
+}
+
+/// A marker file's content: the `pid` and whether `pr merge` succeeded (`at` is for whoever reads the file).
 #[derive(Deserialize)]
 struct Marker {
     pid: i64,
+    #[serde(default)]
+    merged: bool,
 }
 
 /// The directory of the markers.
@@ -155,11 +191,15 @@ mod tests {
     #[test]
     fn only_a_marker_whose_pid_is_alive_is_live_and_a_stale_one_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(live(&home(&dir)), BTreeSet::new(), "no directory: none");
+        assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::new(), "no directory: none");
         put(&dir, "acme__api__3.json", std::process::id());
         put(&dir, "acme__web__4.json", dead_pid());
-        assert_eq!(live(&home(&dir)), BTreeSet::from(["acme/api#3".to_owned()]));
+        assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::from(["acme/api#3".to_owned()]));
         // a restarted view reads the same files
-        assert_eq!(live(&home(&dir)), live(&home(&dir)));
+        assert_eq!(live(&home(&dir), &BTreeSet::new()), live(&home(&dir), &BTreeSet::new()));
     }
 }
+
+#[cfg(test)]
+#[path = "marker_d550.rs"]
+mod d550;
