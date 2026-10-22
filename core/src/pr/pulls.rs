@@ -186,9 +186,9 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
         .collect()
 }
 
-/// Every row stored `open`, owned or not, in `(repo, number)` order.
+/// Every row stored `open`, owned or not, in id order.
 pub(super) fn stored_open(conn: &Connection) -> Result<Vec<PullRequest>, CpdError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM pull_requests WHERE state = 'open' ORDER BY repo, number"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM pull_requests WHERE state = 'open' ORDER BY id"))?;
     Ok(stmt.query_map([], PullRequest::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
