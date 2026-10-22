@@ -78,7 +78,7 @@ Two more `documented`: hs-d251 -> commands.md: right (the interface tree and its
 
 - Whole measurement: **$0.2416** for 8 runs, 463 records: **$0.000522 per record** curated (all 8 runs valid, so nothing to add for failures; the cut run's cost includes its 43 curated lines). Before: $0.4977 for 526 records = $0.000946 per record all-in ($0.000592 valid only).
 - Cost per run grows with the records already curated, because `known.md` lists them: $0.02476 at 0 curated to $0.03827 at 403 (tokens in 12758 to 30156). For the cheapest and dearest: $0.000413 and $0.000638 per record.
-- **The whole backlog**, 769 records at the measured per-record cost: **$0.40** (0.000522 x 769, flat; the per-record cost still rises, so the last runs cost more: at 769 curated a 60-run would be about $0.045 by the same growth, from the first and last points: my extrapolation, unverified). Before: $0.71 all-in for 751 records.
+- **The whole backlog**, 769 records at the measured per-record cost: **$0.40** (0.000522 x 769, flat; the per-record cost still rises, so the last runs cost more: at 709 curated a 60-run would be about $0.048 by the same growth, from the first and last points: my extrapolation, unverified). Before: $0.71 all-in for 751 records.
 - Time: 1736.8 s for 463 records (3.75 s per record, 217 s per run, 29 min in all): the backlog about 48 min (769 x 3.75 s). Before: 272 s per valid 60-run, 74 min for 526 records.
 
 ## 5. Verdict against hs-d558
