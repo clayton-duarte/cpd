@@ -40,7 +40,7 @@ fn a_waiting_job_pill_is_not_followed_by_a_note() {
     let screen = screen_when(&env, &pane, "the chart", |s| s.iter().any(|l| l.contains(" c│")));
     assert!(screen.iter().all(|l| !l.contains("waiting")), "{}", screen.join("\n"));
     // every pill row ends at the closing cap of its last pill
-    for row in chart(&screen).iter().filter(|r| r.contains('│')) {
+    for row in chart(&screen).iter().filter(|r| r.contains('\u{e0b6}')) {
         assert!(row.ends_with('\u{e0b4}') || row.contains(['─', '┐', '┘', '┤', '┬', '┴', '├', '┼']), "{row:?}");
     }
     let c = chart(&screen).into_iter().find(|r| r.contains(" c│")).unwrap();
