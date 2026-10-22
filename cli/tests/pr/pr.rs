@@ -1499,7 +1499,7 @@ fn node(repo: &str, number: i64, state: &str, review: Option<&str>, rollup: Opti
     format!(
         r#"{{"repository":{{"nameWithOwner":"{repo}"}},"number":{number},"url":"https://github.com/{repo}/pull/{number}","title":"{title}",
         "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":{review},
-        "mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
+        "mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":{rollup}}}}}]}}}}"#
     )
 }
@@ -1509,6 +1509,16 @@ fn merge_state(node: String, mergeable: &str, merge_state: &str) -> String {
     node.replace(
         r#""mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN""#,
         &format!(r#""mergeable":"{mergeable}","mergeStateStatus":"{merge_state}""#),
+    )
+}
+
+/// `node`, as a direct read (the lookup) answers it for the viewer: whether the viewer `did_author` it and whether a review
+/// is `requested` of them (`viewerLatestReviewRequest` is `{"id":"RR_1"}` or null). The search ignores both fields.
+fn viewer(node: String, did_author: bool, requested: bool) -> String {
+    let request = if requested { r#"{"id":"RR_1"}"# } else { "null" };
+    node.replace(
+        r#""viewerDidAuthor":true,"viewerLatestReviewRequest":null"#,
+        &format!(r#""viewerDidAuthor":{did_author},"viewerLatestReviewRequest":{request}"#),
     )
 }
 
@@ -1641,7 +1651,7 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
                "changed": [
                    {"repo": "acme/pay", "number": 901, "state": "open", "draft": false, "checks": "passed", "review_decision": "approved", "mergeable": "unknown", "merge_state": "unknown"},
                    {"repo": "acme/web", "number": 902, "state": "open", "draft": false, "checks": "none", "review_decision": "none", "mergeable": "unknown", "merge_state": "unknown"}],
-               "base_changed": [], "removed": 0, "feedback": [], "update_jobs": [], "merged": [], "done": [],
+               "base_changed": [], "feedback": [], "update_jobs": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}})
     );
     assert_eq!(fx.pull_requests(), [("acme/pay".to_owned(), 901), ("acme/web".to_owned(), 902)]);
@@ -1654,14 +1664,15 @@ fn the_first_poll_inserts_every_pull_request_and_appends_nothing_for_unowned_one
 }
 
 #[test]
-fn a_review_request_is_stored_as_not_authored_and_deleted_when_it_leaves_the_search() {
+fn a_review_request_is_stored_as_not_authored_and_kept_until_a_read_says_it_is_gone() {
     let fx = fx("dispatch");
     fx.search_both(&[node("acme/pay", 901, "OPEN", None, None)], &[node("acme/web", 902, "OPEN", Some("APPROVED"), Some("FAILURE"))]);
     let events = fx.event_count();
 
     let out = fx.poll_all();
 
-    assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len(), out["removed"].clone()), (json!(2), 2, json!(0)));
+    assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len()), (json!(2), 2));
+    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, false, true)]);
     assert_eq!(fx.event_count(), events, "no PR owns either: no Event, not even for a review request with failed checks");
     let calls = fx.gh_calls();
@@ -1673,16 +1684,20 @@ fn a_review_request_is_stored_as_not_authored_and_deleted_when_it_leaves_the_sea
     assert_eq!(fx.poll_all()["changed"], json!([]));
     assert_eq!(fx.txns(), txns);
 
-    // It leaves the review-request search: its row is deleted, the authored one stays.
+    // It leaves the review-request search: its row is kept, read directly, and `review_requested` clears (the viewer did not
+    // write it and no request is left); the authored one stays.
     fx.search_both(&[node("acme/pay", 901, "OPEN", None, None)], &[]);
+    fx.lookup(&[Some(viewer(node("acme/web", 902, "OPEN", Some("APPROVED"), Some("FAILURE")), false, false))]);
     let out = fx.poll_all();
-    assert_eq!((out["removed"].clone(), out["changed"].clone()), (json!(1), json!([])));
-    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
-    assert_eq!(fx.gh_calls().len(), 3, "one call per poll, three polls");
+    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
+    assert_eq!(out["changed"].as_array().unwrap().len(), 1, "the flag moved: {out}");
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, false, false)]);
+    assert_eq!(fx.gh_calls().len(), 4, "one call per poll, the third with its direct read");
+    assert!(is_lookup(&fx.gh_calls()[3]));
 }
 
 #[test]
-fn a_pull_request_in_both_searches_is_authored_and_review_requested_and_each_flag_clears_when_it_leaves_its_search() {
+fn a_pull_request_in_both_searches_is_authored_and_review_requested_and_each_flag_clears_only_when_a_read_says_so() {
     let fx = fx("dispatch");
     let mine = node("acme/pay", 901, "OPEN", None, None);
     fx.search_both(&[mine.clone()], &[mine.clone()]);
@@ -1690,21 +1705,26 @@ fn a_pull_request_in_both_searches_is_authored_and_review_requested_and_each_fla
     assert_eq!((out["polled"].clone(), out["changed"].as_array().unwrap().len()), (json!(1), 1));
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, true)]);
 
-    // Left the author search only: `authored` clears, the row is kept and reported as changed.
+    // Left the author search only: the read says the viewer did not write it, so `authored` clears; the row is reported as changed.
     fx.search_both(&[], &[mine.clone()]);
+    fx.lookup(&[Some(viewer(mine.clone(), false, true))]);
     let out = fx.poll_all();
-    assert_eq!((out["changed"].as_array().unwrap().len(), out["removed"].clone()), (1, json!(0)));
+    assert_eq!(out["changed"].as_array().unwrap().len(), 1);
+    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, true)]);
 
-    // Back in the author search only: `review_requested` clears.
+    // Back in the author search only: the read shows no request, so `review_requested` clears.
     fx.search_both(&[mine.clone()], &[]);
+    fx.lookup(&[Some(viewer(mine.clone(), true, false))]);
     fx.poll_all();
     assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
 
-    // In neither: no PR points to it, so it is deleted.
+    // In neither: the read answers, both flags clear and the row is kept, never deleted.
     fx.search_both(&[], &[]);
-    assert_eq!(fx.poll_all()["removed"], 1);
-    assert!(fx.memberships().is_empty());
+    fx.lookup(&[Some(viewer(mine.clone(), false, false))]);
+    let out = fx.poll_all();
+    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, false)]);
 }
 
 #[test]
@@ -1745,7 +1765,7 @@ fn a_second_identical_poll_writes_nothing() {
 
     assert_eq!(
         again,
-        json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "removed": 0, "feedback": [], "update_jobs": [], "merged": [], "done": [],
+        json!({"ok": true, "polled": 2, "changed": [], "base_changed": [], "feedback": [], "update_jobs": [], "merged": [], "done": [],
                "rate_limit": {"cost": 1, "remaining": 4987, "reset_at": RESET}, "prs": again["prs"]})
     );
     assert_eq!((fx.txns(), fx.event_count()), (txns, events), "no write transaction, no Event");
@@ -2195,26 +2215,302 @@ fn a_draft_is_stored_and_printed() {
     assert_eq!(out["prs"][0]["pull_request"]["draft"], true);
 }
 
-#[test]
-fn an_unowned_pull_request_that_leaves_the_search_is_deleted() {
-    let fx = fx("dispatch");
-    fx.search(&[node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None)]);
-    fx.poll_all();
-    assert_eq!(fx.pull_requests().len(), 2);
+impl Fx {
+    /// `(id, state, authored, review_requested, merged_at)` of the row of `pull_requests` for pull request `number`.
+    fn pull_request_row(&self, number: i64) -> Option<(i64, String, bool, bool, Option<String>)> {
+        self.store()
+            .read(|c| {
+                Ok(rusqlite::OptionalExtension::optional(c.query_row(
+                    "SELECT id, state, authored, review_requested, merged_at FROM pull_requests WHERE number = ?1",
+                    [number],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                ))?)
+            })
+            .unwrap()
+    }
 
-    fx.search(&[node("acme/web", 902, "OPEN", None, None)]);
-    let out = fx.poll_all();
+    /// How many rows of `history` are `op` writes of `pull_requests` (of pull request `number` when given).
+    fn pull_request_history(&self, op: &str, number: Option<i64>) -> i64 {
+        self.store()
+            .read(|c| {
+                Ok(c.query_row(
+                    "SELECT count(*) FROM history WHERE tbl = 'pull_requests' AND op = ?1
+                        AND (?2 IS NULL OR json_extract(coalesce(after, before), '$.number') = ?2)",
+                    params![op, number],
+                    |r| r.get(0),
+                )?)
+            })
+            .unwrap()
+    }
 
-    assert_eq!((out["removed"].clone(), out["polled"].clone(), out["changed"].clone()), (json!(1), json!(1), json!([])));
-    assert_eq!(fx.pull_requests(), [("acme/web".to_owned(), 902)]);
+    /// `(repo, number)` of the cockpit widgets' PRs section.
+    fn widget_prs(&self) -> Vec<(String, i64)> {
+        read::widgets(&mut self.store(), 3, 0).unwrap().prs.into_iter().map(|p| (p.repo, p.number)).collect()
+    }
 
-    fx.search(&[]);
-    assert_eq!(fx.poll_all()["removed"], 1);
-    assert!(fx.pull_requests().is_empty());
+    /// Adds a stored pull request `number` of `acme/<repo>`, no PR points to it.
+    fn add_row(&self, repo: &str, number: i64, state: &str, authored: bool, requested: bool) {
+        let sql = format!(
+            "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, merged_at, changed_at, authored, review_requested)
+               VALUES ('acme/{repo}', {number}, 'https://github.com/acme/{repo}/pull/{number}', 'Pay the bills', 0, '{state}', 'none', 'none', 'opened', NULL, 'opened', {}, {});",
+            authored as i32, requested as i32
+        );
+        self.store().write("fixture", |tx| Ok(tx.execute_batch(&sql)?)).unwrap();
+    }
+
+    /// What the fake `gh` is asked for each call of the lookup: the text of its query.
+    fn lookup_texts(&self) -> Vec<String> {
+        self.gh_calls().into_iter().filter(|c| is_lookup(c)).map(|c| c[3].clone()).collect()
+    }
 }
 
 #[test]
-fn an_owned_row_is_never_deleted_and_a_lookup_answering_open_changes_nothing() {
+fn a_pull_request_one_search_misses_keeps_its_row_and_the_open_list() {
+    let fx = fx("dispatch");
+    let (a, b) = (node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None));
+    fx.search(&[a.clone(), b.clone()]);
+    fx.poll_all();
+    let id = fx.pull_request_row(901).expect("stored by the first poll").0;
+    let (txns, events) = (fx.txns(), fx.event_count());
+    let list = fx.widget_prs();
+    assert_eq!(list, [("acme/pay".to_owned(), 901), ("acme/web".to_owned(), 902)]);
+    assert_eq!(fx.gh_calls().len(), 1);
+
+    let check = |when: &str| {
+        assert_eq!(fx.pull_request_row(901), Some((id, "open".to_owned(), true, false, None)), "{when}");
+        assert_eq!((fx.txns(), fx.event_count()), (txns, events), "{when}: nothing written, no Event");
+        assert_eq!(fx.pull_request_history("delete", None), 0, "{when}: no row is ever deleted");
+        assert_eq!(fx.pull_request_history("insert", Some(901)), 1, "{when}: 901 was inserted once");
+        assert_eq!(fx.widget_prs(), list, "{when}: the widget's list does not flicker");
+    };
+
+    // Poll 2: one search misses 901; the direct read says it is open, and the viewer's.
+    fx.search(&[b.clone()]);
+    fx.lookup(&[Some(viewer(a.clone(), true, false))]);
+    let out = fx.poll_all();
+    assert_eq!(out["changed"], json!([]));
+    check("poll 2");
+    let calls = fx.gh_calls();
+    assert_eq!(calls.len(), 3, "poll 2 made a search and a lookup: {calls:?}");
+    assert!(is_search(&calls[1]) && is_lookup(&calls[2]), "{calls:?}");
+    assert!(calls[2][3].contains("number: 901") && !calls[2][3].contains("number: 902"), "{}", calls[2][3]);
+
+    // Poll 3: the search lists both again.
+    fx.search(&[a, b]);
+    let out = fx.poll_all();
+    assert_eq!(out["changed"], json!([]));
+    check("poll 3");
+    assert_eq!(fx.gh_calls().len(), 4, "poll 3 made one call");
+}
+
+#[test]
+fn a_search_that_lists_fewer_nodes_than_its_issue_count_deletes_and_clears_nothing() {
+    let fx = fx("dispatch");
+    let a = node("acme/pay", 901, "OPEN", None, None);
+    fx.search(&[a.clone()]);
+    fx.poll_all();
+    let id = fx.pull_request_row(901).expect("stored by the first poll").0;
+
+    // More than 100 open pull requests: the search says 3 and lists one node.
+    let answer = search_answer_with(&[node("acme/web", 902, "OPEN", None, None)], &[], 4987).replacen(r#""issueCount":1,"nodes""#, r#""issueCount":3,"nodes""#, 1);
+    assert!(answer.contains(r#""issueCount":3"#), "{answer}");
+    fx.gh("search.json", &answer);
+    fx.lookup(&[Some(viewer(a, true, false))]);
+    let out = fx.poll_all();
+
+    let added: Vec<&Value> = out["changed"].as_array().unwrap().iter().map(|c| &c["number"]).collect();
+    assert_eq!(added, [&json!(902)], "902 is added: {out}");
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, true, false)]);
+    assert_eq!(fx.pull_request_row(901).map(|r| r.0), Some(id));
+    assert_eq!(fx.pull_request_history("delete", None), 0);
+    assert_eq!(fx.widget_prs(), [("acme/pay".to_owned(), 901), ("acme/web".to_owned(), 902)]);
+    assert_eq!(fx.lookup_texts().len(), 1, "901 was read directly");
+}
+
+#[test]
+fn a_flag_a_search_misses_clears_only_when_the_direct_read_says_so() {
+    let fx = fx("dispatch");
+    let a = node("acme/pay", 901, "OPEN", None, None);
+    fx.search_both(&[a.clone()], &[a.clone()]);
+    fx.poll_all();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, true)]);
+    let id = fx.pull_request_row(901).expect("stored by the first poll").0;
+    let numbers = |out: &Value| -> Vec<i64> { out["changed"].as_array().unwrap().iter().map(|c| c["number"].as_i64().unwrap()).collect() };
+
+    // Poll A: no search lists it; the read says the viewer wrote it and no request is left.
+    fx.search_both(&[], &[]);
+    fx.lookup(&[Some(viewer(a.clone(), true, false))]);
+    let out = fx.poll_all();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
+    assert_eq!(numbers(&out), [901]);
+    assert_eq!(fx.pull_request_row(901).map(|r| r.0), Some(id));
+    assert_eq!(fx.widget_prs(), [("acme/pay".to_owned(), 901)]);
+
+    // Poll B: the viewer did not write it (another gh account) and no request: both flags clear, the row stays.
+    fx.lookup(&[Some(viewer(a.clone(), false, false))]);
+    fx.poll_all();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, false)]);
+    assert_eq!(fx.pull_request_row(901), Some((id, "open".to_owned(), false, false, None)));
+    assert_eq!(fx.widget_prs(), []);
+    assert_eq!(fx.pull_request_history("delete", None), 0);
+
+    // Poll C: no flag and no owner: not a candidate, no lookup, one call, no write.
+    let (calls, txns) = (fx.gh_calls().len(), fx.txns());
+    let out = fx.poll_all();
+    assert_eq!(out["changed"], json!([]));
+    assert_eq!(fx.gh_calls().len(), calls + 1, "one call: the search");
+    assert_eq!(fx.txns(), txns, "no write transaction");
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, false, false)]);
+
+    // Poll D: the author search lists it again.
+    fx.search_both(&[a], &[]);
+    fx.poll_all();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 901, true, false)]);
+    assert_eq!(fx.widget_prs(), [("acme/pay".to_owned(), 901)]);
+}
+
+#[test]
+fn a_direct_read_that_says_merged_or_closed_moves_an_unowned_row_and_keeps_it() {
+    let fx = fx("dispatch");
+    let (a, b) = (node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None));
+    fx.search(&[a.clone(), b.clone()]);
+    fx.poll_all();
+    let ids = (fx.pull_request_row(901).unwrap().0, fx.pull_request_row(902).unwrap().0);
+
+    fx.search(&[]);
+    fx.lookup(&[Some(node("acme/pay", 901, "MERGED", None, None)), Some(node("acme/web", 902, "CLOSED", None, None))]);
+    let out = fx.poll_all();
+
+    let mut changed: Vec<(i64, String)> =
+        out["changed"].as_array().unwrap().iter().map(|c| (c["number"].as_i64().unwrap(), c["state"].as_str().unwrap().to_owned())).collect();
+    changed.sort();
+    assert_eq!(changed, [(901, "merged".to_owned()), (902, "closed".to_owned())], "{out}");
+    let (a_row, b_row) = (fx.pull_request_row(901).expect("901 is kept"), fx.pull_request_row(902).expect("902 is kept"));
+    assert_eq!((a_row.0, a_row.1.as_str(), a_row.2, a_row.3), (ids.0, "merged", false, false));
+    assert_eq!(a_row.4.as_deref(), Some("2026-10-14T10:00:00Z"));
+    assert_eq!(b_row, (ids.1, "closed".to_owned(), false, false, None));
+    assert_eq!(fx.widget_prs(), []);
+    assert_eq!(fx.pull_request_history("delete", None), 0);
+
+    // A lagging search lists 901 as open: merged is final, and a merged row is not read again.
+    let (txns, calls) = (fx.txns(), fx.gh_calls().len());
+    fx.search(&[a]);
+    let out = fx.poll_all();
+    assert_eq!(out["changed"], json!([]));
+    assert_eq!(fx.pull_request_row(901), Some(a_row));
+    assert_eq!(fx.txns(), txns);
+    assert_eq!(fx.gh_calls().len(), calls + 1, "one call: the search");
+}
+
+#[test]
+fn a_pull_request_github_cannot_find_loses_its_flags_and_is_not_read_again() {
+    let fx = fx("dispatch");
+    fx.search(&[node("acme/pay", 901, "OPEN", None, None)]);
+    fx.poll_all();
+    let id = fx.pull_request_row(901).expect("stored by the first poll").0;
+
+    fx.search(&[]);
+    fx.lookup(&[None]);
+    fx.poll_all();
+
+    assert_eq!(fx.pull_request_row(901), Some((id, "open".to_owned(), false, false, None)));
+    assert_eq!(fx.widget_prs(), []);
+    assert_eq!(fx.pull_request_history("delete", None), 0);
+    let (calls, txns) = (fx.gh_calls().len(), fx.txns());
+    fx.poll_all();
+    assert_eq!(fx.gh_calls().len(), calls + 1, "one call: the search");
+    assert_eq!(fx.txns(), txns);
+
+    // An owned row GitHub cannot find is unchanged.
+    let fx = fx_owned_not_found();
+    assert_eq!(fx.memberships(), [("acme/pay".to_owned(), 812, true, false)]);
+    assert_eq!(fx.pr_data().3, "open");
+}
+
+/// `deploy`, polled once with a search that lists nothing and a read that cannot find 812; the txns did not move.
+fn fx_owned_not_found() -> Fx {
+    let fx = fx("deploy");
+    fx.search(&[]);
+    fx.lookup(&[None]);
+    let txns = fx.txns();
+    fx.poll_all();
+    assert_eq!(fx.txns(), txns, "an owned row GitHub cannot find is unchanged");
+    fx
+}
+
+#[test]
+fn the_direct_read_is_one_batched_call_and_only_when_a_stored_open_pr_is_missing() {
+    let fx = fx("deploy");
+    let (p812, p901, p902, p903) =
+        (pay("OPEN", None, None), node("acme/pay", 901, "OPEN", None, None), node("acme/web", 902, "OPEN", None, None), node("acme/shop", 903, "OPEN", None, None));
+    // 812 is owned; 901 and 902 are authored; 903 is review-requested only.
+    fx.search_both(&[p812.clone(), p901.clone(), p902.clone()], &[p903.clone()]);
+    fx.poll_all();
+    assert_eq!(
+        fx.memberships(),
+        [("acme/pay".to_owned(), 812, true, false), ("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, true, false), ("acme/shop".to_owned(), 903, false, true)]
+    );
+    assert_eq!(fx.gh_calls().len(), 1);
+    // Every flag listed: exactly one call, a search.
+    fx.poll_all();
+    assert_eq!(fx.gh_calls().len(), 2);
+    assert!(fx.lookup_texts().is_empty());
+
+    // The searches list 812 only: 901, 902 (a) and 903 (c) are read, in id order, in one call; 812 is not.
+    fx.search_both(&[p812.clone()], &[]);
+    fx.lookup(&[Some(viewer(p901.clone(), true, false)), Some(viewer(p902.clone(), true, false)), Some(viewer(p903.clone(), false, true))]);
+    fx.poll_all();
+    let calls = fx.gh_calls();
+    assert_eq!(calls.len(), 4, "that poll made a search and one lookup: {calls:?}");
+    assert!(is_search(&calls[2]) && is_lookup(&calls[3]), "{calls:?}");
+    let text = &calls[3][3];
+    for (i, (repo, name, number)) in [("acme", "pay", 901), ("acme", "web", 902), ("acme", "shop", 903)].into_iter().enumerate() {
+        let want = format!(r#"p{i}: repository(owner: "{repo}", name: "{name}") {{ pullRequest(number: {number}) {{"#);
+        assert!(text.contains(&want), "{want} in {text}");
+    }
+    assert!(!text.contains("p3:") && !text.contains("number: 812"), "{text}");
+    assert_eq!(text.matches("viewerDidAuthor viewerLatestReviewRequest { id } }").count(), 3, "{text}");
+    assert_eq!(fx.memberships()[1..], [("acme/pay".to_owned(), 901, true, false), ("acme/web".to_owned(), 902, true, false), ("acme/shop".to_owned(), 903, false, true)]);
+
+    // A stored closed row and a stored open row with no flag and no owner are never named.
+    fx.add_row("pay", 904, "closed", true, false);
+    fx.add_row("pay", 905, "open", false, false);
+    fx.poll_all();
+    let texts = fx.lookup_texts();
+    assert_eq!(texts.len(), 2, "the same three are read again");
+    assert!(!texts[1].contains("number: 904") && !texts[1].contains("number: 905") && !texts[1].contains("p3:"), "{}", texts[1]);
+
+    // 903 is listed by the author search only while its stored flag is `review_requested`: (c) makes it the only candidate.
+    fx.search_both(&[p812, p901, p902, p903.clone()], &[]);
+    fx.lookup(&[Some(viewer(p903, true, true))]);
+    fx.poll_all();
+    let texts = fx.lookup_texts();
+    assert_eq!(texts.len(), 3);
+    assert!(texts[2].contains("p0: repository(owner: \"acme\", name: \"shop\") { pullRequest(number: 903)") && !texts[2].contains("p1:"), "{}", texts[2]);
+}
+
+#[test]
+fn a_failed_direct_read_fails_the_poll_and_writes_nothing() {
+    let fx = fx("dispatch");
+    fx.search(&[node("acme/pay", 901, "OPEN", None, None)]);
+    fx.poll_all();
+    let (txns, events, rows) = (fx.txns(), fx.event_count(), fx.memberships());
+
+    fx.search(&[]);
+    fx.env.fake_gh(&lookup_script("echo 'gh: HTTP 502: Bad Gateway' >&2; exit 1"));
+    let run = fx.env.cpd(&["pr", "poll"]);
+
+    assert_eq!(run.exit, 1, "the poll reads 901 directly and fails: {run:?}");
+    assert_eq!(code(&run), ("gh_failed".into(), 1));
+    let details = &run.error()["details"];
+    assert_eq!((&details["call"], &details["transient"]), (&json!("lookup"), &json!(true)), "{details}");
+    assert_eq!((fx.txns(), fx.event_count(), fx.memberships()), (txns, events, rows));
+    assert_eq!(fx.pull_request_history("delete", None), 0);
+    assert_eq!(fx.widget_prs(), [("acme/pay".to_owned(), 901)]);
+}
+
+#[test]
+fn an_owned_row_a_search_misses_is_read_and_an_open_answer_with_the_same_values_changes_nothing() {
     let fx = fx("deploy");
     fx.search(&[]);
     fx.lookup(&[Some(pay("OPEN", None, None))]);
@@ -2222,12 +2518,14 @@ fn an_owned_row_is_never_deleted_and_a_lookup_answering_open_changes_nothing() {
 
     let out = fx.poll();
 
-    assert_eq!((out["polled"].clone(), out["changed"].clone(), out["removed"].clone()), (json!(0), json!([]), json!(0)));
+    assert_eq!((out["polled"].clone(), out["changed"].clone()), (json!(0), json!([])));
+    assert!(out.get("removed").is_none(), "nothing is removed: {out}");
     assert_eq!((fx.txns(), fx.event_count()), (txns, events));
     assert_eq!(fx.pull_requests(), [("acme/pay".to_owned(), 812)]);
     let calls = fx.gh_calls();
     assert!(is_search(&calls[0]) && is_lookup(&calls[1]) && calls.len() == 2, "{calls:?}");
     assert!(calls[1][3].contains(r#"p0: repository(owner: "acme", name: "pay") { pullRequest(number: 812) { repository { nameWithOwner } number url"#), "{}", calls[1][3]);
+    assert!(calls[1][3].contains("viewerDidAuthor viewerLatestReviewRequest { id } }"), "{}", calls[1][3]);
 }
 
 #[test]

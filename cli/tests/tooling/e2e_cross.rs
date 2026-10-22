@@ -80,7 +80,7 @@ fn gh(flags: &Path) -> String {
 node() {{
   state="$2"; merged=null
   if [ "$state" = MERGED ]; then merged='"2026-10-15T10:00:00Z"'; fi
-  printf '%s' '{{"repository":{{"nameWithOwner":"acme/repo"}},"number":'"$1"',"url":"https://github.com/acme/repo/pull/'"$1"'","title":"Chain","isDraft":false,"state":"'"$state"'","createdAt":"2026-10-15T09:00:00Z","mergedAt":'"$merged"',"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","commits":{{"nodes":[]}}}}'
+  printf '%s' '{{"repository":{{"nameWithOwner":"acme/repo"}},"number":'"$1"',"url":"https://github.com/acme/repo/pull/'"$1"'","title":"Chain","isDraft":false,"state":"'"$state"'","createdAt":"2026-10-15T09:00:00Z","mergedAt":'"$merged"',"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{{"nodes":[]}}}}'
 }}
 case "$1 $2" in
   "pr list") echo '[]' ;;

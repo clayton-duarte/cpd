@@ -69,7 +69,6 @@ struct Follow {
 struct Outcome {
     changed: Vec<Value>,
     base_changed: Vec<Value>,
-    removed: usize,
     feedback: Vec<(PlanId, PrKey)>,
     /// The `update` Jobs the poll queued, for a conflict (§3.7 E5).
     update_jobs: Vec<(PlanId, PrKey, JobKey)>,
@@ -87,7 +86,6 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
     let root = env.home.root().to_owned();
 
     let search = gh::search_open(&root)?;
-    let present: Vec<(String, i64)> = search.prs.iter().map(|l| (l.pr.repo.clone(), l.pr.number)).collect();
     let owned = env.store.read(pulls::owned_open)?;
     // Each owned PR's `pr.feedback.checks`, resolved before anything is written (§8.3). A PR whose policy does not
     // resolve is told nothing and reported below; the poll goes on for the others (§7.6).
@@ -100,19 +98,42 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         }
     }
 
-    // The owned pull requests that left the open search: merged, closed, or the index lags (D3).
-    // One stored as decided (`closed`, A11) is already right: it is not looked up again until the search lists it.
-    let mut absent: Vec<(String, i64)> = Vec::new();
-    for (_, _, row) in owned.iter().filter(|(_, _, row)| row.state == "open") {
-        let key = (row.repo.clone(), row.number);
-        if !present.contains(&key) && !absent.contains(&key) {
-            absent.push(key);
+    // The stored open pull requests a search missed are read directly (§7.6 step 3): owned and listed by neither search,
+    // or flagged for a search that did not list them. A search's absence deletes, moves and unflags nothing.
+    let stored = env.store.read(pulls::stored_open)?;
+    let listed_in = |row: &pulls::PullRequest| search.prs.iter().find(|l| l.pr.repo == row.repo && l.pr.number == row.number);
+    let candidates: Vec<&pulls::PullRequest> = stored
+        .iter()
+        .filter(|row| {
+            let found = listed_in(row).map(|l| l.membership).unwrap_or_default();
+            let is_owned = owned.iter().any(|(_, _, o)| o.id == row.id);
+            (is_owned && listed_in(row).is_none()) || (row.authored && !found.authored) || (row.review_requested && !found.review_requested)
+        })
+        .collect();
+    let keys: Vec<(String, i64)> = candidates.iter().map(|row| (row.repo.clone(), row.number)).collect();
+    let read = gh::read_absent(&root, &keys)?;
+    let mut seen: Vec<Listed> = search.prs.iter().filter(|l| !keys.contains(&(l.pr.repo.clone(), l.pr.number))).cloned().collect();
+    for (row, read) in candidates.iter().zip(read) {
+        let found = listed_in(row);
+        match read {
+            // `OPEN`: the read is fresher; each flag a search listed it in stays, and the read adds its own.
+            Some(Listed { pr, membership }) if pr.state == PrState::Open => {
+                let search_flags = found.map(|l| l.membership).unwrap_or_default();
+                let membership = gh::Membership {
+                    authored: search_flags.authored || membership.authored,
+                    review_requested: search_flags.review_requested || membership.review_requested,
+                };
+                seen.push(Listed { pr, membership });
+            }
+            // `MERGED` or `CLOSED`: the row takes the state, with no flag.
+            Some(decided) => seen.push(decided),
+            // Not found: an unowned row loses its flags and keeps its state; an owned row is unchanged.
+            None if !owned.iter().any(|(_, _, o)| o.id == row.id) => {
+                seen.push(Listed { pr: row.polled()?, membership: Default::default() });
+            }
+            None => seen.extend(found.cloned()),
         }
     }
-    let looked_up = gh::lookup(&root, &absent)?;
-    let mut seen = search.prs.clone();
-    // `OPEN` is "not decided yet", `None` a pull request GitHub cannot find: nothing changes.
-    seen.extend(looked_up.into_iter().flatten().filter(|p| p.state != PrState::Open).map(|pr| Listed { pr, membership: Default::default() }));
 
     // The owned PRs whose pull request a search lists with a base other than the PR's `base`.
     let follows = env.store.read(|conn| follows(conn, &owned, &search.bases))?;
@@ -124,14 +145,11 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
                 _ => return Ok(true),
             }
         }
-        let mut stmt = conn
-            .prepare("SELECT repo, number FROM pull_requests WHERE NOT EXISTS (SELECT 1 FROM prs WHERE prs.pull_request = pull_requests.id)")?;
-        let unowned = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(unowned.iter().any(|row| !present.contains(row)))
+        Ok(false)
     })?;
     let open_tier = env.config.open_tier;
     // A poll that finds nothing new opens no write transaction (D5).
-    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &present, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
+    let outcome = if dirty { env.store.write(COMMAND, |tx| apply(tx, &seen, &owned, &checks, &follows, open_tier))? } else { Outcome::default() };
 
     report_unresolved(&mut env, &unresolved)?;
 
@@ -150,7 +168,6 @@ pub(super) fn poll(args: PollArgs) -> Result<Output, CpdError> {
         "polled": search.prs.len(),
         "changed": outcome.changed,
         "base_changed": outcome.base_changed,
-        "removed": outcome.removed,
         "feedback": outcome.feedback.iter().map(pair).collect::<Vec<_>>(),
         "update_jobs": outcome.update_jobs.iter().map(|(plan, pr, job)| json!({"plan": plan, "pr": pr, "job": job, "reason": Cause::Conflict.as_str()})).collect::<Vec<_>>(),
         "merged": outcome.merged.iter().map(pair).collect::<Vec<_>>(),
@@ -191,11 +208,10 @@ fn take_lock(path: &Path) -> Result<fs::File, CpdError> {
 }
 
 /// The one write transaction (D5, D7): every changed row, the Events of the
-/// owning Plans, the rows that left the search.
+/// owning Plans.
 fn apply(
     tx: &WriteTxn<'_>,
     seen: &[Listed],
-    present: &[(String, i64)],
     owned: &[Owned],
     checks: &[(PlanId, PrKey, Checks)],
     follows: &[Follow],
@@ -239,7 +255,6 @@ fn apply(
     for follow in follows {
         out.base_changed.push(follow_base(tx, follow)?);
     }
-    out.removed = pulls::delete_unowned_absent(tx, present)?;
     Ok(out)
 }
 
@@ -600,7 +615,7 @@ fn merged_prs_to_clean(conn: &rusqlite::Connection, just: &[(PlanId, PrKey)]) ->
 /// [`clean`] once the PR is idle (contract §7.2, hs-d243, hs-n124): every Attempt of its
 /// Jobs is `ended` and its driver lock is free, probed without creating the file, since
 /// a driver that just ended its Attempt may still be in A9, removing its worktree. While
-/// it is not, nothing is removed and there is no failure: the PR is still on disk, so a
+/// it is not, nothing is cleaned and there is no failure: the PR is still on disk, so a
 /// later poll cleans it up. A driver lock that cannot be probed is a failed removal.
 fn clean_when_idle(home: &CpdHome, merged: &Merged) -> Vec<Failure> {
     for attempt in &merged.attempts {
