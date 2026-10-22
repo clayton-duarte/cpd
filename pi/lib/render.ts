@@ -138,7 +138,7 @@ const CAP_RIGHT = "\u{E0B4}";
 const MARGIN = " ";
 const GREY8 = (text: string): string => `\x1b[90m${text}\x1b[39m`;
 
-/** The text up to the first `.`, `:` or line end, cut at 60 characters with `…` only when longer (hs-d537). */
+/** The text up to the first `.`, `:` or line end, cut at 60 characters with `…` only when longer. */
 function firstSentence(summary: string): string {
   const line = (summary.split("\n")[0] ?? "").trim();
   const at = line.search(/[.:]/);

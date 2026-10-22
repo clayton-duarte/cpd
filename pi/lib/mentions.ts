@@ -1,6 +1,6 @@
 import { isObject } from "./cpd.ts";
 
-/** commands.md §15.14 (hs-d544): magenta mentions of Leads and Managers. */
+/** commands.md §15.14: magenta mentions of Leads and Managers. */
 export type PaneRole = "lead" | "manager" | "worker";
 
 const WORD = /[A-Za-z0-9_-]+/g;

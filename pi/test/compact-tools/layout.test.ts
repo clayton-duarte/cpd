@@ -31,7 +31,7 @@ test("pi/package.json lists the adapter and the compact-tools extension, each a 
 	const manifest = json(join(PI, "package.json"));
 	assert.deepEqual(manifest.pi.extensions, ["./extension.ts", "./compact-tools/extensions/compact-tools.ts"]);
 	assert.deepEqual(manifest.pi.skills, ["./skills"]);
-	assert.equal("themes" in manifest.pi, false, "the extension ships no theme: the User's own applies");
+	assert.deepEqual(manifest.pi.themes, ["./themes"]);
 	// An entry whose file is missing makes pi fail to load the adapter: the entry and the files come in one change.
 	for (const entry of manifest.pi.extensions as string[]) assert.ok(existsSync(join(PI, entry)), entry);
 	assert.equal("dependencies" in manifest, false, "the package gains no dependency");
