@@ -542,7 +542,7 @@ function renderRowResult(
 		const container = options.isPartial ? new LoaderContainer() : new CachedContainer();
 		if (state.expanded || state.preview) {
 			const body = renderRowBody(name, ctx.args, result, output, state.expanded === true, theme, ctx.isError, author);
-			if (body) container.addChild(state.expanded ? body : limitComponentLines(body, runtime.config.previewLines, theme));
+			if (body) container.addChild(atContentWidth(state.expanded ? body : limitComponentLines(body, runtime.config.previewLines, theme)));
 		}
 		// A failed row whose output is hidden gets its reason on the status line. When
 		// the output shows, it already says why, and repeating it only doubles the error.
@@ -570,6 +570,11 @@ function renderRowResult(
 		},
 		invalidate() { drawn.invalidate(); },
 	};
+}
+
+/** A rail fold's body ends at column W-4: the margin, rail and blank before it, and three blank columns after (a box's content width, W-6). */
+function atContentWidth(body: Component): Component {
+	return { render: (width) => body.render(Math.max(1, width - 3)), invalidate: () => body.invalidate?.() };
 }
 
 /**

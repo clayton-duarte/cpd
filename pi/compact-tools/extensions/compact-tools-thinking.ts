@@ -162,8 +162,7 @@ function renderThinkingSections(
 				: [];
 			if (view === "detail" && detail) {
 				const styleDetailPrefix = options.styleDetailPrefix ?? ((prefix: string) => prefix);
-				const connector = `${styleDetailPrefix("│")}  `;
-				const detailOutput = `${title}  \n${connector}\n${compactDetail(detail, availableWidth, styleDetailPrefix)}`;
+				const detailOutput = `${title}  \n${compactDetail(detail, availableWidth - 2, styleDetailPrefix)}`;
 				return controlLines.length > 0 ? `${detailOutput}\n${hardBreak(controlLines)}` : detailOutput;
 			}
 			return hardBreak([title, ...controlLines]);

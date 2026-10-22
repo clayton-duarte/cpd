@@ -161,7 +161,6 @@ test("with no file the thinking block's control row is the toggle: ╰ U+F004B e
 		block.press();
 		assert.deepEqual(block.draw(), [
 			"╭─\uE0B6Thinking…\uE0B4",
-			"\u2502",
 			"\u2502 ## **Check the implementation**",
 			"\u2502",
 			"\u2502 Inspect the renderer.",

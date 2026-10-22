@@ -1110,11 +1110,11 @@ mod tests {
     }
 
     #[test]
-    fn the_counters_end_at_width_minus_2_and_the_cursor_row_is_inverted_between_the_margins() {
+    fn the_counters_end_at_width_minus_4_and_the_cursor_row_is_inverted_between_the_margins() {
         let mut view = on(&["alpha", "ship"]);
         let buf = buffer(&mut view, 44, 12);
         let ship: String = (0..44).map(|x| buf[(x, 2)].symbol()).collect();
-        assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(42) == Some('5'), "{ship:?}");
+        assert!(ship.trim_end().ends_with("2⋅1⋅1⋅0⋅5") && ship.chars().nth(40) == Some('5'), "{ship:?}");
         let reversed: Vec<u16> = (0..44).filter(|x| crate::palette::check::is_selected(&buf[(*x, 2)])).collect();
         assert_eq!(reversed, (1..43).collect::<Vec<u16>>());
     }
@@ -1960,7 +1960,7 @@ mod tests {
 
     /// An item row at 43 columns: the margin, the fold's `│`, one space, the tier glyph, a space, the label, the age ending at the last column of the inner area.
     fn item_row(glyph: &str, label: &str, age: &str) -> String {
-        format!(" │ {glyph} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
+        format!(" │ {glyph} {label}{}{age}", " ".repeat(39 - 4 - label.chars().count() - age.chars().count()))
     }
 
     /// The empty Inbox's one closing row (hs-d487): the margin, `╰`, U+F005A, the words.
@@ -1968,7 +1968,7 @@ mod tests {
 
     /// A scroll cue row at 43 columns: the margin, the fold's `│`, the cue right-aligned.
     fn cue_row(arrow: char, n: usize) -> String {
-        format!(" │{:>40}", format!("{arrow} {n} more"))
+        format!(" │{:>38}", format!("{arrow} {n} more"))
     }
 
     /// A scroll cue row of the tree at 43 columns: the margin, the cue right-aligned in the 41 columns of the inner area.
@@ -1997,7 +1997,7 @@ mod tests {
         assert_eq!(rows[13], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
         assert_eq!(rows[14], " ╰󰁚", "nothing to fold");
         assert_eq!(rows[15], "", "the empty row below the section");
-        assert_eq!(rows[11].chars().count(), 42, "the age ends in column 41, the last of the inner area");
+        assert_eq!(rows[11].chars().count(), 40, "the age ends in column 39 (W-4)");
     }
 
     #[test]
@@ -2067,12 +2067,12 @@ mod tests {
         let mut view = with_inbox(1);
         view.tree.inbox[0].label = "f-blocked: a very long question that cannot fit the row".into();
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        let label = "f-blocked: a very long question …"; // 41 - 4 (`│`, one space, the glyph, a space) - 1 (space) - 3 (age) = 33 columns
-        assert_eq!(label.chars().count(), 33);
+        let label = "f-blocked: a very long questio…"; // 39 - 4 (`│`, one space, the glyph, a space) - 1 (space) - 3 (age) = 31 columns
+        assert_eq!(label.chars().count(), 31);
         assert_eq!(rows[13], format!(" │ {} {label} 42s", palette::TIER_RED));
-        view.tree.inbox[0].label = "x".repeat(33);
+        view.tree.inbox[0].label = "x".repeat(31);
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[13], format!(" │ {} {} 42s", palette::TIER_RED, "x".repeat(33)), "a label that fits is not cut");
+        assert_eq!(rows[13], format!(" │ {} {} 42s", palette::TIER_RED, "x".repeat(31)), "a label that fits is not cut");
     }
 
     #[test]
@@ -2102,7 +2102,7 @@ mod tests {
             assert_eq!((buf[(3, y as u16)].symbol(), buf[(3, y as u16)].fg), (glyph, colour), "the glyph of row {y}");
             assert_ne!(buf[(5, y as u16)].fg, muted, "the label of row {y} is not muted");
         }
-        assert_eq!(buf[(40, 11)].fg, muted, "the age");
+        assert_eq!(buf[(38, 11)].fg, muted, "the age");
     }
 
     #[test]

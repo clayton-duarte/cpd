@@ -110,7 +110,7 @@ fn chart_rows(screen: &[String], rows: usize) -> String {
     screen[2..2 + rows]
         .iter()
         .map(|l| {
-            let inside: String = l.chars().skip(3).map(|c| if SPINNER[1..].iter().any(|g| g.starts_with(c)) { SPINNER[0].chars().next().unwrap() } else { c }).collect();
+            let inside: String = l.chars().skip(2).map(|c| if SPINNER[1..].iter().any(|g| g.starts_with(c)) { SPINNER[0].chars().next().unwrap() } else { c }).collect();
             let inside = inside.trim_end();
             inside.strip_suffix('│').unwrap_or_else(|| panic!("no right border: {l:?}")).trim_end().to_owned()
         })
@@ -283,7 +283,7 @@ fn the_chart_of_a_store_equivalent_to_the_cockpits_fixture_has_all_its_jobs_in_o
     }
     assert!(text.contains(&format!("{MERGING} rs-workspace")), "the merging Job has its icon:\n{text}");
     // a Plan of one PR is one box, titled on its top border
-    assert!(screen[1].starts_with("  ╭ repo · repo 󱦰 main · dispatch ─"), "{:?}", screen[1]);
+    assert!(screen[1].starts_with(" ╭ repo · repo 󱦰 main · dispatch ─"), "{:?}", screen[1]);
     assert_eq!(screen.iter().filter(|l| l.trim().starts_with("╭ ") && l.contains(" · ") && l.trim_end().ends_with('╮')).count(), 1, "{text}");
     assert!(screen.iter().all(|l| !l.contains(['┌', '┐', '└', '┘'])), "the corners are rounded:\n{text}");
 }
@@ -314,18 +314,18 @@ fn a_plan_of_two_prs_is_two_titled_boxes_one_below_the_other_linked_by_an_arrow(
     // web below api, the arrow from api's bottom border into web's top border
     // `web` waits for `api`, which has not merged (hs-d521): its title says on what
     let (merged_row, queued_row) = (
-        format!("  │ \u{e0b6}{MERGED} a│O3\u{e0b4}─────\u{e0b6}{MERGED} b│S3\u{e0b4}                │"),
-        format!("  │ \u{e0b6}{QUEUED} c│S3\u{e0b4}                             │"),
+        format!(" │ \u{e0b6}{MERGED} a│O3\u{e0b4}─────\u{e0b6}{MERGED} b│S3\u{e0b4}                │"),
+        format!(" │ \u{e0b6}{QUEUED} c│S3\u{e0b4}                             │"),
     );
     let want = [
-        "  ╭ api · api-server 󱦰 main · #12 open 󰏌 ╮",
+        " ╭ api · api-server 󱦰 main · #12 open 󰏌 ╮",
         merged_row.as_str(),
-        "  ╰──────────────────┬───────────────────╯",
-        "                     │",
-        "                     󱦳",
-        "  ╭ web · web 󱦰 develop · waiting on api ╮",
+        " ╰──────────────────┬───────────────────╯",
+        "                    │",
+        "                    󱦳",
+        " ╭ web · web 󱦰 develop · waiting on api ╮",
         queued_row.as_str(),
-        "  ╰──────────────────────────────────────╯",
+        " ╰──────────────────────────────────────╯",
     ];
     assert_eq!(screen[1..9], want, "{}", screen.join("\n"));
 }
@@ -449,7 +449,7 @@ fn a_pull_request_box_title_ends_in_a_link_to_it() {
     env.sql(&plan_under_review(2, "pending"));
     let pane = start_view(&env);
     let screen = screen_when(&env, &pane, "the box", |s| s.iter().any(|l| l.contains(" a│")));
-    assert!(screen.iter().any(|l| l == "  ╭ repo · repo 󱦰 main · #7 open 󰏌 ╮"), "{}", screen.join("\n"));
+    assert!(screen.iter().any(|l| l == " ╭ repo · repo 󱦰 main · #7 open 󰏌 ╮"), "{}", screen.join("\n"));
     let styled = styled_screen(&env, &pane);
     assert!(styled.contains("]8;;https://github.com/acme/repo/pull/7"), "{styled:?}");
     // the link wraps its whole text, from `#` through `󰏌`, and nothing else
@@ -539,7 +539,7 @@ fn a_pending_plan_review_draws_no_row_above_the_boxes() {
         let screen = screen_when(&env, &pane, "the box", |s| s.iter().any(|l| l.contains(" a│")));
         let shown = screen.join("\n");
         assert_eq!(screen[0], "", "{port:?}:\n{shown}");
-        assert_eq!(screen[1], "  ╭ repo · repo 󱦰 main · #7 open 󰏌 ╮", "{port:?}:\n{shown}");
+        assert_eq!(screen[1], " ╭ repo · repo 󱦰 main · #7 open 󰏌 ╮", "{port:?}:\n{shown}");
         assert!(screen.iter().all(|l| !l.contains("Plan review")), "{port:?}:\n{shown}");
         assert!(!styled_screen(&env, &pane).contains("localhost"));
     }
@@ -568,9 +568,9 @@ fn the_first_rows_of_the_pane_are_the_top_of_the_first_box_with_no_tab() {
     let screen = screen_when(&env, &pane, "the box", |s| s.len() > 3 && s[2].contains(" a│"));
     // one row of margin, then the box's top border, its one chart row and its bottom border
     assert_eq!(screen[0], "", "{}", screen.join("\n"));
-    assert_eq!(screen[1], "  ╭ repo · repo 󱦰 main · dispatch ╮");
-    assert!(screen[2].starts_with(&format!("  │ \u{e0b6}{QUEUED} a│S3\u{e0b4}")), "{:?}", screen[2]);
-    assert!(screen[3].starts_with("  ╰─"), "{:?}", screen[3]);
+    assert_eq!(screen[1], " ╭ repo · repo 󱦰 main · dispatch ╮");
+    assert!(screen[2].starts_with(&format!(" │ \u{e0b6}{QUEUED} a│S3\u{e0b4}")), "{:?}", screen[2]);
+    assert!(screen[3].starts_with(" ╰─"), "{:?}", screen[3]);
     assert!(screen.iter().all(|l| !l.contains('\u{F0142}' /* md-chevron_right */) && !l.contains("name of") && !l.starts_with('─')), "{}", screen.join("\n"));
 }
 

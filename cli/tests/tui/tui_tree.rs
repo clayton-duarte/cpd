@@ -44,7 +44,7 @@ fn pill(inner: usize, count: usize) -> String {
 
 /// An Inbox item row in `inner` columns: the muted `│`, one space, the tier `glyph`, the label and the age (`5m`) at the last column.
 fn item_row_of(inner: usize, glyph: &str, label: &str) -> String {
-    format!(" │ {glyph} {label}{}5m", " ".repeat(inner - 4 - label.len() - 2))
+    format!(" │ {glyph} {label}{}5m", " ".repeat(inner - 2 - 4 - label.len() - 2))
 }
 
 // ---------- the prepared store ----------
@@ -532,7 +532,7 @@ fn the_tree_of_a_prepared_store() {
     let env = env();
     populate(&env);
     let pane = Pane::start(&env, 46, 20);
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
     let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),
@@ -585,7 +585,7 @@ fn the_tree_leaves_the_first_and_the_last_column_blank() {
     // `screen` is trimmed at the right, so the last column is blank when no row is longer than 45 columns
     assert!(screen.iter().all(|r| r.is_empty() || r.starts_with(' ')), "column 0: {screen:?}");
     assert!(screen.iter().all(|r| r.chars().count() <= 45), "the last column: {screen:?}");
-    assert!(screen.iter().any(|r| r.chars().count() == 45), "the counters end at width − 2: {screen:?}");
+    assert!(screen.iter().any(|r| r.chars().count() == 43), "the counters end at width − 4: {screen:?}");
 }
 
 #[test]
@@ -1001,7 +1001,7 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
     archive(&env);
     fake_cpd(&env, r#"{"ok":true}"#);
     let pane = Pane::start(&env, 46, 26);
-    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 44 - right.chars().count());
+    let row = |left: &str, right: &str| format!(" {left:<w$}{right}", w = 42 - right.chars().count());
     let mut expected = vec![
         String::new(),
         format!(" ╭{NEEDS_YOU} alpha"),

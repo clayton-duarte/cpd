@@ -35,7 +35,7 @@ const PAD: &str = " ";
 /// ` ──<pill>───…` (the padding, a muted `──`, the pill), for every in-pane title that is no collapsible widget's (logs, legend,
 /// the Deploy column's sections, dialog titles).
 pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    row(PLAIN_LEAD, palette::muted_text(), title, count, None, width)
+    row(PLAIN_LEAD, palette::muted_text(), title, count, None, palette::pill_static(), width)
 }
 
 /// The **collapsible** section title (hs-d478): a title `width` cells wide, its first and last cell the padding: ` ╭─<pill>───…`
@@ -43,19 +43,18 @@ pub fn title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
 /// collapsible widget (the Inbox's); its left cap sits three columns from the edge, as [`title`]'s does. A title wider than the room
 /// is cut (a pill narrower than 3 cells is left out); the line never wraps. The count is a grey pill too (hs-d480).
 pub fn collapsible_title(title: &str, count: Option<usize>, width: usize) -> Line<'static> {
-    row(LEAD, palette::muted_text(), title, count, None, width)
+    row(LEAD, palette::muted_text(), title, count, None, palette::pill_static(), width)
 }
 
-/// The input box's top border (contract §6.1.1): ` ╭─<pill>───╮ `, the corner, the lines and `╮` in `border`; `label` is cut to the room,
-/// and no pill is drawn for an empty one.
-pub(crate) fn box_top(label: &str, border: Style, width: usize) -> Line<'static> {
-    row(LEAD, border, label, None, Some(BOX_CLOSE), width)
+/// The input box's top border (contract §6.1.1): ` ╭─<pill>───╮ `, the corner, the lines and `╮` in the border's colour and the
+/// label pill in that colour too (hs-d578 F9); `label` is cut to the room, and no pill is drawn for an empty one.
+pub(crate) fn box_top(label: &str, focused: bool, width: usize) -> Line<'static> {
+    row(LEAD, palette::input_border(focused), label, None, Some(BOX_CLOSE), palette::label_pill(focused), width)
 }
 
 /// The row the forms share: `lead` (two cells) and `muted`, the style of the lead, the lines and `close`, a closing cell that
-/// takes the place of the count, are what differ.
-fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, close: Option<&str>, width: usize) -> Line<'static> {
-    let pill_style = palette::pill_static();
+/// takes the place of the count, and `pill_style` are what differ.
+fn row(lead: &str, muted: Style, title: &str, count: Option<usize>, close: Option<&str>, pill_style: Style, width: usize) -> Line<'static> {
     let cap = Style::new().fg(pill_style.bg.expect("a pill has a colour"));
     let pad = usize::from(width >= 2);
     let width = width - 2 * pad;

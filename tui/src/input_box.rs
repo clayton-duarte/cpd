@@ -43,7 +43,7 @@ fn rule(lead: &str, end: &str, border: Style, width: usize) -> Line<'static> {
 pub(crate) fn lines(label: &str, text: &[char], cursor: usize, focused: bool, width: usize) -> Vec<Line<'static>> {
     let border = palette::input_border(focused);
     let tw = text_width(width);
-    let mut out = vec![clip(section::box_top(label, border, width), width)];
+    let mut out = vec![clip(section::box_top(label, focused, width), width)];
     let shown = |range: std::ops::Range<usize>| text.get(range.start.min(text.len())..range.end.min(text.len())).unwrap_or_default().iter().collect::<String>();
     for k in 0..text_rows(text.len(), width) {
         let (from, to) = (k * tw, (k + 1) * tw);

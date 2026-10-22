@@ -214,7 +214,7 @@ export class Rendering {
     }
     const draw = (width: number): string[] => {
       const shown = open || state.expanded;
-      const lines = [...rows.head(width), ...(shown ? rows.body(width) : []), ...(closes ? rows.terminator() : rows.toggle(width, shown))];
+      const lines = [...rows.head(width), ...(shown ? rows.body(width - 3) : []), ...(closes ? rows.terminator() : rows.toggle(width, shown))];
       return withinWidth(lines, width);
     };
     const inner: Component = {

@@ -25,7 +25,7 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::crossterm::event::{self, Event, KeyEventKind, MouseButton, MouseEventKind};
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Margin, Position, Rect};
 
 use super::dialog;
 use super::palette;
@@ -167,7 +167,7 @@ fn show(
                     draw_error(f, pane, error);
                 }
                 if let Some(open) = &menu {
-                    open.menu.draw_at(f, pane, frame);
+                    open.menu.draw_at(f, pane.inner(Margin::new(1, 0)), frame);
                 }
             })?;
             (redraw, drawn_frame) = (false, Some(frame));
@@ -181,7 +181,7 @@ fn show(
                 // an open menu takes every key and click
                 let outcome = match &event {
                     Event::Key(key) if key.kind == KeyEventKind::Press => open.menu.key(*key),
-                    Event::Mouse(m) => open.menu.mouse(pane, *m),
+                    Event::Mouse(m) => open.menu.mouse(pane.inner(Margin::new(1, 0)), *m),
                     _ => Outcome::Stay,
                 };
                 match outcome {

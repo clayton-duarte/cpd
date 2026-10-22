@@ -77,6 +77,8 @@ const FRAME: Duration = Duration::from_millis(100);
 /// The blank space around the chart's content, inside the canvas the view scrolls over: at scroll (0, 0) nothing of the
 /// chart touches the pane's edges, and scrolled the chart reaches them.
 const MARGIN: Margin = Margin { horizontal: 2, vertical: 1 };
+/// The chart canvas keeps one blank column each side; Pulse and the message row keep `MARGIN`.
+const CHART_MARGIN: Margin = Margin { horizontal: 1, vertical: 1 };
 
 /// What the pane shows when a Lead is in the chat slot.
 struct Centre {
@@ -98,7 +100,7 @@ impl Centre {
     fn turn(&mut self, frame: usize) -> bool {
         let turned = frame != self.frame && self.spins();
         if turned {
-            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, &self.plan.needs_user, frame).with_margin(MARGIN);
+            self.boxes = boxes::layout(&self.plan.prs, &self.plan.jobs, &self.plan.needs_user, frame).with_margin(CHART_MARGIN);
             self.frame = frame;
         }
         turned
@@ -126,7 +128,7 @@ fn snapshot(store: &mut Store, width: u16, now_ms: i64) -> Result<Snapshot, CpdE
     let Some(slot) = read::chat_slot(store)? else { return Ok(Snapshot { cursor, centre: None, pulse: None }) };
     let plan = read::plan_boxes(store, &slot.plan)?;
     let frame = palette::frame(SystemTime::now());
-    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(MARGIN);
+    let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, frame).with_margin(CHART_MARGIN);
     Ok(Snapshot { cursor, centre: Some(Centre { slot, plan, boxes, frame }), pulse: None })
 }
 
@@ -543,6 +545,9 @@ fn show(
 }
 
 #[cfg(test)]
+mod margin_tests;
+
+#[cfg(test)]
 mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -605,7 +610,7 @@ mod tests {
             needs_user: read::NeedsUser::default(),
             events_cursor: 0,
         };
-        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(MARGIN);
+        let boxes = boxes::layout(&plan.prs, &plan.jobs, &plan.needs_user, 0).with_margin(CHART_MARGIN);
         let slot = ChatSlot {
             session: SessionId::parse("00000000-0000-4000-8000-000000000000").unwrap(),
             name: "lead".into(),

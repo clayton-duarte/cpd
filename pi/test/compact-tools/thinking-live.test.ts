@@ -44,8 +44,8 @@ function live(hideThinkingBlock = false) {
 
 const EXPANDED = [
 	`╭─${LEFT}Thinking…${RIGHT}`,
-	"│",
-	"│ The user wants the pill to expand, so I will look at how the title is built.",
+	"│ The user wants the pill to expand, so I will look at how the title is",
+	"│ built.",
 	"│",
 	"│ Then decide what the fold should hold.",
 	"╰\u{F0063} collapse",

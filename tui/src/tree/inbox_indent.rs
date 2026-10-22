@@ -44,17 +44,17 @@ fn an_item_row_is_the_rail_one_space_the_glyph_a_space_the_label_and_the_age() {
     let rows = rows_with(label);
     let glyph = palette::TIER_RED;
     // 41 columns of inner area: `│`, space, glyph, space (4), the label, the gap, the age
-    let want = format!(" │ {glyph} {label}{}5m", " ".repeat(41 - 4 - label.chars().count() - 2));
+    let want = format!(" │ {glyph} {label}{}5m", " ".repeat(39 - 4 - label.chars().count() - 2));
     assert_eq!(item_row_of(&rows), &want, "{rows:?}");
-    assert_eq!(item_row_of(&rows).chars().count(), 42, "the age ends in column 41, the last of the inner area");
+    assert_eq!(item_row_of(&rows).chars().count(), 40, "the age ends in column 39 (W-4: two blank columns of padding after it)");
 }
 
 #[test]
 fn a_label_that_does_not_fit_is_cut_with_an_ellipsis_one_cell_later() {
     let rows = rows_with(&"x".repeat(60));
     let glyph = palette::TIER_RED;
-    // the label gets 41 - 4 - 1 (the gap) - 2 (the age) = 34 cells: 33 letters and the `…`
-    let want = format!(" │ {glyph} {}… 5m", "x".repeat(33));
+    // the label gets 39 - 4 - 1 (the gap) - 2 (the age) = 32 cells: 31 letters and the `…`
+    let want = format!(" │ {glyph} {}… 5m", "x".repeat(31));
     assert_eq!(item_row_of(&rows), &want, "{rows:?}");
-    assert_eq!(item_row_of(&rows).chars().count(), 42, "still the full inner width");
+    assert_eq!(item_row_of(&rows).chars().count(), 40, "still ending at column 39");
 }

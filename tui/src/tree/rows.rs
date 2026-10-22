@@ -70,6 +70,10 @@ const TOGGLE: &str = "╰─ ";
 /// What the identifier of the empty row after the Context whose own identifier is `id` starts with (hs-d476).
 const SPACER: &str = "  ";
 
+/// The columns the tree's area (already inside the pane's margin) keeps blank at the right of a rail row: the padding and the
+/// box's wall column, so that the row ends at column W-4 of the pane (commands.md §17).
+const RIGHT_PAD: u16 = 2;
+
 /// The columns a content row's branch takes (`fold::TREE_BRANCH`).
 const BRANCH_WIDTH: usize = 2;
 
@@ -485,7 +489,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", palette::muted_text()))), area);
         return;
     }
-    let items = items(tree, state.opened(), area.width, frame);
+    let items = items(tree, state.opened(), area.width.saturating_sub(RIGHT_PAD), frame);
     let flat = state.flatten(&items);
     let height = usize::from(area.height);
     scroll.max = max_scroll(flat.len(), height, 1);
@@ -525,7 +529,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
             buf[(x, y)] = cell;
         }
         if let Row::Plan(_, plan) = row {
-            counters(plan, has_stuck_job(tree, plan)).right_aligned().render(rect, buf);
+            counters(plan, has_stuck_job(tree, plan)).right_aligned().render(Rect { width: rect.width.saturating_sub(RIGHT_PAD), ..rect }, buf);
         }
         if row.muted() {
             // archived: colour 8 on every mark; asleep: colour 7 on every mark, the fold's lines (the branch) staying 8; either way
@@ -670,9 +674,9 @@ mod tests {
         (0..buf.area.height).map(|y| text(buf, y)).collect()
     }
 
-    /// A row `width` wide: `left`, then `right` flush against the right edge.
+    /// A row of an area `width` wide: `left`, then `right`, which ends `RIGHT_PAD` columns before the right edge.
     fn row_of(left: &str, right: &str, width: usize) -> String {
-        format!("{left:<w$}{right}", w = width - right.chars().count())
+        format!("{left:<w$}{right}", w = width - usize::from(RIGHT_PAD) - right.chars().count())
     }
 
     fn fg(buf: &Buffer, x: u16, y: u16) -> Color {
@@ -859,8 +863,8 @@ mod tests {
         let t = tree(vec![context("cc", vec![lone("pp", "p", Phase::Plan, [4, 0, 0, 0, 0, 0])])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 2, false);
         assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} pp"), "4⋅0⋅0⋅0⋅0", 20));
-        assert_eq!(fg(&buf, 11, 1), palette::color_clickable(Meaning::Planning), "the drafts of phase `plan` are magenta (13)");
-        assert_eq!(fg(&buf, 13, 1), color(Meaning::Nothing), "the zero");
+        assert_eq!(fg(&buf, 9, 1), palette::color_clickable(Meaning::Planning), "the drafts of phase `plan` are magenta (13)");
+        assert_eq!(fg(&buf, 11, 1), color(Meaning::Nothing), "the zero");
     }
 
     #[test]
@@ -868,7 +872,7 @@ mod tests {
         let long = lone("a-very-long-plan-id", "lead", Phase::Dispatch, [0, 36, 0, 0, 1, 5]);
         let t = tree(vec![context("cc", vec![long])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 30, 2, false);
-        assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} a-very-long-…"), "36⋅0⋅0⋅1⋅5", 30));
+        assert_eq!(text(&buf, 1), row_of(&format!("╰─{IDLE} a-very-lon…"), "36⋅0⋅0⋅1⋅5", 30));
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcd", 3), "ab…");
         assert_eq!(truncate("abcd", 0), "");
@@ -996,8 +1000,8 @@ mod tests {
     fn every_status_has_its_counter_colour_and_zeros_and_separators_are_grey() {
         let t = tree(vec![context("cc", vec![lone("aa", "x", Phase::Dispatch, [9, 1, 2, 3, 4, 5]), lone("bb", "y", Phase::Dispatch, [0; 6])])]);
         let buf = render(&t, &mut state_for(&t, &[], &[]), 20, 3, false);
-        // counters "1⋅2⋅3⋅4⋅5" occupy the last 9 columns
-        let at = |i: u16| 11 + 2 * i;
+        // counters "1⋅2⋅3⋅4⋅5" end `RIGHT_PAD` columns before the edge
+        let at = |i: u16| 9 + 2 * i;
         let colours: Vec<Color> = (0..5).map(|i| fg(&buf, at(i), 1)).collect();
         assert_eq!(
             colours,
@@ -1014,8 +1018,8 @@ mod tests {
         use cpd_core::ids::PlanId;
         use cpd_core::inbox::model::Urgency;
         let counters = || vec![context("cc", vec![lone("aa", "x", Phase::Dispatch, [0, 1, 0, 2, 2, 5]), lone("bb", "y", Phase::Dispatch, [0, 1, 0, 2, 2, 5])])];
-        // counters "1⋅0⋅2⋅2⋅5": the failed one is the 4th, in column 11 + 2 * 3
-        let failed = |t: &Tree, row: u16| fg(&render(t, &mut state_for(t, &[], &[]), 20, 3, false), 17, row);
+        // counters "1⋅0⋅2⋅2⋅5": the failed one is the 4th, in column 9 + 2 * 3
+        let failed = |t: &Tree, row: u16| fg(&render(t, &mut state_for(t, &[], &[]), 20, 3, false), 15, row);
         let handled = tree(counters());
         assert_eq!((failed(&handled, 1), failed(&handled, 2)), (palette::color_clickable(Meaning::Waiting), palette::color_clickable(Meaning::Waiting)), "its Lead handles it");
         let stuck_for = |plan: &str, kind: Kind| {
@@ -1123,13 +1127,13 @@ mod tests {
         assert_eq!(text(&buf, 1).chars().next(), Some('├'), "the branch, not a mark");
         assert_eq!((fg(&buf, 0, 1), fg(&buf, 1, 1)), (grey, grey), "the branch");
         assert_eq!(cell(&buf, 2, 1), drawn_dot(Dot::Working), "the dot");
-        // counters "2⋅1⋅1⋅0⋅5" are the last 9 columns
-        let counters: Vec<Color> = (0..5).map(|i| fg(&buf, 35 + 2 * i, 1)).collect();
+        // counters "2⋅1⋅1⋅0⋅5" end `RIGHT_PAD` columns before the edge
+        let counters: Vec<Color> = (0..5).map(|i| fg(&buf, 33 + 2 * i, 1)).collect();
         assert_eq!(
             counters,
             [palette::color_clickable(Meaning::NotStarted), palette::color_clickable(Meaning::InProgress), palette::color_clickable(Meaning::Review), color(Meaning::Nothing), palette::color_clickable(Meaning::Done)]
         );
-        assert!((0..4).all(|i| fg(&buf, 36 + 2 * i, 1) == grey), "the separators");
+        assert!((0..4).all(|i| fg(&buf, 34 + 2 * i, 1) == grey), "the separators");
     }
 
     #[test]
