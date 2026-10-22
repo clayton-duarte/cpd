@@ -198,12 +198,6 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
-| `cpd secret get` (§24.1) | Manager, Lead, Worker | no | no |
-| `cpd secret list` (§24.2) | Manager, Lead | no | no |
-| `cpd secret create` (§24.3) | Manager, Lead | no | no |
-| `cpd secret edit` (§24.4) | Manager, Lead | no | no |
-| `cpd secret delete` (§24.5) | Manager, Lead | no | no |
-| `cpd secret allow` (§24.6) | Lead | no | no |
 | `cpd secret approve` (§24.7, internal) | none | no | yes |
 | `cpd context curation` (§3.15, internal) | none | yes | yes |
 | `cpd context retire` (§3.16, internal) | none | yes | yes |

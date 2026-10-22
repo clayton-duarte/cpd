@@ -34,6 +34,7 @@ pub mod plan;
 pub mod policy;
 pub mod pr;
 pub mod review;
+pub mod secret;
 pub mod session;
 pub mod spec;
 pub mod store;

@@ -126,3 +126,11 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd config` | Print the effective configuration (commands.md §14.2) | | |
 | `cpd tiers` | Print the Tiers and their valid efforts (commands.md §14.3) | Lead | |
 | `cpd slot` | Run a command inside a test slot (commands.md §23) | Manager, Lead, Worker | |
+| `cpd secret` | Secrets in 1Password through op (commands.md §24) | | |
+| `cpd secret get` | Get one field of an item (§24.1) | Lead, Manager, Worker | |
+| `cpd secret list` | List the items of a vault (§24.2) | Lead, Manager | |
+| `cpd secret create` | Create an item with one concealed field; the value is on stdin (§24.3) | Lead, Manager | |
+| `cpd secret edit` | Set one field of an item; the value is on stdin (§24.4) | Lead, Manager | |
+| `cpd secret delete` | Archive an item (§24.5) | Lead, Manager | |
+| `cpd secret allow` | Let a Worker's Attempt read one field of one item (§24.6) | Lead | |
+| `cpd secret approve` | Record the User's approval for another vault (adapter) (§24.7) | internal | |

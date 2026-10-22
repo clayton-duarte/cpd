@@ -102,6 +102,9 @@ error_codes! {
     PolicyInvalid = "policy_invalid" => Failure,
     OwnerUnknown = "owner_unknown" => Failure,
     RepoUnkeyed = "repo_unkeyed" => Failure,
+    // Secrets (contract §8.4).
+    SecretOpMissing = "secret_op_missing" => Failure,
+    SecretOpFailed = "secret_op_failed" => Failure,
 
     // Exit 2: usage error.
     Usage = "usage" => Usage,
@@ -203,6 +206,13 @@ error_codes! {
     OwnerMismatch = "owner_mismatch" => Refused,
     OwnerUnset = "owner_unset" => Refused,
     OwnerSet = "owner_set" => Refused,
+    SecretSessionRequired = "secret_session_required" => Refused,
+    SecretRoleDenied = "secret_role_denied" => Refused,
+    SecretVaultDenied = "secret_vault_denied" => Refused,
+    SecretGrantRequired = "secret_grant_required" => Refused,
+    SecretAttemptEnded = "secret_attempt_ended" => Refused,
+    SecretExists = "secret_exists" => Refused,
+    SecretNotSignedIn = "secret_not_signed_in" => Refused,
 
     // Exit 4: not found.
     ContextNotFound = "context_not_found" => NotFound,
@@ -213,6 +223,7 @@ error_codes! {
     ReviewNotFound = "review_not_found" => NotFound,
     TopicNotFound = "topic_not_found" => NotFound,
     SessionNotFound = "session_not_found" => NotFound,
+    SecretNotFound = "secret_not_found" => NotFound,
     BaseNotFound = "base_not_found" => NotFound,
     ItemNotFound = "item_not_found" => NotFound,
 
