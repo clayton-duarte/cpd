@@ -14,7 +14,7 @@ const CONTENTS = ["a\n\nb\n" + long, "\x1b[31mred\nspans\x1b[0m plain\n" + long,
 
 test("every row of a cpd block has the rail in 8", () => {
   for (const content of CONTENTS)
-    for (const customType of ["cpd", "cpd-plan-review-summary"])
+    for (const customType of ["cpd", "cpd-plan-summary"])
       for (const outputPad of [1, 0])
         for (const expanded of [true, false]) {
           const message = { role: "custom" as const, timestamp: 0, customType, content, display: true, details: { review: "r1" } };
