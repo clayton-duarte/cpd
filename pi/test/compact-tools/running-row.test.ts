@@ -1,13 +1,14 @@
 /**
  * The closing row of a running tool row (contract 6.1.1): with fold "toggle" it is " ╰" in 8 and one loader frame
- * in 6 (U+F0766, U+F0A9E..U+F0AA5), no text (running-loader.test.ts). Fold "status" keeps " └ Running".
+ * in 6 (the moon phases, loader-frames.ts), no text (running-loader.test.ts). Fold "status" keeps " └ Running".
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MOON_FRAMES } from "./loader-frames.ts";
 import { advance, announce, CASES, loadExtension, makeRow, restoreClocks, shutdown } from "./indicator-harness.ts";
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
-const GLYPH = "[\u{F0766}\u{F0A9E}-\u{F0AA5}]";
+const GLYPH = `[${MOON_FRAMES.join("")}]`;
 const HEAD = " \u256D\u2500";
 let sequence = 0;
 
