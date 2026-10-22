@@ -1,4 +1,4 @@
-/** commands.md §15.13: which `ask_user_question` calls are refused (G2 a long question; G3 and G4 for a Lead or Manager: no visible text this turn, labels the chat never showed). Pure: the adapter (`adapter.ts`) applies it to a `tool_call`. */
+/** commands.md §15.13: which `ask_user_question` calls are refused (G2 a long question; G4 for a Lead or Manager: labels stated nowhere). Pure: the adapter (`adapter.ts`) applies it to a `tool_call`. */
 
 /** The most characters one `ask_user_question` call may carry, summed over its text. */
 export const LIMIT = 1500;
@@ -31,12 +31,9 @@ export function tooLong(input: unknown): string | undefined {
   return n > LIMIT ? longReason(n) : undefined;
 }
 
-/** G3's reason, one line (§15.13). */
-export const noTextReason = "cpd: write what you ask about in the chat as text, then ask again; refused: no visible text in this turn";
-
 /** G4's reason, one line (§15.13). */
 export const unseenReason = (labels: string[]): string =>
-  `cpd: write what you ask about in the chat as text, then ask again; refused: ${labels.join(", ")} not in the visible chat`;
+  `cpd: state what you ask about in the question itself (its text, or an option's description or preview); refused: ${labels.join(", ")} stated nowhere`;
 
 type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === "object" && v !== null;
@@ -85,35 +82,21 @@ function textOf(content: unknown, stopAt?: (b: Rec) => boolean): string[] {
   return out;
 }
 
-/** G3 and G4: the reason when the call cites no visible text this turn, or labels the chat never showed; else undefined. `branch` is the session's branch, `toolCallId` the call's id. */
+/** G4: the reason when a cited label is stated nowhere (not in the call's text, not in the visible chat); else undefined. `branch` is the session's branch, `toolCallId` the call's id. */
 export function unseen(input: unknown, toolCallId: string, branch: readonly unknown[]): string | undefined {
   const isCall = (b: Rec) => b.type === "toolCall" && b.id === toolCallId;
   let at = branch.findLastIndex((e) => isRec(e) && isRec(e.message) && Array.isArray(e.message.content) && e.message.content.some((b) => isRec(b) && isCall(b)));
   if (at < 0) at = branch.length;
-  let turn = 0;
-  const visible: string[] = [];
-  let turnText = false;
+  const visible: string[] = [...texts(input)];
   for (let i = 0; i < at + 1 && i < branch.length; i++) {
     const e = branch[i];
     if (!isRec(e)) continue;
     const m = isRec(e.message) ? e.message : undefined;
-    const stop = i === at ? isCall : undefined;
-    let parts: string[] = [];
     if (e.type === "custom_message") {
-      if (i < at) turn = i + 1;
-      if (e.display === true) parts = textOf(e.content);
-    } else if (m?.role === "user") {
-      if (i < at) turn = i + 1;
-      parts = textOf(m.content);
-    } else if (m?.role === "toolResult") parts = textOf(m.content);
-    else if (m?.role === "assistant") {
-      parts = textOf(m.content, stop);
-      if (i >= turn && parts.some((p) => p.trim() !== "")) turnText = true;
-    }
-    visible.push(...parts);
-    if (i < turn) turnText = false;
+      if (e.display === true) visible.push(...textOf(e.content));
+    } else if (m?.role === "user" || m?.role === "toolResult") visible.push(...textOf(m.content));
+    else if (m?.role === "assistant") visible.push(...textOf(m.content, i === at ? isCall : undefined));
   }
-  if (!turnText) return noTextReason;
   const shown = new Set<string>();
   for (const v of visible) for (const m of v.matchAll(/\b[A-Z][0-9]+\b/g)) shown.add(m[0]);
   const missing = texts(input).flatMap(labelsIn).filter((l, i, a) => a.indexOf(l) === i && !shown.has(l));

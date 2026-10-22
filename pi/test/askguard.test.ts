@@ -166,104 +166,115 @@ test("before session_start no call is refused", async (t) => {
   assert.equal(await call(f, [ask(2000, 0)]), undefined);
 });
 
-// ---- G3 and G4 (hs-d548): a question cites only what the User has seen ----
+// ---- G4 (hs-d553, superseding hs-d548 part 1 and G3): a question states what it asks about ----
 
-const G34 = (tail: string) => `cpd: write what you ask about in the chat as text, then ask again; refused: ${tail}`;
-const G3 = G34("no visible text in this turn");
-const G4 = (labels: string) => G34(`${labels} not in the visible chat`);
+const G4 = (labels: string) => `cpd: state what you ask about in the question itself (its text, or an option's description or preview); refused: ${labels} stated nowhere`;
 const labelled = (question: string, o: Partial<Option> & { header?: string } = {}): Question => ({
   question,
   header: o.header ?? "h",
   options: [{ label: o.label ?? "x", description: o.description ?? "d", ...(o.preview === undefined ? {} : { preview: o.preview }) }],
 });
 const ask1 = (f: Fixture, q: Question, branch: unknown[]) => call(f, [q], "ask_user_question", branch);
+/** hs-n425: prose next to a tool call is stored as thinking, so the message is [thinking, toolCall] only. */
+const THINKING_ONLY = [assistant(think("A long thought."))];
 
-test("G3: a turn with no visible text before the call is refused", async (t) => {
+test("G3 is gone: a turn with no visible text before the call is not refused", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  assert.deepEqual(await ask1(f, ask(10, 5), [assistant()]), { block: true, reason: G3 });
-  assert.deepEqual(await ask1(f, ask(10, 5), [assistant(say("Earlier turn.")), user("ok"), assistant()]), { block: true, reason: G3 });
-  assert.equal(await ask1(f, ask(10, 5), [user("ok"), assistant(say("Now."))]), undefined);
+  assert.equal(await ask1(f, ask(10, 5), [assistant()]), undefined);
+  assert.equal(await ask1(f, ask(10, 5), [assistant(say("Earlier turn.")), user("ok"), assistant()]), undefined);
+  assert.equal(await ask1(f, ask(10, 5), [assistant(say("Old turn text.")), custom("Event: job merged"), assistant(think("only thinking"))]), undefined);
 });
 
-test("G3: a turn whose only text is thinking is refused", async (t) => {
+test("G3 is gone: a turn whose only text is thinking is not refused", async (t) => {
   const f = await started("manager");
   t.after(() => f.close());
-  assert.deepEqual(await ask1(f, ask(10, 5), [assistant(think("A long thought."))]), { block: true, reason: G3 });
+  assert.equal(await ask1(f, ask(10, 5), THINKING_ONLY), undefined);
 });
 
-test("G3: text earlier in the same assistant message passes", async (t) => {
+test("G4: a label the call itself states needs no visible text", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  assert.equal(await ask1(f, ask(10, 5), [assistant(think("hm"), say("Visible."))]), undefined);
-  assert.deepEqual(await ask1(f, ask(10, 5), [assistant(think("hm"))]), { block: true, reason: G3 }, "control: no text");
+  assert.equal(await ask1(f, labelled("Take A4?"), THINKING_ONLY), undefined);
+  assert.equal(await ask1(f, labelled("q", { description: "see C3", preview: "uses D4" }), [assistant()]), undefined);
 });
 
-test("G3: a turn started by a cpd custom message counts as its own turn", async (t) => {
+test("G4: a label shown before in assistant text passes; one stated nowhere is refused", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  const branch = [assistant(say("Old turn text.")), custom("Event: job merged"), assistant(think("only thinking"))];
-  assert.deepEqual(await ask1(f, ask(10, 5), branch), { block: true, reason: G3 });
-  assert.equal(await ask1(f, ask(10, 5), [...branch.slice(0, 2), assistant(say("Reacting."))]), undefined);
+  // A1 is stated in a range's end only when the call states it; a middle member must be shown elsewhere.
+  assert.equal(await ask1(f, labelled("Pick A1–A3?"), [assistant(say("A2 is the middle one."))]), undefined);
+  assert.deepEqual(await ask1(f, labelled("Pick A1–A3?"), [assistant(say("Something else."))]), { block: true, reason: G4("A2") });
 });
 
-test("G4: a label shown before in assistant text passes", async (t) => {
-  const f = await started("lead");
-  t.after(() => f.close());
-  assert.equal(await ask1(f, labelled("Take A1?"), [assistant(say("A1 is the first option."))]), undefined);
-  assert.deepEqual(await ask1(f, labelled("Take A1?"), [assistant(say("Something else."))]), { block: true, reason: G4("A1") });
-});
-
-test("G4: a label only in thinking is refused, naming it", async (t) => {
+test("G4: a label only in thinking is not shown by it", async (t) => {
   const f = await started("manager");
   t.after(() => f.close());
-  const branch = [assistant(think("A1 and D2 are the options."), say("I considered it."))];
-  assert.deepEqual(await ask1(f, labelled("Choose D2 or A1?"), branch), { block: true, reason: G4("D2, A1") });
-  const earlier = [assistant(think("D3"), say("Seen A1.")), user("go"), assistant(say("Seen D2."))];
-  assert.deepEqual(await ask1(f, labelled("A1, D2, D3?"), earlier), { block: true, reason: G4("D3") });
+  const branch = [assistant(think("D2 and D3."), say("I considered it."))];
+  assert.deepEqual(await ask1(f, labelled("Choose D1–D4?"), branch), { block: true, reason: G4("D2, D3") });
 });
 
 test("G4: a label shown in a user message or a tool result passes", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  const branch = [user("I prefer B7."), assistant(say("Noted.")), result("C12 failed"), assistant(say("Checking."))];
-  assert.equal(await ask1(f, labelled("B7 or C12?"), branch), undefined);
-  assert.deepEqual(await ask1(f, labelled("B7 or C13?"), branch), { block: true, reason: G4("C13") });
+  const branch = [user("I prefer B2."), assistant(say("Noted.")), result("B3 failed"), assistant(say("Checking."))];
+  assert.equal(await ask1(f, labelled("B1–B4?"), branch), undefined);
+  assert.deepEqual(await ask1(f, labelled("B1–B5?"), branch), { block: true, reason: G4("B4") });
 });
 
-test("G4: a range D1–D5 needs each of D1 to D5 shown", async (t) => {
+test("G4: a custom message shown counts only with display true", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  const only = [assistant(say("Options D1–D5 are listed."))];
-  assert.deepEqual(await ask1(f, labelled("Pick D1–D5?"), only), { block: true, reason: G4("D2, D3, D4") }, "the ends of a range in the chat show only themselves");
-  assert.deepEqual(await ask1(f, labelled("Pick D1-D5?"), [assistant(say("Seen D1."))]), { block: true, reason: G4("D2, D3, D4, D5") }, "hyphen range");
-  assert.equal(await ask1(f, labelled("Pick D1–D3?"), [assistant(say("D1, D2 and D3."))]), undefined);
-  assert.deepEqual(await ask1(f, labelled("Pick D2 and D1–D3?"), [assistant(say("Seen D3."))]), { block: true, reason: G4("D2, D1") });
+  assert.equal(await ask1(f, labelled("C1–C3?"), [custom("C2 here"), assistant()]), undefined);
+  assert.deepEqual(await ask1(f, labelled("C1–C3?"), [custom("C2 here", false), assistant()]), { block: true, reason: G4("C2") });
+});
+
+test("G4: a range D1–D5 whose middle members are stated nowhere is refused, naming D2, D3, D4", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  const r = await ask1(f, labelled("Pick D1–D5?"), VISIBLE);
+  assert.deepEqual(r, { block: true, reason: G4("D2, D3, D4") });
+  assert.equal(r?.reason?.includes("\n"), false);
+  assert.deepEqual(await ask1(f, labelled("Pick D1-D5?"), THINKING_ONLY), { block: true, reason: G4("D2, D3, D4") }, "hyphen range");
+});
+
+test("G4: a range D1–D5 passes when D2, D3 and D4 are each stated in the call", async (t) => {
+  const f = await started("lead");
+  t.after(() => f.close());
+  const q = labelled("Pick D1–D5?", { label: "D2", description: "D3 is the default", preview: "D4 shown" });
+  assert.equal(await ask1(f, q, THINKING_ONLY), undefined);
+});
+
+test("G4: range members shown in the visible chat pass and the rest are named", async (t) => {
+  const f = await started("manager");
+  t.after(() => f.close());
+  const branch = [user("D2 please."), assistant(say("D3 is odd."))];
+  assert.deepEqual(await ask1(f, labelled("Pick D1–D5?"), branch), { block: true, reason: G4("D4") });
+  assert.deepEqual(await ask1(f, labelled("Pick D1–D5?"), [user("D2 please.")]), { block: true, reason: G4("D3, D4") });
 });
 
 test("G4: labels in headers, option labels, descriptions and previews count", async (t) => {
   const f = await started("manager");
   t.after(() => f.close());
   const branch = [assistant(say("Nothing relevant."))];
-  assert.deepEqual(await ask1(f, labelled("q", { header: "About A1" }), branch), { block: true, reason: G4("A1") });
-  assert.deepEqual(await ask1(f, labelled("q", { label: "B2" }), branch), { block: true, reason: G4("B2") });
-  assert.deepEqual(await ask1(f, labelled("q", { description: "see C3" }), branch), { block: true, reason: G4("C3") });
-  assert.deepEqual(await ask1(f, labelled("q", { preview: "uses D4" }), branch), { block: true, reason: G4("D4") });
+  assert.deepEqual(await ask1(f, labelled("q", { header: "About A1–A3" }), branch), { block: true, reason: G4("A2") });
+  assert.deepEqual(await ask1(f, labelled("q", { label: "B1–B3" }), branch), { block: true, reason: G4("B2") });
+  assert.deepEqual(await ask1(f, labelled("q", { description: "see C1–C3" }), branch), { block: true, reason: G4("C2") });
+  assert.deepEqual(await ask1(f, labelled("q", { preview: "uses D1–D3" }), branch), { block: true, reason: G4("D2") });
 });
 
-test("G3 and G4: a Worker is unaffected", async (t) => {
+test("G4: a Worker is unaffected", async (t) => {
   const w = await started("worker");
   t.after(() => w.close());
-  assert.equal(await ask1(w, labelled("Take Z9?"), [assistant()]), undefined);
+  assert.equal(await ask1(w, labelled("Take Z1–Z3?"), [assistant()]), undefined);
   const l = await started("lead");
   t.after(() => l.close());
-  assert.deepEqual(await ask1(l, labelled("Take Z9?"), [assistant()]), { block: true, reason: G3 }, "control: a Lead is refused");
+  assert.deepEqual(await ask1(l, labelled("Take Z1–Z3?"), [assistant()]), { block: true, reason: G4("Z2") }, "control: a Lead is refused");
 });
 
-test("G2 runs before G3 and G4", async (t) => {
+test("G2 runs before G4", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  assert.deepEqual(await ask1(f, ask(2000, 0), [assistant()]), { block: true, reason: G2(2000) });
-  assert.deepEqual(await ask1(f, labelled("A1 " + "q".repeat(2000)), [assistant(say("none"))]), { block: true, reason: G2(2006) });
-  assert.deepEqual(await ask1(f, ask(10, 5), [assistant()]), { block: true, reason: G3 }, "control: short, G3");
+  assert.deepEqual(await ask1(f, labelled("D1–D5 " + "q".repeat(2000)), [assistant(say("none"))]), { block: true, reason: G2(2009) });
+  assert.deepEqual(await ask1(f, labelled("D1–D5"), [assistant(say("none"))]), { block: true, reason: G4("D2, D3, D4") }, "control: short, G4");
 });

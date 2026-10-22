@@ -719,14 +719,16 @@ test("a PR is a substantial deliverable: cpd-lead gets parallelism from Jobs and
   assert.match(manager, /small follow-up goes into its area's existing PR, not a new one/);
 });
 
-test("both skills: decisions are ask rounds at any phase, G2 limit stays and G3/G4 guards added, plannotator is for long documents", () => {
+test("both skills: decisions are ask rounds at any phase, G2 limit stays and G4 guard enforced, plannotator is for long documents", () => {
   const lead = skillFiles("cpd-lead")[0]!.text;
   const manager = skillFiles("cpd-manager")[0]!.text;
   for (const text of [lead, manager]) {
     assert.match(text, /every open decision goes to the User as an ask round/);
     assert.match(text, /enforces G2.*1500-character limit/);
-    assert.match(text, /G3 and G4/);
-    assert.match(text, /First write what you ask about in the chat as text/);
+    assert.match(text, /and G4/);
+    assert.doesNotMatch(text, /G3/);
+    assert.match(text, /State what you ask about in the question itself/);
+    assert.doesNotMatch(text, /First write what you ask about in the chat/);
     assert.doesNotMatch(text, /refuses `ask_user_question` for a Lead whose Plan has draft/);
   }
   const approving = section(lead, "### Approving");
