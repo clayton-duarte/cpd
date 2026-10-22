@@ -45,7 +45,7 @@ const TAIL_LINES: usize = 20;
 fn prompt(limit: usize) -> String {
     format!(
         "The text above is the last two turns of a conversation between a user and an AI agent. \
-Write a short reminder of what was last happening in it, not what it started with. \
+Write a short title that reminds what was last happening in it, not what it started with. \
 Answer with one line, `TITLE: <what was last happening, at most {limit} characters>`, and nothing else: plain text, no quotes, no sentences."
     )
 }

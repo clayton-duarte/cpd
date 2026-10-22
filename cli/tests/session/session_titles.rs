@@ -162,7 +162,7 @@ fn pi_runs_once_on_the_lowest_effort_of_h_with_no_session_and_no_extensions_and_
     assert_eq!(argv[..6], ["--print", "--no-session", "--no-extensions", "--model", "p/haiku:low", "--"], "{argv:?}");
     assert_eq!(argv.len(), 7, "one prompt after `--`: {argv:?}");
     let prompt = &argv[6];
-    for asked in ["title", "60 characters", "last happening", "one line", "no quotes"] {
+    for asked in ["title", "at most 60 characters", "last happening", "one line", "no quotes"] {
         assert!(prompt.contains(asked), "the prompt asks for {asked:?}: {prompt}");
     }
     let pi_env = fs::read_to_string(env.root().join("env.txt")).unwrap();
