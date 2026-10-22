@@ -33,6 +33,8 @@ mod folds;
 mod inbox;
 #[cfg(test)]
 mod inbox_distill;
+#[cfg(test)]
+mod inbox_indent;
 mod kinds;
 #[cfg(test)]
 mod look;

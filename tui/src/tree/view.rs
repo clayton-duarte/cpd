@@ -1967,9 +1967,9 @@ mod tests {
         y as u16
     }
 
-    /// An item row at 43 columns: the margin, the fold's `│`, two spaces, the tier glyph, a space, the label, the age ending at the last column of the inner area.
+    /// An item row at 43 columns: the margin, the fold's `│`, one space, the tier glyph, a space, the label, the age ending at the last column of the inner area.
     fn item_row(glyph: &str, label: &str, age: &str) -> String {
-        format!(" │  {glyph} {label}{}{age}", " ".repeat(41 - 5 - label.chars().count() - age.chars().count()))
+        format!(" │ {glyph} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
     }
 
     /// The empty Inbox's one closing row (hs-d487): the margin, `╰`, U+F005A, the words.
@@ -2076,12 +2076,12 @@ mod tests {
         let mut view = with_inbox(1);
         view.tree.inbox[0].label = "f-blocked: a very long question that cannot fit the row".into();
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        let label = "f-blocked: a very long question…"; // 41 - 5 (`│`, two spaces, the glyph, a space) - 1 (space) - 3 (age) = 32 columns
-        assert_eq!(label.chars().count(), 32);
-        assert_eq!(rows[13], format!(" │  {} {label} 42s", palette::TIER_RED));
-        view.tree.inbox[0].label = "x".repeat(32);
+        let label = "f-blocked: a very long question …"; // 41 - 4 (`│`, one space, the glyph, a space) - 1 (space) - 3 (age) = 33 columns
+        assert_eq!(label.chars().count(), 33);
+        assert_eq!(rows[13], format!(" │ {} {label} 42s", palette::TIER_RED));
+        view.tree.inbox[0].label = "x".repeat(33);
         let rows = text_rows(&draw_now(&mut view, 43, 16));
-        assert_eq!(rows[13], format!(" │  {} {} 42s", palette::TIER_RED, "x".repeat(32)), "a label that fits is not cut");
+        assert_eq!(rows[13], format!(" │ {} {} 42s", palette::TIER_RED, "x".repeat(33)), "a label that fits is not cut");
     }
 
     #[test]
@@ -2106,10 +2106,10 @@ mod tests {
         let rows = text_rows(&buf);
         let muted = palette::color(palette::Meaning::Nothing);
         for (y, glyph, colour) in [(11, palette::TIER_RED, palette::Meaning::Failed), (12, palette::TIER_RED, palette::Meaning::Failed), (13, palette::TIER_YELLOW, palette::Meaning::Review)].map(|(y, g, m)| (y, g, palette::color_clickable(m))) {
-            assert!(rows[y].starts_with(&format!(" │  {glyph} ")), "the glyph in row {y}: {rows:?}");
+            assert!(rows[y].starts_with(&format!(" │ {glyph} ")), "the glyph in row {y}: {rows:?}");
             assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted), "the branch of row {y}");
-            assert_eq!((buf[(4, y as u16)].symbol(), buf[(4, y as u16)].fg), (glyph, colour), "the glyph of row {y}");
-            assert_ne!(buf[(6, y as u16)].fg, muted, "the label of row {y} is not muted");
+            assert_eq!((buf[(3, y as u16)].symbol(), buf[(3, y as u16)].fg), (glyph, colour), "the glyph of row {y}");
+            assert_ne!(buf[(5, y as u16)].fg, muted, "the label of row {y} is not muted");
         }
         assert_eq!(buf[(40, 11)].fg, muted, "the age");
     }
@@ -2201,7 +2201,7 @@ mod tests {
     fn glyph(view: &mut View, row: u16, frame: usize) -> String {
         let mut terminal = Terminal::new(TestBackend::new(43, 16)).unwrap();
         terminal.draw(|f| view.draw_at(f, frame, now())).unwrap();
-        terminal.backend().buffer()[(4, row)].symbol().to_owned()
+        terminal.backend().buffer()[(3, row)].symbol().to_owned()
     }
 
     #[test]
