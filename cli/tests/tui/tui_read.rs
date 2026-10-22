@@ -1121,7 +1121,7 @@ fn a_worker_is_its_attempt_session_and_escalations() {
     assert_eq!((done.merged_sha.as_deref(), ended.session.is_none()), (Some("abc123"), true));
     assert_eq!((ended.escalations[0].status, ended.escalations[0].answer.as_deref()), (EscalationStatus::Answered, Some("Use v2.")));
     let merging = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("b-a1"))).unwrap();
-    assert_eq!((merging.attempt.as_ref().unwrap().submitted_sha.as_deref(), merging.attempt.unwrap().status), (Some("def456"), AttemptStatus::Merging));
+    assert_eq!((merging.attempt.as_ref().unwrap().submitted_sha.as_deref(), merging.attempt.as_ref().unwrap().status), (Some("def456"), AttemptStatus::Merging));
     let expired = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("e-a1"))).unwrap();
     assert_eq!(expired.escalations[0].status, EscalationStatus::Expired);
     assert!(expired.escalations[0].expired_at.is_some());
@@ -1140,7 +1140,7 @@ fn the_latest_attempt_of_a_job_is_the_one_with_the_highest_number_and_a_job_that
 #[test]
 fn an_unknown_plan_or_attempt_is_not_found() {
     let (_env, mut store) = fixture();
-    assert_eq!(read::worker(&mut store, &plan("nope"), &attempt("c-a2")).unwrap_err().code(), ErrorCode::PlanNotFound);
+    assert_eq!(read::worker(&mut store, &plan("nope"), &Target::Attempt(attempt("c-a2"))).unwrap_err().code(), ErrorCode::PlanNotFound);
     assert_eq!(read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a9"))).unwrap_err().code(), ErrorCode::AttemptNotFound);
 }
 
@@ -1162,7 +1162,7 @@ fn every_read(store: &mut Store) {
     read::flow(store, &plan("ship")).unwrap();
     read::chat_slot(store).unwrap();
     read::widgets(store, 3, 20).unwrap();
-    read::worker(store, &plan("ship"), &attempt("c-a2")).unwrap();
+    read::worker(store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
 }
 
 #[test]
@@ -1270,7 +1270,7 @@ fn every_read_runs_the_same_statements_on_a_large_store_as_on_a_small_one() {
             "worker",
             &|s, large| {
                 let (p, a) = if large { ("p3x3", "j2-a1") } else { ("ship", "c-a2") };
-                drop(read::worker(s, &plan(p), &attempt(a)).unwrap());
+                drop(read::worker(s, &plan(p), &Target::Attempt(attempt(a))).unwrap());
             },
         ),
     ];
