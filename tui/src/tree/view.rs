@@ -2954,7 +2954,7 @@ mod tests {
     fn a_context_with_no_row_at_all_is_its_title_and_the_terminator() {
         let tree = super::super::fixture::tree(vec![super::super::fixture::context("gamma", vec![])]);
         let rows = drawn(&mut View::new(tree, true), 44, 10);
-        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰─".to_owned()]);
+        assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰\u{F005A}".to_owned()]);
     }
 
     #[test]
