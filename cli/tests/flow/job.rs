@@ -331,8 +331,8 @@ fn add_refusals_write_nothing() {
     assert_eq!(e["details"]["needs"], json!([{"key": "x", "status": "failed"}, {"key": "y", "status": "cancelled"}]));
     // The flags.
     let spec = spec_file(&env);
-    let e = refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S0", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
-    assert_eq!(e["details"]["efforts"], json!([1, 2, 3, 4, 5]));
+    let e = refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "H4", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
+    assert_eq!(e["details"]["efforts"], json!([0, 1, 2, 3]));
     refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "H4", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
     refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S9", "--spec", &spec, "--plan", "pl"]), "tier_invalid", 2);
     refused(&env.cpd(&["job", "add", "k", "--title", "T", "--tier", "S2", "--spec", "/no/such/file", "--plan", "pl"]), "file_unreadable", 2);
@@ -471,7 +471,7 @@ fn edit_refusals_write_nothing() {
     assert_eq!(e["details"]["cycle"], json!(["a", "c", "b", "a"]));
     refused(&job(&env, &["edit", "a", "--needs", "b"], "pl"), "dependency_cycle", 3);
     refused(&job(&env, &["edit", "a", "--needs", "a"], "pl"), "dependency_cycle", 3);
-    refused(&job(&env, &["edit", "b", "--tier", "S0"], "pl"), "tier_invalid", 2);
+    refused(&job(&env, &["edit", "b", "--tier", "S6"], "pl"), "tier_invalid", 2);
     refused(&job(&env, &["edit", "b", "--spec", "/no/such/file"], "pl"), "file_unreadable", 2);
     assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
     assert_eq!(env.query::<i64>("SELECT count(*) FROM dependencies"), 2);
@@ -637,8 +637,8 @@ fn retry_refusals_write_nothing() {
     refused(&job(&env, &["retry", "c", "--tier", "S2"], "pl"), "job_not_failed", 3);
     refused(&job(&env, &["retry", "ghost", "--tier", "S2"], "pl"), "job_not_found", 4);
     refused(&job(&env, &["retry", "b", "--tier", "S2"], "nope"), "plan_not_found", 4);
-    let e = refused(&job(&env, &["retry", "a", "--tier", "S0"], "pl"), "tier_invalid", 2);
-    assert_eq!(e["details"]["efforts"], json!([1, 2, 3, 4, 5]));
+    let e = refused(&job(&env, &["retry", "a", "--tier", "H4"], "pl"), "tier_invalid", 2);
+    assert_eq!(e["details"]["efforts"], json!([0, 1, 2, 3]));
     refused(&job(&env, &["retry", "a", "--tier", "Z1"], "pl"), "tier_invalid", 2);
     refused(&job(&env, &["retry", "a"], "pl"), "usage", 2);
     assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
