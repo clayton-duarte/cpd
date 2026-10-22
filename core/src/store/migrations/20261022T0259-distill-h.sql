@@ -1,4 +1,4 @@
--- cpd-migration: breaking after 40
+-- cpd-migration: breaking after 41
 -- hs-d555: the Inbox kind `distill-tier` goes (the distill ladder stops at H3, nothing triggers it): its rows are deleted and `inbox_items` is rebuilt without the kind in its check, as `distill-tier` added it.
 CREATE TABLE inbox_items_new (
   id            INTEGER PRIMARY KEY,
