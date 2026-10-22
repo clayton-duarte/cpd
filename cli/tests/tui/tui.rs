@@ -126,9 +126,9 @@ fn assert_layout(panes: &[Pane]) {
 /// and `cpd-work` none (contract §6.1).
 fn assert_status_line(env: &TestEnv) {
     let shown = |session: &str, format: &str| tmux_out(env, &["display", "-p", "-t", &format!("={session}:"), format]);
-    assert_eq!(shown("cpd", "#{status}").trim(), "on");
+    assert_eq!(shown("cpd", "#{status}").trim(), "2");
     assert_eq!(tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-style"]).trim(), "default");
-    let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
+    let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[1]"]);
     assert_eq!(format.trim_end_matches('\n'), STATUS_FORMAT);
     for range in [
         "#[range=user|reset]",
@@ -410,7 +410,7 @@ fn tui_removes_an_old_statusbar_pane_then_resets_the_layout() {
     let full = main_panes(&env);
     // A main built by an older cpd: the StatusBar pane at the bottom, the session without its status line, and the
     // sizes changed by the User.
-    for option in ["status", "status-style", "status-format[0]"] {
+    for option in ["status", "status-style", "status-format[0]", "status-format[1]"] {
         tmux_out(&env, &["set", "-u", "-t", "=cpd:", option]);
     }
     let bar = tmux_out(&env, &["split-window", "-d", "-v", "-f", "-l", "1", "-t", &full[0].id, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
@@ -565,8 +565,8 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     });
     // The status line is the client's last row: the three buttons at the left, one space apart.
     wait_until("the buttons", || outer.screen().lines().nth(29).is_some_and(|l| l.starts_with(&buttons())));
-    // It takes one row: the window has the other 29.
-    assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{window_height}"]).trim(), "29");
+    // It takes one row: the window has the other 28.
+    assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{window_height}"]).trim(), "28");
     let chat = view(&main_panes(&env), "chat").clone();
     let actions = || env.calls("cpd").into_iter().filter(|c| c.get(1).map(String::as_str) == Some("action")).collect::<Vec<_>>();
 
@@ -1089,7 +1089,7 @@ fn the_status_line_starts_and_ends_with_one_grey_line_cell_and_joins_its_pills_w
         assert!(!line.contains("\u{e0b4} \u{e0b6}"), "no space between two pills: {line:?}");
         // The leading `─`, the joins and the fill are colour 8 (bright black, SGR 90), the pills' caps too.
         assert!(styled.contains("\x1b[90m\u{2500}\x1b[97m\u{e0b6}"), "the leading line cell, grey, then a button's white cap: {styled:?}");
-        assert!(styled.trim_end().ends_with("\x1b[37m\x1b[49m\u{e0b4}\x1b[90m\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
+        assert!(styled.trim_end().ends_with("\x1b[90m\x1b[49m\u{e0b4}\u{2500}"), "the pill's cap, then the closing line cell, grey: {styled:?}");
     }
 }
 
@@ -1103,7 +1103,7 @@ fn the_status_line_fill_is_grey_and_spans_the_free_width_of_any_client() {
         let fill = "\u{2500}".repeat(usize::from(width) - used);
         // The last button's cap, the fill (the join is its first cell), then the workers' pill.
         assert!(line.contains(&format!("\u{e0b4}{fill}\u{e0b6}")), "{line:?}");
-        assert!(styled.contains(&format!("\x1b[90m{fill}\x1b[37m\u{e0b6}")), "{styled:?}");
+        assert!(styled.contains(&format!("\x1b[90m{fill}\u{e0b6}")), "{styled:?}");
     }
 }
 

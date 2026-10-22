@@ -168,7 +168,7 @@ impl Fx {
     fn merge(&self, attempt: &AttemptId) -> End {
         let config = Config::load(&self.home).unwrap();
         let model = |m: &str| TierModel { model: m.to_owned(), efforts: vec![0, 1, 2, 3, 4, 5] };
-        let catalog = Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku") };
+        let catalog = Catalog { pi_version: "1.2.0".to_owned(), o: model("p/opus"), s: model("p/sonnet"), h: model("p/haiku"), g: TierModel { model: "p/gemini".to_owned(), efforts: vec![] } };
         let ctx = Ctx { home: &self.home, config: &config, catalog: &catalog, source: "attempt run", metrics: &|_| None };
         merge::merge(&mut self.store(), &ctx, &plan(), attempt).unwrap().end
     }

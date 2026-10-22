@@ -57,8 +57,8 @@ fn status_line_pills_follow_the_rule() {
         button("legend", cpd_core::host::tmux::LEGEND_GLYPH),
         button("logs", cpd_core::host::tmux::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
-        pill("colour7", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
-        pill("colour7", "#{@cpd_version}"),
+        pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
+        pill("colour8", "#{@cpd_version}"),
     );
     assert_eq!(STATUS_FORMAT, want);
     for old in ["reverse", "colour236", "push-default", "pop-default"] {

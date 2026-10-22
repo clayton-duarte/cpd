@@ -100,7 +100,7 @@ string_enum! {
 
 string_enum! {
     /// A Plan review's status.
-    ReviewStatus { Pending = "pending", Approved = "approved", Rejected = "rejected" }
+    ReviewStatus { Pending = "pending", Approved = "approved", Rejected = "rejected", Superseded = "superseded" }
 }
 
 string_enum! {

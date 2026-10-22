@@ -113,6 +113,8 @@ pub struct Tiers {
     pub s: String,
     #[serde(rename = "H")]
     pub h: String,
+    #[serde(rename = "G")]
+    pub g: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -274,10 +276,10 @@ impl Config {
         // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
         let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
         let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
-        let context_distill_tier = r.get("context_distill_tier", Tier::parse("H0").expect("a valid Tier"), |v| {
+        let context_distill_tier = r.get("context_distill_tier", Tier::parse("GX").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
-            if tier.letter() != Letter::H || tier.effort() > Tier::MAX_EFFORT {
-                return Err(format!("must be an H Tier with effort 0-4, not {tier}: an auxiliary run uses only the H tier and never effort 5, to keep cost down (hs-d506)"));
+            if tier.letter() != Letter::G {
+                return Err(format!("must be GX, not {tier}: an auxiliary run uses only GX, to keep cost down (hs-d562)"));
             }
             Ok(tier)
         })?;
@@ -311,6 +313,7 @@ impl Config {
             o: r.get("tiers.O", "github-copilot/claude-opus-5.5".into(), |v| model_ref(text_of(&v)?))?,
             s: r.get("tiers.S", "github-copilot/claude-sonnet-5.5".into(), |v| model_ref(text_of(&v)?))?,
             h: r.get("tiers.H", "github-copilot/claude-haiku-4.5".into(), |v| model_ref(text_of(&v)?))?,
+            g: r.get("tiers.G", "github-copilot/gemini-3.8-flash".into(), |v| model_ref(text_of(&v)?))?,
         };
         let positive = |r: &mut Reader, key: &str, default: u32| r.get(key, default, |v| int(v, 1, u32::MAX));
         let timeouts = Timeouts {
@@ -492,6 +495,9 @@ const KNOWN_SECTIONS: [&str; 6] = ["tiers", "timeouts", "watch", "inbox", "event
 /// A Lead's or the Manager's Tier: any letter, but never effort 5 (hs-d506).
 fn leader_tier(value: &Value) -> Result<Tier, String> {
     let tier = Tier::parse(text_of(value)?).map_err(|e| e.message().to_owned())?;
+    if tier.letter() == Letter::G {
+        return Err("must not be a G Tier, not GX: a Lead or the Manager is never on G (hs-d562)".to_owned());
+    }
     if tier.effort() > Tier::MAX_EFFORT {
         return Err(format!("must have effort 0-4, not {tier}: no agent uses effort 5, to keep cost down (hs-d506)"));
     }

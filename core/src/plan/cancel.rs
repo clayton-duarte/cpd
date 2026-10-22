@@ -12,13 +12,13 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::archive::{Objects, refuse_chat_slot};
-use super::{CancelArgs, Env, jobs};
+use super::{CancelArgs, Closing, Env, close_reviews, jobs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::host::Tmux;
 use crate::ids::{AttemptId, ContextId, PlanId, SessionId};
 use crate::output::Output;
-use crate::session::{archive_blocked, blockers, close_lead};
+use crate::session::close_lead;
 use crate::store::Store;
 use crate::{job, pr};
 
@@ -52,25 +52,27 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
 
     // 1. Check.
     refuse_chat_slot(&mut env.store, &tmux, &cockpit, &objects.sessions)?;
-    let reviews = env.store.read(|conn| {
-        Ok(blockers(conn, &[], std::slice::from_ref(&plan))?.into_iter().filter(|b| b.kind == "review").collect::<Vec<_>>())
+
+    // 2. Reviews: a pending Plan review is superseded, nobody decides it now.
+    let pending = env.store.read(|conn| {
+        Ok(conn.query_row("SELECT EXISTS (SELECT 1 FROM plan_reviews WHERE plan = ?1 AND status = 'pending')", [plan.as_str()], |r| r.get::<_, bool>(0))?)
     })?;
-    if !reviews.is_empty() {
-        return Err(archive_blocked(&reviews, None));
+    if pending {
+        env.store.write(COMMAND, |tx| close_reviews(tx, &plan, &Closing::Cancelled))?;
     }
 
-    // 2. Jobs.
+    // 3. Jobs.
     let cancelled = cancel_jobs(&mut env.store, &plan, reason)?;
     wait_until_ended(&mut env.store, &plan, WAIT, POLL)?;
 
-    // 3. Escalations.
+    // 4. Escalations.
     let expired = expire_escalations(&mut env.store, &plan, reason)?;
 
-    // 4. Pull requests.
+    // 5. Pull requests.
     let closed_prs = close_prs(&mut env, &plan)?;
 
-    // 5. tmux. The Lead that runs this command, if it is one of the Plan's, is closed last: its
-    // pane dies with the process, and the rows of step 6 are written by then.
+    // 6. tmux. The Lead that runs this command, if it is one of the Plan's, is closed last: its
+    // pane dies with the process, and the rows of step 7 are written by then.
     let own = env::var("CPD_SESSION").ok().and_then(|id| objects.sessions.iter().find(|s| s.as_str() == id).cloned());
     let mut closed = Vec::new();
     for id in objects.sessions.iter().filter(|id| Some(*id) != own.as_ref()) {
@@ -78,7 +80,7 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
         closed.extend(lead.pane.filter(|_| !lead.already));
     }
 
-    // 6. Rows.
+    // 7. Rows.
     let archived = archive_rows(&mut env.store, &plan, &objects.sessions)?;
     if let Some(id) = &own {
         let lead = close_lead(&mut env.store, &tmux, &cockpit, id, COMMAND)?;
@@ -93,7 +95,7 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-/// Step 2: `job cancel` for every Job that is not `merged` and not `cancelled`. The keys it newly
+/// Step 3: `job cancel` for every Job that is not `merged` and not `cancelled`. The keys it newly
 /// cancelled, or asked the engine to stop.
 fn cancel_jobs(store: &mut Store, plan: &PlanId, reason: &str) -> Result<Vec<String>, CpdError> {
     let all = store.read(|conn| jobs::load(conn, plan))?;
@@ -135,7 +137,7 @@ fn wait_until_ended(store: &mut Store, plan: &PlanId, limit: Duration, every: Du
     }
 }
 
-/// Step 3: each `open` Escalation of `plan` becomes `expired`. Whether any did.
+/// Step 4: each `open` Escalation of `plan` becomes `expired`. Whether any did.
 fn expire_escalations(store: &mut Store, plan: &PlanId, reason: &str) -> Result<bool, CpdError> {
     store.write(COMMAND, |tx| {
         let mut stmt = tx.prepare("SELECT id, attempt FROM escalations WHERE plan = ?1 AND status = 'open' ORDER BY asked_at, id")?;
@@ -154,7 +156,7 @@ fn expire_escalations(store: &mut Store, plan: &PlanId, reason: &str) -> Result<
     })
 }
 
-/// Step 4: `gh pr close` for each PR of `plan` in status `open` whose pull request is not `merged`
+/// Step 5: `gh pr close` for each PR of `plan` in status `open` whose pull request is not `merged`
 /// or `closed` as the poller last read it. The PR rows keep their status. `{pr, number}` of each.
 fn close_prs(env: &mut Env, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
     let open = env.store.read(|conn| {
@@ -172,7 +174,7 @@ fn close_prs(env: &mut Env, plan: &PlanId) -> Result<Vec<Value>, CpdError> {
     Ok(closed)
 }
 
-/// Step 6: `archived_at` on the Plan and its Sessions, one transaction, with the Events of
+/// Step 7: `archived_at` on the Plan and its Sessions, one transaction, with the Events of
 /// `plan archive` (§4.10). The objects it changed.
 fn archive_rows(store: &mut Store, plan: &PlanId, sessions: &[SessionId]) -> Result<Vec<Value>, CpdError> {
     store.write(COMMAND, |tx| {

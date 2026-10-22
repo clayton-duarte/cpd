@@ -68,7 +68,7 @@ fi
 "##;
 
 /// pi's catalog as the embedded module prints it (§9).
-const CATALOG: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium","high"]}"#;
+const CATALOG: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium","high"],"G":["off"]}"#;
 
 /// What gh knows of each pull request: `a1` is #11, `b` #12 and `a2` #13 (`pr create` finds the number by the Lead
 /// worktree it is run in). A pull request exists once `pr create` made it (`created-<number>` in `$FLAGS`) and is

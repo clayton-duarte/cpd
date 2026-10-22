@@ -409,7 +409,7 @@ fn an_unknown_plan_is_plan_not_found() {
 }
 
 #[test]
-fn a_pending_plan_review_blocks_and_nothing_is_written() {
+fn a_pending_plan_review_is_superseded_and_the_cancel_goes_on() {
     let env = TestEnv::new();
     setup(&env);
     fixture(
@@ -420,12 +420,30 @@ fn a_pending_plan_review_blocks_and_nothing_is_written() {
             "f".repeat(64)
         ),
     );
-    let before = env.query::<i64>("SELECT count(*) FROM events");
-    let error = refused(&env.cpd(&["plan", "cancel", "--plan", "pay"]), "archive_blocked", 3);
-    assert_eq!(error["details"]["blockers"][0]["kind"], "review");
-    assert_eq!(error["details"]["blockers"].as_array().unwrap().len(), 1, "a running Job does not block");
-    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), before);
-    assert_eq!(job_status(&env, "q"), "queued");
+    let before: i64 = env.query("SELECT max(id) FROM events");
+    cancel_with_engine(&env, &[]).ok();
+
+    // The review is closed, with one Event, before the Jobs are cancelled; the Job is cancelled and the Plan archived.
+    let (status, decided_at): (String, Option<String>) =
+        env.read(|c| c.query_row("SELECT status, decided_at FROM plan_reviews WHERE plan = 'pay' AND id = 'r1'", [], |r| Ok((r.get(0)?, r.get(1)?))));
+    assert_eq!(status, "superseded");
+    assert!(decided_at.is_some());
+    let closed = events(&env, "plan-review");
+    assert_eq!(closed.len(), 1, "{closed:?}");
+    assert_eq!((&closed[0]["data"]["review"], &closed[0]["data"]["status"]), (&json!("r1"), &json!("superseded")));
+    assert!(closed[0]["text"].as_str().unwrap().contains("cancelled"), "{}", closed[0]["text"]);
+    let first_cancel: i64 = env.query(&format!("SELECT min(id) FROM events WHERE kind LIKE 'job-cancel%' AND id > {before}"));
+    let review_event: i64 = env.query("SELECT id FROM events WHERE kind = 'plan-review'");
+    assert!(before < review_event && review_event < first_cancel, "the review closes first");
+    assert_eq!(job_status(&env, "q"), "cancelled");
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+
+    // A rerun is already done and writes nothing.
+    fixture(&env, "UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
+    let events_before = env.query::<i64>("SELECT count(*) FROM events");
+    let again = env.cpd(&["plan", "cancel", "--plan", "pay"]).ok();
+    assert_eq!(again["already"], true);
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), events_before);
 }
 
 #[test]

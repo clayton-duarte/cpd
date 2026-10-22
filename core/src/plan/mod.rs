@@ -46,6 +46,7 @@ pub use fingerprint::plan_fingerprint;
 pub use outline::Outline;
 pub use jobs::locked_fingerprint;
 pub use prs::{PrRow, Pull};
+pub use review::{Closing, close_reviews};
 pub use row::{Phase, PlanRow};
 pub(crate) use new::lead_message;
 

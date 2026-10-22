@@ -166,6 +166,7 @@ fn finish(tx: &WriteTxn<'_>, plan: &PlanId, key: &PrKey) -> Result<Option<Phase>
     if count("NOT IN ('merged', 'cancelled')")? > 0 || count("= 'merged'")? == 0 {
         return Ok(None);
     }
+    crate::plan::close_reviews(tx, plan, &crate::plan::Closing::Done)?;
     let done = tx.execute(
         "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND phase = 'deploy'",
         [plan.as_str()],

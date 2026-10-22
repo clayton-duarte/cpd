@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::process::{Child, Stdio};
 
 use common::{CPD, Run, pi_says, TestEnv, refused, wait_until};
-use cpd_core::config::Tier;
 use cpd_core::context::{By, Draft, PlanRef, Record};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, RecordId};
@@ -37,7 +36,7 @@ fn fx() -> Fx {
     )
     .unwrap();
     env.fake_pi(&pi_says(common::CURATES_ALL));
-    // pi's catalog.
+    // pi's catalog (G has the one level off).
     env.fake("node", &format!("echo '{LADDER_LEVELS}'"));
     let install = env.root().join("install");
     fs::create_dir_all(&install).unwrap();
@@ -63,13 +62,8 @@ fn ago(minutes: i64) -> String {
 }
 
 impl Fx {
-    /// Starts the Tier at H3 (hs-d560), for the tests of what one step does: the top of, the top of
-    /// the catalog's H efforts, and the catalog has no S effort above 0, which the S steps (S1..S4) need.
+    /// The run is one step long (hs-d562): the distiller starts on GX, its default, and never climbs.
     fn one_step(self) -> Fx {
-        self.env.fake("node", r#"echo '{"O":["off"],"S":["off"],"H":["off","low","medium","high"]}'"#);
-        let config = self.env.cpd_home().join("config.toml");
-        let text = fs::read_to_string(&config).unwrap().replacen("lead_pi_packages", "context_distill_tier = \"H3\"\nlead_pi_packages", 1);
-        fs::write(&config, text).unwrap();
         self
     }
 
@@ -231,7 +225,7 @@ fn the_context_is_required_and_must_exist() {
 
 // ---- pi's catalog (hs-d560: one step, no ladder) ----
 
-const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"]}"#;
+const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"],"G":["off"]}"#;
 
 // ---- The curating distill step (contract §4.6 "The distiller curates", "The distill run"; hs-d549, hs-d551) ----
 
@@ -885,18 +879,18 @@ fn a_cut_answer_with_no_complete_line_is_distill_failed() {
     assert_eq!(curated_ids(&fx), ["hs-n1"]);
 }
 
-// ---- One Tier, no ladder (hs-d560) ----
+// ---- The distiller on GX (hs-d562): contract §4.6, §9 ----
 
 #[test]
-fn the_distiller_runs_at_context_distill_tier() {
+fn the_distiller_runs_on_gx_with_the_g_model() {
     let fx = fx();
-    let config = fx.env.cpd_home().join("config.toml");
-    let text = fs::read_to_string(&config).unwrap().replacen("lead_pi_packages", "context_distill_tier = \"H2\"\nlead_pi_packages", 1);
-    fs::write(&config, text).unwrap();
     fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     let tiers: Vec<String> = fx.runs().iter().map(|r| r["tier"].as_str().unwrap().to_string()).collect();
-    assert_eq!(tiers, ["H2"]);
+    assert_eq!(tiers, ["GX"]);
+    let calls = fx.env.calls("pi");
+    let at = calls[0].iter().position(|a| a == "--model").expect("--model") + 1;
+    assert_eq!(calls[0][at], "github-copilot/gemini-3.8-flash:off", "{:?}", calls[0]);
 }
 
 #[test]

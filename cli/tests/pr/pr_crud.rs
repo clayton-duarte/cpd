@@ -1023,6 +1023,20 @@ impl Fx {
 // ---------- pr cancel after the lock ----------
 
 #[test]
+fn cancel_that_completes_the_plan_supersedes_the_pending_reviews() {
+    let fx = fx("dispatch");
+    fx.locked_pr("api", &fx.pay, "merged");
+    fx.locked_pr("gateci", &fx.web, "dispatch");
+    fx.job("a", "gateci", "cancelled");
+    insert_pending_reviews(&fx.env, "pay-1");
+
+    let out = fx.pr(&["cancel", "gateci"]).ok();
+    assert_eq!(out["pr"], json!({"key": "gateci", "status": "cancelled"}));
+    assert_eq!(out["phase"], "done");
+    assert_reviews_superseded_before_done(&fx.env, "pay-1");
+}
+
+#[test]
 fn a_locked_pr_with_only_cancelled_jobs_is_cancelled_and_the_plan_reaches_done() {
     let fx = fx("dispatch");
     fx.locked_pr("api", &fx.pay, "merged");
@@ -1534,4 +1548,47 @@ fn superseding_a_waiting_pr_before_the_lock_is_refused() {
     let writes = fx.writes();
     fx.refused(&fx.pr(&["cancel", "web", "--superseded-by", "api"]), "illegal_transition", 3, writes);
     assert_eq!(fx.env.query::<String>("SELECT status FROM prs WHERE key = 'web'"), "waiting");
+}
+
+/// Inserts pending reviews r1 and r2 of `plan` (fingerprints all `a` and all `b`).
+fn insert_pending_reviews(env: &TestEnv, plan: &str) {
+    env.sql(&format!(
+        "INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('{plan}', 'r1', 1, '{}', 'pending', 't');
+         INSERT INTO plan_reviews (plan, id, number, fingerprint, status, requested_at) VALUES ('{plan}', 'r2', 2, '{}', 'pending', 't');",
+        "a".repeat(64),
+        "b".repeat(64)
+    ));
+}
+
+/// Asserts r1 and r2 of `plan` are superseded and their `plan-review` Events come, in order, before the one `plan-done`.
+fn assert_reviews_superseded_before_done(env: &TestEnv, plan: &str) {
+    assert_eq!(env.query::<String>(&format!("SELECT phase FROM plans WHERE id = '{plan}'")), "done");
+    for (id, fingerprint) in [("r1", "a"), ("r2", "b")] {
+        assert_eq!(
+            env.query::<String>(&format!(
+                "SELECT status || '|' || (decided_at IS NOT NULL) || '|' || (feedback IS NULL) || '|' || fingerprint FROM plan_reviews WHERE plan = '{plan}' AND id = '{id}'"
+            )),
+            format!("superseded|1|1|{}", fingerprint.repeat(64)),
+            "{id}"
+        );
+    }
+    let reviews: Vec<String> = env.read(|c| {
+        let mut stmt = c.prepare(&format!("SELECT data FROM events WHERE plan = '{plan}' AND kind = 'plan-review' ORDER BY id"))?;
+        stmt.query_map([], |r| r.get::<_, String>(0))?.collect()
+    });
+    let reviews: Vec<Value> = reviews.iter().map(|d| serde_json::from_str(d).unwrap()).collect();
+    assert_eq!(
+        reviews,
+        [
+            json!({"review": "r1", "fingerprint": "a".repeat(64), "status": "superseded"}),
+            json!({"review": "r2", "fingerprint": "b".repeat(64), "status": "superseded"})
+        ]
+    );
+    assert_eq!(env.query::<i64>(&format!("SELECT count(*) FROM events WHERE plan = '{plan}' AND kind = 'plan-done'")), 1);
+    assert_eq!(
+        env.query::<i64>(&format!(
+            "SELECT (SELECT max(id) FROM events WHERE plan = '{plan}' AND kind = 'plan-review') < (SELECT id FROM events WHERE plan = '{plan}' AND kind = 'plan-done')"
+        )),
+        1
+    );
 }

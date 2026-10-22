@@ -221,15 +221,11 @@ fn message_text(line: &str) -> Option<String> {
     (!text.is_empty()).then(|| format!("{role}: {text}"))
 }
 
-/// Steps 3 and 4: pi on the lowest effort of Tier `H`, the conversation on stdin, in `run/titles/`;
+/// Steps 3 and 4: pi on Tier `GX` (the G model, no effort, hs-d562), the conversation on stdin, in `run/titles/`;
 /// its answer sanitised. pi's stderr is passed on to this run's stderr (the engine's log).
 fn run_pi(env: &Env, id: &SessionId, text: &str, limit: usize) -> Result<Title, CpdError> {
     let catalog = load_catalog(&env.config)?;
-    let effort = catalog.h.efforts.first().copied().ok_or_else(|| {
-        CpdError::new(ErrorCode::CatalogFailed, format!("pi's catalog lists no effort for {}.", catalog.h.model))
-            .with("model", catalog.h.model.clone())
-    })?;
-    let model = catalog.model_arg(Tier::new(Letter::H, effort).expect("a catalog effort is 0–5"))?;
+    let model = catalog.model_arg(Tier::new(Letter::G, 0).expect("GX"))?;
     let dir = run_dir(&env.home);
     fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
     let mut command = Command::new("pi");

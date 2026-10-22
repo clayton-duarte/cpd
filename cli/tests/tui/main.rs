@@ -7,6 +7,7 @@ mod common;
 mod bare;
 mod inbox;
 mod inbox_rules;
+mod tui_chat_pad;
 mod tui_checklist;
 mod tui_dialog;
 mod tui_history;
