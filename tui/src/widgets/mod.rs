@@ -154,7 +154,7 @@ fn show(
     let mut pane = Rect::default();
     // The PRs section's offset, in pull requests: in memory only, kept by a refresh and clamped by the drawing.
     let mut scroll = 0usize;
-    mark_merging(&mut prs, &crate::merge::marker::live(opener.home));
+    mark_merging(&mut prs, &crate::merge::marker::live(opener.home, &Default::default()));
     loop {
         // the spinner of a working Lead turns: a new frame redraws (commands.md §13.2)
         let frame = palette::frame(SystemTime::now());
@@ -232,7 +232,7 @@ fn show(
                 Some(next) => {
                     // A merge starts and ends with no Event of the store: the markers are read on each snapshot.
                     let mut next = next.unwrap_or_else(|| prs.clone());
-                    mark_merging(&mut next, &crate::merge::marker::live(opener.home));
+                    mark_merging(&mut next, &crate::merge::marker::live(opener.home, &Default::default()));
                     if next != prs {
                         prs = next;
                         redraw = true;

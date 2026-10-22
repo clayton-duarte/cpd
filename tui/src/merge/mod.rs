@@ -290,7 +290,7 @@ fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str
 /// exists, the action does nothing but log `merge already running`.
 pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
     let log = ViewLog::of(home, LOG);
-    if marker::live(home).contains(&pull.to_string()) {
+    if marker::live(home, &Default::default()).contains(&pull.to_string()) {
         // A merge of it runs: its marker is not this action's to touch, and the User is told nothing.
         let _ = log.append(&format!("merge already running {pull}"));
         return Ok(());
@@ -446,3 +446,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "action_d550.rs"]
+mod d550;

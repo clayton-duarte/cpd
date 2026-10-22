@@ -123,7 +123,7 @@ fn event_loop(
     // meanwhile. A popup returns when it closes, so it does not hold up the commands.
     let mut actions = Background::<Result<String, Failed>>::new();
     let mut popups = Background::<Result<(), String>>::new();
-    view.set_merging(crate::merge::marker::live(home));
+    view.set_merging(crate::merge::marker::live(home, &Default::default()));
     for line in view.keep_folds(FoldsFile::at(home)) {
         show(log.line(&line), &mut popups, runner);
     }
@@ -148,7 +148,7 @@ fn event_loop(
             dirty |= snooze_end.is_some_and(|end| OffsetDateTime::now_utc() >= end);
             dirty |= kept(model::engine_running(home), &mut engine_error).is_some_and(|on| on != view.tree.engine_running);
             // a merge starts and ends with no Event: its marker (hs-d495) is read on each poll
-            redraw |= view.set_merging(crate::merge::marker::live(home));
+            redraw |= view.set_merging(crate::merge::marker::live(home, &Default::default()));
             view.error = snapshot_error.clone().or_else(|| follow_error.clone()).or_else(|| engine_error.clone());
         }
         if snapshot_due(dirty || snapshot_error.is_some(), last_snapshot.elapsed()) {

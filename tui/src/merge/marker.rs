@@ -50,7 +50,8 @@ pub fn remove(home: &CpdHome, pull: &Pull) {
 
 /// The pull requests, as `<owner>/<repo>#<n>`, that have a live marker: one whose `pid` is alive. A stale one is none,
 /// and so is a file that is not a marker (a view cannot fail on it, and the next merge action replaces it).
-pub fn live(home: &CpdHome) -> BTreeSet<String> {
+/// Stub (hs-d550): `open` is ignored until implemented.
+pub fn live(home: &CpdHome, _open: &BTreeSet<String>) -> BTreeSet<String> {
     let Ok(entries) = std::fs::read_dir(path_dir(home)) else { return BTreeSet::new() };
     entries
         .flatten()
@@ -155,11 +156,15 @@ mod tests {
     #[test]
     fn only_a_marker_whose_pid_is_alive_is_live_and_a_stale_one_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(live(&home(&dir)), BTreeSet::new(), "no directory: none");
+        assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::new(), "no directory: none");
         put(&dir, "acme__api__3.json", std::process::id());
         put(&dir, "acme__web__4.json", dead_pid());
-        assert_eq!(live(&home(&dir)), BTreeSet::from(["acme/api#3".to_owned()]));
+        assert_eq!(live(&home(&dir), &BTreeSet::new()), BTreeSet::from(["acme/api#3".to_owned()]));
         // a restarted view reads the same files
-        assert_eq!(live(&home(&dir)), live(&home(&dir)));
+        assert_eq!(live(&home(&dir), &BTreeSet::new()), live(&home(&dir), &BTreeSet::new()));
     }
 }
+
+#[cfg(test)]
+#[path = "marker_d550.rs"]
+mod d550;
