@@ -1132,7 +1132,7 @@ mod tests {
         }
         assert_eq!(click(&mut view, 1, 1), Effect::Run(Action::OpenManager(ContextId::parse("alpha").unwrap())), "the title row keeps its action");
         let rows = drawn(&mut view, 44, 16);
-        assert_eq!(click(&mut view, 1, 12), Effect::None, "a plain closing row has nothing to fold");
+        assert_eq!(click(&mut view, 1, 12), Effect::None, "a terminator closing row has nothing to fold");
         assert_eq!(drawn(&mut view, 44, 16), rows, "and folds nothing");
     }
 
@@ -1988,14 +1988,14 @@ mod tests {
     }
 
     #[test]
-    fn three_items_are_three_rows_with_the_age_at_the_right_edge_and_a_plain_close() {
+    fn three_items_are_three_rows_with_the_age_at_the_right_edge_and_the_terminator_close() {
         let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 16));
         assert_eq!(rows[9], "", "the empty row above the title");
         assert_eq!(rows[10], header(3));
         assert_eq!(rows[11], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
         assert_eq!(rows[12], item_row(palette::TIER_RED, "acme/api#12 checks failed", "5m"));
         assert_eq!(rows[13], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
-        assert_eq!(rows[14], " ╰─", "nothing to fold");
+        assert_eq!(rows[14], " ╰󰁚", "nothing to fold");
         assert_eq!(rows[15], "", "the empty row below the section");
         assert_eq!(rows[11].chars().count(), 42, "the age ends in column 41, the last of the inner area");
     }
@@ -2524,7 +2524,7 @@ mod tests {
         assert_eq!(rows[13], "", "the empty row above the title");
         assert_eq!(rows[14], header(50));
         assert_eq!(rows[1], format!(" ╭{NEEDS_YOU} alpha"), "the tree is above it");
-        assert_eq!(rows[12], " ╰─", "the tree's rows are its 12, then the section's empty row");
+        assert_eq!(rows[12], " ╰󰁚", "the tree's rows are its 12, then the section's empty row");
         assert_eq!((label(&rows[15]), label(&rows[36])), ("item 00", "item 21"));
         assert_eq!(rows[37], cue_row('▼', 28), "the last row of the list is the cue, right-aligned after the line");
         assert_eq!(rows[38], COLLAPSE, "the closing row stays in view");
@@ -2660,9 +2660,9 @@ mod tests {
         let (view, rows) = shared(sample(), 3, false, 31);
         assert_eq!(view.inbox_area, Rect::new(1, 24, 41, 7), "the empty row, the title, three items, `╰─` and the empty row: as tall as its rows, pinned to the bottom");
         assert!(rows[1].starts_with(&format!(" ╭{NEEDS_YOU} alpha")), "{rows:?}");
-        assert_eq!(rows[12], " ╰─", "the tree's last row: {rows:?}");
+        assert_eq!(rows[12], " ╰󰁚", "the tree's last row: {rows:?}");
         assert!(rows[13..25].iter().all(|r| r.is_empty()), "the gap, and the section's empty row above its title: {rows:?}");
-        assert_eq!((rows[25].as_str(), rows[29].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰─", ""), "{rows:?}");
+        assert_eq!((rows[25].as_str(), rows[29].as_str(), rows[30].as_str()), (header(3).as_str(), " ╰󰁚", ""), "{rows:?}");
         assert!(!rows.iter().any(|r| r.contains('▲') || r.contains('▼')), "no cue when all fit: {rows:?}");
     }
 
@@ -2923,7 +2923,7 @@ mod tests {
         assert_eq!(rows[8], format!(" ╭{NEEDS_YOU} beta"));
         starts(9, format!(" ╰─{NEEDS_YOU} rel"));
         assert_eq!(rows[10], "");
-        assert_eq!(rows.iter().filter(|r| r.trim() == "╰─").count(), 1, "no plain `╰─` line but the Context with no row's: {rows:#?}");
+        assert_eq!(rows.iter().filter(|r| r.trim() == "╰󰁚").count(), 1, "no terminator line but the Context with no row's: {rows:#?}");
     }
 
     #[test]
@@ -2943,7 +2943,7 @@ mod tests {
         starts(10, format!(" ╰─{NEEDS_YOU} rel"));
         assert_eq!(rows[11], "");
         assert_eq!(rows[12], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[13], " ╰─", "a Context with no row at all stays as it was");
+        assert_eq!(rows[13], " ╰󰁚", "a Context with no row at all ends with the terminator");
         assert_eq!(rows[14], "");
         assert_eq!(rows[15], format!(" ╭{STOPPED} zeta"));
         assert_eq!(rows[16], EXPAND, "the folded Context with archived rows: `╰󰁋 expand`");
@@ -2951,7 +2951,7 @@ mod tests {
     }
 
     #[test]
-    fn a_context_with_no_row_at_all_is_its_title_and_a_plain_corner_line_as_before() {
+    fn a_context_with_no_row_at_all_is_its_title_and_the_terminator() {
         let tree = super::super::fixture::tree(vec![super::super::fixture::context("gamma", vec![])]);
         let rows = drawn(&mut View::new(tree, true), 44, 10);
         assert_eq!(rows[..3], ["".to_owned(), format!(" ╭{STOPPED} gamma"), " ╰─".to_owned()]);
@@ -2968,13 +2968,13 @@ mod tests {
     }
 
     #[test]
-    fn three_items_close_with_a_plain_line_and_an_empty_row_below() {
+    fn three_items_close_with_the_terminator_and_an_empty_row_below() {
         let rows = text_rows(&draw_now(&mut with_inbox(3), 43, 22));
         assert_eq!(rows[15], "", "the empty row above the title");
         assert_eq!(rows[16], header(3));
         assert_eq!(rows[17], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));
         assert_eq!(rows[19], item_row(palette::TIER_YELLOW, "ship: Job c is stuck", "3h"));
-        assert_eq!(rows[20], " ╰─", "nothing to fold");
+        assert_eq!(rows[20], " ╰󰁚", "nothing to fold");
         assert_eq!(rows[21], "", "the empty row below the section");
     }
 
@@ -2983,7 +2983,7 @@ mod tests {
         // 20 rows: the tree's 12 (its last block's empty row below is the section's empty row above) and the section's 7
         let rows = text_rows(&draw_now(&mut with_inbox(5), 43, 20));
         assert_eq!(rows[11], format!(" ╭{STOPPED} gamma"));
-        assert_eq!(rows[12], " ╰─");
+        assert_eq!(rows[12], " ╰󰁚");
         assert_eq!(rows[13], "", "one empty row between the tree's last block and the Inbox");
         assert_eq!(rows[14], header(5));
         assert_eq!(rows[15], item_row(palette::TIER_RED, "f-blocked: Worker question", "42s"));

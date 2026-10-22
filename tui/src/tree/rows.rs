@@ -688,7 +688,7 @@ mod tests {
     /// The closing toggle `╰󰁣 collapse`.
     const COLLAPSE: &str = "╰\u{F0063} collapse";
     /// The closing row of a Context with nothing to fold.
-    const PLAIN: &str = "╰─";
+    const TERMINATOR: &str = "╰󰁚";
 
     /// A Plan with an idle Lead named `name` and no forks.
     fn lone(id: &str, name: &str, phase: Phase, counts: [usize; 6]) -> PlanNode {
@@ -747,7 +747,7 @@ mod tests {
                 row_of(&format!("╰─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
                 String::new(),
                 format!("╭{STOPPED} gamma").to_owned(),
-                PLAIN.to_owned(),
+                TERMINATOR.to_owned(),
             ],
             "no state text after a name; the last row of a Context with nothing archived ends it with `╰─`, one empty row between two Contexts, and the terminator closes a Context with no row inside"
         );
@@ -1374,7 +1374,7 @@ mod tests {
                 row_of(&format!("╰─{NEEDS_YOU} rel"), "0⋅0⋅0⋅0⋅3", 44),
                 String::new(),
                 format!("╭{STOPPED} gamma").to_owned(),
-                PLAIN.to_owned(),
+                TERMINATOR.to_owned(),
             ],
             "the archived Plan and fork follow the live rows, no `󰇘`; one closing row per Context (or its last row's `╰─`), one empty row between two Contexts"
         );
@@ -1442,7 +1442,7 @@ mod tests {
         assert!(!state.opened().contains(&toggle_of(&["zeta"])), "an archived Context starts folded");
         let buf = render(&t, &mut state, 44, 16, false);
         let rows = lines(&buf);
-        assert_eq!(rows[11..], [format!("╭{STOPPED} gamma"), PLAIN.to_owned(), String::new(), format!("╭{STOPPED} zeta"), EXPAND.to_owned()], "{rows:#?}");
+        assert_eq!(rows[11..], [format!("╭{STOPPED} gamma"), TERMINATOR.to_owned(), String::new(), format!("╭{STOPPED} zeta"), EXPAND.to_owned()], "{rows:#?}");
         unfold(&mut state, &t, "zeta");
         let buf = render(&t, &mut state, 44, 18, false);
         let rows = lines(&buf);
