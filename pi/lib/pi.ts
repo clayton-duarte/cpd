@@ -4,7 +4,7 @@ import type { Component } from "@earendil-works/pi-tui";
 
 export type Ctx = Pick<ExtensionContext, "mode" | "isIdle" | "hasPendingMessages" | "cwd" | "isProjectTrusted"> & {
   ui: Pick<ExtensionContext["ui"], "notify" | "getEditorText" | "select" | "editor">;
-  sessionManager: Pick<ExtensionContext["sessionManager"], "getSessionId" | "getEntries">;
+  sessionManager: Pick<ExtensionContext["sessionManager"], "getSessionId" | "getEntries" | "getBranch">;
 };
 
 /** The context handed to `session_start`: `Ctx` and pi's model registry, which the model switch reads (commands.md §15.3 `session-retiered`). */

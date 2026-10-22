@@ -489,7 +489,7 @@ export class FakePi implements PiApi {
       cwd: join(tmpdir(), "pi-test-no-such-project"),
       isProjectTrusted: () => this.trusted,
       ui,
-      sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]> },
+      sessionManager: { getSessionId: () => this.sessionId, getEntries: () => this.entries as ReturnType<Ctx["sessionManager"]["getEntries"]>, getBranch: () => this.entries as ReturnType<Ctx["sessionManager"]["getBranch"]> },
       isIdle: () => this.idle,
       hasPendingMessages: () => this.pendingMessages,
       modelRegistry: { find: (provider, id) => (this.knownModels.has(`${provider}/${id}`) ? { provider, id } : undefined) },
