@@ -39,4 +39,7 @@ mod review_plannotator;
 mod policy;
 mod review_job;
 mod review;
+mod secret;
+mod secret_grants;
+mod secret_guard;
 mod spec;
