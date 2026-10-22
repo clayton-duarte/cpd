@@ -2,7 +2,8 @@
  * fold: "toggle", closing row; see docs/contract.md section 6.9.
  *
  * renderControls (the closing row), with fold "toggle", compact style:
- *   running           unchanged: " └ " + the running timer ("Running" or the elapsed time).
+ *   running           " ╰" + RUNNING_GLYPH + " " + the running timer ("Running" or the elapsed time), all in 8.
+ *                     fold "status" and the other styles keep " └ ".
  *   has a result      " ╰" + glyph + " " + label, then " · " + metadata when there is any.
  *                     glyph/label: toggle.expand + " expand" while folded,
  *                                  toggle.collapse + " collapse" while expanded.
@@ -192,6 +193,9 @@ function rememberResult(state: RowState, result: AgentToolResult<unknown>, optio
 	state.lastResultConfigRevision = state.configRevision;
 }
 
+/** The cockpit's glyph of a closing row with nothing to fold. */
+const RUNNING_GLYPH = "\u{F005A}";
+
 function renderControls(
 	theme: Theme,
 	state: RowState,
@@ -220,6 +224,9 @@ function renderControls(
 	// A failed call produced no result worth counting; "(0 lines)" would only mislead.
 	else if (state.resultLineSummary && !running && !isError) details += metadata(` (${state.resultLineSummary})`);
 	if (nestedSummary && !running) details += chrome(" · ") + nestedSummary;
+	if (running && foldToggles() && prefix === " └ ") {
+		return prefixedText(details, chrome(` ╰${RUNNING_GLYPH} `), indent);
+	}
 	if (!running && foldToggles() && prefix === " └ ") {
 		// fold: "toggle": the closing row is the toggle, and today's text becomes its metadata.
 		const { expand, collapse } = runtime.config.toggle;
