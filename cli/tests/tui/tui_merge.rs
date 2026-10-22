@@ -22,8 +22,9 @@ const REF: &str = "o/r#7";
 const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 /// The client the view was opened on, for the tests that have none attached.
 const CLIENT: &str = "/dev/pts/9";
-/// What `gh api graphql` does when the poll is to succeed (an empty search) and when it is to fail.
-const POLL_OK: &str = r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'; exit 0"#;
+/// What `gh api graphql` does when the poll is to succeed and when it is to fail: the search lists nothing, and the direct
+/// read of the stored open `o/r#7` the search missed (`p0: repository`) finds it merged (the merge the action just made).
+const POLL_OK: &str = r#"case "$4" in *"p0: repository"*) echo '{"data":{"p0":{"pullRequest":{"repository":{"nameWithOwner":"o/r"},"number":7,"url":"https://github.com/o/r/pull/7","title":"Add the thing","isDraft":false,"state":"MERGED","createdAt":"t","mergedAt":"2026-10-20T10:00:00Z","reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,"commits":{"nodes":[]}}}}}'; exit 0;; esac; echo '{"data":{"search":{"issueCount":0,"nodes":[]},"reviewRequests":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'; exit 0"#;
 const POLL_FAILS: &str = "echo 'poll said no' >&2; exit 9";
 /// How long the view may take to close once confirmed while `gh pr merge` blocks. The claim is that it does not wait
 /// for `gh`, so the wait is for the view's own work only.
