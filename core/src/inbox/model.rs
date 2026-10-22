@@ -34,8 +34,6 @@ pub enum Kind {
     PrChanges,
     PrReady,
     ReviewRequested,
-    /// A distill run reached an S Tier (hs-d539).
-    DistillTier,
 }
 
 impl Kind {
@@ -54,13 +52,12 @@ impl Kind {
             Kind::PrChanges => "pr-changes",
             Kind::PrReady => "pr-ready",
             Kind::ReviewRequested => "review-requested",
-            Kind::DistillTier => "distill-tier",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, DistillTier]
+        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested]
             .into_iter()
             .find(|k| k.as_str() == s)
     }

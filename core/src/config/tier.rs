@@ -230,12 +230,10 @@ impl Catalog {
         Ok(None)
     }
 
-    /// The distill ladder (hs-d538): `start`, then the H efforts above it, then S1..S4, each kept only when
-    /// this catalog accepts it; never `O`, never effort 5.
+    /// The distill ladder (hs-d555): `start`, then the H efforts above it that this catalog accepts; never an S or `O` step.
     pub fn distill_ladder(&self, start: Tier) -> Vec<Tier> {
         let above = (start.effort + 1..=Tier::MAX_EFFORT).filter_map(|e| Tier::new(Letter::H, e));
-        let s = (1..=Tier::MAX_EFFORT).filter_map(|e| Tier::new(Letter::S, e));
-        std::iter::once(start).chain(above.chain(s).filter(|t| self.is_valid(*t))).collect()
+        std::iter::once(start).chain(above.filter(|t| self.is_valid(*t))).collect()
     }
 
     /// The Tier of automatic Attempt `n` (from 1): `next` applied `n - 1`
@@ -345,5 +343,13 @@ mod tests {
         assert_eq!(at("S3", 3), None);
         assert_eq!(at("S4", 2), None);
         assert_eq!(at("S4", 9), None);
+    }
+
+    #[test]
+    fn the_distill_ladder_climbs_h_and_stops_at_h3() {
+        let c = catalog();
+        let ladder = |s: &str| c.distill_ladder(t(s)).iter().map(Tier::to_string).collect::<Vec<_>>();
+        assert_eq!(ladder("H0"), ["H0", "H1", "H2", "H3"]);
+        assert_eq!(ladder("H3"), ["H3"]);
     }
 }

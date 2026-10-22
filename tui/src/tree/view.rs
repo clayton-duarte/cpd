@@ -689,21 +689,8 @@ impl View {
             // a merge of it runs: the click, like the glyph's spinner, is its marker's (hs-d495)
             Some(Jump::Merge(pull)) if self.merging.contains(&pull.to_string()) => Effect::None,
             Some(Jump::Merge(pull)) => Effect::Merge(pull),
-            Some(Jump::Notice(id, context)) => match Self::read_notice(&context) {
-                Ok(Some(notice)) => Effect::Ask(Question::distill_tier(id, &context, &notice)),
-                Ok(None) => Effect::None,
-                Err(e) => Effect::text("Digest", format!("{}: {}", e.code(), e.message())),
-            },
             None => Effect::None,
         }
-    }
-
-    /// The `tier_notice` of `context`, read from the store of the home.
-    fn read_notice(context: &cpd_core::ids::ContextId) -> Result<Option<cpd_core::inbox::rules::TierNotice>, cpd_core::error::CpdError> {
-        let home = CpdHome::from_env()?;
-        let config = cpd_core::config::Config::load(&home)?;
-        let mut store = cpd_core::store::Store::open(&home, u64::from(config.timeouts.store_busy_ms))?;
-        store.read(|conn| cpd_core::inbox::rules::tier_notice(conn, &home, context))
     }
 
     /// The row drawn at `at`, none below the last row (the tree state answers with the last row there).
