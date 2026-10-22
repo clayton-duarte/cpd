@@ -401,7 +401,7 @@ mod tests {
         assert_eq!(dots.title, "Session Dots");
         let shown: String = dots.rows.iter().flatten().map(text).collect();
         let precedence = format!(
-            "red > yellow > magenta > white > {} > {} > {} > {}",
+            "red > yellow > magenta > blue > white > {} > {} > {} > {}",
             palette::SPINNER[0],
             palette::WAITING,
             palette::IDLE,
@@ -410,12 +410,32 @@ mod tests {
         for glyph in [palette::NEEDS_YOU, &palette::SPINNER.concat(), palette::WAITING, palette::IDLE, palette::STOPPED, &precedence] {
             assert!(shown.contains(glyph), "{glyph}: {shown}");
         }
-        for (row, dot) in dots.rows[5..9].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::White]) {
+        for (row, dot) in dots.rows[5..10].iter().zip([Dot::Red, Dot::Yellow, Dot::Magenta, Dot::Blue, Dot::White]) {
             assert_eq!(row[0].spans, [palette::dot_span(dot, 0, false)], "{dot:?}");
         }
         assert!(!shown.contains("phase"), "{shown}");
         let frames: Vec<_> = dots.rows[1][0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(frames, palette::SPINNER);
+    }
+
+    /// hs-d570 BL5, BL7: the blue dot between magenta and white, and the precedence line with blue.
+    #[test]
+    fn the_legends_session_dots_list_the_blue_dot_and_the_precedence() {
+        let dots = &sections()[2];
+        assert_eq!(dots.title, "Session Dots");
+        let blue = dots.rows.iter().position(|r| r[0].spans == [palette::dot_span(Dot::Blue, 0, false)]).expect("a blue dot row");
+        assert_eq!(dots.rows[blue - 1][0].spans, [palette::dot_span(Dot::Magenta, 0, false)], "after magenta");
+        assert_eq!(dots.rows[blue + 1][0].spans, [palette::dot_span(Dot::White, 0, false)], "before white");
+        assert!(text(&dots.rows[blue][1]).starts_with("blue:"), "{:?}", text(&dots.rows[blue][1]));
+        let precedence = format!(
+            "red > yellow > magenta > blue > white > {} > {} > {} > {}",
+            palette::SPINNER[0],
+            palette::WAITING,
+            palette::IDLE,
+            palette::STOPPED
+        );
+        let shown: Vec<String> = dots.rows.iter().map(|r| text(&r[1])).collect();
+        assert!(shown.iter().any(|s| s.ends_with(&precedence)), "{shown:?}");
     }
 
     #[test]
@@ -629,10 +649,10 @@ mod tests {
         section::check::grey_pill(&buf, 3, 1, &text);
     }
 
-    // ---- the Inbox section (hs-d483): the four tiers, red to white, each glyph in its colour with its meaning; red until it exists ----
+    // ---- the Inbox section (hs-d483, hs-d570): the five tiers, red to white, each glyph in its colour with its meaning; red until it exists ----
 
     #[test]
-    fn the_legends_inbox_section_lists_the_generic_the_documentation_and_the_retire_glyphs() {
+    fn the_legends_inbox_section_lists_five_tiers_and_the_two_curate_glyphs() {
         let all = sections();
         let at = all.iter().position(|s| s.title == "Inbox").unwrap_or_else(|| panic!("no Inbox section: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>()));
         let inbox = &all[at];
@@ -642,7 +662,8 @@ mod tests {
             [
                 "\u{F0362}", "a blocker only you can clear",
                 "\u{F069A}", "pull-request work",
-                "\u{F06F1}", "a decision before the work runs",
+                "\u{F173A}", "a decision before the work runs",
+                "\u{F06F1}", "a cpd notice: curation, nothing blocks",
                 "\u{F0653}", "a documentation candidate",
                 "\u{F116E}", "a record to retire",
                 "\u{F0366}", "an unread reply",
@@ -650,7 +671,11 @@ mod tests {
         );
         let colours: Vec<_> = inbox.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
         let c = |m| Some(palette::color_clickable(m));
-        assert_eq!(colours, [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::Planning), c(Meaning::Planning), c(Meaning::NotStarted)], "red, yellow, magenta (three lines), white");
+        assert_eq!(
+            colours,
+            [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::Notice), c(Meaning::NotStarted)],
+            "red, yellow, magenta, blue (three lines: the tier and the two curate kinds), white"
+        );
         let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
         let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();
         assert!(dots < at && at < pulse, "between the Session Dots and the Pulse: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>());

@@ -41,6 +41,8 @@ pub enum Meaning {
     Nothing,
     /// A Session that waits for another agent, not for the User (hs-d303): the waiting dot.
     Waiting,
+    /// A cpd notice that blocks nothing: the blue Inbox tier and its Session dot (hs-d570). Not in [`Meaning::ALL`].
+    Notice,
 }
 
 impl Meaning {
@@ -67,6 +69,7 @@ impl Meaning {
             Meaning::Grounding => "grounding",
             Meaning::Nothing => "nothing / n/a / zero",
             Meaning::Waiting => "waiting on an agent",
+            Meaning::Notice => "a cpd notice",
         }
     }
 }
@@ -85,6 +88,7 @@ pub fn color(m: Meaning) -> Color {
         Meaning::Nothing => Color::DarkGray,
         // Cyan, not blue: blue is focus and selection only; agent activity is cyan.
         Meaning::Waiting => Color::Cyan,
+        Meaning::Notice => Color::Blue,
     }
 }
 
@@ -370,6 +374,8 @@ pub const TIER_MAGENTA: &str = "\u{F06F1}";
 pub const ITEM_DOCS: &str = "\u{F0653}";
 /// A record to retire (an Inbox item of kind `curate-retire`), magenta.
 pub const ITEM_RETIRE: &str = "\u{F116E}";
+/// Blue: a cpd notice that blocks nothing (the generic system item), U+F06F1 (hs-d570).
+pub const TIER_BLUE: &str = "\u{F06F1}";
 /// Yellow: pull-request work.
 pub const TIER_YELLOW: &str = "\u{F069A}";
 /// Red: a blocker only the User can clear.
@@ -416,6 +422,7 @@ pub fn dot_span(dot: Dot, frame: usize, archived: bool) -> Span<'static> {
         Dot::Red => (NEEDS_YOU, fg_clickable(Meaning::Failed)),
         Dot::Yellow => (NEEDS_YOU, fg_clickable(Meaning::Review)),
         Dot::Magenta => (NEEDS_YOU, fg_clickable(Meaning::Planning)),
+        Dot::Blue => (NEEDS_YOU, clickable_text()), // stub (hs-d570)
         Dot::White => (NEEDS_YOU, clickable_text()),
         Dot::Working => (SPINNER[if archived { 0 } else { frame % SPINNER.len() }], fg_clickable(Meaning::InProgress)),
         Dot::Waiting => (WAITING, fg_clickable(Meaning::Waiting)),
@@ -526,6 +533,18 @@ mod tests {
         }
     }
 
+    /// hs-d570 BL3: the notice colour is blue 4, bright 12 on a clickable row; the focus block stays 4.
+    #[test]
+    fn the_notice_meaning_is_blue_4_and_bright_12_on_a_clickable_row() {
+        assert_eq!(color(Meaning::Notice), numbered::C4);
+        assert_eq!(color_clickable(Meaning::Notice), Color::LightBlue, "12");
+        assert_eq!(selected().bg, Some(numbered::C4), "the focus block is still 4");
+        assert_eq!(selected().fg, Some(numbered::C0), "a mark on the cursor's blue block draws text 0");
+        assert_eq!(tier_span(Urgency::Blue), Span::styled(TIER_BLUE, fg_clickable(Meaning::Notice)));
+        assert_eq!(dot_span(Dot::Blue, 0, false), Span::styled(NEEDS_YOU, fg_clickable(Meaning::Notice)));
+        assert_eq!(dot_span(Dot::Blue, 0, true), Span::styled(NEEDS_YOU, Style::new().fg(Color::DarkGray)), "archived: 8");
+    }
+
     #[test]
     fn every_job_status_has_its_icon_and_meaning() {
         let table = [
@@ -572,6 +591,7 @@ mod tests {
             (Dot::Red, Color::LightRed),
             (Dot::Yellow, Color::LightYellow),
             (Dot::Magenta, Color::LightMagenta),
+            (Dot::Blue, Color::LightBlue),
             (Dot::White, Color::White),
         ] {
             assert_eq!(dot_span(dot, 0, false), Span::styled(NEEDS_YOU, Style::new().fg(colour)), "{dot:?}");
@@ -633,6 +653,7 @@ mod tests {
             (Dot::Red, NEEDS_YOU),
             (Dot::Yellow, NEEDS_YOU),
             (Dot::Magenta, NEEDS_YOU),
+            (Dot::Blue, NEEDS_YOU),
             (Dot::White, NEEDS_YOU),
             (Dot::Waiting, WAITING),
             (Dot::Idle, IDLE),
