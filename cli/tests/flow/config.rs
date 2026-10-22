@@ -171,7 +171,7 @@ retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"
 context_distill_tier = "H0"
-open_tier = "S4"
+open_tier = "S3"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
 plannotator_ports = "1-65535"
@@ -215,7 +215,7 @@ work_session = "w"
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["test_concurrency"], 64);
     assert_eq!(out["config"]["context_distill_tier"], "H0");
-    assert_eq!(out["config"]["open_tier"], "S4");
+    assert_eq!(out["config"]["open_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
     assert_eq!(out["config"]["plannotator_ports"], "1-65535");
@@ -357,6 +357,19 @@ fn config_refuses_each_bad_file_with_its_key_path() {
         assert_eq!(err["code"], "config_invalid", "{text}: {err}");
         assert_eq!(err["details"]["key"], *key, "{text}: {err}");
         assert_eq!(err["details"]["path"], env.cpd_home().join("config.toml").to_str().unwrap(), "{text}");
+    }
+}
+
+/// hs-d554: `open_tier` is a Worker Tier: H3 or S0-S3.
+#[test]
+fn config_refuses_an_open_tier_outside_the_worker_range() {
+    let env = TestEnv::new();
+    for tier in ["H0", "H1", "H2", "S4", "S5", "O2"] {
+        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\nopen_tier = \"{tier}\"\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{tier}");
+        assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
+        assert_eq!(err["details"]["key"], "open_tier", "{tier}: {err}");
     }
 }
 
@@ -909,13 +922,13 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
     let env = TestEnv::new();
     let out = config_with(
         &env,
-        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"H4\"\nopen_tier = \"H1\"\n",
+        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"H4\"\nopen_tier = \"H3\"\n",
     )
     .ok();
     let config = &out["config"];
     assert_eq!(
         (&config["lead_tier"], &config["manager_tier"], &config["context_distill_tier"], &config["open_tier"]),
-        (&json!("O0"), &json!("O4"), &json!("H4"), &json!("H1"))
+        (&json!("O0"), &json!("O4"), &json!("H4"), &json!("H3"))
     );
 }
 

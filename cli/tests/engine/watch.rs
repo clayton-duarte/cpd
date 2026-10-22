@@ -1483,31 +1483,36 @@ fn e3_reports_a_tampered_job_once_and_does_not_start_it() {
     assert_eq!(fx.job_status("api"), "queued");
 }
 
-/// hs-d506: a store written before the rule may hold a queued Job on an `O` or effort-5 Tier. E3 never starts it:
+/// hs-d554: a store written before the rule may hold a queued Job on a Tier outside H3, S0-S3. E3 never starts it:
 /// one `error` Event (`tier_not_allowed`) per Job, once, the Job stays `queued`, no Attempt is made.
 #[test]
-fn e3_does_not_start_a_job_on_an_o_or_effort_5_tier_and_raises_one_error_per_job() {
+fn e3_does_not_start_a_job_on_a_tier_outside_the_worker_range_and_raises_one_error_per_job() {
     let fx = fx("");
-    for (key, tier) in [("api", "O3"), ("web", "S5")] {
+    for (key, tier) in [("api", "O3"), ("web", "S5"), ("app", "S4"), ("ui", "H2")] {
         fx.add_job_on(tier, "repo", key, &[], "");
     }
 
     let engine = fx.start();
-    wait_until("two errors", || fx.count("error") == 2);
+    wait_until("four errors", || fx.count("error") == 4);
     fx.env.wait_whole_ticks(2);
     engine.stop();
 
     let errors = fx.events("error");
-    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert_eq!(errors.len(), 4, "{errors:?}");
     let mut jobs_named: Vec<_> = errors.iter().map(|(plan, job, attempt, _)| (plan.clone(), job.clone().unwrap(), attempt.clone())).collect();
     jobs_named.sort();
-    assert_eq!(jobs_named, [(Some("pay".into()), "api".into(), None), (Some("pay".into()), "web".into(), None)]);
+    assert_eq!(
+        jobs_named,
+        [("api", None), ("app", None), ("ui", None), ("web", None)].map(|(job, attempt): (&str, Option<String>)| (Some("pay".to_string()), job.to_string(), attempt))
+    );
     for (_, _, _, data) in &errors {
         assert_eq!((&data["source"], &data["code"]), (&json!("watch"), &json!("tier_not_allowed")), "{data}");
     }
-    assert!(fx.texts("error").iter().all(|t| t.contains("hs-d506")), "{:?}", fx.texts("error"));
+    assert!(fx.texts("error").iter().all(|t| t.contains("hs-d554")), "{:?}", fx.texts("error"));
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM attempts"), 0);
-    assert_eq!((fx.job_status("api"), fx.job_status("web")), ("queued".into(), "queued".into()));
+    for key in ["api", "web", "app", "ui"] {
+        assert_eq!(fx.job_status(key), "queued", "{key}");
+    }
 }
 
 /// The 00:02Z incident, reproduced: the engine cannot run the driver (its file is gone), so every Attempt
@@ -1854,7 +1859,7 @@ fn e4_adds_one_open_job_to_a_dispatch_pr_whatever_its_other_jobs_are_doing_and_a
 /// `open_tier` is a key of its own (§8.2): the Job takes its Tier from it.
 #[test]
 fn e4_gives_the_open_job_the_tier_open_tier_names() {
-    let fx = fx("open_tier = \"H1\"");
+    let fx = fx("open_tier = \"H3\"");
     fx.add_merged_api();
     fx.add_draft("later");
 
@@ -1862,7 +1867,7 @@ fn e4_gives_the_open_job_the_tier_open_tier_names() {
     wait_until("the open Job", || !fx.jobs_of_kind("open").is_empty());
     engine.stop();
 
-    assert_eq!(fx.env.query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'open-repo'"), "H1");
+    assert_eq!(fx.env.query::<String>("SELECT tier FROM jobs WHERE plan = 'pay' AND key = 'open-repo'"), "H3");
 }
 
 /// A PR that has an open Job `queued` or `failed` gets no second one (a `failed` one waits for the Lead: `job retry`, or `job cancel`).
