@@ -1202,7 +1202,7 @@ mod tests {
         assert_eq!(cmd.get_program(), "tmux");
         assert_eq!(cmd.get_args().next().unwrap(), "-u");
         let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
-        assert_eq!(removed, ["TMUX", "TMUX_PANE"]);
+        assert_eq!(removed, ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"]);
     }
 
     /// A `tmux` that behaves as one does while its server dies after `kill-server` (hs-n285): its
