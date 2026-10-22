@@ -194,7 +194,6 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context owner` (§3.13) | Manager, Lead | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
-| `cpd mcp attach` (§24.1) | Manager, Lead, Worker | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |

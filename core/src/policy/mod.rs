@@ -35,7 +35,7 @@ pub fn run(command: Command) -> Result<crate::output::Output, CpdError> {
     }
 }
 
-pub use machine::{load_machine, parse_machine, Exposure, Machine, MachineSource, McpOauth, McpServer};
+pub use machine::{name_ok, load_machine, parse_machine, Exposure, Machine, MachineSource, McpOauth, McpServer};
 pub use origin::{parse_origin, repo_key};
 pub use load::{load_scope_file, parse_scope, policy_invalid};
 pub use resolve::{check_file_names, default_policy, key_of_scope_file, resolve, resolve_unowned_row};

@@ -157,7 +157,7 @@ fn loopback(authority: &str) -> bool {
 }
 
 /// `^[a-z][a-z0-9-]{0,31}$`
-fn name_ok(name: &str) -> bool {
+pub fn name_ok(name: &str) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c.is_ascii_lowercase())
         && name.len() <= 32

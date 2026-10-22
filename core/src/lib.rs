@@ -28,6 +28,7 @@ pub mod git;
 pub mod host;
 pub mod inbox;
 pub mod job;
+pub mod mcp;
 pub mod merge;
 pub mod metrics;
 pub mod plan;
