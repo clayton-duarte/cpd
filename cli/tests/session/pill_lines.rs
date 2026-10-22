@@ -60,7 +60,11 @@ fn status_line_pills_follow_the_rule() {
         pill("colour8", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
         pill("colour8", "#{@cpd_version}"),
     );
-    assert_eq!(STATUS_FORMAT, want);
+    // The prefix (up to the fill's colour) and the suffix (the right group) are pinned; the fill is pinned by behaviour.
+    let fill = want.find("#[fg=colour8]#{R:").expect("the fill") + "#[fg=colour8]".len();
+    let right = want.find("#[default]#[align=right]").expect("the right group");
+    assert!(STATUS_FORMAT.starts_with(&want[..fill]), "the prefix: {STATUS_FORMAT}");
+    assert!(STATUS_FORMAT.ends_with(&want[right..]), "the suffix: {STATUS_FORMAT}");
     for old in ["reverse", "colour236", "push-default", "pop-default"] {
         assert!(!STATUS_FORMAT.contains(old), "{old} is gone from the status format");
     }
