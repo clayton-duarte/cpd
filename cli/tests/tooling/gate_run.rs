@@ -25,7 +25,8 @@ impl Fx {
         let env = TestEnv::new();
         let tmp = env.root().join("tmp");
         fs::create_dir_all(&tmp).unwrap();
-        let _cleanup = Cleanup { pid_files: vec![env.root().join("left.pid")], socket_id: env.root().join("run-id") };
+        let left_socket = format!("cpdt-left-{}", env.root().file_name().unwrap().to_string_lossy());
+        let _cleanup = Cleanup { pid_files: vec![env.root().join("left.pid")], socket_id: env.root().join("run-id"), left_socket };
         Fx { env, tmp, _cleanup }
     }
 
@@ -54,6 +55,8 @@ impl Fx {
 struct Cleanup {
     pid_files: Vec<PathBuf>,
     socket_id: PathBuf,
+    /// The socket (without the run id) of the server `leave_a_process` starts: tmux leaves its file.
+    left_socket: String,
 }
 
 impl Drop for Cleanup {
@@ -63,6 +66,7 @@ impl Drop for Cleanup {
                 let _ = std::process::Command::new("kill").args(["-KILL", pid.trim()]).status();
             }
         }
+        let _ = fs::remove_file(socket_file(&self.left_socket));
         if let Ok(id) = fs::read_to_string(&self.socket_id) {
             let socket = format!("cpdt-{}-1-0", id.trim());
             let _ = std::process::Command::new("tmux").args(["-L", &socket, "kill-server"]).env_remove("TMUX_TMPDIR").env_remove("TMUX").output();
@@ -84,10 +88,18 @@ fn alive(pid: u32) -> bool {
     !stat.is_empty() && !stat.starts_with('Z')
 }
 
-/// A command that leaves a process out of gate-run's descendants (a double fork: reparented to init) and writes its pid
-/// to `left.pid`.
+/// A command that leaves a process and writes its pid to `left.pid`: a detached tmux server on tmux's default
+/// directory, whose socket name does not hold the run id (so the process check is what is exercised, not the socket
+/// check). It is tmux, not a plain `sleep`, because on macOS `ps -E` hides the environment of Apple platform binaries
+/// (/bin/sh, /bin/sleep: SIP): a leftover of that kind is not seen by gate-run.sh there, while non-platform processes
+/// (tmux, node, cpd and the other cargo-built test binaries) are. The server is started from the command, so it
+/// inherits `GATE_RUN`, and it is not a descendant of the command once it has detached.
 fn leave_a_process(fx: &Fx) -> String {
-    format!("( sleep {SLEEP_SECONDS} </dev/null >/dev/null 2>&1 & echo $! > '{}' )", fx.file("left.pid").display())
+    let socket = format!("cpdt-left-{}", fx.env.root().file_name().unwrap().to_string_lossy());
+    format!(
+        "unset TMUX TMUX_TMPDIR; tmux -L '{socket}' -f /dev/null new-session -d -P -F '#{{pid}}' 'exec sleep {SLEEP_SECONDS}' > '{}'",
+        fx.file("left.pid").display()
+    )
 }
 
 #[test]
