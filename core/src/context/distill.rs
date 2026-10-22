@@ -6,6 +6,7 @@
 //! holds `locks/distill-<context>.lock`, a `flock(2)` lock the kernel frees when
 //! the run dies, so a Context never has two runs and a crash leaves no stale lock.
 
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -117,13 +118,14 @@ pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
     let context = args.select.resolve(&mut store)?;
     store.read(|conn| ContextRow::require(conn, &context))?;
     let _lock = Lock::take(&home, &context)?;
-    let records = store.read(|conn| {
+    let (records, retired) = store.read(|conn| {
         let mut stmt =
             conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-        Ok(stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
+        let records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((records, inforce::retired(conn, &context)?))
     })?;
     let run = Run { home: &home, config: &config, store: &mut store, context: &context };
-    run.run(&records).map(Output::success)
+    run.run(&records, &retired).map(Output::success)
 }
 
 struct Run<'a> {
@@ -139,10 +141,10 @@ fn digest_json(digest: Option<&Digest>) -> Value {
 
 impl Run<'_> {
     /// Steps 2–5 of the run (contract §4.6), the lock held: `records` are every record of the Context, in `seq` order.
-    fn run(mut self, records: &[Indexed]) -> Result<Value, CpdError> {
+    fn run(mut self, records: &[Indexed], retired: &HashSet<RecordId>) -> Result<Value, CpdError> {
         let Some(&(highest, _)) = records.last() else { return Ok(self.already(None, 0)) };
         let upto = u64::try_from(highest).expect("a record's seq is positive");
-        let in_force = inforce::in_force(records, highest);
+        let in_force = inforce::in_force_without(records, highest, retired);
         if in_force.is_empty() {
             return Ok(self.already(None, 0));
         }

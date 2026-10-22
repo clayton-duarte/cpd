@@ -23,15 +23,16 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         return show_record(&mut store, &id, record);
     }
     let since = args.since.map_or(0, |s| i64::try_from(s).unwrap_or(i64::MAX));
-    let (row, records, repos) = store.read(|conn| {
+    let (row, records, repos, retired) = store.read(|conn| {
         let row = ContextRow::require(conn, &id)?;
         let mut stmt =
             conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
         let records = stmt.query_map([id.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         let repos = plan_repos(conn, &config.machine, &records)?;
-        Ok((row, records, repos))
+        let retired = retired_labels(conn, &id)?;
+        Ok((row, records, repos, retired))
     })?;
-    let markdown = render::markdown(&row.title, row.jira.as_deref(), &records, since, &repos);
+    let markdown = render::markdown_retired(&row.title, row.jira.as_deref(), &records, since, &repos, &retired);
     let records: Vec<Value> = records
         .iter()
         .filter(|(seq, _)| *seq > since)
@@ -49,6 +50,13 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
         "records": records,
         "markdown": markdown,
     })))
+}
+
+/// The approved retirements of `context`, as `render` labels them: `<reason> <target>` by record id.
+fn retired_labels(conn: &rusqlite::Connection, context: &ContextId) -> Result<render::Retired, CpdError> {
+    let mut stmt = conn.prepare("SELECT record, reason, target FROM record_retirements WHERE context = ?1 AND status = 'approved'")?;
+    let rows = stmt.query_map([context.as_str()], |r| Ok((r.get::<_, String>(0)?, format!("{} {}", r.get::<_, String>(1)?, r.get::<_, String>(2)?))))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// `context show --digest` (§3.3): the Context's latest digest file, and no record.

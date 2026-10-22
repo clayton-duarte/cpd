@@ -93,12 +93,13 @@ fn start_if_due(engine: &mut Engine, context: &ContextId, seq: i64, at: &str, no
             return Ok(());
         }
     }
-    let records = engine.store.read(|conn| {
+    let (records, retired) = engine.store.read(|conn| {
         let mut stmt =
             conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-        Ok(stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
+        let records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok((records, inforce::retired(conn, context)?))
     })?;
-    if inforce::in_force(&records, seq).is_empty() || running(&engine.home, context)? {
+    if inforce::in_force_without(&records, seq, &retired).is_empty() || running(&engine.home, context)? {
         return Ok(());
     }
     let pid = spawn(engine, context)?;

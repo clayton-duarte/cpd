@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 11;
+pub const PROTOCOL: u32 = 12;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -114,6 +114,9 @@ kinds! {
     SessionAsleep = "session-asleep",
     PlanDeleted = "plan-deleted",
     ContextDeleted = "context-deleted",
+    RecordsRetired = "records-retired",
+    DocsDecided = "docs-decided",
+    ContextCurated = "context-curated",
     ContextRenamed = "context-renamed",
     ContextOwner = "context-owner",
     PlanRenamed = "plan-renamed",
@@ -185,6 +188,9 @@ impl Kind {
             SessionAsleep => spec([Y, M, N, N, Y], &[], &[]),
             PlanDeleted => spec([Y, Y, N, N, N], &["jobs", "attempts", "sessions", "worktrees", "disk_freed_mb"], &[]),
             ContextDeleted => spec([Y, N, N, N, N], &["plans", "jobs", "attempts", "sessions", "worktrees", "disk_freed_mb"], &[]),
+            RecordsRetired => spec([Y, N, N, N, N], &["context", "approved", "rejected"], &[]),
+            DocsDecided => spec([Y, N, N, N, N], &["context", "sent", "dismissed"], &[]),
+            ContextCurated => spec([Y, N, N, N, N], &["context", "curated", "retire", "docs"], &[]),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
             ContextOwner => spec([Y, N, N, N, N], &["owner"], &[]),
             PlanRenamed => spec([Y, Y, N, N, N], &["title"], &[]),
