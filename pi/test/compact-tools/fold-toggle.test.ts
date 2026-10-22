@@ -145,12 +145,13 @@ const metadataOf = (statusLines: string[]) => {
 	return line.slice(` ${BOX.plainClose} `.length);
 };
 
-test("the head's leading space becomes ╭ and the rest of the head is unchanged", async () => {
+test("the toggle head is ' ╭─' and the pill, with no dot, where status keeps its dot head", async () => {
 	for (const name of ["bash", "read", "web_search"]) {
 		const status = await drawRow(STATUS, name);
 		const toggle = await drawRow(TOGGLE, name);
 		assert.ok(firstLine(status.done).startsWith(" "), name);
-		assert.equal(firstLine(toggle.done), BOX.head + firstLine(status.done).slice(1), name);
+		assert.ok(firstLine(toggle.done).startsWith(` ${BOX.head}\u2500`), `${name}: ${firstLine(toggle.done)}`);
+		assert.ok(!firstLine(toggle.done).includes("\u2981"), `${name}: no dot`);
 	}
 });
 
@@ -221,10 +222,10 @@ test("an edit's closing row carries its diff counts after the toggle", async () 
 	assert.match(lastLine(toggle.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · Done in 0\\.300s \\(\\+1 -1\\)$`, "u"));
 });
 
-test("while a row runs the head wears ╭ and the closing row is today's, with no toggle", async () => {
-	const status = await drawRow(STATUS, "bash");
+test("while a row runs the head wears ' ╭─' with no dot and the closing row is today's, with no toggle", async () => {
 	const toggle = await drawRow(TOGGLE, "bash");
-	assert.deepEqual(toggle.running.slice(1), status.running.slice(1).map((line, index) => index === 0 ? BOX.head + line.slice(1) : line));
+	assert.ok(firstLine(toggle.running).startsWith(` ${BOX.head}\u2500`), firstLine(toggle.running));
+	assert.ok(!firstLine(toggle.running).includes("\u2981"), "no dot");
 	assert.ok(toggle.running.every((line) => !line.includes(BOX.close)), "no ╰ while running");
 });
 
@@ -244,7 +245,7 @@ test("with no fold key every compact row is the toggle's; fold: status brings ba
 		for (const expanded of [false, true]) {
 			const absent = await drawRow({}, name, { expanded });
 			assert.deepEqual(absent, await drawRow(TOGGLE, name, { expanded }), name);
-			assert.ok(firstLine(absent.done).startsWith(BOX.head), name);
+			assert.ok(firstLine(absent.done).startsWith(` ${BOX.head}`), name);
 			const status = await drawRow(STATUS, name, { expanded });
 			assert.ok(firstLine(status.done).startsWith(" "), name);
 			assert.match(lastLine(status.done), /^ └ (Done in [0-9.]+s|Failed in )|^ │ /u, name);
@@ -286,24 +287,28 @@ async function thinking(config: object, source = "## **Check the implementation*
 	};
 }
 
-test("thinking, folded (summary): the title, then ╰<glyph> expand", async () => {
+const THINKING_TITLE = "╭─\uE0B6Thinking...\uE0B4";
+
+test("thinking, folded (summary): the one Thinking pill, then ╰<glyph> expand", async () => {
 	const block = await thinking({ ...TOGGLE, toggle: NERD });
 	try {
-		assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation", `${BOX.close}${NERD.expand} expand`]);
+		assert.deepEqual(block.draw().map((line) => line.trim()), [THINKING_TITLE, `${BOX.close}${NERD.expand} expand`]);
 	} finally { block.end(); }
 });
 
-test("thinking, expanded (detail): │ lines, then ╰<glyph> collapse · with the ctrl+t hint after the ·", async () => {
+test("thinking, expanded (detail): the whole text on │ lines, then ╰<glyph> collapse", async () => {
 	const block = await thinking({ ...TOGGLE, toggle: NERD });
 	try {
 		block.draw(); // the controller learns the block has detail on its first draw, as in Pi
 		block.press();
-		assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
-			"Check the implementation",
+		assert.deepEqual(block.draw().map((line) => line.trim()), [
+			THINKING_TITLE,
+			BOX.rail,
+			`${BOX.rail} ## **Check the implementation**`,
 			BOX.rail,
 			`${BOX.rail} Inspect the renderer.`,
 			`${BOX.rail} Keep the cache.`,
-			`${BOX.close}${NERD.collapse} collapse · ctrl+t toggle • click to hide`,
+			`${BOX.close}${NERD.collapse} collapse`,
 		]);
 	} finally { block.end(); }
 });
@@ -311,21 +316,21 @@ test("thinking, expanded (detail): │ lines, then ╰<glyph> collapse · with t
 test("thinking: summary after detail is folded again, hidden is unchanged, the default glyphs are the cockpit's", async () => {
 	const block = await thinking(TOGGLE);
 	try {
-		assert.equal(block.draw().at(-1)!.trimEnd(), `${BOX.close}${NERD.expand} expand`);
+		assert.equal(block.draw().at(-1)!.trim(), `${BOX.close}${NERD.expand} expand`);
 		block.press();
-		assert.equal(block.draw().at(-1)!.trimEnd(), `${BOX.close}${NERD.collapse} collapse · ctrl+t toggle • click to hide`);
+		assert.equal(block.draw().at(-1)!.trim(), `${BOX.close}${NERD.collapse} collapse`);
 		block.press();
-		assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation", `${BOX.close}${NERD.expand} expand`]);
+		assert.deepEqual(block.draw().map((line) => line.trim()), [THINKING_TITLE, `${BOX.close}${NERD.expand} expand`]);
 		assert.equal(block.press(), undefined, "summary-after-detail passes to Pi's own toggle, which hides");
 		block.press();
 	} finally { block.end(); }
 });
 
-test("thinking with no detail has no toggle row, folded or not", async () => {
+test("thinking of one paragraph has its toggle too: the whole text is inside the fold", async () => {
 	assert.equal(foldOf(merged(TOGGLE).config).fold, "toggle", "the key is accepted");
 	const block = await thinking(TOGGLE, "**Planning integration harness testing**");
 	try {
-		assert.equal(block.draw().join("\n").includes(BOX.close), false);
+		assert.deepEqual(block.draw().map((line) => line.trim()), [THINKING_TITLE, `${BOX.close}${NERD.expand} expand`]);
 	} finally { block.end(); }
 });
 
@@ -334,10 +339,12 @@ test("with fold: status the thinking block is upstream's: └ ctrl+t toggle • 
 	for (const config of [STATUS]) {
 		const block = await thinking(config);
 		try {
-			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation"]);
+			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Thinking..."]);
 			block.press();
 			assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
-				"Check the implementation",
+				"\uE0B6Thinking...\uE0B4",
+				BOX.rail,
+				`${BOX.rail} ## **Check the implementation**`,
 				BOX.rail,
 				`${BOX.rail} Inspect the renderer.`,
 				`${BOX.rail} Keep the cache.`,

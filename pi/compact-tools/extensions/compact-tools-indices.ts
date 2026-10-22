@@ -82,7 +82,7 @@ export function statusPill(status: RowStatus, text: string): string {
 	return pill(statusIndex(status), text);
 }
 
-/** The Thinking title pill, cyan. */
+/** The Thinking title pill, read-only grey 7. */
 export function thinkingPill(text: string): string {
-	return pill(INDEX.cyan, text);
+	return pill(INDEX.grey, text);
 }

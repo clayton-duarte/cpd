@@ -45,14 +45,14 @@ for (const publicAPI of [false, true]) for (const projectOff of [false, true]) t
 		assert.ok(internals.children.includes(projectOff ? internals.contentBox : internals.selfRenderContainer), "trusted project must refresh idle shell, even off");
 		const output = row.render(100).map(stripTerminalSequences).join("\n");
 		if (projectOff) {
-			assert.doesNotMatch(output, /⦁ bash/u);
+			assert.doesNotMatch(output, /╭─\uE0B6bash/u);
 			assert.match(output, /echo hello/u, "off cannot leave a blank detached shell");
 			row.setExpanded(true);
 			const expanded = row.render(100).map(stripTerminalSequences).join("\n");
-			assert.doesNotMatch(expanded, /⦁ bash/u);
+			assert.doesNotMatch(expanded, /╭─\uE0B6bash/u);
 			assert.match(expanded, /hello/u, "off still expands native result");
 		} else {
-			assert.match(output, /⦁ bash Run echo/u);
+			assert.match(output, /╭─\uE0B6bash\uE0B4 Run echo/u);
 			assert.deepEqual(internals.rendererState, authorState, "compact bookkeeping must not touch original state");
 		}
 		handlers.get("session_shutdown")!({ reason: "quit" });
