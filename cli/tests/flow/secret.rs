@@ -70,12 +70,37 @@ impl Fx {
         fx.env.sql(
             "UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'crashed', ended_at = 't' WHERE id = 'e-a1';",
         );
-        let log = fx.op_log_path();
+        let (log, dir) = (fx.op_log_path(), fx.op_dir());
+        fs::create_dir_all(&dir).unwrap();
+        // The fake `op` logs its argv (one line) and, for `item create` and `item edit`, keeps its stdin in
+        // `op/stdin.<sub>`. It answers by subcommand (the word after `item`) from `op/<sub>.out`, `.err` and `.code`.
         common::write_executable(
             &fx.env.bin().join("op"),
-            &format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit 0\n", log.display()),
+            &format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{log}'\nsub=''\nprev=''\nfor a in \"$@\"; do\n  if [ \"$prev\" = item ]; then sub=$a; break; fi\n  prev=$a\ndone\ncase \"$sub\" in create|edit) cat > '{d}'/stdin.\"$sub\";; esac\n[ -f '{d}'/\"$sub\".out ] && cat '{d}'/\"$sub\".out\n[ -f '{d}'/\"$sub\".err ] && cat '{d}'/\"$sub\".err >&2\ncode=0\n[ -f '{d}'/\"$sub\".code ] && code=$(cat '{d}'/\"$sub\".code)\nexit \"$code\"\n",
+                log = log.display(),
+                d = dir.display()
+            ),
         );
         fx
+    }
+
+    fn op_dir(&self) -> std::path::PathBuf {
+        self.env.root().join("op")
+    }
+
+    /// The fake `op` answers `item <sub>` (`get`, `list`, `create`, `edit`, `delete`) with `stdout`, `stderr` and
+    /// exit status `code`, until the next call of this for the same `sub`.
+    pub fn op_says(&self, sub: &str, stdout: &str, stderr: &str, code: i32) {
+        let d = self.op_dir();
+        fs::write(d.join(format!("{sub}.out")), stdout).unwrap();
+        fs::write(d.join(format!("{sub}.err")), stderr).unwrap();
+        fs::write(d.join(format!("{sub}.code")), code.to_string()).unwrap();
+    }
+
+    /// What the fake `op` read on stdin in its last `item <sub>` call (`create` or `edit`).
+    pub fn op_stdin(&self, sub: &str) -> String {
+        fs::read_to_string(self.op_dir().join(format!("stdin.{sub}"))).unwrap_or_else(|e| panic!("op got no stdin for {sub}: {e}"))
     }
 
     fn op_log_path(&self) -> std::path::PathBuf {
@@ -93,8 +118,16 @@ impl Fx {
 
     /// `cpd <args>` as `who`, with `stdin` (none: a closed stdin).
     pub fn run(&self, who: Who, args: &[&str], stdin: Option<&str>) -> Run {
+        self.run_with_path(who, args, stdin, None)
+    }
+
+    /// Like [`Fx::run`], with `PATH` set to `path` when given.
+    pub fn run_with_path(&self, who: Who, args: &[&str], stdin: Option<&str>, path: Option<&std::ffi::OsStr>) -> Run {
         let mut cmd = self.env.command(CPD);
         cmd.args(args);
+        if let Some(path) = path {
+            cmd.env("PATH", path);
+        }
         match who {
             Who::Nobody => {}
             Who::Empty => {
