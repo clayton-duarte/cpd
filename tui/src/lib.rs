@@ -22,6 +22,9 @@ mod cockpit;
 pub mod dialog;
 pub mod fold;
 mod history;
+mod input_box;
+#[cfg(test)]
+mod input_box_tests;
 pub mod link;
 pub mod logs;
 pub mod menu;

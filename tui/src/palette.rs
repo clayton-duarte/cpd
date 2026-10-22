@@ -257,6 +257,8 @@ pub(crate) mod numbered {
     pub(crate) const C9: Color = Color::LightRed;
     pub(crate) const C10: Color = Color::LightGreen;
     pub(crate) const C11: Color = Color::LightYellow;
+    #[allow(dead_code)]
+    pub(crate) const C12: Color = Color::LightBlue;
     pub(crate) const C13: Color = Color::LightMagenta;
     pub(crate) const C14: Color = Color::LightCyan;
     pub(crate) const C15: Color = Color::White;

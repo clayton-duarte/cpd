@@ -12,6 +12,8 @@
 pub(crate) mod scroll;
 pub(crate) mod validate;
 mod view;
+#[cfg(test)]
+mod input_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -273,6 +275,14 @@ fn popup_size(client: (u16, u16), title: &str, natural: usize, body_rows: impl F
     let rows = body_rows(inner - 2) + 5;
     let fit = |wanted: usize, cap: u16| u16::try_from(wanted + 2).unwrap_or(u16::MAX).min(cap);
     (fit(inner, client.0), fit(rows, client.1))
+}
+
+/// The popup's size `(columns, rows)` for an `input`: wide enough for the label and the initial text, tall enough for the
+/// longest value the validator accepts (commands.md §13.2). Stub.
+#[allow(dead_code)]
+fn input_popup_size(client: (u16, u16), title: &str, prompt: &str, initial: &str, validator: Validator) -> (u16, u16) {
+    let _ = (client, title, prompt, initial, validator);
+    todo!()
 }
 
 /// The width of the longest line of `text`.
