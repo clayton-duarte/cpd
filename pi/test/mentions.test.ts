@@ -30,6 +30,7 @@ test("only whole tokens are mentions", () => {
 test("an unknown id is not a mention", () => {
   assert.equal(paintMentions("see other-plan", ids), "see other-plan");
   assert.equal(isMention("other-plan", ids), false);
+  assert.equal(paintMentions("see other-plan and cpd2", ids), `see other-plan and ${mag("cpd2")}`);
 });
 
 test("a Worker pane draws no mentions", () => {
