@@ -951,17 +951,9 @@ fn the_twenty_count_runs_from_the_latest_digest() {
     stop_engine(engine);
 }
 
-// ---- The Tier ladder (hs-d538): contract §4.6 ----
+// ---- One Tier, no ladder (hs-d560) ----
 
 const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"]}"#;
-
-/// A fake `pi` that answers `haiku` (shell, run in a `says`) for every `p/haiku` model, `sonnet` for every
-/// `p/sonnet` one, and `other` for anything else (O included).
-fn by_model(haiku: &str, sonnet: &str, other: &str) -> String {
-    format!(
-        "{REPLY}\ncase \"$*\" in\n*p/haiku:*) {{\n{haiku}\n}} | reply ;;\n*p/sonnet:*) {{\n{sonnet}\n}} | reply ;;\n*) {{\n{other}\n}} | reply ;;\nesac"
-    )
-}
 
 const STRAY: &str = "echo '# Digest'; echo 'Cites a ghost [hs-d99] and nothing else.'";
 
@@ -976,76 +968,46 @@ fn tiers_of(runs: &[Value]) -> Vec<String> {
     runs.iter().map(|r| r["tier"].as_str().unwrap_or("<none>").to_string()).collect()
 }
 
-/// The tier names the output's `steps` lists, whether each step is a string or an object with a `tier`.
-fn step_tiers(out: &Value) -> Vec<String> {
-    out["steps"]
-        .as_array()
-        .unwrap_or_else(|| panic!("the output has a `steps` array: {out}"))
-        .iter()
-        .map(|s| s.as_str().or_else(|| s["tier"].as_str()).unwrap_or("<none>").to_string())
-        .collect()
-}
-
 #[test]
-fn the_distiller_climbs_the_ladder_until_a_digest_is_valid() {
-    let fx = ladder_fx();
-    fx.env.fake_pi(&format!("{REPLY}\ncase \"$*\" in\n*:high*) {{\n{CITES_ALL}\n}} | reply ;;\n*) {{\n{STRAY}\n}} | reply ;;\nesac"));
-    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3"], "{out}");
-    assert_eq!(tiers_of(&fx.runs()), ["H0", "H1", "H2", "H3"]);
-    assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
-    assert_eq!(fx.errors().len(), 0, "a valid step ends the run with no error Event");
-}
-
-#[test]
-fn the_distiller_starts_at_context_distill_tier() {
+fn the_distiller_runs_at_context_distill_tier() {
     let fx = ladder_fx();
     let config = fx.env.cpd_home().join("config.toml");
     let mut text = fs::read_to_string(&config).unwrap();
     text = text.replacen("lead_pi_packages", "context_distill_tier = \"H2\"\nlead_pi_packages", 1);
     fs::write(&config, text).unwrap();
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(tiers_of(&fx.runs()).first().map(String::as_str), Some("H2"));
+    assert_eq!(tiers_of(&fx.runs()), ["H2"]);
 }
 
 #[test]
-fn a_run_that_fails_every_step_stops_after_h3_with_one_error_event() {
+fn an_invalid_step_fails_the_run_with_no_second_step() {
     let fx = ladder_fx();
     fx.env.fake_pi(&says(STRAY));
+    let start = tiers_of(&{
+        // The tier a run starts at: the one the run of a valid digest reports.
+        let probe = ladder_fx();
+        probe.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+        probe.runs()
+    });
     let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
     refused(&run, "distill_invalid", 1);
-    let runs = fx.runs();
-    assert_eq!(tiers_of(&runs), ["H0", "H1", "H2", "H3"]);
-    for r in &runs {
-        let model = r["model"].to_string();
-        assert!(!model.contains("opus"), "never O: {r}");
-        assert_ne!(r["tier"].as_str().unwrap_or("")[..1], *"S", "no S step (hs-d555): {r}");
-        assert!(!model.contains(":max"), "never effort 5: {r}");
-    }
+    assert_eq!(tiers_of(&fx.runs()), start, "one step, at the one Tier, no higher one");
+    assert_eq!(fx.pi_calls(), 1, "one pi run: a stray id gets no repair either");
     let events = fx.errors();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["data"]["code"], "distill_invalid");
 }
 
 #[test]
-fn a_failed_pi_step_climbs_too() {
+fn a_failed_pi_run_fails_the_run_with_no_second_step() {
     let fx = ladder_fx();
-    fx.env.fake_pi(&format!("case \"$*\" in *:high*) ;; *) echo 'model unavailable' >&2; exit 7 ;; esac\n{}", says(CITES_ALL)));
-    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3"], "{out}");
-    assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
-}
-
-#[test]
-fn a_run_starting_at_h3_has_one_step() {
-    // The full catalog (S efforts up to max) is there: the ladder still ends at H3 (hs-d555).
-    let fx = ladder_fx();
-    let config = fx.env.cpd_home().join("config.toml");
-    let text = fs::read_to_string(&config).unwrap().replacen("lead_pi_packages", "context_distill_tier = \"H3\"\nlead_pi_packages", 1);
-    fs::write(&config, text).unwrap();
-    fx.env.fake_pi(&says(STRAY));
+    fx.env.fake_pi("echo 'model unavailable' >&2; exit 7");
     let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
-    refused(&run, "distill_invalid", 1);
-    assert_eq!(tiers_of(&fx.runs()), ["H3"]);
-    assert_eq!(fx.errors().len(), 1);
+    refused(&run, "distill_failed", 1);
+    assert_eq!(fx.pi_calls(), 1, "no next step, no higher Tier");
+    assert_eq!(fx.runs().len(), 1);
+    assert!(fx.digest_files().is_empty());
+    let events = fx.errors();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["data"]["code"], "distill_failed");
 }
