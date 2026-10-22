@@ -196,6 +196,7 @@ machine = "a1234567"
 concurrency = 1
 test_concurrency = 64
 context_recent_days = 3650
+loop_guard_turns = 4294967295
 retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"
