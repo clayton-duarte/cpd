@@ -270,8 +270,8 @@ fn add_in_phase_dispatch_or_deploy_appends_a_queued_job_with_its_fingerprint() {
                 ),
             );
         }
-        let out = job_add(&env, "pl", "late", "H1", &["a"]).ok();
-        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "kind": "work", "status": "queued", "appended": true, "tier": "H1", "needs": ["a"], "review": false, "urgent": false}), "{phase}");
+        let out = job_add(&env, "pl", "late", "H3", &["a"]).ok();
+        assert_eq!(out["job"], json!({"key": "late", "pr": "repo", "kind": "work", "status": "queued", "appended": true, "tier": "H3", "needs": ["a"], "review": false, "urgent": false}), "{phase}");
         assert_eq!(job_row(&env, "pl", "late", "appended"), 1);
         let id = PlanId::parse("pl").unwrap();
         let all = store(&env).read(|conn| jobs::load(conn, &id)).unwrap();
@@ -410,11 +410,11 @@ fn edit_changes_the_given_fields_and_lists_only_those_that_changed() {
     job_add(&env, "pl", "c", "S2", &[]).ok();
     let spec = write_spec(&env, "new.json", &json!({"goal": "New goal.", "context": "Because.", "touches": ["src/a.rs"], "acceptance": ["cargo test"], "out_of_scope": []}).to_string());
 
-    let run = job(&env, &["edit", "b", "--tier", "S4", "--needs", "a,c", "--title", "Title of b"], "pl");
+    let run = job(&env, &["edit", "b", "--tier", "S3", "--needs", "a,c", "--title", "Title of b"], "pl");
     let out = run.ok();
     assert_eq!(out["job"], json!({"key": "b", "status": "draft"}));
     assert_eq!(out["fields"], json!(["tier", "needs"]));
-    assert_eq!(job_row(&env, "pl", "b", "tier"), "S4");
+    assert_eq!(job_row(&env, "pl", "b", "tier"), "S3");
     assert_eq!(env.query::<String>("SELECT group_concat(needs) FROM (SELECT needs FROM dependencies WHERE job = 'b' ORDER BY needs)"), "a,c");
 
     let out = job(&env, &["edit", "b", "--spec", &spec, "--title", "New title"], "pl").ok();
@@ -593,31 +593,31 @@ fn retry_queues_a_failed_job_at_the_given_tier() {
     drafted(&env);
     lock(&env, "pl");
     engine(&env, "pl", "a", "failed");
-    let out = job(&env, &["retry", "a", "--tier", "S4"], "pl").ok();
-    assert_eq!(out, json!({"ok": true, "job": "a", "status": "queued", "tier": "S4"}));
+    let out = job(&env, &["retry", "a", "--tier", "S3"], "pl").ok();
+    assert_eq!(out, json!({"ok": true, "job": "a", "status": "queued", "tier": "S3"}));
     assert_eq!(job_row(&env, "pl", "a", "status"), "queued");
-    assert_eq!(job_row(&env, "pl", "a", "retry_tier"), "S4");
+    assert_eq!(job_row(&env, "pl", "a", "retry_tier"), "S3");
     assert_eq!(job_row(&env, "pl", "a", "failed_cause"), Value::Null);
     assert_eq!(job_row(&env, "pl", "a", "tier"), "S2", "the Job's own Tier is Locked");
     let retried = events(&env, "job-retried");
     assert_eq!(retried.len(), 1);
-    assert_eq!(retried[0]["data"], json!({"tier": "S4"}));
+    assert_eq!(retried[0]["data"], json!({"tier": "S3"}));
     assert_eq!(retried[0]["job"], "a");
 
     // Again with the same Tier and no Attempt since: already, nothing written.
     let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
-    let out = job(&env, &["retry", "a", "--tier", "S4"], "pl").ok();
+    let out = job(&env, &["retry", "a", "--tier", "S3"], "pl").ok();
     assert_eq!(out["already"], true);
     assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
     // Another Tier is not the same retry.
-    refused(&job(&env, &["retry", "a", "--tier", "S3"], "pl"), "job_not_failed", 3);
+    refused(&job(&env, &["retry", "a", "--tier", "S1"], "pl"), "job_not_failed", 3);
     // Once an Attempt has started since, the retry is spent: the Job is only queued again by the ladder.
     fixture(
         &env,
         "INSERT INTO events (txn, at, kind, context, plan, job, attempt, text, data)
          SELECT id, at, 'attempt-started', 'ctx', 'pl', 'a', 'a-a2', 'Started.', '{}' FROM txns WHERE id = cpd_txn();",
     );
-    refused(&job(&env, &["retry", "a", "--tier", "S4"], "pl"), "job_not_failed", 3);
+    refused(&job(&env, &["retry", "a", "--tier", "S3"], "pl"), "job_not_failed", 3);
 }
 
 #[test]
@@ -1631,41 +1631,42 @@ fn fixture_error(env: &TestEnv, sql: &str) -> String {
     store(env).write("fixture", |tx| exec(tx, sql)).unwrap_err().to_string()
 }
 
-// ---------- Tier rules (hs-d506): Workers use only S0-S4 and H0-H4 ----------
+// ---------- Tier rules (hs-d554): Workers use only H3 and S0-S3 ----------
 
-/// The refusal of hs-d506: `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
+/// The refusal of hs-d554: `tier_not_allowed`, exit 2, naming the rule, its reason and the allowed range.
 fn not_allowed(run: &Run, tier: &str) {
     let e = refused(run, "tier_not_allowed", 2);
     assert_eq!(e["details"]["tier"], tier, "{run:?}");
-    assert_eq!(e["details"]["allowed"], "S0-S4, H0-H4", "{run:?}");
-    assert_eq!(e["details"]["rule"], "hs-d506", "{run:?}");
+    assert_eq!(e["details"]["allowed"], "H3, S0-S3", "{run:?}");
+    assert_eq!(e["details"]["rule"], "hs-d554", "{run:?}");
     let message = e["message"].as_str().unwrap();
-    for part in ["hs-d506", "cost", "S0-S4", "H0-H4", "never O", "never effort 5"] {
+    for part in ["hs-d554", "cost", "H3, S0-S3"] {
         assert!(message.contains(part), "`{part}` missing from: {message}");
     }
 }
 
 #[test]
-fn add_refuses_an_o_tier_or_effort_5_and_writes_nothing() {
+fn add_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     let env = TestEnv::new();
     setup(&env);
     plan(&env, "pl", "plan");
     let (txns, evs, rows) = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
-    for tier in ["O1", "O2", "O3", "O4", "S5"] {
+    for tier in ["O1", "O3", "S4", "S5", "H0", "H1", "H2"] {
         not_allowed(&job_add(&env, "pl", "k", tier, &[]), tier);
     }
     // A stub draft's Tier is checked too.
-    not_allowed(&stub_add(&env, "pl", "k", &["--tier", "O3"]), "O3");
-    not_allowed(&stub_add(&env, "pl", "k", &["--tier", "S5"]), "S5");
+    for tier in ["O1", "O3", "S4", "S5", "H0", "H1", "H2"] {
+        not_allowed(&stub_add(&env, "pl", "k", &["--tier", tier]), tier);
+    }
     assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), (txns, evs, rows));
 }
 
 #[test]
-fn add_accepts_s1_to_s4_and_h1_to_h3() {
+fn add_accepts_h3_and_s0_to_s3() {
     let env = TestEnv::new();
     setup(&env);
     plan(&env, "pl", "plan");
-    for tier in ["S1", "S2", "S3", "S4", "H1", "H2", "H3"] {
+    for tier in ["H3", "S0", "S1", "S2", "S3"] {
         let key = format!("j-{}", tier.to_lowercase());
         assert_eq!(job_add(&env, "pl", &key, tier, &[]).ok()["job"]["tier"], tier);
         assert_eq!(job_row(&env, "pl", &key, "tier"), tier);
@@ -1682,11 +1683,11 @@ fn add_says_tier_invalid_before_tier_not_allowed() {
 }
 
 #[test]
-fn edit_refuses_an_o_tier_or_effort_5_and_writes_nothing() {
+fn edit_refuses_a_tier_outside_the_worker_range_and_writes_nothing() {
     let env = TestEnv::new();
     drafted(&env);
     let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
-    for tier in ["O1", "O3", "O4", "S5"] {
+    for tier in ["O1", "O3", "S4", "S5", "H0", "H2"] {
         not_allowed(&job(&env, &["edit", "b", "--tier", tier], "pl"), tier);
         not_allowed(&job(&env, &["edit", "b", "--tier", tier, "--title", "New"], "pl"), tier);
     }
@@ -1696,10 +1697,10 @@ fn edit_refuses_an_o_tier_or_effort_5_and_writes_nothing() {
 }
 
 #[test]
-fn edit_accepts_s1_to_s4_and_h1_to_h3() {
+fn edit_accepts_h3_and_s0_to_s3() {
     let env = TestEnv::new();
     drafted(&env);
-    for tier in ["S1", "S4", "H1", "H2", "H3", "S3"] {
+    for tier in ["S0", "S1", "S2", "H3", "S3"] {
         assert_eq!(job(&env, &["edit", "b", "--tier", tier], "pl").ok()["fields"], json!(["tier"]), "{tier}");
         assert_eq!(job_row(&env, "pl", "b", "tier"), tier);
     }
@@ -1709,17 +1710,25 @@ fn edit_accepts_s1_to_s4_and_h1_to_h3() {
 fn a_draft_stored_on_a_refused_tier_is_repaired_by_edit_and_other_edits_are_not_blocked() {
     let env = TestEnv::new();
     drafted(&env);
-    // A store written before hs-d506.
+    // A store written before hs-d554.
     fixture(&env, "UPDATE jobs SET tier = 'O3' WHERE plan = 'pl' AND key = 'b';");
     assert_eq!(job(&env, &["edit", "b", "--title", "Renamed"], "pl").ok()["fields"], json!(["title"]));
     assert_eq!(job_row(&env, "pl", "b", "tier"), "O3", "no migration and no edit rewrites it");
     not_allowed(&job(&env, &["edit", "b", "--tier", "O4"], "pl"), "O4");
     assert_eq!(job(&env, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]));
     assert_eq!(job_row(&env, "pl", "b", "tier"), "S3");
+    // Second pass: Tiers that were allowed before hs-d554.
+    for stored in ["S4", "H2"] {
+        fixture(&env, &format!("UPDATE jobs SET tier = '{stored}' WHERE plan = 'pl' AND key = 'b';"));
+        assert_eq!(job(&env, &["edit", "b", "--title", &format!("Renamed {stored}")], "pl").ok()["fields"], json!(["title"]));
+        assert_eq!(job_row(&env, "pl", "b", "tier"), stored);
+        assert_eq!(job(&env, &["edit", "b", "--tier", "S3"], "pl").ok()["fields"], json!(["tier"]));
+        assert_eq!(job_row(&env, "pl", "b", "tier"), "S3");
+    }
 }
 
 #[test]
-fn retry_refuses_an_o_tier_or_effort_5_checks_it_first_and_writes_nothing() {
+fn retry_refuses_a_tier_outside_the_worker_range_checks_it_first_and_writes_nothing() {
     let env = TestEnv::new();
     drafted(&env);
     job_add(&env, "pl", "c", "S2", &[]).ok();
@@ -1727,7 +1736,7 @@ fn retry_refuses_an_o_tier_or_effort_5_checks_it_first_and_writes_nothing() {
     engine(&env, "pl", "a", "failed");
     engine(&env, "pl", "c", "running");
     let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
-    for tier in ["O1", "O3", "O4", "O5", "S5"] {
+    for tier in ["O1", "O3", "O5", "S4", "S5", "H2"] {
         not_allowed(&job(&env, &["retry", "a", "--tier", tier], "pl"), tier);
     }
     // Checked first: a Job that is not failed still gets the Tier refusal.
@@ -1738,8 +1747,8 @@ fn retry_refuses_an_o_tier_or_effort_5_checks_it_first_and_writes_nothing() {
 }
 
 #[test]
-fn retry_accepts_s1_to_s4_and_h1_to_h3() {
-    for tier in ["S1", "S4", "H1", "H3"] {
+fn retry_accepts_h3_and_s0_to_s3() {
+    for tier in ["S0", "S3", "H3"] {
         let env = TestEnv::new();
         drafted(&env);
         lock(&env, "pl");
