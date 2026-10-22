@@ -245,7 +245,7 @@ test("with no fold key every compact row is the toggle's; fold: status brings ba
 		for (const expanded of [false, true]) {
 			const absent = await drawRow({}, name, { expanded });
 			assert.deepEqual(absent, await drawRow(TOGGLE, name, { expanded }), name);
-			assert.ok(firstLine(absent.done).startsWith(BOX.head), name);
+			assert.ok(firstLine(absent.done).startsWith(` ${BOX.head}`), name);
 			const status = await drawRow(STATUS, name, { expanded });
 			assert.ok(firstLine(status.done).startsWith(" "), name);
 			assert.match(lastLine(status.done), /^ └ (Done in [0-9.]+s|Failed in )|^ │ /u, name);
@@ -339,7 +339,7 @@ test("with fold: status the thinking block is upstream's: └ ctrl+t toggle • 
 	for (const config of [STATUS]) {
 		const block = await thinking(config);
 		try {
-			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Check the implementation"]);
+			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Thinking..."]);
 			block.press();
 			assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
 				"Check the implementation",

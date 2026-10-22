@@ -247,7 +247,7 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 	const kind = rowKind(name);
 	const compact = !isCodex() && !isClaude();
 	const indicator = liveIndicator(theme, ctx, state, isCodex() ? CODEX_BULLET : undefined,
-		compact ? (status) => `${paintIndicator(status)} ${statusPill(status, name)}` : undefined);
+		compact ? (status) => (foldToggles() ? statusPill(status, name) : `${paintIndicator(status)} ${statusPill(status, name)}`) : undefined);
 	// Painted once now as well, so a row that starts running starts the animation clock.
 	indicator();
 	// Codex's head reads the call's outcome, so it is worded each time it is drawn.
@@ -274,7 +274,7 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 		const summary = kind === "file" ? getCallDetails(name, args) : summarizeCustomArguments(args);
 		details = summary ? styleMultiline(summary, (line) => ink("toolOutput", line)) : undefined;
 	}
-	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot, details, theme, undefined, foldToggles() ? chrome("╭") : undefined));
+	const container = new LiveCallContainer(indicator, (dot) => renderToolCall(dot, details, theme, undefined, foldToggles() ? chrome(" ╭─") : undefined));
 	const extra = kind === "file" ? getArgumentDetails(name, args) : kind === "custom" && state.expanded ? args : {};
 	if (Object.keys(extra).length > 0) container.addChild(renderArguments(extra, theme));
 	return new WithinWidth(container);
