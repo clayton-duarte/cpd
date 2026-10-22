@@ -136,6 +136,15 @@ const withinWidth = (lines: string[], width: number): string[] => lines.map((l) 
 const CAP_LEFT = "\u{E0B6}";
 const CAP_RIGHT = "\u{E0B4}";
 const MARGIN = " ";
+const GREY8 = (text: string): string => `\x1b[90m${text}\x1b[39m`;
+
+/** The text up to the first `.`, `:` or line end, cut at 60 characters with `…` only when longer (hs-d537). */
+function firstSentence(summary: string): string {
+  const line = (summary.split("\n")[0] ?? "").trim();
+  const at = line.search(/[.:]/);
+  const s = at >= 0 && at < line.length - 1 ? line.slice(0, at).trim() : line;
+  return s.length > 60 ? `${s.slice(0, 60)}…` : s;
+}
 const TOP = "╭─";
 const RAIL = "│ ";
 const CLOSE = "╰";
@@ -148,23 +157,24 @@ type Rows = { head: (width: number) => string[]; body: (width: number) => string
 
 /** The fold's rows for one message. `body` is empty when `content` is. */
 function rowsOf(summary: string, content: string, theme: Theme): Rows {
-  const muted = (text: string) => theme.fg("muted", text);
+  void theme;
   const text = normalizeLineEndings(content).trimEnd();
-  const lead = `${MARGIN}${muted(TOP)}\x1b[90m${CAP_LEFT}`;
+  const lead = `${MARGIN}${GREY8(TOP)}\x1b[35m${CAP_LEFT}`;
   const indent = " ".repeat(visibleWidth(lead));
-  // contract §6.1.1 R1: background 8, text 7, caps 8, by explicit SGR (pi's theme has no numbered colours).
-  const pill = (line: string) => `\x1b[100m\x1b[37m${line}\x1b[49m`;
-  const rail = `${MARGIN}${muted(RAIL)}`;
+  // contract §6.1.1: a block is magenta 5 with text 0, caps 5, by explicit indexed SGR; lead and rails 8, toggle and content 7.
+  const pill = (line: string) => `\x1b[45m\x1b[30m${line}\x1b[49m`;
+  const rail = `${MARGIN}${GREY8(RAIL)}`;
+  const body = text === "" ? "" : text.split("\n").map((l) => (l === "" ? l : `\x1b[37m${l}\x1b[39m`)).join("\n");
   return {
     head: (width) => {
       const room = width - visibleWidth(lead);
-      let lines = hardWrap(`cpd ${summary}`, room);
+      let lines = hardWrap(`cpd ${firstSentence(summary)}`, room);
       // The closing cap needs its own cell on the last row.
-      if (visibleWidth(lines[lines.length - 1]) + visibleWidth(CAP_RIGHT) > room) lines = hardWrap(`cpd ${summary}`, room - visibleWidth(CAP_RIGHT));
-      return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? `\x1b[90m${CAP_RIGHT}\x1b[39m` : ""}`);
+      if (visibleWidth(lines[lines.length - 1]) + visibleWidth(CAP_RIGHT) > room) lines = hardWrap(`cpd ${firstSentence(summary)}`, room - visibleWidth(CAP_RIGHT));
+      return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? `\x1b[35m${CAP_RIGHT}\x1b[39m` : ""}`);
     },
-    body: text === "" ? () => [] : prefixedText(text, rail),
-    toggle: (_width, expanded) => [`${MARGIN}${muted(`${CLOSE}${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}`)}`],
+    body: text === "" ? () => [] : prefixedText(body, rail),
+    toggle: (_width, expanded) => [`${MARGIN}\x1b[37m${CLOSE}${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}\x1b[39m`],
   };
 }
 
@@ -202,10 +212,7 @@ export class Rendering {
       return withinWidth(lines, width);
     };
     const inner: Component = {
-      render: (width) => {
-        const lines = outputPad === 0 ? outputPadLines(draw(width + 1), width) : draw(width);
-        return lines.map((l) => theme.bg("customMessageBg", l + " ".repeat(Math.max(0, width - visibleWidth(l)))));
-      },
+      render: (width) => (outputPad === 0 ? outputPadLines(draw(width + 1), width) : draw(width)),
       invalidate() {},
     };
     if (open) return inner;

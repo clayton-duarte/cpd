@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 
 /** contract §6.1.1 "The pi theme" (hs-d534, hs-d545): `pi/themes/cpd.json` names pi's 56 colour tokens, each an index 0-15 or "" (terminal default). */
@@ -94,7 +93,7 @@ test("theme cpd matches the contract token table", () => {
 
 test("theme cpd loads in pi", async () => {
   assert.ok(existsSync(THEME), "pi/themes/cpd.json exists");
-  const pi = createRequire(import.meta.url).resolve("@earendil-works/pi-coding-agent");
+  const pi = fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"));
   const mod = (await import(pathToFileURL(join(dirname(pi), "modes/interactive/theme/theme.js")).href)) as {
     loadThemeFromPath(path: string, mode?: string): { fg(color: string, text: string): string };
   };

@@ -29,7 +29,9 @@ const tagged = (line: string): string =>
     .replace(/\x1b\[38;5;(\d+)m/g, (_m, n) => `<${COLORS[Number(n)]}>`)
     .replace(/\x1b\[39m/g, "</>")
     .replace(/\x1b\[90m/g, "<c8>")
-    .replace(/\x1b\[100m/g, "<bg8>")
+    .replace(/\x1b\[35m/g, "<c5>")
+    .replace(/\x1b\[45m/g, "<bg5>")
+    .replace(/\x1b\[30m/g, "<t0>")
     .replace(/\x1b\[37m/g, "<t7>")
     .replace(/\x1b\[7m/g, "<inv>")
     .replace(/\x1b\[27m/g, "</inv>")
@@ -47,13 +49,18 @@ const plain = (lines: string[]) => lines.map((l) => l.replace(/<\/?[a-zA-Z0-9]*>
 const CAP_L = "\u{E0B6}";
 const CAP_R = "\u{E0B4}";
 const DOT = "\u{2981}";
-// hs-d486, hs-d530: `╭─` muted; the pill by explicit SGR (caps colour 8, background 8, text 7); no dot.
-const HEAD = (summary: string) => ` <muted>╭─</><c8>${CAP_L}<bg8><t7>cpd ${summary}<c8>${CAP_R}</>`;
-const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd ${summary}${CAP_R}`;
-const rail = (line: string) => ` <muted>│ </>${line}`;
+// hs-d534, hs-d537: `╭─` 8; the pill by explicit SGR (caps colour 5, background 5, text 0), `cpd` and the first sentence; no dot.
+const first = (summary: string): string => {
+  const at = summary.search(/[.:]/);
+  const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
+  return s.length > 60 ? `${s.slice(0, 60)}…` : s;
+};
+const HEAD = (summary: string) => ` <c8>╭─</><c5>${CAP_L}<bg5><t0>cpd ${first(summary)}<c5>${CAP_R}</>`;
+const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd ${first(summary)}${CAP_R}`;
+const rail = (line: string) => ` <c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
 const FOLDED = "\u{F004B}";
 const OPEN = "\u{F0063}";
-const closing = (word: string) => ` <muted>╰${word === "expand" ? FOLDED : OPEN} ${word}</>`;
+const closing = (word: string) => ` <t7>╰${word === "expand" ? FOLDED : OPEN} ${word}</>`;
 
 const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
 const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev(7, kind, over) as unknown as CpdEvent;
@@ -71,10 +78,10 @@ test("an Event, expanded: the title stays, the full content behind a muted │ ,
   assert.deepEqual(show(m, true), [HEAD("Job api-1 merged."), rail("Job api-1 merged."), rail("second line"), closing("collapse")]);
 });
 
-test("a long summary is cut to 160 characters, 159 and `…`", () => {
+test("a long summary is cut to 60 characters and `…`", () => {
   const m = eventMessage(event("escalation", { text: `${"word ".repeat(60)}` }), ID);
   const summary = plain(show(m, false))[0]!.slice(` ╭─${CAP_L}cpd `.length, -CAP_R.length);
-  assert.equal(summary.length, 160);
+  assert.equal(summary.length, 61);
   assert.ok(summary.endsWith("…"));
 });
 
