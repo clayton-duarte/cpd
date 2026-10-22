@@ -147,7 +147,7 @@ fn register(
         .display()
         .to_string();
     if !by_user {
-        let message = store.read(|conn| digest::manager_message(conn, home, &config.machine, context, &row.title))?;
+        let message = store.read(|conn| digest::manager_message(conn, config, context, &row.title))?;
         write_file(&home.manager_message(context), &message)?;
     }
 

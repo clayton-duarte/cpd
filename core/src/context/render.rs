@@ -26,6 +26,7 @@ pub type Retired = HashMap<String, String>;
 /// Only the records after `since` are listed, but which decision is active and
 /// which question is open is decided from all of `records`. An answer after
 /// `since` is listed with its question, whatever the question's position.
+#[cfg(test)]
 pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64, repos: &Repos) -> String {
     markdown_retired(title, jira, records, since, repos, &Retired::new())
 }
@@ -139,6 +140,11 @@ pub fn markdown_retired(title: &str, jira: Option<&str>, records: &[Indexed], si
         .map(|(_, r)| item(r, &format!("{}{}", r.text, retired_label(r))));
     section(&mut out, "Notes", active.chain(superseded).chain(retired_notes));
     out
+}
+
+/// An uncurated record in force, raw: `- [<id>] <kind>, <date>: <text>`, a multi-line text indented under it.
+pub fn raw(record: &Record) -> String {
+    format!("- [{}] {}, {}: {}", record.id, record.kind().as_str(), date(record), record.text.trim_end().replace('\n', "\n  "))
 }
 
 /// One record in full (`context show --record`, commands.md §3.3): the Context's title, then the record's id, kind
