@@ -79,7 +79,7 @@ async function real(kind: "fullscreen" | "main"): Promise<Real> {
 	return {
 		tui,
 		editor,
-		send: (data) => tui.handleTerminalInput(data),
+		send: (data) => (tui as unknown as { handleTerminalInput(data: string): void }).handleTerminalInput(data),
 		shutdown: () => emit("session_shutdown", { reason: "quit" }),
 		border() {
 			const fgs = new Set<string | undefined>();
@@ -161,7 +161,7 @@ test("session shutdown restores the fullscreen mode's own input handling", async
 	assert.deepEqual(s.border(), ["97"], "while bound the report reaches the box");
 	s.shutdown();
 	assert.ok(!Object.hasOwn(tui, "handleViewportInput"), "the instance carries no override after shutdown");
-	assert.equal(tui.handleViewportInput, TuiAltScreen.prototype.handleViewportInput, "pi-tui's own handler is back");
+	assert.equal(tui.handleViewportInput, (TuiAltScreen.prototype as unknown as { handleViewportInput: unknown }).handleViewportInput, "pi-tui's own handler is back");
 	tui.selectionPressActive = true;
 	s.send(FOCUS_OUT);
 	assert.equal(tui.selectionPressActive, false, "the fullscreen renderer still handles the report itself");
