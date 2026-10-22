@@ -219,12 +219,17 @@ pub fn checklist(kind: Kind, context: &cpd_core::ids::ContextId, reply: &serde_j
             Some(Row { id: text(e, "record")?, text: text(e, "text")?, detail })
         })
         .collect::<Option<Vec<_>>>()?;
+    let total = reply[format!("{key}_total")].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(rows.len());
+    let title = if total > rows.len() { format!("{title} ({} of {total})", rows.len()) } else { title };
     (!rows.is_empty()).then_some(Checklist { title, rows })
 }
 
-/// The `cpd` arguments of the curation request (CD4: at most ten entries); stub, the old arguments.
+/// The most entries one checklist shows (hs-d569 CD4).
+const CURATION_LIMIT: usize = 10;
+
+/// The `cpd` arguments of the curation request: at most [`CURATION_LIMIT`] entries of each list.
 pub fn curation_argv(context: &cpd_core::ids::ContextId) -> Vec<String> {
-    vec!["context".into(), "curation".into(), format!("--context={context}")]
+    vec!["context".into(), "curation".into(), format!("--context={context}"), format!("--limit={CURATION_LIMIT}")]
 }
 
 /// The `cpd` arguments an approved checklist runs (commands.md §13.2); a flag with no ids is left out.
@@ -306,7 +311,7 @@ fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line
     let label = truncate(&item.label, room);
     let label_width = label.chars().count();
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
-    let mut glyph = palette::tier_span(item.urgency);
+    let mut glyph = palette::item_span(item.kind, item.urgency);
     if let Some(frame) = spin {
         glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();
         glyph.style = palette::fg_clickable(palette::Meaning::Review); // a merge runs: yellow, whatever the tier

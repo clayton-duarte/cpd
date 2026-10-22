@@ -364,8 +364,12 @@ pub const NEEDS_YOU: &str = SPINNER[8];
 /// The Inbox's tier glyphs (hs-d483), one per [`Urgency`], drawn in that urgency's colour; the state dots stay the Context tree's.
 /// White: an unread reply.
 pub const TIER_WHITE: &str = "\u{F0366}";
-/// Magenta: a decision before the work runs.
-pub const TIER_MAGENTA: &str = "\u{F173A}";
+/// Magenta: a decision before the work runs (the generic system item).
+pub const TIER_MAGENTA: &str = "\u{F06F1}";
+/// A documentation candidate (an Inbox item of kind `curate-docs`), magenta.
+pub const ITEM_DOCS: &str = "\u{F0653}";
+/// A record to retire (an Inbox item of kind `curate-retire`), magenta.
+pub const ITEM_RETIRE: &str = "\u{F116E}";
 /// Yellow: pull-request work.
 pub const TIER_YELLOW: &str = "\u{F069A}";
 /// Red: a blocker only the User can clear.
@@ -380,6 +384,17 @@ pub fn tier_span(urgency: Urgency) -> Span<'static> {
         Urgency::White => (TIER_WHITE, Meaning::NotStarted),
     };
     Span::styled(glyph, fg_clickable(meaning))
+}
+
+/// The glyph of an Inbox item of `kind` and `urgency` (hs-d569 CD5): its tier's glyph, except the two curation kinds, which
+/// draw their own, in the magenta colour.
+pub fn item_span(kind: cpd_core::inbox::model::Kind, urgency: Urgency) -> Span<'static> {
+    use cpd_core::inbox::model::Kind as Item;
+    match kind {
+        Item::CurateDocs => Span::styled(ITEM_DOCS, fg_clickable(Meaning::Planning)),
+        Item::CurateRetire => Span::styled(ITEM_RETIRE, fg_clickable(Meaning::Planning)),
+        _ => tier_span(urgency),
+    }
 }
 
 /// How long one frame of the spinner lasts, in milliseconds.

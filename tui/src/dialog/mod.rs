@@ -45,7 +45,7 @@ enum Kind {
     Input(Input),
     /// Scrollable read-only text
     Text(Text),
-    /// Rows to tick, with `[Approve]` and `[Cancel]`; the outcome is `{approved, ticked, unticked}`
+    /// Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}`
     Checklist(Checklist),
 }
 
@@ -251,8 +251,6 @@ fn popup_args(size: (u16, u16), command: &str) -> Vec<String> {
     [
         "display-popup".to_owned(),
         "-E".to_owned(),
-        "-T".to_owned(), // stub (hs-d569 CD1): the kit passes no title
-        String::new(),
         "-w".to_owned(),
         size.0.to_string(),
         "-h".to_owned(),
@@ -373,7 +371,8 @@ pub(crate) struct Checked {
     pub(crate) unticked: Vec<String>,
 }
 
-/// Rows `[ ] <id> <short> — <detail>` (`rows` are `(id, short, detail)`) to tick in a popup, `[Approve]` and `[Cancel]`.
+/// Entries `[ ] <id> — <detail>` (`rows` are `(id, text, detail)`), the full text wrapped under each, to tick in a popup,
+/// `[Approve]` and `[Later]`.
 pub(crate) fn checklist(tmux: &Tmux, title: &str, rows: &[(String, String, String)]) -> Result<Checked, CpdError> {
     let items: Vec<serde_json::Value> =
         rows.iter().map(|(id, text, detail)| serde_json::json!({"id": id, "text": text, "detail": detail})).collect();
@@ -381,8 +380,16 @@ pub(crate) fn checklist(tmux: &Tmux, title: &str, rows: &[(String, String, Strin
     std::fs::write(&file, serde_json::Value::Array(items).to_string()).map_err(|e| {
         CpdError::new(ErrorCode::Internal, format!("Cannot write the checklist items to {}: {e}.", file.display()))
     })?;
-    let natural = rows.iter().map(|(id, text, detail)| format!("[ ] {id} {text} — {detail}").chars().count()).max().unwrap_or(0);
-    let size = |client, title: &str| popup_size(client, title, natural, |_| rows.len().max(1));
+    let natural = rows
+        .iter()
+        .map(|(id, text, detail)| format!("[ ] {id} — {detail}").chars().count().max(widest(text) + view::TEXT_INDENT))
+        .max()
+        .unwrap_or(0);
+    let body_rows = |width: usize| {
+        let entries: usize = rows.iter().map(|(_, text, _)| 1 + wrap(text, width.saturating_sub(view::TEXT_INDENT)).len()).sum();
+        (entries + rows.len().saturating_sub(1)).max(1)
+    };
+    let size = |client, title: &str| popup_size(client, title, natural, body_rows);
     let path = file.display().to_string();
     let asked = ask_with(tmux, On::Newest, title, "checklist", &[("items", &path)], size, |out| {
         let shown = out.display().to_string();

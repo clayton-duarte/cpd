@@ -215,6 +215,8 @@ pub(crate) fn sections() -> Vec<Section> {
             tier(Urgency::Red, "a blocker only you can clear"),
             tier(Urgency::Yellow, "pull-request work"),
             tier(Urgency::Magenta, "a decision before the work runs"),
+            vec![Line::from(Span::styled(palette::ITEM_DOCS, palette::fg_clickable(Meaning::Planning))), plain("a documentation candidate")],
+            vec![Line::from(Span::styled(palette::ITEM_RETIRE, palette::fg_clickable(Meaning::Planning))), plain("a record to retire")],
             tier(Urgency::White, "an unread reply"),
         ],
     };

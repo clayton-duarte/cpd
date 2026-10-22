@@ -368,7 +368,7 @@ fn tiers() -> [(Urgency, &'static str, Color); 4] {
     [
         (Urgency::Red, "\u{F0362}", palette::color_clickable(Meaning::Failed)),
         (Urgency::Yellow, "\u{F069A}", palette::color_clickable(Meaning::Review)),
-        (Urgency::Magenta, "\u{F173A}", palette::color_clickable(Meaning::Planning)),
+        (Urgency::Magenta, "\u{F06F1}", palette::color_clickable(Meaning::Planning)),
         (Urgency::White, "\u{F0366}", palette::color_clickable(Meaning::NotStarted)),
     ]
 }
