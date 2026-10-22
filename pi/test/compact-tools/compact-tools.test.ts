@@ -1232,7 +1232,7 @@ test("renders each thinking view without changing source content", () => {
 	assert.equal(renderThinkingView(thinking, "summary", 80), "Thinking…");
 	assert.equal(
 		renderThinkingView(thinking, "detail", 80),
-		"Thinking…  \n│  \n│ ## **Check the implementation**  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
+		"Thinking…  \n│ ## **Check the implementation**  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
 	);
 	assert.equal(renderThinkingView(thinking, "hidden", 80), "Thinking…");
 	assert.equal(thinking, "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.");
