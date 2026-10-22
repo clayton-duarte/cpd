@@ -275,6 +275,6 @@ test("G4: a Worker is unaffected", async (t) => {
 test("G2 runs before G4", async (t) => {
   const f = await started("lead");
   t.after(() => f.close());
-  assert.deepEqual(await ask1(f, labelled("D1–D5 " + "q".repeat(2000)), [assistant(say("none"))]), { block: true, reason: G2(2008) });
+  assert.deepEqual(await ask1(f, labelled("D1–D5 " + "q".repeat(2000)), [assistant(say("none"))]), { block: true, reason: G2(2009) });
   assert.deepEqual(await ask1(f, labelled("D1–D5"), [assistant(say("none"))]), { block: true, reason: G4("D2, D3, D4") }, "control: short, G4");
 });
