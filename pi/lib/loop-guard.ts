@@ -2,7 +2,7 @@ import { isObject } from "./cpd.ts";
 import type { Host } from "./host.ts";
 import type { Run } from "./run.ts";
 
-/** commands.md §15.15 (hs-d552, hs-d571): the loop guard of a Lead or Manager. */
+/** commands.md §15.15: the loop guard of a Lead or Manager. */
 
 /** L3: the sliding window, in ms. */
 export const WINDOW_MS = 600_000;
