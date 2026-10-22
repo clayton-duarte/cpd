@@ -81,18 +81,18 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 	const hidden = editor.scrollOffset;
 	let top: string | undefined;
 	if (words !== undefined && workingStatusIndicator !== undefined && textWidth >= 1) {
-		const room = inner - 2 - 2 - 2;
+		const room = inner - 1 - 2 - 2;
 		if (room >= 1) {
 			const label = truncateToWidth(words, room, "…");
 			const block = pill(RUNNING, `${loaderFrame()} ${label}`);
-			let rest = inner - 2 - 2 - 2 - visibleWidth(label);
+			let rest = inner - 1 - 2 - 2 - visibleWidth(label);
 			let tail = "";
 			const scroll = hidden > 0 ? ` ↑ ${hidden} more ` : "";
 			if (scroll && rest >= visibleWidth(scroll) + 2) {
 				tail = `${"─".repeat(rest - visibleWidth(scroll) - 1)}${scroll}─`;
 				rest = 0;
 			}
-			top = ` ${ink("╭──")}${block}${ink(`${tail || "─".repeat(rest)}╮`)} `;
+			top = ` ${ink("╭─")}${block}${ink(`${tail || "─".repeat(rest)}╮`)} `;
 		}
 	}
 	out.push(top ?? ` ${ink(`╭─${rows[0]}─╮`)} `);
@@ -129,12 +129,32 @@ export class EditorBoxController {
 			tui = host;
 			return { render: () => [], invalidate() {} };
 		}, { placement: "belowEditor" });
-		this.stopInput = ctx.ui.onTerminalInput((data) => {
-			if (data !== FOCUS_IN && data !== FOCUS_OUT) return undefined;
-			state().focused = data === FOCUS_IN;
+		const seen = (data: string): void => {
+			if (data !== FOCUS_IN && data !== FOCUS_OUT) return;
+			const focused = data === FOCUS_IN;
+			if (state().focused === focused) return;
+			state().focused = focused;
 			tui?.requestRender();
+		};
+		const stopListener = ctx.ui.onTerminalInput((data) => {
+			seen(data);
 			return undefined;
 		});
+		// The fullscreen renderer consumes the reports in its own first listener, so no later listener sees them:
+		// observe them where it handles them, then let it do so unchanged.
+		const viewport = tui as unknown as { handleViewportInput?: (data: string) => unknown } | undefined;
+		const own = viewport && typeof viewport.handleViewportInput === "function" ? viewport : undefined;
+		if (own) {
+			const original = own.handleViewportInput!;
+			own.handleViewportInput = function (this: unknown, data: string) {
+				seen(data);
+				return original.call(this, data);
+			};
+		}
+		this.stopInput = () => {
+			stopListener();
+			if (own) delete own.handleViewportInput;
+		};
 	}
 
 	dispose(ctx?: ExtensionContext): void {
