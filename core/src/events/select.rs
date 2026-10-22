@@ -38,7 +38,7 @@ enum Filter {
     Plan(PlanId),
     Context(ContextId),
     /// A Session that is its Plan's `lead_session` (amendment 7): its Plan, its
-    /// Context's Events about no Plan, and itself.
+    /// Context's Events about no Plan (but not an adapter `error`, which is the Manager's alone, hs-d573), and itself.
     Lead { session: SessionId, plan: PlanId, context: ContextId },
     /// Any other Session (a Worker, a side fork, a Manager): Events addressed to itself.
     Session(SessionId),
@@ -110,7 +110,7 @@ impl Selection {
                 params.push(text(context.as_str()));
             }
             Filter::Lead { session, plan, context } => {
-                sql.push_str(" AND (plan = ? OR (plan IS NULL AND context = ?) OR session = ?)");
+                sql.push_str(" AND (plan = ? OR (plan IS NULL AND context = ? AND NOT (kind = 'error' AND json_extract(data, '$.source') = 'adapter')) OR session = ?)");
                 params.extend([text(plan.as_str()), text(context.as_str()), text(session.as_str())]);
             }
             Filter::Session(session) => {

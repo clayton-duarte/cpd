@@ -35,7 +35,7 @@ pub struct Spec {
 /// reported by `cpd --version`. Raise it whenever an Event kind, an Event `data` field the pi
 /// adapter reads, or the output of a command the adapter runs changes in a way the adapter depends on.
 /// The pi adapter's `PROTOCOL` (`pi/lib/event.ts`) must equal it; `pi/test/protocol.test.ts` checks.
-pub const PROTOCOL: u32 = 12;
+pub const PROTOCOL: u32 = 13;
 
 use Set::{Maybe as M, No as N, Yes as Y};
 
@@ -238,10 +238,10 @@ mod tests {
 
     const REVIEW_KINDS: [&str; 2] = ["review-opened", "review-closed"];
 
-    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10) and hs-d571 (`session-resumed`: 12).
+    /// hs-d496 (two review kinds: 8), hs-d506 (`session-retiered`: 9), hs-d502 (`plan-outlined`: 10) and hs-d571 (`session-resumed`: 12) and hs-d573 (`session report`: 13).
     #[test]
-    fn the_protocol_is_12_with_the_session_resumed_kind() {
-        assert_eq!(PROTOCOL, 12);
+    fn the_protocol_is_13_with_the_session_report_command() {
+        assert_eq!(PROTOCOL, 13);
     }
 
     #[test]
