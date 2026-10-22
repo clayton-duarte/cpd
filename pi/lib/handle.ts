@@ -68,7 +68,7 @@ function handleLine(host: Host, r: Run, line: string): boolean {
   return true;
 }
 
-// The Event kinds that change the mention ids (hs-n423, §15.14).
+// The Event kinds that change the mention ids.
 export const MENTION_KINDS: ReadonlySet<string> = new Set([
   "session-registered",
   "plan-created",
