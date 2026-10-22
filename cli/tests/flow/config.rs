@@ -46,6 +46,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "manager_tier": "O4",
             "context_distill_tier": "GX",
             "context_recent_days": 1,
+            "loop_guard_turns": 20,
             "open_tier": "S2",
             "lead_pi_packages": [
                 "npm:@plannotator/pi-extension@0.28.17",
@@ -82,6 +83,33 @@ fn config_defaults_context_distill_tier_to_gx() {
             "tmux": {"socket": "cpd", "cockpit_session": "cpd", "work_session": "cpd-work"}
         })
     );
+}
+
+/// hs-d552, hs-d571 (contract §8.2): `loop_guard_turns` is an integer >= 1, default 20.
+#[test]
+fn config_defaults_loop_guard_turns_to_20_and_takes_a_positive_integer() {
+    let env = TestEnv::new();
+    let out = config_with(&env, MINIMAL).ok();
+    assert_eq!(out["config"]["loop_guard_turns"], 20, "{out}");
+    assert_eq!(out["sources"]["loop_guard_turns"], "default", "{out}");
+
+    let out = config_with(&env, &format!("{MINIMAL}loop_guard_turns = 3\n")).ok();
+    assert_eq!(out["config"]["loop_guard_turns"], 3, "{out}");
+    assert_eq!(out["sources"]["loop_guard_turns"], "file", "{out}");
+}
+
+#[test]
+fn config_loop_guard_turns_zero_negative_or_not_an_integer_is_config_invalid() {
+    let env = TestEnv::new();
+    // 1 is the floor and is accepted.
+    assert_eq!(config_with(&env, &format!("{MINIMAL}loop_guard_turns = 1\n")).ok()["config"]["loop_guard_turns"], 1);
+    for bad in ["0", "-1", "1.5", "\"20\""] {
+        let run = config_with(&env, &format!("{MINIMAL}loop_guard_turns = {bad}\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{bad}");
+        assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
+        assert_eq!(err["details"]["key"], "loop_guard_turns", "{bad}: {err}");
+    }
 }
 
 /// Context decision 'Team review Inbox' (contract §8.2): the channel and the User's Slack id are set together.
@@ -168,6 +196,7 @@ machine = "a1234567"
 concurrency = 1
 test_concurrency = 64
 context_recent_days = 3650
+loop_guard_turns = 4294967295
 retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"

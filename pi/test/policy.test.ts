@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CpdError } from "../lib/cpd.ts";
 import { POLICY_SECTION, policySection } from "../lib/policy.ts";
-import { Fixture, policyShow, sessionShow } from "./fake.ts";
+import { Fixture, policyShow, shown } from "./fake.ts";
 
 /** Runs a start and a `before_agent_start`; returns the sections pi would hand to the prompt. */
 async function sectionsAfterStart(f: Fixture): Promise<Record<string, string>> {
@@ -47,7 +47,7 @@ test("a failed `cpd policy show` is an error message and no section", async (t) 
 test("the Worker's role: the adapter trusts policy show's role and keeps the domains whose audience holds it", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow({ role: "worker", plan_lead: false, attempt: "a1" }));
+  f.respond("session-show", shown({ role: "worker", plan_lead: false, attempt: "a1" }));
   f.respond("policy-show", policyShow("worker", { deploy: "Lead only.", code: "Small commits.", instructions: "Hi." }, "repo:/p/r.toml"));
   const sections = await sectionsAfterStart(f);
   assert.equal(sections[POLICY_SECTION], "## code (repo:/p/r.toml)\nSmall commits.\n\n## instructions (repo:/p/r.toml)\nHi.");
@@ -56,7 +56,7 @@ test("the Worker's role: the adapter trusts policy show's role and keeps the dom
 test("a Manager gets only the instructions text", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false }));
+  f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false }));
   f.respond("policy-show", policyShow("manager", { pr: "Lead and Worker.", instructions: "For all." }));
   const sections = await sectionsAfterStart(f);
   assert.equal(sections[POLICY_SECTION], "## instructions (owner:/p/o.toml)\nFor all.");
@@ -65,7 +65,7 @@ test("a Manager gets only the instructions text", async (t) => {
 test("the section composes with the Manager's turn-start update", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false }));
+  f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false }));
   f.respond("policy-show", policyShow("manager", { instructions: "For all." }));
   f.load();
   await f.pi.fire("session_start");

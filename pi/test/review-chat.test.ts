@@ -358,7 +358,7 @@ test("/plan-review with no pending chat review says so and opens nothing", async
 test("/plan-review is not registered for a Manager", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
-  f.respond("session-show", { ok: true, session: { id: "x", role: "manager", context: "ctx", plan: null, attempt: null, name: "m", state: "idle", plan_lead: false, grounded_lead: false, registered_event: 1 } });
+  f.respond("session-show", { ok: true, session: { id: "x", role: "manager", context: "ctx", plan: null, attempt: null, name: "m", state: "idle", plan_lead: false, grounded_lead: false, registered_event: 1, loop_guard_turns: 20 } });
   f.load();
   assert.equal(f.pi.commands.has("plan-review"), false);
 });

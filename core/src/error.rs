@@ -134,6 +134,7 @@ error_codes! {
     CurationNotPending = "curation_not_pending" => Refused,
     ManagerMissing = "manager_missing" => Refused,
     ArgsInvalid = "args_invalid" => Usage,
+    NotLoopGuarded = "not_loop_guarded" => Refused,
     DistillRunning = "distill_running" => Refused,
     WatchNotStarted = "watch_not_started" => Refused,
     IllegalTransition = "illegal_transition" => Refused,

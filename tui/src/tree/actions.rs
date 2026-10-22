@@ -143,6 +143,9 @@ pub enum Action {
     /// `tmux set-buffer -w -- <url>`: a click on an Inbox item that only has a link (no Plan to open); the
     /// click says nothing (the label is an OSC 8 link the terminal's modifier-click opens).
     CopyUrl(String),
+    /// `session resume <id>` (§10.17): a click on a `loop-guard` item, in the background with no dialog.
+    #[allow(dead_code)] // stub: the click that builds it is not written yet
+    SessionResume(SessionId),
     /// `watch --ensure` (§12): a click on an `engine-down` item starts the engine; idempotent.
     EnsureWatch,
     /// `session send <manager> --unblocks <why> -- <text>` (§10.13): the engine's failure to start, to the most recently active live
@@ -188,6 +191,7 @@ impl Action {
             Action::Archive { subject, .. } => subject.command("archive"),
             Action::Unarchive(subject) | Action::Resume { unarchive: subject, .. } => subject.command("unarchive"),
             Action::CopyId(text) | Action::CopyUrl(text) => words(&["set-buffer", "-w", "--", text.as_str()]),
+            Action::SessionResume(id) => words(&["session", "resume", id.as_str()]),
             Action::EnsureWatch => words(&["watch", "--ensure"]),
             Action::Tell { manager, text } => vec![
                 "session".into(),
@@ -260,6 +264,7 @@ impl Action {
             Action::CopyUrl(url) => format!("copied {url}: Cmd-click the row to open it"),
             Action::EnsureWatch if reply["already"] == true => "already running".into(),
             Action::EnsureWatch => "engine started".into(),
+            Action::SessionResume(id) => format!("resumed {id}"),
             Action::Tell { manager, .. } => format!("told {manager}"),
             Action::Snooze { .. } => "snoozed".into(),
             Action::Dismiss(_) => "dismissed".into(),

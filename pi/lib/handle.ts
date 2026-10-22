@@ -3,6 +3,7 @@ import { eventMessage, FOLLOW_UP, gated, leadRule, sessionMessage } from "./deli
 import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
 import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
+import { clearTrip } from "./loop-guard.ts";
 import { checkProtocol } from "./protocol.ts";
 import { closeSuperseded, decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
 import { noteRetier } from "./retier.ts";
@@ -87,6 +88,11 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
   if (MENTION_KINDS.has(ev.kind)) void refreshMentions(host, r);
   const { pi } = host;
   const own = ev.session === r.id;
+  if (ev.kind === "session-resumed") {
+    // §15.15 L6: for its own Session while tripped, the trip is cleared and ONE message starts the turn that sees what queued; otherwise nothing.
+    if (own && (r.info.role === "lead" || r.info.role === "manager") && clearTrip(host, r)) pi.sendMessage(eventMessage(ev, r.id), gated(r, FOLLOW_UP(true)));
+    return;
+  }
   if (ev.kind === "session-message") {
     if (own && (r.info.role === "lead" || r.info.role === "manager")) await deliverSessionMessage(host, r, ev);
     return;

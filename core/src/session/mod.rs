@@ -9,6 +9,7 @@
 //! - [`archive`]: `session archive` and `unarchive`, and the archive rule;
 //! - [`retier`]: `session retier`, a live Lead's or Manager's Tier set to the config's;
 //! - [`send`]: `session send`, one message to a Lead;
+//! - [`resume`]: `session resume`, a Lead or Manager blocked by the loop guard, resumed;
 //! - [`retitle`]: `session retitle`, a Lead's or a Manager's dynamic title;
 //! - [`port`]: a Plan's plannotator port;
 //! - [`run`]: `session run`, the program in every Lead pane (§6.7);
@@ -23,6 +24,7 @@ mod moves;
 mod port;
 mod reload;
 mod resolve;
+mod resume;
 mod retier;
 mod retitle;
 mod row;
@@ -43,6 +45,7 @@ pub use archive::{Blocker, archive_ended_workers, archive_blocked, blockers};
 pub use moves::{Closed, Place, Placed, close_lead, gone, placed, reopen};
 pub(crate) use moves::lead_spawn;
 pub use row::{Role, State};
+pub use resume::LOOP_GUARD_LABEL;
 pub use state::Label;
 pub use send::{plan_inactive, sender, tell_managers};
 
@@ -78,6 +81,8 @@ pub enum Command {
     Unarchive(UnarchiveArgs),
     /// Send a message to a Lead (§10.13)
     Send(SendArgs),
+    /// Resume a Lead or Manager blocked by the loop guard (§10.17)
+    Resume(ResumeArgs),
     /// Move live Leads and Managers to the Tier the config names now (§10.15)
     Retier(RetierArgs),
     /// Rename a Session (§10.7)
@@ -247,6 +252,13 @@ pub struct StateArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct ResumeArgs {
+    /// The Lead or Manager Session blocked by the loop guard
+    #[arg(value_name = "id")]
+    id: SessionRef,
+}
+
+#[derive(clap::Args, Debug)]
 #[command(group(clap::ArgGroup::new("target").required(true).multiple(false).args(["id", "all"])))]
 pub struct RetierArgs {
     /// The Lead or Manager Session to move
@@ -300,6 +312,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Archive(args) => archive::archive(args),
         Command::Unarchive(args) => archive::unarchive(args),
         Command::Send(args) => send::send(args),
+        Command::Resume(args) => resume::resume(args),
         Command::Retier(args) => retier::retier(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),

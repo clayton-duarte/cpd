@@ -6,6 +6,7 @@ import { CpdError, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
 import { PERMANENT_CODES } from "./follower.ts";
 import { policySection } from "./policy.ts";
+import { holdTrip, trippedIn } from "./loop-guard.ts";
 import { followerHooks } from "./handle.ts";
 import type { Host } from "./host.ts";
 import type { Ctx, ModelCtx } from "./pi.ts";
@@ -191,6 +192,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     registerPlanReviewCommand(host);
   }
   if (host.run !== r) return;
+  if (trippedIn(entries)) holdTrip(r); // §15.15 L7: a trip survives a reload; the reason and the gate are back before the follower starts
   host.refresh(r);
 
   // 6. follow

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { contextCursorFrom } from "../lib/updates.ts";
-import { ev, Fixture, ID, OTHER, sessionShow, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, OTHER, shown, waitFor } from "./fake.ts";
 
 /** commands.md §15.7, "the first message of a by-user Session" (hs-d542 A3). */
 const TEXT = "You are the Lead of Plan p1 \"T\". Follow the cpd-lead skill.\n\nContext ctx digest.";
@@ -9,7 +9,7 @@ const firstMessage = (event = 120) => ({ ok: true, session: ID, role: "lead", te
 const firstMessageCalls = (f: Fixture) => f.argvs().filter((a) => a[0] === "session" && a[1] === "first-message");
 
 async function lead(f: Fixture, over: Record<string, unknown> = {}) {
-  f.respond("session-show", sessionShow(over));
+  f.respond("session-show", shown(over));
   f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
   f.respond("session-first-message", firstMessage());
   f.respond("events-list@context-record", { ok: true, events: [], next: 0 });

@@ -370,6 +370,10 @@ impl NewEvent {
         make(Kind::SessionAsleep, text, json!({}))
     }
 
+    pub fn session_resumed(text: impl Into<String>) -> NewEvent {
+        make(Kind::SessionResumed, text, json!({}))
+    }
+
     pub fn plan_deleted(text: impl Into<String>, counts: &Counts) -> NewEvent {
         make(
             Kind::PlanDeleted,
@@ -539,6 +543,7 @@ mod tests {
             Kind::SessionTitled => vec![NewEvent::session_titled(T, s)],
             Kind::SessionRetiered => vec![NewEvent::session_retiered(T, s, s)],
             Kind::SessionAsleep => vec![NewEvent::session_asleep(T)],
+            Kind::SessionResumed => vec![NewEvent::session_resumed(T)],
             Kind::PlanDeleted => vec![NewEvent::plan_deleted(T, &Counts::default())],
             Kind::ContextDeleted => vec![NewEvent::context_deleted(T, 0, &Counts::default())],
             Kind::RecordsRetired => vec![NewEvent::records_retired(T, s, [s], Vec::<String>::new())],

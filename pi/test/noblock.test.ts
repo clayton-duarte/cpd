@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BOUND_SECONDS, blockingReason, reasonText } from "../lib/noblock.ts";
-import { Fixture, sessionShow, waitFor } from "./fake.ts";
+import { Fixture, shown, waitFor } from "./fake.ts";
 
 // commands.md §15.11: a Manager's bash call that waits over 30 s is refused.
 
@@ -92,7 +92,7 @@ test("the reason is one line naming the rule and what matched", () => {
 
 async function started(role: string) {
   const f = new Fixture();
-  f.respond("session-show", sessionShow({ role, plan: role === "manager" ? null : "p1", plan_lead: role === "lead" }));
+  f.respond("session-show", shown({ role, plan: role === "manager" ? null : "p1", plan_lead: role === "lead" }));
   f.respond("plan-show", { ok: true, plan: { id: "p1" }, jobs: [], escalations: [], review: null });
   f.load();
   await f.pi.fire("session_start");

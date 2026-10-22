@@ -13,6 +13,7 @@ mod tui_dialog;
 mod tui_history;
 mod tui_idle;
 mod tui_logs;
+mod tui_loop_guard;
 mod tui_merge;
 mod tui_plan;
 mod tui_plan_cancelled;

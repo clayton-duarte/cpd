@@ -14,6 +14,9 @@ export const sessionShow = (over: Record<string, unknown> = {}) => ({
   open_escalations: [],
 });
 
+/** `sessionShow` with the default `loop_guard_turns` (commands.md §15.15): what a `session show` answers; `sessionShow` alone is the answer without it (a `bad_output`, loop-guard.test.ts). */
+export const shown = (over: Record<string, unknown> = {}) => sessionShow({ loop_guard_turns: 20, ...over });
+
 /** A `cpd policy show` output (commands.md §22.1): the domains of contract §8.3, each with its audience; `texts` sets a domain's text and `source`. */
 export const policyShow = (role = "lead", texts: Record<string, string> = {}, source = "owner:/p/o.toml") => {
   const audience: Record<string, string[]> = {
@@ -24,7 +27,7 @@ export const policyShow = (role = "lead", texts: Record<string, string> = {}, so
 };
 
 export const answers = (): Record<string, unknown> => ({
-  "session-show": sessionShow(),
+  "session-show": shown(),
   "context-pending": { ok: true, context: "ctx", plans: [] }, // a Manager reads it at every turn start (§15.7)
   "policy-show": policyShow(), // no text anywhere: no section
   "review-list": { ok: true, reviews: [] }, // a Lead or Manager reconciles its tracked plannotator sessions at start

@@ -88,6 +88,7 @@ pub const TABLE: &[Entry] = &[
     ("session archive", &[], true),
     ("session unarchive", &[], true),
     ("session send", &[Lead, Manager], false),
+    ("session resume", &[], true),
     ("session retier", &[Manager], false),
     ("session rename", &[Lead], true),
     ("events list", &[Manager], false),

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Fixture, planShow, sessionShow, waitFor } from "./fake.ts";
+import { Fixture, planShow, shown, waitFor } from "./fake.ts";
 
 // commands.md §15.13 (hs-d502, hs-d503): G1 (a Lead with draft Jobs) is deleted; any Session's `ask_user_question` over 1500 characters (G2) is refused.
 
@@ -26,7 +26,7 @@ const ask = (question: number, header: number, option: [number, number, number?]
 
 async function started(role: "lead" | "manager" | "worker", plan = withJobs()) {
   const f = new Fixture();
-  f.respond("session-show", sessionShow({ role, plan: role === "manager" ? null : "p1", plan_lead: role === "lead" }));
+  f.respond("session-show", shown({ role, plan: role === "manager" ? null : "p1", plan_lead: role === "lead" }));
   f.respond("plan-show", plan);
   f.load();
   await f.pi.fire("session_start");

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { LEAD_MESSAGES } from "../lib/delivery.ts";
 import { KINDS, PROTOCOL } from "../lib/event.ts";
-import { ev, Fixture, ID, OTHER, planShow, sessionShow, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, OTHER, planShow, shown, waitFor } from "./fake.ts";
 
 // hs-d506, commands.md §15.3 `session-retiered`: a Session whose Tier `cpd session retier` changed switches pi's model and thinking level at its next
 // idle, once, with no message and no restart. The model and level are the ones `cpd session show` reports (`model`, `thinking`, commands.md §10.2); the adapter
@@ -12,13 +12,13 @@ import { ev, Fixture, ID, OTHER, planShow, sessionShow, waitFor } from "./fake.t
 const WAIT = 5000;
 const retiered = (id: number, session: string = ID) => ev(id, "session-retiered", { session, data: { from: "O3", to: "O2" } });
 /** The row after the retier: `O2` is `tiers.O` at `medium`. */
-const shownO2 = (over: Record<string, unknown> = {}) => sessionShow({ tier: "O2", model: "p/opus", thinking: "medium", ...over });
+const shownO2 = (over: Record<string, unknown> = {}) => shown({ tier: "O2", model: "p/opus", thinking: "medium", ...over });
 
 async function started(t: { after(fn: () => Promise<void>): void }, show: Record<string, unknown> = {}): Promise<Fixture> {
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("plan-show", planShow());
-  f.respond("session-show", sessionShow(show));
+  f.respond("session-show", shown(show));
   f.load();
   await f.pi.fire("session_start");
   await waitFor("the follower", () => f.follows().length > 0);
@@ -65,7 +65,7 @@ test("two retiers before one idle make one switch, to what the row says at that 
   await f.pi.busy();
   f.emit(retiered(200), { ...retiered(201), data: { from: "O2", to: "O1" } });
   await f.drain();
-  f.respond("session-show", sessionShow({ tier: "O1", model: "p/opus", thinking: "low" }));
+  f.respond("session-show", shown({ tier: "O1", model: "p/opus", thinking: "low" }));
   f.pi.idle = true;
   await f.pi.fire("agent_settled");
   await waitFor("setModel at idle", () => f.pi.modelsSet.length > 0, WAIT);
@@ -88,7 +88,7 @@ test("an Event for another Session changes nothing, and the Session's own then d
 
 test("a Manager switches too", async (t) => {
   const f = await started(t, { role: "manager", plan: null, plan_lead: false, name: "ctx-manager" });
-  f.respond("session-show", sessionShow({ role: "manager", plan: null, plan_lead: false, tier: "O4", model: "p/opus", thinking: "xhigh" }));
+  f.respond("session-show", shown({ role: "manager", plan: null, plan_lead: false, tier: "O4", model: "p/opus", thinking: "xhigh" }));
   f.emit({ ...retiered(200), plan: null, data: { from: "O5", to: "O4" } });
   await waitFor("setModel", () => f.pi.modelsSet.length > 0, WAIT);
   // a Manager gets only what is addressed to it: a message to it is the marker that the Event before it was handled

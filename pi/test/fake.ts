@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { adapter, type Options } from "../lib/adapter.ts";
-import { answers, ID, policyShow, sessionShow } from "./answers.ts";
+import { answers, ID, policyShow, sessionShow, shown } from "./answers.ts";
 import type { CommandCtx, Ctx, ExecOptions, ExecResult, Message, PiApi, SendOptions, ToolDefinition } from "../lib/pi.ts";
 
 /** A fake `cpd` on PATH and a fake pi, so the adapter is tested through its real boundaries (child processes, pi's API). */
@@ -92,7 +92,7 @@ import(entry).then((m) => {
 });
 `;
 
-export { ID, policyShow, sessionShow };
+export { ID, policyShow, sessionShow, shown };
 export const OTHER = "11111111-2222-4333-8444-555555555555";
 
 export type Call = { phase: "start" | "end"; argv: string[]; since?: string; feedback?: string; t: number };
@@ -522,12 +522,12 @@ export class FakePi implements PiApi {
     for (const h of this.handlers.get(event) ?? []) await h({ type: event, ...payload }, this.ctx());
   }
 
-  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). The adapter's `markReply` and `policyHandler` observers add no message and are left out, so the list stays what the handlers that add a message returned. */
+  /** Like `fire`, returning what each handler returned (`before_agent_start` returns the message to add). The adapter's `markReply`, `policyHandler` and `loopGuardHandler` observers add no message and are left out, so the list stays what the handlers that add a message returned. */
   async fireWith(event: string, payload: Record<string, unknown> = {}): Promise<unknown[]> {
     const out: unknown[] = [];
     for (const h of this.handlers.get(event) ?? []) {
       const result = await h({ type: event, ...payload }, this.ctx());
-      if (h.name !== "markReply" && h.name !== "policyHandler") out.push(result);
+      if (h.name !== "markReply" && h.name !== "policyHandler" && h.name !== "loopGuardHandler") out.push(result);
     }
     return out;
   }
