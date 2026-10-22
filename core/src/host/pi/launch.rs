@@ -505,3 +505,7 @@ mod tests {
     }
 
 }
+
+#[cfg(test)]
+#[path = "launch_no_mcp_tests.rs"]
+mod no_mcp_tests;

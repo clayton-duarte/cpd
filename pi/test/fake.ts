@@ -478,6 +478,13 @@ export class FakePi implements PiApi {
   /** The models `pi.setModel` was called with, in order (commands.md §15.3 `session-retiered`), and the levels `pi.setThinkingLevel` was called with. */
   readonly modelsSet: { provider: string; id: string }[] = [];
   readonly thinkingSet: string[] = [];
+  /** The `registerMcpServer` calls (commands.md §15.3 `mcp-attached`), in order; `mcpThrows` is thrown by each when set. */
+  readonly registeredMcp: { name: string; config: unknown }[] = [];
+  mcpThrows?: Error;
+  registerMcpServer(name: string, config: unknown): void {
+    this.registeredMcp.push({ name, config });
+    if (this.mcpThrows) throw this.mcpThrows;
+  }
   /** What `setModel` answers: false is pi's "no authentication for the model's provider". */
   modelAccepted = true;
   /** The models `ctx.modelRegistry.find(provider, id)` knows, as `provider/id`. */
