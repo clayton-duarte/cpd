@@ -5,6 +5,7 @@
 mod common;
 
 mod doctor;
+mod watch_distill_inbox;
 mod watch_inbox;
 mod watch_sleep;
 mod watch;
