@@ -120,7 +120,7 @@ impl Fx {
 
     /// Two more ticks, so that a missing item had its chance to open.
     fn two_ticks(&self) {
-        std::thread::sleep(Duration::from_secs(common::TICK_SECONDS.parse::<u64>().unwrap() * 2 + 1));
+        std::thread::sleep(Duration::from_secs_f64(common::TICK_SECONDS.parse::<f64>().unwrap() * 2.0 + 1.0));
     }
 
     fn errors(&self) -> i64 {
