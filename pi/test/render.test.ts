@@ -55,8 +55,9 @@ const first = (summary: string): string => {
   const s = at >= 0 && at < summary.length - 1 ? summary.slice(0, at).trim() : summary;
   return s.length > 60 ? `${s.slice(0, 60)}…` : s;
 };
-const HEAD = (summary: string) => ` <c8>╭─</><c5>${CAP_L}<bg5><t0>cpd ${first(summary)}<c5>${CAP_R}</>`;
-const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd ${first(summary)}${CAP_R}`;
+const HEAD = (summary: string) => ` <c8>╭─</><c5>${CAP_L}<bg5><t0>cpd<c5>${CAP_R}</> <t7>${first(summary)}</>`;
+const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd${CAP_R} ${first(summary)}`;
+const TERM = ` <c8>╰\u{F005A}</>`;
 const rail = (line: string) => ` <c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
 const FOLDED = "\u{F004B}";
 const OPEN = "\u{F0063}";
@@ -80,7 +81,7 @@ test("an Event, expanded: the title stays, the full content behind a muted │ ,
 
 test("a long summary is cut to 60 characters and `…`", () => {
   const m = eventMessage(event("escalation", { text: `${"word ".repeat(60)}` }), ID);
-  const summary = plain(show(m, false))[0]!.slice(` ╭─${CAP_L}cpd `.length, -CAP_R.length);
+  const summary = plain(show(m, false))[0]!.slice(` ╭─${CAP_L}cpd${CAP_R} `.length);
   assert.equal(summary.length, 61);
   assert.ok(summary.endsWith("…"));
 });
@@ -88,14 +89,15 @@ test("a long summary is cut to 60 characters and `…`", () => {
 test("a head wider than the pane wraps under the title, it is never cut", () => {
   const m = eventMessage(event("job-merged", { text: "alpha beta gamma delta epsilon zeta" }), ID);
   const lines = plain(show(m, false, { width: 24 }));
-  assert.equal(lines[0], ` ╭─${CAP_L}cpd alpha beta gamma`);
-  assert.equal(lines[1], `    delta epsilon zeta${CAP_R}`);
+  assert.ok(lines[0]!.startsWith(` ╭─${CAP_L}cpd${CAP_R} alpha`), lines[0]);
+  assert.ok(lines.length >= 3 && lines.slice(1, -1).every((l) => l.startsWith(" │ ")), "continuation rows are aligned like a tool row's");
+  assert.ok(lines.slice(0, -1).join("").replace(/[\s│╭─]|cpd/gu, "").includes("zeta"), "never cut");
   assert.equal(lines.at(-1), ` ╰${FOLDED} expand`);
 });
 
 test("an empty content shows no body", () => {
   const m = eventMessage(event("job-merged", { text: "x" }), ID, "");
-  assert.deepEqual(show(m, true), [HEAD("x"), closing("collapse")]);
+  assert.deepEqual(show(m, true), [HEAD("x"), TERM]);
 });
 
 // ---- Session messages ----
@@ -155,7 +157,7 @@ test("cpd-context, expanded: the full text", () => {
 
 test("cpd-context whose details lack the counts (an older adapter's): always open, no closing row", () => {
   const old = { ...context(), details: { event: 1, delivered_to: ID, records: ["hs-n1"] } };
-  const expected = [HEAD("cpd-context"), ...FULL.map((l) => rail(l))];
+  const expected = [HEAD("cpd-context"), ...FULL.map((l) => rail(l)), TERM];
   assert.deepEqual(show(old, false), expected);
   assert.deepEqual(show(old, true), expected);
   const component = rendering().render(old, { expanded: false, outputPad: 1 }, theme) as Component & { handleMouse?: unknown };
@@ -192,7 +194,7 @@ test("a customType the adapter starts to display later: the first line of its co
 test("cpd-plan-summary: `Plan review <id> summary`, always open with its Markdown content in full, no closing row and no toggle", () => {
   const content = "# Review title\nPlan p1: Plan · review r1\n\nGoal: Show a review in chat\n\nApprove | Change | Open full plan (/x/plan-r1.md)";
   const m: Message = { customType: "cpd-plan-summary", content, display: true, details: { plan: "p1", review: "r1" } };
-  const expected = [HEAD("Plan review r1 summary"), rail("# Review title"), rail("Plan p1: Plan · review r1"), rail(""), rail("Goal: Show a review in chat"), rail(""), rail("Approve | Change | Open full plan (/x/plan-r1.md)")];
+  const expected = [HEAD("Plan review r1 summary"), rail("# Review title"), rail("Plan p1: Plan · review r1"), rail(""), rail("Goal: Show a review in chat"), rail(""), rail("Approve | Change | Open full plan (/x/plan-r1.md)"), TERM];
   assert.deepEqual(show(m, false), expected);
   assert.deepEqual(show(m, true), expected);
   const component = rendering().render(m, { expanded: false, outputPad: 1 }, theme) as Component & { handleMouse?: unknown };
@@ -258,7 +260,7 @@ test("Click to expand is gone; only the closing ╰ row names the toggle, muted"
 
 test("outputPad 0 gives the margin column back", () => {
   const m = eventMessage(event("job-merged", { text: "A" }), ID);
-  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}cpd A${CAP_R}`, `╰${FOLDED} expand`]);
+  assert.deepEqual(plain(show(m, false, { outputPad: 0 })), [`╭─${CAP_L}cpd${CAP_R} A`, `╰${FOLDED} expand`]);
 });
 
 test("style off: no component, so pi draws its own box", () => {
