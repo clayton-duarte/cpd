@@ -1065,7 +1065,7 @@ test("keeps the progress controller inert until it is bound to a TUI", () => {
 		},
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
-	assert.deepEqual(messages, ["\x1b[36mThinking…\x1b[39m"]);
+	assert.deepEqual(messages, ["\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30m Thinking… \x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m"]);
 
 	// Disposed again: later events must not reach the detached context.
 	controller.dispose();
@@ -1108,7 +1108,7 @@ test("the working label is palette index 6 whatever the thinking level", () => {
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
 	handlers.get("thinking_level_select")?.({ level: "max", previousLevel: "low" });
-	assert.equal(messages.at(-1), "\x1b[36mThinking…\x1b[39m");
+	assert.equal(messages.at(-1), "\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30m Thinking… \x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m");
 	controller.dispose();
 });
 
@@ -1129,7 +1129,8 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 			setWorkingIndicator: (value?: typeof indicator) => { indicator = value; },
 		},
 	} as unknown as ExtensionContext);
-	assert.deepEqual(indicator?.frames, []);
+	assert.equal(indicator?.frames.length, 9);
+	assert.equal(indicator?.intervalMs, 100);
 	handlers.get("agent_start")?.({});
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "thinking_delta" } });
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "thinking_delta" } });
@@ -1139,7 +1140,7 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 	handlers.get("agent_end")?.({});
 	assert.equal(messages.length, beforeAgentEnd, "a low-level run may still retry or continue");
 	handlers.get("agent_settled")?.({});
-	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…"].map((label) => `\x1b[36m${label}\x1b[39m`).concat(undefined as never));
+	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…"].map((label) => `\x1b[36m\ue0b6\x1b[39m\x1b[46m\x1b[30m ${label} \x1b[39m\x1b[49m\x1b[36m\ue0b4\x1b[39m`).concat(undefined as never));
 	controller.dispose();
 });
 
@@ -1216,7 +1217,7 @@ test("a one-paragraph thinking block is the Thinking pill 7 with its text inside
 
 	// hs-d557 item 1: the one title is the Thinking pill (bg 7, text 0); the paragraph is inside the fold.
 	const view = render();
-	assert.ok(view?.includes("\x1b[47m\x1b[30mThinking...") && !view.includes("Planning"), JSON.stringify(view));
+	assert.ok(view?.includes("\x1b[47m\x1b[30mThinking…") && !view.includes("Planning"), JSON.stringify(view));
 	controller.dispose();
 });
 
@@ -1228,22 +1229,22 @@ test("detects whether provider thinking includes expandable detail", () => {
 
 test("renders each thinking view without changing source content", () => {
 	const thinking = "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.";
-	assert.equal(renderThinkingView(thinking, "summary", 80), "Thinking...");
+	assert.equal(renderThinkingView(thinking, "summary", 80), "Thinking…");
 	assert.equal(
 		renderThinkingView(thinking, "detail", 80),
-		"Thinking...  \n│  \n│ ## **Check the implementation**  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
+		"Thinking…  \n│  \n│ ## **Check the implementation**  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
 	);
-	assert.equal(renderThinkingView(thinking, "hidden", 80), "Thinking...");
+	assert.equal(renderThinkingView(thinking, "hidden", 80), "Thinking…");
 	assert.equal(thinking, "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.");
 });
 
-test("the title is Thinking... and the whole text is the detail, never truncated", () => {
+test("the title is Thinking… and the whole text is the detail, never truncated", () => {
 	const paragraph = "I need to check the config loader first because project settings are ignored when untrusted.";
-	assert.equal(renderThinkingView(paragraph, "summary", 16), "Thinking...");
+	assert.equal(renderThinkingView(paragraph, "summary", 16), "Thinking…");
 	const rendered = renderThinkingView(paragraph, "detail", 16);
-	assert.ok(rendered.startsWith("Thinking..."), rendered);
+	assert.ok(rendered.startsWith("Thinking…"), rendered);
 	assert.ok(rendered.replace(/[│└\s]+/gu, " ").includes("config loader"));
-	assert.ok(!rendered.includes("…"));
+	assert.ok(!rendered.slice("Thinking…".length).includes("…"), "the detail is never cut short");
 });
 
 test("renders a connected detail rail while preserving fenced code", () => {
@@ -1264,7 +1265,7 @@ test("headings inside thinking are text, not sections: one styled title", () => 
 			return `<thinking>${summary}</thinking>`;
 		},
 	});
-	assert.ok(rendered.startsWith("<thinking>Thinking...</thinking>"), rendered);
+	assert.ok(rendered.startsWith("<thinking>Thinking…</thinking>"), rendered);
 	assert.ok(rendered.includes("│ **Detail heading**"));
 	assert.deepEqual(styledSections, [0]);
 });

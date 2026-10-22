@@ -287,7 +287,7 @@ async function thinking(config: object, source = "## **Check the implementation*
 	};
 }
 
-const THINKING_TITLE = "╭─\uE0B6Thinking...\uE0B4";
+const THINKING_TITLE = "╭─\uE0B6Thinking…\uE0B4";
 
 test("thinking, folded (summary): the one Thinking pill, then ╰<glyph> expand", async () => {
 	const block = await thinking({ ...TOGGLE, toggle: NERD });
@@ -339,10 +339,10 @@ test("with fold: status the thinking block is upstream's: └ ctrl+t toggle • 
 	for (const config of [STATUS]) {
 		const block = await thinking(config);
 		try {
-			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Thinking..."]);
+			assert.deepEqual(block.draw().map((line) => line.trimEnd()), ["Thinking…"]);
 			block.press();
 			assert.deepEqual(block.draw().map((line) => line.trimEnd()), [
-				"\uE0B6Thinking...\uE0B4",
+				"\uE0B6Thinking…\uE0B4",
 				BOX.rail,
 				`${BOX.rail} ## **Check the implementation**`,
 				BOX.rail,

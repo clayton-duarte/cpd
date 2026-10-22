@@ -2,7 +2,7 @@
  * fold: "toggle", thinking block; see docs/contract.md section 6.9.
  *
  * renderThinkingSections with fold "toggle" (the three views map as follows):
- *   hidden   unchanged: "Thinking...", no toggle row.
+ *   hidden   unchanged: "Thinking…", no toggle row.
  *   summary  = folded. Each section prints its title, then, only when the section has detail,
  *            the row "╰" + toggle.expand + " expand" (chrome rail, same painter as the tool rows).
  *            A section without detail has nothing to expand and no toggle row.
@@ -11,7 +11,7 @@
  *            " · ", dim, as today). A section without detail has no toggle row.
  * Replaces today's "└ ctrl+t toggle • click to hide" control row; the "└ " prefix is not used.
  */
-import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -62,10 +62,10 @@ export function classifyThinkingToggleInput(data: string): ThinkingToggleInput |
 
 type ThinkingSection = { summary: string; detail: string };
 
-/** One section: the title is the literal "Thinking...", the whole text is the fold's body. */
+/** One section: the title is the literal "Thinking…", the whole text is the fold's body. */
 function splitThinkingSections(markdown: string): ThinkingSection[] {
 	const normalized = markdown.includes("\r") ? markdown.replace(/\r\n?/gu, "\n") : markdown;
-	return [{ summary: "Thinking...", detail: normalized.trim() }];
+	return [{ summary: "Thinking…", detail: normalized.trim() }];
 }
 
 function compactDetail(
@@ -135,7 +135,7 @@ function renderThinkingSections(
 	availableWidth: number,
 	options: ThinkingRenderOptions = {},
 ): string {
-	if (view === "hidden") return "Thinking...";
+	if (view === "hidden") return "Thinking…";
 	const controls = options.controls ?? ((hasDetail: boolean) =>
 		hasDetail ? "ctrl+t toggle • click to hide" : undefined);
 	const styleControlPrefix = options.styleControlPrefix ?? ((prefix: string) => prefix);
@@ -192,6 +192,41 @@ function getInitialThinkingPhase(): ThinkingPhase {
 	}
 }
 
+/** The bound controllers, the latest last: pi gives a message no way to name the one that owns it. */
+const bound: ThinkingCycleController[] = [];
+
+type ThinkingMessage = {
+	thinkingVisibilityOverrides: Map<number, boolean>;
+	contentContainer: { children: Array<{ child?: { defaultTextStyle?: { italic?: boolean }; text?: string; setText?: (text: string) => void } }> };
+	updateContent(message: unknown, isStreaming?: boolean): void;
+};
+
+type PatchedUpdate = ((this: ThinkingMessage, message: unknown, isStreaming?: boolean) => void) & { original?: unknown };
+
+/**
+ * pi's thinking block has two cuts we do not want: a click on a visible block records an override that
+ * swaps in pi's plain hidden label (never our expanded view), and its Markdown/hidden label are drawn
+ * with italic. Both are decided inside AssistantMessageComponent.updateContent, which offers no hook,
+ * so it is wrapped once while a controller is bound: a click override becomes our fold toggle, and the
+ * italic is cancelled on the thinking children it just built (the agent's reply keeps pi's emphasis).
+ */
+function patchedUpdate(original: (message: unknown, isStreaming?: boolean) => void): PatchedUpdate {
+	const wrapper: PatchedUpdate = function (this: ThinkingMessage, message, isStreaming) {
+		const owner = bound[bound.length - 1];
+		const clicked = owner?.takeClick(this.thinkingVisibilityOverrides) ?? false;
+		original.call(this, message, isStreaming);
+		if (!owner) return;
+		for (const { child } of this.contentContainer.children) {
+			if (!child) continue;
+			if (child.defaultTextStyle?.italic) child.defaultTextStyle = { ...child.defaultTextStyle, italic: false };
+			else if (typeof child.text === "string" && child.setText) child.setText(child.text.replace(/\x1b\[2?3m/gu, ""));
+		}
+		if (clicked) owner.refresh();
+	};
+	wrapper.original = original;
+	return wrapper;
+}
+
 export class ThinkingCycleController {
 	private context: ExtensionContext | undefined;
 	private phase: ThinkingPhase = "summary";
@@ -201,7 +236,7 @@ export class ThinkingCycleController {
 	private refreshThinking: (() => void) | undefined;
 
 	constructor(pi: ExtensionAPI, enabled: () => boolean = () => true, toggle: () => ToggleGlyphs | undefined = () => undefined) {
-		pi.registerMarkdownTransformer((markdown, context) => {
+		const transformer = (markdown: string, context: { messageType: string; availableWidth: number }): string => {
 			// Off also applies before session_start, during transcript reconstruction
 			// and HTML exports. Do not summarize or restyle native thinking there.
 			if (!enabled() || context.messageType !== "assistant-thinking") return markdown;
@@ -229,11 +264,29 @@ export class ThinkingCycleController {
 				styleControlPrefix: rail,
 				toggle: toggleGlyphs,
 			});
-		});
+		};
+		pi.registerMarkdownTransformer(transformer);
+	}
+
+	/**
+	 * A click on a visible block: pi recorded "hide it" (override true). Drop it and flip our own fold
+	 * instead, so the block expands or folds rather than turning into pi's plain label.
+	 */
+	takeClick(overrides: Map<number, boolean>): boolean {
+		if (overrides.size === 0 || !this.hasToggleableThinking || this.phase === "hidden") return false;
+		if (![...overrides.values()].includes(true)) return false;
+		overrides.clear();
+		this.phase = thinkingViewForPhase(this.phase) === "detail" ? "summary" : "detail";
+		return true;
+	}
+
+	refresh(): void {
+		this.refreshThinking?.();
 	}
 
 	bind(ctx: ExtensionContext): void {
 		this.unsubscribe?.();
+		if (!bound.includes(this)) bound.push(this);
 		this.context = ctx;
 		this.theme = ctx.ui.theme;
 		this.hasToggleableThinking = false;
@@ -242,11 +295,13 @@ export class ThinkingCycleController {
 		// this label in thinkingText, so an inner text span keeps it consistent with
 		// completed summary titles.
 		this.phase = getInitialThinkingPhase();
-		const hiddenLabel = ink("text", this.theme.bold("Thinking..."));
+		const hiddenLabel = ink("text", this.theme.bold("Thinking…"));
 		// Pi does not currently expose transcript invalidation directly. Updating
 		// this label rebuilds assistant Markdown and requests a render without
 		// changing the message or its hidden/visible state.
 		this.refreshThinking = () => ctx.ui.setHiddenThinkingLabel(hiddenLabel);
+		const prototype = AssistantMessageComponent.prototype as unknown as { updateContent: PatchedUpdate };
+		if (!prototype.updateContent.original) prototype.updateContent = patchedUpdate(prototype.updateContent);
 		this.refreshThinking();
 		this.unsubscribe = ctx.ui.onTerminalInput((data) => {
 			const input = classifyThinkingToggleInput(data);
@@ -277,6 +332,7 @@ export class ThinkingCycleController {
 		this.context = undefined;
 		this.unsubscribe = undefined;
 		this.refreshThinking = undefined;
+		if (bound.includes(this)) bound.splice(bound.indexOf(this), 1);
 		this.hasToggleableThinking = false;
 		this.theme = undefined;
 		try { unsubscribe?.(); }

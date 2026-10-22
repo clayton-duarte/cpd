@@ -173,7 +173,7 @@ test("tool rows draw only indexed colours 0-15", async () => {
 
 test("the thinking block draws only indexed colours 0-15", () => {
 	const { folded, expanded } = thinkingViews();
-	assert.ok(plain(folded).includes("Thinking..."), "folded thinking is the one title");
+	assert.ok(plain(folded).includes("Thinking…"), "folded thinking is the one title");
 	assert.ok(!plain(folded).includes("Check the code"), "its text is inside the fold");
 	assert.ok(plain(expanded).includes("Inspect the renderer."), "expanded thinking is drawn");
 	assert.deepEqual(refused([...folded.split("\n"), ...expanded.split("\n")]), []);
@@ -245,7 +245,7 @@ test("the running dot and working label are colour 6", async () => {
 				apply(match[1]!, paint);
 			}
 			if (plain(message.slice(last)) !== "") colours.add(paint.fg);
-			assert.deepEqual([...colours], [6], `the label is colour 6 in ${readable(message)}`);
+			assert.deepEqual([...colours].sort(), [0, 6], `the label is a pill: caps 6, text 0 on bg 6 in ${readable(message)}`);
 		}
 	});
 });

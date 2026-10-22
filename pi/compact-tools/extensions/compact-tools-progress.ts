@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
 import { onTick } from "./compact-tools-clock.ts";
-import { paint, RUNNING } from "./compact-tools-indices.ts";
+import { paint, pill, RUNNING } from "./compact-tools-indices.ts";
+import { LOADER_FRAMES, LOADER_INTERVAL_MS } from "./compact-tools-loader.ts";
 import type { ToolArgs } from "./compact-tools-types.ts";
 
 
@@ -92,7 +93,7 @@ export class ProgressController {
 		if (!message) this.activeTools.clear();
 		this.message = undefined;
 		ctx.ui.setWorkingVisible(true);
-		ctx.ui.setWorkingIndicator({ frames: [] });
+		ctx.ui.setWorkingIndicator({ frames: LOADER_FRAMES.map((frame) => paint(RUNNING, frame)), intervalMs: LOADER_INTERVAL_MS });
 		if (message) this.setMessage(message);
 	}
 
@@ -120,7 +121,7 @@ export class ProgressController {
 
 	private renderMessage(): void {
 		if (!this.message || !this.context) return;
-		this.context.ui.setWorkingMessage(paint(RUNNING, this.message));
+		this.context.ui.setWorkingMessage(pill(RUNNING, ` ${this.message} `));
 	}
 
 	private clearMessage(): void {
