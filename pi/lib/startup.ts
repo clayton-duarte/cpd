@@ -4,7 +4,6 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { newReporter } from "./agent-state.ts";
 import { CpdError, isObject, toCpdError } from "./cpd.ts";
 import { cursorFrom } from "./cursor.ts";
-import { errorMessage } from "./delivery.ts";
 import { PERMANENT_CODES } from "./follower.ts";
 import { policySection } from "./policy.ts";
 import { followerHooks } from "./handle.ts";
@@ -37,8 +36,7 @@ export async function start(host: Host, ctx: ModelCtx, reason: string): Promise<
   host.abort = new AbortController();
   host.ctx = ctx;
   if (ctx.sessionManager.getSessionId() !== id) {
-    const m = errorMessage("activation", "session_mismatch", `CPD_SESSION is ${id} but pi's session is ${ctx.sessionManager.getSessionId()}; the adapter stays inactive.`);
-    host.pi.sendMessage(m.message, m.options);
+    host.report("activation", "session_mismatch", `CPD_SESSION is ${id} but pi's session is ${ctx.sessionManager.getSessionId()}; the adapter stays inactive.`);
     return;
   }
 

@@ -91,5 +91,5 @@ test("a pi without sections: the policy failure is reported once per run, no tur
   const errs = f.pi.errors();
   assert.equal(errs.length, 1);
   assert.match(errs[0]!.message.content, /^cpd adapter: policy section: sections_missing: /);
-  assert.deepEqual(errs[0]!.options, { triggerTurn: true, deliverAs: "followUp" }); // the adapter's one error path
+  assert.deepEqual(errs[0]!.options, { triggerTurn: false, deliverAs: "followUp" }); // the adapter's one error path
 });

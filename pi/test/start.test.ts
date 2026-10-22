@@ -103,7 +103,7 @@ test("activation: only in a tui, only with CPD_SESSION, only when it is pi's ses
   assert.equal(f.pi.sent.length, 1);
   const m: Sent = f.pi.sent[0]!;
   assert.match(m.message.content, /^cpd adapter: activation: session_mismatch: /);
-  assert.deepEqual(m.options, { triggerTurn: true, deliverAs: "followUp" });
+  assert.deepEqual(m.options, { triggerTurn: false, deliverAs: "followUp" });
   assert.equal((m.message.details as any).kind, "error");
 });
 

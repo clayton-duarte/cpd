@@ -1,5 +1,4 @@
 import { toCpdError } from "./cpd.ts";
-import { errorMessage } from "./delivery.ts";
 import type { Host } from "./host.ts";
 import type { Ctx, Message } from "./pi.ts";
 import { lastAssistantText, needsReminder, planKeys, REMINDER_TEXT, REMINDER_TYPE } from "./reminder.ts";
@@ -46,8 +45,7 @@ async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: 
     if (!r.contextFailed) {
       r.contextFailed = true;
       const err = toCpdError(e);
-      const m = errorMessage("context updates", err.code, err.message, err.details);
-      host.pi.sendMessage(m.message, { ...m.options, triggerTurn: false });
+      host.report("context updates", err.code, err.message, err.details);
     }
     return undefined;
   }

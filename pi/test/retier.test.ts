@@ -102,7 +102,7 @@ test("a model pi cannot find is one error message and sets nothing, not even the
   f.emit(retiered(200));
   const e = await waitFor("an error", () => f.pi.errors()[0], WAIT);
   assert.equal((e.message.details as any).code, "model_unavailable");
-  assert.equal(e.options.triggerTurn, true, "an adapter error is delivered as every one is (commands.md §15.1)");
+  assert.equal(e.options.triggerTurn, false, "an adapter error is delivered as every one is (commands.md §15.1)");
   await f.drain();
   assert.deepEqual([f.pi.modelsSet, f.pi.thinkingSet, f.pi.errors().length], [[], [], 1]);
 });

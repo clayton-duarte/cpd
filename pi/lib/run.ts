@@ -28,6 +28,8 @@ export class Run {
   deciding = new Set<string>();
   /** Error codes already delivered since the last valid Event (commands.md §15.2, "The follower ends"). */
   followerReported = new Set<string>();
+  /** §15.1 "Errors": the `what` and `code` of the last adapter error shown; an identical one is not shown again until another has been. */
+  lastError: string | undefined = undefined;
   failureLineThisRun = false;
   /** `installedIdentity()` when the current follower process started. */
   startedWith: string | undefined;

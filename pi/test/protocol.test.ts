@@ -87,7 +87,7 @@ test("a different protocol twice for the same binary: still one message", async 
   assert.equal(mismatches(f).length, 1);
 });
 
-test("a new binary that is still different: a second message", async (t) => {
+test("a new binary that is still different: the same message is not shown again (§15.1)", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   f.respond("--version", version(PROTOCOL + 1));
@@ -95,10 +95,9 @@ test("a new binary that is still different: a second message", async (t) => {
   await waitFor("the first message", () => mismatches(f).length === 1);
   f.reinstall();
   await restart(f);
-  await waitFor("the second message", () => mismatches(f).length === 2);
   await restart(f);
   await f.quiet(); // `restart` returns once the next follower started, after its `--version` check
-  assert.equal(mismatches(f).length, 2);
+  assert.equal(mismatches(f).length, 1);
 });
 
 test("a `--version` without protocol is a message", async (t) => {

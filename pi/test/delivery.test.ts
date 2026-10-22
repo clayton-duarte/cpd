@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { CpdError } from "../lib/cpd.ts";
 import { KINDS } from "../lib/event.ts";
-import { ev, Fixture, ID, OTHER, planShow, sessionShow, stateCalls, waitFor } from "./fake.ts";
+import { createHost } from "../lib/host.ts";
+import { Run } from "../lib/run.ts";
+import { ev, FakePi, Fixture, ID, OTHER, planShow, sessionShow, stateCalls, waitFor } from "./fake.ts";
 
 const DATA: Record<string, Record<string, unknown>> = {
   "job-merged": { turn: true },
@@ -309,4 +312,44 @@ test("a Worker ignores session-message", async (t) => {
   f.emit(message(101, null));
   await f.drain(nudge);
   assert.deepEqual(f.pi.sent, []);
+});
+
+/** commands.md §15.1 "Errors" (hs-d552 G1): `host.deliver` on a real Host and Run with a fake pi. */
+function errorHost() {
+  const pi = new FakePi();
+  const host = createHost(pi, {});
+  host.run = new Run({
+    id: ID,
+    info: { role: "lead", context: "c", plan: "p1", planLead: true, registeredEvent: 0, name: null, byUser: false },
+    facts: {} as never,
+    reporter: {} as never,
+    abort: new AbortController(),
+    log: () => {},
+    follow: { hooks: () => ({}) as never, timing: host.timing },
+  });
+  return { host, pi };
+}
+
+test("G1: an adapter error starts no turn", () => {
+  const { host, pi } = errorHost();
+  host.deliver("policy show", new CpdError("bad_output", "one"));
+  assert.equal(pi.sent.length, 1);
+  assert.deepEqual(pi.sent[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
+});
+
+test("G1: the same what and code twice shows once", () => {
+  const { host, pi } = errorHost();
+  host.deliver("policy show", new CpdError("bad_output", "first message"));
+  host.deliver("policy show", new CpdError("bad_output", "another message"));
+  assert.equal(pi.errors().length, 1);
+});
+
+test("G1: a different error shows, then the first shows again", () => {
+  const { host, pi } = errorHost();
+  const a = new CpdError("bad_output", "a");
+  const b = new CpdError("lock_timeout", "b");
+  host.deliver("policy show", a);
+  host.deliver("policy show", b);
+  host.deliver("policy show", a);
+  assert.equal(pi.errors().length, 3);
 });

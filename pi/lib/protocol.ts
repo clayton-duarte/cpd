@@ -1,5 +1,4 @@
 import { cpdProtocol, installedIdentity, toCpdError } from "./cpd.ts";
-import { errorMessage } from "./delivery.ts";
 import { PROTOCOL } from "./event.ts";
 import type { Host } from "./host.ts";
 
@@ -13,8 +12,7 @@ export async function checkProtocol(host: Host): Promise<void> {
     if (host.mismatched.has(identity)) return;
     host.mismatched.add(identity);
     const speaks = cpd === null ? "no protocol (`cpd --version` has no `protocol`)" : `protocol ${cpd}`;
-    const m = errorMessage("protocol mismatch", "protocol_mismatch", `cpd speaks ${speaks}, this adapter ${PROTOCOL}; reload pi (/reload)`, { cpd, adapter: PROTOCOL });
-    host.pi.sendMessage(m.message, m.options);
+    host.report("protocol mismatch", "protocol_mismatch", `cpd speaks ${speaks}, this adapter ${PROTOCOL}; reload pi (/reload)`, { cpd, adapter: PROTOCOL });
   } catch (e) {
     const err = toCpdError(e);
     if (host.versionFailures.has(err.code)) return;

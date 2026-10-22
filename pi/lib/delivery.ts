@@ -32,7 +32,7 @@ export function eventMessage(event: CpdEvent, sessionId: string, content: string
 export function errorMessage(what: string, code: string, message: string, extra: Record<string, unknown> = {}): { message: Message; options: SendOptions } {
   return {
     message: { customType: "cpd", content: `cpd adapter: ${what}: ${code}: ${message}`, display: true, details: { kind: "error", code, ...extra } },
-    options: FOLLOW_UP(true),
+    options: FOLLOW_UP(false),
   };
 }
 

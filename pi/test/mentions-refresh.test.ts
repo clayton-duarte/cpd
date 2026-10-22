@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Host } from "../lib/host.ts";
+import { createHost, type Host } from "../lib/host.ts";
 import { clearMentions, refreshMentions } from "../lib/mentions-refresh.ts";
-import type { Run } from "../lib/run.ts";
+import { Run } from "../lib/run.ts";
+import { FakePi } from "./fake.ts";
+import { ID } from "./answers.ts";
 
 /** commands.md §15.14 (hs-d544): the mentions refresh lists live and archived Leads and Managers with `session list --archived` once (it already lists both; clap refuses it twice), and a failure that repeats the same way is shown once. */
 const run = { info: { role: "lead" } } as unknown as Run;
@@ -43,34 +45,27 @@ test("refresh lists lead and manager sessions with --archived once", async (t) =
   assert.deepEqual(f.delivered, []);
 });
 
-test("a failure repeated the same way is delivered once", async (t) => {
+test("a mentions failure repeated after a success is not shown again", async (t) => {
   t.after(clearMentions);
-  const f = fakeHost(failing("repeat: store lock_timeout"));
-  await refreshMentions(f.host, run);
-  await refreshMentions(f.host, run);
-  assert.equal(f.delivered.length, 1);
-  assert.equal(f.delivered[0]!.what, "mentions");
-});
-
-test("a different failure or a success re-arms the delivery", async (t) => {
-  t.after(clearMentions);
-  let reply: Reply = failing("rearm: same");
-  const f = fakeHost((a) => reply(a));
-  await refreshMentions(f.host, run);
-  await refreshMentions(f.host, run);
+  // The real `host.deliver`: the §15.1 rule (the same what and code is shown once) is what this pins.
+  const pi = new FakePi();
+  const host = createHost(pi, {});
+  const live = new Run({
+    id: ID,
+    info: { role: "lead", context: "c", plan: "p1", planLead: true, registeredEvent: 0, name: null, byUser: false },
+    facts: {} as never,
+    reporter: {} as never,
+    abort: new AbortController(),
+    log: () => {},
+    follow: { hooks: () => ({}) as never, timing: host.timing },
+  });
+  host.run = live;
+  let reply: Reply = failing("after-success: same");
+  (host as { call: Host["call"] }).call = ((args: string[]) => reply(args)) as Host["call"];
+  await refreshMentions(host, live);
   reply = ok;
-  await refreshMentions(f.host, run);
-  reply = failing("rearm: same");
-  await refreshMentions(f.host, run);
-  await refreshMentions(f.host, run);
-  assert.equal(f.delivered.length, 2, "same error, a success, the same error: twice");
-
-  const g = fakeHost((a) => reply(a));
-  reply = failing("rearm: A");
-  await refreshMentions(g.host, run);
-  await refreshMentions(g.host, run);
-  reply = failing("rearm: B");
-  await refreshMentions(g.host, run);
-  await refreshMentions(g.host, run);
-  assert.equal(g.delivered.length, 2, "error A then error B: twice");
+  await refreshMentions(host, live);
+  reply = failing("after-success: same");
+  await refreshMentions(host, live);
+  assert.equal(pi.errors().length, 1, "same error, a success, the same error: shown once (§15.1)");
 });
