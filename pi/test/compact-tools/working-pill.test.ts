@@ -55,6 +55,8 @@ test("the working label is a pill with caps 6, bg 6 and text 0", () => {
 	assert.ok(message.includes("\x1b[46m"), "the body is bg 6");
 	assert.ok(message.includes("\x1b[30m"), "the text is 0");
 	assert.ok(strip(message).startsWith(LEFT_CAP) && strip(message).endsWith(RIGHT_CAP));
+	const inside = strip(message).slice(1, -1);
+	assert.equal(inside, inside.trim(), "no padding space inside the caps (hs-d475)");
 });
 
 test("every working label keeps its words and ends with …", () => {
@@ -62,21 +64,21 @@ test("every working label keeps its words and ends with …", () => {
 		const { messages } = drive(act);
 		const message = messages.at(-1);
 		assert.ok(message, `${label} is set`);
-		const plain = strip(message!).replace(LEFT_CAP, "").replace(RIGHT_CAP, "").trim();
-		assert.equal(plain, label);
+		const plain = strip(message!).replace(LEFT_CAP, "").replace(RIGHT_CAP, "");
+		assert.equal(plain, label, "the words sit unpadded between the caps");
 		assert.ok(plain.endsWith("…") && !plain.includes("..."));
 		assert.ok(message!.includes(LEFT_CAP), `${label} is a pill`);
 	}
 });
 
-test("the working indicator frames are the cockpit loader in 6 at 100 ms", () => {
+test("the working indicator frames are the cockpit loader, plain, at 100 ms", () => {
 	const { indicator } = drive((h) => h.get("agent_start")!({}));
 	assert.ok(indicator, "an indicator is set");
 	assert.equal(indicator!.intervalMs, 100);
 	assert.equal(indicator!.frames.length, 9);
 	indicator!.frames.forEach((frame, index) => {
 		assert.equal(strip(frame), LOADER[index], `frame ${index}`);
-		assert.ok(frame.includes("\x1b[36m"), `frame ${index} is drawn in 6`);
+		assert.equal(frame, LOADER[index], `frame ${index} has no colour of its own: the pill paints it in text 0`);
 	});
 });
 
