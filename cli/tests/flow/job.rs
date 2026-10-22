@@ -1746,6 +1746,42 @@ fn retry_refuses_a_tier_outside_the_worker_range_checks_it_first_and_writes_noth
     assert_eq!(job_row(&env, "pl", "a", "retry_tier"), Value::Null);
 }
 
+/// hs-d562: `GX` is the auxiliaries' Tier, never a Worker's: refused as `S4` is, after `tier_invalid`.
+#[test]
+fn add_edit_and_retry_refuse_gx_as_a_worker_tier() {
+    let env = TestEnv::new();
+    drafted(&env);
+    job_add(&env, "pl", "c", "S2", &[]).ok();
+    lock(&env, "pl");
+    engine(&env, "pl", "a", "failed");
+    engine(&env, "pl", "c", "running");
+    let (txns, evs, rows) = (count(&env, "txns"), count(&env, "events"), count(&env, "jobs"));
+    not_allowed(&job_add(&env, "pl", "k", "GX", &[]), "GX");
+    not_allowed(&stub_add(&env, "pl", "k", &["--tier", "GX"]), "GX");
+    not_allowed(&job(&env, &["edit", "b", "--tier", "GX"], "pl"), "GX");
+    not_allowed(&job(&env, &["edit", "b", "--tier", "GX", "--title", "New"], "pl"), "GX");
+    not_allowed(&job(&env, &["retry", "a", "--tier", "GX"], "pl"), "GX");
+    // Checked first: a Job that is not failed still gets the Tier refusal.
+    not_allowed(&job(&env, &["retry", "c", "--tier", "GX"], "pl"), "GX");
+    assert_eq!((count(&env, "txns"), count(&env, "events"), count(&env, "jobs")), (txns, evs, rows));
+    assert_eq!(job_row(&env, "pl", "b", "tier"), "S2");
+    assert_eq!(job_row(&env, "pl", "b", "title"), "Title of b");
+    assert_eq!(job_row(&env, "pl", "a", "status"), "failed");
+    assert_eq!(job_row(&env, "pl", "a", "retry_tier"), Value::Null);
+}
+
+/// hs-d562: G has no number; `G0` is `tier_invalid` (not `tier_not_allowed`) and the message says to write `GX`.
+#[test]
+fn a_job_tier_g0_is_tier_invalid_and_says_write_gx() {
+    let env = TestEnv::new();
+    setup(&env);
+    plan(&env, "pl", "plan");
+    let e = refused(&job_add(&env, "pl", "k", "G0", &[]), "tier_invalid", 2);
+    let message = e["message"].as_str().unwrap();
+    assert!(message.contains("GX"), "{message}");
+    assert!(message.contains("hs-d562"), "{message}");
+}
+
 #[test]
 fn retry_accepts_h3_and_s0_to_s3() {
     for tier in ["S0", "S3", "H3"] {
