@@ -3718,3 +3718,37 @@ fn watch_check_writes_no_row_and_no_event_passing_or_failing() {
     assert_eq!(row_counts(&s.env), before, "a failing check wrote a row");
     assert_eq!(s.env.query::<i64>("SELECT count(*) FROM events"), before.iter().find(|(t, _)| t == "events").unwrap().1);
 }
+
+/// E9 (contract §3.7, §4.6; hs-d551): a backlog of uncurated records is curated one batch of at most 60 per run, the next
+/// tick starting the next run.
+#[test]
+fn e9_curates_the_backlog_one_batch_per_run() {
+    use cpd_core::context::{By, Draft, Record};
+    use cpd_core::ids::{ContextId, RecordId};
+
+    let fx = fx_bare("");
+    let context = ContextId::parse("ctx").unwrap();
+    // 125 records in force, the newest an hour old: the quiet period is over.
+    for n in 1..=125 {
+        let record = Record {
+            id: RecordId::parse(&format!("m1-n{n}")).unwrap(),
+            at: ago(300 - n),
+            by: By { session: None, plan: None },
+            text: format!("Note number {n}."),
+            draft: Draft::Note,
+        };
+        fx.store().write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
+    }
+    // A fake pi that logs the size of the batch it is given and curates it.
+    fx.env.fake_pi(&common::pi_says(&format!("grep -c '^\\[' batch.md >> \"$HOME/batches\"\n{}", common::CURATES_ALL)));
+    let engine = fx.start();
+    common::wait_until_for("the whole backlog curated", Duration::from_secs(20), || {
+        fx.env.query::<i64>("SELECT count(*) FROM record_curations") == 125
+    });
+    fx.env.wait_whole_ticks(3);
+    engine.stop();
+    let batches = fs::read_to_string(fx.env.home().join("batches")).unwrap();
+    assert_eq!(batches.lines().collect::<Vec<_>>(), ["60", "60", "5"], "one batch per run: {batches}");
+    assert_eq!(fx.env.calls("pi").len(), 3);
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'context-curated'"), 3);
+}

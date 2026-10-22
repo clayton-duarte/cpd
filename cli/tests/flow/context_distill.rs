@@ -23,12 +23,7 @@ const CONTEXT: &str = "ctx";
 /// Shell for a fake `pi`: `reply` reads the digest text on stdin and prints pi's `--mode json` stream for a
 /// one-shot run (shapes recorded from pi 1.3.0, see `RECORDED`) whose final assistant message holds it, with
 /// usage 2 input + 100 cache-read + 631 cache-write = 733 tokens in, 4 out, cost 0.25.
-const REPLY: &str = r##"reply() {
-  text=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/$/\\n/' | tr -d '\n')
-  printf '%s\n' '{"type":"session","version":3,"id":"x","timestamp":"2026-10-19T01:59:25.851Z","cwd":"/"}' '{"type":"agent_start"}'
-  printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"%s"}],"usage":{"input":2,"output":4,"cacheRead":100,"cacheWrite":631,"reasoning":1,"totalTokens":737,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0.25}},"stopReason":"stop"}}\n' "$text"
-  printf '%s\n' '{"type":"agent_settled","aborted":false}'
-}"##;
+const REPLY: &str = common::PI_REPLY;
 
 /// A fake `pi` that prints `digest` (shell) as the final assistant message of a JSON stream.
 fn says(digest: &str) -> String {
@@ -1033,4 +1028,310 @@ fn a_failed_pi_step_climbs_too() {
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3", "S1"], "{out}");
     assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
+}
+
+// ---- The curating distill step (contract §4.6 "The distiller curates", "The distill run"; hs-d549, hs-d551) ----
+
+use common::pi_says;
+
+/// The rows of `record_curations`: `(record, topic, short, doc_candidate)`, by record.
+fn curation_rows(fx: &Fx) -> Vec<(String, String, String, Option<String>)> {
+    fx.env.read(|conn| {
+        let mut statement = conn.prepare("SELECT record, topic, short, doc_candidate FROM record_curations WHERE context = 'ctx' ORDER BY record")?;
+        let rows = statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        rows.collect()
+    })
+}
+
+/// The rows of `record_retirements`: `(record, reason, target, status)`, by record.
+fn retirement_rows(fx: &Fx) -> Vec<(String, String, String, String)> {
+    fx.env.read(|conn| {
+        let mut statement = conn.prepare("SELECT record, reason, target, status FROM record_retirements WHERE context = 'ctx' ORDER BY record")?;
+        let rows = statement.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        rows.collect()
+    })
+}
+
+fn s(text: &str) -> String {
+    text.to_owned()
+}
+
+/// A fake `pi` that keeps a copy of its input files under `$HOME/seen-<name>` and answers `answer` (shell).
+fn pi_keeps_input_and_says(answer: &str) -> String {
+    pi_says(&format!("for f in batch.md known.md docs.md; do cp \"$f\" \"$HOME/seen-$f\"; done\n{answer}"))
+}
+
+fn seen(fx: &Fx, name: &str) -> String {
+    fs::read_to_string(fx.env.home().join(format!("seen-{name}"))).unwrap_or_else(|e| panic!("the distiller saw no {name}: {e}"))
+}
+
+/// The ids of the blocks of a `batch.md`, in file order.
+fn block_ids(text: &str) -> Vec<String> {
+    text.lines().filter(|l| l.starts_with('[')).map(|l| l[1..l.find(']').unwrap()].to_owned()).collect()
+}
+
+#[test]
+fn a_step_sends_at_most_60_uncurated_records_and_the_known_short_forms() {
+    let fx = fx().one_step();
+    fx.insert(CONTEXT, "hs-d1", &ago(500), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.store()
+        .write("fixture", |tx| {
+            tx.execute(
+                "INSERT INTO record_curations (context, record, topic, short, curated_at) VALUES ('ctx', 'hs-d1', 'storage', 'known short form', 't')",
+                [],
+            )?;
+            Ok::<(), cpd_core::error::CpdError>(())
+        })
+        .unwrap();
+    for n in 1..=61 {
+        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100), &format!("Note number {n}."), Draft::Note);
+    }
+    fx.env.fake_pi(&pi_keeps_input_and_says(common::CURATES_ALL));
+
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["distilled"], true, "{out}");
+    // The batch: the 60 oldest uncurated records in force, oldest first, full blocks; the curated one is not in it.
+    let batch = seen(&fx, "batch.md");
+    let expected: Vec<String> = (1..=60).map(|n| format!("hs-n{n}")).collect();
+    assert_eq!(block_ids(&batch), expected, "{batch}");
+    assert!(batch.contains("Note number 60."), "{batch}");
+    // known.md: the topics in use, then `[<id>] <topic> | <short>` for every curated record in force.
+    let known = seen(&fx, "known.md");
+    assert!(known.lines().any(|l| l == "storage"), "{known}");
+    assert!(known.lines().any(|l| l == "[hs-d1] storage | known short form"), "{known}");
+    assert!(!known.contains("hs-n"), "{known}");
+    for name in ["prompt.md", "batch.md", "known.md", "docs.md"] {
+        assert!(fx.digests().join(name).exists(), "{name} is written");
+    }
+    assert_eq!(curation_rows(&fx).len(), 61, "the batch is curated, the 61st record is not");
+
+    // The next run takes the rest, and sees what the first one curated.
+    let again = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(again["distilled"], true, "{again}");
+    assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n61"]);
+    let known = seen(&fx, "known.md");
+    assert!(known.lines().any(|l| l == "[hs-n1] t | s hs-n1"), "{known}");
+    assert!(known.lines().any(|l| l == "[hs-d1] storage | known short form"), "{known}");
+    assert_eq!(curation_rows(&fx).len(), 62);
+    assert_eq!(fx.cpd(&["context", "distill", "--context", CONTEXT]).ok()["already"], true);
+    assert_eq!(fx.pi_calls(), 2);
+}
+
+#[test]
+fn a_valid_output_writes_curations_and_pending_proposals() {
+    let fx = fx().one_step();
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-d2", &ago(80), "Use sqlite in WAL mode.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-d3", &ago(70), "Use sqlite with WAL.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-n4", &ago(60), "Locks are flock.", Draft::Note);
+    fx.env.fake_pi(&pi_says(
+        r#"cat <<'EOF'
+{"id":"hs-d1","topic":"storage","short":"sqlite store","retire":{"reason":"superseded","target":"hs-d2"},"doc":false}
+{"id":"hs-d2","topic":"storage","short":"sqlite WAL","retire":null,"doc":false}
+{"id":"hs-d3","topic":"storage","short":"sqlite WAL again","retire":{"reason":"duplicate","target":"hs-d2"},"doc":false}
+{"id":"hs-n4","topic":"locking","short":"flock locks","retire":null,"doc":true}
+EOF"#,
+    ));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(out["distilled"], true, "{out}");
+    let upto = fx.highest_seq();
+    assert_eq!(
+        curation_rows(&fx),
+        [
+            (s("hs-d1"), s("storage"), s("sqlite store"), None),
+            (s("hs-d2"), s("storage"), s("sqlite WAL"), None),
+            (s("hs-d3"), s("storage"), s("sqlite WAL again"), None),
+            (s("hs-n4"), s("locking"), s("flock locks"), Some(s("pending"))),
+        ]
+    );
+    assert_eq!(
+        retirement_rows(&fx),
+        [
+            (s("hs-d1"), s("superseded"), s("hs-d2"), s("pending")),
+            (s("hs-d3"), s("duplicate"), s("hs-d2"), s("pending")),
+        ],
+        "proposals only: nothing is retired without the User"
+    );
+    let paths: String = fx.env.query("SELECT doc_paths FROM record_curations WHERE record = 'hs-n4'");
+    assert_eq!(paths, "[]", "a doc candidate with no grep hit");
+    // One `context-curated` Event with the counts.
+    let events = fx.cpd(&["events", "list", "--kind", "context-curated"]).ok()["events"].as_array().unwrap().clone();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["data"], json!({"context": CONTEXT, "curated": 4, "retire": 2, "docs": 1}));
+    assert!(fx.errors().is_empty());
+    // No digest file, no kept invalid output.
+    assert!(!fx.digests().join(format!("{upto}.md")).exists());
+    assert!(!fx.digests().join(format!("{upto}.jsonl.invalid")).exists());
+    let runs = fx.runs();
+    assert_eq!((runs.len(), runs[0]["result"].clone(), runs[0]["kind"].clone()), (1, json!("valid"), json!("distill")), "{runs:?}");
+    // Everything is curated now: nothing left to do.
+    assert_eq!(fx.cpd(&["context", "distill", "--context", CONTEXT]).ok()["already"], true);
+    assert_eq!(fx.pi_calls(), 1);
+}
+
+#[test]
+fn an_output_missing_a_batch_id_is_invalid_and_climbs_the_ladder() {
+    let fx = fx();
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-d2", &ago(80), "Use flock.", Draft::Decision { supersedes: None });
+    fx.env.fake_pi(&pi_says(r#"echo '{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":false}'"#));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let upto = fx.highest_seq();
+    let details = &error["details"];
+    assert_eq!((details["context"].clone(), details["upto_seq"].clone()), (json!(CONTEXT), json!(upto)));
+    let errors = details["errors"].as_array().unwrap_or_else(|| panic!("details.errors lists the failures: {details}"));
+    assert!(errors.iter().any(|e| e["id"] == "hs-d2" && e["what"].is_string()), "{errors:?}");
+    let invalid = fx.digests().join(format!("{upto}.jsonl.invalid"));
+    assert_eq!(details["invalid"], invalid.display().to_string());
+    assert!(fs::read_to_string(&invalid).unwrap().contains("hs-d1"), "the last output is kept");
+    // The ladder (hs-d538) climbs as before, and the whole run writes one Event.
+    assert_eq!(tiers_of(&fx.runs()), ["H0", "H1", "H2", "H3", "S1", "S2", "S3", "S4"]);
+    assert_eq!(fx.errors().len(), 1);
+    assert_eq!(fx.errors()[0]["data"]["code"], "distill_invalid");
+    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]), "an invalid output writes nothing");
+}
+
+#[test]
+fn a_superseded_target_must_be_newer() {
+    let fx = fx().one_step();
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-d2", &ago(80), "Use sqlite in WAL mode.", Draft::Decision { supersedes: None });
+    // hs-d2 is superseded by hs-d1, which is older (a lower seq): invalid.
+    fx.env.fake_pi(&pi_says(
+        r#"cat <<'EOF'
+{"id":"hs-d1","topic":"storage","short":"sqlite","retire":null,"doc":false}
+{"id":"hs-d2","topic":"storage","short":"sqlite WAL","retire":{"reason":"superseded","target":"hs-d1"},"doc":false}
+EOF"#,
+    ));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let errors = error["details"]["errors"].as_array().unwrap_or_else(|| panic!("details.errors: {error}"));
+    assert!(errors.iter().any(|e| e["id"] == "hs-d2"), "{errors:?}");
+    assert!(!errors.iter().any(|e| e["id"] == "hs-d1"), "only the bad line is listed: {errors:?}");
+    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]));
+    let upto = fx.highest_seq();
+    assert!(fx.digests().join(format!("{upto}.jsonl.invalid")).exists());
+
+    // The other way round is valid, and removes the kept output.
+    fx.env.fake_pi(&pi_says(
+        r#"cat <<'EOF'
+{"id":"hs-d1","topic":"storage","short":"sqlite","retire":{"reason":"superseded","target":"hs-d2"},"doc":false}
+{"id":"hs-d2","topic":"storage","short":"sqlite WAL","retire":null,"doc":false}
+EOF"#,
+    ));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(retirement_rows(&fx), [(s("hs-d1"), s("superseded"), s("hs-d2"), s("pending"))]);
+    assert!(!fx.digests().join(format!("{upto}.jsonl.invalid")).exists());
+}
+
+/// Plan `pl` of `ctx` with one PR in each of `repos` (the PRs' repos are the Context's repos).
+fn plan_with_repos(fx: &Fx, repos: &[&std::path::Path]) {
+    let prs: String = repos
+        .iter()
+        .enumerate()
+        .map(|(n, repo)| {
+            format!(
+                "INSERT INTO prs (plan, key, repo, base, status, lead_branch, created_txn, created_at)
+                 VALUES ('pl', 'pr{n}', '{}', 'main', 'waiting', 'cpd/pl{n}', cpd_txn(), 't');",
+                repo.display()
+            )
+        })
+        .collect();
+    fx.env.sql(&format!(
+        "INSERT INTO plans (id, context, title, phase, lead_session, created_at) VALUES ('pl', 'ctx', 'Plan', 'grounding', 'lead-pl', 't');
+         INSERT INTO sessions (id, role, context, plan, name, cwd, tier, state, state_at, created_at)
+           VALUES ('lead-pl', 'lead', 'ctx', 'pl', 'pl', '/', 'O3', 'idle', 't', 't');
+         {prs}"
+    ));
+}
+
+/// A git repo `name` with `files` (path, text) committed.
+fn repo_with(fx: &Fx, name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let repo = fx.env.git_repo(name).canonicalize().unwrap();
+    for (path, text) in files {
+        let file = repo.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, text).unwrap();
+    }
+    fx.env.git(&repo, &["add", "-A"]);
+    fx.env.git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t.invalid", "commit", "-q", "-m", "docs"]);
+    repo
+}
+
+#[test]
+fn docs_md_lists_the_grep_hits_of_the_contexts_repos() {
+    let fx = fx().one_step();
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-d10", &ago(80), "Use flock.", Draft::Decision { supersedes: None });
+    let a = repo_with(&fx, "a", &[("docs/design.md", "We use sqlite, see hs-d1.\n"), ("notes.txt", "hs-d1 is not markdown\n"), ("docs/other.md", "Only hs-d10 here.\n")]);
+    let b = repo_with(&fx, "b", &[("README.md", "Decided in hs-d1.\n")]);
+    let elsewhere = repo_with(&fx, "c", &[("docs/x.md", "hs-d1 in a repo no PR of the Context has.\n")]);
+    // `a` has two PRs: its hits are listed once.
+    plan_with_repos(&fx, &[&a, &b, &a]);
+    let _ = elsewhere;
+    fx.env.fake_pi(&pi_keeps_input_and_says(common::CURATES_ALL));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let docs = seen(&fx, "docs.md");
+    let (hit_a, hit_b) = (format!("{}:docs/design.md", a.display()), format!("{}:README.md", b.display()));
+    assert_eq!(docs.matches(&hit_a).count(), 1, "{docs}");
+    assert_eq!(docs.matches(&hit_b).count(), 1, "{docs}");
+    assert!(!docs.contains("notes.txt") && !docs.contains("elsewhere") && !docs.contains("/c:"), "{docs}");
+    // `-w`: hs-d10's own hit is not hs-d1's.
+    assert_eq!(docs.matches(&format!("{}:docs/other.md", a.display())).count(), 1, "{docs}");
+}
+
+#[test]
+fn a_documented_target_must_be_a_grep_hit() {
+    let fx = fx().one_step();
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-d2", &ago(80), "Use flock.", Draft::Decision { supersedes: None });
+    let a = repo_with(&fx, "a", &[("docs/design.md", "We use sqlite, see hs-d1.\n")]);
+    plan_with_repos(&fx, &[&a]);
+    let hit = format!("{}:docs/design.md", a.display());
+    // hs-d1 names a path that is no hit; hs-d2 names a real hit of hs-d1, not of its own.
+    fx.env.fake_pi(&pi_says(&format!(
+        r#"cat <<'EOF'
+{{"id":"hs-d1","topic":"storage","short":"sqlite","retire":{{"reason":"documented","target":"{a}:docs/invented.md"}},"doc":false}}
+{{"id":"hs-d2","topic":"locking","short":"flock","retire":{{"reason":"documented","target":"{hit}"}},"doc":false}}
+EOF"#,
+        a = a.display()
+    )));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let errors = error["details"]["errors"].as_array().unwrap_or_else(|| panic!("details.errors: {error}"));
+    assert!(errors.iter().any(|e| e["id"] == "hs-d1") && errors.iter().any(|e| e["id"] == "hs-d2"), "every failure at once: {errors:?}");
+    assert_eq!(retirement_rows(&fx), vec![]);
+
+    fx.env.fake_pi(&pi_says(&format!(
+        r#"cat <<'EOF'
+{{"id":"hs-d1","topic":"storage","short":"sqlite","retire":{{"reason":"documented","target":"{hit}"}},"doc":false}}
+{{"id":"hs-d2","topic":"locking","short":"flock","retire":null,"doc":false}}
+EOF"#
+    )));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(retirement_rows(&fx), [(s("hs-d1"), s("documented"), hit, s("pending"))]);
+}
+
+#[test]
+fn no_repair_turn_and_no_contradictions_section() {
+    let fx = fx().one_step();
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    // Output that is no JSON line: invalid. With one step of the ladder, one pi run; no repair turn.
+    fx.env.fake_pi(&pi_says("echo '# Digest'; echo 'Cites [hs-d1].'"));
+    refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    assert_eq!(fx.pi_calls(), 1, "a failure climbs the ladder, nothing repairs it: {:?}", fx.env.calls("pi"));
+    assert!(!fx.env.calls("pi").iter().flatten().any(|a| a.contains("missing.md") || a.contains("repair")));
+    for gone in ["repair-prompt.md", "missing.md", "problem.md", "records.md"] {
+        assert!(!fx.digests().join(gone).exists(), "{gone}");
+    }
+    let prompt = fs::read_to_string(fx.digests().join("prompt.md")).unwrap();
+    assert!(!prompt.contains("Contradictions") && !prompt.contains("Record index"), "{prompt}");
+
+    fx.env.fake_pi(&pi_says(common::CURATES_ALL));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let runs = fx.runs();
+    assert_eq!(runs.len(), 2, "one line per pi run: {runs:?}");
+    for run in &runs {
+        assert_eq!(run["kind"], "distill", "{run}");
+        assert!(run.get("contradictions").is_none() && run.get("contradictions_dropped").is_none(), "{run}");
+        assert_eq!(run.as_object().unwrap().len(), 11, "{run}");
+    }
 }

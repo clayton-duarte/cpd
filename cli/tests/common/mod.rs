@@ -49,6 +49,28 @@ use tempfile::TempDir;
 /// The cpd binary Cargo built for this test run.
 pub const CPD: &str = env!("CARGO_BIN_EXE_cpd");
 
+/// Shell for a fake `pi`: `reply` reads the answer text on stdin and prints pi's `--mode json` stream for a one-shot
+/// run (shapes recorded from pi 1.3.0) whose final assistant message holds it.
+pub const PI_REPLY: &str = r##"reply() {
+  text=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/$/\\n/' | tr -d '\n')
+  printf '%s\n' '{"type":"session","version":3,"id":"x","timestamp":"2026-10-19T01:59:25.851Z","cwd":"/"}' '{"type":"agent_start"}'
+  printf '{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"%s"}],"usage":{"input":2,"output":4,"cacheRead":100,"cacheWrite":631,"reasoning":1,"totalTokens":737,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0.25}},"stopReason":"stop"}}\n' "$text"
+  printf '%s\n' '{"type":"agent_settled","aborted":false}'
+}"##;
+
+/// Shell for the curating distiller's answer (contract §4.6 step 4): one valid JSON line, with no retirement and no
+/// doc candidate, for every record of `batch.md` (the current directory is the Context's digest directory).
+pub const CURATES_ALL: &str = r##"while IFS= read -r line; do
+  case "$line" in "["*) id=${line%%]*}; id=${id#[}
+    echo "{\"id\":\"$id\",\"topic\":\"t\",\"short\":\"s $id\",\"retire\":null,\"doc\":false}" ;;
+  esac
+done < batch.md"##;
+
+/// A fake `pi` that prints `answer` (shell) as the final assistant message of a JSON stream.
+pub fn pi_says(answer: &str) -> String {
+    format!("{PI_REPLY}\n{{\n{answer}\n}} | reply")
+}
+
 /// The longest any fake sleeps, so the leftovers of a killed test run end by themselves.
 pub const SLEEP_SECONDS: u64 = 120;
 
