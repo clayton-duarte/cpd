@@ -7,6 +7,9 @@ use std::str::FromStr;
 use cpd_core::args::{Name, Title};
 use cpd_core::ids::PlanId;
 
+/// A Plan id's longest length (contract §2.1: `^[a-z][a-z0-9-]{1,23}$`); `PlanId` exports no constant.
+const PLAN_ID_MAX: usize = 24;
+
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Validator {
     /// A Plan id (contract §2.1): `^[a-z][a-z0-9-]{1,23}$`
@@ -27,6 +30,15 @@ impl Validator {
         }
     }
 
+    /// The most characters a value may have: the checks' own limits.
+    pub(crate) fn max_len(self) -> usize {
+        match self {
+            Validator::PlanId => PLAN_ID_MAX,
+            Validator::Title => Title::MAX_CHARS,
+            Validator::Name => Name::MAX_CHARS,
+        }
+    }
+
     /// The accepted value (the text, trimmed), or why it is refused.
     pub(crate) fn check(self, text: &str) -> Result<String, String> {
         let text = text.trim();
@@ -43,6 +55,14 @@ impl Validator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_longest_value_is_the_checks_limit() {
+        assert_eq!(Validator::PlanId.max_len(), 24);
+        assert!(Validator::PlanId.check(&"a".repeat(24)).is_ok() && Validator::PlanId.check(&"a".repeat(25)).is_err());
+        assert_eq!(Validator::Title.max_len(), 200);
+        assert_eq!(Validator::Name.max_len(), 80);
+    }
 
     #[test]
     fn a_plan_id_is_the_contracts() {

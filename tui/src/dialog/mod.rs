@@ -43,7 +43,7 @@ pub struct Args {
 enum Kind {
     /// A question with two buttons
     Confirm(Confirm),
-    /// A one-line text field
+    /// A labelled text box that grows with its text
     Input(Input),
     /// Scrollable read-only text
     Text(Text),
@@ -278,11 +278,14 @@ fn popup_size(client: (u16, u16), title: &str, natural: usize, body_rows: impl F
 }
 
 /// The popup's size `(columns, rows)` for an `input`: wide enough for the label and the initial text, tall enough for the
-/// longest value the validator accepts (commands.md §13.2). Stub.
-#[allow(dead_code)]
+/// longest value the validator accepts (commands.md §13.2).
 fn input_popup_size(client: (u16, u16), title: &str, prompt: &str, initial: &str, validator: Validator) -> (u16, u16) {
-    let _ = (client, title, prompt, initial, validator);
-    todo!()
+    let initial = initial.chars().count();
+    let natural = view::label(prompt).chars().count().max(initial) + 5;
+    popup_size(client, title, natural, |text_width| {
+        let tw = text_width - 4;
+        validator.max_len().max(initial) / tw + 1 + 2 + REFUSAL_ROWS
+    })
 }
 
 /// The width of the longest line of `text`.
@@ -361,10 +364,7 @@ pub(crate) fn confirm(tmux: &Tmux, title: &str, text: &str, yes_label: &str) -> 
 #[allow(dead_code)] // the tree's New…, Rename…, Fork… and `n` (Job kit-tree)
 pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, validator: Validator) -> Result<Option<String>, CpdError> {
     let fields = [("prompt", prompt), ("initial", initial), ("validate", validator.as_arg())];
-    let size = |client, title: &str| {
-        let natural = widest(prompt).max(initial.chars().count() + 1);
-        popup_size(client, title, natural, |width| wrap(prompt, width).len() + 1 + REFUSAL_ROWS)
-    };
+    let size = |client, title: &str| input_popup_size(client, title, prompt, initial, validator);
     let outcome = ask(tmux, On::Newest, title, "input", &fields, size)?;
     match (outcome.confirmed, outcome.value) {
         (false, _) => Ok(None),

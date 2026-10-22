@@ -12,6 +12,7 @@ use ratatui::widgets::Paragraph;
 use super::Outcome;
 use super::scroll::Scroll;
 use super::validate::Validator;
+use crate::input_box;
 use crate::palette;
 use crate::section;
 
@@ -129,19 +130,9 @@ impl Field {
         Some(edit)
     }
 
-    /// The row of the field in `width` columns: the text around the cursor (clickable text), the cursor the blue block (a space past the end).
-    fn line(&self, width: usize) -> Line<'static> {
-        let width = width.max(1);
-        let start = (self.cursor + 1).saturating_sub(width);
-        let shown: Vec<char> = self.chars.iter().copied().skip(start).take(width).collect();
-        let at = self.cursor - start;
-        let part = |from: usize, to: usize| shown[from.min(shown.len())..to.min(shown.len())].iter().collect::<String>();
-        let cursor = shown.get(at).map_or(" ".to_owned(), char::to_string);
-        Line::from(vec![
-            Span::styled(format!(" {}", part(0, at)), palette::clickable_text()),
-            Span::styled(cursor, palette::selected()),
-            Span::styled(part(at + 1, shown.len()), palette::clickable_text()),
-        ])
+    /// The characters held and the cursor (a character index).
+    pub(crate) fn parts(&self) -> (&[char], usize) {
+        (&self.chars, self.cursor)
     }
 }
 
@@ -183,6 +174,12 @@ pub(crate) fn wrap(text: &str, width: usize) -> Vec<String> {
         rows.push(rest.into_iter().collect());
     }
     rows
+}
+
+/// The label of an input's box: its prompt without trailing whitespace and one trailing `:`.
+pub(super) fn label(prompt: &str) -> String {
+    let t = prompt.trim_end();
+    t.strip_suffix(':').unwrap_or(t).trim_end().to_owned()
 }
 
 /// `text` cut to `width` columns, with `…` at the cut.
@@ -301,14 +298,25 @@ impl Dialog {
         let width = usize::from(area.width).saturating_sub(2);
         match &self.mode {
             Mode::Input { field, refused, .. } => {
-                for (n, text) in rows.iter().enumerate() {
-                    f.render_widget(Paragraph::new(format!(" {text}")).style(palette::read_only_text()), row(n));
+                let (chars, cursor) = field.parts();
+                let box_width = usize::from(area.width);
+                let avail = usize::from(parts.body.height).saturating_sub(2 + REFUSAL_ROWS).max(1);
+                let tw = box_width.saturating_sub(6).max(1);
+                let start = (cursor / tw + 1).saturating_sub(avail);
+                let drawn = input_box::lines(&label(&self.text), chars, cursor, true, box_width);
+                let last = drawn.len() - 1;
+                let shown = 1 + avail.min(drawn.len() - 2);
+                let window: Vec<Line> = std::iter::once(drawn[0].clone())
+                    .chain(drawn[1..last].iter().skip(start).take(avail).cloned())
+                    .chain(std::iter::once(drawn[last].clone()))
+                    .collect();
+                for (n, line) in window.into_iter().enumerate() {
+                    f.render_widget(Paragraph::new(line), row(n));
                 }
-                f.render_widget(Paragraph::new(field.line(width)), row(rows.len()));
                 if let Some(why) = refused {
                     for (n, text) in wrap(why, width).iter().take(REFUSAL_ROWS).enumerate() {
                         let line = Line::from(Span::styled(format!(" {}", cut(text, width)), palette::note()));
-                        f.render_widget(Paragraph::new(line), row(rows.len() + 1 + n));
+                        f.render_widget(Paragraph::new(line), row(shown + 1 + n));
                     }
                 }
             }
@@ -618,19 +626,6 @@ mod tests {
     }
 
     #[test]
-    fn input_draws_the_prompt_the_field_with_its_cursor_and_the_buttons() {
-        let mut d = input("abc");
-        let buf = render(&mut d, 44, 9);
-        assert_eq!(
-            rows(&buf)[3..],
-            [" Fork cpd-ui into a new Plan, name:", " abc", "", "", "", "  [OK]   [Cancel]"][..]
-        );
-        // the cursor is the reversed cell after the text
-        assert!(crate::palette::check::is_selected(&buf[(4, 4)]));
-        assert!(!crate::palette::check::is_selected(&buf[(3, 4)]));
-    }
-
-    #[test]
     fn input_types_edits_and_moves_the_cursor() {
         let mut d = input("");
         type_str(&mut d, "yqn");
@@ -672,13 +667,13 @@ mod tests {
         type_str(&mut d, "Bad");
         assert_eq!(d.press_key(press(KeyCode::Enter)), None);
         let buf = rows(&render(&mut d, 60, 11));
-        assert!(buf[5].starts_with(" Invalid Plan id"), "{buf:?}");
-        assert_eq!(buf[4], " Bad");
+        assert!(buf[6].starts_with(" Invalid Plan id"), "{buf:?}");
+        assert_eq!(buf[4], format!(" │ Bad{} │", " ".repeat(60 - 6 - 3)));
         // typing clears the refusal, and a fixed value is accepted
         for _ in 0..3 {
             d.press_key(press(KeyCode::Backspace));
         }
-        assert!(rows(&render(&mut d, 60, 11))[5].is_empty());
+        assert!(rows(&render(&mut d, 60, 11))[6].is_empty());
         type_str(&mut d, "good");
         assert_eq!(d.press_key(press(KeyCode::Enter)), Some(Outcome::value("good".into())));
     }
@@ -700,16 +695,6 @@ mod tests {
         render(&mut bad, 44, 9);
         assert_eq!(bad.press_mouse(click(3, 8)), None);
         assert!(matches!(&bad.mode, Mode::Input { refused: Some(_), .. }));
-    }
-
-    #[test]
-    fn a_field_longer_than_the_width_shows_the_end_where_the_cursor_is() {
-        let mut d = input(&"x".repeat(60));
-        type_str(&mut d, "END");
-        let buf = rows(&render(&mut d, 20, 10));
-        assert_eq!(buf[5], format!(" {}END", "x".repeat(14)));
-        d.press_key(press(KeyCode::Home));
-        assert_eq!(rows(&render(&mut d, 20, 10))[5], format!(" {}", "x".repeat(18)));
     }
 
     #[test]

@@ -111,7 +111,7 @@ fn input_box_border_is_15_unfocused_and_12_focused_and_the_label_is_a_grey_pill(
         for x in [1, 2] {
             assert_eq!(buf[(x, 0)].fg, border, "top column {x}");
         }
-        for x in 11..43 {
+        for x in 10..42 {
             assert_eq!((buf[(x, 0)].symbol(), buf[(x, 0)].fg), ("─", border), "fill {x}");
         }
         assert_eq!((buf[(43, 0)].symbol(), buf[(42, 0)].symbol()), (" ", "╮"));
