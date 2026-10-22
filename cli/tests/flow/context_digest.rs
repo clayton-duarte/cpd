@@ -1,0 +1,244 @@
+//! The cpd-rendered Context digest, `context show --digest` and `--topic`, and the first message (contract §4.6 "The
+//! Context digest", "Consumers"; §8.2; commands.md §3.3; hs-d549, hs-d551), run as the built binary. Curations are
+//! written through `curation::propose`, as the distiller will.
+
+use crate::common;
+
+use std::fs;
+
+use common::{TestEnv, WATCH_OK};
+use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
+use cpd_core::home::CpdHome;
+use cpd_core::ids::{ContextId, PlanId};
+use serde_json::Value;
+
+const CTX: &str = "ctx";
+
+/// Machine `m1`, Context `ctx` and a fake `cpd` for the panes (`plan new`).
+fn fx() -> TestEnv {
+    let env = TestEnv::new();
+    env.write_tmux_config("");
+    env.fake_cpd_panes(WATCH_OK);
+    env.cpd(&["context", "new", CTX, "--title", "Payments", "--owner", "acme"]).ok();
+    env
+}
+
+/// Inserts a record of `kind` written `minutes` minutes ago (the CLI cannot backdate a record).
+fn seed(env: &TestEnv, id: &str, kind: &str, minutes: u32, text: &str) {
+    env.sql(&format!(
+        "INSERT INTO context_records (context, id, kind, at, machine, text)
+         VALUES ('{CTX}', '{id}', '{kind}', strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-{minutes} minutes'), 'm1', '{text}')"
+    ));
+}
+
+const DAY: u32 = 24 * 60;
+
+fn curate(env: &TestEnv, rows: &[(&str, &str, &str)]) {
+    let curations: Vec<Curation> = rows
+        .iter()
+        .map(|(id, topic, short)| Curation { record: id.parse().unwrap(), topic: (*topic).into(), short: (*short).into(), doc_paths: None })
+        .collect();
+    propose(&mut env.store(), &ContextId::parse(CTX).unwrap(), &curations, &[]).unwrap();
+}
+
+fn digest(env: &TestEnv) -> Value {
+    env.cpd(&["context", "show", "--context", CTX, "--digest"]).ok()
+}
+
+fn topic(env: &TestEnv, t: &str) -> Value {
+    env.cpd(&["context", "show", "--context", CTX, "--topic", t]).ok()
+}
+
+fn markdown(out: &Value) -> String {
+    out["markdown"].as_str().unwrap_or_else(|| panic!("a markdown in {out}")).to_owned()
+}
+
+fn lead_message(env: &TestEnv, plan: &str) -> String {
+    let home = CpdHome::resolve(Some(env.cpd_home().into()), None).unwrap();
+    fs::read_to_string(home.lead_message(&PlanId::parse(plan).unwrap())).unwrap()
+}
+
+fn new_plan_with_brief(env: &TestEnv, id: &str, brief: &str) {
+    let file = env.root().join(format!("{id}-brief.md"));
+    fs::write(&file, brief).unwrap();
+    env.cpd(&["plan", "new", id, "--context", CTX, "--title", &format!("Plan {id}"), "--brief-file", file.to_str().unwrap()]).ok();
+}
+
+#[test]
+fn the_digest_holds_recent_records_open_questions_and_brief_citations() {
+    let env = fx();
+    seed(&env, "m1-n1", "note", 30 * DAY, "Old and uncited.");
+    seed(&env, "m1-n2", "note", 30 * DAY, "Old but a brief cites it.");
+    seed(&env, "m1-q1", "question", 30 * DAY, "Old but still open?");
+    seed(&env, "m1-n3", "note", 60, "Written an hour ago.");
+    seed(&env, "m1-n4", "note", 60, "Recent but not curated.");
+    curate(
+        &env,
+        &[
+            ("m1-n1", "ledger", "old uncited fact"),
+            ("m1-n2", "ledger", "old cited fact"),
+            ("m1-q1", "retries", "old open question"),
+            ("m1-n3", "retries", "recent fact"),
+        ],
+    );
+    new_plan_with_brief(&env, "pay", "Retry the payouts. Rests on m1-n2.\n");
+
+    let out = digest(&env);
+    let md = markdown(&out);
+    for line in ["- [m1-n2] old cited fact", "- [m1-q1] old open question", "- [m1-n3] recent fact"] {
+        assert!(md.lines().any(|l| l == line), "{line:?} in\n{md}");
+    }
+    assert!(!md.contains("m1-n1]") && !md.contains("old uncited fact"), "an old uncited record is not relevant: {md}");
+    assert!(!md.contains("m1-n4") && !md.contains("not curated"), "an uncurated record is never in the digest: {md}");
+    assert_eq!(out["digest"]["records"], 3, "{out}");
+    assert_eq!(out["digest"]["bytes"], md.len(), "{out}");
+
+    // A wider window takes the old record in.
+    env.write_config("version = 1\nmachine = \"m1\"\ncontext_recent_days = 60\n");
+    assert!(markdown(&digest(&env)).contains("- [m1-n1] old uncited fact"));
+}
+
+#[test]
+fn the_digest_groups_short_forms_by_topic_and_lists_every_topic() {
+    let env = fx();
+    seed(&env, "m1-n1", "note", 300, "a");
+    seed(&env, "m1-n2", "note", 180, "b");
+    seed(&env, "m1-n3", "note", 60, "c");
+    seed(&env, "m1-n4", "note", 120, "d");
+    seed(&env, "m1-n5", "note", 40 * DAY, "e");
+    seed(&env, "m1-n6", "note", 40 * DAY, "f");
+    curate(
+        &env,
+        &[
+            ("m1-n1", "engine", "engine one"),
+            ("m1-n2", "store", "store two"),
+            ("m1-n3", "engine", "engine three"),
+            ("m1-n4", "inbox", "inbox four"),
+            ("m1-n5", "engine", "engine old"),
+            ("m1-n6", "archive", "archive old"),
+        ],
+    );
+
+    let out = digest(&env);
+    let md = markdown(&out);
+    let (sections, topics) = md.split_once("## Topics\n").unwrap_or_else(|| panic!("a ## Topics section in\n{md}"));
+    // topics by their newest relevant record, newest first; lines oldest first within a topic
+    assert_eq!(
+        sections.trim_end(),
+        "## engine\n- [m1-n1] engine one\n- [m1-n3] engine three\n\n## inbox\n- [m1-n4] inbox four\n\n## store\n- [m1-n2] store two",
+        "{md}"
+    );
+    // every topic of the curated records in force, with its count of records in force (the old ones too)
+    let lines: Vec<&str> = topics.lines().filter(|l| !l.is_empty()).collect();
+    for expected in ["- engine (3)", "- inbox (1)", "- store (1)", "- archive (1)"] {
+        assert!(lines.contains(&expected), "{expected:?} in {lines:?}");
+    }
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(out["digest"]["records"], 4, "{out}");
+}
+
+#[test]
+fn an_over_limit_digest_drops_the_oldest_and_points_to_topic() {
+    let env = fx();
+    // 400 recent records of one topic, each line 130+ bytes: far over 32 768 bytes. Record n is n minutes old... n=1 newest.
+    let mut rows = Vec::new();
+    for n in 1..=400u32 {
+        seed(&env, &format!("m1-n{n}"), "note", n, "x");
+    }
+    let shorts: Vec<String> = (1..=400u32).map(|n| format!("{n:03} {}", "s".repeat(100))).collect();
+    for n in 1..=400usize {
+        rows.push((format!("m1-n{n}"), shorts[n - 1].clone()));
+    }
+    let rows: Vec<(&str, &str, &str)> = rows.iter().map(|(id, s)| (id.as_str(), "alpha", s.as_str())).collect();
+    curate(&env, &rows);
+
+    let out = digest(&env);
+    let md = markdown(&out);
+    assert!(md.len() <= 32_768, "{} bytes", md.len());
+    assert_eq!(out["digest"]["bytes"], md.len(), "{out}");
+    assert!(md.contains("- [m1-n1] 001 "), "the newest line stays");
+    assert!(!md.contains("- [m1-n400] "), "the oldest line is dropped first");
+    let kept = md.lines().filter(|l| l.starts_with("- [m1-n")).count();
+    assert!(kept > 100 && kept < 400, "{kept} lines kept");
+    let pointer = format!("and {} older: cpd context show --topic alpha", 400 - kept);
+    assert!(md.lines().any(|l| l == pointer), "{pointer:?} in the digest's tail: {}", &md[md.len().saturating_sub(300)..]);
+    assert!(md.contains("## Topics\n- alpha (400)"), "the topic list is kept whole");
+    // idempotent: the same records give the same text
+    assert_eq!(markdown(&digest(&env)), md);
+}
+
+#[test]
+fn first_message_lists_uncurated_records_raw_at_most_20() {
+    let env = fx();
+    env.cpd(&["context", "note", "FULL TEXT of the curated one.", "--context", CTX]).ok();
+    for n in 2..=25 {
+        env.cpd(&["context", "note", &format!("raw-{n:02}"), "--context", CTX]).ok();
+    }
+    curate(&env, &[("m1-n1", "ledger", "curated short form")]);
+    new_plan_with_brief(&env, "pay", "Pay out.\n");
+
+    let message = lead_message(&env, "pay");
+    let at = |needle: &str| message.find(needle).unwrap_or_else(|| panic!("{needle:?} in\n{message}"));
+    assert!(at("- [m1-n1] curated short form") < at("raw-02"), "the digest, then the raw records");
+    assert!(!message.contains("FULL TEXT"), "a curated record is a short form, not raw: {message}");
+    for n in 2..=21 {
+        assert!(message.contains(&format!("raw-{n:02}")), "raw-{n:02} in {message}");
+    }
+    for n in 22..=25 {
+        assert!(!message.contains(&format!("raw-{n:02}")), "raw-{n:02} is past the 20: {message}");
+    }
+    assert!(message.contains("and 4 more: cpd context show --context ctx"), "{message}");
+    let pointer = message.rfind("cpd context show --context ctx --since").unwrap_or_else(|| panic!("the pointer line in {message}"));
+    assert!(pointer > at("raw-21"), "the pointer line comes last: {message}");
+}
+
+#[test]
+fn show_topic_prints_every_curated_record_of_the_topic() {
+    let env = fx();
+    seed(&env, "m1-n1", "note", 40 * DAY, "a");
+    seed(&env, "m1-n2", "note", 30 * DAY, "b");
+    seed(&env, "m1-n3", "note", 20 * DAY, "c");
+    seed(&env, "m1-n4", "note", 10 * DAY, "d");
+    seed(&env, "m1-n5", "note", 5 * DAY, "e");
+    curate(&env, &[("m1-n1", "engine", "first"), ("m1-n2", "store", "other topic"), ("m1-n3", "engine", "second"), ("m1-n4", "engine", "superseded one")]);
+    // m1-n5 is uncurated; a later note supersedes m1-n4
+    env.cpd(&["context", "note", "Newer.", "--supersedes", "m1-n4", "--context", CTX]).ok();
+
+    let out = topic(&env, "engine");
+    assert_eq!(out["topic"], "engine", "{out}");
+    assert_eq!(out["records"], serde_json::json!([{"id": "m1-n1", "short": "first"}, {"id": "m1-n3", "short": "second"}]), "{out}");
+    assert_eq!(markdown(&out), "- [m1-n1] first\n- [m1-n3] second", "oldest first, as the docs say");
+
+    // a topic no record in force has is not an error
+    let none = topic(&env, "nothing");
+    assert_eq!((none["records"].clone(), markdown(&none)), (serde_json::json!([]), String::new()), "{none}");
+}
+
+#[test]
+fn a_retired_record_is_in_no_digest() {
+    let env = fx();
+    seed(&env, "m1-n1", "note", 60, "a");
+    seed(&env, "m1-n2", "note", 50, "b");
+    curate(&env, &[("m1-n1", "engine", "retired short"), ("m1-n2", "engine", "kept short")]);
+    propose(
+        &mut env.store(),
+        &ContextId::parse(CTX).unwrap(),
+        &[],
+        &[Proposal { record: "m1-n1".parse().unwrap(), reason: Reason::Duplicate, target: "m1-n2".into() }],
+    )
+    .unwrap();
+    // pending: still in force, so still in the digest
+    assert!(markdown(&digest(&env)).contains("m1-n1"), "a pending proposal changes nothing");
+
+    env.cpd(&["context", "retire", "--context", CTX, "--approve", "m1-n1"]).ok();
+    new_plan_with_brief(&env, "pay", "Cites the retired m1-n1.\n");
+
+    let md = markdown(&digest(&env));
+    assert!(md.contains("- [m1-n2] kept short"), "{md}");
+    assert!(!md.contains("m1-n1") && !md.contains("retired short"), "{md}");
+    assert!(md.contains("- engine (1)"), "the count is of records in force: {md}");
+    let by_topic = topic(&env, "engine");
+    assert_eq!(markdown(&by_topic), "- [m1-n2] kept short", "{by_topic}");
+    let message = lead_message(&env, "pay");
+    assert!(!message.contains("retired short"), "{message}");
+}
