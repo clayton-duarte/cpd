@@ -186,6 +186,12 @@ pub(super) fn owned_open(conn: &Connection) -> Result<Vec<(PlanId, PrKey, PullRe
         .collect()
 }
 
+/// Every row stored `open`, owned or not, in `(repo, number)` order.
+pub(super) fn stored_open(conn: &Connection) -> Result<Vec<PullRequest>, CpdError> {
+    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM pull_requests WHERE state = 'open' ORDER BY repo, number"))?;
+    Ok(stmt.query_map([], PullRequest::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// What `upsert` changed: the row before (none when it was inserted) and after.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Change {
@@ -269,23 +275,6 @@ fn insert(tx: &WriteTxn<'_>, polled: &PolledPr, membership: Membership) -> Resul
         ],
     )?;
     load(tx, tx.last_insert_rowid())
-}
-
-/// Deletes the rows no PR points to whose `(repo, number)` is not in `present`
-/// (D5: their pull request is in neither open search). Rows a PR points to stay: a
-/// trigger refuses their delete. The number of rows deleted.
-pub(super) fn delete_unowned_absent(tx: &WriteTxn<'_>, present: &[(String, i64)]) -> Result<usize, CpdError> {
-    let mut stmt = tx.prepare(
-        "SELECT id, repo, number FROM pull_requests WHERE NOT EXISTS (SELECT 1 FROM prs WHERE prs.pull_request = pull_requests.id)",
-    )?;
-    let unowned = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut deleted = 0;
-    for (id, repo, number) in unowned {
-        if !present.iter().any(|(r, n)| *r == repo && *n == number) {
-            deleted += tx.execute("DELETE FROM pull_requests WHERE id = ?1", [id])?;
-        }
-    }
-    Ok(deleted)
 }
 
 /// Why the Plan's Lead is told of a change (D7), in this order.
@@ -563,16 +552,15 @@ mod tests {
     }
 
     #[test]
-    fn rows_that_left_the_search_are_deleted_when_no_pr_points_to_them() {
+    fn stored_open_lists_only_the_open_rows() {
         let dir = tempfile::tempdir().unwrap();
         let mut store = store(&dir);
-        for n in [7, 8, 9] {
+        for n in [7, 8] {
             store.write("test", |tx| up(tx, &polled(n, ChecksSummary::None))).unwrap();
         }
-        let present = [("acme/pay".to_owned(), 8)];
-        assert_eq!(store.write("test", |tx| delete_unowned_absent(tx, &present)).unwrap(), 2);
-        assert_eq!(store.write("test", |tx| delete_unowned_absent(tx, &present)).unwrap(), 0);
-        let left: Vec<i64> = store.read(|c| Ok(c.prepare("SELECT number FROM pull_requests")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)).unwrap();
-        assert_eq!(left, [8]);
+        let closed = PolledPr { state: PrState::Closed, ..polled(9, ChecksSummary::None) };
+        store.write("test", |tx| upsert(tx, &Listed { pr: closed, membership: Membership::default() })).unwrap();
+        let open: Vec<i64> = store.read(stored_open).unwrap().iter().map(|r| r.number).collect();
+        assert_eq!(open, [7, 8]);
     }
 }

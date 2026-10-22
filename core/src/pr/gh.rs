@@ -510,6 +510,16 @@ struct RawPr {
     #[serde(rename = "mergeStateStatus")]
     merge_state: String,
     commits: RawCommits,
+    /// Selected by the direct read only (`read_absent`); `None` when the reply has no such key, `Some(Null)` for a null.
+    #[serde(rename = "viewerDidAuthor", default)]
+    viewer_did_author: Option<bool>,
+    #[serde(rename = "viewerLatestReviewRequest", default, deserialize_with = "present")]
+    viewer_review_request: Option<Value>,
+}
+
+/// A key that is in the reply, null or not: `Some`.
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(d).map(Some)
 }
 
 #[derive(Deserialize)]
@@ -683,26 +693,48 @@ pub fn lookup(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>
     if prs.is_empty() {
         return Ok(Vec::new());
     }
-    lookup_call(cwd, prs).map_err(|e| polled_call("lookup", e))
+    let found = lookup_call(cwd, prs, false).map_err(|e| polled_call("lookup", e))?;
+    Ok(found.into_iter().map(|p| p.map(|l| l.pr)).collect())
 }
 
-fn lookup_call(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<PolledPr>>, CpdError> {
+/// The direct read of the poll (§7.6 step 3): [`lookup`]'s call with `viewerDidAuthor` and `viewerLatestReviewRequest`
+/// selected, both required in the reply. An `OPEN` pull request carries what the viewer's own flags are
+/// (`authored` = `viewerDidAuthor`, `review_requested` = a latest review request); a merged or closed one has neither.
+/// `None` for one GitHub cannot find. Failures are the lookup's (`details.call` `lookup`). An empty `prs` makes no call.
+pub fn read_absent(cwd: &Path, prs: &[(String, i64)]) -> Result<Vec<Option<Listed>>, CpdError> {
+    if prs.is_empty() {
+        return Ok(Vec::new());
+    }
+    lookup_call(cwd, prs, true).map_err(|e| polled_call("lookup", e))
+}
+
+/// The lookup's query: one alias `p<i>` per pull request; `viewer` adds the two fields of the direct read.
+fn lookup_query(prs: &[(String, i64)], viewer: bool) -> Result<String, CpdError> {
+    let extra = if viewer { " viewerDidAuthor viewerLatestReviewRequest { id }" } else { "" };
     let mut query = String::from("query {");
     for (i, (repo, number)) in prs.iter().enumerate() {
         let (owner, name) = repo_parts(repo).ok_or_else(|| {
             CpdError::new(ErrorCode::GhFailed, format!("{repo:?} is not an owner/name repo."))
                 .with("repo", repo.as_str())
         })?;
-        query.push_str(&format!(" p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ {} }} }}", pr_fields!()));
+        query.push_str(&format!(
+            " p{i}: repository(owner: \"{owner}\", name: \"{name}\") {{ pullRequest(number: {number}) {{ {}{extra} }} }}",
+            pr_fields!()
+        ));
     }
     query.push_str(" }");
-    let (args, out) = graphql(cwd, &query)?;
-    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    parse_lookup(&Reply { args: &refs, out: &out }, prs.len())
+    Ok(query)
 }
 
-/// The `count` aliases `p0`… of a lookup's reply.
-fn parse_lookup(reply: &Reply, count: usize) -> Result<Vec<Option<PolledPr>>, CpdError> {
+fn lookup_call(cwd: &Path, prs: &[(String, i64)], viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
+    let query = lookup_query(prs, viewer)?;
+    let (args, out) = graphql(cwd, &query)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    parse_lookup(&Reply { args: &refs, out: &out }, prs.len(), viewer)
+}
+
+/// The `count` aliases `p0`… of a lookup's reply; with `viewer`, each `OPEN` one carries its viewer flags.
+fn parse_lookup(reply: &Reply, count: usize, viewer: bool) -> Result<Vec<Option<Listed>>, CpdError> {
     let (mut data, errors): (BTreeMap<String, Option<RawRepoLookup>>, _) = reply.envelope()?;
     if let Some(other) = errors.iter().find(|e| e.kind.as_deref() != Some("NOT_FOUND")) {
         return Err(reply.fail(format!("gh api graphql answered with errors: {}", other.message.as_deref().unwrap_or("(no message)"))));
@@ -716,7 +748,22 @@ fn parse_lookup(reply: &Reply, count: usize) -> Result<Vec<Option<PolledPr>>, Cp
             .ok_or_else(|| reply.fail(format!("gh api graphql answered without {alias}.")))?
             .and_then(|r| r.pull_request);
         found.push(match raw {
-            Some(raw) => Some(reply.polled(raw)?),
+            Some(raw) => {
+                let mut membership = Membership::default();
+                if viewer {
+                    let authored = raw.viewer_did_author.ok_or_else(|| reply.fail(format!("gh api graphql answered {alias} without viewerDidAuthor.")))?;
+                    let request = raw
+                        .viewer_review_request
+                        .clone()
+                        .ok_or_else(|| reply.fail(format!("gh api graphql answered {alias} without viewerLatestReviewRequest.")))?;
+                    membership = Membership { authored, review_requested: !request.is_null() };
+                }
+                let pr = reply.polled(raw)?;
+                if pr.state != PrState::Open {
+                    membership = Membership::default();
+                }
+                Some(Listed { pr, membership })
+            }
             None if not_found(&alias) => None,
             None => return Err(reply.fail(format!("gh api graphql answered null for {alias} without NOT_FOUND."))),
         });
@@ -748,7 +795,11 @@ mod tests {
     }
 
     fn looked_up(out: &Output, count: usize) -> Result<Vec<Option<PolledPr>>, CpdError> {
-        parse_lookup(&Reply { args: &ARGS, out }, count)
+        Ok(parse_lookup(&Reply { args: &ARGS, out }, count, false)?.into_iter().map(|p| p.map(|l| l.pr)).collect())
+    }
+
+    fn read(out: &Output, count: usize) -> Result<Vec<Option<Listed>>, CpdError> {
+        parse_lookup(&Reply { args: &ARGS, out }, count, true)
     }
 
     #[test]
@@ -946,6 +997,47 @@ mod tests {
         let found = looked_up(&reply(&body, 1), 2).unwrap();
         let [Some(a), None] = &found[..] else { panic!("{found:?}") };
         assert_eq!((a.number, a.state, a.checks, a.merged_at.as_deref()), (7, PrState::Merged, ChecksSummary::Passed, Some("2026-05-02T00:00:00Z")));
+    }
+
+    #[test]
+    fn the_direct_read_selects_the_two_viewer_fields_after_the_poll_fields_and_the_lookup_does_not() {
+        let prs = [("o/a".to_owned(), 7), ("o/b".to_owned(), 8)];
+        let plain = lookup_query(&prs, false).unwrap();
+        let direct = lookup_query(&prs, true).unwrap();
+        assert!(!plain.contains("viewer"));
+        assert_eq!(direct.matches(" viewerDidAuthor viewerLatestReviewRequest { id } } }").count(), 2);
+        assert!(direct.starts_with("query { p0: repository(owner: \"o\", name: \"a\") { pullRequest(number: 7) { repository { nameWithOwner }"));
+        assert_eq!(direct.replace(" viewerDidAuthor viewerLatestReviewRequest { id }", ""), plain);
+    }
+
+    fn with_viewer(node: String, author: &str, request: &str) -> String {
+        node.replace(r#""mergeStateStatus":"DIRTY","#, &format!(r#""mergeStateStatus":"DIRTY","viewerDidAuthor":{author},"viewerLatestReviewRequest":{request},"#))
+    }
+
+    #[test]
+    fn the_direct_read_types_the_viewer_flags_of_an_open_pull_request_and_clears_those_of_a_decided_one() {
+        let open = with_viewer(pr("o/a", 1, false, "OPEN", "null"), "true", r#"{"id":"R"}"#);
+        let other = with_viewer(pr("o/a", 2, false, "OPEN", "null"), "false", "null");
+        let closed = with_viewer(pr("o/a", 3, false, "CLOSED", "null"), "true", r#"{"id":"R"}"#);
+        let body = format!(r#"{{"data":{{"p0":{{"pullRequest":{open}}},"p1":{{"pullRequest":{other}}},"p2":{{"pullRequest":{closed}}}}}}}"#);
+        let found = read(&reply(&body, 0), 3).unwrap();
+        let flags: Vec<_> = found.iter().map(|l| l.as_ref().map(|l| (l.membership.authored, l.membership.review_requested))).collect();
+        assert_eq!(flags, vec![Some((true, true)), Some((false, false)), Some((false, false))]);
+    }
+
+    #[test]
+    fn the_direct_read_without_either_viewer_field_is_gh_failed_and_a_not_found_alias_is_none() {
+        for (name, node) in [
+            ("no author", pr("o/a", 1, false, "OPEN", "null").replace(r#""mergeStateStatus":"DIRTY","#, r#""mergeStateStatus":"DIRTY","viewerLatestReviewRequest":null,"#)),
+            ("no request", pr("o/a", 1, false, "OPEN", "null").replace(r#""mergeStateStatus":"DIRTY","#, r#""mergeStateStatus":"DIRTY","viewerDidAuthor":true,"#)),
+            ("neither", pr("o/a", 1, false, "MERGED", "null")),
+        ] {
+            let body = format!(r#"{{"data":{{"p0":{{"pullRequest":{node}}}}}}}"#);
+            assert_eq!(read(&reply(&body, 0), 1).unwrap_err().code(), ErrorCode::GhFailed, "{name}");
+        }
+        let gone = r#"{"data":{"p0":null},"errors":[{"type":"NOT_FOUND","path":["p0"],"message":"x"}]}"#;
+        assert_eq!(read(&reply(gone, 1), 1).unwrap(), vec![None]);
+        assert_eq!(read_absent(Path::new("/nonexistent"), &[]).unwrap(), vec![]);
     }
 
     #[test]
