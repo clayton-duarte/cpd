@@ -36,6 +36,8 @@ mod inbox_indent;
 mod kinds;
 #[cfg(test)]
 mod look;
+#[cfg(test)]
+mod margin_tests;
 mod menu;
 mod rows;
 mod slug;
