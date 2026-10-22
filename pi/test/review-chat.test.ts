@@ -107,7 +107,7 @@ test("a superseded or decided request is skipped", async (t) => {
   assert.equal(nSelects(f), 0);
 });
 
-test("a failed read of the summary is an error with a turn; nothing is written", async (t) => {
+test("a failed read of the summary is an error without a turn; nothing is written", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await lead(f);
@@ -119,7 +119,7 @@ test("a failed read of the summary is an error with a turn; nothing is written",
   f.emit(reviewEvent(101, "r2"));
   await waitFor("the error", () => f.pi.errors().length === 1);
   assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: plan review r2: file_unreadable: /);
-  assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+  assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
   assert.deepEqual(entries(f), []);
   assert.equal(nSelects(f), 0);
   assert.equal(stateCalls(f).includes(REVIEW_LABEL), false);
@@ -269,7 +269,7 @@ for (const [name, answer] of [
   ["is unavailable", { status: "unavailable" }],
   ["errors", { status: "error", error: "Port 19432 in use after 5 retries" }],
 ] as const) {
-  test(`Open full plan while plannotator ${name}: an error with a turn, nothing written, back to the select`, async (t) => {
+  test(`Open full plan while plannotator ${name}: an error without a turn, nothing written, back to the select`, async (t) => {
     const f = new Fixture();
     t.after(() => f.close());
     plannotator(f, () => answer);
@@ -277,7 +277,7 @@ for (const [name, answer] of [
     d.answer("Open full plan");
     await waitFor("the error", () => f.pi.errors().length === 1, 4000);
     assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: plan review r1: plannotator_/);
-    assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: true, deliverAs: "followUp" });
+    assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
     await waitFor("the select again", () => nSelects(f) === 2 && f.pi.openDialog("select"));
     assert.deepEqual(entries(f), [chatEntry()]);
     assert.deepEqual(decides(f), []);

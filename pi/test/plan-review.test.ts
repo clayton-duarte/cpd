@@ -95,7 +95,7 @@ for (const [name, answer, code, text] of [
   ["handled but not pending", { status: "handled", result: { status: "completed" } }, "plannotator_invalid", /did not open/],
   ["no answer", undefined, "plannotator_timeout", /did not answer plan-review/],
 ] as const) {
-  test(`plannotator answers ${name}: an error message with a turn, nothing written, the review stays pending`, async (t) => {
+  test(`plannotator answers ${name}: an error message without a turn, nothing written, the review stays pending`, async (t) => {
     const f = new Fixture();
     t.after(() => f.close());
     plannotator(f, () => answer);
@@ -105,7 +105,7 @@ for (const [name, answer, code, text] of [
     const e = f.pi.errors()[0]!;
     assert.match(e.message.content, new RegExp(`^cpd adapter: plan review r1: ${code}: `));
     assert.match(e.message.content, text);
-    assert.deepEqual(e.options, { triggerTurn: true, deliverAs: "followUp" });
+    assert.deepEqual(e.options, { triggerTurn: false, deliverAs: "followUp" });
     assert.deepEqual(entries(f), []);
     assert.equal(stateCalls(f).includes(REVIEW_LABEL), false);
     assert.equal(f.argvs().some((a) => a[1] === "decide"), false);
