@@ -6,7 +6,7 @@ use crate::common;
 
 use std::fs;
 
-use common::{TestEnv, WATCH_OK};
+use common::{SLEEP_SECONDS, TestEnv, WATCH_OK};
 use cpd_core::context::curation::{Curation, Proposal, Reason, propose};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, PlanId};
@@ -241,4 +241,113 @@ fn a_retired_record_is_in_no_digest() {
     assert_eq!(markdown(&by_topic), "- [m1-n2] kept short", "{by_topic}");
     let message = lead_message(&env, "pay");
     assert!(!message.contains("retired short"), "{message}");
+}
+
+/// A fake `pi` that creates its session file and sleeps; the cockpit is the one `plan new` made.
+fn manager_cockpit(env: &TestEnv) {
+    env.fake_cpd_views();
+    env.fake_pi(&format!(
+        "id=''; prev=''\nfor a in \"$@\"; do [ \"$prev\" = --session-id ] && id=$a; prev=$a; done\n\
+         if [ -n \"$id\" ]; then mkdir -p \"$HOME/.pi/agent/sessions/g\"; \
+         printf '{{\"type\":\"session\"}}\\n' > \"$HOME/.pi/agent/sessions/g/2026_$id.jsonl\"; fi\n\
+         exec sleep {SLEEP_SECONDS}"
+    ));
+}
+
+/// hs-d558 FX5: a topic no curated record has ever used is refused, with the topics in use.
+#[test]
+fn show_topic_refuses_an_unknown_topic_with_the_topics_in_use() {
+    let env = fx();
+    seed(&env, "m1-n1", "note", 60, "a");
+    seed(&env, "m1-n2", "note", 50, "b");
+    curate(&env, &[("m1-n1", "engine", "one"), ("m1-n2", "store", "two")]);
+
+    let run = env.cpd(&["context", "show", "--context", CTX, "--topic", "nothing"]);
+    let err = run.error();
+    assert_eq!(run.exit, 4, "{err}");
+    assert_eq!(err["code"], "topic_not_found", "{err}");
+    assert_eq!(err["details"], serde_json::json!({"context": CTX, "topic": "nothing", "topics": ["engine", "store"]}), "{err}");
+    // a topic in use is still answered
+    assert_eq!(markdown(&topic(&env, "engine")), "- [m1-n1] one");
+}
+
+/// hs-d558 FX6: the pointer line names the Context.
+#[test]
+fn the_pointer_line_names_the_context() {
+    let env = fx();
+    for n in 1..=400u32 {
+        seed(&env, &format!("m1-n{n}"), "note", n, "x");
+    }
+    let shorts: Vec<String> = (1..=400u32).map(|n| format!("{n:03} {}", "s".repeat(100))).collect();
+    let rows: Vec<(String, &str)> = (1..=400usize).map(|n| (format!("m1-n{n}"), shorts[n - 1].as_str())).collect();
+    let rows: Vec<(&str, &str, &str)> = rows.iter().map(|(id, s)| (id.as_str(), "alpha", *s)).collect();
+    curate(&env, &rows);
+
+    let md = markdown(&digest(&env));
+    let kept = md.lines().filter(|l| l.starts_with("- [m1-n")).count();
+    let pointer = format!("and {} older: cpd context show --context {CTX} --topic alpha", 400 - kept);
+    assert!(md.lines().any(|l| l == pointer), "{pointer:?} in the digest's tail: {}", &md[md.len().saturating_sub(300)..]);
+}
+
+/// hs-d558 FX6: even when the topic list alone is over 32 768 bytes, the digest is not.
+#[test]
+fn the_digest_never_exceeds_32_kb_even_when_the_topic_list_is_long() {
+    let env = fx();
+    // 900 topics of 40 bytes: the list is `- <topic> (1)` lines, about 50 bytes each, 45 kB.
+    for n in 1..=900u32 {
+        seed(&env, &format!("m1-n{n}"), "note", n, "x");
+    }
+    let topics: Vec<String> = (1..=900u32).map(|n| format!("topic-{n:04}-{}", "a".repeat(26))).collect();
+    let rows: Vec<(String, &str)> = (1..=900usize).map(|n| (format!("m1-n{n}"), topics[n - 1].as_str())).collect();
+    let rows: Vec<(&str, &str, &str)> = rows.iter().map(|(id, t)| (id.as_str(), *t, "short")).collect();
+    curate(&env, &rows);
+
+    let out = digest(&env);
+    let md = markdown(&out);
+    assert!(md.len() <= 32_768, "{} bytes", md.len());
+    assert_eq!(out["digest"]["bytes"], md.len(), "{out}");
+    assert!(md.contains("## Topics\n- "), "the topic list starts: {}", &md[..200.min(md.len())]);
+    assert_eq!(md.lines().last(), Some("and more topics: cpd context show --context ctx --digest"), "{}", &md[md.len().saturating_sub(300)..]);
+    // the lines kept are whole, dropped from the end
+    assert!(md.contains("- topic-0001-"), "the first topic line stays");
+    assert!(!md.contains("- topic-0900-"), "the last topic line is dropped");
+}
+
+/// hs-d558 FX7: the Plan's own brief is in its Lead's message once, in full; another Plan's brief is short.
+#[test]
+fn the_first_message_does_not_list_the_plans_own_brief_again() {
+    let env = fx();
+    new_plan_with_brief(&env, "old", "OTHER-FIRST-LINE\nOTHER-SECOND-LINE\n");
+    new_plan_with_brief(&env, "pay", "OWN-FIRST-LINE\nOWN-SECOND-LINE\n");
+
+    let message = lead_message(&env, "pay");
+    assert_eq!(message.matches("OWN-FIRST-LINE").count(), 1, "the own brief once: {message}");
+    assert_eq!(message.matches("OWN-SECOND-LINE").count(), 1, "the own brief once, in full: {message}");
+    assert!(message.contains("OTHER-FIRST-LINE"), "another brief is listed: {message}");
+    assert!(!message.contains("OTHER-SECOND-LINE"), "another brief is short, its first line: {message}");
+}
+
+/// hs-d558 FX7: a Manager's first message holds the digest and the uncurated records, at most 20; a brief is short.
+#[test]
+fn a_managers_first_message_holds_the_digest_and_the_uncurated_records() {
+    let env = fx();
+    env.cpd(&["context", "note", "FULL TEXT of the curated one.", "--context", CTX]).ok();
+    for n in 2..=25 {
+        env.cpd(&["context", "note", &format!("raw-{n:02}"), "--context", CTX]).ok();
+    }
+    curate(&env, &[("m1-n1", "ledger", "curated short form")]);
+    new_plan_with_brief(&env, "pay", "BRIEF-FIRST-LINE\nBRIEF-SECOND-LINE\n");
+    manager_cockpit(&env);
+    env.cpd(&["context", "manager", "--context", CTX]).ok();
+
+    let path = env.cpd_home().join("run/ctx/manager-message.md");
+    let message = fs::read_to_string(&path).unwrap();
+    assert!(message.starts_with("You are the Manager of Context ctx \"Payments\"."), "{message}");
+    assert!(message.contains("- [m1-n1] curated short form"), "the digest: {message}");
+    assert!(!message.contains("FULL TEXT"), "{message}");
+    assert!(message.contains("raw-02"), "the uncurated records: {message}");
+    assert!(message.contains("BRIEF-FIRST-LINE"), "{message}");
+    assert!(!message.contains("BRIEF-SECOND-LINE"), "a brief is short, as `context show` renders it: {message}");
+    let listed = message.lines().filter(|l| l.starts_with("- [m1-") && l.contains("raw-")).count();
+    assert!(listed <= 20, "{listed} raw records in\n{message}");
 }

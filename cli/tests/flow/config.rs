@@ -938,3 +938,17 @@ fn context_recent_days_defaults_to_1_and_refuses_0() {
         assert_eq!(err["details"]["key"], "context_recent_days", "{bad}: {err}");
     }
 }
+
+/// hs-d558 FX6: `context_recent_days` is 1 to 3650; a bigger value is refused like 0 is.
+#[test]
+fn context_recent_days_above_3650_is_refused() {
+    let env = TestEnv::new();
+    let out = config_with(&env, &format!("{MINIMAL}context_recent_days = 3650\n")).ok();
+    assert_eq!(out["config"]["context_recent_days"], 3650, "{out}");
+
+    let run = config_with(&env, &format!("{MINIMAL}context_recent_days = 3651\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid", "{err}");
+    assert_eq!(err["details"]["key"], "context_recent_days", "{err}");
+}
