@@ -72,17 +72,48 @@ impl Drop for Cleanup {
 }
 
 fn socket_file(socket: &str) -> PathBuf {
-    Path::new("/tmp").join(format!("tmux-{}", { use std::os::unix::fs::MetadataExt; std::fs::metadata("/proc/self").unwrap().uid() })).join(socket)
+    let uid = std::process::Command::new("id").arg("-u").output().expect("id -u");
+    let uid = String::from_utf8(uid.stdout).unwrap();
+    Path::new("/tmp").join(format!("tmux-{}", uid.trim())).join(socket)
 }
 
 fn alive(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .is_ok_and(|s| s.rsplit_once(") ").is_some_and(|(_, rest)| !rest.starts_with('Z') && !rest.starts_with('X')))
+    let out = std::process::Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().expect("ps");
+    let stat = String::from_utf8_lossy(&out.stdout);
+    let stat = stat.trim();
+    !stat.is_empty() && !stat.starts_with('Z')
 }
 
-/// A command that leaves a detached process (`setsid`, out of every group) and writes its pid to `left.pid`.
+/// A command that leaves a process out of gate-run's descendants (a double fork: reparented to init) and writes its pid
+/// to `left.pid`.
 fn leave_a_process(fx: &Fx) -> String {
-    format!("setsid sleep {SLEEP_SECONDS} </dev/null >/dev/null 2>&1 & echo $! > '{}'", fx.file("left.pid").display())
+    format!("( sleep {SLEEP_SECONDS} </dev/null >/dev/null 2>&1 & echo $! > '{}' )", fx.file("left.pid").display())
+}
+
+#[test]
+fn a_clean_run_of_true_prints_nothing_and_exits_0() {
+    let fx = Fx::new();
+
+    let run = fx.gate_run("true");
+
+    assert_eq!((run.exit, run.stdout.as_str(), run.stderr.as_str()), (0, "", ""), "{run:?}");
+    assert_eq!(fx.tmp_entries(), Vec::<String>::new(), "a clean run removes its empty directory");
+}
+
+#[test]
+fn the_hint_for_a_left_process_names_a_command_this_os_has() {
+    let fx = Fx::new();
+
+    let run = fx.gate_run(&leave_a_process(&fx));
+
+    let pid: u32 = fs::read_to_string(fx.file("left.pid")).unwrap_or_default().trim().parse().unwrap_or_else(|_| panic!("the command left no process: {run:?}"));
+    assert_eq!(run.exit, 1, "{run:?}");
+    if Path::new("/proc/self").exists() {
+        assert!(run.stderr.contains(&format!("/proc/{pid}/environ")), "{run:?}");
+    } else {
+        assert!(run.stderr.contains(&format!("ps -E -p {pid}")), "{run:?}");
+        assert!(!run.stderr.contains("/proc/"), "{run:?}");
+    }
 }
 
 #[test]
