@@ -268,6 +268,7 @@ pub(super) fn model_and_level(config: &Config, id: &SessionId, tier: &str) -> Re
         Letter::O => &models.o,
         Letter::S => &models.s,
         Letter::H => &models.h,
+        Letter::G => &models.g,
     };
     Ok((model.clone(), tier.level()))
 }

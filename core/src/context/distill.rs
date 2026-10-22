@@ -348,6 +348,7 @@ impl Run<'_> {
             Letter::O => &models.o,
             Letter::S => &models.s,
             Letter::H => &models.h,
+            Letter::G => &models.g,
         };
         let model = format!("{model}:{}", tier.level());
         let launch = pi::distiller(&model, files);

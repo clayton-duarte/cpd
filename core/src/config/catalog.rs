@@ -136,7 +136,7 @@ pub fn load_with(config: &Config, store: &mut Store) -> Result<Catalog, CpdError
 
 fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catalog, CpdError> {
     let models = [config.tiers.o.as_str(), config.tiers.s.as_str(), config.tiers.h.as_str()];
-    if let Some(cached) = cache::read(store, &pi.version, models)? {
+    if let Some(cached) = cache::read(store, &pi.version, models, &config.tiers.g)? {
         return Ok(cached);
     }
     let catalog = read(pi, config, NODE_DEADLINE)?;
@@ -146,7 +146,7 @@ fn load_from(pi: &PiInstall, config: &Config, store: &mut Store) -> Result<Catal
 
 /// Runs the embedded module with pi's Node (killed past `deadline`) and builds the [`Catalog`] from what it prints.
 pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catalog, CpdError> {
-    let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h)];
+    let tiers = [(Letter::O, &config.tiers.o), (Letter::S, &config.tiers.s), (Letter::H, &config.tiers.h), (Letter::G, &config.tiers.g)];
     let node = node();
     let mut cmd = Command::new(&node);
     cmd.args(["--input-type=module", "-e", MODULE, "--"])
@@ -182,6 +182,11 @@ pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catal
             missing.push(serde_json::json!({"letter": letter.to_string(), "model": model}));
             continue;
         };
+        if letter == Letter::G {
+            // G has no effort levels (hs-d562): pi's levels for it are ignored, only that pi has the model matters.
+            models.push(TierModel { model: model.clone(), efforts: vec![] });
+            continue;
+        }
         let mut efforts = Vec::new();
         for level in entry {
             match effort_of_level(level) {
@@ -206,8 +211,8 @@ pub fn read(pi: &PiInstall, config: &Config, deadline: Duration) -> Result<Catal
             .with("missing", missing)
             .with("pi_version", pi.version.clone()));
     }
-    let [o, s, h]: [TierModel; 3] = models.try_into().expect("one model per letter");
-    Ok(Catalog { pi_version: pi.version.clone(), o, s, h })
+    let [o, s, h, g]: [TierModel; 4] = models.try_into().expect("one model per letter");
+    Ok(Catalog { pi_version: pi.version.clone(), o, s, h, g })
 }
 
 #[cfg(test)]
@@ -237,6 +242,7 @@ mod tests {
             o: tier(&config.tiers.o),
             s: tier(&config.tiers.s),
             h: tier(&config.tiers.h),
+            g: TierModel { model: config.tiers.g.clone(), efforts: vec![] },
         };
         cache::write(&mut store, &cached).unwrap();
 

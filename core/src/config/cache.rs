@@ -13,7 +13,8 @@ const COMMAND: &str = "tiers";
 
 /// The cached Catalog for `pi_version`, when it holds a row for each of the
 /// three configured models (`models` in `O, S, H` order). `None` is a cache miss.
-pub(super) fn read(store: &mut Store, pi_version: &str, models: [&str; 3]) -> Result<Option<Catalog>, CpdError> {
+/// `g` is the configured G model: G is never cached (hs-d562), a catalog is built with it.
+pub(super) fn read(store: &mut Store, pi_version: &str, models: [&str; 3], g: &str) -> Result<Option<Catalog>, CpdError> {
     store.read(|conn| {
         let mut found = Vec::with_capacity(3);
         for (letter, model) in [Letter::O, Letter::S, Letter::H].into_iter().zip(models) {
@@ -23,7 +24,8 @@ pub(super) fn read(store: &mut Store, pi_version: &str, models: [&str; 3]) -> Re
             }
         }
         let [o, s, h]: [TierModel; 3] = found.try_into().expect("one model per letter");
-        Ok(Some(Catalog { pi_version: pi_version.to_owned(), o, s, h }))
+        let g = TierModel { model: g.to_owned(), efforts: vec![] };
+        Ok(Some(Catalog { pi_version: pi_version.to_owned(), o, s, h, g }))
     })
 }
 

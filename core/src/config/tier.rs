@@ -17,6 +17,8 @@ pub enum Letter {
     O,
     S,
     H,
+    /// Auxiliary agents only, written `GX` (hs-d562).
+    G,
 }
 
 impl Letter {
@@ -28,6 +30,7 @@ impl Letter {
             Letter::O => 'O',
             Letter::S => 'S',
             Letter::H => 'H',
+            Letter::G => 'G',
         }
     }
 
@@ -36,6 +39,7 @@ impl Letter {
             'O' => Some(Letter::O),
             'S' => Some(Letter::S),
             'H' => Some(Letter::H),
+            'G' => Some(Letter::G),
             _ => None,
         }
     }
@@ -62,7 +66,8 @@ pub(super) fn effort_of_level(level: &str) -> Option<Option<u8>> {
 /// The Tiers a Worker may have (hs-d554), as `details.allowed` and the message give them.
 const WORKER_RANGE: &str = "H3, S0-S3";
 
-/// A Tier: a model letter and an effort 0–5, `^(O|S|H)([0-5])$`, e.g. `S3`.
+/// A Tier: a model letter and an effort 0–5, `^(O|S|H)([0-5])$`, e.g. `S3`, or exactly `GX` (hs-d562).
+/// A G Tier keeps effort 0 inside and is written `GX`: no value displays as `G0`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Tier {
     letter: Letter,
@@ -72,15 +77,30 @@ pub struct Tier {
 impl Tier {
     /// `None` when `effort` is above 5.
     pub fn new(letter: Letter, effort: u8) -> Option<Tier> {
+        let effort = if letter == Letter::G { 0 } else { effort };
         (effort <= 5).then_some(Tier { letter, effort })
     }
 
-    /// `tier_invalid` (exit 2) when `s` is not `^(O|S|H)([0-5])$`.
+    /// `tier_invalid` (exit 2) when `s` is not `^(O|S|H)([0-5])$` or `GX`.
     pub fn parse(s: &str) -> Result<Tier, CpdError> {
+        if s == "GX" {
+            return Ok(Tier { letter: Letter::G, effort: 0 });
+        }
+        let mut peek = s.chars();
+        if peek.next() == Some('G') && peek.next().is_some_and(|c| c.is_ascii_digit()) && peek.next().is_none() {
+            return Err(CpdError::new(
+                ErrorCode::TierInvalid,
+                format!("invalid Tier {s:?}: G has no effort, write GX (hs-d562)."),
+            )
+            .with("tier", s));
+        }
         let mut chars = s.chars();
         let tier = (|| {
             let letter = Letter::from_char(chars.next()?)?;
             let effort = chars.next()?.to_digit(10)? as u8;
+            if letter == Letter::G {
+                return None;
+            }
             if chars.next().is_some() {
                 return None;
             }
@@ -89,7 +109,7 @@ impl Tier {
         tier.ok_or_else(|| {
             CpdError::new(
                 ErrorCode::TierInvalid,
-                format!("invalid Tier {s:?}: expected <O|S|H><0-5>, for example S3."),
+                format!("invalid Tier {s:?}: expected <O|S|H><0-5> or GX, for example S3."),
             )
             .with("tier", s)
         })
@@ -104,7 +124,7 @@ impl Tier {
         match self.letter {
             Letter::H => self.effort == 3,
             Letter::S => self.effort <= 3,
-            Letter::O => false,
+            Letter::O | Letter::G => false,
         }
     }
 
@@ -140,7 +160,10 @@ impl Tier {
 
 impl fmt::Display for Tier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.letter, self.effort)
+        match self.letter {
+            Letter::G => f.write_str("GX"),
+            letter => write!(f, "{letter}{}", self.effort),
+        }
     }
 }
 
@@ -173,6 +196,8 @@ pub struct Catalog {
     pub o: TierModel,
     pub s: TierModel,
     pub h: TierModel,
+    /// Never cached; `efforts` is empty: G has no effort levels, `GX` is its one Tier (hs-d562).
+    pub g: TierModel,
 }
 
 impl Catalog {
@@ -181,12 +206,13 @@ impl Catalog {
             Letter::O => &self.o,
             Letter::S => &self.s,
             Letter::H => &self.h,
+            Letter::G => &self.g,
         }
     }
 
     /// Whether `tier`'s effort is valid for its model.
     pub fn is_valid(&self, tier: Tier) -> bool {
-        self.model(tier.letter).efforts.contains(&tier.effort)
+        tier.letter == Letter::G || self.model(tier.letter).efforts.contains(&tier.effort)
     }
 
     /// `tier_invalid` (exit 2) when `tier`'s effort is not valid for its model.
@@ -238,6 +264,9 @@ impl Catalog {
     /// The distill ladder (hs-d538): `start`, then the H efforts above it, then S1..S4, each kept only when
     /// this catalog accepts it; never `O`, never effort 5.
     pub fn distill_ladder(&self, start: Tier) -> Vec<Tier> {
+        if start.letter == Letter::G {
+            return vec![start];
+        }
         let above = (start.effort + 1..=Tier::MAX_EFFORT).filter_map(|e| Tier::new(Letter::H, e));
         let s = (1..=Tier::MAX_EFFORT).filter_map(|e| Tier::new(Letter::S, e));
         std::iter::once(start).chain(above.chain(s).filter(|t| self.is_valid(*t))).collect()
@@ -274,6 +303,7 @@ mod tests {
             o: model("opus", &[0, 1, 2, 3, 4, 5]),
             s: model("sonnet", &[1, 2, 3, 4, 5]),
             h: model("haiku", &[0, 1, 2, 3]),
+            g: model("gemini", &[]),
         }
     }
 
@@ -287,10 +317,10 @@ mod tests {
 
     #[test]
     fn syntax() {
-        for good in ["O0", "S3", "H5"] {
+        for good in ["O0", "S3", "H5", "GX"] {
             assert_eq!(t(good).to_string(), good);
         }
-        for bad in ["", "O", "O6", "o3", "X1", "S33", "S-1", " S3", "S3 ", "minimal"] {
+        for bad in ["", "O", "O6", "o3", "X1", "S33", "S-1", " S3", "S3 ", "minimal", "G0", "gx"] {
             let err = Tier::parse(bad).unwrap_err();
             assert_eq!(err.code(), ErrorCode::TierInvalid, "{bad:?}");
         }
