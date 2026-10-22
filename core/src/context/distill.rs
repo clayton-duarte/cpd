@@ -1,12 +1,12 @@
 //! `cpd context distill` (commands.md §3.12, contract §4.6 "The distill run";
-//! hs-d194 D4, D5): builds a Context's digest with one-shot pi, validates it
-//! ([`super::digest`]) and renames it into place.
+//! hs-d549, hs-d551): curates a batch of at most 60 uncurated records with one-shot pi, checks its JSON lines
+//! and writes the curations and proposals with [`propose`].
 //!
 //! Started on demand, or detached by engine E9 (`watch/distill.rs`). The run
 //! holds `locks/distill-<context>.lock`, a `flock(2)` lock the kernel frees when
 //! the run dies, so a Context never has two runs and a crash leaves no stale lock.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -14,11 +14,12 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use clap::Args;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::digest::{self, Digest, Invalid};
+use super::curation::{Curation, Proposal, Reason, propose};
 use super::render::Indexed;
 use super::{ContextRow, Record, Select, inforce};
 use crate::config::{Config, Letter, Tier};
@@ -37,17 +38,6 @@ const SOURCE: &str = "context distill";
 
 /// The distiller's prompt (contract §4.6 step 3): versioned with the code that validates its answer.
 const PROMPT: &str = include_str!("distill_prompt.md");
-
-/// The repair turn's prompt (contract §4.6 step 5, hs-d244 D-c), shape B: the model writes only `## Additions`.
-const REPAIR_PROMPT: &str = include_str!("distill_repair_prompt.md");
-
-/// The most missing records a repair turn is tried for (contract §4.6 step 5): the measured range of
-/// shape B is 1–16 (`docs/research/context-distill.md`); with more, the answer outgrows the digest's limit.
-pub const REPAIR_MAX: usize = 16;
-
-/// The `kind` of a `runs.jsonl` line: the run that wrote the digest, and the repair turn after an invalid one.
-const KIND_DISTILL: &str = "distill";
-const KIND_REPAIR: &str = "repair";
 
 /// How many lines of pi's stderr a `distill_failed` Event carries.
 const TAIL_LINES: usize = 60;
@@ -111,21 +101,58 @@ pub fn running(home: &CpdHome, context: &ContextId) -> Result<bool, CpdError> {
     let free = lock::try_lock(&file).map_err(|e| lock_failed(&path, e))?;
     Ok(!free)
 }
-
 /// `context distill` (§3.12).
 pub(super) fn distill(args: DistillArgs) -> Result<Output, CpdError> {
     let Env { home, config, mut store } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
     store.read(|conn| ContextRow::require(conn, &context))?;
     let _lock = Lock::take(&home, &context)?;
-    let (records, retired) = store.read(|conn| {
+    let state = store.read(|conn| State::read(conn, &context))?;
+    let run = Run { home: &home, config: &config, store: &mut store, context: &context };
+    run.run(&state).map(Output::success)
+}
+
+/// The most records one step curates.
+pub const BATCH_MAX: usize = 60;
+
+/// The bounds of a curation line (contract §4.6 step 5).
+const TOPIC_MAX: usize = 40;
+const SHORT_MAX: usize = 120;
+
+/// What a run reads in one transaction: every record of a Context, the records out of force, and the curations.
+pub struct State {
+    records: Vec<Indexed>,
+    retired: HashSet<RecordId>,
+    /// `record id -> (topic, short)` of every curated record.
+    curated: HashMap<RecordId, (String, String)>,
+}
+
+impl State {
+    pub fn read(conn: &rusqlite::Connection, context: &ContextId) -> Result<State, CpdError> {
         let mut stmt =
             conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
         let records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok((records, inforce::retired(conn, &context)?))
-    })?;
-    let run = Run { home: &home, config: &config, store: &mut store, context: &context };
-    run.run(&records, &retired).map(Output::success)
+        let mut stmt = conn.prepare("SELECT record, topic, short FROM record_curations WHERE context = ?1")?;
+        let rows = stmt
+            .query_map([context.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let curated = rows.into_iter().map(|(id, topic, short)| Ok((RecordId::parse(&id)?, (topic, short)))).collect::<Result<_, CpdError>>()?;
+        Ok(State { records, retired: inforce::retired(conn, context)?, curated })
+    }
+
+    /// The highest `seq` of the Context, `None` when it has no record.
+    pub fn highest(&self) -> Option<i64> {
+        self.records.last().map(|(seq, _)| *seq)
+    }
+
+    fn in_force(&self) -> Vec<&Indexed> {
+        self.highest().map_or_else(Vec::new, |h| inforce::in_force_without(&self.records, h, &self.retired))
+    }
+
+    /// The records in force that are not curated yet, oldest first.
+    pub fn uncurated(&self) -> Vec<&Indexed> {
+        self.in_force().into_iter().filter(|(_, r)| !self.curated.contains_key(&r.id)).collect()
+    }
 }
 
 struct Run<'a> {
@@ -135,88 +162,215 @@ struct Run<'a> {
     context: &'a ContextId,
 }
 
-fn digest_json(digest: Option<&Digest>) -> Value {
-    digest.map_or(Value::Null, |d| json!({"upto_seq": d.upto_seq, "file": d.file, "bytes": d.text.len()}))
+/// One problem of an output: `{id?, line?, what}`.
+#[derive(Debug, Clone, PartialEq)]
+struct Problem {
+    id: Option<RecordId>,
+    line: Option<usize>,
+    what: String,
+}
+
+impl Problem {
+    fn json(&self) -> Value {
+        let mut v = json!({"what": self.what});
+        if let Some(id) = &self.id {
+            v["id"] = json!(id.to_string());
+        }
+        if let Some(line) = self.line {
+            v["line"] = json!(line);
+        }
+        v
+    }
+}
+
+/// How a retirement proposal of the model reads.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawRetire {
+    reason: RawReason,
+    target: String,
+}
+
+#[derive(Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum RawReason {
+    Duplicate,
+    Superseded,
+    Documented,
+}
+
+/// One line of the model's output, as the schema of contract §4.6 step 4 has it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawLine {
+    id: String,
+    topic: String,
+    short: String,
+    retire: Option<RawRetire>,
+    doc: bool,
+}
+
+/// A checked output: what [`propose`] takes.
+struct Checked {
+    curations: Vec<Curation>,
+    proposals: Vec<Proposal>,
+}
+
+/// The batch of a step with the data the checks need.
+struct Batch<'a> {
+    records: &'a [&'a Indexed],
+    /// The ids and `seq`s of every record in force of the Context (the batch and the known ones).
+    in_force: HashMap<RecordId, i64>,
+    /// `docs.md`'s hits of each batch record.
+    hits: HashMap<RecordId, Vec<String>>,
+}
+
+impl Batch<'_> {
+    /// Checks `text` (contract §4.6 step 5), every failure at once.
+    fn check(&self, text: &str) -> Result<Checked, Vec<Problem>> {
+        let mut problems = Vec::new();
+        let mut seen: HashSet<RecordId> = HashSet::new();
+        let mut checked = Checked { curations: Vec::new(), proposals: Vec::new() };
+        let batch: HashMap<&RecordId, i64> = self.records.iter().map(|(seq, r)| (&r.id, *seq)).collect();
+        for (n, line) in text.lines().enumerate().map(|(i, l)| (i + 1, l)).filter(|(_, l)| !l.trim().is_empty()) {
+            let problem = |id: Option<&RecordId>, what: String| Problem { id: id.cloned(), line: Some(n), what };
+            let raw: RawLine = match serde_json::from_str(line) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    problems.push(problem(None, format!("not a curation line: {e}")));
+                    continue;
+                }
+            };
+            let id = match RecordId::parse(&raw.id) {
+                Ok(id) if batch.contains_key(&id) => id,
+                Ok(_) => {
+                    problems.push(problem(None, format!("{} is not a record of the batch", raw.id)));
+                    continue;
+                }
+                Err(_) => {
+                    problems.push(problem(None, format!("{:?} is not a record id", raw.id)));
+                    continue;
+                }
+            };
+            if !seen.insert(id.clone()) {
+                problems.push(problem(Some(&id), "listed more than once".to_owned()));
+                continue;
+            }
+            let mut bad = Vec::new();
+            let topic_len = raw.topic.chars().count();
+            if topic_len == 0 || topic_len > TOPIC_MAX || raw.topic.contains('\n') {
+                bad.push(format!("topic must be 1 to {TOPIC_MAX} characters on one line"));
+            }
+            if raw.short.is_empty() || raw.short.len() > SHORT_MAX || raw.short.contains('\n') {
+                bad.push(format!("short must be 1 to {SHORT_MAX} bytes on one line"));
+            }
+            let seq = batch[&id];
+            let mut proposal = None;
+            if let Some(retire) = &raw.retire {
+                match self.retire(&id, seq, retire) {
+                    Ok(p) => proposal = Some(p),
+                    Err(what) => bad.push(what),
+                }
+            }
+            if !bad.is_empty() {
+                problems.extend(bad.into_iter().map(|what| problem(Some(&id), what)));
+                continue;
+            }
+            checked.curations.push(Curation {
+                record: id.clone(),
+                topic: raw.topic,
+                short: raw.short,
+                doc_paths: raw.doc.then(|| self.hits.get(&id).cloned().unwrap_or_default()),
+            });
+            checked.proposals.extend(proposal);
+        }
+        for (_, r) in self.records.iter().filter(|(_, r)| !seen.contains(&r.id)) {
+            problems.push(Problem { id: Some(r.id.clone()), line: None, what: "missing from the output".to_owned() });
+        }
+        if problems.is_empty() { Ok(checked) } else { Err(problems) }
+    }
+
+    fn retire(&self, id: &RecordId, seq: i64, retire: &RawRetire) -> Result<Proposal, String> {
+        let reason = match retire.reason {
+            RawReason::Duplicate => Reason::Duplicate,
+            RawReason::Superseded => Reason::Superseded,
+            RawReason::Documented => Reason::Documented,
+        };
+        match reason {
+            Reason::Documented => {
+                if !self.hits.get(id).is_some_and(|h| h.contains(&retire.target)) {
+                    return Err(format!("documented target {:?} is not one of the record's grep hits", retire.target));
+                }
+            }
+            Reason::Duplicate | Reason::Superseded => {
+                let target = RecordId::parse(&retire.target).map_err(|_| format!("{} target {:?} is not a record id", reason.as_str(), retire.target))?;
+                let Some(&target_seq) = self.in_force.get(&target) else {
+                    return Err(format!("{} target {target} is not a record in force of the Context", reason.as_str()));
+                };
+                if &target == id {
+                    return Err(format!("{} target is the record itself", reason.as_str()));
+                }
+                if reason == Reason::Superseded && target_seq <= seq {
+                    return Err(format!("superseded target {target} is not newer than the record"));
+                }
+            }
+        }
+        Ok(Proposal { record: id.clone(), reason, target: retire.target.clone() })
+    }
 }
 
 impl Run<'_> {
-    /// Steps 2–5 of the run (contract §4.6), the lock held: `records` are every record of the Context, in `seq` order.
-    fn run(mut self, records: &[Indexed], retired: &HashSet<RecordId>) -> Result<Value, CpdError> {
-        let Some(&(highest, _)) = records.last() else { return Ok(self.already(None, 0)) };
+    /// The run (contract §4.6 "The distill run"), the lock held.
+    fn run(mut self, state: &State) -> Result<Value, CpdError> {
+        let uncurated = state.uncurated();
+        let Some(highest) = state.highest().filter(|_| !uncurated.is_empty()) else {
+            return Ok(json!({"context": self.context.as_str(), "already": true, "remaining": 0}));
+        };
         let upto = u64::try_from(highest).expect("a record's seq is positive");
-        let in_force = inforce::in_force_without(records, highest, retired);
-        if in_force.is_empty() {
-            return Ok(self.already(None, 0));
-        }
-        let latest = digest::latest(self.home, self.context)?;
-        if latest.as_ref().is_some_and(|d| d.upto_seq >= upto) {
-            return Ok(self.already(latest.as_ref(), in_force.len()));
-        }
+        let batch_records: Vec<&Indexed> = uncurated.iter().take(BATCH_MAX).copied().collect();
+        let in_force = state.in_force();
+        let hits = self.grep_hits(&batch_records)?;
         let dir = self.home.context_digest_dir(self.context);
         fs::create_dir_all(&dir).map_err(|e| io_failed("create", &dir, &e))?;
-        let tmp = self.home.context_digest_tmp(self.context, upto);
-        // Only `plan` and `brief` records came since: the records in force are the same, so are the topic sections.
-        let carried = latest.filter(|d| in_force.iter().all(|(seq, _)| u64::try_from(*seq).is_ok_and(|s| s <= d.upto_seq)));
-        let expect = digest::Expect::of(&in_force);
+        self.write_inputs(&dir, &batch_records, &in_force, state, &hits)?;
+        let batch = Batch { records: &batch_records, in_force: in_force.iter().map(|(seq, r)| (r.id.clone(), *seq)).collect(), hits };
+        let start = self.config.context_distill_tier;
+        let mut ladder = vec![start];
         let mut steps: Vec<Tier> = Vec::new();
-        let (ran, repair) = match &carried {
-            Some(d) => {
-                fs::write(&tmp, digest::topic_sections(&d.text)).map_err(|e| io_failed("write", &tmp, &e))?;
-                let (_, checked) = self.check_tmp(&tmp, &expect)?;
-                if let Err(invalid) = checked {
-                    let kept = digest::keep_invalid(self.home, self.context, upto)?;
-                    return Err(self.invalid(upto, &invalid, &kept));
-                }
-                (None, None)
+        let mut index = 0;
+        let (ran, checked) = loop {
+            let tier = ladder[index];
+            steps.push(tier);
+            let fault = match self.step(tier, upto, &batch)? {
+                Ok(done) => break done,
+                Err(fault) => fault,
+            };
+            if index == 0 {
+                ladder = self.distill_ladder(start);
             }
-            None => {
-                self.write_inputs(&dir, &in_force)?;
-                let start = self.config.context_distill_tier;
-                let mut ladder = vec![start];
-                let mut index = 0;
-                loop {
-                    let tier = ladder[index];
-                    steps.push(tier);
-                    let fault = match self.step(tier, upto, &dir, &tmp, &in_force, &expect)? {
-                        Ok(done) => break (Some(done.0), done.1),
-                        Err(fault) => fault,
-                    };
-                    if index == 0 {
-                        ladder = self.distill_ladder(start);
-                    }
-                    index += 1;
-                    if index == ladder.len() {
-                        return Err(match fault {
-                            Fault::Invalid(invalid) => {
-                                let kept = digest::keep_invalid(self.home, self.context, upto)?;
-                                self.invalid(upto, &invalid, &kept)
-                            }
-                            Fault::Pi(failure, tail) => {
-                                digest::discard(self.home, self.context, upto)?;
-                                self.pi_failed(upto, &failure, tail)
-                            }
-                        });
-                    }
-                }
+            index += 1;
+            if index == ladder.len() {
+                return Err(match fault {
+                    Fault::Invalid(problems, kept) => self.invalid(upto, &problems, &kept),
+                    Fault::Pi(failure, tail) => self.pi_failed(upto, &failure, tail),
+                });
             }
         };
-        let file = digest::install(self.home, self.context, upto, &expect)?;
-        let text = fs::read_to_string(&file).map_err(|e| io_failed("read", &file, &e))?;
-        let installed = Digest { upto_seq: upto, file, text };
-        let mut out = json!({
+        let (curated, retire, docs) =
+            (checked.curations.len(), checked.proposals.len(), checked.curations.iter().filter(|c| c.doc_paths.is_some()).count());
+        propose(self.store, self.context, &checked.curations, &checked.proposals)?;
+        remove_invalid(self.home, self.context)?;
+        self.log_run(&ran, upto, "valid");
+        Ok(json!({
             "context": self.context.as_str(),
-            "distilled": ran.is_some(),
-            "digest": digest_json(Some(&installed)),
-            "records_in_force": in_force.len(),
+            "distilled": true,
             "steps": steps.iter().map(Tier::to_string).collect::<Vec<_>>(),
-        });
-        if let Some(ran) = &ran {
-            out["run"] = ran.figures();
-        }
-        if let Some(repair) = &repair {
-            out["repair"] = repair.figures();
-        }
-        Ok(out)
+            "curated": curated,
+            "retire": retire,
+            "docs": docs,
+            "remaining": uncurated.len() - batch_records.len(),
+            "run": ran.figures(),
+        }))
     }
 
     /// The distill ladder from `start` (hs-d538), from pi's catalog. A catalog that cannot be read gives no
@@ -225,124 +379,93 @@ impl Run<'_> {
         crate::config::load_catalog_with(self.config, self.store).map_or_else(|_| vec![start], |c| c.distill_ladder(start))
     }
 
-    /// Reads `tmp`, drops an index the model wrote anyway (it is not a topic section) and validates the rest.
-    fn check_tmp(&self, tmp: &Path, expect: &digest::Expect) -> Result<(Vec<u8>, Result<(), Invalid>), CpdError> {
-        let mut bytes = fs::read(tmp).map_err(|e| io_failed("read", tmp, &e))?;
-        if let Some(topic) = std::str::from_utf8(&bytes).ok().map(digest::topic_sections).filter(|t| t.len() < bytes.len()) {
-            bytes = topic.as_bytes().to_vec();
-            fs::write(tmp, &bytes).map_err(|e| io_failed("write", tmp, &e))?;
-        }
-        let checked = digest::validate(&bytes, expect, digest::LIMIT);
-        Ok((bytes, checked))
-    }
-
-    /// One step of step 4/5 (contract §4.6) at `tier`: the distiller, then the one repair turn when the repair
-    /// rules allow it. The outer `Err` is a failure that ends the run at once (a file); the inner one is the
-    /// step's fault, which only the last step reports. Each pi run is logged.
-    #[allow(clippy::too_many_arguments)]
-    fn step(
-        &mut self,
-        tier: Tier,
-        upto: u64,
-        dir: &Path,
-        tmp: &Path,
-        in_force: &[&Indexed],
-        expect: &digest::Expect,
-    ) -> Result<Result<(Ran, Option<Ran>), Fault>, CpdError> {
-        let (mut ran, text) = match self.run_pi(tier, upto, KIND_DISTILL, &["prompt.md", "records.md"])? {
+    /// One step (contract §4.6 steps 4 and 5) at `tier`: the distiller, then the checks. The outer `Err` is a failure
+    /// that ends the run at once (a file); the inner one is the step's fault, which only the last step reports.
+    fn step(&mut self, tier: Tier, upto: u64, batch: &Batch<'_>) -> Result<Result<(Ran, Checked), Fault>, CpdError> {
+        let (ran, text) = match self.run_pi(tier, upto, &["prompt.md", "batch.md", "known.md", "docs.md"])? {
             Ok(done) => done,
             Err(fault) => return Ok(Err(fault)),
         };
-        // Recency wins (contract §4.6 "The contradictions report"): the report is taken out of the text
-        // before anything validates it, and goes to the run's line.
-        let (text, report) = take_contradictions(&text);
-        ran.report = Report::of(&report, in_force);
-        fs::write(tmp, text).map_err(|e| io_failed("write", tmp, &e))?;
-        let (mut bytes, checked) = self.check_tmp(tmp, expect)?;
-        let Err(invalid) = checked else {
-            self.log_run(&ran, upto, "valid");
-            return Ok(Ok((ran, None)));
-        };
-        self.log_run(&ran, upto, "invalid");
-        // One repair turn, only for a digest that lacks citations and nothing else.
-        let repairable = !invalid.not_utf8 && !invalid.too_big && invalid.stray.is_empty() && (1..=REPAIR_MAX).contains(&invalid.missing.len());
-        if !repairable {
-            return Ok(Err(Fault::Invalid(invalid)));
+        match batch.check(&text) {
+            Ok(checked) => Ok(Ok((ran, checked))),
+            Err(problems) => {
+                self.log_run(&ran, upto, "invalid");
+                let kept = self.home.context_digest_invalid(self.context, upto);
+                remove_invalid(self.home, self.context)?;
+                fs::write(&kept, &text).map_err(|e| io_failed("write", &kept, &e))?;
+                Ok(Err(Fault::Invalid(problems, kept)))
+            }
         }
-        let (fixed, text) = match self.repair(tier, dir, upto, &bytes, &invalid.missing, in_force)? {
-            Ok(done) => done,
-            Err(fault) => return Ok(Err(fault)),
-        };
-        bytes.extend_from_slice(b"\n");
-        bytes.extend_from_slice(text.as_bytes());
-        fs::write(tmp, &bytes).map_err(|e| io_failed("write", tmp, &e))?;
-        if let Err(invalid) = digest::validate(&bytes, expect, digest::LIMIT) {
-            self.log_run(&fixed, upto, "invalid");
-            return Ok(Err(Fault::Invalid(invalid)));
+    }
+
+    /// For each batch record, the `<repo>:<path>` hits of `git grep -l -w <id> -- docs '*.md'` on each repo of the
+    /// Context's Plans' PRs.
+    fn grep_hits(&mut self, batch: &[&Indexed]) -> Result<HashMap<RecordId, Vec<String>>, CpdError> {
+        let repos: Vec<String> = self.store.read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT prs.repo FROM prs JOIN plans ON plans.id = prs.plan WHERE plans.context = ?1 ORDER BY prs.repo",
+            )?;
+            Ok(stmt.query_map([self.context.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?)
+        })?;
+        let mut hits = HashMap::new();
+        for (_, record) in batch {
+            let mut found = Vec::new();
+            for repo in &repos {
+                let out = Command::new("git")
+                    .args(["-C", repo, "grep", "-l", "-w", &record.id.to_string(), "--", "docs", "*.md"])
+                    .stdin(Stdio::null())
+                    .output()
+                    .map_err(|e| git_failed(repo, &e.to_string()))?;
+                // 1: no match.
+                if !out.status.success() && out.status.code() != Some(1) {
+                    return Err(git_failed(repo, String::from_utf8_lossy(&out.stderr).trim()));
+                }
+                found.extend(String::from_utf8_lossy(&out.stdout).lines().map(|path| format!("{repo}:{path}")));
+            }
+            hits.insert(record.id.clone(), found);
         }
-        self.log_run(&fixed, upto, "valid");
-        Ok(Ok((ran, Some(fixed))))
+        Ok(hits)
     }
 
-    fn already(&self, digest: Option<&Digest>, in_force: usize) -> Value {
-        json!({
-            "context": self.context.as_str(),
-            "already": true,
-            "digest": digest_json(digest),
-            "records_in_force": in_force,
-        })
-    }
-
-    /// Step 3: `prompt.md` and `records.md`, the records in force oldest first.
-    fn write_inputs(&self, dir: &Path, in_force: &[&Indexed]) -> Result<(), CpdError> {
-        let prompt = dir.join("prompt.md");
-        fs::write(&prompt, PROMPT).map_err(|e| io_failed("write", &prompt, &e))?;
-        let records = dir.join("records.md");
-        fs::write(&records, distiller_records_md(in_force)).map_err(|e| io_failed("write", &records, &e))
-    }
-
-    /// Step 5's repair turn (shape B): `digest.md` (the invalid topic sections), `missing.md` (the blocks of the
-    /// missing records, as in `records.md`) and `problem.md` (their ids), then pi with the repair prompt. Returns
-    /// the run and its answer, `## Additions`, which the caller appends to the topic sections.
-    fn repair(
-        &mut self,
-        tier: Tier,
+    /// Step 3: `prompt.md`, `batch.md`, `known.md` and `docs.md`.
+    fn write_inputs(
+        &self,
         dir: &Path,
-        upto: u64,
-        topic: &[u8],
-        missing: &[RecordId],
+        batch: &[&Indexed],
         in_force: &[&Indexed],
-    ) -> Result<Result<(Ran, String), Fault>, CpdError> {
-        let blocks: Vec<&Indexed> = in_force.iter().filter(|(_, r)| missing.contains(&r.id)).copied().collect();
-        let problem = format!(
-            "The digest in `digest.md` does not cite these {} decisions and open questions in force, which are in `missing.md`:\n{}\n",
-            missing.len(),
-            missing.iter().map(|id| format!("- {id}")).collect::<Vec<_>>().join("\n")
-        );
-        for (name, content) in [
-            ("repair-prompt.md", REPAIR_PROMPT.as_bytes().to_vec()),
-            ("digest.md", topic.to_vec()),
-            ("missing.md", records_md(&blocks).into_bytes()),
-            ("problem.md", problem.into_bytes()),
-        ] {
+        state: &State,
+        hits: &HashMap<RecordId, Vec<String>>,
+    ) -> Result<(), CpdError> {
+        let mut known: Vec<(&str, String)> = Vec::new();
+        for (_, record) in in_force {
+            if let Some((topic, short)) = state.curated.get(&record.id) {
+                known.push((topic, format!("[{}] {topic} | {short}\n", record.id)));
+            }
+        }
+        let topics: BTreeSet<&str> = known.iter().map(|(t, _)| *t).collect();
+        let mut known_md: String = topics.iter().map(|t| format!("{t}\n")).collect();
+        known_md.push('\n');
+        known_md.extend(known.iter().map(|(_, line)| line.as_str()));
+        let mut docs_md = String::new();
+        for (_, record) in batch {
+            docs_md.push_str(&format!("[{}]\n", record.id));
+            for hit in &hits[&record.id] {
+                docs_md.push_str(hit);
+                docs_md.push('\n');
+            }
+            docs_md.push('\n');
+        }
+        for (name, content) in [("prompt.md", PROMPT.to_owned()), ("batch.md", records_md(batch)), ("known.md", known_md), ("docs.md", docs_md)] {
             let path = dir.join(name);
             fs::write(&path, content).map_err(|e| io_failed("write", &path, &e))?;
         }
-        let (ran, text) = match self.run_pi(tier, upto, KIND_REPAIR, &["repair-prompt.md", "digest.md", "missing.md", "problem.md"])? {
-            Ok(done) => done,
-            Err(fault) => return Ok(Err(fault)),
-        };
-        // As for a digest, an index the model wrote anyway is not an addition, nor is a contradictions section
-        // (a repair line reports no pairs, contract §4.6).
-        let (text, _) = take_contradictions(&text);
-        Ok(Ok((ran, digest::topic_sections(&text).trim_end().to_owned() + "\n")))
+        Ok(())
     }
 
     /// Step 4: the distiller in JSON mode over the files `files` of the directory, its stderr to the log, its
     /// stdout read by cpd: the run and its final assistant text (ending in a newline) are returned. A failure
-    /// removes the `.md.tmp` and appends the `error` Event; every run that started pi appends its line to
-    /// `runs.jsonl`, a failed one here.
-    fn run_pi(&mut self, tier: Tier, upto: u64, kind: &'static str, files: &[&str]) -> Result<Result<(Ran, String), Fault>, CpdError> {
+    /// appends the `error` Event upstream; every run that started pi appends its line to `runs.jsonl`, a failed one here.
+    fn run_pi(&mut self, tier: Tier, upto: u64, files: &[&str]) -> Result<Result<(Ran, String), Fault>, CpdError> {
         let models = &self.config.tiers;
         let model = match tier.letter() {
             Letter::O => &models.o,
@@ -376,9 +499,7 @@ impl Run<'_> {
             seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0,
             model,
             tier,
-            kind,
             usage: None,
-            report: Report::default(),
         };
         let failure = match waited {
             Err(e) => Failed::Spawn(e.to_string()),
@@ -417,10 +538,8 @@ impl Run<'_> {
         line["context"] = json!(self.context.as_str());
         line["upto_seq"] = json!(upto);
         line["result"] = json!(result);
-        line["kind"] = json!(ran.kind);
+        line["kind"] = json!("distill");
         line["tier"] = json!(ran.tier.to_string());
-        line["contradictions"] = json!(ran.report.kept);
-        line["contradictions_dropped"] = json!(ran.report.dropped);
         let path = runs_path(self.home, self.context);
         let written = OpenOptions::new().create(true).append(true).open(&path).and_then(|mut file| writeln!(file, "{line}"));
         if let Err(e) = written {
@@ -441,33 +560,18 @@ impl Run<'_> {
         }
     }
 
-    fn invalid(&mut self, upto: u64, invalid: &Invalid, kept: &Path) -> CpdError {
-        let ids = |ids: &[RecordId]| ids.iter().map(RecordId::to_string).collect::<Vec<_>>();
-        let mut why = Vec::new();
-        if invalid.not_utf8 {
-            why.push("it is not UTF-8".to_owned());
-        }
-        if invalid.too_big {
-            why.push(format!("it is {} bytes, over the {} limit", invalid.bytes, invalid.limit));
-        }
-        if !invalid.missing.is_empty() {
-            why.push(format!("its topic sections do not cite {}, decisions or open questions in force", ids(&invalid.missing).join(", ")));
-        }
-        if !invalid.stray.is_empty() {
-            why.push(format!("it cites {}, which are not in force", ids(&invalid.stray).join(", ")));
-        }
-        let message = format!("The digest of Context {} up to record {upto} is invalid: {}.", self.context, why.join("; "));
+    fn invalid(&mut self, upto: u64, problems: &[Problem], kept: &Path) -> CpdError {
+        let listed: Vec<String> = problems.iter().take(5).map(|p| p.id.as_ref().map_or_else(|| p.what.clone(), |id| format!("{id}: {}", p.what))).collect();
+        let more = if problems.len() > 5 { format!(" (and {} more)", problems.len() - 5) } else { String::new() };
+        let message = format!("The curation of Context {} up to record {upto} is invalid: {}{more}.", self.context, listed.join("; "));
         let error = CpdError::new(ErrorCode::DistillInvalid, message)
             .with("context", self.context.as_str())
             .with("upto_seq", upto)
-            .with("bytes", invalid.bytes)
-            .with("limit", invalid.limit)
-            .with("missing", ids(&invalid.missing))
-            .with("stray", ids(&invalid.stray))
+            .with("errors", problems.iter().map(Problem::json).collect::<Vec<_>>())
             .with("invalid", kept.display().to_string())
             .with("log", log_path(self.home, self.context).display().to_string());
         let text = format!(
-            "{} The previous digest stays; the invalid one is kept at {}. Run it again: cpd context distill --context {}",
+            "{} The invalid output is kept at {}. Run it again: cpd context distill --context {}",
             error.message(),
             kept.display(),
             self.context
@@ -495,7 +599,7 @@ impl Run<'_> {
         if let Some(status) = exit {
             error = error.with("exit", status.code());
         }
-        let text = format!("{} The previous digest stays. Run it again: cpd context distill --context {}", error.message(), self.context);
+        let text = format!("{} Run it again: cpd context distill --context {}", error.message(), self.context);
         self.fail(error, text)
     }
 }
@@ -508,6 +612,20 @@ pub fn log_path(home: &CpdHome, context: &ContextId) -> PathBuf {
 /// `run/context-digests/<context>/runs.jsonl`: one line per run that started pi, appended (contract §1.4, §4.6).
 pub fn runs_path(home: &CpdHome, context: &ContextId) -> PathBuf {
     home.context_digest_dir(context).join("runs.jsonl")
+}
+
+fn git_failed(repo: &str, why: &str) -> CpdError {
+    CpdError::new(ErrorCode::GitFailed, format!("Cannot search {repo} for the record ids: {why}.")).with("repo", repo)
+}
+
+/// Removes the kept invalid outputs of the Context (`<upto_seq>.jsonl.invalid`).
+fn remove_invalid(home: &CpdHome, context: &ContextId) -> Result<(), CpdError> {
+    let dir = home.context_digest_dir(context);
+    let Ok(entries) = fs::read_dir(&dir) else { return Ok(()) };
+    for entry in entries.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".jsonl.invalid")) {
+        fs::remove_file(entry.path()).map_err(|e| io_failed("remove", &entry.path(), &e))?;
+    }
+    Ok(())
 }
 
 fn io_failed(what: &str, path: &Path, e: &io::Error) -> CpdError {
@@ -530,99 +648,6 @@ fn records_md(in_force: &[&Indexed]) -> String {
     out
 }
 
-/// The longest gist of a checklist line, in characters.
-const GIST_MAX: usize = 100;
-
-/// The distiller's `records.md`: a checklist of the decisions and open questions in force (the records the
-/// digest must cite, [`digest::Expect`]), one line each in file order, `[<id>] <kind>: <first line of the text>`,
-/// with the bytes the model's text may take (the limit less cpd's index), then every record as [`records_md`]
-/// gives it. The prompt asks the model to copy each checklist id into a bullet of its topic: covering the list is
-/// copying, not recall.
-fn distiller_records_md(in_force: &[&Indexed]) -> String {
-    // Validating nothing shows what is required and how big the file is without any topic section: cpd's index.
-    let empty = digest::validate(b"", &digest::Expect::of(in_force), digest::LIMIT).err();
-    let (required, room) = empty.map_or((Vec::new(), digest::LIMIT), |i| (i.missing, digest::LIMIT.saturating_sub(i.bytes)));
-    let mut out = format!(
-        "# Checklist: {} decisions and open questions in force\n\nYour digest may take at most {room} bytes: the program adds its index to it.\n\n",
-        required.len()
-    );
-    for (_, record) in in_force.iter().filter(|(_, r)| required.contains(&r.id)) {
-        let first = record.text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-        let gist = match first.char_indices().nth(GIST_MAX) {
-            Some((end, _)) => format!("{}…", first[..end].trim_end()),
-            None => first.to_owned(),
-        };
-        out.push_str(&format!("[{}] {}: {gist}\n", record.id, record.kind().as_str()));
-    }
-    out.push_str("\n# Records\n\n");
-    out.push_str(&records_md(in_force));
-    out
-}
-
-/// The heading of the contradictions report, which the prompt asks the model to end its text with.
-const CONTRADICTIONS_HEADING: &str = "## Contradictions";
-
-/// Splits the model's text into the text without its `## Contradictions` section (from that heading to the next
-/// `## ` heading or the end) and the section's lines.
-fn take_contradictions(text: &str) -> (String, Vec<&str>) {
-    let (mut kept, mut lines, mut inside) = (String::new(), Vec::new(), false);
-    for line in text.split_inclusive('\n') {
-        let bare = line.trim_end_matches(['\r', '\n']);
-        if bare.trim_end() == CONTRADICTIONS_HEADING {
-            inside = true;
-        } else if inside && bare.starts_with("## ") {
-            inside = false;
-        }
-        if !inside {
-            kept.push_str(line);
-        } else if bare.trim_end() != CONTRADICTIONS_HEADING && !bare.trim().is_empty() {
-            lines.push(bare);
-        }
-    }
-    (kept, lines)
-}
-
-/// One pair of contradicting records: `older` is overruled by `newer` (recency wins), `why` in one line.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-struct Contradiction {
-    older: RecordId,
-    newer: RecordId,
-    why: String,
-}
-
-/// The pairs a run reported that cpd keeps, and how many it dropped.
-#[derive(Debug, Default)]
-struct Report {
-    kept: Vec<Contradiction>,
-    dropped: usize,
-}
-
-impl Report {
-    /// Keeps each line `- [<older>] -> [<newer>]: <why>` whose two ids are headers of `records.md` (`in_force`)
-    /// with the older one's `seq` lower than the newer one's; any other line (an unknown id, the reverse
-    /// order, an unparseable line) is dropped and counted.
-    fn of(lines: &[&str], in_force: &[&Indexed]) -> Report {
-        let seq = |id: &RecordId| in_force.iter().find(|(_, r)| &r.id == id).map(|(seq, _)| *seq);
-        let mut report = Report::default();
-        for line in lines {
-            match Self::pair(line).filter(|c| matches!((seq(&c.older), seq(&c.newer)), (Some(o), Some(n)) if o < n)) {
-                Some(pair) => report.kept.push(pair),
-                None => report.dropped += 1,
-            }
-        }
-        report
-    }
-
-    fn pair(line: &str) -> Option<Contradiction> {
-        let rest = line.trim().strip_prefix("- [")?;
-        let (older, rest) = rest.split_once("] -> [")?;
-        let (newer, why) = rest.split_once("]:")?;
-        let why = why.trim();
-        (!why.is_empty()).then_some(())?;
-        Some(Contradiction { older: RecordId::parse(older.trim()).ok()?, newer: RecordId::parse(newer.trim()).ok()?, why: why.to_owned() })
-    }
-}
-
 /// Why pi failed.
 enum Failed {
     Spawn(String),
@@ -634,7 +659,8 @@ enum Failed {
 
 /// Why a step of the ladder failed; only the last step's becomes the run's error Event.
 enum Fault {
-    Invalid(Invalid),
+    /// The step's problems and the file that keeps its output.
+    Invalid(Vec<Problem>, PathBuf),
     Pi(Failed, String),
 }
 
@@ -646,12 +672,8 @@ struct Ran {
     model: String,
     /// The Tier of the pi run.
     tier: Tier,
-    /// [`KIND_DISTILL`] or [`KIND_REPAIR`]: the `kind` of the run's `runs.jsonl` line.
-    kind: &'static str,
     /// `None` when pi reported none (a spawn failure, a kill, a stream without an assistant message).
     usage: Option<pi_json::Usage>,
-    /// The contradictions the run's text reported; empty for a run without such a section (a repair turn, a failure).
-    report: Report,
 }
 
 impl Ran {
@@ -835,44 +857,6 @@ mod tests {
              [hs-a1] answer (2026-10-02)\nanswers hs-q1\nPort 80.\nSecond line.\n\n\
              [hs-d2] decision (2026-10-03)\nUse it.\n\n"
         );
-    }
-
-    #[test]
-    fn the_distiller_records_md_opens_with_a_checklist_of_the_decisions_and_open_questions() {
-        let q1 = record("hs-q1", "2026-10-01T10:00:00.000Z", "Which port?\nMore.", Draft::Question);
-        let q2 = record("hs-q2", "2026-10-01T11:00:00.000Z", "Which host?", Draft::Question);
-        let a = record("hs-a1", "2026-10-02T10:00:00.000Z", "Port 80.", Draft::Answer { question: RecordId::parse("hs-q1").unwrap() });
-        let n = record("hs-n1", "2026-10-02T11:00:00.000Z", "A note.", Draft::Note);
-        let long = "x".repeat(GIST_MAX + 20);
-        let d = record("hs-d2", "2026-10-03T10:00:00.000Z", &format!("\n{long}\nrest"), Draft::Decision { supersedes: None });
-        let in_force = [&q1, &q2, &a, &n, &d];
-        let text = distiller_records_md(&in_force);
-        let (checklist, records) = text.split_once("\n# Records\n\n").unwrap();
-        // 32768 less the 173 bytes of cpd's index for these five records (a 19-byte heading and a line each).
-        assert_eq!(
-            checklist,
-            format!(
-                "# Checklist: 2 decisions and open questions in force\n\nYour digest may take at most 32595 bytes: the program adds its index to it.\n\n[hs-q2] question: Which host?\n[hs-d2] decision: {}…\n",
-                "x".repeat(GIST_MAX)
-            )
-        );
-        assert_eq!(records, records_md(&in_force));
-    }
-
-    #[test]
-    fn the_contradictions_section_runs_to_the_next_heading_and_its_pairs_are_checked_against_the_headers() {
-        let text = "# D\n- [hs-d1] x\n\n## Contradictions\n- [hs-d1] -> [hs-d2]: why\nnoise\n- [hs-d2] -> [hs-d1]: back\n## Tail\n- [hs-d2] y\n";
-        let (rest, lines) = take_contradictions(text);
-        assert_eq!(rest, "# D\n- [hs-d1] x\n\n## Tail\n- [hs-d2] y\n");
-        let (d1, d2) = (record("hs-d1", "2026-10-01T10:00:00.000Z", "a", Draft::Note), record("hs-d2", "2026-10-02T10:00:00.000Z", "b", Draft::Note));
-        let (d1, d2) = ((1, d1.1), (2, d2.1));
-        let report = Report::of(&lines, &[&d1, &d2]);
-        assert_eq!(report.kept.len(), 1);
-        assert_eq!(
-            (report.kept[0].older.to_string(), report.kept[0].newer.to_string(), report.kept[0].why.as_str()),
-            ("hs-d1".to_owned(), "hs-d2".to_owned(), "why")
-        );
-        assert_eq!(report.dropped, 2);
     }
 
     fn assistant(text: &str, stop: &str, input: u64, cache_read: u64, cache_write: u64, output: u64, cost: f64) -> String {

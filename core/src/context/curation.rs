@@ -51,7 +51,7 @@ pub struct Proposal {
     pub target: String,
 }
 
-/// Writes `curations` and pending retirements for `proposals` in one transaction. A record that already has a
+/// Writes `curations` and pending retirements for `proposals` and appends `context-curated`, in one transaction. A record that already has a
 /// retirement row (any status) gets no new proposal; a record whose doc_candidate is already set keeps it. Every
 /// proposed record has a curation (written now or before): the commands list a proposal by its short form.
 pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], proposals: &[Proposal]) -> Result<(), CpdError> {
@@ -86,6 +86,16 @@ pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], p
                     .with("record", p.record.to_string()));
             }
         }
+        let docs = curations.iter().filter(|c| c.doc_paths.is_some()).count();
+        let text = format!(
+            "Context {context} curated: {} records, {} retirements proposed, {docs} doc candidates.",
+            curations.len(),
+            proposals.len()
+        );
+        append(
+            tx,
+            NewEvent::context_curated(text, context.as_str(), curations.len() as u64, proposals.len() as u64, docs as u64).context(context.clone()),
+        )?;
         Ok(())
     })
 }
