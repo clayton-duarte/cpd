@@ -931,6 +931,7 @@ Requests the User's approval of the draft Jobs (§2.2 Plan review). In phase `pl
 
 Effects:
 - **Files:** renders the plan to `run/<plan>/plan.md` and `run/<plan>/summary.md` (§4.5) and copies them to `run/<plan>/plan-<review>.md` and `run/<plan>/summary-<review>.md`, so a later render cannot change what the User reviews. The summary copy is the Plan summary of §4.5 with the review's heading (block 1) and its last line (block 13), and no other difference; it is what the User reviews (§15.5), and the full copy is shown only when the User asks for it. The copy opens with `# <review title>`, then one line `Plan <plan id>: <Plan title> · review <review id>`, then the rendered content (hs-d291); `plan.md`, made without a review (`plan render`, §4.5), keeps `# Plan: <Plan title>`. The reviewed file carries the `## Overlaps` section of §4.5, as it is at that moment, so the User sees the warning in the review: one row per open Job of this Plan and per other PR that overlaps it, short enough to read (hs-n201); it is a warning only and the review is requested all the same.
+- **Closing other reviews:** every other pending review of the Plan (always older) closes `superseded` in the same transaction that inserts the new review request (the new `pending` Event comes after their `superseded` Events). Their Events say why: "Plan review r<k> of Plan P is superseded by r<k+1>." When the latest review is already pending for the current fingerprint (the `already: true` path) nothing is written, nothing closes.
 - The refusals `outline_missing` and `outline_incomplete` come **before anything is written** (D3): no render, no file, no row, no Event.
 - **Rows**, one transaction: `plan_reviews` (`id = r<k>`, `k` = 1 + the highest, `fingerprint` = the plan fingerprint (§2.3: it includes the outline), `title` = `--title`, `status = pending`). **Event** `plan-review` `{review, fingerprint, status: "pending"}`.
 
@@ -941,7 +942,7 @@ Effects:
 
 **Stubs** (hs-d241, R1). A draft without its Tier or its Spec (a stub, §5.1) cannot be approved, so the review is **not requested**: it is refused `draft_incomplete` (exit 3) with `details.jobs` = `[{"key": "api-1", "missing": ["spec"]}, …]`, in key order, `missing` holding `"tier"` and/or `"spec"`. The same refusal applies through the tool `cpd_plan_review`. Nothing is rendered or written. The Lead completes each stub with `job edit --tier --spec` (§5.2) or cancels it, then asks again. The plan fingerprint covers a stub as it is (contract §2.3), so completing one changes it.
 
-Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` (its `path` and `summary` too) and writes nothing; the two refusals above are still checked first, so a Plan with no outline is refused even when a review made before the outline existed is pending. When the Jobs or PRs changed since, it requests a new review; the older one stays `pending` and no longer matters, because `plan lock` reads only the latest (§2.3).
+Idempotent: yes. When the latest review is `pending` for the current fingerprint, it returns that review with `"already": true` (its `path` and `summary` too) and writes nothing; the two refusals above are still checked first, so a Plan with no outline is refused even when a review made before the outline existed is pending. When the Jobs or PRs changed since, it requests a new review and closes the older one `superseded`; the older one stays in the database, closed.
 
 ### 4.7 `plan decide` (internal)
 
@@ -953,7 +954,7 @@ Records the User's decision. Called by the pi adapter with the result of the cha
 
 | Precondition | Code | Exit |
 |---|---|---|
-| the review is `pending` (decided the same way: `already`) | `review_decided` | 3 |
+| the review is `pending` (decided the same way: `already`); a review with status `approved`, `rejected`, or `superseded` is refused `review_decided` | `review_decided` | 3 |
 
 Effects: **rows**, one transaction: `plan_reviews.status`, `feedback` (the file's text, or null), `decided_at`. **Event** `plan-review` `{review, fingerprint, status, feedback}`.
 
@@ -1042,6 +1043,8 @@ Archives the Plan with its Lead and its side forks (contract §2.2 "Archived").
 | no object of the cascade is live: no Session `working`, `waiting` or `blocked`, no Job `queued` or `running`, no open Escalation, no pending Plan review, and no PR of the Plan, not `merged` or `cancelled`, that a PR of another Plan (itself not `merged` or `cancelled`) names as base PR or need (`kind` `pr`, `id` `<plan>/<key>` of the PR named; contract §2.2 "Archived", hs-d324); `details.blockers` lists each as `{kind, id, reason}`. The phase does not matter: a Plan in `deploy` is archivable, and the engine keeps polling its PR | `archive_blocked` | 3 |
 | neither the Lead nor a side fork is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
 
+Since the migration `review-superseded` and its enforcement rule, a Plan that is `done` has no pending review: every pending review of the Plan is closed `superseded` when the Plan reaches `done`.
+
 Effects, in this order (all or nothing):
 1. **Check** every object of the cascade; nothing is written if any blocks.
 2. **tmux:** close every live Lead pane as `session close` does (§10.9).
@@ -1086,7 +1089,6 @@ Abandons a Plan (E1, hs-d203): cancels every Job that is not merged, closes the 
 |---|---|---|
 | the Plan exists | `plan_not_found` | 4 |
 | neither the Lead nor a side fork is in the chat slot; `details.next` = `cpd session park` | `in_chat_slot` | 3 |
-| no Plan review is `pending` (the User decides it first); `details.blockers` as `plan archive` | `archive_blocked` | 3 |
 | every running Attempt has ended within 60 s of its stop request (below); `details.attempts` lists those still running | `cancel_timeout` | 5 |
 | each `gh pr close` succeeds, or its pull request is already closed or merged; `details` is `{argv, exit, stderr}` | `gh_failed` | 1 |
 
@@ -1094,11 +1096,12 @@ A Session `working`, `waiting` or `blocked` and a Job `running` do not block (un
 
 Effects, in this order; each step is idempotent, so a rerun after any failure continues where it stopped:
 1. **Check** the preconditions above that need no write.
-2. **Jobs**, as `job cancel` (§5.3) for every Job not `merged` and not `cancelled`, with the reason: `draft`, `queued` and `failed` become `cancelled` with **Event** `job-cancelled`; a `running` Job gets `job-cancel-requested`, and engine E2 or the driver ends its Attempt `cancelled` at the next safe point (contract §3.4). The command then waits, polling, up to 60 s until no Attempt of the Plan is not `ended`. Dependents cannot start, as for `job cancel`; they are cancelled themselves by this step.
-3. **Escalations:** each `open` Escalation of the Plan becomes `expired`, **Event** `escalation-expired`.
-4. **Pull requests:** for each PR of the Plan with status `open` whose pull request is not `merged`, `gh pr close <number> --repo <owner/repo>`. The PR rows keep their status (`open`; PR statuses never end this way, contract §3.8); the next `pr poll` reads the closure and appends no `pr-feedback` for an archived Plan. A `waiting` PR has no pull request: nothing. A `merged` PR is never touched.
-5. **tmux:** close every live Lead pane as `session close` does (§10.9).
-6. **Rows**, one transaction: `archived_at` = now on the Plan and its Sessions, with **Event** `plan-archived` `{archived: true}` and `session-archived` per object, as `plan archive` (§4.10). The Plan's port is free from here (contract §6.5).
+2. **Plan reviews:** every pending review of the Plan becomes `superseded` with `decided_at` = now and `feedback` null, **Event** `plan-review` `{review, fingerprint, status: "superseded"}` (reason: "Plan review r<k> of Plan P is superseded: the Plan was cancelled.") The User sees the reason in the Event's `text` (contract §5.2) and the dialog closes in the pi adapter (§15.5).
+3. **Jobs**, as `job cancel` (§5.3) for every Job not `merged` and not `cancelled`, with the reason: `draft`, `queued` and `failed` become `cancelled` with **Event** `job-cancelled`; a `running` Job gets `job-cancel-requested`, and engine E2 or the driver ends its Attempt `cancelled` at the next safe point (contract §3.4). The command then waits, polling, up to 60 s until no Attempt of the Plan is not `ended`. Dependents cannot start, as for `job cancel`; they are cancelled themselves by this step.
+4. **Escalations:** each `open` Escalation of the Plan becomes `expired`, **Event** `escalation-expired`.
+5. **Pull requests:** for each PR of the Plan with status `open` whose pull request is not `merged`, `gh pr close <number> --repo <owner/repo>`. The PR rows keep their status (`open`; PR statuses never end this way, contract §3.8); the next `pr poll` reads the closure and appends no `pr-feedback` for an archived Plan. A `waiting` PR has no pull request: nothing. A `merged` PR is never touched.
+6. **tmux:** close every live Lead pane as `session close` does (§10.9).
+7. **Rows**, one transaction: `archived_at` = now on the Plan and its Sessions, with **Event** `plan-archived` `{archived: true}` and `session-archived` per object, as `plan archive` (§4.10). The Plan's port is free from here (contract §6.5).
 
 No new Event kind and no schema change. The command's own Events are the existing ones named above.
 
