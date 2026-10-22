@@ -136,11 +136,11 @@ impl NewEvent {
         )
     }
 
-    /// The `job-added` of a Job cpd adds itself (§5.2, §3.7 E4): an `open` Job (`by` `engine`). It is `queued` and `appended`, and its
+    /// The `job-added` of a Job cpd adds itself (§5.2, §3.7 E4): an `open` Job (`by` `engine`). It is `queued` (`draft` while a draft of its PR remains) and `appended`, and its
     /// `needs` is the empty list: its Ready rule is derived (§3.2). `reason` is for an `update` Job (`conflict` or `feedback`).
-    pub fn job_added_by_cpd(text: impl Into<String>, pr: impl Serialize, kind: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
+    pub fn job_added_by_cpd(text: impl Into<String>, pr: impl Serialize, kind: &str, status: &str, tier: &str, by: &str, reason: Option<&str>) -> NewEvent {
         let mut data = json!({
-            "pr": pr, "kind": kind, "status": "queued", "appended": true, "tier": tier, "needs": [], "review": false, "urgent": false, "by": by,
+            "pr": pr, "kind": kind, "status": status, "appended": true, "tier": tier, "needs": [], "review": false, "urgent": false, "by": by,
         });
         if let Some(reason) = reason {
             data["reason"] = json!(reason);
@@ -498,8 +498,8 @@ mod tests {
             Kind::JobAdded => vec![
                 NewEvent::job_added(T, s, s, s, b, Some(s), [s], b, b),
                 NewEvent::job_added(T, s, s, s, b, None, [s], b, b),
-                NewEvent::job_added_by_cpd(T, s, s, s, s, None),
-                NewEvent::job_added_by_cpd(T, s, s, s, s, Some(s)),
+                NewEvent::job_added_by_cpd(T, s, s, s, s, s, None),
+                NewEvent::job_added_by_cpd(T, s, s, s, s, s, Some(s)),
             ],
             Kind::JobEdited => vec![NewEvent::job_edited(T, [s])],
             Kind::JobMerged => vec![NewEvent::job_merged(T, s, s, s, false, false, None), NewEvent::job_merged(T, s, s, s, true, true, Some((s, n, s)))],

@@ -69,6 +69,11 @@ impl Job {
         self.status == "draft"
     }
 
+    /// A draft that is under review (§2.3, hs-d573): every draft but a `draft` `open` Job, which is cpd's and no Job of the Lead's.
+    pub fn is_under_review(&self) -> bool {
+        self.is_draft() && self.kind != "open"
+    }
+
     /// What a stub lacks (`details.jobs[].missing` of `draft_incomplete`, commands.md §4.6):
     /// `tier` and/or `spec`; empty for a Job that has both.
     pub fn missing(&self) -> Vec<&'static str> {

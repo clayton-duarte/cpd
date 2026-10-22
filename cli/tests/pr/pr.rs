@@ -878,7 +878,7 @@ impl Fx {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
-                     VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?1, 1, 'open', ?2,
+                     VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?1, 1, 'open', iif(?1 = 'draft', NULL, ?2),
                              iif(?1 = 'merged', 'abc', NULL), iif(?1 = 'failed', 'crashed', NULL),
                              iif(?1 = 'cancelled', 'start over', NULL), iif(?1 = 'cancelled', 't', NULL), ?3, 't')",
                     params![status, "f".repeat(64), tx.id()],

@@ -1862,6 +1862,8 @@ fn e4_adds_the_open_job_as_a_draft_while_a_draft_of_its_pr_remains_and_queues_it
     let fx = fx("");
     fx.add_merged_api();
     fx.add_draft("later");
+    // A running Job keeps E3 from starting the open Job once it is queued, and is no draft.
+    fx.add_job_in("repo", "busy", &[], "UPDATE jobs SET status = 'running' WHERE key = 'busy';");
 
     let engine = fx.start();
     wait_until("the open Job", || !fx.jobs_of_kind("open").is_empty());
@@ -1986,7 +1988,7 @@ fn e4_adds_a_fresh_open_job_after_a_merged_one_on_a_pr_still_dispatch() {
     fx.env.wait_whole_ticks(3);
     engine.stop();
 
-    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "merged".to_owned()), ("open-repo-2".to_owned(), "queued".to_owned())]);
+    assert_eq!(fx.jobs_of_kind("open"), [("open-repo".to_owned(), "merged".to_owned()), ("open-repo-2".to_owned(), "draft".to_owned())]);
     assert_eq!(fx.count("job-added"), 1);
 }
 

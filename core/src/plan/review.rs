@@ -157,7 +157,7 @@ pub(super) fn render(args: RenderArgs) -> Result<Output, CpdError> {
         "path": path.display().to_string(),
         "summary": summary.display().to_string(),
         "fingerprint": s.fingerprint,
-        "draft_jobs": s.jobs.iter().filter(|j| j.is_draft()).count(),
+        "draft_jobs": s.jobs.iter().filter(|j| j.is_under_review()).count(),
         "prs": s.prs.iter().filter(|p| p.status != "cancelled").count(),
         "overlaps": s.overlaps.iter().map(Overlap::to_json).collect::<Vec<_>>(),
     })))
@@ -177,7 +177,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         .with("plan", id.as_str())
         .with("phase", plan.phase.as_str()));
     }
-    let drafts = jobs.iter().filter(|j| j.is_draft()).count();
+    let drafts = jobs.iter().filter(|j| j.is_under_review()).count();
     if drafts == 0 {
         return Err(no_draft_jobs(&id));
     }
