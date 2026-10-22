@@ -4,7 +4,6 @@
 #[path = "../common/mod.rs"]
 mod common;
 
-mod distill_notice;
 mod doctor;
 mod watch_distill_inbox;
 mod watch_inbox;
