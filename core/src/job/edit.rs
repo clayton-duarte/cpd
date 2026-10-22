@@ -92,6 +92,15 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, edits: &Edits) -> Resu
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let before = find(&all, plan, key)?;
+    if matches!(before.kind.as_str(), "open" | "update") {
+        return Err(CpdError::new(
+            ErrorCode::JobLocked,
+            format!("Job {key} is an {} Job: its Spec is cpd's, and cannot be edited.", before.kind),
+        )
+        .with("plan", plan.as_str())
+        .with("job", key.as_str())
+        .with("status", before.status.as_str()));
+    }
     if !before.is_draft() {
         return Err(CpdError::new(
             ErrorCode::JobLocked,

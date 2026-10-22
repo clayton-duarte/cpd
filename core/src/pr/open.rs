@@ -524,7 +524,7 @@ fn require_no_open_job_live(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result
         use rusqlite::OptionalExtension;
         Ok(conn
             .query_row(
-                "SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'open' AND status IN ('queued', 'running') ORDER BY seq LIMIT 1",
+                "SELECT key FROM jobs WHERE plan = ?1 AND pr = ?2 AND kind = 'open' AND status IN ('draft', 'queued', 'running') ORDER BY seq LIMIT 1",
                 [plan.as_str(), key.as_str()],
                 |r| r.get(0),
             )
@@ -534,7 +534,7 @@ fn require_no_open_job_live(env: &mut Env, plan: &PlanId, key: &PrKey) -> Result
         None => Ok(()),
         Some(job) => Err(CpdError::new(
             ErrorCode::OpenJobLive,
-            format!("PR {key} of Plan {plan} has its open Job {job} queued or running: it opens the pull request. Wait for it, or cancel it (cpd job cancel {job}) to open the PR by hand."),
+            format!("PR {key} of Plan {plan} has its open Job {job} draft, queued or running: it opens the pull request. Wait for it, or cancel it (cpd job cancel {job}) to open the PR by hand."),
         )
         .with("plan", plan.as_str())
         .with("pr", key.as_str())

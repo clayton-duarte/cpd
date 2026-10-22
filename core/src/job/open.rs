@@ -100,8 +100,8 @@ fn update_spec(pr: &PrRow) -> JobSpec {
 
 /// Inserts PR `pr`'s `open` Job in `tx` (§3.7 E4): `queued` at `tier`, `appended`, `urgent` 0, fixed Spec, no Dependency rows, its
 /// fingerprint stored at once, with `job-added` (`kind` `open`, `by` `engine`) in the same transaction. Returns its key.
-pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier) -> Result<JobKey, CpdError> {
-    insert(tx, plan, pr, tier, "open", BY_ENGINE, None)
+pub fn add(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, draft: bool) -> Result<JobKey, CpdError> {
+    insert(tx, plan, pr, tier, "open", BY_ENGINE, None, draft)
 }
 
 /// Why an `update` Job is queued (`job-added`'s `reason`, §5.2).
@@ -134,11 +134,11 @@ pub fn queue_update(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, by
     if live {
         return Ok(None);
     }
-    insert(tx, plan, pr, tier, "update", by, Some(cause.as_str())).map(Some)
+    insert(tx, plan, pr, tier, "update", by, Some(cause.as_str()), false).map(Some)
 }
 
 /// The insert of an `open` or `update` Job: the same row, Spec apart, with `job-added` in the same transaction.
-fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, by: &str, reason: Option<&str>) -> Result<JobKey, CpdError> {
+fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, by: &str, reason: Option<&str>, draft: bool) -> Result<JobKey, CpdError> {
     let taken: Vec<String> = {
         let mut stmt = tx.prepare("SELECT key FROM jobs WHERE plan = ?1")?;
         stmt.query_map([plan.as_str()], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
@@ -154,7 +154,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
         title,
         tier: Some(tier.clone()),
         spec: Some(if update { update_spec(pr) } else { spec(pr) }),
-        status: "queued".to_owned(),
+        status: if draft { "draft" } else { "queued" }.to_owned(),
         appended: true,
         review: false,
         kind: kind.to_owned(),
@@ -171,13 +171,13 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
         created_at: String::new(),
         needs: Vec::new(),
     };
-    job.fingerprint = Some(locked_fingerprint(&job));
+    job.fingerprint = (!draft).then(|| locked_fingerprint(&job));
     let spec = job.spec.as_ref().expect("the open Job has its Spec");
     let array = |v: &Value| v.to_string();
     tx.execute(
         "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                            status, appended, fingerprint, kind, created_txn, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', 1, ?11, ?12, cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?13, 1, ?11, ?12, cpd_txn(), (SELECT at FROM txns WHERE id = cpd_txn()))",
         params![
             plan.as_str(),
             job.pr,
@@ -191,9 +191,16 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
             array(&spec.out_of_scope),
             job.fingerprint,
             kind,
+            job.status,
         ],
     )?;
-    let text = if update {
+    let text = if draft {
+        format!(
+            "Job {key} added to Plan {plan} by the engine as a draft: PR {pr} has a draft Job, so it is queued with the PR's drafts, or when none remains. \
+             It merges the base only on a conflict, and cpd gates, pushes and opens PR {pr}'s pull request when it is done. Next: cpd job show {key} --plan {plan}",
+            pr = pr.key
+        )
+    } else if update {
         format!(
             "Job {key} added to Plan {plan} by {by} ({why}): it merges the base only on a conflict, and cpd gates and pushes PR {pr}'s Lead Branch when it is done. \
              It waits for every other Job of the PR. Next: cpd job show {key} --plan {plan}",
@@ -207,7 +214,7 @@ fn insert(tx: &WriteTxn<'_>, plan: &PlanId, pr: &PrRow, tier: Tier, kind: &str, 
             pr = pr.key
         )
     };
-    append(tx, NewEvent::job_added_by_cpd(text, pr.key.as_str(), kind, &tier, by, reason).plan(plan.clone()).job(key.clone()))?;
+    append(tx, NewEvent::job_added_by_cpd(text, pr.key.as_str(), kind, &job.status, &tier, by, reason).plan(plan.clone()).job(key.clone()))?;
     Ok(key)
 }
 

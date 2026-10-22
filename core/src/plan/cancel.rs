@@ -1,13 +1,12 @@
 //! `plan cancel` (commands.md §4.12, E1): abandons a Plan. Every step is idempotent, so a rerun
 //! after any failure continues where it stopped. The pieces are the other commands': `job cancel`
-//! (run through the command tree), `gh pr close`, `session close` ([`close_lead`]) and the
+//! (its cancel without the shape check), `gh pr close`, `session close` ([`close_lead`]) and the
 //! archive of `plan archive` (§4.10).
 
 use std::env;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use clap::Parser;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 
@@ -16,7 +15,7 @@ use super::{CancelArgs, Closing, Env, close_reviews, jobs};
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::host::Tmux;
-use crate::ids::{AttemptId, ContextId, PlanId, SessionId};
+use crate::ids::{AttemptId, ContextId, JobKey, PlanId, SessionId};
 use crate::output::Output;
 use crate::session::close_lead;
 use crate::store::Store;
@@ -32,14 +31,6 @@ const WAIT: Duration = Duration::from_secs(60);
 
 /// How often the wait looks again.
 const POLL: Duration = Duration::from_millis(250);
-
-/// `job` as the command tree parses it, so `job cancel` runs as it does for the Lead.
-#[derive(Parser)]
-#[command(no_binary_name = true)]
-struct JobCommand {
-    #[command(subcommand)]
-    command: job::Command,
-}
 
 /// `plan cancel` (§4.12).
 pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
@@ -95,15 +86,13 @@ pub(super) fn plan_cancel(args: CancelArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-/// Step 3: `job cancel` for every Job that is not `merged` and not `cancelled`. The keys it newly
+/// Step 3: `job cancel`, without its shape check, for every Job that is not `merged` and not `cancelled`. The keys it newly
 /// cancelled, or asked the engine to stop.
 fn cancel_jobs(store: &mut Store, plan: &PlanId, reason: &str) -> Result<Vec<String>, CpdError> {
     let all = store.read(|conn| jobs::load(conn, plan))?;
     let mut keys = Vec::new();
     for job in all.iter().filter(|j| !matches!(j.status.as_str(), "merged" | "cancelled")) {
-        let argv = ["cancel", job.key.as_str(), &format!("--reason={reason}"), "--plan", plan.as_str()];
-        let parsed = JobCommand::try_parse_from(argv).map_err(|e| CpdError::new(ErrorCode::Usage, e.to_string()))?;
-        let Output::Success(out) = job::run(parsed.command)? else { continue };
+        let Output::Success(out) = job::cancel::cancel_without_shape(plan, JobKey::parse(&job.key)?, reason)? else { continue };
         if !out.contains_key("already") {
             keys.push(job.key.clone());
         }

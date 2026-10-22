@@ -878,7 +878,7 @@ impl Fx {
                 tx.execute(
                     "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
                                        status, appended, kind, fingerprint, merged_sha, failed_cause, cancel_reason, cancel_requested_at, created_txn, created_at)
-                     VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?1, 1, 'open', ?2,
+                     VALUES ('pay', 'repo', 'open-repo', 'Open the pull request', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', ?1, 1, 'open', iif(?1 = 'draft', NULL, ?2),
                              iif(?1 = 'merged', 'abc', NULL), iif(?1 = 'failed', 'crashed', NULL),
                              iif(?1 = 'cancelled', 'start over', NULL), iif(?1 = 'cancelled', 't', NULL), ?3, 't')",
                     params![status, "f".repeat(64), tx.id()],
@@ -906,6 +906,22 @@ fn open_is_refused_open_job_live_while_the_open_job_is_queued_or_running() {
         assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "{status}: nothing was pushed");
         assert_eq!((fx.plan_row().0, fx.txns()), ("dispatch".to_owned(), txns), "{status}");
     }
+}
+
+/// B1 (hs-d573 O6): a `draft` `open` Job counts as live too: `pr open` is refused `open_job_live`, with nothing run or written.
+#[test]
+fn pr_open_is_refused_open_job_live_while_the_open_job_is_a_draft() {
+    let fx = fx("dispatch");
+    fx.open_job("draft");
+    let txns = fx.txns();
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run), ("open_job_live".into(), 3), "{run:?}");
+    assert_eq!(run.error()["details"]["job"], "open-repo");
+    assert!(fx.gh_calls().is_empty());
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "nothing was pushed");
+    assert_eq!((fx.plan_row().0, fx.txns()), ("dispatch".to_owned(), txns));
 }
 
 /// A PR whose `open` Job is `failed` (the Lead decides between `job retry` and this), `cancelled` or `merged` on a PR still `dispatch`

@@ -995,6 +995,81 @@ fn a_review_after_the_lock_covers_the_drafts_and_its_approval_queues_exactly_the
     assert_eq!(job_status(&env, "e"), "draft");
 }
 
+/// A `draft` `open` Job of PR `pr` as engine E4 inserts it while a draft of the PR remains (hs-d573 B1): `appended`, no fingerprint.
+fn add_draft_open(env: &TestEnv, plan: &str, key: &str) {
+    store(env)
+        .write("fixture", |tx| {
+            exec(
+                tx,
+                &format!(
+                    "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope,
+                                       status, appended, kind, created_txn, created_at)
+                     VALUES ('{plan}', (SELECT key FROM prs WHERE plan = '{plan}'), '{key}', 'Open the pull request', 'S2', 'Open it.', 'Because.', '[\"{key}.txt\"]',
+                             '[\"it opens\"]', '[]', 'draft', 1, 'open', {id}, 't');",
+                    id = tx.id()
+                ),
+            )
+        })
+        .unwrap();
+}
+
+/// B1 (hs-d573 O3, O4): E4's draft `open` Job is no Job under review: the fingerprint ignores it, so a pending review stays current, and the
+/// approval queues it with the drafts, in the same transaction.
+#[test]
+fn a_draft_open_job_does_not_void_a_pending_review_and_an_approval_queues_it_with_the_drafts() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+    add_draft(&env, "pay", "c", &["a"], true);
+    env.outline_for_review("pay");
+    let fingerprint = env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"].clone();
+    let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    assert_eq!(out["review"]["fingerprint"], fingerprint);
+    let review = out["review"]["id"].as_str().unwrap().to_owned();
+
+    add_draft_open(&env, "pay", "open-pay");
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["fingerprint"], fingerprint, "the open Job is not in the fingerprint");
+    assert_eq!(show(&env, "pay")["review"]["current"], true);
+
+    let out = env.cpd(&["plan", "decide", &review, "--approve", "--plan", "pay"]).ok();
+    assert_eq!((&out["review"]["status"], &out["current"]), (&json!("approved"), &json!(true)));
+    let mut queued: Vec<String> = out["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
+    queued.sort();
+    assert_eq!(queued, ["c", "open-pay"]);
+    let decided = events(&env, "plan-review").last().unwrap().clone();
+    let mut listed: Vec<String> = decided["data"]["jobs"].as_array().unwrap().iter().map(|j| j.as_str().unwrap().to_owned()).collect();
+    listed.sort();
+    assert_eq!(listed, ["c", "open-pay"]);
+    for key in ["c", "open-pay"] {
+        assert_eq!(job_status(&env, key), "queued", "{key}");
+        assert_eq!(env.query::<bool>(&format!("SELECT fingerprint IS NOT NULL FROM jobs WHERE plan = 'pay' AND key = '{key}'")), true, "{key}");
+    }
+}
+
+/// B1 (hs-d573 O4): `draft_jobs` and `no_draft_jobs` do not count a draft `open` Job, and the review document shows it as context.
+#[test]
+fn a_draft_open_job_is_no_job_under_review() {
+    let env = TestEnv::new();
+    let repo = setup(&env);
+    approved(&env, &repo);
+    env.cpd(&["plan", "lock", "--plan", "pay"]).ok();
+
+    // The only draft is the open Job: nothing to review.
+    add_draft_open(&env, "pay", "open-pay");
+    refused(&env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]), "no_draft_jobs", 3);
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 0);
+
+    add_draft(&env, "pay", "c", &["a"], true);
+    env.outline_for_review("pay");
+    assert_eq!(env.cpd(&["plan", "render", "--plan", "pay"]).ok()["draft_jobs"], 1);
+    let out = env.cpd(&["plan", "review", "--plan", "pay", "--title", "Review title"]).ok();
+    let text = fs::read_to_string(out["path"].as_str().unwrap()).unwrap();
+    let row = text.lines().find(|l| l.starts_with("| `open-pay` |")).unwrap_or_else(|| panic!("no row for the open Job: {text}"));
+    assert!(!row.contains("**under review**"), "{row}");
+    assert!(text.lines().any(|l| l.starts_with("| `c` |") && l.contains("**under review**")), "{text}");
+}
+
 // ---------- plan lock ----------
 
 /// A Plan `pay` in phase `plan` with an approved, current review.

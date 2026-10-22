@@ -21,16 +21,32 @@ enum Decision {
     Request(Job, AttemptId),
 }
 
+/// Whether the cancel keeps the shape of a `tdd` PR (`shape_incomplete`). Only `plan cancel` skips it, by calling
+/// [`cancel_without_shape`]: it is a parameter of the function, never a flag or an option of the command.
+#[derive(Clone, Copy)]
+enum Shape {
+    Keep,
+    Skip,
+}
+
 pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
     let plan = args.plan.require()?.clone();
-    let reason = args.reason.as_str().to_owned();
-    let key = args.key;
+    cancel_with(&plan, args.key, args.reason.as_str(), Shape::Keep)
+}
+
+/// `job cancel` as `plan cancel` runs it: no Job is refused `shape_incomplete`, the Plan goes away whole.
+pub(crate) fn cancel_without_shape(plan: &PlanId, key: JobKey, reason: &str) -> Result<Output, CpdError> {
+    cancel_with(plan, key, reason, Shape::Skip)
+}
+
+fn cancel_with(plan: &PlanId, key: JobKey, reason: &str, shape: Shape) -> Result<Output, CpdError> {
+    let (plan, reason) = (plan.clone(), reason.to_owned());
     let mut env = Env::open()?;
 
-    let decision = env.store.read(|conn| decide(conn, &plan, &key))?;
+    let decision = env.store.read(|conn| decide(conn, &plan, &key, shape))?;
     let (status, requested, already) = match decision {
         Decision::Already(job) => (job.status.clone(), job.status == "running", true),
-        _ => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key)? {
+        _ => env.store.write(COMMAND, |tx| match decide(tx, &plan, &key, shape)? {
             Decision::Already(job) => Ok((job.status.clone(), job.status == "running", true)),
             Decision::Cancel(job) => {
                 tx.execute(
@@ -71,7 +87,7 @@ pub(super) fn cancel(args: CancelArgs) -> Result<Output, CpdError> {
     Ok(Output::success(out))
 }
 
-fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, CpdError> {
+fn decide(conn: &Connection, plan: &PlanId, key: &JobKey, shape: Shape) -> Result<Decision, CpdError> {
     plan_phase(conn, plan)?;
     let all = jobs::load(conn, plan)?;
     let job = find(&all, plan, key)?.clone();
@@ -82,7 +98,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, Cp
         "cancelled" => Ok(Decision::Already(job)),
         "running" if job.cancel_requested_at.is_some() => Ok(Decision::Already(job)),
         "running" => {
-            keeps_the_shape(conn, plan, &all, &job)?;
+            if matches!(shape, Shape::Keep) {
+                keeps_the_shape(conn, plan, &all, &job)?;
+            }
             let active: Option<String> = conn
                 .query_row("SELECT id FROM attempts WHERE plan = ?1 AND job = ?2 AND status <> 'ended'", [plan.as_str(), key.as_str()], |r| r.get(0))
                 .optional()?;
@@ -92,7 +110,9 @@ fn decide(conn: &Connection, plan: &PlanId, key: &JobKey) -> Result<Decision, Cp
             Ok(Decision::Request(job, attempt))
         }
         _ => {
-            keeps_the_shape(conn, plan, &all, &job)?;
+            if matches!(shape, Shape::Keep) {
+                keeps_the_shape(conn, plan, &all, &job)?;
+            }
             Ok(Decision::Cancel(job))
         }
     }

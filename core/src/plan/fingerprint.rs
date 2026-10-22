@@ -40,7 +40,7 @@ pub fn of(jobs: &[Job], prs: &[PrRow]) -> String {
 /// [`of`] with the Plan's outline: when it is set, the object is `{jobs, outline, prs}`, `outline` being its object
 /// (contract §2.3, hs-d502); when it is not, `{jobs, prs}` exactly, so a review made before the outline existed stays current.
 pub fn of_with(jobs: &[Job], prs: &[PrRow], outline: Option<&Outline>) -> String {
-    let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_draft()).collect();
+    let mut drafts: Vec<&Job> = jobs.iter().filter(|j| j.is_under_review()).collect();
     drafts.sort_by(|a, b| a.key.cmp(&b.key));
     let jobs: Vec<Value> = drafts
         .into_iter()

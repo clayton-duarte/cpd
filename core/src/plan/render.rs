@@ -211,7 +211,7 @@ fn job_status(j: &Job, blockers: &[String], anchors: &Anchors) -> String {
 /// What a Job is in a review of a phase after `plan` (§4.5): a `draft` is
 /// under review, every other Job is Locked context.
 fn mark(job: &Job) -> &'static str {
-    if job.is_draft() { "**under review**" } else { "Locked" }
+    if job.is_under_review() { "**under review**" } else { "Locked" }
 }
 
 /// What the sections of a render are drawn from: the Plan's Jobs, what the views show of waiting and cancelled work, and the
