@@ -218,6 +218,38 @@ macro_rules! long_fits {
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
 macro_rules! version_width { () => { "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}" }; }
+// The fill's first column, F0: the left group's 12 cells and the preview pill.
+macro_rules! fill_start { () => { concat!("#{e|+:12,", preview_width!(), "}") }; }
+// The fill's cell count: `#{client_width}` minus the left group's 12, the preview pill, the version pill and the
+// right group's workers pill in the form drawn plus the closing `─`.
+macro_rules! fill_count {
+    () => {
+        concat!(
+            "#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},",
+            "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}"
+        )
+    };
+}
+// F1 = F0 + the count: the first column of the right group.
+macro_rules! fill_end { () => { concat!("#{e|+:", fill_start!(), ",", fill_count!(), "}") }; }
+// `max(a, b)` and `min(a, b)`: the format language has neither.
+macro_rules! max { ($a:expr, $b:expr) => { concat!("#{?#{e|>:", $a, ",", $b, "},", $a, ",", $b, "}") }; }
+macro_rules! min { ($a:expr, $b:expr) => { concat!("#{?#{e|<:", $a, ",", $b, "},", $a, ",", $b, "}") }; }
+// The vertical border's column right of the visited pane.
+macro_rules! border_column { () => { "#{e|+:#{pane_right},1}" }; }
+// The fill: today's run of `─` in a zoomed window; else, per bottom-row pane in index order, its columns that lie in
+// the fill as a run of `─`, then a `┸` at its right border's column when that is in the fill and the pane is not at the right edge.
+macro_rules! fill {
+    () => {
+        concat!(
+            "#{?window_zoomed_flag,#{R:\u{2500},", fill_count!(), "},",
+            "#{P/i/:#{?pane_at_bottom,",
+            "#{R:\u{2500},", max!("0", concat!("#{e|+:#{e|-:", min!("#{pane_right}", concat!("#{e|-:", fill_end!(), ",1}")), ",", max!("#{pane_left}", fill_start!()), "},1}")), "}",
+            "#{?#{&&:#{!:#{pane_at_right}},#{&&:#{e|>=:", border_column!(), ",", fill_start!(), "},#{e|<:", border_column!(), ",", fill_end!(), "}}},\u{2538},}",
+            ",}}}"
+        )
+    };
+}
 // A join: one grey `─`, outside the click ranges.
 // An interactive pill (R2): a click range, bg 15, text 0, caps 15.
 macro_rules! button {
@@ -240,13 +272,19 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// `\u{e0b4}`, 3 cells), each in its own click range, joined by a single `\u{2500}` outside
 /// the ranges (a range also owns the cell after it, so the join does what the space did;
 /// the leading `\u{2500}` is outside the first range): the left group is 12 cells.
-/// Then the `\u{2500}` fill, `#{R:\u{2500},n}`, over the free width: `#{client_width}` minus
+/// Then the `\u{2500}` fill over the free width: `#{client_width}` minus
 /// the left group's 12, the preview pill and the right group in the form drawn (the
 /// engine's width plus the closing `\u{2500}`). At the right, each its own pill on
 /// bg 8 (text 0), joined by a single `\u{2500}`: the workers counts (User, hs-d198): the long form in
 /// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
 /// least `@cpd_workers_width` plus 14), else the short form in `@cpd_workers_short`,
 /// whose width is `@cpd_workers_short_width`.
+///
+/// The fill is split by a `#{P/i/:}` loop over the window's panes in index order (tmux 3.6+): each
+/// bottom-row pane adds a run of `\u{2500}` over its columns inside the fill, then a `\u{2538}` (colour 8) at
+/// its right border's column (`pane_right + 1`) when the pane is not at the right edge and that column
+/// is in the fill (so none under a button, the preview pill or the right group); a zoomed window has
+/// the plain fill. The row keeps its width; the contract (§6.1, the junctions) is the long form.
 ///
 /// While `@cpd_preview` is set (`scripts/preview-tui.sh on`, hs-n264), a
 /// pill `preview: <value>` follows the buttons, joined by a single `\u{2500}`, and the
@@ -268,8 +306,7 @@ pub const STATUS_FORMAT: &str = concat!(
     join!(),
     button!("logs", logs_glyph!()),
     "#{?#{@cpd_preview},#[fg=colour8]\u{2500}", pill!("colour3", "preview: #{@cpd_preview}"), ",}",
-    "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},",
-    "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}",
+    "#[fg=colour8]", fill!(),
     "#[default]#[align=right]",
     pill!("colour8", "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}"),
     "#{?#{@cpd_version},#[fg=colour8]\u{2500}", pill!("colour8", "#{@cpd_version}"), ",}",
@@ -1045,14 +1082,13 @@ mod tests {
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.
     #[test]
     fn the_fill_and_long_fits_subtract_the_version_pills_width() {
-        let width = "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}";
-        let long_fits = STATUS_FORMAT.matches("#{?#{e|>=:#{client_width}").count();
-        assert_eq!(STATUS_FORMAT.matches(width).count(), long_fits + 1, "the fill and each long_fits: {STATUS_FORMAT}");
-        let fill = STATUS_FORMAT.find("#{R:").unwrap();
-        let fill_end = STATUS_FORMAT[fill..].find("#[default]#[align=right]").unwrap() + fill;
-        assert!(STATUS_FORMAT[fill..fill_end].contains(width), "the fill: {}", &STATUS_FORMAT[fill..fill_end]);
-        let fits = STATUS_FORMAT.find("#{?#{e|>=:#{client_width}").unwrap();
-        assert!(STATUS_FORMAT[fits..fits + 200].contains(width), "long_fits: {}", &STATUS_FORMAT[fits..]);
+        let width = version_width!();
+        assert_eq!(width, "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}");
+        let fill = fill_count!();
+        assert!(fill.contains(width), "the fill count: {fill}");
+        assert!(long_fits!().contains(width), "long_fits: {}", long_fits!());
+        assert!(STATUS_FORMAT.contains(fill), "the format uses the fill count: {STATUS_FORMAT}");
+        assert!(STATUS_FORMAT.contains(long_fits!()), "the format uses long_fits: {STATUS_FORMAT}");
     }
 
     #[test]
