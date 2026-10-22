@@ -1,6 +1,6 @@
 //! The Inbox section at the bottom of the tree column (commands.md §13.2, §17; contract §2.2 "Inbox item"): a collapsible
 //! widget (`crate::fold`) with its margins, one empty row above and one below (hs-d476): the grey pill title
-//! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│  <glyph> <label>` (each with
+//! `╭─Inbox────…────<n>` (`crate::section`, inside the panel's padding), up to [`SHOWN`] item rows `│ <glyph> <label>` (each with
 //! its tier's glyph and colour, hs-d483) with the age right-aligned, and the fold widget's closing row (`crate::fold`): with more items
 //! the muted `╰󰁋 expand` that expands the list inline and becomes `╰󰁣 collapse`, with fewer a plain `╰─`, with none no
 //! row. Only the toggle row toggles. Whether it is expanded is view state only. Expanded, it is capped at the rows the
@@ -34,8 +34,8 @@ use cpd_core::inbox::model::{Item, Kind};
 /// How many item rows the section shows before the `╰󰁋 expand` row.
 pub const SHOWN: usize = 3;
 
-/// The columns before the label: the fold's `│`, two spaces, the item's tier glyph and a space.
-const LEAD_WIDTH: usize = 5;
+/// The columns before the label: the fold's `│`, one space, the item's tier glyph and a space.
+const LEAD_WIDTH: usize = 4;
 
 /// The rows above the items: the empty row (hs-d346) and the title.
 const TOP: usize = 2;
@@ -242,7 +242,7 @@ fn is_link(kind: Kind) -> bool {
     matches!(kind, Kind::PlanReview | Kind::ReviewWaiting | Kind::PrReady | Kind::ReviewRequested)
 }
 
-/// An item's row: the fold's muted `│`, two spaces, the item's tier glyph in its urgency's colour, a space, the label cut with
+/// An item's row: the fold's muted `│`, one space, the item's tier glyph in its urgency's colour, a space, the label cut with
 /// `…` so that it never reaches the age, and the age. Returns the line and the number of cells of the label.
 /// A merge of the item's pull request runs (hs-d495): `spin` is the spinner's frame, and the glyph cell shows it.
 fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line<'static>, usize) {
@@ -256,7 +256,7 @@ fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line
         glyph.style = palette::fg_clickable(palette::Meaning::Review); // a merge runs: yellow, whatever the tier
     }
     let line = fold::content(fold::BRANCH, Line::from(vec![
-        "  ".into(),
+        " ".into(),
         glyph,
         " ".into(),
         Span::styled(label, palette::clickable_text()),

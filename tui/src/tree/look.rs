@@ -220,9 +220,9 @@ fn pill(inner: usize, count: usize) -> String {
     format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{CAP_LEFT}{count}{CAP_RIGHT}", "─".repeat(inner - 2 - 7 - (count.to_string().len() + 2)))
 }
 
-/// An item row at 41 inner columns: `│`, two spaces, the tier glyph, a space, the label, the age at the last column.
+/// An item row at 41 inner columns: `│`, one space, the tier glyph, a space, the label, the age at the last column.
 fn item_row(glyph: &str, label: &str, age: &str) -> String {
-    format!(" │  {glyph} {label}{}{age}", " ".repeat(41 - 5 - label.chars().count() - age.chars().count()))
+    format!(" │ {glyph} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
 }
 
 #[test]
@@ -382,17 +382,17 @@ fn one_item(kind: Kind, urgency: Urgency) -> (Buffer, u16) {
 }
 
 #[test]
-fn an_item_row_is_the_muted_line_two_spaces_its_tier_glyph_in_its_colour_a_space_and_the_text() {
+fn an_item_row_is_the_muted_line_one_space_its_tier_glyph_in_its_colour_a_space_and_the_text() {
     for (urgency, glyph, colour) in tiers() {
         let (buf, y) = one_item(Kind::Unread, urgency);
         assert_eq!((buf[(1, y)].symbol(), buf[(1, y)].fg), ("│", muted()), "{urgency:?}: the line");
-        assert_eq!((buf[(4, y)].symbol(), buf[(4, y)].fg), (glyph, colour), "{urgency:?}: the tier glyph in its colour");
-        assert_eq!((buf[(2, y)].symbol(), buf[(3, y)].symbol()), (" ", " "), "{urgency:?}: two spaces after the line");
-        assert_eq!(buf[(5, y)].symbol(), " ", "{urgency:?}");
-        assert_eq!(buf[(6, y)].symbol(), "t", "{urgency:?}: the text starts at column 6");
-        assert_ne!(buf[(6, y)].fg, muted(), "{urgency:?}: the text is not muted");
+        assert_eq!((buf[(3, y)].symbol(), buf[(3, y)].fg), (glyph, colour), "{urgency:?}: the tier glyph in its colour");
+        assert_eq!(buf[(2, y)].symbol(), " ", "{urgency:?}: one space after the line");
+        assert_eq!(buf[(4, y)].symbol(), " ", "{urgency:?}");
+        assert_eq!(buf[(5, y)].symbol(), "t", "{urgency:?}: the text starts at column 5");
+        assert_ne!(buf[(5, y)].fg, muted(), "{urgency:?}: the text is not muted");
         assert_eq!(buf[(40, y)].fg, muted(), "{urgency:?}: the age");
-        assert_eq!(rows(&buf)[y as usize], format!(" │  {glyph} the label{}42s", " ".repeat(41 - 5 - "the label".len() - 3)), "{urgency:?}");
+        assert_eq!(rows(&buf)[y as usize], format!(" │ {glyph} the label{}42s", " ".repeat(41 - 4 - "the label".len() - 3)), "{urgency:?}");
     }
 }
 
@@ -414,7 +414,7 @@ fn the_glyph_is_its_urgencys_never_its_kinds() {
     for (urgency, glyph, colour) in tiers() {
         for kind in kinds {
             let (buf, y) = one_item(kind, urgency);
-            assert_eq!((buf[(4, y)].symbol(), buf[(4, y)].fg), (glyph, colour), "{kind:?} at {urgency:?}");
+            assert_eq!((buf[(3, y)].symbol(), buf[(3, y)].fg), (glyph, colour), "{kind:?} at {urgency:?}");
         }
     }
 }
@@ -444,6 +444,6 @@ fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_tier_glyph(
     items[0].label = "x".repeat(60);
     let mut view = with_inbox(items);
     let got = rows(&draw(&mut view, 43, 24));
-    // 41 columns: `│`, two spaces, the glyph and a space (5), the label, a space, `42s` (3): 32 for the label
-    assert_eq!(got[find(&got, "xxx")], format!(" │  \u{F0362} {}… 42s", "x".repeat(31)));
+    // 41 columns: `│`, one space, the glyph and a space (4), the label, a space, `42s` (3): 33 for the label
+    assert_eq!(got[find(&got, "xxx")], format!(" │ \u{F0362} {}… 42s", "x".repeat(32)));
 }
