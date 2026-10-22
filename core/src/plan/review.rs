@@ -17,6 +17,7 @@ use super::{DecideArgs, Env, RenderArgs, ReviewArgs, read_text_file, render, sum
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{NewEvent, append};
 use crate::home::CpdHome;
+use crate::store::WriteTxn;
 use crate::ids::{PlanId, ReviewId};
 use crate::job::open as job_open;
 use crate::output::Output;
@@ -223,6 +224,7 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
              SELECT ?1, ?2, ?3, ?4, ?5, 'pending', at FROM txns WHERE id = cpd_txn()",
             rusqlite::params![id.as_str(), review.to_string(), number, fingerprint, args.title.as_str()],
         )?;
+        close_reviews(tx, &id, &Closing::Newer(review))?;
         let text = format!("Plan review {review} of Plan {id} requested: the User reviews {drafts} draft Jobs in your chat.");
         append(tx, NewEvent::plan_review_requested(text, review, &fingerprint).plan(id.clone()))?;
         Ok(tx.query_row("SELECT at FROM txns WHERE id = cpd_txn()", [], |r| r.get::<_, String>(0))?)
@@ -233,6 +235,45 @@ pub(super) fn review(args: ReviewArgs) -> Result<Output, CpdError> {
         "summary": summary.display().to_string(),
         "next": REVIEW_NEXT,
     })))
+}
+
+/// Why [`close_reviews`] closes the pending reviews of a Plan.
+pub enum Closing {
+    /// A newer review was requested: the pending reviews below it close.
+    Newer(ReviewId),
+    /// The Plan became `done`: every pending review closes.
+    Done,
+    /// The Plan was cancelled: every pending review closes.
+    Cancelled,
+}
+
+/// Closes the pending reviews of `plan` named by `why` as `superseded` (`decided_at` is the transaction's time,
+/// `feedback` stays null) and appends one `plan-review` Event for each, in number order. The ids closed.
+pub fn close_reviews(tx: &WriteTxn<'_>, plan: &PlanId, why: &Closing) -> Result<Vec<ReviewId>, CpdError> {
+    let below = match why {
+        Closing::Newer(r) => i64::from(r.number().get()),
+        Closing::Done | Closing::Cancelled => i64::MAX,
+    };
+    let mut stmt = tx.prepare("SELECT id, fingerprint FROM plan_reviews WHERE plan = ?1 AND status = 'pending' AND number < ?2 ORDER BY number")?;
+    let pending = stmt.query_map(rusqlite::params![plan.as_str(), below], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut closed = Vec::new();
+    for (id, fingerprint) in pending {
+        tx.execute(
+            "UPDATE plan_reviews SET status = 'superseded', decided_at = (SELECT at FROM txns WHERE id = cpd_txn())
+              WHERE plan = ?1 AND id = ?2 AND status = 'pending'",
+            [plan.as_str(), id.as_str()],
+        )?;
+        let review = ReviewId::parse(&id)?;
+        let text = match why {
+            Closing::Newer(r) => format!("Plan review {review} of Plan {plan} is superseded by {r}."),
+            Closing::Done => format!("Plan review {review} of Plan {plan} is superseded: the Plan is done."),
+            Closing::Cancelled => format!("Plan review {review} of Plan {plan} is superseded: the Plan was cancelled."),
+        };
+        append(tx, NewEvent::plan_review_superseded(text, review, &fingerprint).plan(plan.clone()))?;
+        closed.push(review);
+    }
+    Ok(closed)
 }
 
 /// The Plan has an outline, and it says when each PR with a draft Job is done (§4.6, D3): else `outline_missing` or
