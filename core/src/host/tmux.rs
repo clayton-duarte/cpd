@@ -57,7 +57,7 @@ const UTF8: &str = "-u";
 /// Every spawn of tmux in cpd starts from it, so every call is a UTF-8 client whatever the caller's locale.
 pub fn client(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut cmd = Command::new(program);
-    cmd.arg(UTF8).env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null());
+    cmd.arg(UTF8).env_remove("TMUX").env_remove("TMUX_PANE").env_remove("CPD_SESSION").env_remove("CPD_ATTEMPT").stdin(Stdio::null());
     cmd
 }
 
@@ -1017,6 +1017,15 @@ mod palette;
 mod tests {
     use super::*;
 
+    /// Agent identity must not leak into a tmux server started by cpd.
+    #[test]
+    fn client_strips_cpd_session_and_cpd_attempt() {
+        let cmd = client("tmux");
+        for k in ["CPD_SESSION", "CPD_ATTEMPT"] {
+            assert!(cmd.get_envs().any(|(n, v)| n == k && v.is_none()), "{k} not removed");
+        }
+    }
+
     /// The version pill (§6.1): last on the right, after the workers pill, one `─` join, then the closing `─`, only while `@cpd_version` is set.
     #[test]
     fn the_version_pill_is_last_on_the_right_and_only_while_the_option_is_set() {
@@ -1193,7 +1202,7 @@ mod tests {
         assert_eq!(cmd.get_program(), "tmux");
         assert_eq!(cmd.get_args().next().unwrap(), "-u");
         let removed: Vec<_> = cmd.get_envs().filter(|(_, v)| v.is_none()).map(|(k, _)| k.to_owned()).collect();
-        assert_eq!(removed, ["TMUX", "TMUX_PANE"]);
+        assert_eq!(removed, ["CPD_ATTEMPT", "CPD_SESSION", "TMUX", "TMUX_PANE"]);
     }
 
     /// A `tmux` that behaves as one does while its server dies after `kill-server` (hs-n285): its

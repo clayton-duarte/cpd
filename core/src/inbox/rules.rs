@@ -59,6 +59,7 @@ pub fn conditions_with(store: &mut Store, home: &CpdHome, now: OffsetDateTime, t
     // one closes at the next reconcile, its condition no longer holding. Questions to the User go through `ask_user_question`.
     all.extend(store.read(|conn| pr_ready(conn))?);
     all.extend(store.read(|conn| distill_tier(conn, home))?);
+    all.extend(store.read(curate)?);
     all.extend(review_requested(store, home, now, team)?);
     Ok(all)
 }
@@ -302,6 +303,46 @@ fn distill_tier(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, Cpd
             record: None,
             event: None,
         });
+    }
+    Ok(out)
+}
+
+/// `curate-retire` and `curate-docs` (hs-d549, hs-d551): one magenta item per Context and kind while the Context has
+/// pending retirements, or pending doc candidates; the label carries the count. Dismissing one decides nothing.
+fn curate(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
+    let mut out = Vec::new();
+    for (kind, name, noun, sql) in [
+        (
+            Kind::CurateRetire,
+            "curate-retire",
+            "to retire",
+            "SELECT context, count(*) FROM record_retirements WHERE status = 'pending' GROUP BY context ORDER BY context",
+        ),
+        (
+            Kind::CurateDocs,
+            "curate-docs",
+            "doc candidates",
+            "SELECT context, count(*) FROM record_curations WHERE doc_candidate = 'pending' GROUP BY context ORDER BY context",
+        ),
+    ] {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        for (raw, n) in rows {
+            let context = id("context id", &raw, ContextId::parse)?;
+            out.push(Condition {
+                kind,
+                urgency: Urgency::Magenta,
+                subject: format!("{name}:{context}"),
+                label: format!("{context}: {n} {noun}"),
+                url: None,
+                context: Some(context),
+                plan: None,
+                job: None,
+                session: None,
+                record: None,
+                event: None,
+            });
+        }
     }
     Ok(out)
 }

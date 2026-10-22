@@ -181,6 +181,59 @@ pub enum Jump {
     Merge(Pull),
     /// The Digest dialog of this item and Context (`distill-tier`, hs-d547).
     Notice(i64, cpd_core::ids::ContextId),
+    /// The checklist dialog of a `curate-retire` or `curate-docs` item of this Context (hs-d549, hs-d551).
+    Curate(Kind, cpd_core::ids::ContextId),
+}
+
+/// One row of a curation checklist: the record, its short form and the detail after the dash.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    pub id: String,
+    pub short: String,
+    pub detail: String,
+}
+
+/// The checklist dialog a curate item opens: its title and rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Checklist {
+    pub title: String,
+    pub rows: Vec<Row>,
+}
+
+/// The checklist of `kind` for `context` from the reply of `cpd context curation` (commands.md §13.2): the pending
+/// `retire` or `docs` entries; `None` when none is pending (or the reply has none of the shape).
+pub fn checklist(kind: Kind, context: &cpd_core::ids::ContextId, reply: &serde_json::Value) -> Option<Checklist> {
+    let (key, title) = match kind {
+        Kind::CurateRetire => ("retire", format!("Retire records of {context}")),
+        Kind::CurateDocs => ("docs", format!("Documentation candidates of {context}")),
+        _ => return None,
+    };
+    let text = |e: &serde_json::Value, k: &str| e[k].as_str().map(str::to_owned);
+    let rows = reply[key]
+        .as_array()?
+        .iter()
+        .map(|e| {
+            let detail = if key == "retire" {
+                format!("{} {}", text(e, "reason")?, text(e, "target")?)
+            } else {
+                e["paths"].as_array()?.iter().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(", ")
+            };
+            Some(Row { id: text(e, "record")?, short: text(e, "short")?, detail })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!rows.is_empty()).then_some(Checklist { title, rows })
+}
+
+/// The `cpd` arguments an approved checklist runs (commands.md §13.2); a flag with no ids is left out.
+pub fn approved(kind: Kind, context: &cpd_core::ids::ContextId, ticked: &[String], unticked: &[String]) -> Vec<String> {
+    let (verb, yes, no) = if kind == Kind::CurateDocs { ("docs", "send", "dismiss") } else { ("retire", "approve", "reject") };
+    let mut argv = vec!["context".to_owned(), verb.to_owned(), format!("--context={context}")];
+    for (flag, ids) in [(yes, ticked), (no, unticked)] {
+        if !ids.is_empty() {
+            argv.push(format!("--{flag}={}", ids.join(",")));
+        }
+    }
+    argv
 }
 
 /// `session open <id>`, or `session history <id>` for an archived Session (as a click on its tree row).
@@ -224,6 +277,7 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
                 None => Jump::Run(open),
             })
         }
+        Kind::CurateRetire | Kind::CurateDocs => item.context.as_ref().map(|c| Jump::Curate(item.kind, c.clone())),
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
@@ -691,5 +745,52 @@ mod tests {
         for y in 0..4 {
             assert_eq!(Shape::new(0, false).hit(y), if y == 1 { Some(Hit::Header) } else { None }, "row {y}: only the title is a hit, the closing row is no toggle");
         }
+    }
+
+    fn curate_click(kind: Kind, label: &str, reply: serde_json::Value, title: &str, rows: [(&str, &str, &str); 2], command: [&str; 5]) {
+        let tree = sample();
+        let alpha = ContextId::parse("alpha").unwrap();
+        let mut it = item(5, kind, Urgency::Magenta, label, OPENED);
+        assert_eq!(jump(&tree, &it), None, "no Context: nowhere to go");
+        it.context = Some(alpha.clone());
+        assert_eq!(jump(&tree, &it), Some(Jump::Curate(kind, alpha.clone())));
+        let list = checklist(kind, &alpha, &reply).expect("something is pending");
+        assert_eq!(list.title, title);
+        let want: Vec<Row> = rows.iter().map(|(id, short, detail)| Row { id: (*id).into(), short: (*short).into(), detail: (*detail).into() }).collect();
+        assert_eq!(list.rows, want);
+        let ticked = vec!["r-1".to_owned()];
+        let unticked = vec!["r-2".to_owned()];
+        assert_eq!(approved(kind, &alpha, &ticked, &unticked), command.map(String::from).to_vec());
+        // a flag with no ids is left out
+        let only = approved(kind, &alpha, &ticked, &[]);
+        assert_eq!(only.len(), 4, "{only:?}");
+    }
+
+    #[test]
+    fn a_curate_retire_click_opens_the_checklist_and_runs_retire_with_the_ticks() {
+        curate_click(
+            Kind::CurateRetire,
+            "alpha: 2 to retire",
+            serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": [
+                {"record": "r-1", "kind": "decision", "short": "use sqlite", "reason": "duplicate", "target": "r-0"},
+                {"record": "r-2", "kind": "note", "short": "old plan", "reason": "superseded", "target": "r-9"}]}),
+            "Retire records of alpha",
+            [("r-1", "use sqlite", "duplicate r-0"), ("r-2", "old plan", "superseded r-9")],
+            ["context", "retire", "--context=alpha", "--approve=r-1", "--reject=r-2"],
+        );
+    }
+
+    #[test]
+    fn a_curate_docs_click_opens_the_checklist_and_runs_docs_with_the_ticks() {
+        curate_click(
+            Kind::CurateDocs,
+            "alpha: 2 doc candidates",
+            serde_json::json!({"ok": true, "context": "alpha", "retire": [], "docs": [
+                {"record": "r-1", "kind": "decision", "short": "use sqlite", "paths": ["docs/a.md", "README.md"]},
+                {"record": "r-2", "kind": "note", "short": "old plan", "paths": ["docs/b.md"]}]}),
+            "Documentation candidates of alpha",
+            [("r-1", "use sqlite", "docs/a.md, README.md"), ("r-2", "old plan", "docs/b.md")],
+            ["context", "docs", "--context=alpha", "--send=r-1", "--dismiss=r-2"],
+        );
     }
 }

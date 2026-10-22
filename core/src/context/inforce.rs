@@ -6,7 +6,8 @@
 use std::collections::HashSet;
 
 use super::render::Indexed;
-use crate::ids::RecordKind;
+use crate::error::CpdError;
+use crate::ids::{ContextId, RecordId, RecordKind};
 
 /// The records of `records` (index order, as read) that are in force as of
 /// `as_of`: those with `seq <= as_of` of kind `decision`, `note`, `question`
@@ -14,12 +15,25 @@ use crate::ids::RecordKind;
 /// its `supersedes`. A `plan` or `brief` record is never in force. The result
 /// keeps the order of `records`.
 pub fn in_force(records: &[Indexed], as_of: i64) -> Vec<&Indexed> {
+    in_force_without(records, as_of, &HashSet::new())
+}
+
+/// The records of `Context` that an approved retirement took out of force (contract §4.6 "Retirement", hs-d549).
+pub fn retired(conn: &rusqlite::Connection, context: &ContextId) -> Result<HashSet<RecordId>, CpdError> {
+    let mut stmt = conn.prepare("SELECT record FROM record_retirements WHERE context = ?1 AND status = 'approved'")?;
+    let ids = stmt.query_map([context.as_str()], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    ids.iter().map(|id| RecordId::parse(id)).collect()
+}
+
+/// [`in_force`] that also leaves out the `retired` records (read with [`retired`]).
+pub fn in_force_without<'a>(records: &'a [Indexed], as_of: i64, retired: &HashSet<RecordId>) -> Vec<&'a Indexed> {
     let considered = || records.iter().filter(|(seq, _)| *seq <= as_of);
     let superseded: HashSet<_> = considered().filter_map(|(_, r)| r.supersedes()).collect();
     considered()
         .filter(|(_, r)| {
             matches!(r.kind(), RecordKind::Decision | RecordKind::Note | RecordKind::Question | RecordKind::Answer)
                 && !superseded.contains(&r.id)
+                && !retired.contains(&r.id)
         })
         .collect()
 }
@@ -53,6 +67,14 @@ mod tests {
     /// Records numbered by position, from 1.
     fn indexed(records: Vec<Record>) -> Vec<Indexed> {
         records.into_iter().enumerate().map(|(i, r)| (i as i64 + 1, r)).collect()
+    }
+
+    #[test]
+    fn a_retired_record_is_out_and_the_rest_stay() {
+        let records = indexed(vec![decision("hs-d1", None), record("hs-n1", Draft::Note), record("hs-n2", Draft::Note)]);
+        let retired: HashSet<RecordId> = [id("hs-n1"), id("hs-d1")].into();
+        assert_eq!(ids(&in_force_without(&records, 3, &retired)), ["hs-n2"]);
+        assert_eq!(ids(&in_force(&records, 3)), ["hs-d1", "hs-n1", "hs-n2"]);
     }
 
     #[test]
