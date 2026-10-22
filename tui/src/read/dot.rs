@@ -81,7 +81,7 @@ pub fn urgency(visible: &[Item], session: &SessionId, lead_of: Option<&PlanId>) 
     visible
         .iter()
         .filter(|i| match i.kind {
-            Kind::Dialog | Kind::Unread | Kind::ReviewWaiting => i.session.as_ref() == Some(session),
+            Kind::Dialog | Kind::Unread | Kind::ReviewWaiting | Kind::LoopGuard => i.session.as_ref() == Some(session),
             k => lead_of.is_some() && i.plan.as_ref() == lead_of && PLAN_KINDS.contains(&k),
         })
         .map(|i| i.urgency)

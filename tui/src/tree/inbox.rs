@@ -285,8 +285,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
             })
         }
         Kind::CurateRetire | Kind::CurateDocs => item.context.as_ref().map(|c| Jump::Curate(item.kind, c.clone())),
-        // stub: the red tests want `Jump::Run(Action::SessionResume(<the item's Session>))`
-        Kind::LoopGuard => None,
+        // one background `session resume`: the pane does not open; a refusal is the failure dialog
+        Kind::LoopGuard => item.session.as_ref().map(|s| Jump::Run(Action::SessionResume(s.clone()))),
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
