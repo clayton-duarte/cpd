@@ -381,6 +381,7 @@ pub fn record(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pulled: &Pulled) -> R
     if unmerged > 0 {
         return Ok(Some(Phase::Deploy));
     }
+    crate::plan::close_reviews(tx, id, &crate::plan::Closing::Done)?;
     let moved = tx.execute(
         "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn()) WHERE id = ?1 AND phase = 'deploy'",
         [id.as_str()],

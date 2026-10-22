@@ -389,6 +389,7 @@ pub(super) fn merge(tx: &WriteTxn<'_>, id: &PlanId, key: &PrKey, pull: &pulls::P
     if unmerged > 0 {
         return Ok(false);
     }
+    crate::plan::close_reviews(tx, id, &crate::plan::Closing::Done)?;
     let moved = tx.execute(
         "UPDATE plans SET phase = 'done', done_at = (SELECT at FROM txns WHERE id = cpd_txn())
           WHERE id = ?1 AND phase = 'deploy'",
