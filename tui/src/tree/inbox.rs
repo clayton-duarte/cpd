@@ -206,7 +206,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         // no click: the engine's errors, the stuck Jobs and PR check/review state reach no Inbox (hs-d314, hs-d318, hs-d470); only a row an older engine opened remains
         Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
-        Kind::Question | Kind::DistillTier => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
+        Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
+        Kind::DistillTier => item.context.as_ref().map(|c| Jump::Notice(item.id, c.clone())),
         Kind::PlanReview => {
             let open = open_lead(tree, item.plan.as_ref()?)?;
             // with no port file yet there is no page to copy: the Lead opens, and nothing else happens
