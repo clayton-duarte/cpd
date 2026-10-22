@@ -1,6 +1,9 @@
 import { CpdError, isObject } from "./cpd.ts";
 import type { Message } from "./pi.ts";
 
+/** commands.md §15.7a: the custom type of the hidden first message of a by-user Session; its `details.event` counts for the cursor. */
+export const FIRST_MESSAGE_TYPE = "cpd-first-message";
+
 /** commands.md §15.7: the custom type of the message that lists new Context records. */
 export const CONTEXT_TYPE = "cpd-context";
 
@@ -38,7 +41,7 @@ export const MAX_LISTED = 20;
 export function contextCursorFrom(registeredEvent: number, entries: readonly unknown[], sessionId: string): number {
   let cursor = registeredEvent;
   for (const e of entries) {
-    if (!isObject(e) || e.type !== "custom_message" || e.customType !== CONTEXT_TYPE || !isObject(e.details)) continue;
+    if (!isObject(e) || e.type !== "custom_message" || (e.customType !== CONTEXT_TYPE && e.customType !== FIRST_MESSAGE_TYPE) || !isObject(e.details)) continue;
     if (e.details.delivered_to !== sessionId || !Number.isSafeInteger(e.details.event)) continue;
     cursor = Math.max(cursor, e.details.event as number);
   }

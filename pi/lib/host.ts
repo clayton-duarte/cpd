@@ -1,5 +1,5 @@
 import { callCpd, toCpdError } from "./cpd.ts";
-import { errorMessage } from "./delivery.ts";
+import { errorMessage, gated } from "./delivery.ts";
 import { DEFAULT_TIMING, type Schedule, type Spawn, type Timing } from "./follower.ts";
 import type { Exec, ModelCtx, PiApi } from "./pi.ts";
 import type { Validation } from "./reload.ts";
@@ -38,7 +38,7 @@ export type Host = {
   readonly mismatched: Set<string>;
   readonly versionFailures: Set<string>;
   /** pi has no way to remove a handler or a tool: each is registered once. */
-  registered: { tool: boolean; updates: boolean; reminder: boolean };
+  registered: { tool: boolean; updates: boolean; reminder: boolean; firstMessage: boolean };
   call(args: string[]): ReturnType<typeof callCpd>;
   /** Delivers a failure as an error message to the Lead. */
   deliver(what: string, e: unknown, extra?: Record<string, unknown>): void;
@@ -61,12 +61,12 @@ export function createHost(pi: PiApi, options: Options): Host {
     showRetry: undefined,
     mismatched: new Set(),
     versionFailures: new Set(),
-    registered: { tool: false, updates: false, reminder: false },
+    registered: { tool: false, updates: false, reminder: false, firstMessage: false },
     call: (args) => callCpd(host.exec, args, { timeoutMs: timing.callTimeoutMs, signal: host.abort.signal }),
     deliver(what, e, extra = {}) {
       const err = toCpdError(e);
       const m = errorMessage(what, err.code, err.message, { ...err.details, ...extra });
-      pi.sendMessage(m.message, m.options);
+      pi.sendMessage(m.message, gated(host.run, m.options));
     },
     refresh(r) {
       if (r.reporting && host.run === r) r.reporter.want(r.facts.wanted());
