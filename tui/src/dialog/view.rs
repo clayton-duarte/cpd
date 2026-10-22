@@ -35,7 +35,29 @@ pub(crate) enum Mode {
     Input { validator: Validator, field: Field, refused: Option<String> },
     /// Read-only text, with `[Close]`.
     Text,
+    /// Rows `[ ] <id> <short> — <detail>` the User ticks, with `[Approve]` and `[Cancel]` (hs-d549, hs-d551).
+    Checklist { rows: Vec<Row>, ticked: Vec<bool>, cursor: usize },
 }
+
+/// One row of a `checklist`: the `--items` file is a JSON array of these.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Row {
+    pub(crate) id: String,
+    pub(crate) short: String,
+    pub(crate) detail: String,
+}
+
+impl Row {
+    /// The row as drawn, with the box of `ticked`, with no control character.
+    pub(crate) fn line(&self, ticked: bool) -> String {
+        let line = format!("[{}] {} {} — {}", if ticked { 'x' } else { ' ' }, self.id, self.short, self.detail);
+        line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
+    }
+}
+
+/// The label of the confirming button of `checklist`.
+pub(crate) const APPROVE: &str = "Approve";
 
 /// The one line of an `input`, with its cursor (a character index).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +201,26 @@ impl Dialog {
             Mode::Confirm { yes } => vec![format!("[{yes}]"), format!("[{CANCEL}]")],
             Mode::Input { .. } => vec![format!("[{OK}]"), format!("[{CANCEL}]")],
             Mode::Text => vec![format!("[{CLOSE}]")],
+            Mode::Checklist { .. } => vec![format!("[{APPROVE}]"), format!("[{CANCEL}]")],
+        }
+    }
+
+    /// The ids ticked and the ids not, in order, of a `checklist`.
+    pub(crate) fn ticks(&self) -> Option<(Vec<String>, Vec<String>)> {
+        let Mode::Checklist { rows, ticked, .. } = &self.mode else { return None };
+        let (yes, no): (Vec<_>, Vec<_>) = rows.iter().zip(ticked).partition(|(_, t)| **t);
+        let ids = |v: Vec<(&Row, &bool)>| v.into_iter().map(|(r, _)| r.id.clone()).collect();
+        Some((ids(yes), ids(no)))
+    }
+
+    /// Keeps the cursor row of a `checklist` inside the scrolled window.
+    fn follow_cursor(&mut self) {
+        let Mode::Checklist { cursor, .. } = &self.mode else { return };
+        let (cursor, offset, page) = (*cursor, self.scroll.offset(), self.scroll.page().max(1));
+        if cursor < offset {
+            self.scroll.by(-((offset - cursor) as isize));
+        } else if cursor >= offset + page {
+            self.scroll.by((cursor + 1 - offset - page) as isize);
         }
     }
 
@@ -199,6 +241,10 @@ impl Dialog {
 
     /// The rows of the text at the width of `body`.
     fn rows(&self, body: Rect) -> Vec<String> {
+        if let Mode::Checklist { rows, ticked, .. } = &self.mode {
+            let width = usize::from(body.width).saturating_sub(2);
+            return rows.iter().zip(ticked).map(|(r, t)| cut(&r.line(*t), width)).collect();
+        }
         wrap(&self.text, usize::from(body.width).saturating_sub(2))
     }
 
@@ -231,6 +277,13 @@ impl Dialog {
                         let line = Line::from(Span::styled(format!(" {}", cut(text, width)), palette::note()));
                         f.render_widget(Paragraph::new(line), row(rows.len() + 1 + n));
                     }
+                }
+            }
+            Mode::Checklist { cursor, .. } => {
+                let first = self.scroll.offset();
+                for (n, text) in rows.iter().skip(first).take(self.scroll.page()).enumerate() {
+                    let style = if first + n == *cursor { palette::selected() } else { palette::clickable_text() };
+                    f.render_widget(Paragraph::new(format!(" {text}")).style(style), row(n));
                 }
             }
             _ => {
@@ -289,6 +342,29 @@ impl Dialog {
         if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
             return None;
         }
+        if let Mode::Checklist { rows, ticked, cursor } = &mut self.mode {
+            let last = rows.len().saturating_sub(1);
+            match key.code {
+                KeyCode::Enter => return Some(Outcome::confirmed()),
+                KeyCode::Esc | KeyCode::Char('q') => return Some(Outcome::cancelled()),
+                KeyCode::Char(' ') => {
+                    if let Some(t) = ticked.get_mut(*cursor) {
+                        *t = !*t;
+                    }
+                }
+                KeyCode::Char('a') => {
+                    let all = ticked.iter().all(|t| *t);
+                    ticked.iter_mut().for_each(|t| *t = !all);
+                }
+                KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+                KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(last),
+                _ => {
+                    self.scroll.key(key);
+                }
+            }
+            self.follow_cursor();
+            return None;
+        }
         match key.code {
             KeyCode::Enter | KeyCode::Char('y') => Some(Outcome::confirmed()),
             KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => Some(Outcome::cancelled()),
@@ -306,6 +382,17 @@ impl Dialog {
             return None;
         }
         let at = Position::new(mouse.column, mouse.row);
+        let body = layout(self.area).body;
+        if let Mode::Checklist { ticked, cursor, .. } = &mut self.mode {
+            if body.contains(at) {
+                let n = self.scroll.offset() + usize::from(at.y - body.y);
+                if let Some(t) = ticked.get_mut(n) {
+                    *t = !*t;
+                    *cursor = n;
+                }
+                return None;
+            }
+        }
         match self.buttons(self.area).iter().position(|b| b.contains(at))? {
             0 => self.confirm(),
             _ => Some(Outcome::cancelled()),

@@ -110,10 +110,11 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view legend` | The key legend (opened by `?` in the Dispatch column, in a tmux popup) | internal | |
 | `cpd tui view logs` | The Event log (opened by the StatusBar's logs button and by an Inbox item, in a tmux popup) | internal | |
 | `cpd tui view merge` | The merge confirmation of a pull request (opened by the Deploy column's merge icon, in a tmux popup) | internal | |
-| `cpd tui view dialog` | A dialog of the kit: `confirm`, `input` or `text` (opened by the cockpit's actions, in a tmux popup) | internal | |
+| `cpd tui view dialog` | A dialog of the kit: `confirm`, `input`, `text` or `checklist` (opened by the cockpit's actions, in a tmux popup) | internal | |
 | `cpd tui view dialog confirm` | A question with two buttons | internal | |
 | `cpd tui view dialog input` | A one-line text field | internal | |
 | `cpd tui view dialog text` | Scrollable read-only text | internal | |
+| `cpd tui view dialog checklist` | Rows to tick, `[Approve] [Cancel]`; the outcome is `{approved, ticked, unticked}` | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
 | `cpd tui action` | A click on a StatusBar button, or the merge popup's confirm (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |

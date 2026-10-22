@@ -200,14 +200,40 @@ pub struct Checklist {
     pub rows: Vec<Row>,
 }
 
-/// The checklist of `kind` for `context` from the reply of `cpd context curation` (commands.md §13.2). Stub.
-pub fn checklist(_kind: Kind, _context: &cpd_core::ids::ContextId, _reply: &serde_json::Value) -> Option<Checklist> {
-    todo!("retire-tui: the checklist of a curate item")
+/// The checklist of `kind` for `context` from the reply of `cpd context curation` (commands.md §13.2): the pending
+/// `retire` or `docs` entries; `None` when none is pending (or the reply has none of the shape).
+pub fn checklist(kind: Kind, context: &cpd_core::ids::ContextId, reply: &serde_json::Value) -> Option<Checklist> {
+    let (key, title) = match kind {
+        Kind::CurateRetire => ("retire", format!("Retire records of {context}")),
+        Kind::CurateDocs => ("docs", format!("Documentation candidates of {context}")),
+        _ => return None,
+    };
+    let text = |e: &serde_json::Value, k: &str| e[k].as_str().map(str::to_owned);
+    let rows = reply[key]
+        .as_array()?
+        .iter()
+        .map(|e| {
+            let detail = if key == "retire" {
+                format!("{} {}", text(e, "reason")?, text(e, "target")?)
+            } else {
+                e["paths"].as_array()?.iter().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(", ")
+            };
+            Some(Row { id: text(e, "record")?, short: text(e, "short")?, detail })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!rows.is_empty()).then_some(Checklist { title, rows })
 }
 
-/// The `cpd` arguments an approved checklist runs (commands.md §13.2); `None` words for a flag with no ids are left out. Stub.
-pub fn approved(_kind: Kind, _context: &cpd_core::ids::ContextId, _ticked: &[String], _unticked: &[String]) -> Vec<String> {
-    todo!("retire-tui: the command of an approved checklist")
+/// The `cpd` arguments an approved checklist runs (commands.md §13.2); a flag with no ids is left out.
+pub fn approved(kind: Kind, context: &cpd_core::ids::ContextId, ticked: &[String], unticked: &[String]) -> Vec<String> {
+    let (verb, yes, no) = if kind == Kind::CurateDocs { ("docs", "send", "dismiss") } else { ("retire", "approve", "reject") };
+    let mut argv = vec!["context".to_owned(), verb.to_owned(), format!("--context={context}")];
+    for (flag, ids) in [(yes, ticked), (no, unticked)] {
+        if !ids.is_empty() {
+            argv.push(format!("--{flag}={}", ids.join(",")));
+        }
+    }
+    argv
 }
 
 /// `session open <id>`, or `session history <id>` for an archived Session (as a click on its tree row).
@@ -251,8 +277,7 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
                 None => Jump::Run(open),
             })
         }
-        // the checklist dialogs are Job retire-tui's
-        Kind::CurateRetire | Kind::CurateDocs => None,
+        Kind::CurateRetire | Kind::CurateDocs => item.context.as_ref().map(|c| Jump::Curate(item.kind, c.clone())),
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))

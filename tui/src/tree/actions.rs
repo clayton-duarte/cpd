@@ -360,6 +360,41 @@ impl Runner {
         question.ask(self)
     }
 
+    /// A click on a `curate-retire` or `curate-docs` item: `cpd context curation`, the checklist popup of what is
+    /// pending, and on approve the command of the ticks (`cpd context retire|docs`); cancel runs nothing. A refusal is
+    /// a `text` dialog (commands.md §17 "No notes"); returns when the dialogs close.
+    pub fn curate(&self, kind: cpd_core::inbox::model::Kind, context: &ContextId) -> Result<(), String> {
+        let title = if kind == cpd_core::inbox::model::Kind::CurateDocs { "Documentation candidates" } else { "Retire records" };
+        match self.curate_flow(kind, context) {
+            Ok(()) => Ok(()),
+            Err(why) => self.error(title, &why),
+        }
+    }
+
+    fn curate_flow(&self, kind: cpd_core::inbox::model::Kind, context: &ContextId) -> Result<(), String> {
+        use super::inbox::{approved, checklist};
+        let call_cpd = |argv: Vec<String>| {
+            let words = argv.join(" ");
+            let output = Command::new(PROGRAM).args(&argv).stdin(Stdio::null()).output().map_err(|e| format!("cannot run {PROGRAM}: {e}"))?;
+            let reply: Value = serde_json::from_slice(&output.stdout)
+                .map_err(|_| format!("{PROGRAM} {words} printed no JSON (exit {}): {}", output.status, String::from_utf8_lossy(&output.stderr).trim()))?;
+            if reply["ok"] == true {
+                Ok(reply)
+            } else {
+                let error = &reply["error"];
+                Err(format!("{}: {}", error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
+            }
+        };
+        let reply = call_cpd(vec!["context".into(), "curation".into(), format!("--context={context}")])?;
+        let Some(list) = checklist(kind, context, &reply) else { return Ok(()) };
+        let rows: Vec<_> = list.rows.into_iter().map(|r| (r.id, r.short, r.detail)).collect();
+        let checked = dialog::checklist(&self.tmux, &list.title, &rows).map_err(|e| e.message().to_owned())?;
+        if checked.approved {
+            call_cpd(approved(kind, context, &checked.ticked, &checked.unticked))?;
+        }
+        Ok(())
+    }
+
     /// A failure the User must see: a `text` popup titled `title` (what failed) saying `text` (why); returns when it closes.
     pub fn error(&self, title: &str, text: &str) -> Result<(), String> {
         dialog::show_error(&self.tmux, title, text).map_err(|e| e.message().to_owned())
