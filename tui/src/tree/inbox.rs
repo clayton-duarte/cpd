@@ -179,8 +179,6 @@ pub enum Jump {
     Steps(Vec<Action>),
     /// The merge popup of this pull request (`pr-ready`).
     Merge(Pull),
-    /// The Digest dialog of this item and Context (`distill-tier`, hs-d547).
-    Notice(i64, cpd_core::ids::ContextId),
     /// The checklist dialog of a `curate-retire` or `curate-docs` item of this Context (hs-d549, hs-d551).
     Curate(Kind, cpd_core::ids::ContextId),
 }
@@ -260,7 +258,6 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
         Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
-        Kind::DistillTier => item.context.as_ref().map(|c| Jump::Notice(item.id, c.clone())),
         Kind::PlanReview => {
             let open = open_lead(tree, item.plan.as_ref()?)?;
             // with no port file yet there is no page to copy: the Lead opens, and nothing else happens

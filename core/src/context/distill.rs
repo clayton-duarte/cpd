@@ -172,30 +172,16 @@ impl Run<'_> {
             None => {
                 self.write_inputs(&dir, &in_force)?;
                 let start = self.config.context_distill_tier;
-                let mut ladder = vec![start];
-                let mut index = 0;
-                loop {
-                    let tier = ladder[index];
-                    steps.push(tier);
-                    let fault = match self.step(tier, upto, &dir, &tmp, &in_force, &expect)? {
-                        Ok(done) => break (Some(done.0), done.1),
-                        Err(fault) => fault,
-                    };
-                    if index == 0 {
-                        ladder = self.distill_ladder(start);
+                steps.push(start);
+                match self.step(start, upto, &dir, &tmp, &in_force, &expect)? {
+                    Ok(done) => (Some(done.0), done.1),
+                    Err(Fault::Invalid(invalid)) => {
+                        let kept = digest::keep_invalid(self.home, self.context, upto)?;
+                        return Err(self.invalid(upto, &invalid, &kept));
                     }
-                    index += 1;
-                    if index == ladder.len() {
-                        return Err(match fault {
-                            Fault::Invalid(invalid) => {
-                                let kept = digest::keep_invalid(self.home, self.context, upto)?;
-                                self.invalid(upto, &invalid, &kept)
-                            }
-                            Fault::Pi(failure, tail) => {
-                                digest::discard(self.home, self.context, upto)?;
-                                self.pi_failed(upto, &failure, tail)
-                            }
-                        });
+                    Err(Fault::Pi(failure, tail)) => {
+                        digest::discard(self.home, self.context, upto)?;
+                        return Err(self.pi_failed(upto, &failure, tail));
                     }
                 }
             }
@@ -217,12 +203,6 @@ impl Run<'_> {
             out["repair"] = repair.figures();
         }
         Ok(out)
-    }
-
-    /// The distill ladder from `start` (hs-d538), from pi's catalog. A catalog that cannot be read gives no
-    /// climb: the run ends with the failed step's own error Event, which is what says what went wrong.
-    fn distill_ladder(&mut self, start: Tier) -> Vec<Tier> {
-        crate::config::load_catalog_with(self.config, self.store).map_or_else(|_| vec![start], |c| c.distill_ladder(start))
     }
 
     /// Reads `tmp`, drops an index the model wrote anyway (it is not a topic section) and validates the rest.
