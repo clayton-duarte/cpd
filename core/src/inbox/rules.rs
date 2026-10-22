@@ -225,6 +225,20 @@ fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     Ok(out)
 }
 
+/// What the distill-tier item and its dialog say about a Context (hs-d546, hs-d547).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TierNotice {
+    pub upto: i64,
+    pub top: String,
+    pub steps: Vec<String>,
+    pub runs: u32,
+}
+
+/// The notice of a Context, or `None` when its highest run did not reach an S Tier or no run counts since the last dismissal.
+pub fn tier_notice(_conn: &Connection, _home: &CpdHome, _context: &ContextId) -> Result<Option<TierNotice>, CpdError> {
+    todo!("tier_notice")
+}
+
 /// `distill-tier` (hs-d539): a Context whose highest-`upto_seq` runs in `runs.jsonl` include one on an S Tier. Yellow; the label
 /// names the highest Tier those runs reached. A missing or unreadable file, and an unparseable line, give nothing.
 fn distill_tier(conn: &Connection, home: &CpdHome) -> Result<Vec<Condition>, CpdError> {
