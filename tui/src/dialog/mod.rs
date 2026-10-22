@@ -28,7 +28,7 @@ use cpd_core::host::Tmux;
 use cpd_core::output::Output;
 use cpd_core::session::PROGRAM;
 use validate::Validator;
-use view::{CANCEL, Dialog, Field, Mode, REFUSAL_ROWS, wrap};
+use view::{CANCEL, Dialog, Field, Mode, REFUSAL_ROWS, Row, wrap};
 
 /// `cpd tui view dialog <confirm|input|text> …`.
 #[derive(clap::Args, Debug)]
@@ -45,6 +45,8 @@ enum Kind {
     Input(Input),
     /// Scrollable read-only text
     Text(Text),
+    /// Rows to tick, with `[Approve]` and `[Cancel]`; the outcome is `{approved, ticked, unticked}`
+    Checklist(Checklist),
 }
 
 /// What every kind takes.
@@ -94,6 +96,15 @@ struct Text {
     body: String,
 }
 
+#[derive(clap::Args, Debug)]
+struct Checklist {
+    #[command(flatten)]
+    common: Common,
+    /// A JSON file: an array of `{id, short, detail}`
+    #[arg(long, value_name = "path")]
+    items: PathBuf,
+}
+
 /// How a dialog closed: the result file's content. `value` is the typed text of an accepted `input`, and only then.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -118,8 +129,19 @@ impl Outcome {
 }
 
 impl Kind {
-    fn parts(self) -> (Common, Dialog) {
-        match self {
+    fn parts(self) -> Result<(Common, Dialog), CpdError> {
+        Ok(match self {
+            Kind::Checklist(a) => {
+                let bad = |why: String| {
+                    CpdError::new(ErrorCode::ArgsInvalid, format!("Cannot read the checklist items {}: {why}.", a.items.display()))
+                        .with("path", a.items.display().to_string())
+                };
+                let json = std::fs::read_to_string(&a.items).map_err(|e| bad(e.to_string()))?;
+                let rows: Vec<Row> = serde_json::from_str(&json).map_err(|e| bad(e.to_string()))?;
+                let ticked = vec![false; rows.len()];
+                let dialog = Dialog::new(a.common.title.clone(), String::new(), Mode::Checklist { rows, ticked, cursor: 0 });
+                (a.common, dialog)
+            }
             Kind::Confirm(a) => {
                 let dialog = Dialog::new(a.common.title.clone(), a.text, Mode::Confirm { yes: a.yes_label });
                 (a.common, dialog)
@@ -133,7 +155,7 @@ impl Kind {
                 let dialog = Dialog::new(a.common.title.clone(), a.body, Mode::Text);
                 (a.common, dialog)
             }
-        }
+        })
     }
 }
 
@@ -141,7 +163,7 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view dialog"));
     }
-    let (common, mut dialog) = args.kind.parts();
+    let (common, mut dialog) = args.kind.parts()?;
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
     let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
@@ -152,7 +174,13 @@ pub(super) fn run(args: Args) -> Result<Output, CpdError> {
         CpdError::new(ErrorCode::NotATerminal, format!("The terminal of cpd tui view dialog failed: {e}."))
             .with("command", "tui view dialog")
     })?;
-    write_outcome(&common.out, &outcome)?;
+    match dialog.ticks() {
+        Some((ticked, unticked)) => {
+            let json = serde_json::json!({"approved": outcome.confirmed, "ticked": ticked, "unticked": unticked});
+            write_json(&common.out, &json.to_string())?;
+        }
+        None => write_outcome(&common.out, &outcome)?,
+    }
     Ok(Output::Owned)
 }
 
@@ -172,7 +200,10 @@ fn show(terminal: &mut ratatui::DefaultTerminal, dialog: &mut Dialog) -> std::io
 }
 
 fn write_outcome(path: &Path, outcome: &Outcome) -> Result<(), CpdError> {
-    let json = serde_json::to_string(outcome).expect("an outcome is JSON");
+    write_json(path, &serde_json::to_string(outcome).expect("an outcome is JSON"))
+}
+
+fn write_json(path: &Path, json: &str) -> Result<(), CpdError> {
     std::fs::write(path, json).map_err(|e| {
         CpdError::new(ErrorCode::Internal, format!("Cannot write the dialog's result to {}: {e}.", path.display()))
             .with("path", path.display().to_string())
@@ -268,6 +299,19 @@ fn ask(
     fields: &[(&str, &str)],
     size: impl FnOnce((u16, u16), &str) -> (u16, u16),
 ) -> Result<Outcome, CpdError> {
+    ask_with(tmux, on, title, kind, fields, size, read_outcome)
+}
+
+/// [`ask`] for a kind whose result file `read` parses.
+fn ask_with<T>(
+    tmux: &Tmux,
+    on: On<'_>,
+    title: &str,
+    kind: &str,
+    fields: &[(&str, &str)],
+    size: impl FnOnce((u16, u16), &str) -> (u16, u16),
+    read: impl FnOnce(&Path) -> Result<T, CpdError>,
+) -> Result<T, CpdError> {
     let client = match on {
         On::Newest => {
             let clients =
@@ -287,7 +331,7 @@ fn ask(
         On::Client(name) => on_client(popup, name),
     };
     let ran = tmux.run(&popup);
-    let read = read_outcome(&out);
+    let read = read(&out);
     ran?;
     read
 }
@@ -318,6 +362,37 @@ pub(crate) fn input(tmux: &Tmux, title: &str, prompt: &str, initial: &str, valid
         (true, Some(value)) => Ok(Some(value)),
         (true, None) => Err(CpdError::new(ErrorCode::Internal, "The input dialog confirmed with no value.")),
     }
+}
+
+/// What a `checklist` closed with: whether it was approved, and the ids ticked and not.
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Checked {
+    pub(crate) approved: bool,
+    pub(crate) ticked: Vec<String>,
+    pub(crate) unticked: Vec<String>,
+}
+
+/// Rows `[ ] <id> <short> — <detail>` (`rows` are `(id, short, detail)`) to tick in a popup, `[Approve]` and `[Cancel]`.
+pub(crate) fn checklist(tmux: &Tmux, title: &str, rows: &[(String, String, String)]) -> Result<Checked, CpdError> {
+    let items: Vec<serde_json::Value> =
+        rows.iter().map(|(id, short, detail)| serde_json::json!({"id": id, "short": short, "detail": detail})).collect();
+    let file = temp_path().with_extension("items.json");
+    std::fs::write(&file, serde_json::Value::Array(items).to_string()).map_err(|e| {
+        CpdError::new(ErrorCode::Internal, format!("Cannot write the checklist items to {}: {e}.", file.display()))
+    })?;
+    let natural = rows.iter().map(|(id, short, detail)| format!("[ ] {id} {short} — {detail}").chars().count()).max().unwrap_or(0);
+    let size = |client, title: &str| popup_size(client, title, natural, |_| rows.len().max(1));
+    let path = file.display().to_string();
+    let asked = ask_with(tmux, On::Newest, title, "checklist", &[("items", &path)], size, |out| {
+        let shown = out.display().to_string();
+        let bad = |why: String| CpdError::new(ErrorCode::Internal, format!("The dialog left no usable result at {shown}: {why}."));
+        let read = std::fs::read_to_string(out);
+        let _ = std::fs::remove_file(out);
+        serde_json::from_str(&read.map_err(|e| bad(e.to_string()))?).map_err(|e| bad(e.to_string()))
+    });
+    let _ = std::fs::remove_file(&file);
+    asked
 }
 
 /// Read-only `body`, scrollable, in a popup on the client `on`, until the User closes it.

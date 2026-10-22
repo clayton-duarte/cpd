@@ -110,7 +110,7 @@ pub const VERSION: i64 = 1000;
 /// The canonical schema hash (§4.3) of a fresh store that applied exactly this
 /// binary's migrations, pinned here and never recorded in the store (hs-d178
 /// D2). A test asserts it and prints the new value when it is stale.
-pub const SCHEMA_HASH: &str = "c07f40bc4a41919aeaa468d1a414f304814c93d5255e7ea55c0403e4b253ae99";
+pub const SCHEMA_HASH: &str = "b1ab777ea6e12e8cff75b92478d452877bf241622b85bd9e0bd3f3f9ba2417fb";
 
 /// The runner's own table (§4.4): created with the first migration it records,
 /// never by a migration's `.sql`.
@@ -454,7 +454,7 @@ fn delete_owner(table: &str) -> Option<String> {
     };
     Some(match table {
         "prs" | "pr_needs" | "plan_reviews" | "jobs" | "dependencies" | "attempts" | "escalations" => plan_deleted("OLD.plan"),
-        "context_records" => context_deleted("OLD.context"),
+        "context_records" | "record_retirements" | "record_curations" => context_deleted("OLD.context"),
         "events" | "inbox_items" | "sessions" => plan_row(),
         "plannotator_reviews" => session_row("session"),
         "board_posts" => session_row("to_session"),

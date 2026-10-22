@@ -13,6 +13,9 @@ pub type Indexed = (i64, Record);
 /// The repos of each Plan record's PRs, by record id.
 pub type Repos = HashMap<String, Vec<String>>;
 
+/// The records an approved retirement took out of force (contract §4.6 "Retirement"), by record id: `<reason> <target>`.
+pub type Retired = HashMap<String, String>;
+
 /// The Context as markdown: title and Jira key; Plans; active decisions;
 /// superseded decisions, each naming its successor; open questions; answered
 /// questions with their answers; notes (those in force, then the superseded ones, each naming its successor). Each item shows its id and date.
@@ -24,6 +27,14 @@ pub type Repos = HashMap<String, Vec<String>>;
 /// which question is open is decided from all of `records`. An answer after
 /// `since` is listed with its question, whatever the question's position.
 pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64, repos: &Repos) -> String {
+    markdown_retired(title, jira, records, since, repos, &Retired::new())
+}
+
+/// [`markdown`] with the retired records labelled `retired (<reason> <target>)`: a retired decision is listed with the
+/// superseded ones, a retired note after the superseded ones, a retired question or answer where it is.
+pub fn markdown_retired(title: &str, jira: Option<&str>, records: &[Indexed], since: i64, repos: &Repos, retired: &Retired) -> String {
+    let retired_label = |r: &Record| retired.get(&r.id.to_string()).map(|why| format!(" [retired ({why})]")).unwrap_or_default();
+    let is_retired = |r: &Record| retired.contains_key(&r.id.to_string());
     let shown = |seq: i64| seq > since;
     let mut successor: HashMap<String, &Record> = HashMap::new();
     let mut answers: HashMap<String, Vec<&Indexed>> = HashMap::new();
@@ -76,14 +87,17 @@ pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64
         }
     }
     section(&mut out, "Plans", plans.into_iter());
-    section(&mut out, "Decisions", of_kind(RecordKind::Decision).filter(|(_, r)| !successor.contains_key(&r.id.to_string())).map(|(_, r)| {
+    section(&mut out, "Decisions", of_kind(RecordKind::Decision).filter(|(_, r)| !successor.contains_key(&r.id.to_string()) && !is_retired(r)).map(|(_, r)| {
         let replaces = r.supersedes().map(|s| format!(" (supersedes {s})")).unwrap_or_default();
         item(r, &format!("{}{replaces}", r.text))
     }));
     section(&mut out, "Superseded decisions", of_kind(RecordKind::Decision).filter_map(|(_, r)| {
-        successor.get(&r.id.to_string()).map(|next| item(r, &format!("{} (superseded by {})", r.text, next.id)))
+        match successor.get(&r.id.to_string()) {
+            Some(next) => Some(item(r, &format!("{} (superseded by {}){}", r.text, next.id, retired_label(r)))),
+            None => is_retired(r).then(|| item(r, &format!("{}{}", r.text, retired_label(r)))),
+        }
     }));
-    section(&mut out, "Open questions", of_kind(RecordKind::Question).filter(|(_, r)| !answers.contains_key(&r.id.to_string())).map(|(_, r)| item(r, &r.text)));
+    section(&mut out, "Open questions", of_kind(RecordKind::Question).filter(|(_, r)| !answers.contains_key(&r.id.to_string())).map(|(_, r)| item(r, &format!("{}{}", r.text, retired_label(r)))));
 
     // A question is listed when it or one of its answers is after `since`.
     let mut answered: Vec<String> = Vec::new();
@@ -93,9 +107,9 @@ pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64
         if !(shown(*seq) || given.iter().any(|(s, _)| shown(*s))) {
             continue;
         }
-        let mut entry = item(question, &question.text);
+        let mut entry = item(question, &format!("{}{}", question.text, retired_label(question)));
         for (_, answer) in given {
-            entry.push_str(&nested(answer));
+            entry.push_str(&nested(answer, &retired_label(answer)));
         }
         answered.push(entry);
     }
@@ -107,20 +121,23 @@ pub fn markdown(title: &str, jira: Option<&str>, records: &[Indexed], since: i64
         }
         let mut entry = format!("- {key} (question not in this index)\n");
         for (_, answer) in given {
-            entry.push_str(&nested(answer));
+            entry.push_str(&nested(answer, &retired_label(answer)));
         }
         answered.push(entry);
     }
     section(&mut out, "Answered questions", answered.into_iter());
     // Notes in force first, then the superseded ones, each naming its successor (a note or a decision).
-    let active = of_kind(RecordKind::Note).filter(|(_, r)| !successor.contains_key(&r.id.to_string())).map(|(_, r)| {
+    let active = of_kind(RecordKind::Note).filter(|(_, r)| !successor.contains_key(&r.id.to_string()) && !is_retired(r)).map(|(_, r)| {
         let replaces = r.supersedes().map(|s| format!(" (supersedes {s})")).unwrap_or_default();
         item(r, &format!("{}{replaces}", r.text))
     });
     let superseded = of_kind(RecordKind::Note).filter_map(|(_, r)| {
-        successor.get(&r.id.to_string()).map(|next| item(r, &format!("{} (superseded by {})", r.text, next.id)))
+        successor.get(&r.id.to_string()).map(|next| item(r, &format!("{} (superseded by {}){}", r.text, next.id, retired_label(r))))
     });
-    section(&mut out, "Notes", active.chain(superseded));
+    let retired_notes = of_kind(RecordKind::Note)
+        .filter(|(_, r)| is_retired(r) && !successor.contains_key(&r.id.to_string()))
+        .map(|(_, r)| item(r, &format!("{}{}", r.text, retired_label(r))));
+    section(&mut out, "Notes", active.chain(superseded).chain(retired_notes));
     out
 }
 
@@ -152,8 +169,8 @@ fn item(record: &Record, text: &str) -> String {
     format!("- {} ({}): {}\n", record.id, date(record), text.replace('\n', "\n  "))
 }
 
-fn nested(answer: &Record) -> String {
-    format!("  - answer {} ({}): {}\n", answer.id, date(answer), answer.text.replace('\n', "\n    "))
+fn nested(answer: &Record, label: &str) -> String {
+    format!("  - answer {} ({}): {}{label}\n", answer.id, date(answer), answer.text.replace('\n', "\n    "))
 }
 
 /// A brief under its Plan: its id and first line only (commands.md §3.3).

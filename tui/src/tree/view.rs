@@ -114,6 +114,9 @@ pub enum Effect {
     Steps(Vec<Action>),
     /// Open the merge popup of this pull request: a click on a `pr-ready` item. A failure is logged.
     Merge(Pull),
+    /// The checklist dialog of a curate item of this Context, then the command its answer makes: a click on a
+    /// `curate-retire` or `curate-docs` item. A failure is a `text` dialog.
+    Curate(cpd_core::inbox::model::Kind, cpd_core::ids::ContextId),
     /// Open a `text` dialog popup ([`crate::dialog::show_error`]): a failure or refusal the User must see (commands.md
     /// §17 "No notes"). `title` says what failed, `text` why (`<code>: <message>`).
     Text { title: String, text: String },
@@ -689,6 +692,7 @@ impl View {
             // a merge of it runs: the click, like the glyph's spinner, is its marker's (hs-d495)
             Some(Jump::Merge(pull)) if self.merging.contains(&pull.to_string()) => Effect::None,
             Some(Jump::Merge(pull)) => Effect::Merge(pull),
+            Some(Jump::Curate(kind, context)) => Effect::Curate(kind, context),
             None => Effect::None,
         }
     }

@@ -34,6 +34,10 @@ pub enum Kind {
     PrChanges,
     PrReady,
     ReviewRequested,
+    /// A Context has pending record retirements (hs-d551).
+    CurateRetire,
+    /// A Context has pending documentation candidates (hs-d551).
+    CurateDocs,
 }
 
 impl Kind {
@@ -52,12 +56,14 @@ impl Kind {
             Kind::PrChanges => "pr-changes",
             Kind::PrReady => "pr-ready",
             Kind::ReviewRequested => "review-requested",
+            Kind::CurateRetire => "curate-retire",
+            Kind::CurateDocs => "curate-docs",
         }
     }
 
     pub fn parse(s: &str) -> Option<Kind> {
         use Kind::*;
-        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested]
+        [Dialog, PlanReview, ReviewWaiting, Unread, JobStuck, EngineError, EngineDown, Question, PrFailing, PrChanges, PrReady, ReviewRequested, CurateRetire, CurateDocs]
             .into_iter()
             .find(|k| k.as_str() == s)
     }
@@ -307,6 +313,16 @@ impl Changes {
     }
 }
 
+/// The open `curate-*` items whose condition has the same identity and another label: their count moved (hs-d549,
+/// hs-d551), and the item, subject `curate-retire:<context>`, follows it without closing, so a dismissal stays.
+fn relabelled<'a>(open: &'a [Item], conditions: &'a [Condition]) -> Vec<(&'a Item, &'a Condition)> {
+    open.iter()
+        .filter(|i| matches!(i.kind, Kind::CurateRetire | Kind::CurateDocs))
+        .filter_map(|i| conditions.iter().find(|c| c.identity() == i.identity()).map(|c| (i, c)))
+        .filter(|(i, c)| i.label != c.label)
+        .collect()
+}
+
 /// The open items with no condition, and the conditions with no open item,
 /// each in order. `conditions` is a set: of two with one identity, the first counts.
 fn diff<'a>(open: &'a [Item], conditions: &'a [Condition]) -> (Vec<&'a Item>, Vec<&'a Condition>) {
@@ -330,7 +346,7 @@ pub fn open_items(conn: &Connection) -> Result<Vec<Item>, CpdError> {
 pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Result<Changes, CpdError> {
     let open = store.read(open_items)?;
     let (gone, new) = diff(&open, conditions);
-    if gone.is_empty() && new.is_empty() {
+    if gone.is_empty() && new.is_empty() && relabelled(&open, conditions).is_empty() {
         return Ok(Changes::default());
     }
     store.write("inbox reconcile", |tx| {
@@ -338,6 +354,9 @@ pub fn reconcile(store: &mut Store, conditions: &[Condition], now: &str) -> Resu
         let open = open_items(tx)?;
         let (gone, new) = diff(&open, conditions);
         let mut changes = Changes::default();
+        for (item, c) in relabelled(&open, conditions) {
+            tx.execute("UPDATE inbox_items SET label = ?2 WHERE id = ?1", params![item.id, c.label])?;
+        }
         for item in gone {
             tx.execute("UPDATE inbox_items SET closed_at = ?2 WHERE id = ?1", params![item.id, now])?;
             let event = NewEvent::inbox_closed(format!("Inbox item {} closed: {}.", item.id, item.label), item.id, item.kind.as_str());

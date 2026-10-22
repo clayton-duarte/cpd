@@ -239,6 +239,12 @@ fn event_loop(
                 popups.submit(move || runner.merge(&pull));
                 dirty = true;
             }
+            Effect::Curate(kind, context) => {
+                // the checklist popup returns when it closes; a refusal is said in a `text` dialog by the runner
+                let runner = Arc::clone(runner);
+                popups.submit(move || runner.curate(kind, &context));
+                dirty = true;
+            }
             Effect::Run(action) => {
                 let runner = Arc::clone(runner);
                 actions.submit(move || runner.run(&action));

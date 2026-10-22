@@ -7,6 +7,7 @@ mod common;
 mod ask;
 mod attempt;
 mod config;
+mod context_curation;
 mod context_delete;
 mod context_distill;
 mod context_manager;
