@@ -37,7 +37,7 @@ fn node(number: i64, state: &str) -> String {
     let merged = if state == "MERGED" { r#""2026-10-14T10:00:00Z""# } else { "null" };
     format!(
         r#"{{"repository":{{"nameWithOwner":"acme/pay"}},"number":{number},"url":"https://github.com/acme/pay/pull/{number}","title":"PR {number}",
-        "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
+        "isDraft":false,"state":"{state}","createdAt":"opened","mergedAt":{merged},"reviewDecision":null,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","viewerDidAuthor":true,"viewerLatestReviewRequest":null,
         "commits":{{"nodes":[{{"commit":{{"statusCheckRollup":null}}}}]}}}}"#
     )
 }
@@ -177,8 +177,18 @@ impl Fx {
         let number = |key: &str| self.prs.iter().find(|p| p.key == key).unwrap().number;
         let nodes: Vec<String> = open.iter().map(|k| node(number(k), "OPEN")).collect();
         self.gh("search.json", &search_answer(&nodes));
-        let aliases: Vec<String> =
-            merged.iter().enumerate().map(|(i, k)| format!(r#""p{i}":{{"pullRequest":{}}}"#, node(number(k), "MERGED"))).collect();
+        // The direct read names every stored open PR the search missed, in id order: a merged one answers MERGED, the
+        // others (a cancelled PR's row is still stored `open` and authored) answer OPEN.
+        let aliases: Vec<String> = self
+            .prs
+            .iter()
+            .filter(|p| !open.contains(&p.key))
+            .enumerate()
+            .map(|(i, p)| {
+                let state = if merged.contains(&p.key) { "MERGED" } else { "OPEN" };
+                format!(r#""p{i}":{{"pullRequest":{}}}"#, node(number(p.key), state))
+            })
+            .collect();
         self.gh("lookup.json", &format!(r#"{{"data":{{{}}}}}"#, aliases.join(",")));
     }
 
