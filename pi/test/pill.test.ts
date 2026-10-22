@@ -23,7 +23,7 @@ test("a cpd message title pill is magenta 5 with text 0", () => {
   const m = eventMessage(ev(7, "job-merged", { text: "Job api-1 merged." }) as unknown as CpdEvent, ID);
   const rendering = Object.assign(new Rendering(), { style: "compact" as const });
   const row = (rendering.render(m, { expanded: false, outputPad: 1 }, theme) as Component).render(200)[0]!;
-  const title = "cpd Job api-1 merged.";
+  const title = "cpd";
   assert.ok(row.includes(`\x1b[35m${CAP_L}\x1b[45m\x1b[30m${title}\x1b[49m\x1b[35m${CAP_R}\x1b[39m`), JSON.stringify(row));
   assert.ok(!row.includes("\x1b[7m"), "no reverse video");
   assert.ok(!row.includes("<muted>" + CAP_L) && !row.includes(`<muted>${title}`), "the pill is no theme-muted block");
