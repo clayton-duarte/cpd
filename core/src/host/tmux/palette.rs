@@ -8,11 +8,11 @@ use super::*;
 
 /// One cell of an expanded format: its character and the colours in force (`None` is the terminal's own).
 #[derive(Debug, Clone, Copy)]
-struct Cell {
-    ch: char,
-    fg: Option<u8>,
-    bg: Option<u8>,
-    reverse: bool,
+pub(super) struct Cell {
+    pub(super) ch: char,
+    pub(super) fg: Option<u8>,
+    pub(super) bg: Option<u8>,
+    pub(super) reverse: bool,
 }
 
 /// A colour as tmux writes it, as its number 0-15 (`None`: `default`). Panics on a name outside the palette.
@@ -47,7 +47,7 @@ fn style(value: &str) -> (Option<u8>, Option<u8>) {
 }
 
 /// The cells of `text`, which tmux expanded but left the `#[…]` styles of.
-fn cells(text: &str) -> Vec<Cell> {
+pub(super) fn cells(text: &str) -> Vec<Cell> {
     let (mut fg, mut bg, mut reverse) = (None, None, false);
     let mut out = Vec::new();
     let mut rest = text;
@@ -77,7 +77,7 @@ fn text(cells: &[Cell]) -> String {
     cells.iter().map(|c| c.ch).collect()
 }
 
-fn show(cells: &[Cell]) -> String {
+pub(super) fn show(cells: &[Cell]) -> String {
     cells.iter().map(|c| format!("{}[{:?},{:?}{}]", c.ch, c.fg, c.bg, if c.reverse { ",reverse" } else { "" })).collect::<Vec<_>>().join(" ")
 }
 
@@ -101,7 +101,7 @@ fn pill(cells: &[Cell], text: &str, colour: u8) -> usize {
 }
 
 /// A private server with one session, whose socket is in a temp dir and which dies with the value.
-struct Server {
+pub(super) struct Server {
     tmux: Tmux,
     _dir: tempfile::TempDir,
 }
@@ -114,7 +114,7 @@ impl Drop for Server {
 
 impl Server {
     /// A server with `panes` panes in one window, `%0` focused.
-    fn new(panes: usize) -> Server {
+    pub(super) fn new(panes: usize) -> Server {
         let dir = tempfile::tempdir().unwrap();
         let tmux = Tmux::with_tmpdir("cpd-palette-test", dir.path());
         tmux.run(&strings(&["new-session", "-d", "-s", "t", "-x", "200", "-y", "20", "sleep 600"])).unwrap();
@@ -125,7 +125,7 @@ impl Server {
         server
     }
 
-    fn run(&self, args: &[&str]) -> String {
+    pub(super) fn run(&self, args: &[&str]) -> String {
         self.tmux.run(&strings(args)).unwrap_or_else(|e| panic!("tmux {args:?}: {e:?}"))
     }
 
@@ -136,7 +136,7 @@ impl Server {
     }
 
     /// The status line as drawn for a client `width` cells wide (a server with no client has no `client_width`).
-    fn status(&self, width: usize) -> Vec<Cell> {
+    pub(super) fn status(&self, width: usize) -> Vec<Cell> {
         self.render("%0", &STATUS_FORMAT.replace("#{client_width}", &width.to_string()))
     }
 }

@@ -509,9 +509,7 @@ fn a_leads_border_shows_its_title_reversed_between_caps_and_a_titleless_lead_sho
 /// (long form from `@cpd_workers_width` + 14: the left group's 12, the closing `─` and a fill of 1).
 #[test]
 fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
-    assert_eq!(
-        cpd_core::host::tmux::STATUS_FORMAT,
-        format!(
+    let prefix = format!(
             "#[fg=colour8]\u{2500}#[default]\
              #[range=user|reset]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]{}#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]\
              #[fg=colour8]\u{2500}#[default]\
@@ -521,16 +519,18 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
             cpd_core::host::tmux::RESET_GLYPH,
             cpd_core::host::tmux::LEGEND_GLYPH,
             cpd_core::host::tmux::LOGS_GLYPH
-        ) + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[fg=colour0]#[bg=colour3]preview: #{@cpd_preview}#[fg=colour3]#[bg=default]\u{e0b4}#[default],}\
-         #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},\
-         #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
-         #[default]#[align=right]\
+        );
+    let prefix = prefix + "#{?#{@cpd_preview},#[fg=colour8]\u{2500}#[fg=colour3]\u{e0b6}#[fg=colour0]#[bg=colour3]preview: #{@cpd_preview}#[fg=colour3]#[bg=default]\u{e0b4}#[default],}\
+         #[fg=colour8]";
+    let suffix = "#[default]#[align=right]\
          #[fg=colour8]\u{e0b6}#[fg=colour0]#[bg=colour8]\
          #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
          #[fg=colour8]#[bg=default]\u{e0b4}#[default]\
          #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[fg=colour0]#[bg=colour8]#{@cpd_version}#[fg=colour8]#[bg=default]\u{e0b4}#[default],}\
-         #[fg=colour8]\u{2500}#[default]"
-    );
+         #[fg=colour8]\u{2500}#[default]";
+    let format = cpd_core::host::tmux::STATUS_FORMAT;
+    assert!(format.starts_with(&prefix), "{format}");
+    assert!(format.ends_with(suffix), "{format}");
 }
 
 /// The buttons' glyphs are the hs-d235 Material Design code points (width 1 is not asserted: no `unicode-width` dependency here).
