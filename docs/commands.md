@@ -616,27 +616,29 @@ Idempotent: yes; a Context already deleted returns `"already": true` and writes 
 ### 3.15 `context curation` (internal)
 
 ```
-cpd context curation [--context <c>]
+cpd context curation [--context <c>] [--limit <n>]
 ```
 
-Lists what the distill step proposed and the User has not yet decided (contract §4.6 "Retirement"; hs-d549, hs-d551): the pending retirements and the pending doc candidates of the Context. Called by the cockpit when the User clicks a `curate-retire` or `curate-docs` Inbox item (§13.2), to fill the checklist dialog. Internal (§1.1): hidden in clap, as `plan decide` is.
+Lists what the distill step proposed and the User has not yet decided (contract §4.6 "Retirement"; hs-d549, hs-d551): the pending retirements and the pending doc candidates of the Context. Called by the cockpit when the User clicks a `curate-retire` or `curate-docs` Inbox item (§13.2), to fill the checklist dialog (hs-d568, hs-d569). Internal (§1.1): hidden in clap, as `plan decide` is.
 
 | Flag | Meaning |
 |---|---|
 | `--context <c>` | the Context (§1.3) |
+| `--limit <n>` | at most n entries per list (hs-d569 CD4), where n >= 1 (default: no limit; all entries) |
 
 | Precondition | Code | Exit |
 |---|---|---|
 | `CPD_SESSION` and `CPD_ATTEMPT` are not set in the environment: only the User decides (hs-d551). The cockpit's views and popups carry neither: cpd's tmux client removes `CPD_SESSION` and `CPD_ATTEMPT` along with `TMUX` and `TMUX_PANE` (contract §6.1 "The one place, in Rust"), so even a tmux server started from inside an agent never passes them on, and only the panes of a Session (`session run`, contract §6.5) get `CPD_SESSION`, through their `Spawn` | `user_only` | 3 |
 | a Context was selected (§1.3) | `context_required` | 2 |
 | the Context exists | `context_not_found` | 4 |
+| `--limit` is a positive integer (if given) | (parse error in validation) | 2 |
 
-Effects: none. Output: `retire`, the `pending` rows of `record_retirements`, and `docs`, the records whose `doc_candidate` is `pending`, each **oldest first** (`proposed_at`, and `curated_at` for docs; then the record's `seq`). `kind` is the record's kind (§2.2); `short` its short form (`record_curations.short`; a proposal is always written with its curation, contract §4.6); `reason` and `target` those of the retirement; `paths` the doc paths of `record_curations.doc_paths` (`[]` when none).
+Effects: none. Output: `retire`, the first n `pending` rows of `record_retirements` (oldest first by `proposed_at`, then the record's `seq`); `retire_total`, the count of ALL pending retirements. `docs`, the first n records whose `doc_candidate` is `pending` (oldest first by `curated_at`, then `seq`); `docs_total`, the count of ALL pending doc candidates. Each entry has `record` (the id), `kind` (the record's kind, §2.2), `text` (the record's full text, hs-d569 CD2), `short` (its short form, `record_curations.short`; a proposal is always written with its curation, contract §4.6), `reason` (for retirements) and `target` (for retirements), `paths` (for doc candidates, the doc paths of `record_curations.doc_paths`, `[]` when none).
 
 ```json
-{"ok": true, "context": "building-cpd",
- "retire": [{"record": "hs-d12", "kind": "decision", "short": "engine: one per machine", "reason": "superseded", "target": "hs-d77"}],
- "docs": [{"record": "hs-d300", "kind": "decision", "short": "policy: owner and repo files", "paths": ["docs/contract.md"]}]}
+{"ok": true, "context": "building-cpd", "retire_total": 56, "docs_total": 3,
+ "retire": [{"record": "hs-d12", "kind": "decision", "text": "engine: run one per machine", "short": "engine: one per machine", "reason": "superseded", "target": "hs-d77"}],
+ "docs": [{"record": "hs-d300", "kind": "decision", "text": "policies: per owner and repo", "short": "policy: owner and repo files", "paths": ["docs/contract.md"]}]}
 ```
 
 Idempotent: read-only.
