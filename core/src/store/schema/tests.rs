@@ -1810,8 +1810,8 @@ fn converts_keeping_every_row_and_id(n: usize) {
                 if values.len() == width {
                     continue;
                 }
-                // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`.
-                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free");
+                // `job-kinds` added two NOT NULL columns with a default: `jobs.kind` `work` and `prs.shape` `free`; `session-by-user` one, `sessions.by_user` 0.
+                let default = |v: &Value| v.is_null() || (table == "jobs" && v == "work") || (table == "prs" && v == "free") || (table == "sessions" && v == 0);
                 assert!(values[width..].iter().all(default), "{table}: an added column is set: {row}");
                 values.truncate(width);
                 *row = Value::from(values).to_string();
@@ -2115,11 +2115,12 @@ fn waiting_state_keeps_every_session_and_lets_waiting_and_blocked_say_why() {
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-waiting-state")));
     let conn = connection(&home.db());
-    // `asleep_at` is a later migration's column (`session-asleep`), null on every row.
+    // `asleep_at` is a later migration's column (`session-asleep`), null on every row; so is `by_user` (`session-by-user`), 0.
     let after: Vec<Value> = session_rows(&conn)
         .into_iter()
         .map(|mut row| {
             assert_eq!(row.as_object_mut().unwrap().remove("asleep_at"), Some(Value::Null));
+            assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
             row
         })
         .collect();
@@ -2185,7 +2186,15 @@ fn session_title_length_keeps_every_session_and_title_and_raises_the_limit_to_20
     assert_eq!(store.schema_mismatch(), None);
     assert!(crate::store::tests::applied(&mut store).iter().any(|(name, _, _)| name.ends_with("-session-title-length")));
     let conn = connection(&home.db());
-    assert_eq!(session_rows(&conn), before);
+    // `by_user` is a later migration's column (`session-by-user`), 0 on every row.
+    let after: Vec<Value> = session_rows(&conn)
+        .into_iter()
+        .map(|mut row| {
+            assert_eq!(row.as_object_mut().unwrap().remove("by_user"), Some(Value::from(0)));
+            row
+        })
+        .collect();
+    assert_eq!(after, before);
     assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM history WHERE tbl = 'sessions'", [], |r| r.get(0)).unwrap(), history);
     assert_eq!(conn.query_row::<i64, _, _>("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0)).unwrap(), 0);
     let objects = names(&conn, "SELECT name FROM sqlite_schema WHERE tbl_name = 'sessions' AND name NOT LIKE 'sqlite_%' ORDER BY name");

@@ -47,6 +47,7 @@ pub use outline::Outline;
 pub use jobs::locked_fingerprint;
 pub use prs::{PrRow, Pull};
 pub use row::{Phase, PlanRow};
+pub(crate) use new::lead_message;
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -101,6 +102,9 @@ pub struct NewArgs {
     /// The User's brief for the Lead
     #[arg(long = "brief-file", value_name = "file")]
     brief_file: Option<PathBuf>,
+    /// The User creates the Plan: its Lead starts with no first message and runs no turn until the User's first prompt
+    #[arg(long = "by-user")]
+    by_user: bool,
 }
 
 /// Filters only: neither falls back to `CPD_PLAN`, so the TUI lists every Plan.

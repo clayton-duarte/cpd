@@ -4,7 +4,7 @@ import type { ReviewEntry } from "./plan-review.ts";
 import type { Poll } from "./reload.ts";
 import type { Facts, Reporter } from "./state.ts";
 
-export type SessionInfo = { role: string; context: string; plan: string | null; planLead: boolean; registeredEvent: number; name: string | null };
+export type SessionInfo = { role: string; context: string; plan: string | null; planLead: boolean; registeredEvent: number; name: string | null; byUser: boolean };
 
 /** `cpd session show` at the boundary (§15.2 step 1): the fields the adapter reads, checked once. */
 export function parseSession(show: Record<string, unknown>): SessionInfo {
@@ -16,7 +16,7 @@ export function parseSession(show: Record<string, unknown>): SessionInfo {
   const registered = s.registered_event;
   if (typeof registered !== "number" || !Number.isSafeInteger(registered)) throw lacks();
   if (s.plan_lead && typeof s.plan !== "string") throw new CpdError("bad_output", "cpd session show: a Plan Lead without a plan");
-  return { role: s.role, context: s.context, plan: s.plan, planLead: s.plan_lead, registeredEvent: registered, name: s.name };
+  return { role: s.role, context: s.context, plan: s.plan, planLead: s.plan_lead, registeredEvent: registered, name: s.name, byUser: s.by_user === true };
 }
 
 /** One activation of the adapter: from `session_start` to `session_shutdown`. */
@@ -50,6 +50,12 @@ export class Run {
   policy: string | undefined = undefined;
   /** True once the missing-`sections` failure is reported, so it is reported once per run (§8.3 "Delivery to agents"). */
   sectionsReported = false;
+  /** §15.7a: a by-user Lead or Manager whose first message is not yet delivered: no turn starts before the User's first prompt. */
+  firstPending = false;
+  /** True while a failed read of the first message is reported and none has succeeded since. */
+  firstFailed = false;
+  /** The Event id of the first message delivered by this run: the same run's `cpd-context` update counts it before pi has the message in the session file. */
+  firstEvent = 0;
   unsubscribe: (() => void)[] = [];
   readonly id: string;
   readonly info: SessionInfo;

@@ -9,6 +9,7 @@ mod host;
 mod pill_lines;
 mod session_list_archived;
 mod session_asleep;
+mod session_first_message;
 mod session_reload;
 mod session_retier;
 mod session;

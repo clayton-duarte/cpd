@@ -61,7 +61,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         if !same {
             return Err(CpdError::new(ErrorCode::PlanExists, format!("Plan {id} exists with other flags.")).with("plan", summary(&plan.plan, &[])));
         }
-        return already(&mut env, &plan, brief.as_ref());
+        return already(&mut env, &plan, brief.as_ref(), args.by_user);
     }
     if context.archived_at.is_some() {
         return Err(CpdError::new(
@@ -83,10 +83,10 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
         }
         tx.execute(
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-                                   state, state_label, state_at, created_at)
-             SELECT ?1, 'lead', ?2, ?3, NULL, ?4, NULL, NULL, ?5, ?6, NULL, 'stopped', NULL, at, at
+                                   state, state_label, state_at, created_at, by_user)
+             SELECT ?1, 'lead', ?2, ?3, NULL, ?4, NULL, NULL, ?5, ?6, NULL, 'stopped', NULL, at, at, ?7
                FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![session.as_str(), args.context.as_str(), id.as_str(), name, cwd, tier],
+            rusqlite::params![session.as_str(), args.context.as_str(), id.as_str(), name, cwd, tier, args.by_user],
         )?;
         tx.execute(
             "INSERT INTO plans (id, context, title, jira, phase, lead_session, created_at)
@@ -108,7 +108,9 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
     if let Some(brief) = &brief {
         write_brief(&mut env, &plan, brief)?;
     }
-    write_message(&mut env, &plan, brief.as_ref())?;
+    if !args.by_user {
+        write_message(&mut env, &plan, brief.as_ref())?;
+    }
     let started = start_lead(&mut env, &plan, &cwd, &session, &name)?;
     Ok(Output::success(json!({
         "plan": summary(&plan, &[]),
@@ -121,7 +123,7 @@ pub(super) fn new(args: NewArgs) -> Result<Output, CpdError> {
 /// `plan new` again with the same flags: redoes the steps that did not happen
 /// (the `plan` record, the first message, the Lead's window) and returns
 /// `"already": true`.
-fn already(env: &mut Env, created: &Created, brief: Option<&Text>) -> Result<Output, CpdError> {
+fn already(env: &mut Env, created: &Created, brief: Option<&Text>, by_user: bool) -> Result<Output, CpdError> {
     let plan = &created.plan;
     let machine = env.config.machine.clone();
     let record: Option<String> = env.store.read(|conn| {
@@ -161,7 +163,7 @@ fn already(env: &mut Env, created: &Created, brief: Option<&Text>) -> Result<Out
         )?)
     })?;
     let name = created.name.clone();
-    if !env.home.lead_message(&plan.id).exists() {
+    if !by_user && !env.home.lead_message(&plan.id).exists() {
         write_message(env, plan, brief)?;
     }
     let (pane, window) = match pane {
@@ -227,15 +229,29 @@ fn env_id<T>(name: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<Optio
 /// Context as the first message gives it (§4.6 "Consumers": its digest and the
 /// records after it, or every record; the Lead is always fresh).
 fn write_message(env: &mut Env, plan: &PlanRow, brief: Option<&Text>) -> Result<(), CpdError> {
+    let message = env.store.read(|conn| lead_message(conn, &env.home, &env.config.machine, plan, brief.map(Text::as_str)))?;
+    write_file(&env.home.lead_message(&plan.id), &message)
+}
+
+/// The Lead's first message: the header, the brief, then the Context as the first message gives it (§4.6
+/// "Consumers": its digest and the records after it, or every record). The one rendering `plan new` and
+/// `session first-message` share.
+pub(crate) fn lead_message(
+    conn: &Connection,
+    home: &crate::home::CpdHome,
+    machine: &crate::ids::MachineName,
+    plan: &PlanRow,
+    brief: Option<&str>,
+) -> Result<String, CpdError> {
     // This Plan's own brief is in the message in full: it is not listed again.
     let own_brief_of = brief.map(|_| &plan.id);
-    let context = env.store.read(|conn| digest::first_message(conn, &env.home, &env.config.machine, &plan.context, own_brief_of))?;
+    let context = digest::first_message(conn, home, machine, &plan.context, own_brief_of)?;
     let mut message = vec![header(plan)];
     if let Some(brief) = brief {
-        message.push(brief.as_str().trim_end().to_owned());
+        message.push(brief.trim_end().to_owned());
     }
     message.push(context);
-    write_file(&env.home.lead_message(&plan.id), &(message.join("\n\n") + "\n"))
+    Ok(message.join("\n\n") + "\n")
 }
 
 fn header(plan: &PlanRow) -> String {

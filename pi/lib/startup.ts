@@ -19,6 +19,7 @@ import { guardOf } from "./reload-command.ts";
 import { decide, QUESTION_LABEL, recover, registerTool, showDialog } from "./review.ts";
 import { Run, parseSession, type SessionInfo } from "./run.ts";
 import { Facts } from "./state.ts";
+import { firstMessageDelivered, registerFirstMessage } from "./first-message.ts";
 import { registerUpdates } from "./turns.ts";
 import { clearMentions, refreshMentions } from "./mentions-refresh.ts";
 
@@ -143,7 +144,11 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   const entries = ctx.sessionManager.getEntries();
   r.cursor = cursorFrom(info.registeredEvent, entries, id);
 
-  if (info.role === "manager" || info.role === "lead") registerUpdates(host);
+  if (info.role === "manager" || info.role === "lead") {
+    r.firstPending = info.byUser && !firstMessageDelivered(entries, id);
+    if (r.firstPending) registerFirstMessage(host); // before registerUpdates: pi runs handlers in registration order, and the first message's Event must count before the same run's cpd-context reads its cursor
+    registerUpdates(host);
+  }
   void refreshMentions(host, r);
 
   // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)

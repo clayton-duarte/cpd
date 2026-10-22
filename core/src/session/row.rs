@@ -97,6 +97,8 @@ pub(super) struct Row {
     /// Its dynamic title (contract §2.2, hs-d257), written by `session retitle`, and when.
     pub dynamic_title: Option<String>,
     pub titled_at: Option<String>,
+    /// The User created it from the tree: no first message until their first prompt (hs-d542).
+    pub by_user: bool,
 }
 
 const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name, s.file, s.forked_from, s.cwd, s.tier,
@@ -105,7 +107,7 @@ const SELECT: &str = "SELECT s.id, s.role, s.context, s.plan, s.attempt, s.name,
          WHERE e.session = s.id AND e.kind = 'session-moved' ORDER BY e.id DESC LIMIT 1),
        l.lead_session IS NOT NULL,
        (SELECT min(e.id) FROM events e WHERE e.session = s.id AND e.kind = 'session-registered'),
-       s.archived_at, s.title, s.titled_at, s.asleep_at
+       s.archived_at, s.title, s.titled_at, s.asleep_at, s.by_user
   FROM sessions s
   LEFT JOIN (SELECT DISTINCT lead_session FROM plans) l ON l.lead_session = s.id";
 
@@ -133,6 +135,7 @@ struct Raw {
     title: Option<String>,
     titled_at: Option<String>,
     asleep_at: Option<String>,
+    by_user: bool,
 }
 
 fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
@@ -159,6 +162,7 @@ fn raw(r: &rusqlite::Row) -> rusqlite::Result<Raw> {
         title: r.get(19)?,
         titled_at: r.get(20)?,
         asleep_at: r.get(21)?,
+        by_user: r.get(22)?,
     })
 }
 
@@ -203,6 +207,7 @@ impl Row {
             asleep_at: raw.asleep_at,
             dynamic_title: raw.title,
             titled_at: raw.titled_at,
+            by_user: raw.by_user,
             id,
         })
     }
@@ -230,6 +235,7 @@ impl Row {
             "cwd": self.cwd,
             "title": self.dynamic_title,
             "titled_at": self.titled_at,
+            "by_user": self.by_user,
         })
     }
 }

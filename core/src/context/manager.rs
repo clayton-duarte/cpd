@@ -24,6 +24,9 @@ use crate::store::Store;
 pub struct ManagerArgs {
     #[command(flatten)]
     select: Select,
+    /// The User creates the Manager: it starts with no first message and runs no turn until the User's first prompt
+    #[arg(long = "by-user")]
+    by_user: bool,
 }
 
 /// The Context's live Manager, as `context manager` needs it.
@@ -94,7 +97,7 @@ pub(super) fn manager(args: ManagerArgs) -> Result<Output, CpdError> {
 
     let (manager, registered) = match found {
         Some(manager) => (manager, false),
-        None => (register(&home, &config, &mut store, &context, &row)?, true),
+        None => (register(&home, &config, &mut store, &context, &row, args.by_user)?, true),
     };
     let mut started = registered;
     let mut pane = manager.pane.clone();
@@ -136,18 +139,17 @@ fn register(
     store: &mut Store,
     context: &ContextId,
     row: &ContextRow,
+    by_user: bool,
 ) -> Result<Live, CpdError> {
     let cwd = std::env::current_dir()
         .and_then(|d| d.canonicalize())
         .map_err(|e| CpdError::new(ErrorCode::SetupFailed, format!("Cannot resolve the current directory: {e}.")))?
         .display()
         .to_string();
-    let context_text = store.read(|conn| digest::first_message(conn, home, &config.machine, context, None))?;
-    let header = format!(
-        "You are the Manager of Context {context} \"{}\". Follow the cpd-manager skill.",
-        row.title
-    );
-    write_file(&home.manager_message(context), &format!("{header}\n\n{context_text}\n"))?;
+    if !by_user {
+        let message = store.read(|conn| digest::manager_message(conn, home, &config.machine, context, &row.title))?;
+        write_file(&home.manager_message(context), &message)?;
+    }
 
     let id = SessionId::new_v4();
     let name = format!("{context}-manager");
@@ -155,10 +157,10 @@ fn register(
     store.write("context manager", |tx| {
         tx.execute(
             "INSERT INTO sessions (id, role, context, plan, attempt, name, file, forked_from, cwd, tier, tmux_pane,
-                                   state, state_label, state_at, created_at)
-             SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at
+                                   state, state_label, state_at, created_at, by_user)
+             SELECT ?1, 'manager', ?2, NULL, NULL, ?3, NULL, NULL, ?4, ?5, NULL, 'stopped', NULL, at, at, ?6
                FROM txns WHERE id = cpd_txn()",
-            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier],
+            rusqlite::params![id.as_str(), context.as_str(), name, cwd, tier, by_user],
         )?;
         let text = format!("Manager {name} of Context {context} registered. Next: cpd session open {id}");
         let event = NewEvent::session_registered(text, "manager", &name, Value::Null, &tier);
