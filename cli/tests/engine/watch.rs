@@ -3752,3 +3752,83 @@ fn e9_curates_the_backlog_one_batch_per_run() {
     assert_eq!(fx.env.calls("pi").len(), 3);
     assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM events WHERE kind = 'context-curated'"), 3);
 }
+
+// ---- E9's retry with a smaller batch (contract §3.7 E9; FX4; hs-d549, hs-d551) ----
+
+/// `count` old notes `m1-n<first>`.. in force of Context `ctx`, the newest hours old: the quiet period is over.
+fn old_notes(fx: &Fx, first: i64, count: i64) {
+    use cpd_core::context::{By, Draft, Record};
+    use cpd_core::ids::{ContextId, RecordId};
+
+    let context = ContextId::parse("ctx").unwrap();
+    for n in first..first + count {
+        let record = Record {
+            id: RecordId::parse(&format!("m1-n{n}")).unwrap(),
+            at: ago(600 - n),
+            by: By { session: None, plan: None },
+            text: format!("Note number {n}."),
+            draft: Draft::Note,
+        };
+        fx.store().write("fixture", |tx| Ok(record.insert(tx, &context).unwrap())).unwrap();
+    }
+}
+
+/// A fake pi that logs the number of records of the batch it is given, and curates it when that is at most `fits`
+/// (the model "cannot handle" a bigger batch: it answers no JSON line).
+fn pi_handling_at_most(fx: &Fx, fits: u32) {
+    fx.env.fake_pi(&common::pi_says(&format!(
+        "n=$(grep -c '^\\[' batch.md)\necho $n >> \"$HOME/batches\"\nif [ $n -le {fits} ]; then\n{}\nelse\necho 'I cannot do this.'\nfi",
+        common::CURATES_ALL
+    )));
+}
+
+/// The batch sizes pi saw, in order, a run of equal ones (the ladder's steps of one run) counted once.
+fn batch_sizes(fx: &Fx) -> Vec<u32> {
+    let text = fs::read_to_string(fx.env.home().join("batches")).unwrap_or_default();
+    let mut sizes: Vec<u32> = text.lines().map(|l| l.trim().parse().unwrap()).collect();
+    sizes.dedup();
+    sizes
+}
+
+#[test]
+fn e9_retries_a_failed_run_with_the_next_smaller_batch() {
+    let fx = fx_bare("");
+    old_notes(&fx, 1, 60);
+    pi_handling_at_most(&fx, 15);
+    let engine = fx.start();
+    common::wait_until_for("a batch of 15 curated", Duration::from_secs(30), || fx.env.query::<i64>("SELECT count(*) FROM record_curations") >= 15);
+    engine.stop();
+    assert_eq!(batch_sizes(&fx)[..3], [60, 30, 15], "a failed state is retried with 30, then 15 (the model gets a smaller batch)");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 15);
+}
+
+#[test]
+fn e9_stops_after_a_failed_run_of_batch_1() {
+    let fx = fx_bare("");
+    old_notes(&fx, 1, 70);
+    pi_handling_at_most(&fx, 0);
+    let engine = fx.start();
+    common::wait_until_for("the run of batch 1", Duration::from_secs(30), || batch_sizes(&fx).contains(&1));
+    fx.env.wait_whole_ticks(5);
+    let calls = fx.env.calls("pi").len();
+    fx.env.wait_whole_ticks(10);
+    engine.stop();
+    assert_eq!(batch_sizes(&fx), [60, 30, 15, 5, 1], "one run per batch size, and none after batch 1 failed");
+    assert_eq!(fx.env.calls("pi").len(), calls, "the engine stopped trying: the state did not change");
+    assert_eq!(fx.env.query::<i64>("SELECT count(*) FROM record_curations"), 0);
+}
+
+#[test]
+fn e9_starts_again_at_60_when_the_state_changes() {
+    let fx = fx_bare("");
+    old_notes(&fx, 1, 70);
+    pi_handling_at_most(&fx, 0);
+    let engine = fx.start();
+    common::wait_until_for("the run of batch 1", Duration::from_secs(30), || batch_sizes(&fx).contains(&1));
+    fx.env.wait_whole_ticks(5);
+    // A new record changes the state: the next run is at 60 again.
+    old_notes(&fx, 71, 1);
+    common::wait_until_for("a run at 60 after the new record", Duration::from_secs(30), || batch_sizes(&fx).len() > 5);
+    engine.stop();
+    assert_eq!(batch_sizes(&fx)[..6], [60, 30, 15, 5, 1, 60]);
+}

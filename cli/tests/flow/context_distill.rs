@@ -1335,3 +1335,227 @@ fn no_repair_turn_and_no_contradictions_section() {
         assert_eq!(run.as_object().unwrap().len(), 11, "{run}");
     }
 }
+
+// ---- The fixes FX1 to FX4 (hs-d549, hs-d551) ----
+
+/// The `what` of every failure of a refused run, with the ids they name.
+fn failures(error: &Value) -> Vec<(Option<String>, String)> {
+    let errors = error["details"]["errors"].as_array().unwrap_or_else(|| panic!("details.errors: {error}"));
+    errors.iter().map(|e| (e["id"].as_str().map(str::to_owned), e["what"].as_str().unwrap_or_default().to_owned())).collect()
+}
+
+/// A line of the distiller's answer.
+fn line(id: &str, topic: &str, short: &str, retire: &str) -> String {
+    format!(r#"{{"id":"{id}","topic":"{topic}","short":"{short}","retire":{retire},"doc":false}}"#)
+}
+
+/// A fake `pi` that answers `lines`.
+fn pi_answers(lines: &[String]) -> String {
+    pi_says(&format!("cat <<'EOF'\n{}\nEOF", lines.join("\n")))
+}
+
+fn two_decisions(fx: &Fx) {
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-d2", &ago(80), "Use sqlite in WAL mode.", Draft::Decision { supersedes: None });
+}
+
+#[test]
+fn a_duplicate_target_newer_than_the_record_is_invalid() {
+    let fx = fx().one_step();
+    two_decisions(&fx);
+    // hs-d1 (older) is a duplicate of hs-d2 (newer): the first is kept, so this is invalid.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-d1", "storage", "sqlite", r#"{"reason":"duplicate","target":"hs-d2"}"#),
+        line("hs-d2", "storage", "sqlite WAL", "null"),
+    ]));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let failed = failures(&error);
+    let bad = failed.iter().find(|(id, _)| id.as_deref() == Some("hs-d1")).unwrap_or_else(|| panic!("hs-d1 is listed: {failed:?}"));
+    assert!(bad.1.contains("hs-d1") && bad.1.contains("hs-d2"), "the error names both ids: {failed:?}");
+    assert!(!failed.iter().any(|(id, _)| id.as_deref() == Some("hs-d2")), "{failed:?}");
+    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]));
+
+    // The newer one a duplicate of the older is valid.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-d1", "storage", "sqlite", "null"),
+        line("hs-d2", "storage", "sqlite WAL", r#"{"reason":"duplicate","target":"hs-d1"}"#),
+    ]));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(retirement_rows(&fx), [(s("hs-d2"), s("duplicate"), s("hs-d1"), s("pending"))]);
+}
+
+#[test]
+fn two_records_naming_each_other_as_duplicates_are_invalid() {
+    let fx = fx().one_step();
+    two_decisions(&fx);
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-d1", "storage", "sqlite", r#"{"reason":"duplicate","target":"hs-d2"}"#),
+        line("hs-d2", "storage", "sqlite WAL", r#"{"reason":"duplicate","target":"hs-d1"}"#),
+    ]));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    assert!(!failures(&error).is_empty(), "{error}");
+    assert_eq!((curation_rows(&fx), retirement_rows(&fx)), (vec![], vec![]), "two records never retire each other");
+}
+
+#[test]
+fn a_topic_outside_lowercase_digits_and_hyphen_is_invalid() {
+    let fx = fx().one_step();
+    for n in 1..=6 {
+        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &format!("Note {n}."), Draft::Note);
+    }
+    let too_long = "a".repeat(41);
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n1", "Storage", "upper case", "null"),
+        line("hs-n2", "two words", "a space", "null"),
+        line("hs-n3", "snake_case", "an underscore", "null"),
+        line("hs-n4", &too_long, "41 characters", "null"),
+        line("hs-n5", "storage-2", "digits and hyphen", "null"),
+        line("hs-n6", "é", "not ascii", "null"),
+    ]));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let ids: Vec<String> = failures(&error).into_iter().filter_map(|(id, _)| id).collect();
+    assert_eq!(ids, ["hs-n1", "hs-n2", "hs-n3", "hs-n4", "hs-n6"], "every bad topic at once, and not hs-n5");
+    assert_eq!(curation_rows(&fx), vec![]);
+
+    // 40 characters of the set are valid.
+    let longest = "a1-".repeat(13) + "a";
+    assert_eq!(longest.len(), 40);
+    fx.env.fake_pi(&pi_answers(&(1..=6).map(|n| line(&format!("hs-n{n}"), &longest, "ok", "null")).collect::<Vec<_>>()));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(curation_rows(&fx).len(), 6);
+}
+
+#[test]
+fn a_short_form_over_120_bytes_is_invalid() {
+    let fx = fx().one_step();
+    for n in 1..=3 {
+        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &format!("Note {n}."), Draft::Note);
+    }
+    // hs-n1: 121 bytes; hs-n2: 120 bytes but an upper case topic (FX3); hs-n3 is fine: all failures at once.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n1", "notes", &"x".repeat(121), "null"),
+        line("hs-n2", "Notes", &"x".repeat(120), "null"),
+        line("hs-n3", "notes", &"x".repeat(120), "null"),
+    ]));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let ids: Vec<String> = failures(&error).into_iter().filter_map(|(id, _)| id).collect();
+    assert_eq!(ids, ["hs-n1", "hs-n2"], "{error}");
+    assert_eq!(curation_rows(&fx), vec![]);
+}
+
+#[test]
+fn an_unknown_or_repeated_id_is_invalid() {
+    let fx = fx().one_step();
+    for n in 1..=3 {
+        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &format!("Note {n}."), Draft::Note);
+    }
+    // hs-n1 twice, hs-zz unknown, hs-n3 missing, and a bad topic on hs-n2 (FX3), all listed at once.
+    fx.env.fake_pi(&pi_answers(&[
+        line("hs-n1", "notes", "one", "null"),
+        line("hs-n1", "notes", "one again", "null"),
+        line("hs-zz", "notes", "unknown", "null"),
+        line("hs-n2", "Not A Topic", "two", "null"),
+    ]));
+    let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
+    let failed = failures(&error);
+    for id in ["hs-n1", "hs-n2", "hs-n3"] {
+        assert!(failed.iter().any(|(i, _)| i.as_deref() == Some(id)), "{id} is listed: {failed:?}");
+    }
+    assert!(failed.iter().any(|(_, what)| what.contains("hs-zz")), "the unknown id is named: {failed:?}");
+    assert_eq!(curation_rows(&fx), vec![]);
+}
+
+#[test]
+fn a_retirement_whose_target_left_force_meanwhile_is_dropped_and_the_curations_stay() {
+    let fx = fx().one_step();
+    fx.insert(CONTEXT, "hs-d1", &ago(200), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-d2", &ago(190), "Use sqlite.", Draft::Decision { supersedes: None });
+    // hs-d1 and hs-d2 are curated; hs-d2 has a pending retirement the User will approve while the distiller runs.
+    fx.store()
+        .write("fixture", |tx| {
+            for id in ["hs-d1", "hs-d2"] {
+                tx.execute(
+                    "INSERT INTO record_curations (context, record, topic, short, curated_at) VALUES ('ctx', ?1, 'storage', 'sqlite', 't')",
+                    [id],
+                )?;
+            }
+            tx.execute(
+                "INSERT INTO record_retirements (context, record, reason, target, status, proposed_at)
+                 VALUES ('ctx', 'hs-d2', 'duplicate', 'hs-d1', 'pending', 't')",
+                [],
+            )?;
+            Ok::<(), cpd_core::error::CpdError>(())
+        })
+        .unwrap();
+    fx.insert(CONTEXT, "hs-d3", &ago(80), "Use sqlite in WAL mode.", Draft::Decision { supersedes: None });
+    fx.insert(CONTEXT, "hs-n4", &ago(70), "Locks are flock.", Draft::Note);
+    // The fake pi has the User approve hs-d2's retirement (hs-d2 leaves force) while it runs, then proposes
+    // hs-d3 as a duplicate of hs-d2 (which was in force when the batch was checked... and is not when it is written)
+    // and hs-n4 as a duplicate of hs-d1 (still in force).
+    let approve = format!("CPD_HOME='{}' '{CPD}' context retire --context ctx --approve hs-d2 >/dev/null", fx.env.cpd_home().display());
+    fx.env.fake_pi(&pi_says(&format!(
+        "{approve}\ncat <<'EOF'\n{}\n{}\nEOF",
+        line("hs-d3", "storage", "sqlite WAL", r#"{"reason":"duplicate","target":"hs-d2"}"#),
+        line("hs-n4", "locking", "flock", r#"{"reason":"duplicate","target":"hs-d1"}"#),
+    )));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]);
+    assert_eq!(out.exit, 0, "a dropped proposal is not an error: {}{}", out.stdout, out.stderr);
+    assert_eq!(
+        curation_rows(&fx).iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["hs-d1", "hs-d2", "hs-d3", "hs-n4"],
+        "the curations are written"
+    );
+    assert_eq!(
+        retirement_rows(&fx),
+        [
+            (s("hs-d2"), s("duplicate"), s("hs-d1"), s("approved")),
+            (s("hs-n4"), s("duplicate"), s("hs-d1"), s("pending")),
+        ],
+        "hs-d3's proposal is dropped: its target left force"
+    );
+    let events = fx.cpd(&["events", "list", "--kind", "context-curated"]).ok()["events"].as_array().unwrap().clone();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["data"], json!({"context": CONTEXT, "curated": 2, "retire": 1, "docs": 0}), "only the written ones count");
+}
+
+#[test]
+fn batch_n_sends_at_most_n_records() {
+    let fx = fx().one_step();
+    for n in 1..=12 {
+        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &format!("Note number {n}."), Draft::Note);
+    }
+    fx.env.fake_pi(&pi_keeps_input_and_says(common::CURATES_ALL));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT, "--batch", "5"]).ok();
+    assert_eq!(out["distilled"], true, "{out}");
+    assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n1", "hs-n2", "hs-n3", "hs-n4", "hs-n5"], "the 5 oldest");
+    assert_eq!(curation_rows(&fx).len(), 5);
+    // `--batch 1`: the next oldest alone; the default is 60 (all that is left).
+    fx.cpd(&["context", "distill", "--context", CONTEXT, "--batch", "1"]).ok();
+    assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n6"]);
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(block_ids(&seen(&fx, "batch.md")).len(), 6);
+    assert_eq!(curation_rows(&fx).len(), 12);
+}
+
+#[test]
+fn batch_md_stops_at_49152_bytes_and_always_holds_the_first_record() {
+    let fx = fx().one_step();
+    // Six records of 10000 bytes: four fit under 49152 bytes of text, the fifth would make 50000.
+    for n in 1..=6 {
+        fx.insert(CONTEXT, &format!("hs-n{n}"), &ago(100 - n), &"x".repeat(10_000), Draft::Note);
+    }
+    fx.env.fake_pi(&pi_keeps_input_and_says(common::CURATES_ALL));
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n1", "hs-n2", "hs-n3", "hs-n4"], "the bytes bound the batch, not the 60");
+    // The rest goes in the next run.
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n5", "hs-n6"]);
+
+    // One record over the bound is taken alone.
+    fx.insert(CONTEXT, "hs-n7", &ago(50), &"y".repeat(60_000), Draft::Note);
+    fx.insert(CONTEXT, "hs-n8", &ago(40), "Small.", Draft::Note);
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n7"], "the first record is always taken, and goes alone");
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(block_ids(&seen(&fx, "batch.md")), ["hs-n8"]);
+}
