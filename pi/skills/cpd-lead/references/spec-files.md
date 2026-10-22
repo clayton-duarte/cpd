@@ -56,13 +56,12 @@ Put these in the `context` of every Spec (they are a Worker's only rules):
 
 ## Tiers
 
-Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0–5. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts.
+Format `<model><effort>`: models `O` (opus), `S` (sonnet), `H` (haiku); effort 0–5. An invalid Tier is refused when you add the Job (`tier_invalid`, with the valid efforts in `error.details.efforts`). `cpd tiers` prints the efforts each model accepts. **A Worker Job's Tier is `H3` or `S0`–`S3` only** (hs-d554, contract §9 "Tier rules"); the ladder of a Worker ends at `S3`.
 
 | Work | Tier | Why |
 |---|---|---|
 | Coding, tests, refactors | `S1` | The User's default. Start low: each failed Attempt that the ladder retries (`crashed`, `no_submit`, `merge_conflict`) raises effort by one on the next Attempt, up to `retry_cap` retries (default 2, so 3 Attempts). |
-| Docs, config, mechanical edits | `H2` | Cheap and enough. |
-| Judgement-heavy work (ambiguous design, security-sensitive, subtle algorithms) | `O3` | `O` only when judgement decides the outcome. |
+| Docs, config, mechanical edits | `H3` | Cheap and enough. |
 | A PR's open and update Jobs | `open_tier` (default `S2`) | cpd sets it, you never choose it; if one fails, retry higher with `cpd job retry <k> --tier <T>`. |
 
 ## Test Jobs
