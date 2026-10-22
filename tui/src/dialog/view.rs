@@ -1,11 +1,13 @@
-//! The drawing and the input of the three kinds (commands.md §13.2, "The dialog kit"), in the `merge` popup's style:
-//! the title as the cockpit's section header, the content under it, a blank row, and the buttons on the last row.
+//! The drawing and the input of the four kinds (commands.md §13.2, "The dialog kit"; hs-d578): the popup is one rounded
+//! frame with the title as a pill on its top border, a blank row, the body inside one column of padding, a blank row, the
+//! pill buttons and the closing border.
 //! A [`Dialog`] is pure state: [`Dialog::draw`] fits it to the area it is given, and the key and mouse handlers answer
 //! with the [`Outcome`] that closes it, if any.
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::{Alignment, Position, Rect};
+use ratatui::layout::{Position, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -14,7 +16,6 @@ use super::scroll::Scroll;
 use super::validate::Validator;
 use crate::input_box;
 use crate::palette;
-use crate::section;
 
 /// The label of the second button of `confirm` and `input` (the checklist's is [`LATER`]).
 pub(crate) const CANCEL: &str = "Cancel";
@@ -23,20 +24,22 @@ const OK: &str = "OK";
 const CLOSE: &str = "Close";
 /// Rows an `input` reserves under its field for a refusal.
 pub(crate) const REFUSAL_ROWS: usize = 2;
-/// The column of the first button, relative to the area, and the gap between buttons (the merge popup's).
-const BUTTON_COLUMN: u16 = 2;
-const BUTTON_GAP: u16 = 3;
+/// The pill's caps (U+E0B6, U+E0B4).
+const CAP_LEFT: &str = "\u{E0B6}";
+const CAP_RIGHT: &str = "\u{E0B4}";
+/// The columns a pill takes besides its label: the two caps.
+const CAPS: u16 = 2;
 
 /// What kind of dialog this is, with the state that kind has.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
-    /// A question, with `[<yes>]` and `[Cancel]`.
+    /// A question, with the `<yes>` and `Cancel` buttons.
     Confirm { yes: String },
-    /// A line of text: the prompt above it, `[OK]` and `[Cancel]`. `refused` is why the last accept was refused.
+    /// A line of text: the prompt above it, the `OK` and `Cancel` buttons. `refused` is why the last accept was refused.
     Input { validator: Validator, field: Field, refused: Option<String> },
-    /// Read-only text, with `[Close]`.
+    /// Read-only text, with the `Close` button.
     Text,
-    /// Entries `[ ] <id> — <detail>` with the record's full text under each, the User ticks, with `[Approve]` and `[Later]`
+    /// Entries `[ ] <id> — <detail>` with the record's full text under each, the User ticks, with the `Approve` and `Later` buttons
     /// (hs-d549, hs-d551, hs-d569 CD2, CD3). `cursor` is an entry.
     Checklist { rows: Vec<Row>, ticked: Vec<bool>, cursor: usize },
 }
@@ -142,20 +145,67 @@ enum Edit {
     Move,
 }
 
-/// Where the parts of a dialog are in an area.
+/// Where the parts of a dialog are in an area (the popup, whose edge is the frame).
 struct Layout {
-    header: Rect,
+    /// The body, rows 2 to H-4, inside the padding: content columns 2 to W-3.
     body: Rect,
+    /// The inside of the walls, one row of the body: the padding cells included (the input box and its refusals use it).
+    inside: Rect,
+    /// The buttons row, row H-2, inside the padding.
     buttons: Rect,
 }
 
 fn layout(area: Rect) -> Layout {
-    let row = |y: u16| Rect::new(area.x, area.y.saturating_add(y), area.width, 1).intersection(area);
+    let sub = |x: u16, y: u16, width: u16, height: u16| Rect::new(area.x.saturating_add(x), area.y.saturating_add(y), width, height).intersection(area);
+    let inner = area.width.saturating_sub(4);
+    let height = area.height.saturating_sub(5);
     Layout {
-        header: row(1),
-        body: Rect::new(area.x, area.y.saturating_add(3), area.width, area.height.saturating_sub(5)).intersection(area),
-        buttons: if area.height >= 2 { row(area.height - 1) } else { Rect::default() },
+        body: sub(2, 2, inner, height),
+        inside: sub(1, 2, area.width.saturating_sub(2), height),
+        buttons: if area.height >= 3 { sub(2, area.height - 2, inner, 1) } else { Rect::default() },
     }
+}
+
+/// The frame's top row, `width` cells: `╭─`, the title as a pill cut to `width - 6` cells, `─` up to `╮` (at least one before it).
+fn frame_top(title: &str, width: usize) -> Line<'static> {
+    let muted = palette::muted_text();
+    let lead: String = "╭─".chars().take(width).collect();
+    let left = width - lead.chars().count();
+    let close = usize::from(left >= 1);
+    let left = left - close;
+    let text: String = title.chars().take(width.saturating_sub(6)).collect();
+    let pill = !text.is_empty() && left >= text.chars().count() + 3;
+    let fill = left - if pill { text.chars().count() + 2 } else { 0 };
+    let style = palette::pill_static();
+    let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+    let mut spans = vec![Span::styled(lead, muted)];
+    if pill {
+        spans.extend([Span::styled(CAP_LEFT, cap), Span::styled(text, style), Span::styled(CAP_RIGHT, cap)]);
+    }
+    spans.push(Span::styled("─".repeat(fill), muted));
+    if close == 1 {
+        spans.push(Span::styled("╮", muted));
+    }
+    Line::from(spans)
+}
+
+/// The frame's closing row, `width` cells: `╰`, `─`, `╯`.
+fn frame_bottom(width: usize) -> Line<'static> {
+    let line: String = std::iter::once('╰').chain(std::iter::repeat_n('─', width.saturating_sub(2))).chain(Some('╯').filter(|_| width >= 2)).take(width).collect();
+    Line::styled(line, palette::muted_text())
+}
+
+/// A wall row, `width` cells: the walls with the inside blank.
+fn frame_wall(width: usize) -> Line<'static> {
+    let line: String = std::iter::once('│').chain(std::iter::repeat_n(' ', width.saturating_sub(2))).chain(Some('│').filter(|_| width >= 2)).take(width).collect();
+    Line::styled(line, palette::muted_text())
+}
+
+/// A button as a pill: the caps around the label.
+fn pill(label: &str, style: Style, rect: Rect, f: &mut Frame) {
+    let cap = Style::new().fg(style.bg.expect("a pill has a colour"));
+    let line = Line::from(vec![Span::styled(CAP_LEFT, cap), Span::styled(label.to_owned(), style), Span::styled(CAP_RIGHT, cap)]);
+    f.render_widget(Paragraph::new(line), rect);
 }
 
 /// `text` as rows of at most `width` columns: a line break stays one, a longer line is cut at its last space within
@@ -209,10 +259,10 @@ impl Dialog {
     /// The buttons' labels, the confirming one first.
     fn labels(&self) -> Vec<String> {
         match &self.mode {
-            Mode::Confirm { yes } => vec![format!("[{yes}]"), format!("[{CANCEL}]")],
-            Mode::Input { .. } => vec![format!("[{OK}]"), format!("[{CANCEL}]")],
-            Mode::Text => vec![format!("[{CLOSE}]")],
-            Mode::Checklist { .. } => vec![format!("[{APPROVE}]"), format!("[{LATER}]")],
+            Mode::Confirm { yes } => vec![yes.clone(), CANCEL.to_owned()],
+            Mode::Input { .. } => vec![OK.to_owned(), CANCEL.to_owned()],
+            Mode::Text => vec![CLOSE.to_owned()],
+            Mode::Checklist { .. } => vec![APPROVE.to_owned(), LATER.to_owned()],
         }
     }
 
@@ -244,7 +294,7 @@ impl Dialog {
     /// Keeps the header line of the cursor entry of a `checklist` inside the scrolled window.
     fn follow_cursor(&mut self) {
         let Mode::Checklist { cursor, .. } = &self.mode else { return };
-        let width = usize::from(layout(self.area).body.width).saturating_sub(2);
+        let width = usize::from(layout(self.area).body.width);
         let cursor = self.entry_lines(width).iter().position(|l| l.header && l.entry == Some(*cursor)).unwrap_or(0);
         let (offset, page) = (self.scroll.offset(), self.scroll.page().max(1));
         if cursor < offset {
@@ -254,17 +304,18 @@ impl Dialog {
         }
     }
 
-    /// The buttons' rects in `area`, in the order of [`Dialog::labels`].
+    /// The buttons' rects in `area`, in the order of [`Dialog::labels`]: the first pill flush left (its left cap at column 2),
+    /// the other flush right (its right cap at column W-3). The whole pill, caps included, is the hit target.
     fn buttons(&self, area: Rect) -> Vec<Rect> {
         let row = layout(area).buttons;
-        let mut column = BUTTON_COLUMN;
+        let end = area.x.saturating_add(area.width.saturating_sub(2));
         self.labels()
             .iter()
-            .map(|label| {
-                let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
-                let rect = Rect::new(area.x.saturating_add(column), row.y, width, 1).intersection(row);
-                column = column.saturating_add(width).saturating_add(BUTTON_GAP);
-                rect
+            .enumerate()
+            .map(|(n, label)| {
+                let width = u16::try_from(label.chars().count()).unwrap_or(u16::MAX).saturating_add(CAPS);
+                let x = if n == 0 { area.x.saturating_add(2) } else { end.saturating_sub(width) };
+                Rect::new(x, row.y, width, 1).intersection(row)
             })
             .collect()
     }
@@ -272,10 +323,9 @@ impl Dialog {
     /// The rows of the text at the width of `body`.
     fn rows(&self, body: Rect) -> Vec<String> {
         if let Mode::Checklist { .. } = &self.mode {
-            let width = usize::from(body.width).saturating_sub(2);
-            return self.entry_lines(width).into_iter().map(|l| l.text).collect();
+            return self.entry_lines(usize::from(body.width)).into_iter().map(|l| l.text).collect();
         }
-        wrap(&self.text, usize::from(body.width).saturating_sub(2))
+        wrap(&self.text, usize::from(body.width))
     }
 
     /// Fits the scrolling to `area`.
@@ -292,14 +342,23 @@ impl Dialog {
         let area = f.area();
         self.fit(area);
         let parts = layout(area);
-        f.render_widget(Paragraph::new(section::title(&self.title, None, usize::from(area.width))), parts.header);
+        let width = usize::from(area.width);
+        let at_row = |y: u16| Rect::new(area.x, area.y.saturating_add(y), area.width, 1).intersection(area);
+        f.render_widget(Paragraph::new(frame_top(&self.title, width)), at_row(0));
+        for y in 1..area.height.saturating_sub(1) {
+            f.render_widget(Paragraph::new(frame_wall(width)), at_row(y));
+        }
+        if area.height >= 2 {
+            f.render_widget(Paragraph::new(frame_bottom(width)), at_row(area.height - 1));
+        }
         let rows = self.rows(parts.body);
-        let row = |n: usize| Rect::new(parts.body.x, parts.body.y.saturating_add(u16::try_from(n).unwrap_or(u16::MAX)), parts.body.width, 1).intersection(parts.body);
-        let width = usize::from(area.width).saturating_sub(2);
+        let row_in = |rect: Rect, n: usize| Rect::new(rect.x, rect.y.saturating_add(u16::try_from(n).unwrap_or(u16::MAX)), rect.width, 1).intersection(rect);
+        let (row, wide) = (|n: usize| row_in(parts.body, n), |n: usize| row_in(parts.inside, n));
+        let content = usize::from(parts.body.width);
         match &self.mode {
             Mode::Input { field, refused, .. } => {
                 let (chars, cursor) = field.parts();
-                let box_width = usize::from(area.width);
+                let box_width = usize::from(parts.inside.width);
                 let avail = usize::from(parts.body.height).saturating_sub(2 + REFUSAL_ROWS).max(1);
                 let tw = box_width.saturating_sub(6).max(1);
                 let start = (cursor / tw + 1).saturating_sub(avail);
@@ -311,44 +370,48 @@ impl Dialog {
                     .chain(std::iter::once(drawn[last].clone()))
                     .collect();
                 for (n, line) in window.into_iter().enumerate() {
-                    f.render_widget(Paragraph::new(line), row(n));
+                    f.render_widget(Paragraph::new(line), wide(n));
                 }
                 if let Some(why) = refused {
-                    for (n, text) in wrap(why, width).iter().take(REFUSAL_ROWS).enumerate() {
-                        let line = Line::from(Span::styled(format!(" {}", cut(text, width)), palette::note()));
-                        f.render_widget(Paragraph::new(line), row(shown + 1 + n));
+                    for (n, text) in wrap(why, content).iter().take(REFUSAL_ROWS).enumerate() {
+                        let line = Line::from(Span::styled(format!(" {}", cut(text, content)), palette::note()));
+                        f.render_widget(Paragraph::new(line), wide(shown + 1 + n));
                     }
                 }
             }
             Mode::Checklist { cursor, .. } => {
                 let first = self.scroll.offset();
-                for (n, line) in self.entry_lines(width).iter().skip(first).take(self.scroll.page()).enumerate() {
+                for (n, line) in self.entry_lines(content).iter().skip(first).take(self.scroll.page()).enumerate() {
                     let style = match (line.header, line.entry == Some(*cursor)) {
                         (true, true) => palette::selected(),
                         (true, false) => palette::clickable_text(),
                         (false, _) => palette::read_only_text(),
                     };
-                    f.render_widget(Paragraph::new(format!(" {}", line.text)).style(style), row(n));
+                    f.render_widget(Paragraph::new(line.text.as_str()).style(style), row(n));
                 }
             }
             _ => {
                 let first = self.scroll.offset();
                 for (n, text) in rows.iter().skip(first).take(self.scroll.page()).enumerate() {
-                    f.render_widget(Paragraph::new(format!(" {text}")).style(palette::read_only_text()), row(n));
+                    f.render_widget(Paragraph::new(text.as_str()).style(palette::read_only_text()), row(n));
                 }
             }
         }
-        for (n, (label, rect)) in self.labels().iter().zip(self.buttons(area)).enumerate() {
-            let style = if n == 0 { palette::selected() } else { palette::clickable_text() };
-            f.render_widget(Paragraph::new(label.as_str()).style(style), rect);
+        let buttons = self.buttons(area);
+        for (n, (label, rect)) in self.labels().iter().zip(&buttons).enumerate() {
+            let style = if n == 0 { palette::pill_selected() } else { palette::pill_interactive() };
+            pill(label, style, *rect, f);
         }
-        if self.scroll.scrollable() {
+        if self.scroll.scrollable() && !buttons.is_empty() {
             let last = (self.scroll.offset() + self.scroll.page()).min(self.scroll.total());
-            let position = format!("{}-{}/{} ", self.scroll.offset() + 1, last, self.scroll.total());
-            let taken = self.buttons(area).last().map_or(0, |r| r.x + r.width - area.x);
-            if usize::from(taken) + position.chars().count() < usize::from(area.width) {
-                let muted = Paragraph::new(position).alignment(Alignment::Right).style(palette::muted_text());
-                f.render_widget(muted, parts.buttons);
+            let position = format!("{}-{}/{}", self.scroll.offset() + 1, last, self.scroll.total());
+            // right-aligned: its last character one blank before the right pill's left cap, or at column W-3 with no right pill
+            let end = buttons.get(1).map_or(parts.buttons.right(), |r| r.x.saturating_sub(1));
+            let left_pill_end = buttons[0].right();
+            let len = u16::try_from(position.chars().count()).unwrap_or(u16::MAX);
+            if end >= left_pill_end.saturating_add(len).saturating_add(1) {
+                let rect = Rect::new(end - len, parts.buttons.y, len, 1);
+                f.render_widget(Paragraph::new(position).style(palette::muted_text()), rect);
             }
         }
     }
@@ -435,8 +498,7 @@ impl Dialog {
         let body = layout(self.area).body;
         if matches!(self.mode, Mode::Checklist { .. }) && body.contains(at) {
             let n = self.scroll.offset() + usize::from(at.y - body.y);
-            let width = usize::from(body.width).saturating_sub(2);
-            let entry = self.entry_lines(width).get(n).and_then(|l| l.entry);
+            let entry = self.entry_lines(usize::from(body.width)).get(n).and_then(|l| l.entry);
             if let (Some(entry), Mode::Checklist { ticked, cursor, .. }) = (entry, &mut self.mode) {
                 ticked[entry] = !ticked[entry];
                 *cursor = entry;

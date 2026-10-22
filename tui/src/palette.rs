@@ -241,6 +241,17 @@ pub fn pill_interactive() -> Style {
     Style::new().bg(Color::White).fg(Color::Black)
 }
 
+/// The selected button's pill (hs-d578, hs-d534): text 0 on bright blue 12, its caps drawn in its background colour.
+pub fn pill_selected() -> Style {
+    Style::new().bg(Color::LightBlue).fg(Color::Black)
+}
+
+/// The input box's label pill (hs-d578 F9): text 0 on the colour of the box's border (15 unfocused, 12 focused), its caps
+/// drawn in that colour.
+pub fn label_pill(focused: bool) -> Style {
+    Style::new().bg(input_border(focused).fg.expect("a border has a colour")).fg(Color::Black)
+}
+
 /// The focused pane's title pill: the blue block, as [`selected`].
 pub fn pill_focus() -> Style {
     selected()

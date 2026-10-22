@@ -249,11 +249,12 @@ fn view_command(kind: &str, title: &str, out: &Path, fields: &[(&str, &str)]) ->
     command
 }
 
-/// The tmux arguments that open `command` in a popup of `size` `(columns, rows)`, border included.
+/// The tmux arguments that open `command` in a popup of `size` `(columns, rows)`, with no tmux border (`-B`): the view draws its own frame.
 fn popup_args(size: (u16, u16), command: &str) -> Vec<String> {
     [
         "display-popup".to_owned(),
         "-E".to_owned(),
+        "-B".to_owned(),
         "-w".to_owned(),
         size.0.to_string(),
         "-h".to_owned(),
@@ -267,14 +268,15 @@ fn popup_args(size: (u16, u16), command: &str) -> Vec<String> {
 const MIN_INNER: usize = 40;
 const MAX_INNER: usize = 76;
 
-/// The popup's size `(columns, rows)`, border included, for content `natural` columns wide whose body is
-/// `body_rows(width)` rows at `width` text columns; at most the client's size. The inside is an empty row, the title, an empty
-/// row, the body, a blank row and the buttons.
+/// The popup's size `(columns, rows)` for content `natural` columns wide whose body is `body_rows(width)` rows at `width`
+/// text columns. The popup is exactly the dialog's frame: `inside + 2` columns, at most the client's width less one
+/// column of margin on each side, and `body + 5` rows (the top border, a blank row, the body, a blank row, the buttons and
+/// the bottom border), at most the client's height.
 fn popup_size(client: (u16, u16), title: &str, natural: usize, body_rows: impl Fn(usize) -> usize) -> (u16, u16) {
     let inner = (natural + 2).max(title.chars().count() + 6).clamp(MIN_INNER, MAX_INNER);
     let rows = body_rows(inner - 2) + 5;
-    let fit = |wanted: usize, cap: u16| u16::try_from(wanted + 2).unwrap_or(u16::MAX).min(cap);
-    (fit(inner, client.0), fit(rows, client.1))
+    let to_u16 = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
+    (to_u16(inner + 2).min(client.0.saturating_sub(2)).max(1), to_u16(rows).min(client.1))
 }
 
 /// The popup's size `(columns, rows)` for an `input`: wide enough for the label and the initial text, tall enough for the
