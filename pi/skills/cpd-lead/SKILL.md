@@ -138,7 +138,7 @@ cpd job add <k> --title "<title>" --tier <T> --spec <file.json> --pr <key>
 
 - **Size:** an Attempt gets `attempt_minutes` (the configured value); the timeout is that configured value, not a fixed one. Size a Job to fit well inside it (about 150 turns), including worktree setup and dependency install. Split anything larger.
 - **Every PR needs at least one Job.**
-- **Tier:** `S1` for coding, `H2` for docs. Use `O` only for judgement-heavy work.
+- **Tier:** `S1` for coding, `H3` for docs. A Job's Tier is `H3` or `S0`–`S3` only, `tier_not_allowed` otherwise; no `O`.
 - **Acceptance names targeted tests:** the test files or modules of what the Job changes plus its new tests, never a full unfiltered run (the whole workspace, `npm test` of everything). The full suite is the Gate's, run by the PR's open Job.
 - **Complete and guess-free:** a fresh Worker with only this Spec must finish without asking. If you cannot fill a field without guessing, return to [Clarifying](#clarifying).
 - **Plan every batch now.** Cut the work into batches that each need the User's approval (for example: the first PR's Jobs, then the Jobs that depend on a research finding, then a follow-up PR). Draft **all** of them, so the Plan view shows the whole Plan (a batch that only carries out a recorded User decision is added queued instead: see [Approving](#approving) step 5). A later batch not yet specified is a stub draft (`cpd job add <k> --draft --title "<title>"`, no Tier or Spec); complete it with `cpd job edit <k> --tier <T> --spec <file>` before its review. The first batch is what you review and lock in [Approving](#approving); every PR needs at least one Job in it. Add each later batch with `--draft` right after the lock ([Approving](#approving) step 6): `plan lock` queues every Job drafted before it.
@@ -157,7 +157,7 @@ cpd pr edit <key> --needs <k1,k2>
 - **PR shape:** plan each PR that changes behaviour as, in order: (1) a docs Job (the contract amended first); (2) a test Job, red tests written by a different Worker from the implementer, from the docs alone, that fail before the implementation exists; (3) the implementation Job, which makes them pass; (4) the open Job cpd adds to every PR. A bug or flake fix starts with a test that reproduces it (reproduce first). A visual change pins its exact rows (the rendered lines it expects). A docs-only or config-only PR skips the test Job: it says so with `--shape docs` or `--shape config`. `pr add` lays the first three out as stub drafts; by hand, the test Job `--needs` the docs Job and the implementation Job `--needs` the test Job:
 
   ```
-  cpd job add <docs> --title "Amend the contract" --tier H2 --spec docs.json --pr <key> --kind docs
+  cpd job add <docs> --title "Amend the contract" --tier H3 --spec docs.json --pr <key> --kind docs
   cpd job add <tests> --title "Red tests from the docs" --tier S1 --spec tests.json --pr <key> --kind test --needs <docs>
   cpd job add <impl> --title "Implement" --tier S1 --spec impl.json --pr <key> --kind impl --needs <tests>
   ```
@@ -247,7 +247,7 @@ Find the cause in the message text or `cpd job show <k>` (it lists Attempts with
 | `dirty_target` | The Lead worktree is dirty. Tell the User. Never touch the Lead worktree. |
 | `tampered` | The Attempt changed a protected path (`.config/wt.toml`, `.config/cpd.toml`, `.cpd/`, the repo's protected list), or an implementation Job changed a red test that no `cpd job approve-tests` approved. Retry once; if it recurs the Job needs such a change: for a red test, decide as in [Escalations](#escalations); for a protected path cancel and ask the User. |
 
-- The retry ladder already raised the Tier on every automatic Attempt (at most `retry_cap`, default 2, retries). If the Job failed at `O5`, no higher Tier exists: change the Spec (cancel and append) or ask the User.
+- The retry ladder already raised the Tier on every automatic Attempt (at most `retry_cap`, default 2, retries). If the Job failed at `S3`, no higher Tier exists: change the Spec (cancel and append) or ask the User.
 - A cancelled or failed Job leaves its dependents unable to start, because Locked Jobs cannot be edited. Cancel each dependent too and append replacements whose `--needs` point at the new Jobs.
 - A Job with a running Attempt is stopped by the engine within one tick after you cancel the Job (`cancel_requested` in the result).
 - **A PR's open or update Job** fails the same way (its Worker has the Gate's `gate_failed` to fix, so a failure that reaches you is `gate_error`, a push or `gh` failure after the merge, or an Attempt out of retries). Read `cpd job show <k>`, then `cpd job retry <k> --tier <T>` once the cause is gone. To start over, cancel it: cpd adds a fresh open Job at its next tick, and an update Job when its cause returns. `cpd pr open --pr <key>` and `cpd pr push --pr <key>` are the repair when the engine is down or a failed Job is not worth retrying.
