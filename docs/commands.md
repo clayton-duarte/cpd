@@ -127,6 +127,7 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `internal` | 1 | a bug in cpd itself (for example a malformed Event built by a command), or a failed write to stdout other than EPIPE (no I/O error code exists). `store_failed` is for SQLite failures only |
 | `context_not_found`, `plan_not_found`, `pr_not_found`, `job_not_found`, `attempt_not_found`, `escalation_not_found`, `review_not_found`, `session_not_found` | 4 | the selected or named object does not exist. (A Context record that names a missing record is `record_not_found`, exit 3, §4.6) |
 | `merge_not_clean` | 3 | `pr merge` (§9.10) re-read the pull request and found it not `OPEN` or not `CLEAN`; `details` has `repo`, `number`, `state`, `merge_state` (hs-d272, hs-d274) |
+| `mcp_unknown` | 4 | `mcp attach` (§24.1) named a server the machine policy does not list; `details: {name, machine, available}`, `available` the sorted server names (an empty array when none); nothing is written (pro-d8) |
 | `item_not_found` | 4 | `inbox show`, `snooze` or `dismiss` named an Inbox item that does not exist |
 | `item_closed` | 3 | `inbox snooze` or `dismiss` named an Inbox item that is closed (§21) |
 | `not_loop_guarded` | 3 | `session resume` (§10.17): the Session is not a `lead` or a `manager`, or is archived, or is not `blocked` with label `cpd: loop guard`; `details` `{state, label}` |
@@ -193,6 +194,7 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd context owner` (§3.13) | Manager, Lead | no | no |
 | `cpd policy show` (§22.1) | Manager, Lead, Worker | no | no |
 | `cpd slot` (§23) | Manager, Lead, Worker | no | no |
+| `cpd mcp attach` (§24.1) | Manager, Lead, Worker | no | no |
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
@@ -3212,7 +3214,7 @@ The pi adapter is the TypeScript package `pi/` (decisions: "the pi adapter stays
 - **The empty last row** (User, hs-d567; contract §6.1 "The blank row", Q2-Q3): in its `session_start` handler (`pi/lib/adapter.ts`), the adapter calls `ctx.ui.setStatus("cpd-pad", "")` (`ctx.mode` `tui`; it knows nothing of the chat slot, so a parked pane has the extra empty row too). pi's footer draws one more line, empty, when its extension statuses are not empty, so pi's last row is empty; a `/reload` runs `session_start` again and sets it again, and a resize needs nothing (verified in real pi, contract §6.1 evidence). The key `cpd-pad` is ours; another extension's status text would share the line.
 - **Identity:** `CPD_SESSION` must equal `ctx.sessionManager.getSessionId()`. If not, the adapter delivers one error message (below) and stays inactive: it would otherwise report another Session's state.
 - **Calls:** one-shot commands through `pi.exec("cpd", args)`, whose stdout is parsed as the JSON envelope at the boundary (a non-JSON stdout, or `ok: false`, is an error with the code). Each call passes a timeout of 30 s and the abort signal of the adapter's run (aborted at `session_shutdown`); a call that times out or is aborted is reported like a failed call (the error delivery below, code `tool_timeout` for a timeout). The follower is a child process (`node:child_process` `spawn`, argv, stdin `/dev/null`) read line by line.
-- **Errors** (hs-d552) for a **Manager** or **Worker**: delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: false, deliverAs: "followUp"})`: no turn started, shown as a follow-up. An error identical to the last one shown in this Session (same `what` and `code`) is not shown again until a different error has been shown; one memory per Session, cleared at reload. For a **Lead** (hs-d573 cause A): one line appended to the adapter log `$CPD_HOME/run/adapter/<session>.log` (15.6 'Log'): `<time> error: <what>: <code>: <message>`, and reported to the Manager with `cpd session report` (§10.18), once per (`what`, `code`) by memory (`host.report`): the same error again is neither logged again nor reported again until a different one has been. If the report itself fails, that is one log line (`<time> report failed: <code>: <message>`), never delivered and never reported again (no recursion); the next different error tries again. The adapter never throws into pi.
+- **Errors** (hs-d552; the adapter-only codes `protocol_mismatch` and `mcp_register_failed` are delivered by this rule, contract §1.2) for a **Manager** or **Worker**: delivered to the Session as `pi.sendMessage({customType: "cpd", content: "cpd adapter: <what>: <code>: <message>", display: true, details: {kind: "error", code, …}}, {triggerTurn: false, deliverAs: "followUp"})`: no turn started, shown as a follow-up. An error identical to the last one shown in this Session (same `what` and `code`) is not shown again until a different error has been shown; one memory per Session, cleared at reload. For a **Lead** (hs-d573 cause A): one line appended to the adapter log `$CPD_HOME/run/adapter/<session>.log` (15.6 'Log'): `<time> error: <what>: <code>: <message>`, and reported to the Manager with `cpd session report` (§10.18), once per (`what`, `code`) by memory (`host.report`): the same error again is neither logged again nor reported again until a different one has been. If the report itself fails, that is one log line (`<time> report failed: <code>: <message>`), never delivered and never reported again (no recursion); the next different error tries again. The adapter never throws into pi.
 
 ### 15.2 Start-up and the cursor
 
@@ -3256,6 +3258,7 @@ Events arrive in id order; the follower already applied §11's `--session` rule,
 | `attempt-nudge` (`session` = itself) | | message with `data.prompt` as content, **turn** |
 | `session-message` (`session` = itself) | message, `followUp`, **a turn always, whatever `data.wake`** (hs-d514, hs-n406); for every Lead (Plan Lead, side fork) and the Manager (the `--session` rule delivers Events addressed to a Session to it). Content `Message from <sender>: <text>`, `<sender>` = the sender Session's name and id (`<name> (<id>)`), or `the User` when `data.from` is null. An idle Lead starts a turn at once; a working, waiting or blocked one gets it after its running turn, never interrupted | |
 | `session-resumed` (`session` = itself) | for its own Session while tripped by the loop guard: the adapter clears the trip (L5), appends the pi session entry `{tripped: false}`, and delivers **one message** with a turn (the Event's text from `session resume`, `followUp`). While not tripped, does nothing (no message, no turn). For every Lead and a Manager. When the Session reloads, the trip survives (L7) | same | **the switch** (hs-d506, §10.15): no message, no turn. The adapter notes that its Session's Tier changed; at its next idle (right away when it already is idle, as `agent_settled` and `ctx.isIdle()` say it) it reads `cpd session show` for `model` and `thinking`, finds the model with `ctx.modelRegistry.find(provider, id)` and calls `pi.setModel(model)` and `pi.setThinkingLevel(thinking)`, once. Not while `working`, `waiting` or `blocked`. A model the registry lacks, or a `setModel` that answers false (no authentication for its provider), is one error message (§15.1, delivered as every adapter error is, with a turn: the Session tells the User; code `model_unavailable`, `details: {model, thinking}`) and sets nothing, not even the level; the next `session-retiered` tries again. The same for a failed `session show`. The adapter names no record id and reads no config: the mapping is `session show`'s. For every Lead and a Manager (a Worker never gets one). Adding the kind raises `protocol` | same |
+| `mcp-attached` (`session` = itself) | **the registration** (pro-d8, contract §5.3): no message, no turn. The adapter calls `pi.registerMcpServer(data.name, data.server)` (`attachServer`, contract §6.10). An Event for another Session registers nothing. The same Event handled again (a replay after a restart: the cursor counts delivered messages only, §15.2) registers the same name again, which pi replaces, so an attach is best effort across a restart and an agent that finds a server missing runs `cpd mcp attach` again. A registration pi refuses (it throws) is one error (§15.1, delivered as every adapter error is, once per `what` and `code`; code `mcp_register_failed`, `details: {kind: "error", code, name, message}` with pi's message). With no such Event the adapter registers no server. For every role. Adding the kind raises `protocol` | same |
 | `context-renamed`, `plan-renamed`, `context-archived`, `plan-archived`, `session-archived` | ignored: no message, no turn | ignored |
 | `session-titled` | ignored: **no message, no turn** (hs-d257): the pane header is set by `session retitle` itself, through tmux (§10.14), so the adapter has nothing to do; it only **learns the kind** (the list of kinds in `pi/lib/event.ts`, with delivery `none`), because an unknown kind costs an error turn (hs-n122). Adding the kind raises `protocol` (contract §5.2, "The protocol number") | ignored |
 | every other kind | ignored | ignored |
@@ -4040,6 +4043,8 @@ Output, one JSON value on stdout (contract §1.2), progress on stderr:
 
 Writes nothing: no file, no Slack message, no reaction (hermes' `post_message`, `add_reaction` and `mark_merged` are not ported). The credential is read and refreshed inside pi's modules; the helper holds no token.
 
+**The helper is no Session** (contract §6.10): `--no-mcp` and `cpd mcp attach` (§24.1) do not reach it. It keeps reading the `slack` entry of `<agentDir>/mcp.json`, which therefore stays until a later Plan moves the helper (pro-d10).
+
 **What the User runs once** (`pi mcp login` needs a browser, so it is theirs; cpd never runs it): `pi mcp add slack --url https://mcp.slack.com/mcp --exposure hidden`, then `pi mcp login slack`, then `pi mcp list` shows `slack: connected`. `--exposure hidden` keeps the user-level entry from handing the Slack tools to every Lead and Worker (`docs/research/team-review.md` §3). If Slack refuses pi's dynamic client registration, the User adds `--oauth-client-id` (pi's `pi mcp add` options; unverified for Slack).
 
 ## 22. `policy`
@@ -4148,3 +4153,43 @@ $ cpd slot -- scripts/cargo.sh nextest run
 slot: waiting for a slot (2 of 2 busy; test_concurrency 2)
 slot: slot 1 taken after 94 s
 ```
+
+## 24. `mcp`
+
+Attaches an MCP server to a Session (contract §6.10; pro-d2, pro-d8). The servers a machine may use are listed in its machine policy (contract §8.3 "The machine scope"; `cpd policy show`, §22.1). Area `core/` and `cli/`.
+
+### 24.1 `mcp attach`
+
+```
+cpd mcp attach <name>
+```
+
+| Argument | Meaning |
+|---|---|
+| `<name>` | a server of this machine's policy; it matches the server-name rule of contract §8.3 |
+
+The caller's Session is selected as §1.3 says (`--session <id>`, else `CPD_SESSION`). Any role may run it.
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `<name>` is given and matches the server-name rule (contract §8.3) | `usage` | 2 |
+| a Session is selected | `session_required` | 2 |
+| the Session exists | `session_not_found` | 4 |
+| this machine's file is valid TOML with known keys and types (contract §8.3 "The machine scope"); `details.file`, `details.key`; nothing is appended | `policy_invalid` | 1 |
+| the machine policy lists `<name>`; `details` `{name, machine, available}`, `available` the sorted server names (an empty array when none); the message names the machine and lists what is available, or says none | `mcp_unknown` | 4 |
+
+**Effects**, one transaction:
+- **Event** `mcp-attached` (contract §5.2) addressed to the caller's Session (`session` set, with its `context` and `plan` when it has one), `data` `{name, server}`: `server` is the entry exactly as the machine policy gives it (pi's key names; a key left out is absent). `text`: `Server <name> attached to Session <id>.`
+- Nothing else: no row, no file, no tmux call.
+
+**The adapter** of that Session registers the server with pi (§15.3 `mcp-attached`, contract §5.3). The attach is for that Session only: never for another Session and never for a later one, never saved and never done by default (pro-d2). There is no list and no detach command (pro-d8): `cpd policy show` lists what the machine allows, and the Session's end detaches.
+
+```json
+{"ok": true, "attached": {"name": "slack", "session": "596d007f-…", "event": 48301}}
+```
+
+Idempotent in effect: running it again appends another Event, and the adapter registers the same name again, which pi accepts as a replacement.
+
+#### Signing in
+
+A server that uses OAuth needs the User to sign in once on the machine (pro-d10): in that Session's pi with `/mcp login <name>`, or from a shell with `pi mcp login <name>`. The shell form works while the user-level `~/.pi/agent/mcp.json` has an entry with the same name and URL, because pi keys the credential by server name and URL. Tokens live in pi's own `mcp-auth.json`; cpd never reads or writes one (hs-d107, pro-d4). A running Session uses new credentials on its next turn (pi's rule), and an attached server that needs a sign-in shows pi's own "requires sign-in" report.

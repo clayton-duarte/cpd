@@ -266,6 +266,10 @@ _Avoid_: machine config, machine scope file
 A remote server cpd may attach to a Session; listed in a Machine policy. Its tools reach a Session only through an explicit attach, which another Job documents. cpd holds no credential: pi's own OAuth store does.
 _Avoid_: tool server, plugin
 
+**Attach** (new, pro-d2, pro-d8):
+Giving an MCP server to a Session: one explicit `cpd mcp attach <name>` (commands §24.1), for that Session only, not saved and never by default.
+_Avoid_: enable, load, install
+
 **Resolved policy** (new, hs-d288):
 The Policy of one Policy key: every Domain's value with its source (`default`, `owner:<path>` or `repo:<path>`). It is total, because cpd's default sets every Domain.
 _Avoid_: effective config, merged policy

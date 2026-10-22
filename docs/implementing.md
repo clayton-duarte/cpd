@@ -343,6 +343,7 @@ Contract §6.9 fixes what the extension is, where it lives, its defaults, its co
 0. **Tools** (hs-d355): `tmux` and `node` are on `PATH`, else `pi-check: FAIL: step 0 (tools): <tool> is not installed (step 3 needs it)` and exit 1. Never a skip and never an `ok`: a machine that cannot run the check fails it.
 1. **Version:** `<pi command> --version` succeeds; its output is printed.
 2. **Load:** `pi --no-extensions --no-session -e pi/ --mode rpc </dev/null` with no `CPD_*` variables must exit 0 (an extension that throws at load exits 1).
+   `pi-check` starts pi with `--no-extensions -e <adapter>`, which has no built-in MCP either, so it exercises the adapter's mount (contract §6.10) alone, as production does with `--no-mcp`. The mount depends on pi's exported `createMcpExtension`, so a pi bump re-runs it.
 3. **Activation:** the adapter only activates in interactive mode, so pi runs in a private `tmux` server with `CPD_SESSION` equal to pi's session id (`--session-id`), `CPD_HOME` set, and a fake `cpd` first on `PATH`. It passes when the fake was called with `events follow`.
 
 Exit 0 with `pi-check: ok (<version>)`; exit 1 with `pi-check: FAIL: <step and why>` and the tail of pi's output. It does not run `npm test`.
