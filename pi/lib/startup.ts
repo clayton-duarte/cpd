@@ -108,10 +108,11 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   const { pi, options } = host;
   // 1b. the policy text (§15.10): a failure is an error message and no section
   let policy: string | undefined;
+  let policyFailure: unknown;
   try {
     policy = policySection(await host.call(["policy", "show"]));
   } catch (e) {
-    host.deliver("policy show", e);
+    policyFailure = e; // reported once the run exists: its role says where an error goes (§15.1)
   }
   if (host.abort.signal.aborted) return;
 
@@ -128,6 +129,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   r.policy = policy;
   host.run = r;
   r.log(`start: ${reason}`);
+  if (policyFailure !== undefined) host.deliver("policy show", policyFailure);
 
   // 2. stopped -> idle, then working when pi is busy.
   r.reporter.want({ state: "idle" });

@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { CpdError } from "../lib/cpd.ts";
 import { POLICY_SECTION, policySection } from "../lib/policy.ts";
 import { Fixture, policyShow, shown } from "./fake.ts";
+import { adapterErrors } from "./lead-errors.ts";
 
 /** Runs a start and a `before_agent_start`; returns the sections pi would hand to the prompt. */
 async function sectionsAfterStart(f: Fixture): Promise<Record<string, string>> {
@@ -23,14 +24,14 @@ test("a Lead with a pr and an instructions text gets the exact section", async (
     [POLICY_SECTION]: "## pr (owner:/p/o.toml)\nThese repos run no GitHub Actions.\n\n## instructions (owner:/p/o.toml)\nBe brief.",
   });
   assert.deepEqual(f.policyCalls(), [["policy", "show"]], "no flag: the adapter never picks a key");
-  assert.deepEqual(f.pi.errors(), []);
+  assert.deepEqual(adapterErrors(f), []);
 });
 
 test("no section when every text is empty, and nothing else is changed", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   assert.deepEqual(await sectionsAfterStart(f), { preamble: "x" });
-  assert.deepEqual(f.pi.errors(), []);
+  assert.deepEqual(adapterErrors(f), []);
 });
 
 test("a failed `cpd policy show` is an error message and no section", async (t) => {
@@ -39,7 +40,7 @@ test("a failed `cpd policy show` is an error message and no section", async (t) 
   f.respond("policy-show", { ok: false, error: { code: "owner_unset", message: "the Context has no owner", details: {} } }, { exit: 3 });
   const sections = await sectionsAfterStart(f);
   assert.deepEqual(sections, { preamble: "x" });
-  const errors = f.pi.errors();
+  const errors = adapterErrors(f);
   assert.equal(errors.length, 1);
   assert.equal(errors[0]!.message.content, "cpd adapter: policy show: owner_unset: the Context has no owner");
 });
@@ -88,8 +89,7 @@ test("a pi without sections: the policy failure is reported once per run, no tur
   f.load();
   await f.pi.fire("session_start");
   for (let i = 0; i < 2; i++) await f.pi.fire("before_agent_start", { messageType: "user", prompt: "hi", systemPromptOptions: {} });
-  const errs = f.pi.errors();
+  const errs = adapterErrors(f);
   assert.equal(errs.length, 1);
   assert.match(errs[0]!.message.content, /^cpd adapter: policy section: sections_missing: /);
-  assert.deepEqual(errs[0]!.options, { triggerTurn: false, deliverAs: "followUp" }); // the adapter's one error path
 });

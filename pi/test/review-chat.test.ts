@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Fixture, ev, planShow, stateCalls, waitFor as wait } from "./fake.ts";
+import { adapterErrors } from "./lead-errors.ts";
 
 /** Everything here is local and fast: a red test should fail in seconds. */
 const waitFor = <T>(what: string, fn: () => T | undefined | null | false, ms = 3000) => wait(what, fn, ms);
@@ -117,9 +118,8 @@ test("a failed read of the summary is an error without a turn; nothing is writte
   const { mkdirSync } = await import("node:fs");
   mkdirSync(join(f.cpdHome, "run", "p1", "summary-r2.md"));
   f.emit(reviewEvent(101, "r2"));
-  await waitFor("the error", () => f.pi.errors().length === 1);
-  assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: plan review r2: file_unreadable: /);
-  assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
+  await waitFor("the error", () => adapterErrors(f).length === 1);
+  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan review r2: file_unreadable: /);
   assert.deepEqual(entries(f), []);
   assert.equal(nSelects(f), 0);
   assert.equal(stateCalls(f).includes(REVIEW_LABEL), false);
@@ -201,8 +201,8 @@ test("a failed plan decide from the dialog is an error with a turn, the entry st
   const d = await opens(f);
   f.respond("plan-decide", { ok: false, error: { code: "store_failed", message: "Disk full.", details: {} } }, { exit: 1 });
   d.answer("Approve");
-  await waitFor("the error", () => f.pi.errors().length === 1);
-  assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: plan decide r1: store_failed: Disk full\.$/);
+  await waitFor("the error", () => adapterErrors(f).length === 1);
+  assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan decide r1: store_failed: Disk full\.$/);
   await waitFor("the select again", () => nSelects(f) === 2 && f.pi.openDialog("select"));
   assert.equal(entries(f).at(-1).status, "pending");
   assert.deepEqual(decisions(f), []);
@@ -223,7 +223,7 @@ test("review_decided from the dialog: the adapter continues with the decision cp
   await waitFor("the decision message", () => decisions(f).length === 1);
   assert.match(decisions(f)[0]!.message.content, /^Plan review r1 was REJECTED\.\nFeedback from the reviewer:\nNot yet\./);
   assert.equal(entries(f).at(-1).status, "rejected");
-  assert.equal(f.pi.errors().length, 0);
+  assert.equal(adapterErrors(f).length, 0);
 });
 
 // ---- Open full plan ----
@@ -275,10 +275,9 @@ for (const [name, answer] of [
     plannotator(f, () => answer);
     const d = await opens(f);
     d.answer("Open full plan");
-    await waitFor("the error", () => f.pi.errors().length === 1, 4000);
-    assert.match(f.pi.errors()[0]!.message.content, /^cpd adapter: plan review r1: plannotator_/);
-    assert.deepEqual(f.pi.errors()[0]!.options, { triggerTurn: false, deliverAs: "followUp" });
-    await waitFor("the select again", () => nSelects(f) === 2 && f.pi.openDialog("select"));
+    await waitFor("the error", () => adapterErrors(f).length === 1, 4000);
+    assert.match(adapterErrors(f)[0]!.message.content, /^cpd adapter: plan review r1: plannotator_/);
+      await waitFor("the select again", () => nSelects(f) === 2 && f.pi.openDialog("select"));
     assert.deepEqual(entries(f), [chatEntry()]);
     assert.deepEqual(decides(f), []);
     assert.equal(stateCalls(f).at(-1), REVIEW_LABEL);
@@ -430,7 +429,7 @@ test("deciding elsewhere while the editor of Change is open: its late note is ig
   assert.equal(nSelects(f), 1, "no new select");
   assert.equal(decisions(f).length, 1);
   assert.equal(entries(f).filter((x: any) => x.status === "approved").length, 1);
-  assert.equal(f.pi.errors().length, 0);
+  assert.equal(adapterErrors(f).length, 0);
 });
 
 test("deciding elsewhere while the User chose Approve at the same moment: the late answer changes nothing", async (t) => {
