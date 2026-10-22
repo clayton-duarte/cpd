@@ -69,7 +69,8 @@ export function paintIndicator(status: RowStatus, glyph = indicatorGlyph(status)
 	return paint(status === "success" ? INDEX.green : status === "error" ? INDEX.red : RUNNING, glyph);
 }
 
-const statusIndex = (status: RowStatus): number => (status === "success" ? INDEX.green : status === "error" ? INDEX.red : RUNNING);
+const statusIndex = (status: RowStatus): number =>
+	status === "success" ? INDEX.green : status === "error" ? INDEX.red : status === "asking" ? INDEX.magenta : RUNNING;
 
 /** A pill: caps in the colour on the terminal background, the text on the colour as background with text 0. */
 export function pill(index: number, text: string): string {

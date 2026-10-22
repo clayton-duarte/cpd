@@ -216,7 +216,12 @@ const TERMINATOR_ROW = " ╰\u{F005A}";
 
 /** What closes a row that has no result to fold: `choose` while ask_user_question's widget is open, else the loader. */
 function pendingKey(name: string, ctx: RenderContext): string {
-	return name === ASK_USER_QUESTION && ctx.executionStarted ? "choose" : `loader:${Math.floor(Date.now() / LOADER_INTERVAL_MS)}`;
+	return asking(name, ctx, "running") ? "choose" : `loader:${Math.floor(Date.now() / LOADER_INTERVAL_MS)}`;
+}
+
+/** The one 'asking' window: ask_user_question executing with no result, the question open for the User (its pill is magenta, its closing row `choose`). */
+function asking(name: string, ctx: RenderContext, status: RowStatus): boolean {
+	return name === ASK_USER_QUESTION && ctx.executionStarted && status === "running";
 }
 
 function pendingRow(name: string, ctx: RenderContext): Component {
@@ -300,7 +305,10 @@ function renderRowCallContent(name: string, args: ToolArgs, theme: Theme, ctx: R
 	// fold "toggle": the call closes its own row until a result exists (docs/contract.md 6.9, the five closing rows).
 	const closing = compact && foldToggles() ? callClosing(name, ctx, state) : undefined;
 	const indicator = liveIndicator(theme, ctx, state, isCodex() ? CODEX_BULLET : undefined,
-		compact ? (status) => (foldToggles() ? statusPill(status, name) : `${paintIndicator(status)} ${statusPill(status, name)}`) : undefined,
+		compact ? (status) => {
+			const pillStatus = asking(name, ctx, status) ? "asking" : status;
+			return foldToggles() ? statusPill(pillStatus, name) : `${paintIndicator(status)} ${statusPill(pillStatus, name)}`;
+		} : undefined,
 		closing ? () => !state.resultRendered && runtime.canRun(ctx.toolCallId) : undefined);
 	// Painted once now as well, so a row that starts running starts the animation clock.
 	indicator();
