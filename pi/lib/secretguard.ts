@@ -9,7 +9,7 @@ export function secretBypass(command: string): string | undefined {
     const words = line.slice(i);
     const head = words[0];
     if (head === undefined) continue;
-    if (head === "op" || head.endsWith("/op")) return words.slice(0, 2).join(" ");
+    if (head === "op" || head.endsWith("/op")) return ["op", ...words.slice(1, 2)].join(" ");
     if (head === "cpd" && words[1] === "secret" && words[2] === "approve") return "cpd secret approve";
   }
   return undefined;
