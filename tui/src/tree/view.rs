@@ -1029,7 +1029,7 @@ mod tests {
         drawn(&mut view, 44, 16);
         assert_eq!(click(&mut view, 5, 1), manager, "a folded Context opens its Manager too");
         let Effect::Run(action) = manager else { unreachable!() };
-        assert_eq!(action.argv(), ["context", "manager", "--context=alpha"]);
+        assert_eq!(action.argv(), ["context", "manager", "--context=alpha", "--by-user"]);
     }
 
     #[test]

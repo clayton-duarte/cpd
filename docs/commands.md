@@ -405,8 +405,12 @@ Effects: **rows**, one transaction: `archived_at = NULL` on the Context and ever
 ### 3.10 `context manager`
 
 ```
-cpd context manager [--context <c>]
+cpd context manager [--context <c>] [--by-user]
 ```
+
+| Flag | Meaning |
+|---|---|
+| `--by-user` | (hs-d542 A2) when registering a new Manager, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§4.1); omit it and the Manager starts with its first message, as today |
 
 Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers and starts it when the Context has none, starts it again when it is stopped. The Context is `--context`, else the selected Plan's (§1.3).
 
@@ -417,7 +421,7 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | the cockpit's tmux session exists when a pane must be started; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `forked_from` null; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`, no plannotator variable; `session run` also removes every `PLANNOTATOR_*` variable it inherited from the tmux server or the caller before it starts pi, whatever they hold); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. Its first message, written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): its latest digest and at most 20 records after it, or `context show --context <c>` rendered as markdown (every record; briefs short) when it has no digest yet.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`, no plannotator variable; `session run` also removes every `PLANNOTATOR_*` variable it inherited from the tmux server or the caller before it starts pi, whatever they hold); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): its latest digest and at most 20 records after it, or `context show --context <c>` rendered as markdown (every record; briefs short) when it has no digest yet.
 - **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message.
 - **Otherwise** (it has a pane): nothing.
 
@@ -599,7 +603,7 @@ A Plan (§2.2) and its phases (§3.1). Replaces cpd 1's `workflow` group (D3) an
 ### 4.1 `plan new`
 
 ```
-cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>]
+cpd plan new <id> --context <c> --title <text> [--jira <key>] [--name <name>] [--brief-file <file>] [--by-user]
 ```
 
 A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), and its Lead starts in the caller's cwd, the directory `plan new` runs from (usually `~`; §6.4). `--repo` and `--base` are gone: either is `usage` (exit 2).
@@ -612,6 +616,7 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 | `--jira <key>` | Jira task key, stored only |
 | `--name <name>` | the Lead's pi display name; default `<id>` |
 | `--brief-file <file>` | the brief for the Lead (B3-A4): written as a Context record of kind `brief` and put into the Lead's first message in full |
+| `--by-user` | (hs-d542 A2) when registering a new Lead, stores the flag on the Session and writes no first message (§1.4); `plan new` and `context manager` use it (§3.10); omit it and the Lead starts with its first message, as today |
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -621,15 +626,15 @@ A Plan has no repo (R34, A12): its PRs are added later with `pr add` (§9.4), an
 | the Context is not archived; `details.next` = `cpd context unarchive <c>` | `archived` | 3 |
 
 Effects, in this order:
-1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` null; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
+1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
-3. **First message**, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the Context (contract §4.6 "Consumers", hs-d194 D6):
+3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the Context (contract §4.6 "Consumers", hs-d194 D6):
    - **with a digest**: the latest digest's text (§3.3 `--digest`), then the records written after its `upto_seq`, oldest first, at most 20 (this Plan's own `plan` and `brief` records among them), rendered as `context show --since <upto_seq>` renders them (briefs short), then, when more exist, `and <K> more: cpd context show --context <c> --since <seq>`, with `<seq>` the `seq` before the first record not listed;
    - **with no digest yet**: `context show --context <c>` rendered as markdown: every Context record, other Plans' briefs short (§3.3).
 
-   The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case.
+   The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case. When `by_user` is 1, no file is written (hs-d542 A2).
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11).
-5. In the pane, `session run` (§10.8) starts a fresh Lead with the first message.
+5. In the pane, `session run` (§10.8) starts a fresh Lead; when `by_user` is 1, it waits for the User's first prompt before starting pi (contract §10.8 step 3, hs-d542 A2).
 
 When the cockpit session is missing, plan new creates it with the new Lead's park window as its first window; cpd tui builds main later.
 
@@ -639,7 +644,7 @@ When the cockpit session is missing, plan new creates it with the new Lead's par
  "record": "hs-p4"}
 ```
 
-Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan, and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. Different flags: `plan_exists`.
+Idempotent: yes. With the same flags it returns `"already": true` and redoes any step that did not happen: the `plan` record when the Context has none for this Plan, the `brief` record when `--brief-file` is given and the Context has none for this Plan, and step 4 when the Lead is `stopped` with no pane (in the stored `cwd`). The caller's cwd is not a flag: a rerun from another directory is still `already` and keeps the stored `cwd`. Different flags: `plan_exists`. The `--by-user` flag is part of 'the same flags': a rerun with or without it when the Plan exists is `plan_exists` (hs-d542 A1).
 
 ### 4.2 `plan list`
 
@@ -2146,7 +2151,7 @@ cpd session run <id> [--adopt <pid>]
 The program in every Lead pane (§6.2): owns its terminal (§1.2). Steps of §6.7:
 1. If the Session's file exists, resume: `pi --model <model>:<thinking> --session <file>` with the Lead's `[-e …]` (§6.5). **The model is the row's current `tier`'s** (hs-d506): pi, given `--model`, uses it instead of the model its session file recorded (pi 1.3.0 `core/sdk.js`: the file's model is restored only when none is given) and applies the `:<thinking>` level (`main.js` `buildSessionOptions`); so a Session `session retier` moved (§10.15) and then restarted (a reload for a new pi, the watchdog, Enter after pi exited, `session open`) runs on its new Tier, with its whole conversation.
 2. Else, if `forked_from` is set, wait until the source is idle (§6.7 step 1, every 2 s, showing the waiting line), then `pi … --fork <source file> --session-id <id> -n <name> [-- @<first message file>]`.
-3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- @<first message file>`. Steps 2 and 3 take `--model` from the row's `tier` **when pi starts**, not from the `tier` the row had at registration (hs-d506).
+3. Else start a fresh Lead: `pi --model … --session-id <id> -n <name> -- @<first message file>` for a non-by-user Session, or `pi --model … --session-id <id> -n <name>` for a by-user Session (hs-d542 A2: no `@<file>` when `sessions.by_user = 1`; the User's first prompt carries the first message with the queued turns, §15). Steps 2 and 3 take `--model` from the row's `tier` **when pi starts**, not from the `tier` the row had at registration (hs-d506).
 
 Before it starts pi (steps 1–3) a Lead with a Plan gets its plannotator port (§6.5 "The Plan's plannotator port"): `PLANNOTATOR_PORT=<port>` replaces the value in the pane's environment. When the range is full the pane shows `no_port` and names the Plans that hold it, and Enter retries; pi is not started. A Manager gets no port.
 
@@ -2350,7 +2355,36 @@ pi failing to start or exiting non-zero, or an answer that is empty or does not 
 
 (`"already"` is not used here: it means the same value was already stored, and a retitle never compares.) Idempotent: yes: rerunning is safe and writes a new title each time (it never answers `"already"`).
 
-### 10.15 `session retier`
+### 10.15 `session first-message` (internal)
+
+```
+cpd session first-message [--session <id>]
+```
+
+**Internal:** the pi adapter runs it at turn start for a by-user Lead or Manager Session whose `cpd-first-message` custom message has not yet been delivered (hs-d542 A3). Renders the first message at call time with the same functions `plan new` and `context manager` use (§4.1 step 3, §3.10), writes it to the session file's destination (`run/<plan>/lead-message.md` or `run/<context>/manager-message.md`), and prints JSON for the adapter to add the message to the run (§15).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| the Session exists | `session_not_found` | 4 |
+| it is a `lead` or a `manager`; a Worker is refused `not_a_lead` | `not_a_lead` | 3 |
+| the Session is a Lead of a Plan or is a Manager (not a side fork) | `not_a_lead` | 3 |
+
+Effects:
+- **Files**, one write: render the first message (contract §4.6 "Consumers", hs-d194 D6) and write it to `run/<plan>/lead-message.md` (for a Plan Lead) or `run/<context>/manager-message.md` (for a Manager), overwriting if it exists (hs-d542 A3: a by-user Session has no first message written at registration, so this is the first write).
+- **Rows:** none. No database write, no Event appended.
+- **tmux:** none.
+
+Output: JSON with the rendered message text and metadata for the adapter to add it to the run.
+
+```json
+{"ok": true, "session": "596d007f-…", "role": "lead", "text": "You are the Lead of Plan …", "file": "/home/clayton/.cpd/run/pay-4521/lead-message.md", "event": 4820}
+```
+
+`role` is `lead` or `manager`. `text` is the rendered first message content. `file` is the path where it was written. `event` is the highest Event id at rendering (hs-d542 A3: for the pi adapter to track delivered messages, §15.7).
+
+Idempotent: yes; rerunning renders the message again (the same if no Events occurred, different if the Context's records or Plans changed); the adapter tracks delivery by `details.event` and the fork-safe rule (§15.2 step 4, §15.7).
+
+### 10.16 `session retier`
 
 ```
 cpd session retier [--all | <id>]
@@ -2719,7 +2753,7 @@ The lines (`╭`, `│`, `╰`) are colour 8 and the toggle's arrows and words c
 
   Whether the terminal opens an OSC 8 link on a row of this view through tmux is **unverified**; the cockpit Job tests it by hand with the User, as hs-d187, hs-d191 did for the PR links.
 - **A stopped engine restarts itself** (hs-d328, hs-d363, replacing hs-d318's restart by the tree; contract §3.7 "Who restarts a stopped engine"). **The supervisor restarts it** (contract §6.6: the `pane-died` and `window-unlinked` hooks, a failed start retried and logged to `run/watch.log`); **the tree runs no `cpd watch --ensure` by itself**, because the supervisor covers every case a tree running in the same tmux server could see, and the tree's own restart raced it (it found the engine already running and left `engine was down: … found it running` on screen). A snapshot (§17) that reads the engine running, or a restart that `found it running`, shows nothing. The tree only **speaks**, and only when the engine **stays down past the supervisor's window**: when `locks/watch.lock` has been free on **every** snapshot for **60 s** (view state: the time of the first free read, forgotten at the first held one), the view sends, once per downtime, to **the one Manager whose Session state changed most recently** (hs-d514: the live Manager that was last active; a Session with role `manager`, not archived; `session send <manager> --wake`), `The cpd engine has been down for 60 s and its supervisor has not restarted it; see run/watch.log, start it with cpd watch --ensure.`: the view has no `CPD_SESSION`, so `from` is null (the User's side), and `--wake` wakes the Manager (hs-d514); with no live Manager nothing is sent. It shows no note (hs-d469, replacing hs-d364 (2)'s "short note"): the message to the Manager is the whole of it, and the view logs it. **The `engine-down` item shows in the Inbox section only when no live Manager exists** (with one, the message handles it: no red for what an agent handles, hs-d303); its click, the User's own explicit action (`Action::EnsureWatch`), is the one of the table above, and its reply goes to the log only, never to stderr (§17: a view never writes to its terminal outside its frame).
-- **Clicks.** A click on a live Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on an **archived Session** row (a Plan row's Lead or a fork) runs `session history <id>` (§10.12), then focuses the chat; a Context is a collapsible block (§17, "Collapsible blocks"; hs-d337) whose title row is the Context row: a click on the closing toggle row (`╰󰁋 expand` / `╰󰁣 collapse`) shows or hides its archived rows, and a click on the title row, elsewhere on a live Context row, runs `cpd context manager --context <c>`, then `session open <manager>`, then `select-pane` on the chat slot (B3-A6). Clicks are ignored while a dialog popup is open.
+- **Clicks.** A click on a live Session opens it in the chat slot and focuses the chat (`session open`, then `select-pane`); a click on an **archived Session** row (a Plan row's Lead or a fork) runs `session history <id>` (§10.12), then focuses the chat; a Context is a collapsible block (§17, "Collapsible blocks"; hs-d337) whose title row is the Context row: a click on the closing toggle row (`╰󰁋 expand` / `╰󰁣 collapse`) shows or hides its archived rows, and a click on the title row, elsewhere on a live Context row, runs `cpd context manager --context <c> --by-user` (hs-d542 A1), then `session open <manager>`, then `select-pane` on the chat slot (B3-A6). For a by-user Session the Manager starts with no first message and waits for the User's first prompt to deliver it (hs-d540, hs-d542 A2, §15.7a). Clicks are ignored while a dialog popup is open.
 - **Folds** (User, hs-d260). The folds survive a restart of the view: which Contexts have their archived rows hidden and which archived Contexts are expanded (the toggle shows and hides only archived rows, hs-d344; live Contexts start expanded and archived ones folded, hs-d339; the cursor and the scroll position are not kept). They are kept in `$CPD_HOME/run/tui/tree-folds.json` (contract §1.4), a JSON object `{"collapsed": ["<context id>", …], "expanded": [["<context id>"], …]}`: a Context in `collapsed` has its archived rows hidden (its closing row reads `╰󰁋 expand`) and one in `expanded` has them shown (`╰󰁣 collapse`); a live Context's own rows always show, and a Context with no archived rows has no toggle. It is under the same exception as the Plan view's offsets file (above): the view's own state, not Ledger state, written and failing as that file is. **Read** once, at the view's start: a Context in `collapsed` has its archived rows hidden and one in `expanded` has them shown, both counting as known; ids that match no Context are harmless. A missing file is today's defaults. A file that cannot be read or is not that object is not an error: the view starts with the defaults, logs `fold state reset: <reason>` (no note, §17 "No notes"), and replaces the file at its next write. **Written** atomically (temporary file, rename, parents created) whenever the folds have changed, at most once per second; only Contexts that exist and differ from their start are written, so unknown ids are dropped at the next write. A failed write is logged (`fold state not saved: …`) and retried; it never ends the view.
 - **`n`** asks for the new Plan's id in an **`input`** popup (the dialog kit above; validation `plan-id`; its question and texts are the former inline prompt's, `Fork <label> into a new Plan, name:`; Enter starts, Esc cancels, an empty or invalid id is refused inside the popup) and runs `plan new` (§4.1) in the selected Session's Context: the Plan forks the Context's grounded Lead (R15), the one deviation from cpd 1's `n`, which forked the selected session. On a Context row it says `pick the session to fork`.
 - **`x`** closes the selected Session's pane after a **`confirm`** popup (the dialog kit above) asking `Close <label>? pi stops; the session file stays`, preceded by `<label> is working.` when its state is `working`, with `[Close]` and `[Cancel]`; only Enter, `y` or a click on `[Close]` closes. It runs `cpd session close <id>` (§10.9). The Session in the chat slot is refused with `switch to another session first`, also when it moved there while the popup was open. On a Context row it does nothing. `<label>` is the Session's name.
@@ -2745,7 +2779,7 @@ The lines (`╭`, `│`, `╰`) are colour 8 and the toggle's arrows and words c
   **Archive of the chat slot's Lead** (F3, hs-d90). Archive on a Session row (a Plan row's Lead, or a fork) whose Lead holds the chat slot, or a Context row whose Manager holds the chat slot, cannot go straight to the archive command, which refuses with `in_chat_slot` (§10.10, unchanged). The tree first frees the slot, then archives: it opens the next live Session in tree order, excluding every Session the archive cascade archives (`session open`, then focuses the chat); if none follows, the previous one; if there is none at all, it runs `session park`, so the placeholder holds the slot. Then it runs the archive command. Only the tree does this two-step; the CLI keeps its refusal.
 
   A refusal (`archive_blocked`, `in_chat_slot`, `archived`, …) is a `text` dialog with the failure (§17 "No notes").
-- **New Plan… and New Context…** ask a title in an `input` popup (validation `title`; New Context… also the owner, below); the tree derives the id. The id is a lowercase ASCII slug of the title: each run of other characters becomes `-`, leading non-letters are dropped, and it is cut to fit the id pattern (Plan `^[a-z][a-z0-9-]{1,23}$`, Context: contract §2.1); `-2`, `-3`, … are appended while the id is taken in the tree's snapshot. New Plan… runs `plan new <id> --context=<c> --title=<title>`: no repo, a Plan has none (R34, A12; its PRs are added with `pr add`). New Context… also needs the owner (§3.1): it is chosen from the owner policy files in `$CPD_HOME/policy/owners/` (`<owner>.toml`, the file stem is the login; contract §8.3) — used without asking when there is exactly one, asked after the title in a second `input` popup (`Owner (<owners>):`; a name that is none of the files' owners is refused after it, in a `text` dialog) when there are several, and refused with `No owner policy: add $CPD_HOME/policy/owners/<owner>.toml`, running nothing, in a `text` dialog, when there is none. It runs `context new <id> --title=<title> --owner=<login>`.
+- **New Plan… and New Context…** ask a title in an `input` popup (validation `title`; New Context… also the owner, below); the tree derives the id. The id is a lowercase ASCII slug of the title: each run of other characters becomes `-`, leading non-letters are dropped, and it is cut to fit the id pattern (Plan `^[a-z][a-z0-9-]{1,23}$`, Context: contract §2.1); `-2`, `-3`, … are appended while the id is taken in the tree's snapshot. New Plan… runs `plan new <id> --context=<c> --title=<title> --by-user` (hs-d542 A1): no repo, a Plan has none (R34, A12; its PRs are added with `pr add`). For a by-user Session, pi starts with no first message and waits for the User's first prompt to deliver it (hs-d540, hs-d542 A2, §15.7a). New Context… also needs the owner (§3.1): it is chosen from the owner policy files in `$CPD_HOME/policy/owners/` (`<owner>.toml`, the file stem is the login; contract §8.3) — used without asking when there is exactly one, asked after the title in a second `input` popup (`Owner (<owners>):`; a name that is none of the files' owners is refused after it, in a `text` dialog) when there are several, and refused with `No owner policy: add $CPD_HOME/policy/owners/<owner>.toml`, running nothing, in a `text` dialog, when there is none. It runs `context new <id> --title=<title> --owner=<login>`.
 - **Right button.** The view relies on tmux 3.4's default root `MouseDown3Pane` binding: believed to pass the click to a pane whose app captures the mouse (`mouse_any_flag`), and to show tmux's own menu otherwise (**unverified**). cpd adds no binding for it (§6.1, §13.1 unchanged).
 
 **`plan`.**
@@ -3220,10 +3254,19 @@ Summary of the collapsed row (§15.9): `cpd-context: <n> records · <n> board po
 **Cursor**, in Event ids (the highest of all reads, `context-record` or board or Plan Events or errors): 
 1. Start = the Session's `registered_event` (its first message already held the records up to then).
 2. Then the greatest `details.event` of the session file's `cpd-context` messages whose `details.delivered_to` is this Session: the fork-safe rule of §15.2 step 4.
+3. Also the greatest `details.event` of the session file's `cpd-first-message` messages whose `details.delivered_to` is this Session (hs-d542 A3: for a by-user Session, the first message is delivered only once, tracked by its Event id).
 
 **Reading.** For records: `cpd events list --context <c> --kind context-record --since <cursor>`, then `cpd context show --context <c> --since <seq>` for the full text. The adapter skips its own records. For board posts: `cpd board take --session <id>` (internal, not a Lead command). For Plan Events: `cpd events list --context <c> --kind plan-created,plan-phase,pr-opened,pr-merged,job-failed,escalation,plan-done --since <cursor>`. For errors: `cpd events list --context <c> --kind error --since <cursor>` and `cpd events list --kind error --since <cursor>` (the machine-wide ones). The message's `details` is `{event: <highest Event id read>, delivered_to: <id>, records: [ids], posts: <n>, plans: <n>, errors: <n>, error_codes: {<code>: <count>}}`. The message is returned when any section has something; nothing is added if none do. No schema change.
 
 **Failure.** A failed read adds no message and leaves the cursor. It is reported once as an error message (§15.1, no turn), and again only after a read has succeeded.
+
+### 15.7a First message of a by-user Session
+
+Decision hs-d540 (User): when the User creates a Lead or Manager from the tree, pi starts with no first message and runs no turn; the role's first message is delivered with the User's first prompt, in the same turn, computed when that prompt is sent. Decision hs-d542 (User): (1) the tree passes `--by-user` to `plan new` and `context manager`; without it a command keeps today's behaviour. (2) Until the User's first prompt a by-user Session runs no turn at all: every message or Event that would start one is queued (pi's `sendMessage` `deliverAs` 'nextTurn', `triggerTurn` false) and goes with that prompt's run, with the first message. (3) The first message is hidden in the chat (`display` false); the User sees only their own prompt.
+
+**Handler** (contract §10.8, hs-d542 A3). The pi adapter, for a by-user Session whose session file holds no `cpd-first-message` custom message delivered to it (`details.delivered_to` = this Session, the fork-safe rule of §15.2 step 4/§15.7), adds at the first run's `before_agent_start` one custom message `{customType: 'cpd-first-message', content: text, display: false, details: {event, delivered_to}}`; pi places handler messages after the User's prompt and the queued nextTurn messages (pi 1.3.0 `agent-session.js` `_prepareRun`). Until it is delivered, the adapter starts no turn: every `sendMessage` that would use `triggerTurn` true uses `deliverAs` 'nextTurn' instead. A failed first-message read is reported once as an error message (as §15.1 'Failure') and retried at the next run; no message is added.
+
+**Reading.** The adapter calls `cpd session first-message --session <id>` (internal, §10.15), which renders the first message and returns the text, the file it was written to, and the highest Event id at rendering. The adapter reads the text and delivers it as a `cpd-first-message` custom message, with `details.event` = the returned Event id and `details.delivered_to` = this Session, so the read model and later runs can recognize it.
 
 ### 15.8 Turn-end reminder
 

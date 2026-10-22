@@ -18,6 +18,9 @@ export const LEAD_MESSAGES: Partial<Record<Kind, { turn: boolean; deliverAs: Sen
 /** The rule of an Event for a Plan Lead; `undefined`: no message (every other kind, and a `job-merged` whose `data.turn` is not true). */
 export const leadRule = (ev: CpdEvent) => (ev.kind === "job-merged" && ev.data.turn !== true ? undefined : LEAD_MESSAGES[ev.kind]);
 
+/** §15.7a: while a by-user Session's first message is pending, a send that would start a turn is queued for the next run instead. */
+export const gated = (r: { firstPending: boolean } | undefined, o: SendOptions): SendOptions => (r?.firstPending && o.triggerTurn ? { triggerTurn: false, deliverAs: "nextTurn" } : o);
+
 export const FOLLOW_UP = (turn: boolean): SendOptions => ({ triggerTurn: turn, deliverAs: "followUp" });
 
 /** §15.3: `{customType: "cpd", content: event.text, details: {...event, delivered_to}}`. `delivered_to` is what the cursor counts. */

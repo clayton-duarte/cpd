@@ -290,6 +290,13 @@ pub(crate) fn first_message(
     Ok(parts.join("\n\n"))
 }
 
+/// A Manager's first message (commands.md §3.10): its header, then "the Context" as [`first_message`] renders it.
+/// The one rendering `context manager` and `session first-message` share.
+pub(crate) fn manager_message(conn: &Connection, home: &CpdHome, machine: &MachineName, context: &ContextId, title: &str) -> Result<String, CpdError> {
+    let text = first_message(conn, home, machine, context, None)?;
+    Ok(format!("You are the Manager of Context {context} \"{title}\". Follow the cpd-manager skill.\n\n{text}\n"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

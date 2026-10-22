@@ -31,8 +31,9 @@ impl Launch {
 /// How a Lead starts (contract §6.5, §6.7).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeadStart {
-    /// A new session with its first message.
-    Fresh { model: String, name: String, first_message: PathBuf },
+    /// A new session with its first message; a by-user Session (hs-d542) has none: the adapter delivers it with the
+    /// User's first prompt.
+    Fresh { model: String, name: String, first_message: Option<PathBuf> },
     /// A fork of `source_file`; a fork by `session fork` without `--message-file` has no first message.
     Fork { model: String, name: String, source_file: PathBuf, first_message: Option<PathBuf> },
     /// The Session's own file again, with no first message, on `model` (the row's current Tier, hs-d506): pi uses
@@ -106,7 +107,7 @@ fn base_env(home: &CpdHome, session: &SessionId, plan: &PlanId) -> BTreeMap<Stri
 pub fn lead(launch: &LeadLaunch) -> Launch {
     let mut argv = vec!["pi".to_owned()];
     let (model, name, fork, message) = match &launch.start {
-        LeadStart::Fresh { model, name, first_message } => (model, name, None, Some(first_message)),
+        LeadStart::Fresh { model, name, first_message } => (model, name, None, first_message.as_ref()),
         LeadStart::Fork { model, name, source_file, first_message } => (model, name, Some(source_file), first_message.as_ref()),
         LeadStart::Resume { model, file } => {
             argv.extend(["--model".to_owned(), model.clone(), "--session".to_owned(), file.display().to_string()]);
@@ -311,7 +312,7 @@ mod tests {
         let session = SessionId::parse(ID).unwrap();
         let extensions = strs(&["/opt/cpd/pi"]);
         let plannotator = plannotator(Some("19432"));
-        let start = LeadStart::Fresh { model: "m/x:high".into(), name: "ctx-manager".into(), first_message: "/cpd-home/run/ctx/manager-message.md".into() };
+        let start = LeadStart::Fresh { model: "m/x:high".into(), name: "ctx-manager".into(), first_message: Some("/cpd-home/run/ctx/manager-message.md".into()) };
         let launch = lead(&LeadLaunch { home: &home, session: &session, plan: None, extensions: &extensions, plannotator: &plannotator, start });
         assert_eq!(
             launch.argv,
@@ -366,7 +367,7 @@ mod tests {
         let start = LeadStart::Fresh {
             model: "github-copilot/claude-opus-5.5:high".into(),
             name: "cpd rust lead".into(),
-            first_message: "/cpd-home/run/cpd2/lead-message.md".into(),
+            first_message: Some("/cpd-home/run/cpd2/lead-message.md".into()),
         };
         let launch = lead_launch(start, &plannotator(None));
         assert_eq!(

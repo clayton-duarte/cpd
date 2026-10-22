@@ -25,7 +25,7 @@ async function contextUpdates(host: Host, r: Run, ctx: Ctx): Promise<{ message: 
   const { call } = host;
   const context = r.info.context;
   try {
-    const cursor = contextCursorFrom(r.info.registeredEvent, ctx.sessionManager.getEntries(), r.id);
+    const cursor = Math.max(r.firstEvent, contextCursorFrom(r.info.registeredEvent, ctx.sessionManager.getEntries(), r.id));
     const { events, records } = await readRecords(host, r, cursor);
     let message: Message | undefined;
     if (r.info.role === "lead") {

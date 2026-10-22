@@ -375,6 +375,9 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
         }
         return Ok(Some(LeadStart::Resume { model, file }));
     }
+    if row.by_user && row.forked_from.is_none() {
+        return Ok(Some(LeadStart::Fresh { model, name: row.name.clone(), first_message: None }));
+    }
     let message = first_message(&env.home, row)?;
     match &row.forked_from {
         Some(source) => {
@@ -391,7 +394,7 @@ fn start(env: &mut Env, dirs: &PiDirs, row: &Row) -> Result<Option<LeadStart>, C
                         (None, _) => None,
                     })
             })?;
-            Ok(Some(LeadStart::Fresh { model, name: row.name.clone(), first_message }))
+            Ok(Some(LeadStart::Fresh { model, name: row.name.clone(), first_message: Some(first_message) }))
         }
     }
 }
