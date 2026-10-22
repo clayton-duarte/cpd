@@ -1278,6 +1278,7 @@ fn the_session_dots_are_listed_in_their_colours() {
         ("red:", palette::NEEDS_YOU, Dot::Red),
         ("yellow:", palette::NEEDS_YOU, Dot::Yellow),
         ("magenta:", palette::NEEDS_YOU, Dot::Magenta),
+        ("blue:", palette::NEEDS_YOU, Dot::Blue),
         ("white:", palette::NEEDS_YOU, Dot::White),
     ] {
         let cell = &buf[glyph_at(text)];
@@ -1287,7 +1288,7 @@ fn the_session_dots_are_listed_in_their_colours() {
         assert_eq!(cell.fg, want.style.fg.unwrap_or(Color::Reset), "{text}");
     }
     let precedence = format!(
-        "red > yellow > magenta > white > {} > {} > {} > {}",
+        "red > yellow > magenta > blue > white > {} > {} > {} > {}",
         palette::SPINNER[0],
         palette::WAITING,
         palette::IDLE,
@@ -1331,7 +1332,7 @@ fn the_legend_fits_its_own_size() {
 fn the_legend_popup_is_sized_to_the_legend_and_capped_at_the_client() {
     let (w, h) = legend::size();
     assert_eq!(
-        legend::popup_args((215, 62)),
+        legend::popup_args((215, 100)),
         ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
     );
     let small = legend::popup_args((40, 20));

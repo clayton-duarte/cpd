@@ -74,6 +74,8 @@ impl Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Urgency {
     White,
+    /// A cpd notice that blocks nothing (hs-d570).
+    Blue,
     Magenta,
     Yellow,
     Red,
@@ -86,11 +88,12 @@ impl Urgency {
             Urgency::Magenta => "magenta",
             Urgency::Yellow => "yellow",
             Urgency::Red => "red",
+            Urgency::Blue => "blue",
         }
     }
 
     pub fn parse(s: &str) -> Option<Urgency> {
-        [Urgency::White, Urgency::Magenta, Urgency::Yellow, Urgency::Red].into_iter().find(|u| u.as_str() == s)
+        [Urgency::White, Urgency::Blue, Urgency::Magenta, Urgency::Yellow, Urgency::Red].into_iter().find(|u| u.as_str() == s)
     }
 }
 
@@ -268,7 +271,7 @@ pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
 pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
     let context = filter.context.as_ref().map(ContextId::as_str);
     let select = format!("SELECT {COLUMNS} FROM inbox_items WHERE (?1 IS NULL OR context = ?1) AND");
-    let rank = "CASE urgency WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'magenta' THEN 2 ELSE 3 END, opened_at, id";
+    let rank = "CASE urgency WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'magenta' THEN 2 WHEN 'blue' THEN 3 ELSE 4 END, opened_at, id";
     match &filter.state {
         State::Visible { now } => items(
             conn,
@@ -478,8 +481,10 @@ mod tests {
     }
 
     #[test]
-    fn urgency_ranks_white_below_magenta_below_yellow_below_red() {
-        assert!(Urgency::White < Urgency::Magenta && Urgency::Magenta < Urgency::Yellow && Urgency::Yellow < Urgency::Red);
+    fn urgency_orders_white_blue_magenta_yellow_red_and_parses_blue() {
+        assert!(Urgency::White < Urgency::Blue && Urgency::Blue < Urgency::Magenta && Urgency::Magenta < Urgency::Yellow && Urgency::Yellow < Urgency::Red);
+        assert_eq!(Urgency::parse("blue"), Some(Urgency::Blue));
+        assert_eq!(Urgency::Blue.as_str(), "blue");
     }
 
     #[test]
@@ -490,7 +495,7 @@ mod tests {
         ] {
             assert_eq!(Kind::parse(name).unwrap().as_str(), name);
         }
-        for name in ["white", "magenta", "yellow", "red"] {
+        for name in ["white", "blue", "magenta", "yellow", "red"] {
             assert_eq!(Urgency::parse(name).unwrap().as_str(), name);
         }
         assert_eq!((Kind::parse("nope"), Urgency::parse("nope")), (None, None));

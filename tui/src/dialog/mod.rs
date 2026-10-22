@@ -45,7 +45,7 @@ enum Kind {
     Input(Input),
     /// Scrollable read-only text
     Text(Text),
-    /// Rows to tick, with `[Approve]` and `[Cancel]`; the outcome is `{approved, ticked, unticked}`
+    /// Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}`
     Checklist(Checklist),
 }
 
@@ -100,7 +100,7 @@ struct Text {
 struct Checklist {
     #[command(flatten)]
     common: Common,
-    /// A JSON file: an array of `{id, short, detail}`
+    /// A JSON file: an array of `{id, text, detail}`
     #[arg(long, value_name = "path")]
     items: PathBuf,
 }
@@ -160,10 +160,11 @@ impl Kind {
 }
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
+    // The arguments are parsed at the edge, before the terminal is asked: a bad items file is refused on any stdout.
+    let (common, mut dialog) = args.kind.parts()?;
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view dialog"));
     }
-    let (common, mut dialog) = args.kind.parts()?;
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
     let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
@@ -247,12 +248,10 @@ fn view_command(kind: &str, title: &str, out: &Path, fields: &[(&str, &str)]) ->
 }
 
 /// The tmux arguments that open `command` in a popup of `size` `(columns, rows)`, border included.
-fn popup_args(title: &str, size: (u16, u16), command: &str) -> Vec<String> {
+fn popup_args(size: (u16, u16), command: &str) -> Vec<String> {
     [
         "display-popup".to_owned(),
         "-E".to_owned(),
-        "-T".to_owned(),
-        format!(" {title} "),
         "-w".to_owned(),
         size.0.to_string(),
         "-h".to_owned(),
@@ -325,7 +324,7 @@ fn ask_with<T>(
     let out = temp_path();
     let _ = std::fs::remove_file(&out);
     let command = view_command(kind, title, &out, fields);
-    let popup = popup_args(title, size(client, title), &command);
+    let popup = popup_args(size(client, title), &command);
     let popup = match on {
         On::Newest => popup,
         On::Client(name) => on_client(popup, name),
@@ -373,16 +372,25 @@ pub(crate) struct Checked {
     pub(crate) unticked: Vec<String>,
 }
 
-/// Rows `[ ] <id> <short> — <detail>` (`rows` are `(id, short, detail)`) to tick in a popup, `[Approve]` and `[Cancel]`.
+/// Entries `[ ] <id> — <detail>` (`rows` are `(id, text, detail)`), the full text wrapped under each, to tick in a popup,
+/// `[Approve]` and `[Later]`.
 pub(crate) fn checklist(tmux: &Tmux, title: &str, rows: &[(String, String, String)]) -> Result<Checked, CpdError> {
     let items: Vec<serde_json::Value> =
-        rows.iter().map(|(id, short, detail)| serde_json::json!({"id": id, "short": short, "detail": detail})).collect();
+        rows.iter().map(|(id, text, detail)| serde_json::json!({"id": id, "text": text, "detail": detail})).collect();
     let file = temp_path().with_extension("items.json");
     std::fs::write(&file, serde_json::Value::Array(items).to_string()).map_err(|e| {
         CpdError::new(ErrorCode::Internal, format!("Cannot write the checklist items to {}: {e}.", file.display()))
     })?;
-    let natural = rows.iter().map(|(id, short, detail)| format!("[ ] {id} {short} — {detail}").chars().count()).max().unwrap_or(0);
-    let size = |client, title: &str| popup_size(client, title, natural, |_| rows.len().max(1));
+    let natural = rows
+        .iter()
+        .map(|(id, text, detail)| format!("[ ] {id} — {detail}").chars().count().max(widest(text) + view::TEXT_INDENT))
+        .max()
+        .unwrap_or(0);
+    let body_rows = |width: usize| {
+        let entries: usize = rows.iter().map(|(_, text, _)| 1 + wrap(text, width.saturating_sub(view::TEXT_INDENT)).len()).sum();
+        (entries + rows.len().saturating_sub(1)).max(1)
+    };
+    let size = |client, title: &str| popup_size(client, title, natural, body_rows);
     let path = file.display().to_string();
     let asked = ask_with(tmux, On::Newest, title, "checklist", &[("items", &path)], size, |out| {
         let shown = out.display().to_string();
@@ -466,7 +474,7 @@ mod tests {
         let (tmux, calls) = recording_tmux(&dir);
         let _ = show_error(&tmux, "session open l-ship", "no_cockpit: No cockpit.");
         let popup = popup_of(&calls);
-        assert!(popup.contains(&" session open l-ship ".to_owned()), "the popup's title is what failed: {popup:?}");
+        assert!(!popup.contains(&"-T".to_owned()), "the popup passes no tmux title: the view draws it once: {popup:?}");
         let command = popup.last().unwrap();
         assert!(command.starts_with("cpd tui view dialog text --title='session open l-ship' --out="), "{command}");
         assert!(command.ends_with("--body='no_cockpit: No cockpit.'"), "the body is why: {command}");
@@ -542,8 +550,8 @@ mod tests {
             r"cpd tui view dialog confirm --title='Archive' --out='/tmp/o.json' --text='It'\''s -x?' --yes-label='Archive'"
         );
         assert_eq!(
-            popup_args("Archive", (50, 7), &command),
-            ["display-popup", "-E", "-T", " Archive ", "-w", "50", "-h", "7", command.as_str()]
+            popup_args((50, 7), &command),
+            ["display-popup", "-E", "-w", "50", "-h", "7", command.as_str()]
         );
     }
 

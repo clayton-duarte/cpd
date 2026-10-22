@@ -183,11 +183,11 @@ pub enum Jump {
     Curate(Kind, cpd_core::ids::ContextId),
 }
 
-/// One row of a curation checklist: the record, its short form and the detail after the dash.
+/// One row of a curation checklist: the record, its full text and the detail after the dash.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub id: String,
-    pub short: String,
+    pub text: String,
     pub detail: String,
 }
 
@@ -216,10 +216,20 @@ pub fn checklist(kind: Kind, context: &cpd_core::ids::ContextId, reply: &serde_j
             } else {
                 e["paths"].as_array()?.iter().filter_map(|p| p.as_str()).collect::<Vec<_>>().join(", ")
             };
-            Some(Row { id: text(e, "record")?, short: text(e, "short")?, detail })
+            Some(Row { id: text(e, "record")?, text: text(e, "text")?, detail })
         })
         .collect::<Option<Vec<_>>>()?;
+    let total = reply[format!("{key}_total")].as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or(rows.len());
+    let title = if total > rows.len() { format!("{title} ({} of {total})", rows.len()) } else { title };
     (!rows.is_empty()).then_some(Checklist { title, rows })
+}
+
+/// The most entries one checklist shows (hs-d569 CD4).
+const CURATION_LIMIT: usize = 10;
+
+/// The `cpd` arguments of the curation request: at most [`CURATION_LIMIT`] entries of each list.
+pub fn curation_argv(context: &cpd_core::ids::ContextId) -> Vec<String> {
+    vec!["context".into(), "curation".into(), format!("--context={context}"), format!("--limit={CURATION_LIMIT}")]
 }
 
 /// The `cpd` arguments an approved checklist runs (commands.md §13.2); a flag with no ids is left out.
@@ -301,7 +311,7 @@ fn item_line(item: &Item, age: &str, width: usize, spin: Option<usize>) -> (Line
     let label = truncate(&item.label, room);
     let label_width = label.chars().count();
     let gap = width.saturating_sub(LEAD_WIDTH + label_width + age.chars().count());
-    let mut glyph = palette::tier_span(item.urgency);
+    let mut glyph = palette::item_span(item.kind, item.urgency);
     if let Some(frame) = spin {
         glyph.content = palette::SPINNER[frame % palette::SPINNER.len()].into();
         glyph.style = palette::fg_clickable(palette::Meaning::Review); // a merge runs: yellow, whatever the tier
@@ -745,6 +755,8 @@ mod tests {
     }
 
     fn curate_click(kind: Kind, label: &str, reply: serde_json::Value, title: &str, rows: [(&str, &str, &str); 2], command: [&str; 5]) {
+        let alpha = ContextId::parse("alpha").unwrap();
+        assert_eq!(curation_argv(&alpha), ["context", "curation", "--context=alpha", "--limit=10"].map(String::from).to_vec(), "asks for at most ten entries");
         let tree = sample();
         let alpha = ContextId::parse("alpha").unwrap();
         let mut it = item(5, kind, Urgency::Magenta, label, OPENED);
@@ -753,7 +765,7 @@ mod tests {
         assert_eq!(jump(&tree, &it), Some(Jump::Curate(kind, alpha.clone())));
         let list = checklist(kind, &alpha, &reply).expect("something is pending");
         assert_eq!(list.title, title);
-        let want: Vec<Row> = rows.iter().map(|(id, short, detail)| Row { id: (*id).into(), short: (*short).into(), detail: (*detail).into() }).collect();
+        let want: Vec<Row> = rows.iter().map(|(id, text, detail)| Row { id: (*id).into(), text: (*text).into(), detail: (*detail).into() }).collect();
         assert_eq!(list.rows, want);
         let ticked = vec!["r-1".to_owned()];
         let unticked = vec!["r-2".to_owned()];
@@ -769,10 +781,10 @@ mod tests {
             Kind::CurateRetire,
             "alpha: 2 to retire",
             serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": [
-                {"record": "r-1", "kind": "decision", "short": "use sqlite", "reason": "duplicate", "target": "r-0"},
-                {"record": "r-2", "kind": "note", "short": "old plan", "reason": "superseded", "target": "r-9"}]}),
+                {"record": "r-1", "kind": "decision", "text": "use sqlite is the full text", "reason": "duplicate", "target": "r-0"},
+                {"record": "r-2", "kind": "note", "text": "old plan is the full text", "reason": "superseded", "target": "r-9"}]}),
             "Retire records of alpha",
-            [("r-1", "use sqlite", "duplicate r-0"), ("r-2", "old plan", "superseded r-9")],
+            [("r-1", "use sqlite is the full text", "duplicate r-0"), ("r-2", "old plan is the full text", "superseded r-9")],
             ["context", "retire", "--context=alpha", "--approve=r-1", "--reject=r-2"],
         );
     }
@@ -783,11 +795,62 @@ mod tests {
             Kind::CurateDocs,
             "alpha: 2 doc candidates",
             serde_json::json!({"ok": true, "context": "alpha", "retire": [], "docs": [
-                {"record": "r-1", "kind": "decision", "short": "use sqlite", "paths": ["docs/a.md", "README.md"]},
-                {"record": "r-2", "kind": "note", "short": "old plan", "paths": ["docs/b.md"]}]}),
+                {"record": "r-1", "kind": "decision", "text": "use sqlite is the full text", "paths": ["docs/a.md", "README.md"]},
+                {"record": "r-2", "kind": "note", "text": "old plan is the full text", "paths": ["docs/b.md"]}]}),
             "Documentation candidates of alpha",
-            [("r-1", "use sqlite", "docs/a.md, README.md"), ("r-2", "old plan", "docs/b.md")],
+            [("r-1", "use sqlite is the full text", "docs/a.md, README.md"), ("r-2", "old plan is the full text", "docs/b.md")],
             ["context", "docs", "--context=alpha", "--send=r-1", "--dismiss=r-2"],
+        );
+    }
+
+    #[test]
+    fn a_checklist_title_says_how_many_of_the_pending_entries_it_shows() {
+        let alpha = ContextId::parse("alpha").unwrap();
+        let entries = |n: usize, key: &str| -> Vec<serde_json::Value> {
+            (0..n)
+                .map(|i| match key {
+                    "retire" => serde_json::json!({"record": format!("r-{i}"), "kind": "note", "text": "t", "reason": "duplicate", "target": "r-x"}),
+                    _ => serde_json::json!({"record": format!("r-{i}"), "kind": "note", "text": "t", "paths": ["docs/a.md"]}),
+                })
+                .collect()
+        };
+        let retire = serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": entries(10, "retire"), "retire_total": 56, "docs_total": 0});
+        assert_eq!(checklist(Kind::CurateRetire, &alpha, &retire).unwrap().title, "Retire records of alpha (10 of 56)");
+        let docs = serde_json::json!({"ok": true, "context": "alpha", "retire": [], "docs": entries(10, "docs"), "docs_total": 11, "retire_total": 0});
+        assert_eq!(checklist(Kind::CurateDocs, &alpha, &docs).unwrap().title, "Documentation candidates of alpha (10 of 11)");
+        let all = serde_json::json!({"ok": true, "context": "alpha", "docs": [], "retire": entries(3, "retire"), "retire_total": 3, "docs_total": 0});
+        assert_eq!(checklist(Kind::CurateRetire, &alpha, &all).unwrap().title, "Retire records of alpha", "no suffix when all are shown");
+    }
+
+    #[test]
+    fn a_curate_click_asks_cpd_for_at_most_ten_entries() {
+        let alpha = ContextId::parse("alpha").unwrap();
+        assert_eq!(curation_argv(&alpha), ["context", "curation", "--context=alpha", "--limit=10"].map(String::from).to_vec());
+    }
+
+    /// The glyph span of the row `item_line` draws for `item`.
+    fn glyph_of(item: &Item) -> (String, Option<ratatui::style::Color>) {
+        let (line, _) = item_line(item, "3m", 41, None);
+        let glyphs = ["\u{F06F1}", "\u{F0653}", "\u{F116E}", "\u{F173A}", "\u{F0362}", "\u{F069A}", "\u{F0366}"];
+        let span = line.spans.iter().find(|s| glyphs.contains(&s.content.as_ref()));
+        match span {
+            Some(s) => (s.content.to_string(), s.style.fg),
+            None => panic!("no glyph in {line:?}"),
+        }
+    }
+
+    #[test]
+    fn a_curate_item_draws_its_own_glyph_in_the_blue_colour_and_another_blue_item_the_generic_one() {
+        let blue = Some(palette::color_clickable(Meaning::Notice));
+        let row = |kind| glyph_of(&item(1, kind, Urgency::Blue, "alpha: 2", OPENED));
+        assert_eq!(row(Kind::CurateDocs), ("\u{F0653}".to_owned(), blue), "a documentation candidate");
+        assert_eq!(row(Kind::CurateRetire), ("\u{F116E}".to_owned(), blue), "a record to retire");
+        assert_eq!(row(Kind::Unread), ("\u{F06F1}".to_owned(), blue), "the generic system item is the blue tier's");
+        // the other tiers: magenta is back to U+F173A
+        let tier = |u| glyph_of(&item(1, Kind::PlanReview, u, "x", OPENED)).0;
+        assert_eq!(
+            [tier(Urgency::Red), tier(Urgency::Yellow), tier(Urgency::Magenta), tier(Urgency::White)],
+            ["\u{F0362}", "\u{F069A}", "\u{F173A}", "\u{F0366}"]
         );
     }
 }

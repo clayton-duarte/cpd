@@ -129,18 +129,19 @@ fn curation_lists_pending_retirements_and_doc_candidates() {
     proposed(&env);
     let out = env.cpd(&["context", "curation", "--context", CTX]).ok();
     assert_eq!(out["context"], CTX, "{out}");
+    assert_eq!((&out["retire_total"], &out["docs_total"]), (&json!(3), &json!(1)), "{out}");
     assert_eq!(
         out["retire"],
         json!([
-            {"record": "hs-n1", "kind": "note", "short": "old fact", "reason": "duplicate", "target": "hs-n2"},
-            {"record": "hs-n3", "kind": "note", "short": "documented fact", "reason": "documented", "target": "docs/a.md"},
-            {"record": "hs-n4", "kind": "note", "short": "kept fact", "reason": "superseded", "target": "hs-d1"},
+            {"record": "hs-n1", "kind": "note", "text": "Old fact.", "short": "old fact", "reason": "duplicate", "target": "hs-n2"},
+            {"record": "hs-n3", "kind": "note", "text": "Documented fact.", "short": "documented fact", "reason": "documented", "target": "docs/a.md"},
+            {"record": "hs-n4", "kind": "note", "text": "Kept fact.", "short": "kept fact", "reason": "superseded", "target": "hs-d1"},
         ]),
         "{out}"
     );
     assert_eq!(
         out["docs"],
-        json!([{"record": "hs-d1", "kind": "decision", "short": "worth documenting", "paths": ["docs/a.md", "docs/b.md"]}]),
+        json!([{"record": "hs-d1", "kind": "decision", "text": "Worth documenting.", "short": "worth documenting", "paths": ["docs/a.md", "docs/b.md"]}]),
         "{out}"
     );
     // read-only
@@ -267,4 +268,78 @@ fn show_labels_a_retired_record() {
     assert!(!kept.contains("retired"), "{md}");
     // in the section of its kind, after the active ones
     assert!(md.find(&kept).unwrap() < md.find(&duplicate).unwrap(), "{md}");
+}
+
+/// As `proposed`, plus hs-n2 as a second doc candidate: three retirements (hs-n1, hs-n3, hs-n4), two candidates
+/// (hs-n2, hs-d1; oldest first is record order).
+fn proposed_two_candidates(env: &TestEnv) {
+    let curations = [
+        curation("hs-n1", "old fact", None),
+        curation("hs-n2", "same fact", Some(&["docs/c.md"])),
+        curation("hs-n3", "documented fact", None),
+        curation("hs-n4", "kept fact", None),
+        curation("hs-d1", "worth documenting", Some(&["docs/a.md", "docs/b.md"])),
+    ];
+    let proposals = [
+        proposal("hs-n1", Reason::Duplicate, "hs-n2"),
+        proposal("hs-n3", Reason::Documented, "docs/a.md"),
+        proposal("hs-n4", Reason::Superseded, "hs-d1"),
+    ];
+    propose(&mut env.store(), &ContextId::parse(CTX).unwrap(), &curations, &proposals).unwrap();
+}
+
+fn ids(list: &Value) -> Vec<String> {
+    list.as_array().unwrap().iter().map(|e| e["record"].as_str().unwrap().to_owned()).collect()
+}
+
+#[test]
+fn curation_gives_each_entry_the_records_full_text() {
+    let env = fx();
+    proposed_two_candidates(&env);
+    let out = env.cpd(&["context", "curation", "--context", CTX]).ok();
+    let texts = |list: &Value| list.as_array().unwrap().iter().map(|e| e["text"].clone()).collect::<Vec<_>>();
+    assert_eq!(texts(&out["retire"]), [json!("Old fact."), json!("Documented fact."), json!("Kept fact.")], "{out}");
+    assert_eq!(texts(&out["docs"]), [json!("Same fact."), json!("Worth documenting.")], "{out}");
+}
+
+#[test]
+fn curation_limit_returns_the_first_n_of_each_list_oldest_first() {
+    let env = fx();
+    proposed_two_candidates(&env);
+    let out = env.cpd(&["context", "curation", "--context", CTX, "--limit", "2"]).ok();
+    assert_eq!(ids(&out["retire"]), ["hs-n1", "hs-n3"], "{out}");
+    assert_eq!(ids(&out["docs"]), ["hs-n2", "hs-d1"], "{out}");
+    let out = env.cpd(&["context", "curation", "--context", CTX, "--limit=1"]).ok();
+    assert_eq!(ids(&out["retire"]), ["hs-n1"], "{out}");
+    assert_eq!(ids(&out["docs"]), ["hs-n2"], "{out}");
+}
+
+#[test]
+fn curation_totals_count_every_pending_entry_whatever_the_limit() {
+    let env = fx();
+    proposed_two_candidates(&env);
+    let out = env.cpd(&["context", "curation", "--context", CTX, "--limit", "1"]).ok();
+    assert_eq!((&out["retire_total"], &out["docs_total"]), (&json!(3), &json!(2)), "{out}");
+    // a decided entry leaves the total
+    retire(&env, "--approve", "hs-n1").ok();
+    let out = env.cpd(&["context", "curation", "--context", CTX, "--limit", "1"]).ok();
+    assert_eq!((&out["retire_total"], &out["docs_total"]), (&json!(2), &json!(2)), "{out}");
+    assert_eq!(ids(&out["retire"]), ["hs-n3"], "{out}");
+}
+
+#[test]
+fn curation_without_a_limit_returns_every_entry() {
+    let env = fx();
+    proposed_two_candidates(&env);
+    let out = env.cpd(&["context", "curation", "--context", CTX]).ok();
+    assert_eq!(ids(&out["retire"]), ["hs-n1", "hs-n3", "hs-n4"], "{out}");
+    assert_eq!(ids(&out["docs"]), ["hs-n2", "hs-d1"], "{out}");
+    assert_eq!((&out["retire_total"], &out["docs_total"]), (&json!(3), &json!(2)), "{out}");
+}
+
+#[test]
+fn curation_refuses_a_limit_of_zero() {
+    let env = fx();
+    proposed_two_candidates(&env);
+    refused(&env.cpd(&["context", "curation", "--context", CTX, "--limit", "0"]), "args_invalid", 2);
 }

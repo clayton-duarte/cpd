@@ -342,3 +342,60 @@ fn scoped(mut event: NewEvent, item: &Item) -> NewEvent {
     }
     event
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::home::CpdHome;
+    use crate::inbox::model::{Condition, reconcile};
+    use crate::store::Store;
+
+    fn condition(urgency: Urgency, subject: &str) -> Condition {
+        Condition {
+            kind: Kind::Dialog,
+            urgency,
+            subject: subject.to_owned(),
+            label: subject.to_owned(),
+            url: None,
+            context: None,
+            plan: None,
+            job: None,
+            session: None,
+            record: None,
+            event: None,
+        }
+    }
+
+    #[test]
+    fn inbox_list_orders_red_yellow_magenta_blue_white_oldest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = CpdHome::resolve(Some(dir.path().as_os_str().to_owned()), None).unwrap();
+        let mut store = Store::open(&home, 5000).unwrap();
+        // opened newest tier-first, so only the tier rank (and then age) can produce the expected order
+        for (at, rows) in [
+            ("t1", vec![(Urgency::White, "w-old")]),
+            ("t2", vec![(Urgency::White, "w-old"), (Urgency::Blue, "b-old")]),
+            ("t3", vec![(Urgency::White, "w-old"), (Urgency::Blue, "b-old"), (Urgency::Magenta, "m-old")]),
+            ("t4", vec![(Urgency::White, "w-old"), (Urgency::Blue, "b-old"), (Urgency::Magenta, "m-old"), (Urgency::Yellow, "y-old")]),
+            (
+                "t5",
+                vec![
+                    (Urgency::White, "w-old"),
+                    (Urgency::Blue, "b-old"),
+                    (Urgency::Magenta, "m-old"),
+                    (Urgency::Yellow, "y-old"),
+                    (Urgency::Red, "r-old"),
+                    (Urgency::Blue, "b-new"),
+                ],
+            ),
+        ] {
+            let conditions: Vec<Condition> = rows.into_iter().map(|(u, s)| condition(u, s)).collect();
+            reconcile(&mut store, &conditions, at).unwrap();
+        }
+        let items = store
+            .read(|c| model::list(c, &Filter { context: None, state: State::Open }))
+            .unwrap();
+        let order: Vec<&str> = items.iter().map(|i| i.subject.as_str()).collect();
+        assert_eq!(order, ["r-old", "y-old", "m-old", "b-old", "b-new", "w-old"]);
+    }
+}

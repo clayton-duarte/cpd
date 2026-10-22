@@ -385,9 +385,9 @@ impl Runner {
                 Err(format!("{}: {}", error["code"].as_str().unwrap_or("error"), error["message"].as_str().unwrap_or("failed")))
             }
         };
-        let reply = call_cpd(vec!["context".into(), "curation".into(), format!("--context={context}")])?;
+        let reply = call_cpd(super::inbox::curation_argv(context))?;
         let Some(list) = checklist(kind, context, &reply) else { return Ok(()) };
-        let rows: Vec<_> = list.rows.into_iter().map(|r| (r.id, r.short, r.detail)).collect();
+        let rows: Vec<_> = list.rows.into_iter().map(|r| (r.id, r.text, r.detail)).collect();
         let checked = dialog::checklist(&self.tmux, &list.title, &rows).map_err(|e| e.message().to_owned())?;
         if checked.approved {
             call_cpd(approved(kind, context, &checked.ticked, &checked.unticked))?;
