@@ -88,6 +88,16 @@ fn fx() -> Fx {
     )
     .unwrap();
     env.fake_pi(&says(CITES_ALL));
+    // pi's catalog (hs-d538): the ladder a failed step climbs reads it.
+    env.fake("node", &format!("echo '{LADDER_LEVELS}'"));
+    let install = env.root().join("install");
+    fs::create_dir_all(&install).unwrap();
+    fs::write(install.join("current-version"), "1.0.0\n").unwrap();
+    for package in ["pi-coding-agent", "pi-ai"] {
+        let dist = install.join("releases/1.0.0/node_modules/@earendil-works").join(package).join("dist");
+        fs::create_dir_all(&dist).unwrap();
+        fs::write(dist.join("index.js"), "").unwrap();
+    }
     // The engine's E5 runs `cpd pr poll` at every tick (`start_engine`), through a `gh` that finds no pull requests: the
     // poll searches count whole ticks (`wait_whole_ticks`).
     env.fake_gh(r#"echo '{"data":{"search":{"issueCount":0,"nodes":[]},"rateLimit":{"cost":1,"remaining":4987,"resetAt":"2026-10-20T11:00:00Z"}}}'"#);
@@ -104,6 +114,16 @@ fn ago(minutes: i64) -> String {
 }
 
 impl Fx {
+    /// Makes the ladder one step long (hs-d538), for the tests of what one step does: starts at H3, the top of
+    /// the catalog's H efforts, and the catalog has no S effort above 0, which the S steps (S1..S4) need.
+    fn one_step(self) -> Fx {
+        self.env.fake("node", r#"echo '{"O":["off"],"S":["off"],"H":["off","low","medium","high"]}'"#);
+        let config = self.env.cpd_home().join("config.toml");
+        let text = fs::read_to_string(&config).unwrap().replacen("lead_pi_packages", "context_distill_tier = \"H3\"\nlead_pi_packages", 1);
+        fs::write(&config, text).unwrap();
+        self
+    }
+
     fn cpd(&self, args: &[&str]) -> Run {
         self.env.cpd(args)
     }
@@ -196,7 +216,7 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     assert!(fx.errors().is_empty());
 
     // The distiller's argv and inputs: print mode, no session, no extension, skill, context file or tool; two files.
-    let level = Tier::parse("H2").unwrap().level();
+    let level = Tier::parse("H0").unwrap().level();
     let model = format!("p/haiku:{level}");
     let calls = fx.env.calls("pi");
     assert_eq!(
@@ -243,12 +263,12 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     assert_eq!(line["kind"], "distill");
     // The two contradiction fields are on every pi run's line (contract §4.6 "The run log").
     assert_eq!((line["contradictions"].clone(), line["contradictions_dropped"].clone()), (json!([]), json!(0)), "{line}");
-    assert_eq!(line.as_object().unwrap().len(), 12, "{line}");
+    assert_eq!(line.as_object().unwrap().len(), 13, "{line}");
 }
 
 #[test]
 fn a_recorded_pi_transcript_gives_the_digest_and_one_correct_line() {
-    let fx = fx();
+    let fx = fx().one_step();
     fx.decide("Use sqlite.");
     fx.env.fake_pi(RECORDED);
     // "OK" cites no decision, so the digest is invalid; what matters is that it is the final assistant message.
@@ -281,7 +301,7 @@ fn the_distiller_gets_no_cpd_variable() {
 
 #[test]
 fn an_invalid_digest_is_kept_with_one_error_event_and_the_previous_valid_one_stays() {
-    let fx = fx();
+    let fx = fx().one_step();
     fx.decide("Use sqlite.");
     fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     let before = fx.digest_files();
@@ -387,7 +407,7 @@ fn a_digest_that_misses_citations_is_repaired_once_with_an_addition_cpd_appends(
 
 #[test]
 fn a_repair_that_is_still_invalid_fails_the_run_and_keeps_the_repaired_text() {
-    let fx = fx();
+    let fx = fx().one_step();
     let d1 = fx.decide("Use sqlite.");
     let d2 = fx.decide("Use flock.");
     fx.env.fake_pi(&says_then_repairs(&format!("echo '# Digest'; echo 'Storage [{d1}].'"), "echo '## Additions'; echo 'Nothing to add.'"));
@@ -404,7 +424,7 @@ fn a_repair_that_is_still_invalid_fails_the_run_and_keeps_the_repaired_text() {
 
 #[test]
 fn a_stray_id_or_too_many_missing_get_no_repair() {
-    let fx = fx();
+    let fx = fx().one_step();
     let d1 = fx.decide("Use sqlite.");
     fx.decide("Use flock.");
     fx.env.fake_pi(&says_then_repairs(&format!("echo '# Digest'; echo '[{d1}] [hs-d99]'"), ADDS_MISSING));
@@ -414,7 +434,7 @@ fn a_stray_id_or_too_many_missing_get_no_repair() {
     assert_eq!(kinds(&fx), [("distill".to_owned(), "invalid".to_owned())]);
 
     // 18 missing: over the limit of the repair. 16 are repaired.
-    let fx = fx_with_decisions(18);
+    let fx = fx_with_decisions(18).one_step();
     fx.env.fake_pi(&says_then_repairs("echo '# Digest'; echo 'Nothing cited.'", ADDS_MISSING));
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_invalid", 1);
     assert_eq!(error["details"]["missing"].as_array().unwrap().len(), 18);
@@ -428,7 +448,7 @@ fn a_stray_id_or_too_many_missing_get_no_repair() {
 
 #[test]
 fn a_repair_that_fails_as_pi_is_distill_failed_and_leaves_no_digest() {
-    let fx = fx();
+    let fx = fx().one_step();
     let d1 = fx.decide("Use sqlite.");
     fx.decide("Use flock.");
     let first = says(&format!("echo '# Digest'; echo '[{d1}]'"));
@@ -582,7 +602,7 @@ fn a_digest_over_the_limit_is_invalid() {
 
 #[test]
 fn a_failing_pi_is_distill_failed_with_its_stderr_tail() {
-    let fx = fx();
+    let fx = fx().one_step();
     fx.decide("Use sqlite.");
     fx.env.fake_pi("echo 'half an answer'; echo 'model unavailable' >&2; exit 7");
     let error = refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
@@ -858,7 +878,7 @@ fn the_engine_starts_a_run_only_after_the_quiet_period_and_never_two_at_once() {
 
 #[test]
 fn the_engine_tries_a_failed_seq_once_until_a_newer_record_arrives() {
-    let fx = fx();
+    let fx = fx().one_step();
     fx.insert(CONTEXT, "hs-d1", &ago(60), "A decision.", Draft::Decision { supersedes: None });
     fx.env.fake_pi("echo 'no model' >&2; exit 1");
     let engine = start_engine(&fx);
@@ -929,4 +949,88 @@ fn the_twenty_count_runs_from_the_latest_digest() {
     fx.insert(CONTEXT, "hs-n400", &ago(0), "The twentieth.", Draft::Note);
     wait_until("the second digest", || fx.pi_calls() == calls + 1);
     stop_engine(engine);
+}
+
+// ---- The Tier ladder (hs-d538): contract §4.6 ----
+
+const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"]}"#;
+
+/// A fake `pi` that answers `haiku` (shell, run in a `says`) for every `p/haiku` model, `sonnet` for every
+/// `p/sonnet` one, and `other` for anything else (O included).
+fn by_model(haiku: &str, sonnet: &str, other: &str) -> String {
+    format!(
+        "{REPLY}\ncase \"$*\" in\n*p/haiku:*) {{\n{haiku}\n}} | reply ;;\n*p/sonnet:*) {{\n{sonnet}\n}} | reply ;;\n*) {{\n{other}\n}} | reply ;;\nesac"
+    )
+}
+
+const STRAY: &str = "echo '# Digest'; echo 'Cites a ghost [hs-d99] and nothing else.'";
+
+fn ladder_fx() -> Fx {
+    let fx = fx();
+    fx.env.fake("node", &format!("echo '{LADDER_LEVELS}'"));
+    fx.decide("Use sqlite.");
+    fx
+}
+
+fn tiers_of(runs: &[Value]) -> Vec<String> {
+    runs.iter().map(|r| r["tier"].as_str().unwrap_or("<none>").to_string()).collect()
+}
+
+/// The tier names the output's `steps` lists, whether each step is a string or an object with a `tier`.
+fn step_tiers(out: &Value) -> Vec<String> {
+    out["steps"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the output has a `steps` array: {out}"))
+        .iter()
+        .map(|s| s.as_str().or_else(|| s["tier"].as_str()).unwrap_or("<none>").to_string())
+        .collect()
+}
+
+#[test]
+fn the_distiller_climbs_the_ladder_until_a_digest_is_valid() {
+    let fx = ladder_fx();
+    fx.env.fake_pi(&by_model(STRAY, CITES_ALL, STRAY));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3", "S1"], "{out}");
+    assert_eq!(tiers_of(&fx.runs()), ["H0", "H1", "H2", "H3", "S1"]);
+    assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
+    assert_eq!(fx.errors().len(), 0, "a valid step ends the run with no error Event");
+}
+
+#[test]
+fn the_distiller_starts_at_context_distill_tier() {
+    let fx = ladder_fx();
+    let config = fx.env.cpd_home().join("config.toml");
+    let mut text = fs::read_to_string(&config).unwrap();
+    text = text.replacen("lead_pi_packages", "context_distill_tier = \"H2\"\nlead_pi_packages", 1);
+    fs::write(&config, text).unwrap();
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(tiers_of(&fx.runs()).first().map(String::as_str), Some("H2"));
+}
+
+#[test]
+fn a_run_that_fails_every_step_stops_after_s4_with_one_error_event() {
+    let fx = ladder_fx();
+    fx.env.fake_pi(&says(STRAY));
+    let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
+    refused(&run, "distill_invalid", 1);
+    let runs = fx.runs();
+    assert_eq!(tiers_of(&runs), ["H0", "H1", "H2", "H3", "S1", "S2", "S3", "S4"]);
+    for r in &runs {
+        let model = r["model"].to_string();
+        assert!(!model.contains("opus"), "never O: {r}");
+        assert!(!model.contains(":max"), "never effort 5: {r}");
+    }
+    let events = fx.errors();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["data"]["code"], "distill_invalid");
+}
+
+#[test]
+fn a_failed_pi_step_climbs_too() {
+    let fx = ladder_fx();
+    fx.env.fake_pi(&format!("case \"$*\" in *p/haiku:*) echo 'model unavailable' >&2; exit 7 ;; esac\n{}", says(CITES_ALL)));
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(step_tiers(&out), ["H0", "H1", "H2", "H3", "S1"], "{out}");
+    assert_eq!(fx.digest_files(), [format!("{}.md", fx.highest_seq())]);
 }

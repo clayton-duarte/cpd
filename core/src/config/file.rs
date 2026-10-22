@@ -272,7 +272,7 @@ impl Config {
         // an auxiliary run (the distiller) is `H` only; `open_tier` is a Worker's Tier.
         let lead_tier = r.get("lead_tier", Tier::parse("O2").expect("a valid Tier"), |v| leader_tier(&v))?;
         let manager_tier = r.get("manager_tier", Tier::parse("O4").expect("a valid Tier"), |v| leader_tier(&v))?;
-        let context_distill_tier = r.get("context_distill_tier", Tier::parse("H2").expect("a valid Tier"), |v| {
+        let context_distill_tier = r.get("context_distill_tier", Tier::parse("H0").expect("a valid Tier"), |v| {
             let tier = Tier::parse(text_of(&v)?).map_err(|e| e.message().to_owned())?;
             if tier.letter() != Letter::H || tier.effort() > Tier::MAX_EFFORT {
                 return Err(format!("must be an H Tier with effort 0-4, not {tier}: an auxiliary run uses only the H tier and never effort 5, to keep cost down (hs-d506)"));

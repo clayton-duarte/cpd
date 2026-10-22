@@ -20,7 +20,7 @@ use time::format_description::well_known::Rfc3339;
 use super::digest::{self, Digest, Invalid};
 use super::render::Indexed;
 use super::{ContextRow, Record, Select, inforce};
-use crate::config::{Config, Letter};
+use crate::config::{Config, Letter, Tier};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
 use crate::events::{self, NewEvent};
@@ -155,58 +155,49 @@ impl Run<'_> {
         let tmp = self.home.context_digest_tmp(self.context, upto);
         // Only `plan` and `brief` records came since: the records in force are the same, so are the topic sections.
         let carried = latest.filter(|d| in_force.iter().all(|(seq, _)| u64::try_from(*seq).is_ok_and(|s| s <= d.upto_seq)));
-        let ran = match &carried {
+        let expect = digest::Expect::of(&in_force);
+        let mut steps: Vec<Tier> = Vec::new();
+        let (ran, repair) = match &carried {
             Some(d) => {
                 fs::write(&tmp, digest::topic_sections(&d.text)).map_err(|e| io_failed("write", &tmp, &e))?;
-                None
+                let (_, checked) = self.check_tmp(&tmp, &expect)?;
+                if let Err(invalid) = checked {
+                    let kept = digest::keep_invalid(self.home, self.context, upto)?;
+                    return Err(self.invalid(upto, &invalid, &kept));
+                }
+                (None, None)
             }
             None => {
                 self.write_inputs(&dir, &in_force)?;
-                let (mut ran, text) = self.run_pi(upto, KIND_DISTILL, &["prompt.md", "records.md"])?;
-                // Recency wins (contract §4.6 "The contradictions report"): the report is taken out of the text
-                // before anything validates it, and goes to the run's line.
-                let (text, report) = take_contradictions(&text);
-                ran.report = Report::of(&report, &in_force);
-                fs::write(&tmp, text).map_err(|e| io_failed("write", &tmp, &e))?;
-                Some(ran)
+                let start = self.config.context_distill_tier;
+                let mut ladder = vec![start];
+                let mut index = 0;
+                loop {
+                    let tier = ladder[index];
+                    steps.push(tier);
+                    let fault = match self.step(tier, upto, &dir, &tmp, &in_force, &expect)? {
+                        Ok(done) => break (Some(done.0), done.1),
+                        Err(fault) => fault,
+                    };
+                    if index == 0 {
+                        ladder = self.distill_ladder(start);
+                    }
+                    index += 1;
+                    if index == ladder.len() {
+                        return Err(match fault {
+                            Fault::Invalid(invalid) => {
+                                let kept = digest::keep_invalid(self.home, self.context, upto)?;
+                                self.invalid(upto, &invalid, &kept)
+                            }
+                            Fault::Pi(failure, tail) => {
+                                digest::discard(self.home, self.context, upto)?;
+                                self.pi_failed(upto, &failure, tail)
+                            }
+                        });
+                    }
+                }
             }
         };
-        let mut bytes = fs::read(&tmp).map_err(|e| io_failed("read", &tmp, &e))?;
-        // The model writes no index (the prompt says so); one it wrote anyway is not a topic section and is dropped.
-        if let Some(topic) = std::str::from_utf8(&bytes).ok().map(digest::topic_sections).filter(|t| t.len() < bytes.len()) {
-            bytes = topic.as_bytes().to_vec();
-            fs::write(&tmp, &bytes).map_err(|e| io_failed("write", &tmp, &e))?;
-        }
-        let expect = digest::Expect::of(&in_force);
-        let mut repair = None;
-        if let Err(invalid) = digest::validate(&bytes, &expect, digest::LIMIT) {
-            if let Some(ran) = &ran {
-                self.log_run(ran, upto, "invalid");
-            }
-            // One repair turn, only for a digest that lacks citations and nothing else.
-            let repairable = ran.is_some()
-                && !invalid.not_utf8
-                && !invalid.too_big
-                && invalid.stray.is_empty()
-                && (1..=REPAIR_MAX).contains(&invalid.missing.len());
-            if !repairable {
-                let kept = digest::keep_invalid(self.home, self.context, upto)?;
-                return Err(self.invalid(upto, &invalid, &kept));
-            }
-            let (fixed, text) = self.repair(&dir, upto, &bytes, &invalid.missing, &in_force)?;
-            bytes.extend_from_slice(b"\n");
-            bytes.extend_from_slice(text.as_bytes());
-            fs::write(&tmp, &bytes).map_err(|e| io_failed("write", &tmp, &e))?;
-            if let Err(invalid) = digest::validate(&bytes, &expect, digest::LIMIT) {
-                self.log_run(&fixed, upto, "invalid");
-                let kept = digest::keep_invalid(self.home, self.context, upto)?;
-                return Err(self.invalid(upto, &invalid, &kept));
-            }
-            self.log_run(&fixed, upto, "valid");
-            repair = Some(fixed);
-        } else if let Some(ran) = &ran {
-            self.log_run(ran, upto, "valid");
-        }
         let file = digest::install(self.home, self.context, upto, &expect)?;
         let text = fs::read_to_string(&file).map_err(|e| io_failed("read", &file, &e))?;
         let installed = Digest { upto_seq: upto, file, text };
@@ -215,6 +206,7 @@ impl Run<'_> {
             "distilled": ran.is_some(),
             "digest": digest_json(Some(&installed)),
             "records_in_force": in_force.len(),
+            "steps": steps.iter().map(Tier::to_string).collect::<Vec<_>>(),
         });
         if let Some(ran) = &ran {
             out["run"] = ran.figures();
@@ -223,6 +215,71 @@ impl Run<'_> {
             out["repair"] = repair.figures();
         }
         Ok(out)
+    }
+
+    /// The distill ladder from `start` (hs-d538), from pi's catalog. A catalog that cannot be read gives no
+    /// climb: the run ends with the failed step's own error Event, which is what says what went wrong.
+    fn distill_ladder(&mut self, start: Tier) -> Vec<Tier> {
+        crate::config::load_catalog_with(self.config, self.store).map_or_else(|_| vec![start], |c| c.distill_ladder(start))
+    }
+
+    /// Reads `tmp`, drops an index the model wrote anyway (it is not a topic section) and validates the rest.
+    fn check_tmp(&self, tmp: &Path, expect: &digest::Expect) -> Result<(Vec<u8>, Result<(), Invalid>), CpdError> {
+        let mut bytes = fs::read(tmp).map_err(|e| io_failed("read", tmp, &e))?;
+        if let Some(topic) = std::str::from_utf8(&bytes).ok().map(digest::topic_sections).filter(|t| t.len() < bytes.len()) {
+            bytes = topic.as_bytes().to_vec();
+            fs::write(tmp, &bytes).map_err(|e| io_failed("write", tmp, &e))?;
+        }
+        let checked = digest::validate(&bytes, expect, digest::LIMIT);
+        Ok((bytes, checked))
+    }
+
+    /// One step of step 4/5 (contract §4.6) at `tier`: the distiller, then the one repair turn when the repair
+    /// rules allow it. The outer `Err` is a failure that ends the run at once (a file); the inner one is the
+    /// step's fault, which only the last step reports. Each pi run is logged.
+    #[allow(clippy::too_many_arguments)]
+    fn step(
+        &mut self,
+        tier: Tier,
+        upto: u64,
+        dir: &Path,
+        tmp: &Path,
+        in_force: &[&Indexed],
+        expect: &digest::Expect,
+    ) -> Result<Result<(Ran, Option<Ran>), Fault>, CpdError> {
+        let (mut ran, text) = match self.run_pi(tier, upto, KIND_DISTILL, &["prompt.md", "records.md"])? {
+            Ok(done) => done,
+            Err(fault) => return Ok(Err(fault)),
+        };
+        // Recency wins (contract §4.6 "The contradictions report"): the report is taken out of the text
+        // before anything validates it, and goes to the run's line.
+        let (text, report) = take_contradictions(&text);
+        ran.report = Report::of(&report, in_force);
+        fs::write(tmp, text).map_err(|e| io_failed("write", tmp, &e))?;
+        let (mut bytes, checked) = self.check_tmp(tmp, expect)?;
+        let Err(invalid) = checked else {
+            self.log_run(&ran, upto, "valid");
+            return Ok(Ok((ran, None)));
+        };
+        self.log_run(&ran, upto, "invalid");
+        // One repair turn, only for a digest that lacks citations and nothing else.
+        let repairable = !invalid.not_utf8 && !invalid.too_big && invalid.stray.is_empty() && (1..=REPAIR_MAX).contains(&invalid.missing.len());
+        if !repairable {
+            return Ok(Err(Fault::Invalid(invalid)));
+        }
+        let (fixed, text) = match self.repair(tier, dir, upto, &bytes, &invalid.missing, in_force)? {
+            Ok(done) => done,
+            Err(fault) => return Ok(Err(fault)),
+        };
+        bytes.extend_from_slice(b"\n");
+        bytes.extend_from_slice(text.as_bytes());
+        fs::write(tmp, &bytes).map_err(|e| io_failed("write", tmp, &e))?;
+        if let Err(invalid) = digest::validate(&bytes, expect, digest::LIMIT) {
+            self.log_run(&fixed, upto, "invalid");
+            return Ok(Err(Fault::Invalid(invalid)));
+        }
+        self.log_run(&fixed, upto, "valid");
+        Ok(Ok((ran, Some(fixed))))
     }
 
     fn already(&self, digest: Option<&Digest>, in_force: usize) -> Value {
@@ -245,7 +302,15 @@ impl Run<'_> {
     /// Step 5's repair turn (shape B): `digest.md` (the invalid topic sections), `missing.md` (the blocks of the
     /// missing records, as in `records.md`) and `problem.md` (their ids), then pi with the repair prompt. Returns
     /// the run and its answer, `## Additions`, which the caller appends to the topic sections.
-    fn repair(&mut self, dir: &Path, upto: u64, topic: &[u8], missing: &[RecordId], in_force: &[&Indexed]) -> Result<(Ran, String), CpdError> {
+    fn repair(
+        &mut self,
+        tier: Tier,
+        dir: &Path,
+        upto: u64,
+        topic: &[u8],
+        missing: &[RecordId],
+        in_force: &[&Indexed],
+    ) -> Result<Result<(Ran, String), Fault>, CpdError> {
         let blocks: Vec<&Indexed> = in_force.iter().filter(|(_, r)| missing.contains(&r.id)).copied().collect();
         let problem = format!(
             "The digest in `digest.md` does not cite these {} decisions and open questions in force, which are in `missing.md`:\n{}\n",
@@ -261,19 +326,21 @@ impl Run<'_> {
             let path = dir.join(name);
             fs::write(&path, content).map_err(|e| io_failed("write", &path, &e))?;
         }
-        let (ran, text) = self.run_pi(upto, KIND_REPAIR, &["repair-prompt.md", "digest.md", "missing.md", "problem.md"])?;
+        let (ran, text) = match self.run_pi(tier, upto, KIND_REPAIR, &["repair-prompt.md", "digest.md", "missing.md", "problem.md"])? {
+            Ok(done) => done,
+            Err(fault) => return Ok(Err(fault)),
+        };
         // As for a digest, an index the model wrote anyway is not an addition, nor is a contradictions section
         // (a repair line reports no pairs, contract §4.6).
         let (text, _) = take_contradictions(&text);
-        Ok((ran, digest::topic_sections(&text).trim_end().to_owned() + "\n"))
+        Ok(Ok((ran, digest::topic_sections(&text).trim_end().to_owned() + "\n")))
     }
 
     /// Step 4: the distiller in JSON mode over the files `files` of the directory, its stderr to the log, its
     /// stdout read by cpd: the run and its final assistant text (ending in a newline) are returned. A failure
     /// removes the `.md.tmp` and appends the `error` Event; every run that started pi appends its line to
     /// `runs.jsonl`, a failed one here.
-    fn run_pi(&mut self, upto: u64, kind: &'static str, files: &[&str]) -> Result<(Ran, String), CpdError> {
-        let tier = self.config.context_distill_tier;
+    fn run_pi(&mut self, tier: Tier, upto: u64, kind: &'static str, files: &[&str]) -> Result<Result<(Ran, String), Fault>, CpdError> {
         let models = &self.config.tiers;
         let model = match tier.letter() {
             Letter::O => &models.o,
@@ -306,6 +373,7 @@ impl Run<'_> {
             started_at,
             seconds: (started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0,
             model,
+            tier,
             kind,
             usage: None,
             report: Report::default(),
@@ -321,7 +389,7 @@ impl Run<'_> {
                         match output.answer {
                             Ok(text) => {
                                 let text = if text.ends_with('\n') { text } else { format!("{text}\n") };
-                                return Ok((ran, text));
+                                return Ok(Ok((ran, text)));
                             }
                             Err(why) => Failed::Output(why),
                         }
@@ -336,8 +404,7 @@ impl Run<'_> {
         };
         let _ = log_file.flush();
         self.log_run(&ran, upto, "failed");
-        digest::discard(self.home, self.context, upto)?;
-        Err(self.pi_failed(upto, &failure, tail_of(&log, offset)))
+        Ok(Err(Fault::Pi(failure, tail_of(&log, offset))))
     }
 
     /// Appends the run's line to `runs.jsonl` (contract §4.6 "The run log"). A write failure fails nothing: it
@@ -349,6 +416,7 @@ impl Run<'_> {
         line["upto_seq"] = json!(upto);
         line["result"] = json!(result);
         line["kind"] = json!(ran.kind);
+        line["tier"] = json!(ran.tier.to_string());
         line["contradictions"] = json!(ran.report.kept);
         line["contradictions_dropped"] = json!(ran.report.dropped);
         let path = runs_path(self.home, self.context);
@@ -562,12 +630,20 @@ enum Failed {
     Output(String),
 }
 
+/// Why a step of the ladder failed; only the last step's becomes the run's error Event.
+enum Fault {
+    Invalid(Invalid),
+    Pi(Failed, String),
+}
+
 /// What one pi run took and reported; the figures of its `runs.jsonl` line and of `run` in the command's output.
 struct Ran {
     started_at: String,
     seconds: f64,
     /// The `<model>:<level>` given to pi.
     model: String,
+    /// The Tier of the pi run.
+    tier: Tier,
     /// [`KIND_DISTILL`] or [`KIND_REPAIR`]: the `kind` of the run's `runs.jsonl` line.
     kind: &'static str,
     /// `None` when pi reported none (a spawn failure, a kill, a stream without an assistant message).
