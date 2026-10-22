@@ -57,7 +57,7 @@ const UTF8: &str = "-u";
 /// Every spawn of tmux in cpd starts from it, so every call is a UTF-8 client whatever the caller's locale.
 pub fn client(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut cmd = Command::new(program);
-    cmd.arg(UTF8).env_remove("TMUX").env_remove("TMUX_PANE").stdin(Stdio::null());
+    cmd.arg(UTF8).env_remove("TMUX").env_remove("TMUX_PANE").env_remove("CPD_SESSION").env_remove("CPD_ATTEMPT").stdin(Stdio::null());
     cmd
 }
 
@@ -1016,6 +1016,15 @@ mod palette;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Agent identity must not leak into a tmux server started by cpd.
+    #[test]
+    fn client_strips_cpd_session_and_cpd_attempt() {
+        let cmd = client("tmux");
+        for k in ["CPD_SESSION", "CPD_ATTEMPT"] {
+            assert!(cmd.get_envs().any(|(n, v)| n == k && v.is_none()), "{k} not removed");
+        }
+    }
 
     /// The version pill (§6.1): last on the right, after the workers pill, one `─` join, then the closing `─`, only while `@cpd_version` is set.
     #[test]
