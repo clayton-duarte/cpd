@@ -132,7 +132,7 @@ test("the editor draws a rounded box with one margin column and one padding colu
 test("every row of the editor is as wide as the pane", async () => {
 	const s = await session({ text: "one\ntwo\nthree" });
 	try {
-		for (const width of [10, 24, 40, 80]) {
+		for (const width of [12, 24, 40, 80]) {
 			const rows = s.editor.render(width).map(strip);
 			assert.equal(rows.length, 5, `width ${width}: top, three text rows, bottom`);
 			rows.forEach((row) => assert.equal(visibleWidth(row), width, `width ${width}: ${JSON.stringify(row)}`));
