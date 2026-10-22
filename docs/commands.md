@@ -3690,6 +3690,58 @@ cpd: no agent moves HEAD or changes the files of a repo's primary checkout; fetc
 
 **The `git` wrapper stays.** `$CPD_HOME/bin/git` (contract §6.5, hs-d310) still refuses `git stash` in every directory of every Session, for its own reason (`refs/stash` is shared by every worktree). In a primary checkout this guard answers first, with the reason above.
 
+### 15.17 Secrets in the pi adapter
+
+Decision (User, 2026-10-22, accepted assumptions A1–A5). Agents never call 1Password's `op` directly; the pi adapter refuses it and offers `cpd secret` commands instead (contract §8.4, commands §24). cpd holds no `op` token and never signs in; the 1Password app's per-use prompt is the approval. The adapter enforces the raw-`op` guard as §15.11 and §15.12 do for theirs, and provides the `cpd_secret_approve` tool for a Lead or Manager to request a secret outside the `cpd` and `homeserver` vaults.
+
+#### The raw-op guard
+
+**When.** At pi's `tool_call`, for a `bash` call, of a Session of **every role** (Lead, Manager, Worker, side forks) while a run is active, in the one handler of §15.11 and §15.12 and before their per-role guards. The code is `pi/lib/secretguard.ts`: `secretBypass(command: string): string | undefined` (the refused command as the reason shows it, or `undefined`; the adapter passes the command text from pi) and `reasonText(matched: string): string`. Its tokenizer is the one §15.11 and §15.12 share (`pi/lib/shell.ts`), not a third copy. For any other tool, and for a call that matches nothing, the handler returns nothing.
+
+**What is refused.** A simple command (the tokenizer of §15.11: split at `;`, `&`, `|`, newline, parentheses and backticks; quotes taken off; a command is where a command word stands, so `echo op read` and `grep "op read" f` pass) whose command word, after the prefixes of §15.11 (`FOO=1`, `time`, `nohup`, `exec`, `command`, `sudo`, `env`, `do`, `then`, and the like), is `op` or a path ending `/op`, with any arguments: the matched text is `op` followed by its first argument when it has one (`op read`, `op item`, `op`); and the command `cpd secret approve` (the matched text `cpd secret approve`): approvals are the User's, written only by the adapter after its dialog. Every other `cpd secret ...` command passes.
+
+**Not judged**, because the guard stops mistakes and not a determined bypass: `op` run through `sh -c '...'`, `xargs`, a script, an alias or a function.
+
+**The refusal** is `{block: true, reason}`, with the one-line reason:
+
+```
+For op or path ending /op with arguments:
+cpd: agents do not call 1Password's op; use cpd secret get|list|create|edit|delete (commands.md §24); refused: <matched>
+
+For cpd secret approve:
+cpd: approvals are the User's: ask with the tool cpd_secret_approve (commands.md §15.17); refused: cpd secret approve
+```
+
+`<matched>` is the command word (`op`, `/path/to/op`, `op read`, `op item list`) or `cpd secret approve`.
+
+**Examples.** Refused: `op account get`, `op item list --vault cpd`, `/usr/bin/op read item/my-db-password`, `op`, `cpd secret approve --action get --vault cpd --item x`. Passes: `cpd secret get my-item -f password --vault cpd`, `cpd secret list --vault cpd`, `cpd secret create my-item --vault cpd`, `cpd secret edit my-item --vault cpd`, `cpd secret delete my-item --vault cpd`, `echo op` (argument), `grep "op read" file` (grep's argument).
+
+#### The tool `cpd_secret_approve`
+
+**When.** At pi's `tool_call`, registered once at load like `cpd_plan_review`, called from the adapter's start-up where `registerTool` is. The code is `pi/lib/secret.ts`: `registerSecretTool(host: Host): void`.
+
+**Role and vault.** It is for a Lead or Manager only: any other role (Worker), or no active run, is refused with the CpdError `not_a_lead` and a message `the tool cpd_secret_approve is for Lead and Manager Sessions only`. The vaults `cpd` and `homeserver` are refused with the reason `these vaults need no approval; use cpd secret get|list|create|edit|delete (commands.md §24)`.
+
+**Parameters:** `action` (one of `get`, `list`, `create`, `edit`, `delete`), `vault`, `item` (every action but `list`), `field` (required for `get`, `create` and `edit`), `reason` (one line, at most 200 characters: why the agent needs it).
+
+**The dialog.** pi's `ui.select` run as the Plan review's chat dialog (facts.ownPrompt, so the agent state shows the Session waiting on the User), titled:
+
+```
+<session name> asks to <action> in vault <vault>: item <item>, field <field>. Reason: <reason>
+```
+
+with the options `Allow once` and `Deny`. **`Allow once`:** the adapter runs `cpd secret approve --action <action> --vault <vault> [--item <item>] [--field <field>]` (commands §24.7) atomically, writing `$CPD_HOME/run/secret/approve/<uuid>.json` with `{session, action, vault, item, field, at}`. The tool returns the text `Approved for one command in the next 10 minutes: run it now.` **`Deny`:** nothing is run and the tool returns `The User denied it. Do not try again.` **No dialog available** (no UI): an error `no_ui` saying the cockpit chat is needed.
+
+#### A Worker's way
+
+A Worker that needs a secret for an Attempt escalates to its Lead with `cpd ask <attempt-id> "<question>"`, naming the vault, item, field and why. The Lead reads the escalation, then grants the Worker's access for one use with:
+
+```
+cpd secret allow <item> --attempt <attempt-id> --vault <vault> --field <field>
+```
+
+This writes `$CPD_HOME/run/secret/allow/<attempt-id>.json` (contract §8.4). The Lead then answers the Escalation with `cpd answer <esc-id> "<answer>"`. The Worker runs `cpd secret get <item> --vault <vault> --field <field>` (or the other command the Lead approved). The allowance lasts until the Attempt ends (the store says); every Worker never gets another vault. For a Worker to request a secret from a different vault than `cpd` or `homeserver`, the Lead must first call `cpd_secret_approve` and have the User approve it through the dialog, then allow the Worker.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
