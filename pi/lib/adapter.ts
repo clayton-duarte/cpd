@@ -2,6 +2,8 @@ import { tooLong, unseen } from "./askguard.ts";
 import { registerAgentState } from "./agent-state.ts";
 import { createHost, type Options } from "./host.ts";
 import { registerLoopGuard } from "./loop-guard.ts";
+import { homedir } from "node:os";
+import { primaryCheckoutMove, reasonText as mainReasonText } from "./mainguard.ts";
 import { blockingReason, reasonText } from "./noblock.ts";
 import type { PiApi } from "./pi.ts";
 import { installHint } from "./hint.ts";
@@ -15,7 +17,7 @@ import { registerReminderCheck } from "./turns.ts";
 export type { Options };
 export { QUESTION_LABEL } from "./review.ts";
 
-/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`; refused `ask_user_question` calls: `askguard.ts`. */
+/** commands.md §15: wires the concerns to pi. Start-up and shutdown: `startup.ts`; the follower's Events: `handle.ts`; the Plan review: `review.ts`; the agent state: `agent-state.ts`; Context updates and the reminder: `turns.ts`; the reload command: `reload-command.ts`; a Manager's refused waits: `noblock.ts`; a Worker's refused full test runs: `testguard.ts`; a primary checkout's refused git commands: `mainguard.ts`; refused `ask_user_question` calls: `askguard.ts`. */
 export function adapter(pi: PiApi, options: Options = {}): void {
   const host = createHost(pi, options);
 
@@ -47,11 +49,15 @@ export function adapter(pi: PiApi, options: Options = {}): void {
     }
   });
 
-  // §15.11, §15.12: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
+  // §15.11, §15.12, §15.16: one handler for the guards, registered once (pi has no unsubscribe); the role is read at each call.
   pi.on("tool_call", async (event, ctx) => {
     const role = host.run?.info.role;
     const pn = pnVerdict({ env: host.env, live: host.run !== undefined, store: globalThis as Record<string, unknown> }, event);
     if (pn) return pn;
+    if (host.run && event.toolName === "bash" && typeof (event.input as { command?: unknown }).command === "string") {
+      const moved = primaryCheckoutMove((event.input as { command: string }).command, ctx.cwd, homedir());
+      if (moved !== undefined) return { block: true, reason: mainReasonText(moved) };
+    }
     if (host.run && event.toolName === "ask_user_question") {
       const long = tooLong(event.input);
       if (long !== undefined) return { block: true, reason: long };
