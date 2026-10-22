@@ -129,8 +129,8 @@ pub struct CurationArgs {
     #[command(flatten)]
     select: Select,
     /// At most this many entries per list (default: all)
-    #[arg(long, value_name = "n")]
-    limit: Option<u64>,
+    #[arg(long, value_name = "n", )]
+    limit: Option<u32>,
 }
 
 #[derive(Args, Debug)]
@@ -212,40 +212,55 @@ pub(super) fn curation(args: CurationArgs) -> Result<Output, CpdError> {
     user_only("context curation")?;
     let Env { mut store, .. } = Env::open()?;
     let context = args.select.resolve(&mut store)?;
-    let (retire, docs) = store.read(|conn| {
+    if args.limit == Some(0) {
+        return Err(CpdError::new(ErrorCode::ArgsInvalid, "--limit must be an integer of 1 or more.").with("limit", 0));
+    }
+    let limit = args.limit.map_or(-1, i64::from);
+    let (retire, docs, retire_total, docs_total) = store.read(|conn| {
         ContextRow::require(conn, &context)?;
         let mut stmt = conn.prepare(
-            "SELECT r.record, c.kind, coalesce(k.short, ''), r.reason, r.target
+            "SELECT r.record, c.kind, c.text, coalesce(k.short, ''), r.reason, r.target
                FROM record_retirements r
                JOIN context_records c ON c.context = r.context AND c.id = r.record
                LEFT JOIN record_curations k ON k.context = r.context AND k.record = r.record
-              WHERE r.context = ?1 AND r.status = 'pending' ORDER BY r.proposed_at, c.seq",
+              WHERE r.context = ?1 AND r.status = 'pending' ORDER BY r.proposed_at, c.seq LIMIT ?2",
         )?;
         let retire = stmt
-            .query_map([context.as_str()], |r| {
-                Ok(json!({"record": r.get::<_, String>(0)?, "kind": r.get::<_, String>(1)?, "short": r.get::<_, String>(2)?,
-                          "reason": r.get::<_, String>(3)?, "target": r.get::<_, String>(4)?}))
+            .query_map(rusqlite::params![context.as_str(), limit], |r| {
+                Ok(json!({"record": r.get::<_, String>(0)?, "kind": r.get::<_, String>(1)?, "text": r.get::<_, String>(2)?,
+                          "short": r.get::<_, String>(3)?, "reason": r.get::<_, String>(4)?, "target": r.get::<_, String>(5)?}))
             })?
             .collect::<rusqlite::Result<Vec<Value>>>()?;
         let mut stmt = conn.prepare(
-            "SELECT k.record, c.kind, k.short, coalesce(k.doc_paths, '[]')
+            "SELECT k.record, c.kind, c.text, k.short, coalesce(k.doc_paths, '[]')
                FROM record_curations k JOIN context_records c ON c.context = k.context AND c.id = k.record
-              WHERE k.context = ?1 AND k.doc_candidate = 'pending' ORDER BY k.curated_at, c.seq",
+              WHERE k.context = ?1 AND k.doc_candidate = 'pending' ORDER BY k.curated_at, c.seq LIMIT ?2",
         )?;
         let docs = stmt
-            .query_map([context.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?
+            .query_map(rusqlite::params![context.as_str(), limit], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let docs = docs
             .into_iter()
-            .map(|(record, kind, short, paths)| {
+            .map(|(record, kind, text, short, paths)| {
                 let paths: Value = serde_json::from_str(&paths)
                     .map_err(|e| CpdError::new(ErrorCode::StoreFailed, format!("The doc paths of {record} are not JSON: {e}.")))?;
-                Ok(json!({"record": record, "kind": kind, "short": short, "paths": paths}))
+                Ok(json!({"record": record, "kind": kind, "text": text, "short": short, "paths": paths}))
             })
             .collect::<Result<Vec<Value>, CpdError>>()?;
-        Ok((retire, docs))
+        let total = |sql: &str| conn.query_row(sql, [context.as_str()], |r| r.get::<_, i64>(0));
+        let retire_total = total(
+            "SELECT count(*) FROM record_retirements r JOIN context_records c ON c.context = r.context AND c.id = r.record
+              WHERE r.context = ?1 AND r.status = 'pending'",
+        )?;
+        let docs_total = total(
+            "SELECT count(*) FROM record_curations k JOIN context_records c ON c.context = k.context AND c.id = k.record
+              WHERE k.context = ?1 AND k.doc_candidate = 'pending'",
+        )?;
+        Ok((retire, docs, retire_total, docs_total))
     })?;
-    Ok(Output::success(json!({"context": context, "retire": retire, "docs": docs})))
+    Ok(Output::success(json!({"context": context, "retire": retire, "docs": docs, "retire_total": retire_total, "docs_total": docs_total})))
 }
 
 /// `context retire` (§3.16).
