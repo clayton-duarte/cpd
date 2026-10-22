@@ -170,6 +170,9 @@ fn failed(engine: &mut Engine, error: &CpdError) {
 }
 
 #[cfg(test)]
+mod no_inbox;
+
+#[cfg(test)]
 mod tier;
 
 #[cfg(test)]

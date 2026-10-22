@@ -1021,6 +1021,9 @@ fn strings(args: &[&str]) -> Vec<String> {
 }
 
 #[cfg(test)]
+mod no_inbox;
+
+#[cfg(test)]
 mod palette;
 
 #[cfg(test)]
