@@ -160,10 +160,11 @@ impl Kind {
 }
 
 pub(super) fn run(args: Args) -> Result<Output, CpdError> {
+    // The arguments are parsed at the edge, before the terminal is asked: a bad items file is refused on any stdout.
+    let (common, mut dialog) = args.kind.parts()?;
     if !on_a_terminal() {
         return Err(not_a_terminal("tui view dialog"));
     }
-    let (common, mut dialog) = args.kind.parts()?;
     // From here on this process owns the terminal (commands.md §1.2).
     let mut terminal = ratatui::init();
     let mouse = ratatui::crossterm::execute!(std::io::stdout(), EnableMouseCapture);
