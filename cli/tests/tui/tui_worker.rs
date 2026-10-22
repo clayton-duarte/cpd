@@ -218,10 +218,101 @@ fn the_foot_of_a_worker_waiting_for_its_lead_reads_waiting_and_its_label() {
     assert_eq!(screen.last().map(String::as_str), Some(" api-a1 running · waiting cpd: question to the Lead"), "{screen:?}");
 }
 
-/// An ended Attempt that failed says why at the foot (`failed: <cause>`, the Job's `failed_cause`): what the User reads
-/// when the Worker of a failed Job is opened from its pill in the Plan view.
+/// The Job form's rows and helpers (commands.md §13.2, Job `planview-docs`): the reason header (P4, P5, P6).
+const PLACEHOLDER: &str = " No Attempt yet: the Job has not started.";
+
+/// A Job `key` of PR `repo` in `status`, with `reason` as its cancel reason.
+fn job(key: &str, status: &str, reason: Option<&str>) -> String {
+    let merged = if status == "merged" { "'abc123'" } else { "NULL" };
+    let (reason, requested) = match reason {
+        Some(r) => (format!("'{r}'"), "'2026-01-04T00:00:00.000Z'"),
+        None => ("NULL".to_owned(), "NULL"),
+    };
+    format!(
+        "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, fingerprint,
+                           created_txn, cancel_reason, cancel_requested_at, merged_sha, created_at)
+         VALUES ('ship', 'repo', '{key}', 'Job {key}', 'S3', 'Goal.', 'Why.', '[\"x\"]', '[\"y\"]', '[]', '{status}', 0, '{}',
+                 cpd_txn(), {reason}, {requested}, {merged}, '2026-01-02T00:00:00.000Z');",
+        "0".repeat(64)
+    )
+}
+
+fn need(job: &str, needs: &str) -> String {
+    format!("INSERT INTO dependencies (plan, job, needs) VALUES ('ship', '{job}', '{needs}');")
+}
+
+fn job_pane<'a>(env: &'a TestEnv, key: &str, width: u16, height: u16) -> Pane<'a> {
+    Pane::start_command(env, width, height, &format!("{CPD} tui view worker --job {key} --plan ship"))
+}
+
+fn rows(text: &[&str]) -> Vec<String> {
+    text.iter().map(|r| (*r).to_owned()).collect()
+}
+
+/// The Job form of a cancelled Job without an Attempt: the reason at the top, in colour 8 (P4, P5).
 #[test]
-fn the_foot_of_a_failed_attempt_says_why_it_failed() {
+fn the_job_form_of_a_cancelled_job_without_an_attempt_says_why_at_the_top() {
+    let env = env();
+    populate(&env, None);
+    env.sql(&job("dead", "cancelled", Some("the vendor API is gone for good so the export was dropped by the User")));
+    env.sql(&job("mute", "cancelled", None));
+    let pane = job_pane(&env, "dead", 40, 8);
+    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
+    assert_eq!(
+        screen,
+        rows(&[
+            " cancelled: the vendor API is gone for",
+            " good so the export was dropped by the",
+            " User",
+            "",
+            PLACEHOLDER,
+            "",
+            "",
+            " dead cancelled",
+        ]),
+        "{screen:?}"
+    );
+    let out = env.tmux(&["capture-pane", "-p", "-e", "-t", SESSION]);
+    let raw = String::from_utf8(out.stdout).unwrap();
+    let row = raw.lines().find(|l| l.contains("cancelled: the vendor")).unwrap_or_else(|| panic!("no header:\n{raw}"));
+    assert!(row.contains("\x1b[38;5;8m cancelled: the vendor"), "the header is colour 8: {row:?}");
+
+    env.tmux(&["kill-server"]);
+    let pane = job_pane(&env, "mute", 40, 4);
+    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
+    assert_eq!(screen, rows(&[" cancelled", "", PLACEHOLDER, " mute cancelled"]), "{screen:?}");
+}
+
+/// The Job form of a queued Job: what it waits for, or nothing when its needs are merged.
+#[test]
+fn the_job_form_of_a_waiting_job_says_what_it_waits_for_at_the_top() {
+    let env = env();
+    populate(&env, None);
+    env.sql(&[
+        job("a", "queued", None),
+        job("b", "queued", None),
+        job("m", "merged", None),
+        job("web", "queued", None),
+        job("ok", "queued", None),
+        need("web", "a"),
+        need("web", "b"),
+        need("ok", "m"),
+    ]
+    .concat());
+    let pane = job_pane(&env, "web", 60, 5);
+    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
+    assert_eq!(screen, rows(&[" waiting on a, b", "", PLACEHOLDER, "", " web waiting"]), "{screen:?}");
+
+    env.tmux(&["kill-server"]);
+    let pane = job_pane(&env, "ok", 60, 3);
+    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
+    assert_eq!(screen, rows(&[PLACEHOLDER, "", " ok queued"]), "{screen:?}");
+}
+
+/// An ended Attempt that failed says why at the top, pinned (P5), not at the foot: what the User reads when the
+/// Worker of a failed Job is opened from its pill in the Plan view.
+#[test]
+fn the_attempt_form_of_a_failed_job_says_why_at_the_top_and_not_at_the_foot() {
     let env = env();
     let file = session_file(&env);
     populate(&env, Some(&file));
@@ -231,8 +322,88 @@ fn the_foot_of_a_failed_attempt_says_why_it_failed() {
          UPDATE jobs SET status = 'failed', failed_cause = 'crashed';",
     );
     let pane = Pane::start(&env, 60, 12);
-    let screen = pane.wait("the foot", |s| s.iter().any(|r| r.contains("test result")));
-    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 ended · stopped · failed: crashed"), "{screen:?}");
+    let screen = pane.wait("the transcript", |s| s.iter().any(|r| r.contains("test result")));
+    assert_eq!(screen[..3], rows(&[" failed: crashed", "", "16:33:44 you"])[..], "{screen:?}");
+    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 ended · stopped"), "{screen:?}");
+    pane.keys(&["k", "k", "k", "k", "k", "k", "k", "k"]);
+    pane.keys(&["PageUp"]);
+    let screen = pane.screen();
+    assert_eq!(screen[..2], rows(&[" failed: crashed", ""])[..], "pinned: {screen:?}");
+    assert_eq!(screen.last().map(String::as_str), Some(" api-a1 ended · stopped"), "{screen:?}");
+}
+
+/// A running or merged Job has no header.
+#[test]
+fn the_attempt_form_of_a_merged_job_has_no_header() {
+    let env = env();
+    let file = session_file(&env);
+    populate(&env, Some(&file));
+    env.sql(
+        "UPDATE sessions SET state = 'stopped' WHERE id = 'w1';
+         UPDATE attempts SET status = 'ended', outcome = 'merged', cause = 'merged', merged_sha = 'abc123', ended_at = '2026-01-03T00:05:00.000Z';
+         UPDATE jobs SET status = 'merged', merged_sha = 'abc123';",
+    );
+    let pane = Pane::start(&env, 60, 12);
+    let screen = pane.wait("the transcript", |s| s.iter().any(|r| r.contains("test result")));
+    assert_eq!(screen[0], "16:33:44 you", "{screen:?}");
+}
+
+/// P5: at most 5 header rows, `…` ends the 5th, then one empty row.
+#[test]
+fn a_long_reason_wraps_and_stops_at_five_rows() {
+    let env = env();
+    populate(&env, None);
+    let reason = (1..=39).map(|i| format!("word{i:02}")).collect::<Vec<_>>().join(" ");
+    env.sql(&job("dead", "cancelled", Some(&reason)));
+    let pane = job_pane(&env, "dead", 40, 10);
+    let screen = pane.wait("the form", |s| s.iter().any(|r| r.contains("No Attempt yet")));
+    assert_eq!(
+        screen[..4],
+        rows(&[
+            " cancelled: word01 word02 word03 word04",
+            " word05 word06 word07 word08 word09",
+            " word10 word11 word12 word13 word14",
+            " word15 word16 word17 word18 word19",
+        ])[..],
+        "{screen:?}"
+    );
+    assert!(screen[4].starts_with(" word20") && screen[4].ends_with('…'), "the fifth row ends in …: {screen:?}");
+    assert_eq!((screen[5].as_str(), screen[6].as_str()), ("", PLACEHOLDER), "{screen:?}");
+}
+
+#[test]
+fn the_job_form_of_an_unknown_job_is_refused_before_drawing() {
+    let env = env();
+    populate(&env, None);
+    let run = env.cpd(&["tui", "view", "worker", "--job", "nope", "--plan", "ship"]);
+    assert_eq!((run.exit, run.error()["code"].clone()), (4, json!("job_not_found")), "{run:?}");
+}
+
+/// The pane opened for a Job without an Attempt follows it to its first Attempt.
+#[test]
+fn the_job_form_follows_the_job_to_its_first_attempt() {
+    let env = env();
+    let file = session_file(&env);
+    populate(&env, None);
+    env.sql(&job("later", "queued", None));
+    let pane = job_pane(&env, "later", 60, 12);
+    let screen = pane.wait("the placeholder", |s| s.iter().any(|r| r.contains("No Attempt yet")));
+    assert_eq!(screen[0], PLACEHOLDER, "{screen:?}");
+    env.sql(&format!(
+        "UPDATE jobs SET status = 'running' WHERE key = 'later';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, worker_session, started_at)
+         VALUES ('ship', 'later-a1', 'later', 1, 'S3', 'ladder', 'running', 'cpd/ship--later-a1', '/w/later-a1', 'w2',
+                 '2026-01-03T00:01:00.000Z');
+         INSERT INTO sessions (id, role, context, plan, attempt, name, file, cwd, tier, tmux_pane, state, state_label, state_at, created_at)
+         VALUES ('w2', 'worker', 'alpha', 'ship', 'later-a1', 'later-a1', '{}', '/w/later-a1', 'S3', NULL, 'working', NULL,
+                 '2026-01-03T00:01:00.000Z', '2026-01-03T00:01:00.000Z');
+         INSERT INTO events (txn, at, kind, context, plan, attempt, session, text, data)
+         VALUES (cpd_txn(), '2026-01-03T00:02:00.000Z', 'attempt-started', 'alpha', 'ship', 'later-a1', 'w2', 'fixture', '{{}}');",
+        file.display()
+    ));
+    let screen = pane.wait("the transcript", |s| s.iter().any(|r| r.contains("test result")));
+    assert_eq!(screen[0], "16:33:44 you", "{screen:?}");
+    assert_eq!(screen.last().map(String::as_str), Some(" later-a1 running · working"), "{screen:?}");
 }
 
 #[test]
