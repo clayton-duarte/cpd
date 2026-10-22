@@ -369,8 +369,8 @@ fn the_popup_on_a_client_closes_at_once_on_the_confirm_while_gh_is_merging() {
     release(&env);
     wait_action_done(&env);
     let order = call_order(&env);
-    assert_eq!(order[..2], ["pr view", "pr merge"], "{order:?}");
-    assert!(order.len() > 2 && order[2..].iter().all(|c| c == "api graphql"), "the poll ran after the merge: {order:?}");
+    assert_eq!(order[..3], ["pr view", "pr merge", "pr view"], "{order:?}");
+    assert!(order.len() > 3 && order[3..].iter().all(|c| c == "api graphql"), "the poll ran after the merge: {order:?}");
     assert!(tmux_calls(&env, "display-popup").len() == 1, "a success opens no dialog: {:?}", tmux_calls(&env, "display-popup"));
     assert_eq!(merge_log(&env), Vec::<String>::new());
 }
@@ -406,8 +406,8 @@ fn the_confirm_closes_the_view_at_once_and_the_merge_then_the_poll_run_in_the_ba
         release(&env);
         wait_action_done(&env);
         let order = call_order(&env);
-        assert_eq!(order[..2], ["pr view", "pr merge"], "{how}: {order:?}");
-        assert!(order.len() > 2 && order[2..].iter().all(|c| c == "api graphql"), "{how}: the poll ran after the merge: {order:?}");
+        assert_eq!(order[..3], ["pr view", "pr merge", "pr view"], "{how}: {order:?}");
+        assert!(order.len() > 3 && order[3..].iter().all(|c| c == "api graphql"), "{how}: the poll ran after the merge: {order:?}");
         // a success says nothing: no dialog, no message, no log line
         assert!(tmux_calls(&env, "display-popup").is_empty(), "{how}: {:?}", env.calls("tmux"));
         assert!(tmux_calls(&env, "display-message").is_empty(), "{how}: {:?}", env.calls("tmux"));
@@ -430,8 +430,8 @@ fn the_action_merges_then_polls_and_a_success_says_nothing() {
     fake_tmux(&env);
     action(&env, CLIENT);
     let order = call_order(&env);
-    assert_eq!(order[..2], ["pr view", "pr merge"], "{order:?}");
-    assert!(order.len() > 2 && order[2..].iter().all(|c| c == "api graphql"), "{order:?}");
+    assert_eq!(order[..3], ["pr view", "pr merge", "pr view"], "{order:?}");
+    assert!(order.len() > 3 && order[3..].iter().all(|c| c == "api graphql"), "{order:?}");
     assert_eq!(merges(&env).len(), 1);
     assert!(tmux_calls(&env, "display-popup").is_empty() && tmux_calls(&env, "display-message").is_empty(), "{:?}", env.calls("tmux"));
     assert_eq!(merge_log(&env), Vec::<String>::new());
@@ -444,7 +444,7 @@ fn a_poll_that_fails_after_a_merge_is_a_log_line_and_no_dialog() {
     fake_tmux(&env);
     action(&env, CLIENT);
     // the pull request did merge: the poll ran after it, and its failure is a line of the log, nothing else
-    assert_eq!(call_order(&env)[..3], ["pr view", "pr merge", "api graphql"]);
+    assert_eq!(call_order(&env)[..4], ["pr view", "pr merge", "pr view", "api graphql"]);
     let log = merge_log(&env);
     assert_eq!(log.len(), 1, "{log:?}");
     assert!(log[0].starts_with("pr poll after merge o/r#7: gh_failed: "), "{log:?}");
