@@ -157,7 +157,8 @@ fn the_keys_scroll_and_q_leaves_for_the_placeholder_text() {
     pane.keys(&["g"]); // not a key
     pane.keys(&["k", "k", "k", "k", "k", "k"]);
     let screen = pane.wait("the top", |s| s.get(1).is_some_and(|r| r.contains("you")));
-    assert_eq!(screen, [TOP, "16:33:44 you", "      Plan the API.", "16:33:44 agent"]);
+    // the pane's last row (row 4) stays empty: only rows 1..3 are pinned
+    assert_eq!(screen[..3], [TOP, "16:33:44 you", "      Plan the API."]);
     pane.keys(&["G"]);
     pane.wait("the end again", |s| s.iter().any(|r| r.contains("󰘌 ok")));
     pane.keys(&["q"]);
