@@ -1029,15 +1029,15 @@ mod tests {
     /// The version pill (§6.1): last on the right, after the workers pill, one `─` join, then the closing `─`, only while `@cpd_version` is set.
     #[test]
     fn the_version_pill_is_last_on_the_right_and_only_while_the_option_is_set() {
-        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour7]\u{e0b6}";
+        let pill = "#{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}";
         let at = STATUS_FORMAT.find(pill).unwrap_or_else(|| panic!("no version pill in {STATUS_FORMAT}"));
         let workers = STATUS_FORMAT.rfind("#{@cpd_workers_short}}").expect("the workers pill");
         assert!(at > workers, "the version pill follows the workers pill: {STATUS_FORMAT}");
         let tail = &STATUS_FORMAT[at..];
         assert!(tail.contains("#{@cpd_version}"), "{tail}");
-        assert!(tail.contains("fg=colour7") && tail.contains("bg=colour7") && tail.contains("\u{e0b4}"), "{tail}");
+        assert!(tail.contains("fg=colour8") && tail.contains("bg=colour8") && tail.contains("\u{e0b4}"), "{tail}");
         assert!(tail.ends_with("#[fg=colour8]\u{2500}#[default]"), "the closing ─ follows the pill: {tail}");
-        assert_eq!(STATUS_FORMAT.matches("bg=colour7]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
+        assert_eq!(STATUS_FORMAT.matches("bg=colour8]#{@cpd_version}#[").count(), 1, "the text is drawn once: {STATUS_FORMAT}");
     }
 
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.

@@ -525,10 +525,10 @@ fn the_status_format_is_the_buttons_the_grey_fill_line_and_the_right_pills() {
          #[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}},\
          #{e|+:#{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}\
          #[default]#[align=right]\
-         #[fg=colour7]\u{e0b6}#[fg=colour0]#[bg=colour7]\
+         #[fg=colour8]\u{e0b6}#[fg=colour0]#[bg=colour8]\
          #{?#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}},#{@cpd_workers},#{@cpd_workers_short}}\
-         #[fg=colour7]#[bg=default]\u{e0b4}#[default]\
-         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour7]\u{e0b6}#[fg=colour0]#[bg=colour7]#{@cpd_version}#[fg=colour7]#[bg=default]\u{e0b4}#[default],}\
+         #[fg=colour8]#[bg=default]\u{e0b4}#[default]\
+         #{?#{@cpd_version},#[fg=colour8]\u{2500}#[fg=colour8]\u{e0b6}#[fg=colour0]#[bg=colour8]#{@cpd_version}#[fg=colour8]#[bg=default]\u{e0b4}#[default],}\
          #[fg=colour8]\u{2500}#[default]"
     );
 }
