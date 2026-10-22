@@ -1,10 +1,7 @@
 //! The `@cpd_workers` step (contract §6.1; commands.md §12; User, hs-d149,
 //! hs-d198): the right side of the StatusBar, which tmux's status line cannot
-//! compute: the styled Inbox counter `inbox <n>` (commands.md §13.2), the
-//! styled `workers N/M · W waiting · Q queued` text, its short form `N/M·W·Q`
-//! and the width of the long right side. Every tick, `<n>` is the open,
-//! visible Inbox items (the read of `cpd inbox list`), whose most urgent tier is
-//! `@cpd_inbox_tier`, `N` is the Attempts not `ended` (the slots of the
+//! compute: the `workers N/M · W waiting · Q queued` text, its short form `N/M·W·Q`
+//! and the width of the long right side. Every tick, `N` is the Attempts not `ended` (the slots of the
 //! `widgets` view), `M` is `concurrency`, `W` the Ready Jobs (E3's rule) and
 //! `Q` the `queued` Jobs; the options are set in one `tmux set` call only
 //! when one of them differs from what was last set (the first tick always
@@ -15,21 +12,14 @@
 //! reported): with no server there is no status line to feed, and the step
 //! waits.
 
-use time::OffsetDateTime;
-
 use super::engine::Engine;
-use cpd_core::clock::timestamp;
 use super::report::{About, Step};
 use super::restart;
 use super::schedule::READY;
 use cpd_core::error::CpdError;
-use cpd_core::inbox::model::{self, Filter, State, Urgency};
 
-/// The options the status line draws: the Inbox counter, the long form, the short form, and the width in cells of
-/// the right items (the Inbox counter's pill, one space and the workers' pill, each pill with its two caps) in the
-/// long form and in the short form.
-const INBOX: &str = "@cpd_inbox";
-const TIER: &str = "@cpd_inbox_tier";
+/// The options the status line draws: the long form, the short form, and the width in cells of
+/// the workers' pill, with its two caps, in the long form and in the short form.
 const LONG: &str = "@cpd_workers";
 const SHORT: &str = "@cpd_workers_short";
 const WIDTH: &str = "@cpd_workers_width";
@@ -43,39 +33,6 @@ const HELD: &str = "SELECT count(*) FROM attempts WHERE status <> 'ended'";
 
 /// Every `queued` Job, the waiting ones included.
 const QUEUED: &str = "SELECT count(*) FROM jobs WHERE status = 'queued'";
-
-/// The Inbox counter of the StatusBar.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(super) struct Inbox {
-    /// The open items that are neither snoozed nor dismissed.
-    pub(super) count: usize,
-    /// The urgency of the most urgent of them; `None` when `count` is 0.
-    pub(super) urgency: Option<Urgency>,
-}
-
-impl Inbox {
-    /// The visible items of every Context at `now`, as `cpd inbox list` reads them.
-    fn read(conn: &rusqlite::Connection, now: String) -> Result<Inbox, CpdError> {
-        let items = model::list(conn, &Filter { context: None, state: State::Visible { now } })?;
-        Ok(Inbox { count: items.len(), urgency: items.iter().map(|i| i.urgency).max() })
-    }
-
-    /// `inbox <n>`, with no style of its own: the pill's text colour (§6.1.1 R1) is the only one.
-    pub(super) fn styled(self) -> String {
-        format!("inbox {}", self.count)
-    }
-
-    /// The tier `@cpd_inbox_tier` holds (contract §6.1.1): the urgency of the most urgent item, `red`, `yellow`,
-    /// `magenta` or `white`, and `none` at 0.
-    fn tier(self) -> &'static str {
-        self.urgency.map_or("none", Urgency::as_str)
-    }
-
-    /// The visible width in cells.
-    fn width(self) -> usize {
-        format!("inbox {}", self.count).chars().count()
-    }
-}
 
 /// The three numbers of the StatusBar.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -120,19 +77,17 @@ impl Counts {
 
 pub(super) fn run(engine: &mut Engine) {
     let limit = engine.config.concurrency;
-    let now = timestamp(OffsetDateTime::now_utc());
-    let read = engine.store.read(|conn| Ok((Inbox::read(conn, now)?, Counts::read(conn, limit)?)));
-    let (inbox, counts) = match read {
+    let read = engine.store.read(|conn| Counts::read(conn, limit));
+    let counts = match read {
         Ok(read) => read,
         Err(e) => return engine.fail(Step::Workers, About::Machine, &e),
     };
-    let (styled, long, short) = (inbox.styled(), counts.long(), counts.short());
-    // The status line draws each text in a pill and puts one space between the two pills.
-    let right = |workers: usize| (inbox.width() + CAPS + 1 + workers + CAPS).to_string();
+    let (long, short) = (counts.long(), counts.short());
+    // The status line draws each text in a pill.
+    let right = |workers: usize| (workers + CAPS).to_string();
     let (width, short_width) = (right(counts.width()), right(counts.short_width()));
-    let tier = inbox.tier();
-    // What was last set: the six values, one string (no value holds a newline).
-    let state = format!("{styled}\n{tier}\n{long}\n{short}\n{width}\n{short_width}");
+    // What was last set: the four values, one string (no value holds a newline).
+    let state = format!("{long}\n{short}\n{width}\n{short_width}");
     if engine.workers.as_deref() == Some(state.as_str()) {
         return;
     }
@@ -146,7 +101,7 @@ pub(super) fn run(engine: &mut Engine) {
         Err(e) => return failed(engine, &e),
     }
     // One call, so a status line never draws a width that belongs to another text.
-    let args = ["set", "-g", INBOX, &styled, ";", "set", "-g", TIER, tier, ";", "set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width, ";", "set", "-g", SHORT_WIDTH, &short_width]
+    let args = ["set", "-g", LONG, &long, ";", "set", "-g", SHORT, &short, ";", "set", "-g", WIDTH, &width, ";", "set", "-g", SHORT_WIDTH, &short_width]
         .map(str::to_owned);
     let set: Result<String, CpdError> = engine.tmux.run(&args);
     match set {
@@ -170,23 +125,12 @@ fn failed(engine: &mut Engine, error: &CpdError) {
 }
 
 #[cfg(test)]
-mod tier;
+mod no_inbox;
 
 #[cfg(test)]
 mod tests {
-    use super::{Counts, Inbox};
-    use cpd_core::inbox::model::Urgency;
+    use super::Counts;
     use rusqlite::Connection;
-
-    #[test]
-    fn the_inbox_counter_has_no_style() {
-        for urgency in [None, Some(Urgency::Red), Some(Urgency::White)] {
-            let inbox = Inbox { count: 12, urgency };
-            assert_eq!(inbox.styled(), "inbox 12");
-            assert_eq!(inbox.width(), 8);
-        }
-        assert_eq!(Inbox { count: 0, urgency: None }.width(), 7);
-    }
 
     fn counts(running: u32, limit: u32, waiting: u32, queued: u32) -> Counts {
         Counts { running, limit, waiting, queued }

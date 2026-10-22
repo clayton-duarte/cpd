@@ -56,7 +56,7 @@ pub(super) struct Engine {
     pub last_poll_end: Option<Instant>,
     /// While GitHub's rate limit is nearly spent, E5 runs no poll before this.
     pub paused_until: Option<Instant>,
-    /// The `@cpd_inbox` and `@cpd_workers` texts and width last set on the tmux server.
+    /// The `@cpd_workers` texts and width last set on the tmux server.
     pub workers: Option<String>,
     /// E9: the highest record `seq` of each Context a distill run was started for in this engine's life.
     pub distill_started: HashMap<ContextId, i64>,
@@ -69,6 +69,30 @@ pub(super) struct Engine {
 }
 
 impl Engine {
+    /// An engine on `home` (its config and store) and `tmux`, for the steps' tests.
+    #[cfg(test)]
+    pub(super) fn for_test(home: CpdHome, tmux: Tmux) -> Engine {
+        let config = Config::load(&home).expect("the test home's config");
+        let store = Store::open(&home, u64::from(config.timeouts.store_busy_ms)).expect("the test home's store");
+        let log = Log::open(&home).expect("the test home's log");
+        Engine {
+            home,
+            config,
+            store,
+            tmux,
+            log,
+            report: Report::new(Duration::from_secs(60)),
+            catalog: None,
+            last_poll_end: None,
+            paused_until: None,
+            workers: None,
+            distill_started: HashMap::new(),
+            titles: titles::Runs::default(),
+            team: team::State::default(),
+            restart_started: None,
+        }
+    }
+
     /// Reports a failure of `step` for `about` (once until it clears).
     pub(super) fn fail(&mut self, step: Step, about: About, failure: impl Into<Failure>) {
         self.report.fail(&mut self.store, &mut self.log, step, about, failure);
