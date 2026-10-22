@@ -399,6 +399,83 @@ fn the_cancelled_plans_port_is_free_for_another_plan() {
     wait_until("pi with the port", || fs::read_to_string(&recorded).is_ok_and(|t| t == "19432\n"));
 }
 
+// ---------- a `tdd` PR's last test and impl Jobs do not stop a plan cancel (hs-d573, rule B2) ----------
+
+/// Adds to the Plan of [`setup`] a started `tdd` PR `tdd` whose only `test` and `impl` Jobs are `tdd-tests` and
+/// `tdd-impl` (`impl_status`, `queued` or `running` with its Attempt `tdd-impl-a1`), and a queued `open` Job `tdd-open`.
+fn add_tdd_pr(env: &TestEnv, impl_status: &str) {
+    let repo = env.keyed_repo("tdd");
+    let fingerprint = "f".repeat(64);
+    let job = |key: &str, kind: &str, tests: &str| {
+        format!(
+            "INSERT INTO jobs (plan, pr, key, kind, title, tier, goal, context, touches, acceptance, out_of_scope, tests, test_files, status, appended, fingerprint, created_txn, created_at)
+             VALUES ('pay', 'tdd', '{key}', '{kind}', 'Job {key}', 'S2', 'Goal.', 'Context.', '[\"src/{key}.rs\"]', '[\"cargo test\"]', '[]', {tests}, {tests},
+                     'queued', 0, '{fingerprint}', cpd_txn(), 't');"
+        )
+    };
+    let running = if impl_status == "running" {
+        "UPDATE jobs SET status = 'running' WHERE key = 'tdd-impl';
+         INSERT INTO attempts (plan, id, job, number, tier, origin, status, branch, worktree, started_at)
+         VALUES ('pay', 'tdd-impl-a1', 'tdd-impl', 1, 'S2', 'ladder', 'running', 'cpd/pay--tdd-impl-a1', '/w', 't');"
+    } else {
+        ""
+    };
+    fixture(
+        env,
+        &format!(
+            "INSERT INTO prs (plan, key, repo, base, status, shape, lead_branch, lead_worktree, started_at, created_txn, created_at)
+               VALUES ('pay', 'tdd', '{repo}', 'main', 'dispatch', 'tdd', 'cpd/pay/tdd', '/wt/tdd', 't', cpd_txn(), 't');
+             {tests}{imp}{open}{running}",
+            repo = repo.display(),
+            tests = job("tdd-tests", "test", "'[\"t::x\"]'").replace("'[\"t::x\"]', '[\"t::x\"]'", "'[\"t::x\"]', '[\"tests/x.rs\"]'"),
+            imp = job("tdd-impl", "impl", "NULL"),
+            open = job("tdd-open", "open", "NULL"),
+        ),
+    );
+}
+
+fn cancel_by_hand_is_refused_shape_incomplete(env: &TestEnv) {
+    let before = env.query::<i64>("SELECT count(*) FROM events");
+    let error = refused(&env.cpd(&["job", "cancel", "tdd-impl", "--reason", "No.", "--plan", "pay"]), "shape_incomplete", 3);
+    assert_eq!(error["details"]["missing"], json!(["impl"]));
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM events"), before, "a refusal writes nothing");
+}
+
+#[test]
+fn a_tdd_pr_with_its_last_test_and_impl_jobs_does_not_stop_a_plan_cancel() {
+    let env = TestEnv::new();
+    setup(&env);
+    add_tdd_pr(&env, "queued");
+    cancel_by_hand_is_refused_shape_incomplete(&env);
+    assert_eq!(job_status(&env, "tdd-impl"), "queued");
+
+    cancel_with_engine(&env, &[]).ok();
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
+    for key in ["tdd-tests", "tdd-impl", "tdd-open"] {
+        assert_eq!(env.query::<String>(&format!("SELECT cancel_reason FROM jobs WHERE key = '{key}'")), "plan cancelled", "{key}");
+    }
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+    assert_eq!(env.cpd(&["plan", "cancel", "--plan", "pay"]).ok()["already"], true);
+}
+
+#[test]
+fn a_plan_cancel_stops_a_running_last_impl_job_of_a_tdd_pr_without_the_shape_check() {
+    let env = TestEnv::new();
+    setup(&env);
+    add_tdd_pr(&env, "running");
+    cancel_by_hand_is_refused_shape_incomplete(&env);
+
+    // `r` and `tdd-impl` both run: two stop requests, then the engine ends the Attempts.
+    let child = spawn_cancel(&env, &[]);
+    wait_until("both stop requests", || events(&env, "job-cancel-requested").len() == 2);
+    engine_ends_attempts(&env);
+    finish(child).ok();
+    let requested: Vec<Value> = events(&env, "job-cancel-requested").iter().map(|e| e["job"].clone()).collect();
+    assert!(requested.contains(&json!("tdd-impl")), "{requested:?}");
+    assert_eq!(job_status(&env, "tdd-impl"), "cancelled");
+    assert_eq!(env.query::<i64>("SELECT count(*) FROM jobs WHERE status NOT IN ('merged', 'cancelled')"), 0);
+}
+
 // ---------- refusals ----------
 
 #[test]
