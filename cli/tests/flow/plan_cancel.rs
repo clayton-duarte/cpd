@@ -420,6 +420,7 @@ fn a_pending_plan_review_is_superseded_and_the_cancel_goes_on() {
             "f".repeat(64)
         ),
     );
+    let before: i64 = env.query("SELECT max(id) FROM events");
     cancel_with_engine(&env, &[]).ok();
 
     // The review is closed, with one Event, before the Jobs are cancelled; the Job is cancelled and the Plan archived.
@@ -431,8 +432,9 @@ fn a_pending_plan_review_is_superseded_and_the_cancel_goes_on() {
     assert_eq!(closed.len(), 1, "{closed:?}");
     assert_eq!((&closed[0]["data"]["review"], &closed[0]["data"]["status"]), (&json!("r1"), &json!("superseded")));
     assert!(closed[0]["text"].as_str().unwrap().contains("cancelled"), "{}", closed[0]["text"]);
-    let first_cancel: i64 = env.query("SELECT min(id) FROM events WHERE kind LIKE 'job-cancel%'");
-    assert!(env.query::<i64>("SELECT id FROM events WHERE kind = 'plan-review'") < first_cancel, "the review closes first");
+    let first_cancel: i64 = env.query(&format!("SELECT min(id) FROM events WHERE kind LIKE 'job-cancel%' AND id > {before}"));
+    let review_event: i64 = env.query("SELECT id FROM events WHERE kind = 'plan-review'");
+    assert!(before < review_event && review_event < first_cancel, "the review closes first");
     assert_eq!(job_status(&env, "q"), "cancelled");
     assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
 

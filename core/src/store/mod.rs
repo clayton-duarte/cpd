@@ -947,7 +947,8 @@ mod tests {
         for message in seen {
             let failure = rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER);
             let err = CpdError::from(rusqlite::Error::SqliteFailure(failure, Some(message.clone())));
-            let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()");
+            // `review_pending` guards a code path that forgot to close the Plan's reviews: a bug, so untyped by design.
+            let untyped = message.starts_with("append_only: ") || message.ends_with(" must be cpd_txn()") || message == "review_pending";
             assert_eq!(err.code() == ErrorCode::StoreFailed, untyped, "{message}: {err:?}");
             assert_eq!(err.details()["sqlite_message"], message);
         }
