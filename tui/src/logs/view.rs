@@ -3,7 +3,7 @@
 
 use ratatui::Frame;
 use ratatui::crossterm::event::{KeyEvent, MouseEvent};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -156,13 +156,13 @@ fn line(e: &Event, width: usize) -> Line<'static> {
         ("error", false) => palette::fg(Meaning::Failed),
         _ => palette::read_only_text(),
     };
-    let room = width.saturating_sub(" 00:00:00 ".len());
+    let room = width.saturating_sub("00:00:00 ".len());
     let text = if text.chars().count() <= room {
         text.clone()
     } else {
         text.chars().take(room.saturating_sub(1)).chain(['…']).collect()
     };
-    Line::from(vec![" ".into(), muted(clock(&e.at)), " ".into(), Span::styled(text, style)])
+    Line::from(vec![muted(clock(&e.at)), " ".into(), Span::styled(text, style)])
 }
 
 /// Draws the title, then the visible Events, in `area`, and the error in its last row. Call [`Log::fit`] with its
@@ -171,16 +171,17 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let [head, area] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
     let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
     f.render_widget(Paragraph::new(section::title("Logs", None, usize::from(title.width))), title);
+    let area = area.inner(Margin::new(1, 0)); // one blank column on each side
     let area = match &log.error {
         Some(error) => {
             let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
-            f.render_widget(Paragraph::new(Span::styled(format!(" {error}"), palette::error())), foot);
+            f.render_widget(Paragraph::new(Span::styled(error.clone(), palette::error())), foot);
             events
         }
         None => area,
     };
     let lines: Vec<Line<'static>> = if log.events.is_empty() {
-        vec![Line::from(muted(" none yet"))]
+        vec![Line::from(muted("none yet"))]
     } else {
         log.visible().iter().map(|e| line(e, usize::from(area.width))).collect()
     };

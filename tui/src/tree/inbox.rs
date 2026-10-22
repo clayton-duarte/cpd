@@ -345,7 +345,7 @@ pub fn draw(f: &mut Frame, area: Rect, items: &[Item], shape: Shape, cursor: Opt
     for dy in 0..area.height.min(shape.height()) {
         let full = Rect::new(area.x, area.y + dy, area.width, 1);
         let row = full.inner(Margin::new(1, 0));
-        let width = usize::from(row.width);
+        let width = usize::from(row.width).saturating_sub(2); // the content ends at column W-4 (the rail's right padding)
         let at = usize::from(dy);
         match shape.hit(dy) {
             Some(Hit::Header) => {

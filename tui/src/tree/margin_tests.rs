@@ -81,7 +81,7 @@ fn the_inbox_scroll_cue_row_ends_where_the_rows_do() {
 fn a_context_block_row_is_cut_three_columns_before_the_panes_edge() {
     // a Plan row of the Context block is the one that is cut (its name) and right-aligned (its counters)
     let long = plan(
-        "a-very-long-plan-id-that-cannot-fit-in-forty-columns",
+        "a-very-long-plan-id-xxxx",
         "cc",
         Phase::Dispatch,
         [0, 36, 0, 0, 1, 5],

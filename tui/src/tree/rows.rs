@@ -70,6 +70,10 @@ const TOGGLE: &str = "╰─ ";
 /// What the identifier of the empty row after the Context whose own identifier is `id` starts with (hs-d476).
 const SPACER: &str = "  ";
 
+/// The columns the tree's area (already inside the pane's margin) keeps blank at the right of a rail row: the padding and the
+/// box's wall column, so that the row ends at column W-4 of the pane (commands.md §17).
+const RIGHT_PAD: u16 = 2;
+
 /// The columns a content row's branch takes (`fold::TREE_BRANCH`).
 const BRANCH_WIDTH: usize = 2;
 
@@ -485,7 +489,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
         f.render_widget(Paragraph::new(Line::from(Span::styled(" no Contexts", palette::muted_text()))), area);
         return;
     }
-    let items = items(tree, state.opened(), area.width, frame);
+    let items = items(tree, state.opened(), area.width.saturating_sub(RIGHT_PAD), frame);
     let flat = state.flatten(&items);
     let height = usize::from(area.height);
     scroll.max = max_scroll(flat.len(), height, 1);
@@ -525,7 +529,7 @@ pub fn draw(f: &mut Frame, area: Rect, tree: &Tree, state: &mut TreeState<Id>, c
             buf[(x, y)] = cell;
         }
         if let Row::Plan(_, plan) = row {
-            counters(plan, has_stuck_job(tree, plan)).right_aligned().render(rect, buf);
+            counters(plan, has_stuck_job(tree, plan)).right_aligned().render(Rect { width: rect.width.saturating_sub(RIGHT_PAD), ..rect }, buf);
         }
         if row.muted() {
             // archived: colour 8 on every mark; asleep: colour 7 on every mark, the fold's lines (the branch) staying 8; either way
