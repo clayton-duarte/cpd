@@ -30,7 +30,7 @@ fn config_missing_file_is_config_missing() {
 }
 
 #[test]
-fn config_with_only_the_required_keys_has_every_default() {
+fn config_defaults_context_distill_tier_to_h0() {
     let env = TestEnv::new();
     let out = config_with(&env, MINIMAL).ok();
     assert_eq!(out["path"], env.cpd_home().join("config.toml").to_str().unwrap());
@@ -44,7 +44,7 @@ fn config_with_only_the_required_keys_has_every_default() {
             "retry_cap": 2,
             "lead_tier": "O2",
             "manager_tier": "O4",
-            "context_distill_tier": "H2",
+            "context_distill_tier": "H0",
             "open_tier": "S2",
             "lead_pi_packages": [
                 "npm:@plannotator/pi-extension@0.28.17",
