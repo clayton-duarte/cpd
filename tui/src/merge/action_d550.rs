@@ -35,8 +35,8 @@ fn setup(dir: &tempfile::TempDir, rows: &[(i64, &str)]) -> CpdHome {
         .write("fixture", |tx| {
             for (number, state) in rows {
                 tx.execute(
-                    "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored)
-                     VALUES ('acme/api', ?1, 'https://github.com/acme/api/pull/' || ?1, 'T', 0, ?2, 'none', 'none', 't', 't', 'clean', 1)",
+                    "INSERT INTO pull_requests (repo, number, url, title, draft, state, review_decision, checks, created_at, changed_at, merge_state, authored, merged_at)
+                     VALUES ('acme/api', ?1, 'https://github.com/acme/api/pull/' || ?1, 'T', 0, ?2, 'none', 'none', 't', 't', 'clean', 1, CASE WHEN ?2 = 'merged' THEN 't' END)",
                     (number, state),
                 )?;
             }
