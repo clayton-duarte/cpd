@@ -99,7 +99,7 @@ Phase `grounding`. Steps: [Grounding](#grounding), [Clarifying](#clarifying), [S
    ```
 
    Use `decide` for a settled choice (`--supersedes` when it replaces an earlier one), `note` for a fact, `ask` for a question the User has not settled and `answer` when it is. Plan-only detail (this Plan's assumptions, its Jobs) belongs in the Specs, not the Context.
-2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). Confirm them with the User in one `ask_user_question` round (Accept or Change), also while drafts exist: the assumptions are stated in the question (its text, or an option's description or preview), then confirmed. If they are too long for 1500 characters, write them to a file and open it in plannotator (hs-d303). Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec, and into the Plan's outline (`assumptions`, see [Approving](#approving)). Move on only after the User accepts.
+2. **Assumptions.** List what remains as numbered assumptions (A1, A2, …). Confirm them with the User in one `ask_user_question` round (Accept or Change), also while drafts exist: the assumptions are stated in the question (its text, or an option's description or preview), then confirmed. If they are too long for 1500 characters, write them to a file and open it in plannotator. Copy each accepted assumption into the `context` of every Job it affects: a Worker sees only its Spec, and into the Plan's outline (`assumptions`, see [Approving](#approving)). Move on only after the User accepts.
 3. **Move to `plan`.** `cpd plan phase plan` is the only manual phase change. PRs and Jobs can be drafted only from here. Run it once Grounding, Clarifying and Specifying are done.
 
 ## 2. Plan
