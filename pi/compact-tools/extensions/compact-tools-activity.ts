@@ -1,9 +1,8 @@
-import { UserMessageComponent, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { UserMessageComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { onTick } from "./compact-tools-clock.ts";
-import { colorizeRgb, interpolateRgb } from "./compact-tools-color.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
-import { activityGlow, perPalette, type ThinkingLevel } from "./compact-tools-palette.ts";
+import { INDEX, paint, RUNNING } from "./compact-tools-indices.ts";
 
 const WIDGET_KEY = "compact-tools-silent-activity-render";
 const ACTIVITY_STATE = Symbol.for("pi-compact-tools.silent.activity.state");
@@ -41,8 +40,6 @@ const AFTERGLOW_FRAMES = 8;
 const SUBSTEPS = 8;
 /** Brightness levels: coarse enough that unchanged frames compare equal and skip a repaint. */
 const TONE_LEVELS = 32;
-/** Perceptual easing for color: faint tail steps would otherwise read as bands. */
-const TONE_GAMMA = 0.75;
 
 /**
  * Where the light is at a (possibly fractional) frame. It runs to the last cell and
@@ -111,37 +108,19 @@ export function frameChanges(frame: number): boolean {
 
 type PaintedBreath = readonly (readonly string[])[];
 
-/**
- * Every dot of every frame of a breath at a level, painted once per palette. A breath
- * has a fixed number of frames, so each frame the line draws after that is a lookup.
- */
-function paintedBreath(theme: Theme, level: ThinkingLevel): PaintedBreath {
-	const byLevel = perPalette(theme, "activity-breath", () => new Map<ThinkingLevel, PaintedBreath>());
-	let breath = byLevel.get(level);
-	if (!breath) {
-		const glow = activityGlow(theme, level);
-		const paint = (intensity: number) => glow
-			? colorizeRgb(theme, interpolateRgb(glow.from, glow.to, intensity ** TONE_GAMMA), DOT)
-			// Reached only when the theme's colors did not resolve.
-			: theme.fg(intensity > 0.5 ? "text" : "dim", DOT);
-		breath = FRAMES.map((cells) => cells.map(paint));
-		byLevel.set(level, breath);
-	}
-	return breath;
-}
+/** A lit cell is the running index, an unlit one the rail index: two indices, no ramp between them. */
+const LIT_ABOVE = 0.5;
 
-/** A line the light runs along with a fading afterimage, in the thinking level's color, fitted to the width. */
-export function renderActivityDots(
-	frame: number,
-	width: number,
-	theme: Theme,
-	level: ThinkingLevel = "medium",
-	column = LABEL_COLUMN,
-): string[] {
+/** Every dot of every frame of a breath, painted once; each frame the line draws after that is a lookup. */
+const BREATH: PaintedBreath = FRAMES.map((cells) =>
+	cells.map((intensity) => paint(intensity > LIT_ABOVE ? RUNNING : INDEX.darkGrey, DOT)));
+
+/** A line the light runs along with a fading afterimage, fitted to the width. */
+export function renderActivityDots(frame: number, width: number, column = LABEL_COLUMN): string[] {
 	if (width <= 0) return [];
 	const indent = Math.max(0, Math.min(column, width - 1));
 	const fitting = Math.min(DOT_COUNT, width - indent);
-	return [" ".repeat(indent) + paintedBreath(theme, level)[frameIndex(frame)]!.slice(0, fitting).join("")];
+	return [" ".repeat(indent) + BREATH[frameIndex(frame)]!.slice(0, fitting).join("")];
 }
 
 /** Add the activity row directly beneath the prompt, keeping Pi's padding inside its box. */
@@ -152,8 +131,6 @@ export function attachActivityToUserMessage(lines: string[], activity: string): 
 interface ActivityState {
 	active: boolean;
 	frame: number;
-	level?: ThinkingLevel;
-	theme?: Theme;
 	tui?: TUI;
 	target?: UserMessageComponent;
 	candidate?: UserMessageComponent;
@@ -231,9 +208,9 @@ function patchUserMessage(): boolean {
 				state.tui?.requestRender();
 			});
 		}
-		if (state.target !== self || !state.theme) return lines;
+		if (state.target !== self) return lines;
 		const width = args[0] as number;
-		return attachActivityToUserMessage(lines, renderActivityDots(state.frame, width, state.theme, state.level)[0] ?? "");
+		return attachActivityToUserMessage(lines, renderActivityDots(state.frame, width)[0] ?? "");
 	}, [LEGACY_USER_RENDER]);
 }
 
@@ -301,11 +278,6 @@ export class SilentActivityAnimator {
 		}
 	}
 
-	/** Guarded like the progress label: a host with a partial API keeps the default color. */
-	private readLevel(): ThinkingLevel {
-		return typeof this.pi.getThinkingLevel === "function" ? this.pi.getThinkingLevel() : "medium";
-	}
-
 	private setAnswering(answering: boolean): void {
 		if (this.answering === answering) return;
 		this.answering = answering;
@@ -322,7 +294,7 @@ export class SilentActivityAnimator {
 		this.frame = 0;
 		this.mounted = true;
 		Object.assign(sharedActivityState(), {
-			active: true, frame: 0, level: this.readLevel(), theme: this.context.ui.theme,
+			active: true, frame: 0,
 			target: undefined, candidate: undefined,
 		});
 		// This invisible widget provides Pi's TUI for animation repaints.
@@ -337,11 +309,8 @@ export class SilentActivityAnimator {
 		this.stopTicking = onTick(() => {
 			this.frame++;
 			const state = sharedActivityState();
-			const level = this.readLevel();
-			const changed = frameChanges(this.frame) || level !== state.level;
 			state.frame = this.frame;
-			state.level = level;
-			if (changed) state.tui?.requestRender();
+			if (frameChanges(this.frame)) state.tui?.requestRender();
 		});
 	}
 

@@ -189,9 +189,10 @@ export class Fixture {
     return existsSync(f) ? readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   }
 
-  /** argv of the calls that started, in order, without `events follow`, `--version` and `policy show` (see `policyCalls`). */
+  /** argv of the calls that started, in order, without `events follow`, `--version`, `policy show` (see `policyCalls`) and the mention-id reads (§15.14: `session list`, `plan list`, `context list`). */
   argvs(): string[][] {
-    return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events" && c.argv[0] !== "--version" && c.argv[0] !== "policy").map((c) => c.argv);
+    const mentions = (a: string[]) => a[1] === "list" && ["plan", "context"].includes(a[0]!) || (a[0] === "session" && a[1] === "list" && a.includes("--archived"));
+    return this.calls().filter((c) => c.phase === "start" && c.argv[0] !== "events" && c.argv[0] !== "--version" && c.argv[0] !== "policy" && !mentions(c.argv)).map((c) => c.argv);
   }
 
   /** argv of the `cpd policy …` calls that started. */

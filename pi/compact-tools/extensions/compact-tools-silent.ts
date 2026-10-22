@@ -37,6 +37,11 @@ interface SilentState {
 
 type Renderable = { render(width: number): string[] };
 type Render = (width: number) => string[];
+/** cpd's mentions painter (pi/lib/mentions.ts, PAINTER_KEY), set only in a Lead's or Manager's pane. */
+const PAINTER_KEY = Symbol.for("cpd.mentions.painter");
+const painter = (): ((line: string) => string) | undefined =>
+	(globalThis as typeof globalThis & { [PAINTER_KEY]?: (line: string) => string })[PAINTER_KEY];
+
 export type RenderOverride = (component: any, width: number, render: Render) => string[];
 
 type AssistantLike = {
@@ -227,8 +232,10 @@ function publishOverrides(): void {
 		// Only the prompt and the answer remain: intermediate turns go entirely, and
 		// the final turn keeps its text but not its thinking or any stop notice.
 		assistant: (component: AssistantLike, width, render) => {
-			if (!silent()) return render(width);
-			return isIntermediateAssistant(component) ? [] : renderAnswerOnly(component, width, render);
+			const paint = painter();
+			const draw = (lines: string[]) => paint ? lines.map(paint) : lines;
+			if (!silent()) return draw(render(width));
+			return isIntermediateAssistant(component) ? [] : draw(renderAnswerOnly(component, width, render));
 		},
 		// Extension notices such as pi-web-access's "content ready" arrive between
 		// tool calls; they are progress, not answers.
@@ -259,7 +266,7 @@ function installPatches(): boolean {
 	// cannot leave tool rows hidden while their surrounding turns remain visible.
 	// Normal mode pays one flag check per render and nothing else.
 	const tools = patchRender(ToolExecutionComponent?.prototype, delegate("tool"), isSilent);
-	const assistant = patchRender(AssistantMessageComponent?.prototype, delegate("assistant"), isSilent);
+	const assistant = patchRender(AssistantMessageComponent?.prototype, delegate("assistant"), () => isSilent() || painter() !== undefined);
 	const notices = patchRender(CustomMessageComponent?.prototype, delegate("notice"), isSilent);
 	return tools && assistant && notices;
 }
@@ -322,6 +329,8 @@ export class SilentModeController {
 		const state = sharedState();
 		if (!reload) state.overridden = false;
 		this.apply(state.overridden ? state.enabled : mode === "silent");
+		// The mentions painter (hs-d544) needs the assistant render patch whether or not silent mode is on.
+		installPatches();
 	}
 
 	dispose(): void {

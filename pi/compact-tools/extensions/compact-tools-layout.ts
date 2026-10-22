@@ -6,7 +6,8 @@
  * every tool row: read, write, edit, bash, powershell, grep, find, ls, custom tools (including
  * MCP and codemode), in every state (running, done, failed, folded, expanded).
  */
-import { highlightCode, type Theme } from "@earendil-works/pi-coding-agent";
+import { chrome, INDEX, ink, paint, RAIL, TEXT } from "./compact-tools-indices.ts";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
 	Container,
@@ -16,11 +17,7 @@ import {
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { diffTintRgb, fillRgb, type Rgb } from "./compact-tools-color.ts";
 import { normalizeLineEndings } from "./compact-tools-core.ts";
-import { resolveLanguage } from "./compact-tools-language.ts";
-import { highlightMarkdown } from "./compact-tools-markdown.ts";
-import { paintChrome } from "./compact-tools-palette.ts";
 import type { ToolArgs } from "./compact-tools-types.ts";
 
 /**
@@ -293,7 +290,7 @@ export function renderToolCall(
 	title: string,
 	details: string | undefined,
 	theme: Theme,
-	continuationPrefix = paintChrome(theme, " │ "),
+	continuationPrefix = chrome(" │ "),
 	firstPrefix = " ",
 ): Component {
 	const text = details ? `${title} ${details}` : title;
@@ -308,11 +305,11 @@ export function styleMultiline(text: string, style: (line: string) => string): s
 	return normalizeLineEndings(text).split("\n").map(style).join("\n");
 }
 
-export function renderOutput(output: string, theme: Theme, isError: boolean, rail = paintChrome(theme, " │ ")): Component | undefined {
+export function renderOutput(output: string, theme: Theme, isError: boolean, rail = chrome(" │ ")): Component | undefined {
 	const normalized = normalizeLineEndings(output).trimEnd();
 	if (!normalized) return undefined;
 	const color = isError ? "error" : "toolOutput";
-	const styled = normalized.split("\n").map((line) => theme.fg(color, line)).join("\n");
+	const styled = normalized.split("\n").map((line) => ink(color, line)).join("\n");
 	return prefixedText(styled, rail);
 }
 
@@ -414,47 +411,6 @@ export function trimDiffContext(lines: CodeDiffLine[], contextLines: number): Co
 	return result;
 }
 
-/** Past these sizes syntax highlighting costs more than it helps; mirrors Codex's diff renderer. */
-const HIGHLIGHT_MAX_CHARS = 512 * 1024;
-const HIGHLIGHT_MAX_LINES = 10_000;
-const HIGHLIGHT_MAX_LINE_CHARS = 4 * 1024;
-
-function canHighlight(lines: readonly CodeDiffLine[]): boolean {
-	if (lines.length > HIGHLIGHT_MAX_LINES) return false;
-	let total = 0;
-	for (const line of lines) {
-		if (line.content.length > HIGHLIGHT_MAX_LINE_CHARS) return false;
-		total += line.content.length + 1;
-		if (total > HIGHLIGHT_MAX_CHARS) return false;
-	}
-	return true;
-}
-
-/** Highlight each hunk as one block so multi-line strings and comments keep their state. */
-function highlightCodeLines(lines: CodeDiffLine[], language: string | undefined, theme: Theme): string[] {
-	if (!language || !canHighlight(lines)) {
-		return lines.map((line) => line.kind === "separator" ? line.content : theme.fg("toolOutput", line.content));
-	}
-	const rendered = new Array<string>(lines.length);
-	let index = 0;
-	while (index < lines.length) {
-		if (lines[index]!.kind === "separator") {
-			rendered[index] = lines[index]!.content;
-			index++;
-			continue;
-		}
-		let end = index;
-		while (end < lines.length && lines[end]!.kind !== "separator") end++;
-		const contents = lines.slice(index, end).map((line) => line.content);
-		const highlighted = language === "markdown"
-			? highlightMarkdown(contents, theme)
-			: highlightCode(contents.join("\n"), language);
-		for (let offset = 0; offset < contents.length; offset++) rendered[index + offset] = highlighted[offset] ?? contents[offset]!;
-		index = end;
-	}
-	return rendered;
-}
-
 function hardSliceAnsi(text: string, width: number): string[] {
 	const safeWidth = Math.max(1, width);
 	const lineWidth = visibleWidth(text);
@@ -466,131 +422,16 @@ function hardSliceAnsi(text: string, width: number): string[] {
 	return slices;
 }
 
-function codeGutter(
-	kind: CodeDiffLineKind,
-	lineNumber: number | undefined,
-	numberWidth: number,
-	signs: boolean,
-	theme: Theme,
-): string {
+/** The palette index of a row's text: added 2, removed 1, anything else read-only text. */
+function codeIndex(kind: CodeDiffLineKind): number {
+	return kind === "add" ? INDEX.green : kind === "remove" ? INDEX.red : TEXT;
+}
+
+function codeGutter(kind: CodeDiffLineKind, lineNumber: number | undefined, numberWidth: number, signs: boolean): string {
 	const number = (lineNumber === undefined ? "" : String(lineNumber)).padStart(numberWidth);
-	if (!signs) return theme.fg("toolDiffContext", ` ${number} `);
+	if (!signs) return paint(RAIL, ` ${number} `);
 	const sign = kind === "add" ? "+" : kind === "remove" ? "-" : " ";
-	const color = kind === "add" ? "toolDiffAdded" : kind === "remove" ? "toolDiffRemoved" : "toolDiffContext";
-	return theme.fg(color, ` ${number} ${sign}`);
-}
-
-type CharRange = [start: number, end: number];
-
-/** Most token pairs a word diff compares; a longer pair of lines is left untinted instead of taking quadratic time. */
-const WORD_DIFF_MAX_CELLS = 40_000;
-/** How alike two lines must be, by shared characters, before their changed words are marked. */
-const WORD_DIFF_MIN_SIMILARITY = 0.6;
-/** How much of the theme color a changed word is tinted with, against the row's own tint. */
-const WORD_TINT = 0.32;
-
-/**
- * The changed words of a removed row and the added row that replaces it, as Claude
- * Code marks them: a brighter tint behind each word the pair does not share. Two
- * rows with little in common are rewrites rather than edits and mark nothing.
- */
-function wordDiffRanges(removed: string, added: string): { removed: CharRange[]; added: CharRange[] } | undefined {
-	const split = (text: string) => text.match(/[\p{L}\p{N}_]+|\s+|[^\s\p{L}\p{N}_]/gu) ?? [];
-	const before = split(removed);
-	const after = split(added);
-	if (before.length * after.length > WORD_DIFF_MAX_CELLS) return undefined;
-	const width = after.length + 1;
-	const lengths = new Uint16Array((before.length + 1) * width);
-	for (let i = before.length - 1; i >= 0; i--) {
-		for (let j = after.length - 1; j >= 0; j--) {
-			lengths[i * width + j] = before[i] === after[j]
-				? lengths[(i + 1) * width + j + 1]! + 1
-				: Math.max(lengths[(i + 1) * width + j]!, lengths[i * width + j + 1]!);
-		}
-	}
-	const removedChanged = new Array<boolean>(before.length).fill(true);
-	const addedChanged = new Array<boolean>(after.length).fill(true);
-	let shared = 0;
-	for (let i = 0, j = 0; i < before.length && j < after.length;) {
-		if (before[i] === after[j]) {
-			removedChanged[i] = addedChanged[j] = false;
-			shared += before[i]!.length;
-			i++;
-			j++;
-		} else if (lengths[(i + 1) * width + j]! >= lengths[i * width + j + 1]!) i++;
-		else j++;
-	}
-	if (shared === 0 || (2 * shared) / (removed.length + added.length) < WORD_DIFF_MIN_SIMILARITY) return undefined;
-	const ranges = (text: string, tokens: string[], changed: boolean[]): CharRange[] => {
-		const output: CharRange[] = [];
-		let offset = 0;
-		tokens.forEach((token, index) => {
-			const last = output.at(-1);
-			if (changed[index]) {
-				if (last && last[1] === offset) last[1] = offset + token.length;
-				else output.push([offset, offset + token.length]);
-			}
-			offset += token.length;
-		});
-		// A range starts and ends on a word, not on the blanks beside it.
-		return output
-			.map(([start, end]): CharRange => [
-				end - text.slice(start, end).trimStart().length,
-				start + text.slice(start, end).trimEnd().length,
-			])
-			.filter(([start, end]) => end > start);
-	};
-	const markedRemoved = ranges(removed, before, removedChanged);
-	const markedAdded = ranges(added, after, addedChanged);
-	return markedRemoved.length || markedAdded.length ? { removed: markedRemoved, added: markedAdded } : undefined;
-}
-
-/** Changed-word ranges for every removed row paired, in order, with the added row beside it. */
-function pairWordRanges(lines: readonly CodeDiffLine[]): Map<number, CharRange[]> {
-	const marked = new Map<number, CharRange[]>();
-	let index = 0;
-	while (index < lines.length) {
-		if (lines[index]!.kind !== "remove") {
-			index++;
-			continue;
-		}
-		const removedStart = index;
-		while (index < lines.length && lines[index]!.kind === "remove") index++;
-		const addedStart = index;
-		while (index < lines.length && lines[index]!.kind === "add") index++;
-		for (let offset = 0; offset < Math.min(addedStart - removedStart, index - addedStart); offset++) {
-			const pair = wordDiffRanges(lines[removedStart + offset]!.content, lines[addedStart + offset]!.content);
-			if (!pair) continue;
-			if (pair.removed.length) marked.set(removedStart + offset, pair.removed);
-			if (pair.added.length) marked.set(addedStart + offset, pair.added);
-		}
-	}
-	return marked;
-}
-
-/** A row's text with a brighter fill behind the given character ranges and `base` behind the rest. */
-function fillWithWords(
-	theme: Theme,
-	base: Rgb,
-	word: Rgb,
-	content: string,
-	ranges: readonly CharRange[],
-	chunk: string,
-	chunkStart: number,
-	padding: number,
-): string {
-	const chunkWidth = visibleWidth(chunk);
-	let output = "";
-	let cursor = 0;
-	for (const [start, end] of ranges) {
-		const from = Math.max(cursor, visibleWidth(content.slice(0, start)) - chunkStart);
-		const to = Math.min(chunkWidth, visibleWidth(content.slice(0, end)) - chunkStart);
-		if (to <= from) continue;
-		if (from > cursor) output += fillRgb(theme, base, sliceByColumn(chunk, cursor, from - cursor, true));
-		output += fillRgb(theme, word, sliceByColumn(chunk, from, to - from, true));
-		cursor = to;
-	}
-	return output + fillRgb(theme, base, sliceByColumn(chunk, cursor, chunkWidth - cursor, true) + " ".repeat(padding));
+	return paint(kind === "context" ? RAIL : codeIndex(kind), ` ${number} ${sign}`);
 }
 
 type CodeRowsOptions = {
@@ -602,71 +443,34 @@ type CodeRowsOptions = {
 	rail?: string;
 };
 
-/** Render numbered, syntax-highlighted code rows shared by edit diffs and read/write file views. */
-function renderCodeRows(lines: CodeDiffLine[], path: string, theme: Theme, options: CodeRowsOptions): Component {
-	// A shebang only speaks for the file when the first row really is line 1, so a
-	// read at an offset or a diff hunk never reads one out of a comment.
-	const first = lines[0];
-	const shebangLine = first?.lineNumber === 1 && first.kind !== "separator" ? first.content : undefined;
-	// ToolExecutionComponent builds result components even when silent mode hides
-	// the row. Defer syntax work until the code is actually drawn, and keep it
-	// across width changes so resize does not highlight the same source again.
-	let highlighted: string[] | undefined;
+/** Render numbered code rows shared by edit diffs and read/write file views: text in indices only, no fill. */
+function renderCodeRows(lines: CodeDiffLine[], theme: Theme, options: CodeRowsOptions): Component {
 	const numberWidth = lines.reduce((maximum, line) => Math.max(maximum, String(line.lineNumber ?? "").length), 1);
-	const prefix = options.rail ?? paintChrome(theme, " \u2502 ");
+	const prefix = options.rail ?? chrome(" \u2502 ");
 	const prefixWidth = visibleWidth(prefix);
 	const gutterWidth = numberWidth + (options.signs ? 3 : 2);
-	const addedTint = options.signs ? diffTintRgb(theme, "toolDiffAdded") : undefined;
-	const removedTint = options.signs ? diffTintRgb(theme, "toolDiffRemoved") : undefined;
-	const addedWordTint = options.signs ? diffTintRgb(theme, "toolDiffAdded", WORD_TINT) : undefined;
-	const removedWordTint = options.signs ? diffTintRgb(theme, "toolDiffRemoved", WORD_TINT) : undefined;
-	let words: Map<number, CharRange[]> | undefined;
 	return new CachedComponent((width) => {
-		highlighted ??= highlightCodeLines(lines, resolveLanguage(path, shebangLine), theme);
-		if (options.signs) words ??= pairWordRanges(lines);
 		const bodyWidth = Math.max(1, width - prefixWidth);
 		const codeWidth = Math.max(1, bodyWidth - gutterWidth);
 		const output: string[] = [];
-		lines.forEach((line, index) => {
+		for (const line of lines) {
 			if (line.kind === "separator") {
-				output.push(prefix + " ".repeat(numberWidth + 1) + theme.fg("toolDiffContext", line.content));
-				return;
+				output.push(prefix + " ".repeat(numberWidth + 1) + ink("toolDiffContext", line.content));
+				continue;
 			}
-			const tint = line.kind === "add" ? addedTint : line.kind === "remove" ? removedTint : undefined;
-			const wordRanges = words?.get(index);
-			const wordTint = line.kind === "add" ? addedWordTint : removedWordTint;
-			for (const [chunkIndex, chunk] of hardSliceAnsi(highlighted![index] ?? line.content, codeWidth).entries()) {
-				const gutter = codeGutter(
-					line.kind,
-					chunkIndex === 0 ? line.lineNumber : undefined,
-					numberWidth,
-					options.signs,
-					theme,
-				);
-				const body = gutter + chunk;
-				if (!tint) {
-					output.push(prefix + body);
-					continue;
-				}
-				const padding = Math.max(0, bodyWidth - visibleWidth(body));
-				if (wordRanges && wordTint) {
-					output.push(
-						prefix + fillRgb(theme, tint, gutter)
-							+ fillWithWords(theme, tint, wordTint, line.content, wordRanges, chunk, chunkIndex * codeWidth, padding),
-					);
-					continue;
-				}
-				output.push(prefix + fillRgb(theme, tint, body + " ".repeat(padding)));
+			for (const [chunkIndex, chunk] of hardSliceAnsi(line.content, codeWidth).entries()) {
+				const gutter = codeGutter(line.kind, chunkIndex === 0 ? line.lineNumber : undefined, numberWidth, options.signs);
+				output.push(prefix + gutter + paint(codeIndex(line.kind), chunk));
 			}
-		});
+		}
 		if (options.footer) {
-			for (const line of wrapTextWithAnsi(options.footer, bodyWidth)) output.push(prefix + theme.fg("dim", line));
+			for (const line of wrapTextWithAnsi(options.footer, bodyWidth)) output.push(prefix + ink("dim", line));
 		}
 		return output;
 	});
 }
 
-/** Render an edit as a syntax-highlighted diff with a line-number gutter and tinted change rows. */
+/** Render an edit as a diff with a line-number gutter; added rows are text 2, removed rows text 1. */
 export function renderCodeDiff(
 	patch: string,
 	displayDiff: string,
@@ -677,7 +481,7 @@ export function renderCodeDiff(
 	const diff = parseCodeDiff(patch, displayDiff);
 	const lines = options.contextLines === undefined ? diff : trimDiffContext(diff, options.contextLines);
 	if (lines.length === 0) return undefined;
-	return renderCodeRows(lines, path, theme, { signs: true, rail: options.rail });
+	return renderCodeRows(lines, theme, { signs: true, rail: options.rail });
 }
 
 export type CodeViewOptions = {
@@ -687,7 +491,7 @@ export type CodeViewOptions = {
 	rail?: string;
 };
 
-/** Render file contents with line numbers and syntax highlighting, matching the edit diff layout. */
+/** Render file contents with line numbers, matching the edit diff layout. */
 export function renderCodeView(code: string, path: string, theme: Theme, options: CodeViewOptions = {}): Component | undefined {
 	const normalized = normalizeLineEndings(code).replace(/\n+$/u, "");
 	if (!normalized) return undefined;
@@ -698,13 +502,12 @@ export function renderCodeView(code: string, path: string, theme: Theme, options
 		content: content.replace(/\t/gu, "   "),
 		hunk: 0,
 	}));
-	return renderCodeRows(lines, path, theme, { signs: false, footer: options.footer, rail: options.rail });
+	return renderCodeRows(lines, theme, { signs: false, footer: options.footer, rail: options.rail });
 }
 
 /**
  * Diff rows the way Codex draws them: `{line} {sign}{code}` after `indent`, the
- * number dim and the sign in its change color, and an added or removed row tinted
- * across the whole width. A wrapped row continues under the code; `⋮` marks a gap
+ * number dim and the sign and text in the change color (no fill). A wrapped row continues under the code; `⋮` marks a gap
  * between hunks. `maxRows` keeps the first rows, as Codex's collapsed preview does.
  */
 export function renderCodexDiff(
@@ -715,32 +518,25 @@ export function renderCodexDiff(
 	maxRows?: number,
 ): Component | undefined {
 	if (lines.length === 0) return undefined;
-	const first = lines[0];
-	const shebangLine = first?.lineNumber === 1 && first.kind !== "separator" ? first.content : undefined;
-	let highlighted: string[] | undefined;
 	const numberWidth = lines.reduce((maximum, line) => Math.max(maximum, String(line.lineNumber ?? "").length), 1);
 	const indentWidth = visibleWidth(indent);
-	const addedTint = diffTintRgb(theme, "toolDiffAdded");
-	const removedTint = diffTintRgb(theme, "toolDiffRemoved");
 	return new CachedComponent((width) => {
-		highlighted ??= highlightCodeLines([...lines], resolveLanguage(path, shebangLine), theme);
 		const codeWidth = Math.max(1, width - indentWidth - numberWidth - 2);
 		const output: string[] = [];
-		for (const [index, line] of lines.entries()) {
+		for (const line of lines) {
 			if (maxRows !== undefined && output.length >= maxRows) break;
 			if (line.kind === "separator") {
-				output.push(indent + " ".repeat(numberWidth + 1) + theme.fg("dim", line.content));
+				output.push(indent + " ".repeat(numberWidth + 1) + ink("dim", line.content));
 				continue;
 			}
-			const tint = line.kind === "add" ? addedTint : line.kind === "remove" ? removedTint : undefined;
-			const sign = line.kind === "add" ? theme.fg("toolDiffAdded", "+") : line.kind === "remove" ? theme.fg("toolDiffRemoved", "-") : " ";
-			for (const [chunkIndex, chunk] of hardSliceAnsi(highlighted[index] ?? line.content, codeWidth).entries()) {
+			const index = codeIndex(line.kind);
+			const sign = line.kind === "add" ? paint(index, "+") : line.kind === "remove" ? paint(index, "-") : " ";
+			for (const [chunkIndex, chunk] of hardSliceAnsi(line.content, codeWidth).entries()) {
 				const gutter = chunkIndex === 0
-					? theme.fg("dim", `${String(line.lineNumber ?? "").padStart(numberWidth)} `) + sign
+					? ink("dim", `${String(line.lineNumber ?? "").padStart(numberWidth)} `) + sign
 					: " ".repeat(numberWidth + 2);
 				// Narrower than the gutter itself, a row is cut rather than drawn past the edge.
-				const row = truncateToWidth(indent + gutter + chunk, Math.max(1, width), "");
-				output.push(tint ? fillRgb(theme, tint, row + " ".repeat(Math.max(0, width - visibleWidth(row)))) : row);
+				output.push(truncateToWidth(indent + gutter + paint(index, chunk), Math.max(1, width), ""));
 			}
 		}
 		return maxRows === undefined ? output : output.slice(0, maxRows);
@@ -786,8 +582,8 @@ export function limitComponentLines(
 	component: Component,
 	maximumLines: number,
 	theme: Theme,
-	footer: (omitted: number) => string = (omitted) => paintChrome(theme, " │ ")
-		+ theme.fg("toolOutput", `… ${omitted} more ${omitted === 1 ? "line" : "lines"}`),
+	footer: (omitted: number) => string = (omitted) => chrome(" │ ")
+		+ ink("toolOutput", `… ${omitted} more ${omitted === 1 ? "line" : "lines"}`),
 ): Component {
 	return new CachedComponent((width) => {
 		const lines = component.render(width);
@@ -797,7 +593,7 @@ export function limitComponentLines(
 }
 
 /** Indent another renderer's component under the result rail so it reads as part of the row. */
-export function railComponent(component: Component, theme: Theme, rail = paintChrome(theme, " │ ")): Component {
+export function railComponent(component: Component, theme: Theme, rail = chrome(" │ ")): Component {
 	const railWidth = visibleWidth(rail);
 	return new CachedComponent(
 		(width) => component.render(Math.max(1, width - railWidth)).map((line) => rail + line),
@@ -805,8 +601,8 @@ export function railComponent(component: Component, theme: Theme, rail = paintCh
 	);
 }
 
-export function renderArguments(args: ToolArgs, theme: Theme, rail = paintChrome(theme, " │ ")): Component {
+export function renderArguments(args: ToolArgs, theme: Theme, rail = chrome(" │ ")): Component {
 	const json = JSON.stringify(args, null, 2) ?? "{}";
-	const styled = styleMultiline(json, (line) => theme.fg("toolOutput", line));
+	const styled = styleMultiline(json, (line) => ink("toolOutput", line));
 	return prefixedText(styled, rail);
 }

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { generateDiffString, generateUnifiedPatch } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/edit-diff.js";
-import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import {
 	advance, announce, INDICATOR_INTERVAL_MS, loadExtension, makeRow, restoreClocks, shutdown, text, timerClock, type Harness,
 } from "./indicator-harness.ts";
@@ -147,7 +146,7 @@ test("Codex 0.160.0 exploration folds reads, searches, and listings into one gro
 			const drawnLine = failed.find((each) => stripTerminalSequences(each).includes(line))!;
 			return new RegExp(`(\\x1b\\[[0-9;]*m)${part.replace(/[()]/gu, "\\$&")}`, "u").exec(drawnLine)?.[1];
 		};
-		const red = theme.fg("error", "x").slice(0, -"x\x1b[39m".length);
+		const red = "\x1b[31m";
 		assert.equal(colorOf("gone.txt", " (exit 2)"), red, "a failure is red");
 		assert.equal(colorOf("nope.txt", " (exit 1)"), red, "a read's exit 1 is a failure too");
 		assert.notEqual(colorOf("missing", " (exit 1)"), red, "only a search that found nothing is quiet");
@@ -230,7 +229,8 @@ test("Codex 0.160.0 exploration reads 'Exploring' while a call runs, with the bu
 			frames.add(lines.find((line) => line.includes("Exploring"))!);
 			timerClock.tick(INDICATOR_INTERVAL_MS);
 		}
-		assert.ok(frames.size > 1, "the bullet pulses");
+		assert.equal(frames.size, 1, "the bullet does not pulse: its colour is fixed");
+		assert.ok([...frames][0]!.includes("\x1b[36m•\x1b[39m"), "the bullet is cyan, index 6");
 		harness.handlers.get("tool_execution_end")!({ toolCallId: id, isError: false });
 		row.updateResult({ ...text("src/a.ts:1: TODO"), isError: false } as never, false);
 		assert.equal(drawn(harness.chat.render(PI_WIDTH))[0], " • Explored");
@@ -281,10 +281,11 @@ test("Codex 0.160.0 patches preview their changed lines and open to the whole di
 			"    3  }",
 			"    − Show less",
 		]));
-		// A changed row is tinted across the whole width, gutter and margin included.
-		const tinted = edit.render(PI_WIDTH).filter((line) => /^\x1b\[48;/u.test(line));
-		assert.equal(tinted.length, 2);
-		for (const line of tinted) assert.equal(visibleWidth(line), PI_WIDTH);
+		// A changed row is painted in text colour 2 or 1 and has no background.
+		const drawnRows = edit.render(PI_WIDTH);
+		assert.ok(!drawnRows.some((line) => /\x1b\[(?:48|4[0-7]|10[0-7])[;m]/u.test(line)), "no row has a background");
+		assert.equal(drawnRows.filter((line) => line.includes("\x1b[31m") && line.includes("Hello")).length, 1);
+		assert.equal(drawnRows.filter((line) => line.includes("\x1b[32m") && line.includes("Hi,")).length, 1);
 		// Pi does not say whether the file existed, so a write reads "Wrote" where Codex says "Added".
 		const content = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`).join("\n");
 		const write = finished(harness, "write", { path: "docs/new.md", content }, text("Successfully wrote to docs/new.md"));
@@ -370,9 +371,9 @@ test("Codex bullets are Codex's: green and red once settled, dim on a patch, nev
 		const ok = bulletOf(bash(harness, "true", "ok").render(100));
 		const bad = bulletOf(bash(harness, "false", "Command exited with code 1", true).render(100));
 		const patch = bulletOf(finished(harness, "edit", { path: "src/app.ts", edits: [] }, editResult()).render(100));
-		assert.ok(ok.includes(theme.fg("success", "•")), "a command that succeeded");
-		assert.ok(bad.includes(theme.fg("error", "•")), "a command that failed");
-		assert.ok(patch.includes(theme.fg("dim", "•")), "a patch");
+		assert.ok(ok.includes("\x1b[32m•\x1b[39m"), "a command that succeeded");
+		assert.ok(bad.includes("\x1b[31m•\x1b[39m"), "a command that failed");
+		assert.ok(patch.includes("\x1b[90m•\x1b[39m"), "a patch");
 		for (const line of [ok, bad, patch]) assert.ok(!line.includes("⦁"), "never Pi's own dot");
 	} finally { shutdown(harness); }
 });

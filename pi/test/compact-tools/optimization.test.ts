@@ -62,30 +62,21 @@ test("allocation-free anchor selection matches the original over 2,000 seeded re
 	assert.equal(findAnchorTop(["a", "b"], 100, 5, ["a", "b"]), originalAnchor(["a", "b"], 100, 5, ["a", "b"]));
 });
 
-test("hidden code bodies do not highlight until drawn and resize reuses highlighting", () => {
+test("code views are cached per width and draw every row", () => {
 	initTheme("dark", false);
-	let outputPaints = 0;
-	const theme = { fg: (_color: string, text: string) => { outputPaints++; return text; } } as Parameters<typeof renderCodeView>[2];
-	const component = renderCodeView("one\ntwo\nthree", "NOTES", theme, { rail: "" })!;
-	assert.equal(outputPaints, 0, "constructing a hidden result must not paint source lines");
-	component.render(80);
-	const firstPaints = outputPaints;
-	assert.ok(firstPaints > 0);
-	component.render(80);
-	assert.equal(outputPaints, firstPaints, "cached width must do no work");
-	component.render(40);
-	assert.equal(outputPaints - firstPaints, 3, "resize paints only gutters, not source again");
+	const component = renderCodeView("one\ntwo\nthree", "NOTES", {} as Parameters<typeof renderCodeView>[2], { rail: "" })!;
+	const first = component.render(80);
+	assert.equal(component.render(80), first, "cached width must do no work");
+	assert.deepEqual(component.render(40).map(stripTerminalSequences), [" 1 one", " 2 two", " 3 three"]);
 });
 
 test("150,000-line file views do not exceed the argument limit and retain six-digit gutters", () => {
 	initTheme("dark", false);
-	// The highlighter guard should choose plain rendering, but every source line must remain available.
-	const theme = { fg: (_color: string, text: string) => text } as Parameters<typeof renderCodeView>[2];
-	const component = renderCodeView(Array(150_000).fill("x").join("\n"), "large.ts", theme, { rail: "" })!;
+	const component = renderCodeView(Array(150_000).fill("x").join("\n"), "large.ts", {} as Parameters<typeof renderCodeView>[2], { rail: "" })!;
 	const rows = component.render(80);
 	assert.equal(rows.length, 150_000);
-	assert.equal(rows[0], "      1 x");
-	assert.equal(rows.at(-1), " 150000 x");
+	assert.equal(stripTerminalSequences(rows[0]!), "      1 x");
+	assert.equal(stripTerminalSequences(rows.at(-1)!), " 150000 x");
 	assert.equal(component.render(80), rows, "unchanged layout is cached");
 });
 
@@ -128,7 +119,7 @@ test("timing eviction preserves active siblings and bounds an all-active workloa
 	} finally { runtime.reset(true); }
 });
 
-for (const style of ["compact", "claude", "codex"] as const) test(`existing real host tool rows repaint on theme changes but reuse unchanged results (${style})`, () => {
+for (const style of ["compact", "claude", "codex"] as const) test(`existing real host tool rows reuse unchanged results and draw the same under any theme (${style})`, () => {
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	const directory = mkdtempSync(join(tmpdir(), "compact-tools-theme-reuse-"));
 	process.env.PI_CODING_AGENT_DIR = directory;
@@ -160,9 +151,8 @@ for (const style of ["compact", "claude", "codex"] as const) test(`existing real
 			assert.equal(internals.resultRendererComponent, first, `${name}: same-theme result is reused`);
 			initTheme("light", false);
 			row.invalidate();
-			assert.notEqual(internals.resultRendererComponent, first, `${name}: new theme rebuilds result`);
+			assert.equal(internals.resultRendererComponent, first, `${name}: indices do not depend on the theme, so the result is reused`);
 			const light = row.render(80);
-			assert.notDeepEqual(light, dark, `${name}: colors must change`);
 			assert.deepEqual(light.map(stripTerminalSequences), dark.map(stripTerminalSequences), `${name}: text and layout must not change`);
 		}
 	} finally {

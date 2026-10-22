@@ -13,12 +13,8 @@ import {
 	classifyCallStatus,
 	formatDurationMs,
 	indicatorGlyph,
-	indicatorStrength,
-	indicatorTone,
 	normalizeLineEndings,
-	RUNNING_INDICATOR_FRAME_COUNT,
 } from "../../compact-tools/extensions/compact-tools-core.ts";
-import { colorizeRgb, fillRgb } from "../../compact-tools/extensions/compact-tools-color.ts";
 import { DEFAULT_CONFIG, loadConfig, mergeConfig } from "../../compact-tools/extensions/compact-tools-config.ts";
 import { patchToolRows } from "../../compact-tools/extensions/compact-tools-custom.ts";
 import { findAnchorTop, ViewportKeeper } from "../../compact-tools/extensions/compact-tools-viewport.ts";
@@ -27,7 +23,6 @@ import { isIntermediateAssistant, parseSilentArgument, patchRender, renderAnswer
 import { attachActivityToUserMessage, bottomAlignTranscript, dotIntensities, frameChanges, renderActivityDots, SilentActivityAnimator } from "../../compact-tools/extensions/compact-tools-activity.ts";
 import { classifyShellCommand, claudeArgument, claudeCommand, claudeFailure, claudeOutcome, claudeTitle } from "../../compact-tools/extensions/compact-tools-claude.ts";
 import { countGroup, EXPAND_HINT, groupChildren, groupFailures, groupHint, summarizeGroup, ToolGroupComponent, type ToolRowLike } from "../../compact-tools/extensions/compact-tools-grouping.ts";
-import { languageFromPath, languageFromShebang, resolveLanguage } from "../../compact-tools/extensions/compact-tools-language.ts";
 import {
 	formatResultLineSummary,
 	getArgumentDetails,
@@ -55,9 +50,7 @@ import {
 	styleMultiline,
 	trimDiffContext,
 } from "../../compact-tools/extensions/compact-tools-layout.ts";
-import { highlightMarkdown } from "../../compact-tools/extensions/compact-tools-markdown.ts";
-import { completionPainter, paintChrome } from "../../compact-tools/extensions/compact-tools-palette.ts";
-import { formatToolProgress, glowProgressMessage, ProgressController } from "../../compact-tools/extensions/compact-tools-progress.ts";
+import { formatToolProgress, ProgressController } from "../../compact-tools/extensions/compact-tools-progress.ts";
 import { ToolRuntime } from "../../compact-tools/extensions/compact-tools-runtime.ts";
 import {
 	classifyThinkingToggleInput,
@@ -338,11 +331,11 @@ test("runs a light along a line beneath the submitted prompt and removes it afte
 	// A frame identical to the last asks for no repaint; this run changes every frame.
 	assert.equal(frameChanges(0), true);
 	// One unbroken line from column 3, spanning the "Thinking…" label below it.
-	assert.equal(renderActivityDots(0, 80, theme)[0], "   ━━━━━━━━━");
-	assert.equal(renderActivityDots(0, 80, theme)[0]!.indexOf("━"), "── Thinking…".indexOf("T"));
-	assert.equal(renderActivityDots(0, 80, theme)[0]!.trim().length, "Thinking…".length);
+	assert.equal(stripTerminalSequences(renderActivityDots(0, 80)[0]!), "   ━━━━━━━━━");
+	assert.equal(stripTerminalSequences(renderActivityDots(0, 80)[0]!).indexOf("━"), "── Thinking…".indexOf("T"));
+	assert.equal(stripTerminalSequences(renderActivityDots(0, 80)[0]!).trim().length, "Thinking…".length);
 	for (let frame = 0; frame < 26; frame++) {
-		assert.equal(visibleWidth(renderActivityDots(frame, 80, theme)[0]!), 12, `frame ${frame} keeps its width`);
+		assert.equal(visibleWidth(renderActivityDots(frame, 80)[0]!), 12, `frame ${frame} keeps its width`);
 	}
 	// Pi's padding row stays inside the prompt box; the dots go on the row after it.
 	assert.deepEqual(attachActivityToUserMessage(["prompt", "\x1b]133;B\x07\x1b]133;C\x07    "], "dots"),
@@ -350,7 +343,7 @@ test("runs a light along a line beneath the submitted prompt and removes it afte
 	assert.deepEqual(bottomAlignTranscript(["prompt", "sweep"], 5), ["", "", "", "prompt", "sweep"]);
 	assert.deepEqual(bottomAlignTranscript(["prompt", "sweep"], 2), ["prompt", "sweep"]);
 	for (const width of [1, 4, 12, 80]) {
-		const lines = renderActivityDots(2, width, theme);
+		const lines = renderActivityDots(2, width);
 		assert.equal(lines.length, 1);
 		assert.ok(visibleWidth(lines[0]!) <= width);
 	}
@@ -395,11 +388,11 @@ test("runs a light along a line beneath the submitted prompt and removes it afte
 	earlier.render(80);
 	const normalLatest = latest.render(80);
 	await Promise.resolve();
-	assert.notEqual(earlier.render(80).at(-1), renderActivityDots(0, 80, theme)[0]);
+	assert.notEqual(earlier.render(80).at(-1), renderActivityDots(0, 80)[0]);
 	const animatedLatest = latest.render(80);
 	assert.equal(animatedLatest.length, normalLatest.length + 1, "the dots add a row and keep Pi's bottom padding");
 	assert.deepEqual(animatedLatest.slice(0, -1), normalLatest);
-	assert.equal(stripTerminalSequences(animatedLatest.at(-1)!).trim(), renderActivityDots(0, 80, theme)[0]!.trim());
+	assert.equal(stripTerminalSequences(animatedLatest.at(-1)!).trim(), stripTerminalSequences(renderActivityDots(0, 80)[0]!).trim());
 	// The dots step aside once the answer streams, and return when the assistant goes back to work.
 	handlers.get("message_update")?.({ assistantMessageEvent: { type: "text_delta" } });
 	assert.equal(currentWidget, undefined, "no dots under a streaming answer");
@@ -418,7 +411,7 @@ test("runs a light along a line beneath the submitted prompt and removes it afte
 	assert.equal(currentWidget, undefined);
 	assert.equal(gap.render(80).length, 1, "the editor spacing returns after settlement");
 	assert.deepEqual(document.render(80), ["prompt", "sweep"]);
-	assert.notEqual(latest.render(80).at(-1), renderActivityDots(0, 80, theme)[0]);
+	assert.notEqual(latest.render(80).at(-1), renderActivityDots(0, 80)[0]);
 	activity.dispose();
 });
 
@@ -559,7 +552,7 @@ test("keeps only changed edit lines for the result line summary", () => {
 	assert.equal(getEditChanges(result), "- 9 old\n+ 9 new");
 });
 
-test("renders an edit as a diff with a line-number gutter and tinted change rows", () => {
+test("renders an edit as a diff with a line-number gutter", () => {
 	const patch = [
 		"--- file.ts",
 		"+++ file.ts",
@@ -572,30 +565,11 @@ test("renders an edit as a diff with a line-number gutter and tinted change rows
 	const rendered = renderCodeDiff(patch, "", "file.ts", diffTheme)?.render(60)
 		.map((line) => stripTerminalSequences(line).trimEnd());
 	assert.deepEqual(rendered, [
-		"<dim> │ </dim><toolDiffContext>  8  </toolDiffContext>const before = 1;",
-		"<dim> │ </dim><toolDiffRemoved>  9 -</toolDiffRemoved>const value = old();",
-		"<dim> │ </dim><toolDiffAdded>  9 +</toolDiffAdded>const value = next();",
-		"<dim> │ </dim><toolDiffContext> 10  </toolDiffContext>return value;",
+		" │   8  const before = 1;",
+		" │   9 -const value = old();",
+		" │   9 +const value = next();",
+		" │  10  return value;",
 	]);
-});
-
-test("marks the changed words of a paired edit row and leaves a rewritten row alone", () => {
-	const patch = [
-		"--- file.ts",
-		"+++ file.ts",
-		"@@ -1,2 +1,2 @@",
-		"-const a = 1;",
-		"-return `Yo, ${name}!`;",
-		"+const a = 10;",
-		"+return 42;",
-	].join("\n");
-	const rows = renderCodeDiff(patch, "", "file.ts", diffTheme)!.render(60);
-	const fills = (row: string) => new Set(row.match(/\x1b\[48;[0-9;]+m/gu));
-	assert.equal(fills(rows[0]!).size, 2, "the changed number is brighter than the row around it");
-	assert.equal(fills(rows[1]!).size, 1, "a rewritten row keeps one tint");
-	assert.equal(fills(rows[2]!).size, 2);
-	assert.equal(fills(rows[3]!).size, 1);
-	assert.equal(stripTerminalSequences(rows[0]!).trimEnd().endsWith("const a = 1;"), true);
 });
 
 test("renders file contents with offset line numbers and a dim continuation notice", () => {
@@ -604,51 +578,15 @@ test("renders file contents with offset line numbers and a dim continuation noti
 		footer: "[Showing lines 99-100 of 300. Use offset=101 to continue.]",
 	})?.render(80).map((line) => stripTerminalSequences(line).trimEnd());
 	assert.deepEqual(rendered, [
-		"<dim> │ </dim><toolDiffContext>  99 </toolDiffContext>const a = 1;",
-		"<dim> │ </dim><toolDiffContext> 100 </toolDiffContext>   return a;",
-		"<dim> │ </dim><dim>[Showing lines 99-100 of 300. Use offset=101 to continue.]</dim>",
+		" │   99 const a = 1;",
+		" │  100    return a;",
+		" │ [Showing lines 99-100 of 300. Use offset=101 to continue.]",
 	]);
 });
 
-test("plain-text files keep the output color instead of guessing a language", () => {
-	const rendered = renderCodeView("hello", "NOTES", diffTheme)?.render(120).map(stripTerminalSequences);
-	assert.deepEqual(rendered, ["<dim> │ </dim><toolDiffContext> 1 </toolDiffContext><toolOutput>hello</toolOutput>"]);
-});
-
-test("highlights Markdown prose and fenced code while keeping every source character", () => {
-	const theme = fakeTheme({
-		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-		bold: (text: string) => `<b>${text}</b>`,
-		italic: (text: string) => `<i>${text}</i>`,
-	});
-	const source = [
-		"# Title",
-		"See `x` and [docs](https://x.dev) with **bold**.",
-		"- item",
-		"> quote",
-		"```",
-		"# not a heading",
-		"```",
-	];
-	const rendered = highlightMarkdown(source, theme);
-	assert.deepEqual(rendered, [
-		"<b><mdHeading># Title</mdHeading></b>",
-		"<toolOutput>See </toolOutput><dim>`</dim><mdCode>x</mdCode><dim>`</dim><toolOutput> and </toolOutput>"
-			+ "<dim>[</dim><mdLink>docs</mdLink><dim>](</dim><mdLinkUrl>https://x.dev</mdLinkUrl><dim>)</dim>"
-			+ "<toolOutput> with </toolOutput><dim>**</dim><b><toolOutput>bold</toolOutput></b><dim>**</dim><toolOutput>.</toolOutput>",
-		"<mdListBullet>- </mdListBullet><toolOutput>item</toolOutput>",
-		"<mdQuoteBorder>> </mdQuoteBorder><i><mdQuote>quote</mdQuote></i>",
-		"<mdCodeBlockBorder>```</mdCodeBlockBorder>",
-		"<mdCodeBlock># not a heading</mdCodeBlock>",
-		"<mdCodeBlockBorder>```</mdCodeBlockBorder>",
-	]);
-	assert.deepEqual(rendered.map((line) => line.replace(/<\/?[\w]+>/gu, "")), source);
-});
-
-test("highlights a fenced block with its declared language and survives an unclosed fence", () => {
-	const theme = fakeTheme({ fg: (_color: string, text: string) => text, bold: (text: string) => text, italic: (text: string) => text });
-	const rendered = highlightMarkdown(["```ts", "const a = 1;"], theme).map(stripTerminalSequences);
-	assert.deepEqual(rendered, ["```ts", "const a = 1;"]);
+test("file contents are read-only text 7 after a rail and gutter in rail colour 8, with no language guessed", () => {
+	const rendered = renderCodeView("hello", "NOTES", diffTheme)?.render(120);
+	assert.deepEqual(rendered, ["\x1b[90m │ \x1b[39m\x1b[90m 1 \x1b[39m\x1b[37mhello\x1b[39m"]);
 });
 
 test("separates a read's continuation notice from the file contents", () => {
@@ -777,67 +715,36 @@ test("stops the shared indicator timer and keeps parallel tools independent", as
 	assert.equal(secondInvalidations, secondAtShutdown);
 });
 
-test("classifies calls and smoothly fades one shared tool indicator glyph", () => {
+test("classifies calls and keeps one shared tool indicator glyph", () => {
 	assert.equal(classifyCallStatus(false, false, false), "pending");
 	assert.equal(classifyCallStatus(false, true, false), "running");
 	assert.equal(classifyCallStatus(false, true, true), "success");
 	assert.equal(classifyCallStatus(true, true, true), "error");
 	assert.equal(indicatorGlyph("pending"), "⦁");
-	const strengths = Array.from(
-		{ length: RUNNING_INDICATOR_FRAME_COUNT },
-		(_, frame) => indicatorStrength("running", frame),
-	);
-	assert.equal(strengths[0], 1);
-	assert.ok(Math.abs(strengths[7]! - 0.08) < 1e-12);
-	assert.ok(strengths.slice(0, 8).every((strength, index, values) => index === 0 || strength < values[index - 1]!));
-	assert.ok(strengths.slice(7).every((strength, index, values) => index === 0 || strength > values[index - 1]!));
-	assert.ok(Math.abs(strengths[1]! - strengths[13]!) < 1e-12);
-	assert.equal(indicatorTone("running", 0), "muted");
-	assert.equal(indicatorTone("running", 7), "borderMuted");
-	assert.ok(Array.from(
-		{ length: RUNNING_INDICATOR_FRAME_COUNT },
-		(_, frame) => indicatorGlyph("running", frame),
-	).every((glyph) => glyph === "⦁"));
+	assert.ok(Array.from({ length: 14 }, (_, frame) => indicatorGlyph("running", frame)).every((glyph) => glyph === "⦁"));
 	assert.equal(indicatorGlyph("success"), "⦁");
 	assert.equal(indicatorGlyph("error"), "⦁");
 });
 
-test("frames every rail in one chrome tone, quieter than the theme's own dim", () => {
-	const theme = fakeTheme({
-		fg: (color: string, text: string) => `${THEME_RAMP_ANSI[color] ?? ""}${text}\x1b[39m`,
-		getFgAnsi: (color: string) => THEME_RAMP_ANSI[color] ?? "",
-		getColorMode: () => "truecolor",
-	});
-	const railColor = (line: string) => line.match(/38;2;\d+;\d+;\d+/u)?.[0];
-	const chrome = railColor(paintChrome(theme, " │ "));
+test("frames every rail in one tone: palette index 8", () => {
+	const theme = fakeTheme({ fg: (_color: string, text: string) => text });
+	const rail = (line: string) => line.match(/^\x1b\[\d+m[^\x1b]*\x1b\[39m/u)?.[0];
 	const patch = ["@@ -1,2 +1,2 @@", "-const value = old();", "+const value = next();"].join("\n");
 	const overflowing: Component = { render: () => ["one", "two"], invalidate() {} };
 
-	// Every surface that draws the frame resolves to the same tone, so a row reads as one object.
+	// Every surface that draws the frame resolves to the same rail, so a row reads as one object.
 	assert.deepEqual([
-		railColor(renderToolCall("read", "a path long enough to wrap onto a second line", theme).render(24)[1]!),
-		railColor(renderOutput("hello", theme, false)!.render(80)[0]!),
-		railColor(renderCodeDiff(patch, "", "a.ts", theme)!.render(80)[0]!),
-		railColor(renderCodeView("const a = 1;", "a.ts", theme)!.render(80)[0]!),
-		railColor(renderArguments({ path: "a.ts" }, theme).render(80)[0]!),
-		railColor(limitComponentLines(overflowing, 1, theme).render(80)[1]!),
-	], Array.from({ length: 6 }, () => chrome));
+		rail(renderToolCall("read", "a path long enough to wrap onto a second line", theme).render(24)[1]!),
+		rail(renderOutput("hello", theme, false)!.render(80)[0]!),
+		rail(renderCodeDiff(patch, "", "a.ts", theme)!.render(80)[0]!),
+		rail(renderCodeView("const a = 1;", "a.ts", theme)!.render(80)[0]!),
+		rail(renderArguments({ path: "a.ts" }, theme).render(80)[0]!),
+		rail(limitComponentLines(overflowing, 1, theme).render(80)[1]!),
+	], Array.from({ length: 6 }, () => "\x1b[90m │ \x1b[39m"));
 
-	// The truncation notice rides a chrome rail but reads at the weight of the tool's own
-	// arguments, so hidden output stays noticeable without the frame competing with it.
+	// The truncation notice rides a rail but reads as text 7, like the tool's own arguments.
 	const truncated = limitComponentLines(overflowing, 1, theme).render(80)[1]!;
-	assert.match(stripTerminalSequences(truncated), /^ │ … 1 more line$/u);
-	assert.deepEqual([...new Set([...truncated.matchAll(/38;2;\d+;\d+;\d+/gu)].map((match) => match[0]))], [
-		chrome,
-		THEME_RAMP_ANSI.toolOutput!.match(/38;2;\d+;\d+;\d+/u)![0],
-	]);
-
-	// `dim` is the quietest name a theme offers, but it is still sized for body text.
-	const luminance = (ansi: string) => {
-		const [r, g, b] = ansi.match(/(\d+);(\d+);(\d+)m?$/u)!.slice(1).map(Number);
-		return r! * 0.299 + g! * 0.587 + b! * 0.114;
-	};
-	assert.ok(luminance(chrome!) < luminance(THEME_RAMP_ANSI.dim!));
+	assert.equal(truncated, "\x1b[90m │ \x1b[39m\x1b[37m… 1 more line\x1b[39m");
 });
 
 test("limits previews without modifying the full result component", () => {
@@ -846,7 +753,7 @@ test("limits previews without modifying the full result component", () => {
 		invalidate() {},
 	};
 	const theme = fakeTheme({ fg: (_color: string, text: string) => text });
-	assert.deepEqual(limitComponentLines(source, 2, theme).render(80), ["one", "two", " │ … 2 more lines"]);
+	assert.deepEqual(limitComponentLines(source, 2, theme).render(80).map(stripTerminalSequences), ["one", "two", " │ … 2 more lines"]);
 	assert.deepEqual(source.render(80), ["one", "two", "three", "four"]);
 });
 
@@ -924,12 +831,12 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 			}).render(80);
 			assert.match(
 				lines[0]!,
-				/\x1b\[38;2;\d+;\d+;\d+m⦁\x1b\[39m/u,
+				/\x1b\[(?:36|32|31)m⦁\x1b\[39m/u,
 				`${phase.name} ${definition.name}`,
 			);
 			assert.match(
 				stripTerminalSequences(lines[0]!),
-				new RegExp(`⦁ ${definition.name}\\b`, "u"),
+				new RegExp(`⦁ \uE0B6${definition.name}\uE0B4`, "u"),
 				`${phase.name} ${definition.name}`,
 			);
 		}
@@ -963,8 +870,8 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 		toolCallId: "cached-result",
 	};
 	const callLines = renderCall({ path: "file.ts" }, renderTheme, resultContext).render(80);
-	// Fully lit frame: the indicator sits on the pulse's bright endpoint, derived from `muted`.
-	assert.match(callLines[0]!, /\x1b\[38;2;143;147;151m⦁\x1b\[39m read file\.ts/u);
+	// A running call's dot is palette index 6, then the title as text 7.
+	assert.match(callLines[0]!, /\x1b\[36m⦁\x1b\[39m \x1b\[36m\uE0B6\x1b\[39m\x1b\[46m\x1b\[30mread\x1b\[39m\x1b\[49m\x1b\[36m\uE0B4\x1b\[39m \x1b\[37mfile\.ts/u);
 	assert.doesNotMatch(stripTerminalSequences(callLines[0]!), /⦁ {2}read/u);
 
 	const firstResult = renderResult({ content }, { expanded: true, isPartial: true }, renderTheme, resultContext);
@@ -985,7 +892,7 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 	);
 	assert.notEqual(changedResult, firstResult);
 
-	// The connector keeps quiet chrome; completed duration/count metadata is one step brighter.
+	// The connector and the completed duration/count metadata are one tone: palette index 8.
 	const finished = renderResult(
 		{ content },
 		{ expanded: true, isPartial: false },
@@ -994,10 +901,8 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 	).render(80);
 	const controls = finished.at(-1)!;
 	assert.match(stripTerminalSequences(controls), /└ Done/u);
-	assert.deepEqual([...new Set([...controls.matchAll(/38;2;\d+;\d+;\d+/gu)].map((match) => match[0]))], [
-		paintChrome(renderTheme, "x").match(/38;2;\d+;\d+;\d+/u)![0],
-		completionPainter(renderTheme)("x").match(/38;2;\d+;\d+;\d+/u)![0],
-	]);
+	assert.deepEqual([...new Set([...controls.matchAll(/\x1b\[(90|3[0-7])m/gu)].map((match) => match[1]))], ["90"]);
+	assert.doesNotMatch(controls, /38;2/u);
 
 	const failedResult = renderResult(
 		{ content: [{ type: "text", text: "ENOENT: missing file\nstack frame" }] },
@@ -1023,8 +928,8 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 	assert.match(failedEdit.at(-1)!, /^ └ Failed( in \S+)?$/u);
 
 	// A successful edit reports its change like a diff: lines added and removed,
-	// each in the theme's diff color.
-	const diffTheme = fakeTheme({ ...renderTheme, fg: (color: string, text: string) => `<${color}>${text}</${color}>` });
+	// added in palette index 2, removed in 1.
+	const diffTheme = renderTheme;
 	const editDiff = "     ...\n  57 context\n- 58 old line\n+ 58 new line\n+ 59 added line\n  60 context";
 	const editedStatus = renderEditResult(
 		{ content: [{ type: "text", text: "Successfully replaced 1 block(s) in file.ts." }], details: { diff: editDiff, patch: "" } },
@@ -1032,9 +937,9 @@ test("animates every built-in, restores reload renderers, and reuses unchanged l
 		diffTheme,
 		{ ...resultContext, args: { path: "file.ts" }, expanded: false, isError: false, state: {}, toolCallId: "counted-edit", lastComponent: undefined },
 	).render(200).at(-1)!;
-	assert.match(stripTerminalSequences(editedStatus).replace(/<\/?[a-zA-Z]+>/gu, ""), /└ Done.*\(\+2 -1\)$/u);
-	assert.ok(editedStatus.includes("<toolDiffAdded>+2</toolDiffAdded>"), "additions use the added color");
-	assert.ok(editedStatus.includes("<toolDiffRemoved>-1</toolDiffRemoved>"), "removals use the removed color");
+	assert.match(stripTerminalSequences(editedStatus), /└ Done.*\(\+2 -1\)$/u);
+	assert.ok(editedStatus.includes("\x1b[32m+2\x1b[39m"), "additions use index 2");
+	assert.ok(editedStatus.includes("\x1b[31m-1\x1b[39m"), "removals use index 1");
 
 	registered.length = 0;
 	handlers.get("session_start")?.({ reason: "startup" }, ctx);
@@ -1156,7 +1061,7 @@ test("keeps the progress controller inert until it is bound to a TUI", () => {
 		},
 	} as unknown as ExtensionContext);
 	handlers.get("agent_start")?.({});
-	assert.deepEqual(messages, ["Thinking…"]);
+	assert.deepEqual(messages, ["\x1b[36mThinking…\x1b[39m"]);
 
 	// Disposed again: later events must not reach the detached context.
 	controller.dispose();
@@ -1181,269 +1086,25 @@ test("uses semantic progress labels without exposing invocation details", () => 
 	assert.equal(formatToolProgress("", {}), "Running tool…");
 });
 
-test("uses indexed ANSI colors for the glow in 256-color mode", () => {
-	const theme = fakeTheme({
-		fg: (_color: string, text: string) => text,
-		getFgAnsi: () => "\x1b[38;5;110m",
-		getColorMode: () => "256color",
-	});
-	const rendered = glowProgressMessage("Glow", 2, theme, "high");
-	assert.match(rendered, /\x1b\[38;5;\d+mG\x1b\[39m/u);
-	assert.doesNotMatch(rendered, /\x1b\[38;2;/u);
-});
-
-test("resolves languages Pi's extension table misses, without guessing", () => {
-	// Pi's own mapping still wins where it applies.
-	assert.equal(languageFromPath("src/index.ts"), "typescript");
-	assert.equal(languageFromPath("a/b/notes.md"), "markdown");
-
-	// Named files that carry no extension.
-	assert.equal(languageFromPath("Dockerfile"), "dockerfile");
-	assert.equal(languageFromPath("deploy/Containerfile"), "dockerfile");
-	assert.equal(languageFromPath("Makefile"), "makefile");
-	assert.equal(languageFromPath("CMakeLists.txt"), "cmake");
-	assert.equal(languageFromPath("Gemfile"), "ruby");
-	assert.equal(languageFromPath("ci/Jenkinsfile"), "groovy");
-	assert.equal(languageFromPath("/home/me/.bashrc"), "bash");
-	assert.equal(languageFromPath(".editorconfig"), "ini");
-	assert.equal(languageFromPath(".env"), "ini");
-	assert.equal(languageFromPath(".env.production"), "ini");
-
-	// Extensions Pi does not list.
-	assert.equal(languageFromPath("build.mts"), "typescript");
-	assert.equal(languageFromPath("tsconfig.jsonc"), "json");
-	assert.equal(languageFromPath("run.bat"), "dos");
-	assert.equal(languageFromPath("fix.patch"), "diff");
-	assert.equal(languageFromPath("logo.svg"), "xml");
-	assert.equal(languageFromPath("build.gradle"), "groovy");
-
-	// Case and directory separators must not matter.
-	assert.equal(languageFromPath("infra\\DOCKERFILE"), "dockerfile");
-	assert.equal(languageFromPath("./Rakefile"), "ruby");
-
-	// Content types that auto-detection reliably gets wrong stay unhighlighted.
-	for (const path of ["notes.txt", "server.log", "rows.csv", "data.bin", "LICENSE", "README"]) {
-		assert.equal(languageFromPath(path), undefined, path);
-	}
-});
-
-test("reads the interpreter a shebang declares and ignores anything else", () => {
-	assert.equal(languageFromShebang("#!/bin/bash"), "bash");
-	assert.equal(languageFromShebang("#!/usr/bin/env python3"), "python");
-	assert.equal(languageFromShebang("#!/usr/bin/env -S node --enable-source-maps"), "javascript");
-	assert.equal(languageFromShebang("#!/usr/bin/ruby2.7"), "ruby");
-	assert.equal(languageFromShebang("#! /usr/bin/env  deno"), "typescript");
-	assert.equal(languageFromShebang("#!/usr/bin/env FOO=1 perl"), "perl");
-
-	assert.equal(languageFromShebang("#!/usr/bin/env unknown-thing"), undefined);
-	assert.equal(languageFromShebang("# not a shebang"), undefined);
-	assert.equal(languageFromShebang("const x = 1;"), undefined);
-	assert.equal(languageFromShebang(""), undefined);
-});
-
-test("prefers the path over a shebang and only consults a real first line", () => {
-	// An extension Pi already knows wins over the interpreter line.
-	assert.equal(resolveLanguage("script.py", "#!/bin/bash"), "python");
-	// Extensionless script: the shebang is the only declaration available.
-	assert.equal(resolveLanguage("bin/release", "#!/usr/bin/env bash"), "bash");
-	// No first line supplied (a diff hunk, or a read starting past line 1).
-	assert.equal(resolveLanguage("bin/release"), undefined);
-	assert.equal(resolveLanguage("bin/release", "  echo hello"), undefined);
-});
-
-/**
- * Pi's system theme leaves tokens to the terminal's own colors, whose escape sequence
- * names no color at all. Pi 0.99 still resolves them in `theme.colors`, and the theme's
- * appearance, not a guess from its text color, says which way contrast runs.
- */
-test("chrome derives from a token the terminal colors, and follows the theme's appearance", { skip: !hostResolvesColors && "Pi 0.99 and later" }, () => {
-	const brightness = (painted: string) => {
-		const [r, g, b] = painted.match(/38;2;(\d+);(\d+);(\d+)m/u)!.slice(1).map(Number) as [number, number, number];
-		return (r * 0.299 + g * 0.587 + b * 0.114) / 255;
-	};
-	const systemTheme = (appearance: "dark" | "light") => ({
-		// What Pi writes for a token set to the terminal default.
-		getFgAnsi: () => "\x1b[39m",
-		getColorMode: () => "truecolor",
-		fg: (_color: string, text: string) => `<default>${text}`,
-		// Neither text nor dim has a color of its own; Pi fills them from the terminal.
-		colors: { text: rgb(128, 128, 128), dim: rgb(128, 128, 128) },
-		appearance,
-	}) as unknown as Theme;
-	const dark = paintChrome(systemTheme("dark"), "x");
-	const light = paintChrome(systemTheme("light"), "x");
-	assert.doesNotMatch(dark, /<default>/u, "the chrome tone is derived, not left to the terminal");
-	assert.ok(brightness(dark) >= 0.21 && brightness(dark) <= 0.29, `dark: ${brightness(dark)}`);
-	assert.ok(brightness(light) >= 0.71 && brightness(light) <= 0.79, `light: ${brightness(light)}`);
-});
-
-/**
- * Pi before 0.99 has no `theme.colors`, `theme.appearance`, or `theme.style()`: its
- * theme only writes escape sequences. The same palette must derive the same colors
- * there, and a palette swapped behind the same Theme, as `/theme` does, must show.
- */
-test("a theme from Pi before 0.99 derives the same colors and follows a theme switch", () => {
-	let palette: Record<string, string> = { ...THEME_RAMP_ANSI, thinkingHigh: "\x1b[38;2;210;168;255m" };
-	const legacy = {
-		fg: (color: string, text: string) => `<${color}>${text}`,
-		getFgAnsi: (color: string) => palette[color] ?? "",
-		getColorMode: () => "truecolor",
-	} as unknown as Theme;
-	const modern = fakeTheme({ ...legacy as unknown as Record<string, unknown> });
-	const drawings = (theme: Theme) => [
-		paintChrome(theme, " │ "),
-		glowProgressMessage("Working", 3, theme, "high"),
-		renderActivityDots(5, 40, theme, "high")[0],
-	];
-	const before = drawings(legacy);
-	assert.deepEqual(before, drawings(modern), "the same palette draws the same, with or without theme.colors");
-	assert.ok(before.every((drawn) => /38;2;/u.test(drawn!)), "every drawing is derived, none falls back");
-
-	palette = { ...palette, dim: "\x1b[38;2;200;60;60m", thinkingHigh: "\x1b[38;2;30;200;90m" };
-	const after = drawings(legacy);
-	assert.notDeepEqual(after, before, "a palette swapped behind the same Theme repaints");
-});
-
-test("derived colors are written as Pi 0.99 writes colors, for the terminal's color mode", () => {
-	const truecolor = fakeTheme({ getColorMode: () => "truecolor" });
-	const palette256 = fakeTheme({ getColorMode: () => "256color" });
-	assert.equal(colorizeRgb(truecolor, { r: 10, g: 20, b: 30 }, "x"), "\x1b[38;2;10;20;30mx\x1b[39m");
-	assert.equal(fillRgb(truecolor, { r: 10, g: 20, b: 30 }, "x"), "\x1b[48;2;10;20;30mx\x1b[49m");
-	// Recorded from Pi 0.99's own conversion: the nearest cube or gray step, never the
-	// first sixteen entries, which are whatever the terminal makes of them.
-	const recorded = [[128, 0, 0, 88], [10, 20, 30, 16], [200, 200, 205, 251], [255, 128, 0, 208],
-		[74, 74, 74, 239], [0, 0, 0, 16], [255, 255, 255, 231], [95, 135, 175, 67]] as const;
-	for (const [r, g, b, index] of recorded) {
-		assert.equal(colorizeRgb(palette256, { r, g, b }, "x"), `\x1b[38;5;${index}mx\x1b[39m`, `fg rgb(${r},${g},${b})`);
-		assert.equal(fillRgb(palette256, { r, g, b }, "x"), `\x1b[48;5;${index}mx\x1b[49m`, `bg rgb(${r},${g},${b})`);
-	}
-	// Where Pi can write colors itself, every color agrees with it.
-	const pi = tui as unknown as { foregroundAnsi?: (color: object, mode: string) => string; rgbColor?: (r: number, g: number, b: number) => object };
-	if (!pi.foregroundAnsi || !pi.rgbColor) return;
-	for (const [mode, theme] of [["truecolor", truecolor], ["256color", palette256]] as const) {
-		for (let r = 0; r < 256; r += 37) {
-			for (let g = 0; g < 256; g += 41) {
-				for (let b = 0; b < 256; b += 43) {
-					assert.equal(colorizeRgb(theme, { r, g, b }, "x"), `${pi.foregroundAnsi(pi.rgbColor(r, g, b), mode)}x\x1b[39m`, `rgb(${r},${g},${b}) ${mode}`);
-				}
-			}
-		}
-	}
-});
-
-test("scales the working-label glow to its length and follows the theme's background", () => {
-	const requestedColors: string[] = [];
-	const rampTheme = (ansi: Record<string, string>) => fakeTheme({
-		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-		getFgAnsi: (color: string) => {
-			requestedColors.push(color);
-			return ansi[color] ?? "";
-		},
-	});
-	const luminance = (color: number[]) => color[0]! * 0.299 + color[1]! * 0.587 + color[2]! * 0.114;
-	const glowColors = (rendered: string) =>
-		[...rendered.matchAll(/38;2;(\d+);(\d+);(\d+)m/gu)].map((match) => match.slice(1).map(Number));
-
-	const dark = rampTheme(THEME_RAMP_ANSI);
-	const short = glowProgressMessage("Glow", 2, dark, "max");
-	const long = glowProgressMessage("0123456789abcdef", 8, dark, "max");
-	// The sweep is built from the theme's color for the active thinking level, never a fixed white.
-	assert.deepEqual([...new Set(requestedColors)].sort(), ["text", "thinkingMax"]);
-	const shortColors = glowColors(short);
-	const longColors = glowColors(long);
-	assert.equal(shortColors.length, 4);
-	assert.equal(longColors.length, 16);
-	// The highlight is a single peak that rides the frame, and the radius grows with length.
-	const peak = (colors: number[][]) => colors.reduce(
-		(best, color, index) => luminance(color) > luminance(colors[best]!) ? index : best,
-		0,
-	);
-	assert.equal(peak(shortColors), 0);
-	assert.equal(peak(longColors), 4);
-	const lit = (colors: number[][]) => colors.filter((color) => luminance(color) > luminance(colors.at(-1)!)).length;
-	assert.ok(lit(longColors) > lit(shortColors));
-	// On a dark theme the highlight brightens, and it stays inside the derived endpoints.
-	assert.ok(longColors.every((color) => luminance(color) >= luminance(longColors.at(-1)!) - 1));
-	assert.ok(luminance(longColors[4]!) > luminance(longColors.at(-1)!));
-
-	requestedColors.length = 0;
-	const light = rampTheme({
-		text: "\x1b[38;2;31;35;40m",
-		muted: "\x1b[38;2;108;108;108m",
-		dim: "\x1b[38;2;118;118;118m",
-		thinkingMax: "\x1b[38;2;175;0;95m",
-	});
-	// A light background inverts the sweep: the highlight has to darken to stay readable.
-	const onLight = glowColors(glowProgressMessage("0123456789abcdef", 8, light, "max"));
-	assert.equal(onLight.length, 16);
-	assert.ok(luminance(onLight[4]!) < luminance(onLight.at(-1)!));
-	assert.ok(onLight.every((color) => luminance(color) <= luminance(onLight.at(-1)!) + 1));
-});
-
-test("survives a theme that paints a level black or does not know it at all", () => {
-	const theme = fakeTheme({
-		fg: (color: string, text: string) => {
-			// Pi throws from fg() too, so a fallback must never name the color that just failed.
-			if (!THEME_RAMP_ANSI[color] && color !== "text" && color !== "muted") {
-				throw new Error(`Unknown theme color: ${color}`);
-			}
-			return `<${color}>${text}</${color}>`;
-		},
-		getFgAnsi: (color: string) => {
-			if (color === "thinkingOff") return "\x1b[38;2;0;0;0m";
-			if (color === "thinkingMax") throw new Error("Unknown theme color: thinkingMax");
-			return THEME_RAMP_ANSI[color] ?? "";
-		},
-		getColorMode: () => "truecolor",
-	});
-
-	// Pure black carries no ratio to scale, so the floor has to produce it from the poles.
-	const channels = [...glowProgressMessage("Working", 0, theme, "off").matchAll(/38;2;(\d+);(\d+);(\d+)/gu)]
-		.flatMap((match) => match.slice(1).map(Number));
-	assert.ok(channels.length > 0);
-	assert.ok(channels.every((value) => Number.isFinite(value) && value >= 0 && value <= 255));
-	assert.ok(channels.some((value) => value > 60), "a level painted black must still be readable");
-
-	// An unresolvable color falls back to names every theme carries, without rethrowing.
-	assert.match(glowProgressMessage("Working", 0, theme, "max"), /<muted>|<text>/u);
-});
-
-test("repaints the working label in the session's thinking level", () => {
+test("the working label is palette index 6 whatever the thinking level", () => {
 	const handlers = new Map<string, (event: any) => void>();
 	const pi = {
 		on: (name: string, handler: (event: any) => void) => handlers.set(name, handler),
 		getThinkingLevel: () => "low",
 	} as unknown as ExtensionAPI;
 	const messages: Array<string | undefined> = [];
-	const theme = fakeTheme({
-		fg: (color: string, text: string) => `${THEME_RAMP_ANSI[color] ?? ""}${text}\x1b[39m`,
-		getFgAnsi: (color: string) => THEME_RAMP_ANSI[color] ?? "",
-		getColorMode: () => "truecolor",
-	});
 	const controller = new ProgressController(pi);
 	controller.bind({
 		ui: {
-			theme,
+			theme: fakeTheme({}),
 			setWorkingVisible: () => {},
 			setWorkingMessage: (message?: string) => messages.push(message),
 			setWorkingIndicator: () => {},
 		},
 	} as unknown as ExtensionContext);
-
-	const crest = (label: string) => label.match(/38;2;(\d+);(\d+);(\d+)/u)![0];
 	handlers.get("agent_start")?.({});
-	const atLow = crest(messages.at(-1)!);
-
-	// A level change recolors the label in place, without restarting the sweep.
 	handlers.get("thinking_level_select")?.({ level: "max", previousLevel: "low" });
-	const atMax = crest(messages.at(-1)!);
-	assert.notEqual(atMax, atLow);
-	assert.equal(stripTerminalSequences(messages.at(-1)!), "Thinking…");
-
-	// The same level again is not a change, so nothing is repainted.
-	const before = messages.length;
-	handlers.get("thinking_level_select")?.({ level: "max", previousLevel: "max" });
-	assert.equal(messages.length, before);
+	assert.equal(messages.at(-1), "\x1b[36mThinking…\x1b[39m");
 	controller.dispose();
 });
 
@@ -1474,7 +1135,7 @@ test("keeps one glyph-free Pi working row across thinking and tool progress", ()
 	handlers.get("agent_end")?.({});
 	assert.equal(messages.length, beforeAgentEnd, "a low-level run may still retry or continue");
 	handlers.get("agent_settled")?.({});
-	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…", undefined]);
+	assert.deepEqual(messages, ["Thinking…", "Reading file…", "Processing results…"].map((label) => `\x1b[36m${label}\x1b[39m`).concat(undefined as never));
 	controller.dispose();
 });
 
@@ -1549,9 +1210,9 @@ test("leaves Ctrl+T to Pi's visibility toggle when thinking has no detail", () =
 		availableWidth: 80,
 	});
 
-	assert.equal(render(), "Planning integration harness testing");
+	assert.equal(render(), "\x1b[36m\x1b[39m\x1b[46m\x1b[30mPlanning integration harness testing\x1b[39m\x1b[49m\x1b[36m\x1b[39m");
 	assert.equal(terminalInput?.("\x14"), undefined);
-	assert.equal(render(), "Planning integration harness testing");
+	assert.equal(render(), "\x1b[36m\x1b[39m\x1b[46m\x1b[30mPlanning integration harness testing\x1b[39m\x1b[49m\x1b[36m\x1b[39m");
 	assert.equal(terminalInput?.("\x14"), undefined);
 	controller.dispose();
 });
@@ -1741,7 +1402,7 @@ test("renders custom tools compactly and expands into the author's renderer", as
 			ctx: unknown,
 		) => Component;
 		const call = renderCall(args, theme, context(false)).render(80).map((line) => stripTerminalSequences(line));
-		assert.match(call[0]!, /⦁ web_search IREN news$/u);
+		assert.match(call[0]!, /⦁ web_search IREN news$/u);
 		const result = { content: [{ type: "text", text: "one\ntwo" }] };
 
 		const collapsed = renderResult(result, { expanded: false, isPartial: false }, theme, context(false))
@@ -1948,7 +1609,7 @@ test("marks a finished custom tool's row as done before its result is drawn", as
 	// Pi tells extensions a tool ended, then redraws the row call first, result second.
 	handlers.get("tool_execution_end")?.({ toolCallId: "custom-finished", toolName: "web_search", result: {}, isError: false });
 	const call = renderCall({ query: "pi" }, theme, context).render(80)[0]!;
-	assert.match(call, /<success>⦁<\/success>/u, "the dot turns green without waiting for another redraw");
+	assert.match(call, /\x1b\[32m⦁\x1b\[39m/u, "the dot turns green without waiting for another redraw");
 });
 
 test("lets auto_compact name a custom tool, overriding the custom_tools default for it", () => {

@@ -1,3 +1,4 @@
+import { ink } from "./compact-tools-indices.ts";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import {
@@ -171,11 +172,11 @@ function lookTitle(name: string, args: ToolArgs, theme: Theme): { verb: string; 
 	if (name === "read") return { verb: "Read", target: path };
 	if (name === "ls") return { verb: "List", target: path || "." };
 	const pattern = typeof args.pattern === "string" ? normalizeLineEndings(args.pattern).split("\n")[0]!.trim() : "";
-	return { verb: "Search", target: path ? `${pattern}${theme.fg("dim", " in ")}${path}` : pattern };
+	return { verb: "Search", target: path ? `${pattern}${ink("dim", " in ")}${path}` : pattern };
 }
 
 function changeCount(theme: Theme, added: number, removed: number): string {
-	return `(${theme.fg("toolDiffAdded", `+${added}`)} ${theme.fg("toolDiffRemoved", `-${removed}`)})`;
+	return `(${ink("toolDiffAdded", `+${added}`)} ${ink("toolDiffRemoved", `-${removed}`)})`;
 }
 
 function writeLineCount(args: ToolArgs): number {
@@ -229,12 +230,12 @@ export function renderCodexCall(
 		return `${dot}|${current}|${outcome?.exitCode ?? ""}|${outcome?.changes?.added ?? ""}/${outcome?.changes?.removed ?? ""}|${opened(width)}`;
 	}, (width) => {
 		const phase = settled(current);
-		const bullet = phase === "success" ? theme.bold(theme.fg("success", CODEX_BULLET))
-			: phase === "error" ? theme.bold(theme.fg("error", CODEX_BULLET)) : dot;
+		const bullet = phase === "success" ? theme.bold(ink("success", CODEX_BULLET))
+			: phase === "error" ? theme.bold(ink("error", CODEX_BULLET)) : dot;
 		const head = (verb: string, rest: string) => `${CODEX_MARGIN}${bullet} ${theme.bold(verb)}${rest ? ` ${rest}` : ""}`;
 		if (kind === "shell") {
 			if (opened(width)) {
-				const prompt = theme.fg("bashMode", "$ ");
+				const prompt = ink("bashMode", "$ ");
 				const first = width - visibleWidth(CODEX_MARGIN + "$ ");
 				const rest = Math.max(1, width - visibleWidth(CODEX_COMMAND_INDENT));
 				return segments.flatMap((line, index) => wrapSegments(line, index === 0 ? first : rest, rest)
@@ -247,18 +248,18 @@ export function renderCodexCall(
 		}
 		if (kind === "custom") {
 			const verb = VERBS.custom[phase];
-			if (!expanded) return [clip(head(verb, theme.fg("accent", name)), width)];
+			if (!expanded) return [clip(head(verb, ink("accent", name)), width)];
 			const call = invocation(name, args);
 			if (invocationInline(verb, call, width)) return [head(verb, paintSegments(call, theme))];
-			return [head(verb, ""), ...prefixedRows([call], theme.fg("dim", CODEX_RESULT_PREFIX), CODEX_INDENT, width, theme)];
+			return [head(verb, ""), ...prefixedRows([call], ink("dim", CODEX_RESULT_PREFIX), CODEX_INDENT, width, theme)];
 		}
 		const path = codexPath(args);
 		if (name === "edit" || name === "write") {
 			const verbs = VERBS[name];
-			if (phase === "error") return [clip(`${CODEX_MARGIN}${theme.fg("error", theme.bold(`✘ ${verbs.error}${path ? ` ${path}` : ""}`))}`, width)];
+			if (phase === "error") return [clip(`${CODEX_MARGIN}${ink("error", theme.bold(`✘ ${verbs.error}${path ? ` ${path}` : ""}`))}`, width)];
 			if (phase === "running") return [clip(head(verbs.running, path), width)];
 			const changes = name === "write" ? { added: writeLineCount(args), removed: 0 } : state.codex?.changes ?? { added: 0, removed: 0 };
-			return [clip(`${CODEX_MARGIN}${theme.fg("dim", CODEX_BULLET)} ${theme.bold(verbs.success)} ${path} ${changeCount(theme, changes.added, changes.removed)}`, width)];
+			return [clip(`${CODEX_MARGIN}${ink("dim", CODEX_BULLET)} ${theme.bold(verbs.success)} ${path} ${changeCount(theme, changes.added, changes.removed)}`, width)];
 		}
 		const { verb, target } = lookTitle(name, args, theme);
 		return [clip(head(verb, target), width)];
@@ -288,14 +289,14 @@ type ResultInput = {
  */
 function outcomeLine(theme: Theme, isError: boolean, exitCode: number | undefined, duration: string | undefined): string {
 	const mark = isError
-		? theme.bold(theme.fg("error", "✗")) + (exitCode !== undefined ? ` (${exitCode})` : "")
-		: theme.bold(theme.fg("success", "✓"));
-	return `${CODEX_MARGIN}${mark}${duration ? theme.fg("dim", ` • ${duration}`) : ""}`;
+		? theme.bold(ink("error", "✗")) + (exitCode !== undefined ? ` (${exitCode})` : "")
+		: theme.bold(ink("success", "✓"));
+	return `${CODEX_MARGIN}${mark}${duration ? ink("dim", ` • ${duration}`) : ""}`;
 }
 
 /** The last rows of output under `└`, each cut to the row, dim as Codex previews them. */
 function previewRows(lines: readonly string[], theme: Theme, width: number): string[] {
-	return lines.map((line, index) => clip(theme.fg("dim", (index === 0 ? CODEX_RESULT_PREFIX : CODEX_INDENT) + line), width, theme.fg("dim", "…")));
+	return lines.map((line, index) => clip(ink("dim", (index === 0 ? CODEX_RESULT_PREFIX : CODEX_INDENT) + line), width, ink("dim", "…")));
 }
 
 /**
@@ -319,7 +320,7 @@ function fullOutput(text: string, theme: Theme, width: number): string[] {
 }
 
 function dimDisclosure(theme: Theme, width: number, expanded: boolean, hidden?: number): string {
-	return clip(theme.fg("dim", codexDisclosure(width, expanded, hidden)), width, theme.fg("dim", "…"));
+	return clip(ink("dim", codexDisclosure(width, expanded, hidden)), width, ink("dim", "…"));
 }
 
 /** A command, or a lone read, search, or listing: the tail of its output, or all of it opened. */
@@ -385,9 +386,9 @@ function opens(input: ResultInput, width: number): boolean {
 function failureResult(input: ResultInput, width: number): string[] {
 	const { theme, expanded } = input;
 	const reason = input.output.trim() || "(error details unavailable)";
-	const rows = prefixedRows(textLines(reason, "dim"), theme.fg("dim", CODEX_RESULT_PREFIX), CODEX_INDENT, width, theme);
+	const rows = prefixedRows(textLines(reason, "dim"), ink("dim", CODEX_RESULT_PREFIX), CODEX_INDENT, width, theme);
 	if (expanded) return [...rows, dimDisclosure(theme, width, true)];
-	return [...rows.slice(0, CODEX_PREVIEW_ROWS).map((row) => clip(row, width, theme.fg("dim", "…"))), dimDisclosure(theme, width, false)];
+	return [...rows.slice(0, CODEX_PREVIEW_ROWS).map((row) => clip(row, width, ink("dim", "…"))), dimDisclosure(theme, width, false)];
 }
 
 /** Changed lines only, as Codex previews a patch: context dropped, one `⋮` between hunks. */
@@ -417,7 +418,7 @@ function customResult(input: ResultInput, width: number): string[] {
 	if (isPartial) return text ? previewRows(tailLines(text), theme, width) : [];
 	if (expanded) {
 		const inline = invocationInline(VERBS.custom[isError ? "error" : "success"], invocation(name, args), width);
-		const first = inline ? theme.fg("dim", CODEX_RESULT_PREFIX) : CODEX_INDENT;
+		const first = inline ? ink("dim", CODEX_RESULT_PREFIX) : CODEX_INDENT;
 		let rows: string[] = [];
 		let component: Component | undefined;
 		if (author && !isError) {

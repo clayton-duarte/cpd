@@ -2132,7 +2132,7 @@ Every message in the table that is not marked steered is a follow-up. The turn c
 
 **No loss, no duplicates.** The adapter's cursor is the highest Event id it has delivered, which it reads back at `session_start` from its own session file (the `details.id` of the last `cpd` custom message whose `details.delivered_to` is this Session), else the `id` of the Session's `session-registered` Event, whichever is greater. The adapter adds `delivered_to` (the Session's id) to the `details` of every message it delivers, so the cursor counts only messages delivered to this Session and never one at or below its `session-registered` Event: a fork's session file starts with its source's messages, whose Event ids belong to the source's stream. It runs `cpd events follow --session <id> --since <cursor>` and restarts it with the latest cursor if it exits. The exact protocol (activation, errors, the Plan review through plannotator) is in `commands.md`.
 
-**The title row** (hs-d486, the last word; replaces hs-d485 and hs-d484): no dot glyph. The row is `╭─` (muted), then the title as a pill: U+E0B6, the title (`cpd <summary>`), U+E0B4, no padding inside, folded and expanded alike. It matches the cockpit's pill title, `title` in `tui/src/section.rs` (used by `tui/src/dialog/view.rs`, `tui/src/logs/view.rs`; caps `CAP_L`/`CAP_R` in `tui/src/plan/flow.rs`): lead 8 (a line), the pill magenta (background 5, text 0, caps 5: cpd's own blocks are magenta, hs-d534, §6.1.1). The pi window follows the palette through the pi theme cpd ships (hs-d534; owner: Plan `pi-pin`), which maps pi's colour tokens to the indices 0-15; until it lands `pi/lib/render.ts` keeps drawing the pill with explicit SGR (the caps `ESC[90m`, the block `ESC[100m` with the text `ESC[37m`, then `ESC[49m` and `ESC[39m` to reset). Display only.
+**The title row** (hs-d486, the last word; replaces hs-d485 and hs-d484): no dot glyph. The row is `╭─` (muted), then the title as a pill: U+E0B6, the title (`cpd <summary>`), U+E0B4, no padding inside, folded and expanded alike. It matches the cockpit's pill title, `title` in `tui/src/section.rs` (used by `tui/src/dialog/view.rs`, `tui/src/logs/view.rs`; caps `CAP_L`/`CAP_R` in `tui/src/plan/flow.rs`): lead 8 (a line), the pill magenta (background 5, text 0, caps 5: cpd's own blocks are magenta, hs-d534, §6.1.1). The pi window follows the palette through the pi theme cpd ships (hs-d534; owner: Plan `pi-theme`), which maps pi's colour tokens to the indices 0-15; `pi/lib/render.ts` draws the pill with explicit indexed SGR (hs-d545; §6.1.1): caps `ESC[35m`, block `ESC[45m` with the text `ESC[30m`, then `ESC[49m` and `ESC[39m` to reset (today it still draws the grey `ESC[100m`/`ESC[37m`/`ESC[90m` until Plan `pi-theme` lands). Display only.
 
 **The fold's closing row** (hs-d484; applies hs-d449 inside pi; the rendering itself is `commands.md` §15, `pi/lib/render.ts`). A cpd message in a pi pane is the title row above, then `│ ` content lines when expanded, then one closing toggle row (colour 7, §6.1.1; the rails are 8): `╰󰁋 expand` when folded (U+F004B) or `╰󰁣 collapse` when expanded (U+F0063), one space between the glyph and the word. It replaces `╰─ expand` / `╰─ collapse`. It is the cockpit's own toggle, `toggle` in `tui/src/fold.rs` (glyphs `DOWN` / `UP` in `tui/src/tree/look.rs`), the row of the Inbox and the tree. Display only; no behaviour change.
 
@@ -2270,9 +2270,9 @@ The one palette of the cockpit, the pi window included (User, tui-visuals, 2026-
 | cyan (6, 14) | **agent activity**: running Jobs, working dots and spinners, the Lead-working dot, what a Lead is handling (a failed Job, a closed PR, the conflict or failing checks of an owned PR, `updating`), escalations (Pulse's bar), pending checks, Pulse's activity and PR-opened bars, the waiting Workers count (the status line's `W`: its pill holds no colour by rule (3), so the cyan applies where the count is drawn as text outside a block; there is none today), the Worker pane's `agent` label, a log error addressed to a Lead. The Worker pane's `you` label is **7**, not cyan (hs-d362 amended) |
 | grey (7, 15) | the default when no meaning applies: 7 read-only, 15 clickable |
 
-**Job pills** (the Plan view's cards, the legend's samples, hs-d534): draft magenta, queued 15, running cyan, merging yellow, merged green, failed (its Lead handles it) cyan, failed and stuck (`job-stuck` open) red, cancelled 8; the block is the bright pair (13, 15, 14, 11, 10, 14, 9; cancelled stays 8, which has no pair) because a pill is clickable, text 0, caps the block's colour. The selected pill is the blue block. **The status line:** buttons 15, text 0; the workers pill and the version pill 7, text 0, with no colours inside; the preview pill yellow (background 3, text 0). **The pi chat** (hs-d508): cpd's blocks are magenta, tool pills follow their status in base colours (running cyan, done green, failed red), the Thinking pill is cyan, lines and rails are 8, toggles are 7; the pi window follows the palette through a **pi theme that cpd ships**, mapping pi's colour tokens to the indices 0-15 (pi themes accept indices). **Its owner is Plan `pi-pin`**: the rows below that say "pi theme" state the contract, and the Plan `tui-visuals` implements only `tui/` and the tmux options and formats.
+**Job pills** (the Plan view's cards, the legend's samples, hs-d534): draft magenta, queued 15, running cyan, merging yellow, merged green, failed (its Lead handles it) cyan, failed and stuck (`job-stuck` open) red, cancelled 8; the block is the bright pair (13, 15, 14, 11, 10, 14, 9; cancelled stays 8, which has no pair) because a pill is clickable, text 0, caps the block's colour. The selected pill is the blue block. **The status line:** buttons 15, text 0; the workers pill and the version pill 7, text 0, with no colours inside; the preview pill yellow (background 3, text 0). **The pi chat** (hs-d508): cpd's blocks are magenta, tool pills follow their status in base colours (running cyan, done green, failed red), the Thinking pill is cyan, lines and rails are 8, toggles are 7; the pi window follows the palette through a **pi theme that cpd ships**, mapping pi's colour tokens to the indices 0-15 (pi themes accept indices). **Its owner is Plan `pi-theme`**: the rows below that say "pi theme" state the contract, and the Plan `tui-visuals` implements only `tui/` and the tmux options and formats.
 
-**Where the colours live.** The views take every colour from `tui/src/palette.rs` only (the test `no_colour_outside_the_palette` forbids `Color::` elsewhere under `tui/`): `palette::fg(Meaning)` for a meaning's colour (base, or the bright pair of it for a mark inside a clickable area), the colourless text of rule (2) (15, 7, 8), `palette::pill_static()` (background 7, text 0), `palette::pill_interactive()` (background 15, text 0), `palette::pill(…)` (a coloured pill: its colour, text 0), and `palette::pill_focus()` and `palette::selected()` (the blue block, background 4, text 0). tmux draws its own pills and lines from the format strings and the server options below, which hold the same numbers. pi draws from the theme of Plan `pi-pin`.
+**Where the colours live.** The views take every colour from `tui/src/palette.rs` only (the test `no_colour_outside_the_palette` forbids `Color::` elsewhere under `tui/`): `palette::fg(Meaning)` for a meaning's colour (base, or the bright pair of it for a mark inside a clickable area), the colourless text of rule (2) (15, 7, 8), `palette::pill_static()` (background 7, text 0), `palette::pill_interactive()` (background 15, text 0), `palette::pill(…)` (a coloured pill: its colour, text 0), and `palette::pill_focus()` and `palette::selected()` (the blue block, background 4, text 0). tmux draws its own pills and lines from the format strings and the server options below, which hold the same numbers. pi draws from the theme of Plan `pi-theme` (§6.1.1 "The pi theme").
 
 **The elements.** One row per coloured element of the cockpit (the inventory of `docs/research/colour-audit.md`, decided by hs-d534). *Interactive* is whether the element is part of a hit target (click, key, or a terminal modifier-click on an OSC 8 link). For a block, *Colour* gives the background, the text and the caps; for text it gives the foreground; a mark inside a blue block is text 0.
 
@@ -2413,15 +2413,15 @@ The one palette of the cockpit, the pi window included (User, tui-visuals, 2026-
 | cpd's own menus: entries / selected entry | yes | fg 15 / block bg 4, fg 0 | palette: clickable text, `palette::selected()` |
 | tmux's own pane menu | yes | text 15 (`menu-style`), border 8 (`menu-border-style`), selected entry bg 4, fg 0 (`menu-selected-style`) | server options, §6.1 |
 | **cpd's messages in the pi chat** (`pi/lib/render.ts`) | | | |
-| Title row lead `╭─` | no | fg 8 | pi theme (Plan `pi-pin`) |
-| Title pill (`cpd Message from pi-pin`) | no | bg 5, fg 0, caps 5 (cpd's blocks are magenta, rule (3)) | pi theme (Plan `pi-pin`) |
-| Rail `│ ` before each content line | no | fg 8 | pi theme (Plan `pi-pin`) |
-| Content lines | no | fg 7 | pi theme (Plan `pi-pin`) |
-| Toggle row `╰󰁋 expand` / `╰󰁣 collapse` | yes (click, Ctrl+O) | fg 7 | pi theme (Plan `pi-pin`) |
-| The message's background (every line) | no | 0: no tinted fill (the theme's `customMessageBg` is colour 0) | pi theme (Plan `pi-pin`) |
-| pi tool pills: running / done / failed | no | bg 6 / 2 / 1, fg 0 (base colours) | pi theme (Plan `pi-pin`) |
-| pi Thinking pill | no | bg 6, fg 0 | pi theme (Plan `pi-pin`) |
-| pi lines and rails, toggles | no / yes | fg 8 / fg 7 | pi theme (Plan `pi-pin`) |
+| Title row lead `╭─` | no | fg 8 | pi theme (Plan `pi-theme`) |
+| Title pill (`cpd Message from pi-pin`) | no | bg 5, fg 0, caps 5 (cpd's blocks are magenta, rule (3)) | pi theme (Plan `pi-theme`) |
+| Rail `│ ` before each content line | no | fg 8 | pi theme (Plan `pi-theme`) |
+| Content lines | no | fg 7 | pi theme (Plan `pi-theme`) |
+| Toggle row `╰󰁋 expand` / `╰󰁣 collapse` | yes (click, Ctrl+O) | fg 7 | pi theme (Plan `pi-theme`) |
+| The message's background (every line) | no | the terminal default: no fill (the theme's `customMessageBg` is `""`, hs-d537 A4) | pi theme (Plan `pi-theme`) |
+| pi tool pills: running / done / failed | no | bg 6 / 2 / 1, fg 0 (base colours) | pi theme (Plan `pi-theme`) |
+| pi Thinking pill | no | bg 6, fg 0 | pi theme (Plan `pi-theme`) |
+| pi lines and rails, toggles | no / yes | fg 8 / fg 7 | pi theme (Plan `pi-theme`) |
 | **Other** | | | |
 | Worker pane: `you` label (bold) and the User's lines | no | fg 7 | palette: read-only text |
 | Worker pane: `agent` label (bold) | no | fg 6 | palette: meaning |
@@ -2459,6 +2459,102 @@ JOIN
 Written out, the workers pill is `#[fg=colour7]\u{e0b6}#[fg=colour0]#[bg=colour7]#{…}#[fg=colour7]#[bg=default]\u{e0b4}#[default]`, and the first button is `#[range=user|reset]#[fg=colour15]\u{e0b6}#[fg=colour0]#[bg=colour15]󰨝#[fg=colour15]#[bg=default]\u{e0b4}#[default]#[norange]`. The engine's texts (`@cpd_workers`, `@cpd_workers_short`) carry **no style at all** (plain text, no `#[fg=…]`, no `dim`): the pill's `fg=colour0` is the only text colour. Widths, the fill and the long or short choice are unchanged (layout stays).
 
 The server options of the palette (§6.1 lists them all): `pane-border-style` `fg=colour7`, `pane-active-border-style` `fg=blue`, `popup-border-style` `fg=colour7`, `mode-style` `bg=blue,fg=colour0`, `menu-selected-style` `bg=blue,fg=colour0`, `menu-border-style` `fg=colour8`, `menu-style` `fg=colour15`.
+
+#### The pi theme (hs-d534, hs-d536, hs-d537, hs-d545; owner: Plan `pi-theme`)
+
+The theme file is `pi/themes/cpd.json` (`name` "cpd"), declared in `pi/package.json` under `pi.themes`, and selected by the User's pi settings (pi-config repo: `"theme": "cpd"`, `"themes": ["~/.local/share/cpd/pi/themes"]`, the installed adapter). Every value is an index 0-15 or `""` (the terminal default); no hex, no RGB, and the cockpit's terminal renders the indices as the terminal's own theme CPD, so cpd names indices only (hs-d536). pi writes an indexed theme colour as `38;5;n` (unverified beyond pi 1.3.0's `colorAnsi`, pi-tui `colors.js`), so a change of the terminal theme shows in pi with no change to cpd. The theme maps **pi's own elements** (markdown, editor, footer, pi's own tool boxes under style `off`); the elements that cpd's extensions draw are not left to it (see "How the extensions paint", below). Every background token is `""` except `selectedBg` (hs-d534 rule (3); no tinted fill: A4 of the Plan). The 56 tokens of pi's `dark.json`:
+
+| Token | Value | Reason |
+|---|---|---|
+| `accent` | 4 | focus (blue) |
+| `border` | 8 | line |
+| `borderAccent` | 4 | focused line (blue) |
+| `borderMuted` | 8 | line |
+| `success` | 2 | green meaning |
+| `error` | 1 | red meaning |
+| `warning` | 3 | yellow meaning |
+| `muted` | 8 | muted text |
+| `dim` | 8 | muted text (there is no dim: 8) |
+| `text` | 7 | read-only text |
+| `thinkingText` | 7 | read-only text |
+| `selectedBg` | 4 | the selection block (blue, text 0) |
+| `scrollbarTrack` | "" | no fill |
+| `scrollbarThumb` | 8 | muted mark |
+| `searchMatchBg` | 3 | a match is a yellow block |
+| `searchMatchText` | 0 | text on a block |
+| `userMessageBg` | "" | no fill |
+| `userMessageText` | 7 | read-only text |
+| `customMessageBg` | "" | no fill (A4) |
+| `customMessageText` | 7 | read-only text |
+| `customMessageLabel` | 5 | cpd's blocks are magenta |
+| `toolPendingBg` | "" | no fill; only pills are blocks |
+| `toolSuccessBg` | "" | no fill |
+| `toolErrorBg` | "" | no fill |
+| `toolTitle` | 7 | read-only text |
+| `toolOutput` | 7 | read-only text |
+| `mdHeading` | 7 | read-only text (bold) |
+| `mdLink` | 15 | clickable text |
+| `mdLinkUrl` | 8 | muted |
+| `mdCode` | 6 | cyan |
+| `mdCodeBlock` | 7 | read-only text |
+| `mdCodeBlockBorder` | 8 | line |
+| `mdQuote` | 8 | muted |
+| `mdQuoteBorder` | 8 | rail |
+| `mdHr` | 8 | line |
+| `mdListBullet` | 7 | read-only text |
+| `toolDiffAdded` | 2 | green meaning |
+| `toolDiffRemoved` | 1 | red meaning |
+| `toolDiffContext` | 8 | muted |
+| `syntaxComment` | 8 | muted |
+| `syntaxKeyword` | 4 | blue (magenta is cpd's) |
+| `syntaxFunction` | 6 | cyan |
+| `syntaxVariable` | 7 | read-only text |
+| `syntaxString` | 2 | green |
+| `syntaxNumber` | 3 | yellow |
+| `syntaxType` | 6 | cyan |
+| `syntaxOperator` | 7 | read-only text |
+| `syntaxPunctuation` | 8 | muted |
+| `thinkingOff` | 8 | muted |
+| `thinkingMinimal` | 8 | muted |
+| `thinkingLow` | 4 | blue |
+| `thinkingMedium` | 6 | cyan |
+| `thinkingHigh` | 3 | yellow |
+| `thinkingXhigh` | 3 | yellow |
+| `thinkingMax` | 3 | yellow |
+| `bashMode` | 2 | green meaning |
+
+**How the extensions paint** (hs-d545, User; design choice of the Plan). Every colour pi and cpd's pi extensions draw is one of 0-15 as an **indexed SGR**: 30-37, 90-97, 40-47, 100-107, `38;5;n` and `48;5;n` with n below 16, and the resets 39 and 49. Never RGB (`38;2`, `48;2`), hex, OKLCH or a derived value: no brightening, no dimming (no SGR 2 faint; muted is 8), no contrast band, no colour mixing, no glow or pulse ramp, no diff background tint, no SGR 7 (reverse). Only the cockpit's existing elements appear: pills, `╭─` lines and `│ ` rails, the toggles `╰󰁋 expand` / `╰󰁣 collapse`, dots and spinner glyphs, text. Colour animations stop (a glyph-frame spinner stays, painted in one fixed index). `pi/lib/render.ts` and `pi/compact-tools/` paint with explicit SGR taken from **one module of named indices** (as `pi/lib/render.ts` does today), so they draw the palette under any pi theme; the theme above covers pi's own elements.
+
+The SGR of the elements (n is the colour; the block's text is 0):
+
+| Element | Hit target | SGR |
+|---|---|---|
+| Pill, colour n in 1-7 | no | caps `ESC[3nm` U+E0B6 / U+E0B4 `ESC[39m` (the terminal background behind them); body `ESC[4nm` `ESC[30m` text `ESC[49m` `ESC[39m`. Magenta: `ESC[45m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[35m` |
+| Lead `╭─`, rails `│ `, metadata, secondary text | no | `ESC[90m`…`ESC[39m` (8) |
+| Content lines, toggle | no / yes | `ESC[37m`…`ESC[39m` (7) |
+| Running dot and working label | no | `ESC[36m`…`ESC[39m` (6) |
+
+**The pi chat rows** (hs-d508, hs-d509, hs-d510, hs-d537; the owner is Plan `pi-theme`, which replaces the `pi-pin` rows). Every row below is drawn by the extension, with no background fill (only the pills are blocks):
+
+| Element | Hit target | Colour |
+|---|---|---|
+| cpd's block: lead `╭─` | no | fg 8, `ESC[90m` |
+| cpd's pill (`cpd ` and the summary's first sentence, commands.md §15.9) | no | bg 5, text 0, caps 5: `ESC[45m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[35m` |
+| cpd's block: rail `│ ` | no | fg 8, `ESC[90m` |
+| cpd's block: content | no | fg 7, `ESC[37m` |
+| cpd's block: toggle `╰󰁋 expand` / `╰󰁣 collapse` | yes (click, Ctrl+O) | fg 7, `ESC[37m` |
+| Tool pill, running **or not yet started** | no | bg 6, text 0, caps 6: `ESC[46m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[36m`; the text is the tool's title as today |
+| Tool pill, done | no | bg 2, text 0, caps 2: `ESC[42m` `ESC[30m`…, caps `ESC[32m` |
+| Tool pill, failed | no | bg 1, text 0, caps 1: `ESC[41m` `ESC[30m`…, caps `ESC[31m` |
+| Thinking pill (the section title) | no | bg 6, text 0, caps 6 (as the running tool pill) |
+| Thinking and tool rows: lead, rails, metadata, secondary text | no | fg 8, `ESC[90m` |
+| Thinking and tool rows: toggle | yes (click, Ctrl+T for Thinking, Ctrl+O for tools) | fg 7, `ESC[37m` |
+| Running dot, working label, glyph spinner | no | fg 6, `ESC[36m` (the pulse stops) |
+| Diff added / removed text | no | fg 2 / 1, `ESC[32m` / `ESC[31m`, no background tint |
+| Thinking text | no | fg 7 |
+| **A Lead's or Manager's mention in assistant text** (hs-d544, User, 2026-10-22; owner Plan `pi-theme`; commands.md §15.14) | no | fg 5, text and not a block: `ESC[35m`…`ESC[39m`; only in the pane of a Lead or a Manager |
+
+**Corrections to the rows above** (hs-d537): `customMessageBg` is the terminal default `""` (A4), not 0; the message has no fill.
 
 ### 6.2 Sessions, windows and panes
 
@@ -2645,7 +2741,7 @@ Both are **siblings**: a forked Session is drawn in the tree **directly under it
 hs-d498 (User, 2026-10-20; it supersedes hs-d488's route, a pinned fork of `pi-compact-tools`, and it is why the adapter's message renderer, commands.md §15.9, copies that extension's look). The tool rows, the thinking block and the grouping of pi's chat are drawn by **an extension cpd owns**: a copy of `pi-compact-tools` (nedleeds, MIT) 0.16.6 with the fold language added, shipped inside the adapter. It replaces the `npm:pi-compact-tools` package in the User's pi settings: no `compact-tools.json`, no `git:` pin and no package of its own are needed. Display only, like §15.9: nothing here changes a delivery, a tool's result or what reaches the model. The procedure of copying and of taking upstream changes is docs/implementing.md "The compact-tools extension".
 
 **Where it lives and how pi loads it.**
-- `pi/compact-tools/`, in the adapter package. `pi/package.json` `pi.extensions` is `["./extension.ts", "./compact-tools/extensions/compact-tools.ts"]`; `pi.skills` is unchanged and `pi.themes` is not declared (the extension ships no theme: the User's own applies). The package gains no dependency: the extension imports only `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`, already `peerDependencies: "*"`, and `node:` modules.
+- `pi/compact-tools/`, in the adapter package. `pi/package.json` `pi.extensions` is `["./extension.ts", "./compact-tools/extensions/compact-tools.ts"]`; `pi.skills` is unchanged and `pi.themes` is `["./themes"]` (`pi/themes/cpd.json`, §6.1.1 "The pi theme"; the extension itself ships no theme). The package gains no dependency: the extension imports only `@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui`, already `peerDependencies: "*"`, and `node:` modules.
 - What comes in from the fork: `extensions/` (28 of its 29 source files, under the same names, so a later upstream diff applies path for path; `compact-tools-release.ts` is the one left out) and `schemas/compact-tools.schema.json`. What does not: README, `assets/`, `examples/`, `themes/`, `release-notes.json`, `scripts/`, `docs/`, `.github/`, `.config/`, `package.json`, `package-lock.json`, `tsconfig.json`, badges and release machinery. `package.json` is not copied because nothing reads it once the release notice is gone (the notice, "What's new in pi-compact-tools", read `../package.json` and `../release-notes.json` and wrote `<agent dir>/compact-tools-notices/`; cpd's CHANGELOG is the notice).
 - `pi/compact-tools/LICENSE`: upstream's MIT text, byte for byte, beside the sources. `pi/compact-tools/NOTICE`: names the source and the base, so the copy is traceable: upstream `https://github.com/nedleeds/pi-compact-tools` at `8be1a8d` (0.16.6), the fork `clayton-duarte/pi-compact-tools` at `2c1fcad8089f174738334ff99f2eb83fa43aedcf` (the base plus the fold option), and the list of the changes cpd made on top (docs/implementing.md). The Gate fails when `LICENSE` or `NOTICE` is missing, or when `NOTICE` lacks the base commit.
 - `pi/compact-tools/header.ts`: comments only; it says what the directory is and points here and to docs/implementing.md.
@@ -2674,6 +2770,12 @@ hs-d498 (User, 2026-10-20; it supersedes hs-d488's route, a pinned fork of `pi-c
 - *What it does.* With another copy found, the extension registers **no** tool, command, hook or message transformer. It registers one `session_start` handler that says so. Pi's classes are left to the other copy, so nothing is patched twice. Without one, it works alone and registers everything.
 - *The message, once.* One line, `cpd compact-tools: <source> is also loaded (<settings file>): cpd's own copy stands down and registers nothing. Remove it from packages in <settings file> and run /reload.`, `<settings file>` being the file that declares it. In `tui` mode it is `ctx.ui.notify(…, "warning")`; in another mode, one line on stderr. **Once per process**: a flag on `globalThis` (a `Symbol.for` key) survives `/reload`, so a reload does not say it again.
 - *Why it stands down and does not take over.* The other copy's `registerTool` of the same built-in names and the hook order between two extensions are not ordered by anything cpd controls (unverified: whose renderer wins), and the npm package cannot be changed to detect this one. Standing down is the same on every load order. The cost is that the fold language shows only once the package is removed, which is the point of the message. A project settings file of an untrusted project can make it stand down without that package being loaded (pi's `SettingsManager` reads it by default; unverified for an untrusted project): the message names the file, which is the fix.
+
+**The tool pill and the Thinking pill** (hs-d508, hs-d510, hs-d537; colours and SGR: §6.1.1 "The pi theme"). A tool row's title becomes a pill: the title text as drawn today, inside caps U+E0B6 / U+E0B4, bg 6 while the tool runs **or has not started**, 2 when done, 1 when failed, text 0 (A5); the row's `╭─` lead, rails and metadata are 8. The Thinking section's title (`Thinking`, the section title of `compact-tools-thinking.ts`) becomes a cyan pill (bg 6, text 0). The pill replaces the title's bold/colour text; nothing else changes the row's layout.
+
+**Under hs-d545 what stays and what goes** (inventory of `pi/compact-tools/extensions/`): *stay*: the `╭─` lead and `│ ` rails, the pills, the toggles `╰󰁋 expand` / `╰󰁣 collapse` and their click and Ctrl+O / Ctrl+T, the dots and glyph-frame spinners (the frame changes, the colour is one fixed index: 6 for the running dot and the working label, 8 for rails and metadata), diff text coloured 2 and 1, markdown through the theme. *Go*: the derived colour math (`compact-tools-color.ts`: `interpolateRgb`, `neutralizeRgb`, `liftContrast`, `withContrast`, `diffTintRgb`, `themeColorRgb`, `colorizeRgb`, `fillRgb`, `rgbPainter`); the contrast bands, glow ramps and pulse ramps of `compact-tools-palette.ts` (`CHROME`, `PULSE_LOW`, `activityGlow`, `progressGlow`, `paintIndicator`'s ramp), `glowProgressMessage` of `compact-tools-progress.ts` and the eased intensity of `compact-tools-activity.ts` (`dotIntensities`, a text/dim switch by intensity), the diff background tints, every `theme.fg("dim", …)` (SGR 2 faint depends on the theme; muted is painted 8), and any extra with no cockpit counterpart. The values of the theme's `dim` are 8, so a `theme.fg("dim", …)` that remains is 8 too.
+
+**Why Thinking did not expand, and how it does** (A6, confirmed in the source: unverified at runtime). `getInitialThinkingPhase` of `compact-tools-thinking.ts` reads `<agent dir>/settings.json`; `hideThinkingBlock: true` gives the view `hidden`: the block shows `Thinking...` and has no toggle. The User's pi settings had that value, so Thinking never expanded; the pi-config PR of Plan `pi-theme` sets it false, and the view is then `summary`. It expands by the fold toggle (`╰󰁋 expand`, a click), or Ctrl+T as today, to the full thinking text (colour 7).
 
 ## 7. git and the Gate
 

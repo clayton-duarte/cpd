@@ -57,7 +57,7 @@ const plain = (harness: Harness) => harness.chat.render(100).map(stripTerminalSe
 const HEADS = {
 	codex: [" • Explored", " • Called web_search", " • Running for i in 1 2 3; do echo tick $i; sleep 1; done"],
 	claude: [" ⦁ Searched for 1 pattern, read 1 file (click to expand)", ' ⦁ web_search(query: "pi tui")', " ⦁ Bash(for i in 1 2 3; do echo tick $i; sleep 1; done)"],
-	compact: [" ⦁ read src/app.ts", " ⦁ grep /TODO/ in src", " ⦁ web_search", " ⦁ bash Run for"],
+	compact: [" ⦁ read src/app.ts", " ⦁ grep /TODO/ in src", " ⦁ web_search", " ⦁ bash Run for"],
 } as const;
 
 function heads(harness: Harness): string[] {
@@ -100,7 +100,7 @@ test("while a command runs, /compact-tools redraws every row in each style, with
 	} finally { shutdown(harness); }
 });
 
-test("a running call keeps pulsing after a switch, in every style", async () => {
+test("a running call keeps its dot after a switch, in every style", async () => {
 	const { harness } = await transcript("compact");
 	try {
 		for (const style of ["codex", "claude", "compact"] as const) {
@@ -112,7 +112,7 @@ test("a running call keeps pulsing after a switch, in every style", async () => 
 				const line = harness.chat.render(100).find((each) => /Running|Bash\(|bash Run/u.test(stripTerminalSequences(each)))!;
 				dots.add(line.slice(0, line.search(/[•⦁]/u) + 1));
 			}
-			assert.ok(dots.size > 1, `${style}: the running dot animates`);
+			assert.equal(dots.size, 1, `${style}: the running dot is one fixed colour`);
 			assert.ok(harness.requestRenders() > before, `${style}: and asks for frames`);
 		}
 	} finally { shutdown(harness); }

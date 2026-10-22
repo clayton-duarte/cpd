@@ -106,7 +106,7 @@ for (const [styleName, config] of Object.entries(STYLES)) {
 					for (let frame = 0; frame < 16; frame++) {
 						const [b, c] = [builtIn.render(100), custom.render(100)];
 						assert.equal(dotOf(c), dotOf(b), `${at}: frame ${frame} dot`);
-						assert.match(plain(c[1]!), /^ ⦁ web_search/u, at);
+						assert.match(plain(c[1]!), /^ ⦁ \uE0B6?web_search/u, at);
 						assert.equal(plain(b[1]!).slice(0, 3), plain(c[1]!).slice(0, 3), `${at}: call line`);
 						tick();
 					}
@@ -225,7 +225,7 @@ for (const [styleName, config] of Object.entries(STYLES)) {
 			const shown = harness.chat.render(100).map(plain);
 			const calls = shown.filter((line) => line.includes("⦁"));
 			if (styleName === "compact") {
-				assert.deepEqual(calls.map((line) => line.split(" ").slice(0, 3).join(" ")), [" ⦁ read", " ⦁ grep", " ⦁ web_search", " ⦁ bash"]);
+				assert.deepEqual(calls.map((line) => line.split(" ").slice(0, 3).join(" ")), [" ⦁ read", " ⦁ grep", " ⦁ web_search", " ⦁ bash"]);
 			} else if (styleName === "codex") {
 				assert.deepEqual(shown.filter((line) => line.includes("•")).map((line) => line.split(" ").slice(0, 4).join(" ")),
 					[" • Explored", " • Called web_search", " • Running cd"]);

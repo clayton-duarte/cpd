@@ -207,7 +207,7 @@ test("unmargined fallback lines mark truncation instead of silently dropping a c
 	assert.deepEqual(plain(component.render(5)), ["xxxx…"]);
 });
 
-test("unpadded running calls continue painting live animation frames", async () => {
+test("unpadded running calls keep painting their fixed running dot", async () => {
 	const harness = await loadExtension({ style: "compact" }, { idle: false });
 	try {
 		const id = `live-pad-${++sequence}`;
@@ -221,7 +221,8 @@ test("unpadded running calls continue painting live animation frames", async () 
 			frames.add(component.render(80).join("\n"));
 			elapse(45); timerClock.tick(45);
 		}
-		assert.ok(frames.size > 1, "source frame changes pass through the padding cache");
+		assert.equal(frames.size, 1, "the running dot has no colour animation");
+		assert.ok([...frames][0]!.includes("\x1b[36m⦁"), "and it is cyan, index 6");
 	} finally { shutdown(harness); }
 });
 

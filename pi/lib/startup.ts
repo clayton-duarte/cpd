@@ -21,6 +21,7 @@ import { Run, parseSession, type SessionInfo } from "./run.ts";
 import { Facts } from "./state.ts";
 import { firstMessageDelivered, registerFirstMessage } from "./first-message.ts";
 import { registerUpdates } from "./turns.ts";
+import { clearMentions, refreshMentions } from "./mentions-refresh.ts";
 
 // Start-up and shutdown (§15.2).
 
@@ -148,6 +149,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     if (r.firstPending) registerFirstMessage(host); // before registerUpdates: pi runs handlers in registration order, and the first message's Event must count before the same run's cpd-context reads its cursor
     registerUpdates(host);
   }
+  void refreshMentions(host, r);
 
   // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
   let chatToReopen: { reviews: string[]; title: string | undefined } = { reviews: [], title: undefined };
@@ -241,6 +243,7 @@ export async function stop(host: Host): Promise<void> {
   if (!r) return;
   host.run = undefined;
   host.ctx = undefined;
+  clearMentions();
   r.log("stop");
   r.reload?.stop();
   r.follower.stop();

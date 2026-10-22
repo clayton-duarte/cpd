@@ -11,8 +11,7 @@ import test from "node:test";
 import { timerClock } from "./indicator-harness.ts";
 import type { Component } from "@earendil-works/pi-tui";
 import { CachedContainer, LiveCallContainer } from "../../compact-tools/extensions/compact-tools-layout.ts";
-import { paintIndicator } from "../../compact-tools/extensions/compact-tools-palette.ts";
-import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+import { paintIndicator } from "../../compact-tools/extensions/compact-tools-indices.ts";
 import {
 	advance, animate, announce, CASES, CUSTOM_CASES, elapse, INDICATOR_INTERVAL_MS, lifecycle, loadExtension, makeRow, MODE_CONFIGS,
 	readable, restoreClocks, shutdown, text, type Case, type Harness,
@@ -103,7 +102,7 @@ function customDefinition(key: string, outcome: Case & { author?: object }) {
 const dotOf = (lines: string[]) => lines.join("\n").match(/\x1b\[[0-9;]*m[⦁•]/u)?.[0];
 const glyphOf = (mode: string) => mode === "codex" ? "•" : undefined;
 /** The dot of a row that waits rather than runs. */
-const PENDING_DOT = dotOf([paintIndicator(theme, "pending", 0)]);
+const PENDING_DOT = dotOf([paintIndicator("pending")]);
 
 for (const [mode, config] of Object.entries(MODE_CONFIGS)) {
 	test(`bound to the terminal, built-in rows draw their golden frames and are never rebuilt to animate (${mode})`, async () => {
@@ -191,8 +190,8 @@ for (const [mode, config] of Object.entries(MODE_CONFIGS)) {
 						// Codex opens only a command with more than its preview; drawn opened, it reads `$ cmd`.
 						const command = mode === "codex" && expanded && (name === "bash" || name === "powershell")
 							&& row.render(width).some((line) => line.replace(/\x1b\[[0-9;]*m/gu, "").startsWith(" $ "));
-						const settled = command ? undefined : patch ? (failed ? undefined : dotOf([theme.fg("dim", "•")]))
-							: dotOf([paintIndicator(theme, failed ? "error" : "success", 0, glyphOf(mode))]);
+						const settled = command ? undefined : patch ? (failed ? undefined : dotOf(["\x1b[90m•\x1b[39m"]))
+							: dotOf([paintIndicator(failed ? "error" : "success", glyphOf(mode))]);
 						assert.equal(dotOf(row.render(width)), settled, `${key}: settled dot`);
 						if (command) assert.ok(row.render(width).some((line) => line.includes(failed ? "✗" : "✓")), `${key}: outcome mark`);
 						tick(30);
@@ -260,7 +259,7 @@ test("a restored row that never got its result waits, and never animates", async
 	}
 });
 
-test("when the run ends, a row left without a result stops pulsing and waits", async () => {
+test("when the run ends, a row left without a result stops asking for frames and waits", async () => {
 	const harness = await loadExtension({ style: "compact" }, { tui: true, idle: true });
 	harness.handlers.get("agent_start")!({});
 	const { definition, calls } = counted(harness, "bash");
@@ -271,7 +270,7 @@ test("when the run ends, a row left without a result stops pulsing and waits", a
 		row.render(100);
 	}
 	assert.equal(harness.requestRenders(), 5);
-	assert.notEqual(dotOf(row.render(100)), PENDING_DOT);
+	assert.equal(dotOf(row.render(100)), PENDING_DOT, "waiting and running are both cyan, index 6");
 	harness.handlers.get("agent_end")!({ messages: [] });
 	assert.equal(harness.requestRenders(), 6, "one last frame repaints it");
 	assert.equal(dotOf(row.render(100)), PENDING_DOT, "painted as waiting, without a rebuild");
@@ -317,12 +316,11 @@ test("a running row that keeps being drawn is never dropped", async () => {
 		dots.add(dotOf(row.render(100)));
 	}
 	assert.equal(harness.requestRenders(), 200);
-	// Fourteen frames trace a symmetric pulse: eight distinct shades, each shown.
-	assert.equal(dots.size, 8, "every shade of the pulse shows");
+	assert.equal(dots.size, 1, "the dot is one fixed colour, index 6");
 	shutdown(harness);
 });
 
-test("a running row folded into a Claude group keeps its group line pulsing", async () => {
+test("a running row folded into a Claude group keeps its group line asking for frames", async () => {
 	const harness = await loadExtension({ style: "claude" }, { tui: true, idle: false });
 	const { row } = running(harness, "read", harness.definitions.get("read"));
 	let rowDraws = 0;
@@ -338,7 +336,7 @@ test("a running row folded into a Claude group keeps its group line pulsing", as
 	}
 	assert.equal(rowDraws, 0, "the folded row itself is not drawn");
 	assert.equal(harness.requestRenders(), 100, "the group line keeps the clock going");
-	assert.ok(headers.size > 5, "and it pulses");
+	assert.equal(headers.size, 1, "and the line does not change colour");
 	shutdown(harness);
 });
 
