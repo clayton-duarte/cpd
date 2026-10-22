@@ -34,11 +34,9 @@ pub const LAST_BRANCH: &str = "╰─";
 const OPEN: &str = "╭";
 /// The start of the closing row.
 const CLOSE: &str = "╰";
-/// The closing row of a block with nothing to fold.
-const PLAIN: &str = "╰─";
 /// U+F004B md-arrow_down_drop_circle_outline: the folded block's arrow.
-/// The glyph of the empty Inbox's closing row (hs-d487).
-const UP_TO_DATE: &str = "\u{F005A}";
+/// The terminator glyph (hs-d574), also the empty Inbox's closing row glyph (hs-d487).
+const TERMINATOR: &str = "\u{F005A}";
 
 const DOWN: &str = "\u{F004B}";
 /// U+F0063 md-arrow_up_drop_circle_outline: the expanded block's arrow.
@@ -63,15 +61,15 @@ pub fn toggle(expanded: bool) -> Line<'static> {
 }
 
 /// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
-/// items or fewer): a muted `╰─` and no word (commands.md §17, "Collapsible blocks"; hs-d349, hs-d477).
+/// items or fewer): the muted terminator `╰󰁚` and no word (commands.md §17, "Collapsible blocks"; hs-d574).
 pub fn plain() -> Line<'static> {
-    Line::from(Span::styled(PLAIN, muted()))
+    Line::from(Span::styled(format!("{CLOSE}{TERMINATOR}"), muted()))
 }
 
 /// The closing row of a block with nothing to fold and no row to close it (a Context with no row at all; the Inbox with 3
 /// items or fewer): a muted `╰`, the terminator glyph U+F005A and the word (the empty Inbox; hs-d487, hs-d574).
 pub fn done(text: &str) -> Line<'static> {
-    Line::from(Span::styled(format!("{CLOSE}{UP_TO_DATE} {text}"), muted()))
+    Line::from(Span::styled(format!("{CLOSE}{TERMINATOR} {text}"), muted()))
 }
 
 /// A content row: the muted `branch`, then the content as it is.
@@ -230,9 +228,9 @@ mod tests {
     }
 
     #[test]
-    fn a_block_with_nothing_to_fold_closes_with_a_plain_muted_corner_and_line_and_no_word() {
+    fn a_block_with_nothing_to_fold_closes_with_the_muted_terminator_and_no_word() {
         let row = plain();
-        assert_eq!(flat(&row), "╰─");
+        assert_eq!(flat(&row), "╰\u{F005A}");
         assert!(row.spans.iter().all(is_muted), "{:?}", row.spans);
     }
 
