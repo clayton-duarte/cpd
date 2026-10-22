@@ -23,8 +23,11 @@ test("the adapter's KINDS are exactly core's Event kinds", () => {
   assert.deepEqual([...KINDS].sort(), [...core].sort(), "pi/lib/event.ts KINDS differs from core's kinds: update it, and raise PROTOCOL");
 });
 
-test("hs-d496: the protocol is 11, and review-opened and review-closed are known kinds that are delivered to nobody", () => {
-  assert.equal(PROTOCOL, 11);
+test("hs-d571: the protocol is 12 and session-resumed is a known kind", () => {
+  assert.equal(PROTOCOL, 12);
+  assert.ok((KINDS as readonly string[]).includes("session-resumed"), "session-resumed is not in KINDS");
+  // the message exists only while the breaker is tripped (commands.md §15.15 L6): the adapter's own rule, not a table entry
+  assert.equal((LEAD_MESSAGES as Record<string, unknown>)["session-resumed"], undefined, "session-resumed is not a LEAD_MESSAGES entry");
   for (const kind of ["review-opened", "review-closed"]) {
     assert.ok((KINDS as readonly string[]).includes(kind), `${kind} is not in KINDS`);
     assert.equal((LEAD_MESSAGES as Record<string, unknown>)[kind], undefined, `${kind}: delivery none`);
