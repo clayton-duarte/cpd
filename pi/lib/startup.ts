@@ -152,6 +152,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
   void refreshMentions(host, r);
 
   // 5. blocking reasons (Plan Lead only; a Manager has none and opens no plannotator)
+  let decidedLatest: string | undefined; // the latest review `plan show` reports decided or superseded: no reason, dialog or recovery
   let chatToReopen: { reviews: string[]; title: string | undefined } = { reviews: [], title: undefined };
   if (info.role !== "manager" && info.planLead && info.plan !== null) {
     const plan = info.plan;
@@ -173,9 +174,14 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
       host.deliver("plan show", e);
     }
     // A chat review that cpd reports decided opens nothing: its Event, replayed from the cursor, is "Deciding elsewhere" (§15.5 "Recovery").
+    const decidedStatus = latestStatus === "approved" || latestStatus === "rejected" || latestStatus === "superseded";
+    if (decidedStatus) decidedLatest = latest;
+    const shownEntry = latest === undefined ? undefined : r.reviews.get(latest);
+    if (latestStatus === "superseded" && shownEntry?.status === "pending") r.reviews.set(shownEntry.review, { ...shownEntry, status: "superseded" }); // in memory: a replayed Event then changes nothing
     const reopen: string[] = [];
     for (const entry of r.reviews.values()) {
       if (entry.status !== "pending" || entry.review !== latest) continue;
+      if (decidedStatus) continue;
       if (entry.surface === "chat") {
         if (latestStatus !== undefined && latestStatus !== "pending") continue;
         reopen.push(entry.review);
@@ -230,7 +236,7 @@ async function begin(host: Host, ctx: Ctx, id: string, info: SessionInfo, reason
     }),
   );
   for (const entry of r.reviews.values()) {
-    if (entry.status === "pending" && entry.surface !== "chat") void recover(host, r, entry.review).catch((e) => host.deliver("plan review recovery", e));
+    if (entry.status === "pending" && entry.surface !== "chat" && entry.review !== decidedLatest) void recover(host, r, entry.review).catch((e) => host.deliver("plan review recovery", e));
   }
   for (const review of chatToReopen.reviews) showDialog(host, r, review, chatToReopen.title);
 }

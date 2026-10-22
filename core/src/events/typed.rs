@@ -88,6 +88,11 @@ impl NewEvent {
         make(Kind::PlanReview, text, json!({"review": review, "fingerprint": fingerprint, "status": "pending"}))
     }
 
+    /// A review cpd closed because nobody can or needs to decide it any more.
+    pub fn plan_review_superseded(text: impl Into<String>, review: impl Serialize, fingerprint: &str) -> NewEvent {
+        make(Kind::PlanReview, text, json!({"review": review, "fingerprint": fingerprint, "status": "superseded"}))
+    }
+
     /// A review that was decided; `jobs` are the draft Jobs it queued, when it queued any.
     pub fn plan_review_decided(
         text: impl Into<String>,
@@ -479,6 +484,7 @@ mod tests {
             ],
             Kind::PlanReview => vec![
                 NewEvent::plan_review_requested(T, s, s),
+                NewEvent::plan_review_superseded(T, s, s),
                 NewEvent::plan_review_decided(T, s, s, s, s, None::<Vec<&str>>),
                 NewEvent::plan_review_decided(T, s, s, s, s, Some([s])),
             ],

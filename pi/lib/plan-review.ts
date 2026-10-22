@@ -7,7 +7,7 @@ export const DECISION_TYPE = "cpd-plan-decision";
 export const SUMMARY_TYPE = "cpd-plan-summary";
 export const REVIEW_LABEL = "cpd: plan review";
 
-export type EntryStatus = "pending" | "approved" | "rejected" | "lost";
+export type EntryStatus = "pending" | "approved" | "rejected" | "superseded" | "lost";
 /** Where the User decides: `chat` (the dialog) or plannotator, which alone has a page id. An entry without `surface` is a plannotator one (written before the chat review existed); it keeps that shape. */
 export type ReviewEntry =
   | { plan: string; review: string; surface: "chat"; status: EntryStatus }
@@ -16,7 +16,7 @@ export type ReviewEntry =
 /** The plannotator page id of an entry, or undefined for a chat entry. */
 export const plannotatorId = (e: ReviewEntry): string | undefined => (e.surface === "chat" ? undefined : e.plannotator_id);
 
-const STATUSES: readonly string[] = ["pending", "approved", "rejected", "lost"];
+const STATUSES: readonly string[] = ["pending", "approved", "rejected", "superseded", "lost"];
 
 /**
  * The reviews this session opened for `plan`, folded from its entries (oldest first, the later entry of a review wins).

@@ -528,3 +528,84 @@ test("a decision, failing or not, creates no temp directory", async (t) => {
   assert.deepEqual(feedbackDirs(), before);
   assert.equal(readFileSync(join(f.cpdHome, "run", "p1", "feedback-r1.md"), "utf8"), "Nope.");
 });
+
+// ---- superseded (commands.md §15.3, §15.5 "Latest only") ----
+
+const supersededEvent = (id: number, review = "r1") => ev(id, "plan-review", { data: { review, fingerprint: "ff", status: "superseded" } });
+const chatSeed = (over: Record<string, unknown> = {}) => ({ plan: "p1", review: "r1", surface: "chat", status: "pending", ...over });
+
+test("an Event-only superseded closes the reason and the dialog, records the entry and tells nobody", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", pending());
+  f.planFile("p1", "r1", "# the plan\n");
+  f.summaryFile("p1", "r1", "# Review\nsummary\n");
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  f.emit(reviewEvent(101));
+  const d = await waitFor("the select", () => f.pi.openDialog("select"));
+  await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+  const sentBefore = f.pi.sent.length;
+
+  f.respond("plan-show", pending("r1", { status: "superseded" }));
+  f.emit(supersededEvent(102));
+  await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle", 3000);
+
+  assert.equal(d.signal!.aborted, true);
+  assert.deepEqual(entries(f).at(-1), chatSeed({ status: "superseded" }));
+  assert.equal(f.argvs().some((a) => a[1] === "decide"), false);
+  await f.drain();
+  assert.equal(f.pi.sent.length, sentBefore, "no message and no turn");
+  assert.equal(f.pi.errors().length, 0);
+});
+
+test("a superseded Event for a review this session has no pending entry for changes nothing", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  f.respond("plan-show", pending());
+  f.planFile("p1", "r1", "# the plan\n");
+  f.summaryFile("p1", "r1", "# Review\nsummary\n");
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  f.emit(reviewEvent(101));
+  const d = await waitFor("the select", () => f.pi.openDialog("select"));
+  await waitFor("blocked", () => stateCalls(f).includes(REVIEW_LABEL));
+  const sentBefore = f.pi.sent.length;
+  const entriesBefore = entries(f).length;
+
+  f.emit(supersededEvent(102, "r9")); // no entry for r9: nothing changes, r1's reason and dialog stay
+  await f.drain();
+  assert.deepEqual(stateCalls(f), ["idle", REVIEW_LABEL]);
+  assert.equal(d.signal!.aborted, false);
+  assert.equal(f.pi.sent.length, sentBefore);
+  assert.equal(entries(f).length, entriesBefore);
+
+  f.respond("plan-show", pending("r1", { status: "superseded" }));
+  f.emit(supersededEvent(103, "r1")); // the same Event for r1 does act: the contrast pins that the r9 one was ignored on purpose
+  await waitFor("unblocked", () => stateCalls(f).at(-1) === "idle", 3000);
+  assert.equal(f.pi.errors().length, 0);
+});
+
+test("a restart with plan show reporting the latest review superseded does not block or reopen it", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  plannotator(f, () => ({ status: "handled", result: { status: "pending" } }));
+  f.pi.entries.push({ type: "custom", customType: "cpd-plan-review", data: chatSeed({ review: "r2" }) });
+  seeded(f, { review: "r2", plannotator_id: "pn-2" }); // the same review's page: not polled as pending either
+  f.planFile("p1", "r2", "# r2\n");
+  f.summaryFile("p1", "r2", "# Review\nsummary\n");
+  await lead(f, pending("r2", { status: "superseded" }));
+  await f.quiet(); // recovery starts inside the start-up that `lead` awaited
+  assert.deepEqual(stateCalls(f), ["idle"]);
+  assert.equal(f.pi.dialogs.length, 0, "no dialog reopens");
+  assert.equal(requests(f).length, 0, "no plannotator request either");
+
+  const before = { sent: f.pi.sent.length, entries: entries(f).length, dialogs: f.pi.dialogs.length };
+  f.emit(supersededEvent(101, "r2")); // replayed
+  await f.drain();
+  assert.deepEqual(stateCalls(f), ["idle"]);
+  assert.deepEqual({ sent: f.pi.sent.length, entries: entries(f).length, dialogs: f.pi.dialogs.length }, before);
+  assert.equal(f.pi.errors().length, 0);
+});

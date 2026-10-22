@@ -4,7 +4,7 @@ import { type CpdEvent, type EventOf, parseLine } from "./event.ts";
 import { type FollowerHooks, PERMANENT_CODES } from "./follower.ts";
 import type { Host } from "./host.ts";
 import { checkProtocol } from "./protocol.ts";
-import { decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
+import { closeSuperseded, decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
 import { noteRetier } from "./retier.ts";
 import type { Run } from "./run.ts";
 import { refreshMentions } from "./mentions-refresh.ts";
@@ -113,6 +113,10 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
     if (ev.data.status === "approved" || ev.data.status === "rejected") {
       const entry = r.reviews.get(review);
       if (entry?.status === "pending") void decidedElsewhere(host, r, entry, ev).catch((e) => host.deliver(`plan review ${entry.review}`, e));
+    }
+    if (ev.data.status === "superseded") {
+      const entry = r.reviews.get(review);
+      if (entry?.status === "pending") closeSuperseded(host, r, entry);
     }
   }
 }

@@ -80,7 +80,7 @@ export async function openReview(host: Host, r: Run, review: string, via: "event
   r.opening.add(review);
   try {
     const latest = (await host.call(["plan", "show", "--plan", plan])).review;
-    if (!isObject(latest) || latest.id !== review || latest.status === "approved" || latest.status === "rejected") return;
+    if (!isObject(latest) || latest.id !== review || latest.status === "approved" || latest.status === "rejected" || latest.status === "superseded") return;
     const summaryPath = paths.summary ?? summaryFile(host, plan, review);
     const chat = host.ctx !== undefined && existsSync(summaryPath);
     let entry: ReviewEntry;
@@ -149,6 +149,16 @@ export async function decidedElsewhere(host: Host, r: Run, entry: ReviewEntry, e
   } finally {
     r.deciding.delete(entry.review);
   }
+}
+
+/** §15.5 "Latest only": a `plan-review` Event with status `superseded` closes the reason and the dialog of a pending entry and records it. Nothing is sent. */
+export function closeSuperseded(host: Host, r: Run, entry: ReviewEntry): void {
+  if (r.reviews.get(entry.review)?.status !== "pending") return;
+  const done: ReviewEntry = { ...entry, status: "superseded" };
+  r.reviews.set(entry.review, done);
+  host.pi.appendEntry(ENTRY_TYPE, done);
+  if (r.facts.close(`plan-review:${entry.review}`)) host.refresh(r);
+  closeDialog(r, entry.review);
 }
 
 /** Records the User's decision with cpd, then tells the Lead. A failure other than `review_decided` leaves the entry pending. */
