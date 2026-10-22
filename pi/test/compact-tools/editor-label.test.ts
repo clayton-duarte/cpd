@@ -107,7 +107,10 @@ test("no space separates the border from the caps", () => {
 		const plain = strip(w.row());
 		assert.ok(plain.includes(`─${LEFT_CAP}`), "a line cell touches the left cap");
 		assert.ok(plain.includes(`${RIGHT_CAP}─`), "a line cell touches the right cap");
-		assert.ok(!plain.includes(" "), "the border row has no space");
+		const outside = plain.slice(0, plain.indexOf(LEFT_CAP)) + plain.slice(plain.indexOf(RIGHT_CAP) + 1);
+		assert.ok(!outside.includes(" "), "no space outside the pill");
+		const inside = plain.slice(plain.indexOf(LEFT_CAP) + 1, plain.indexOf(RIGHT_CAP));
+		assert.ok(!inside.startsWith(" ") && !inside.endsWith(" "), "no padding inside the caps");
 	} finally { w.dispose(); }
 });
 

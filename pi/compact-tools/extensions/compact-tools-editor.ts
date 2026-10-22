@@ -9,7 +9,7 @@ import { Editor, truncateToWidth, visibleWidth, type TUI } from "@earendil-works
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { hookMethod } from "./compact-tools-hook.ts";
 import { INDEX, RUNNING, paint, pill } from "./compact-tools-indices.ts";
-import { LOADER_FRAMES, LOADER_INTERVAL_MS } from "./compact-tools-loader.ts";
+import { LOADER_FRAMES } from "./compact-tools-loader.ts";
 
 const STATE_KEY = Symbol.for("pi-compact-tools.editor.state");
 const WIDGET_KEY = "compact-tools-editor";
@@ -25,17 +25,20 @@ interface EditorState {
 	focused: boolean;
 	/** The words of the working label while the agent works, without padding. */
 	words: string | undefined;
+	/** The loader frame index, stepped by the progress label's tick of the shared clock. */
+	frame: number;
 }
 
 function state(): EditorState {
 	const holder = globalThis as typeof globalThis & { [STATE_KEY]?: EditorState };
-	holder[STATE_KEY] ??= { focused: true, words: undefined };
+	holder[STATE_KEY] ??= { focused: true, words: undefined, frame: 0 };
 	return holder[STATE_KEY];
 }
 
 /** Progress tells the box what the working label says; undefined when nothing is working. */
-export function setWorkingWords(words: string | undefined): void {
+export function setWorkingWords(words: string | undefined, frame = 0): void {
 	state().words = words;
+	state().frame = frame;
 }
 
 /** The fields of pi-tui's Editor this module reads and restores; some are private in its typings. */
@@ -51,7 +54,7 @@ type EditorLike = {
 const borderIndex = (editor: EditorLike): number =>
 	state().words !== undefined && editor.workingStatusIndicator !== undefined ? RUNNING : state().focused ? INDEX.blue + 8 : INDEX.brightWhite;
 
-const loaderFrame = (): string => LOADER_FRAMES[Math.floor(Date.now() / LOADER_INTERVAL_MS) % LOADER_FRAMES.length]!;
+const loaderFrame = (): string => LOADER_FRAMES[state().frame % LOADER_FRAMES.length]!;
 
 function boxRows(editor: EditorLike, width: number, original: (width: number) => string[]): string[] {
 	if (width < MIN_WIDTH) return original(width);
@@ -99,7 +102,7 @@ function boxRows(editor: EditorLike, width: number, original: (width: number) =>
 	return out;
 }
 
-function hookEditor(): void {
+export function hookEditor(): void {
 	hookMethod(Editor.prototype, "render", "editor.box.render", (self, args, original) =>
 		boxRows(self, args[0], (width) => original.call(self, width)));
 	// A click's column is counted from the text column, in the text area's width.
