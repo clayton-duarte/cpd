@@ -1,5 +1,5 @@
 /**
- * The working label in the editor's top border: `╭──[<frame> <words>]──…╮` with the loader inside the pill
+ * The working label in the editor's top border: `╭─[<frame> <words>]──…╮` with the loader inside the pill
  * (contract 6.1.1, 6.9; hs-d475, hs-d478). Only the top border row is asserted; the margin columns are stripped.
  */
 import "./pinned-themes.ts";
@@ -53,11 +53,11 @@ function working(label: (start: Handler) => void = (start) => start({})) {
 	};
 }
 
-test("while working the top border is a corner, two line cells, the pill, then line cells to the corner", () => {
+test("while working the top border is a corner, one line cell, the pill, then line cells to the corner", () => {
 	const w = working();
 	try {
 		const row = strip(w.row());
-		assert.match(row, new RegExp(`^╭──${LEFT_CAP}.+${RIGHT_CAP}─+╮$`, "u"));
+		assert.match(row, new RegExp(`^╭─${LEFT_CAP}.+${RIGHT_CAP}─+╮$`, "u"));
 		assert.equal(visibleWidth(row), PANE - 2);
 	} finally { w.dispose(); }
 });
@@ -136,4 +136,14 @@ test("an idle editor's top border is plain", () => {
 	const editor = new CustomEditor(ui as never, { borderColor: (text: string) => text } as never, { matches: () => false } as never, { embedWorkingStatus: true } as never);
 	const row = strip(editor.render(PANE)[0]!).replace(/^ /u, "").replace(/ $/u, "");
 	assert.equal(row, `╭${"─".repeat(PANE - 4)}╮`);
+});
+
+test("the left cap is the fourth cell of the row: margin, corner, one line cell, cap", () => {
+	const w = working();
+	try {
+		const row = strip(w.editor.render(PANE)[0]!);
+		assert.equal(visibleWidth(row), PANE);
+		assert.ok(row.startsWith(` ╭─${LEFT_CAP}`), `got ${JSON.stringify(row)}`);
+		assert.equal([...row].indexOf(LEFT_CAP), 3, "three cells sit between the container's limit and the cap");
+	} finally { w.dispose(); }
 });
