@@ -12,6 +12,7 @@
 mod archive;
 mod delete;
 mod contexts;
+pub mod curation;
 pub mod digest;
 pub mod distill;
 pub mod inforce;
@@ -76,6 +77,15 @@ pub enum Command {
     Owner(owner::OwnerArgs),
     /// Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14)
     Delete(DeleteArgs),
+    /// List the pending retirements and documentation candidates (§3.15)
+    #[command(hide = true)]
+    Curation(curation::CurationArgs),
+    /// Decide the pending retirements (§3.16)
+    #[command(hide = true)]
+    Retire(curation::RetireArgs),
+    /// Decide the pending documentation candidates (§3.17)
+    #[command(hide = true)]
+    Docs(curation::DocsArgs),
 }
 
 /// A Jira Epic key: `^[A-Z][A-Z0-9]+-[0-9]+$`, else `usage` (commands.md §3.1).
@@ -279,6 +289,9 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Distill(args) => distill::distill(args),
         Command::Owner(args) => owner::owner(args),
         Command::Delete(args) => delete::delete(args),
+        Command::Curation(args) => curation::curation(args),
+        Command::Retire(args) => curation::retire(args),
+        Command::Docs(args) => curation::docs(args),
     }
 }
 

@@ -224,6 +224,8 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
                 None => Jump::Run(open),
             })
         }
+        // the checklist dialogs are Job retire-tui's
+        Kind::CurateRetire | Kind::CurateDocs => None,
         Kind::PrReady => Pull::from_subject(&item.subject).map(Jump::Merge),
         Kind::ReviewRequested => {
             item.url.as_ref().map(|url| Jump::Run(Action::CopyUrl(url.clone())))
