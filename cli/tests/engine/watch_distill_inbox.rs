@@ -1,6 +1,6 @@
 //! Engine step E8, the `distill-tier` Inbox item (contract §2.2 "Inbox item", §3.7, §4.6 "The run log"; hs-d539):
 //! with the engine running on a prepared store, a Context whose highest-`upto_seq` runs in `runs.jsonl` include
-//! an `S` Tier opens one yellow item; a newer run replaces it; an unreadable file or line yields no item.
+//! an `S` Tier opens one magenta item; a newer run replaces it; an unreadable file or line yields no item.
 //! The "no item" tests carry a control Context that does reach `S`, so they cannot pass before E8 reads the files.
 
 use crate::common;
@@ -104,14 +104,14 @@ impl Fx {
         self.items().into_iter().filter(|i| i["context"] == context).collect()
     }
 
-    fn assert_item(&self, context: &str, upto: i64, tier: &str) {
+    fn assert_item(&self, context: &str, upto: i64, tier: &str, runs: u32) {
         wait_until("distill-tier item", || self.items_of(context).iter().any(|i| i["subject"] == format!("distill:{context}/{upto}")));
         let items = self.items_of(context);
         assert_eq!(items.len(), 1, "{items:?}");
         let item = &items[0];
-        assert_eq!(item["urgency"], "yellow", "{item}");
+        assert_eq!(item["urgency"], "magenta", "{item}");
         assert_eq!(item["subject"], format!("distill:{context}/{upto}"), "{item}");
-        assert_eq!(item["label"], format!("{context} digest needed {tier}"), "{item}");
+        assert_eq!(item["label"], format!("{context} digest needed {tier} ×{runs}"), "{item}");
         assert_eq!(item["context"], context, "{item}");
         for null in ["plan", "job", "session", "record"] {
             assert!(item[null].is_null(), "{null} must be null: {item}");
@@ -133,11 +133,11 @@ fn runs(context: &str, upto: i64, tiers: &[&str]) -> Vec<String> {
 }
 
 #[test]
-fn a_distill_run_that_reached_s_opens_a_yellow_distill_tier_item() {
+fn a_distill_run_that_reached_s_opens_a_magenta_distill_tier_item() {
     let fx = fx();
     fx.write_runs("building", &runs("building", 7, &["H0", "H1", "H2", "H3", "S1"]));
     let _engine = fx.start();
-    fx.assert_item("building", 7, "S1");
+    fx.assert_item("building", 7, "S1", 1);
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn a_run_that_stayed_on_h_opens_no_item() {
     fx.write_runs("building", &runs("building", 7, &["H0", "H1"]));
     fx.write_runs("control", &runs("control", 3, &["H0", "S1"]));
     let _engine = fx.start();
-    fx.assert_item("control", 3, "S1");
+    fx.assert_item("control", 3, "S1", 1);
     fx.two_ticks();
     assert!(fx.items_of("building").is_empty(), "{:?}", fx.items());
 }
@@ -156,7 +156,7 @@ fn a_newer_run_replaces_the_item() {
     let fx = fx();
     fx.write_runs("building", &runs("building", 7, &["H0", "S1"]));
     let _engine = fx.start();
-    fx.assert_item("building", 7, "S1");
+    fx.assert_item("building", 7, "S1", 1);
 
     // A newer run on H only: the old item closes and none opens.
     let mut lines = runs("building", 7, &["H0", "S1"]);
@@ -169,7 +169,7 @@ fn a_newer_run_replaces_the_item() {
     // A newer run that reached S2: a new item for it.
     lines.extend(runs("building", 11, &["H0", "S1", "S2"]));
     fx.write_runs("building", &lines);
-    fx.assert_item("building", 11, "S2");
+    fx.assert_item("building", 11, "S2", 2); // runs 7 and 11 reached S
 }
 
 #[test]
@@ -182,7 +182,7 @@ fn an_unreadable_runs_file_opens_no_item_and_no_error() {
     lines.push("\u{1}\u{2}".to_owned());
     fx.write_runs("control", &lines);
     let _engine = fx.start();
-    fx.assert_item("control", 3, "S1");
+    fx.assert_item("control", 3, "S1", 1);
     fx.two_ticks();
     assert!(fx.items_of("building").is_empty(), "{:?}", fx.items());
     assert_eq!(fx.errors(), 0);

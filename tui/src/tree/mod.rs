@@ -31,6 +31,8 @@ mod ask;
 mod cursor;
 mod folds;
 mod inbox;
+#[cfg(test)]
+mod inbox_distill;
 mod kinds;
 #[cfg(test)]
 mod look;
