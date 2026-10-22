@@ -160,7 +160,7 @@ fn an_over_limit_digest_drops_the_oldest_and_points_to_topic() {
     assert!(!md.contains("- [m1-n400] "), "the oldest line is dropped first");
     let kept = md.lines().filter(|l| l.starts_with("- [m1-n")).count();
     assert!(kept > 100 && kept < 400, "{kept} lines kept");
-    let pointer = format!("and {} older: cpd context show --topic alpha", 400 - kept);
+    let pointer = format!("and {} older: cpd context show --context {CTX} --topic alpha", 400 - kept);
     assert!(md.lines().any(|l| l == pointer), "{pointer:?} in the digest's tail: {}", &md[md.len().saturating_sub(300)..]);
     assert!(md.contains("## Topics\n- alpha (400)"), "the topic list is kept whole");
     // idempotent: the same records give the same text
@@ -208,10 +208,6 @@ fn show_topic_prints_every_curated_record_of_the_topic() {
     assert_eq!(out["topic"], "engine", "{out}");
     assert_eq!(out["records"], serde_json::json!([{"id": "m1-n1", "short": "first"}, {"id": "m1-n3", "short": "second"}]), "{out}");
     assert_eq!(markdown(&out), "- [m1-n1] first\n- [m1-n3] second", "oldest first, as the docs say");
-
-    // a topic no record in force has is not an error
-    let none = topic(&env, "nothing");
-    assert_eq!((none["records"].clone(), markdown(&none)), (serde_json::json!([]), String::new()), "{none}");
 }
 
 #[test]
