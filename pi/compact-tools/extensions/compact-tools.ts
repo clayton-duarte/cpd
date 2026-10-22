@@ -2,8 +2,8 @@
  * fold: "toggle", closing row; see docs/contract.md section 6.9.
  *
  * renderControls (the closing row), with fold "toggle", compact style:
- *   running           " ╰" + RUNNING_GLYPH + " " + the running timer ("Running" or the elapsed time), all in 8.
- *                     fold "status" and the other styles keep " └ ".
+ *   running           " ╰" in 8 and ONE frame of the cockpit loader in 6 (compact-tools-loader.ts), nothing after it,
+ *                     redrawn as the frame changes. fold "status" and the other styles keep " └ ".
  *   has a result      " ╰" + glyph + " " + label, then " · " + metadata when there is any.
  *                     glyph/label: toggle.expand + " expand" while folded,
  *                                  toggle.collapse + " collapse" while expanded.
@@ -26,6 +26,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { classifyCallStatus, formatDurationMs, normalizeLineEndings, type RowStatus } from "./compact-tools-core.ts";
+import { LOADER_INTERVAL_MS, loaderFrame } from "./compact-tools-loader.ts";
 import { loadConfig } from "./compact-tools-config.ts";
 import { hasAuthorRenderers, loadNativeTimerRenderers, syncNativeToolTimer } from "./compact-tools-rendering.ts";
 import { registerCompactToolsCommand } from "./compact-tools-command.ts";
@@ -193,8 +194,17 @@ function rememberResult(state: RowState, result: AgentToolResult<unknown>, optio
 	state.lastResultConfigRevision = state.configRevision;
 }
 
-/** The cockpit's glyph of a closing row with nothing to fold. */
-const RUNNING_GLYPH = "\u{F005A}";
+/** A running row's lines also depend on the loader frame, which changes every LOADER_INTERVAL_MS. */
+class LoaderContainer extends CachedContainer {
+	protected override cacheKey(): number {
+		return Math.floor(Date.now() / LOADER_INTERVAL_MS);
+	}
+}
+
+/** The closing row of a running row: the line in 8 and the loader's current frame in 6. */
+export function loaderRow(): Component {
+	return { render: () => [chrome(" ╰") + loaderFrame()], invalidate() {} };
+}
 
 function renderControls(
 	theme: Theme,
@@ -225,7 +235,7 @@ function renderControls(
 	else if (state.resultLineSummary && !running && !isError) details += metadata(` (${state.resultLineSummary})`);
 	if (nestedSummary && !running) details += chrome(" · ") + nestedSummary;
 	if (running && foldToggles() && prefix === " └ ") {
-		return prefixedText(details, chrome(` ╰${RUNNING_GLYPH} `), indent);
+		return loaderRow();
 	}
 	if (!running && foldToggles() && prefix === " └ ") {
 		// fold: "toggle": the closing row is the toggle, and today's text becomes its metadata.
@@ -482,7 +492,7 @@ function renderRowResult(
 			state.resultLineSummary = kind === "custom" && !output ? undefined : formatResultLineSummary(name, ctx.args, result, output);
 			state.resultLineSummaryComputed = true;
 		}
-		const container = new CachedContainer();
+		const container = options.isPartial ? new LoaderContainer() : new CachedContainer();
 		if (state.expanded || state.preview) {
 			const body = renderRowBody(name, ctx.args, result, output, state.expanded === true, theme, ctx.isError, author);
 			if (body) container.addChild(state.expanded ? body : limitComponentLines(body, runtime.config.previewLines, theme));
