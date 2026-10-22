@@ -42,9 +42,9 @@ fn pill(inner: usize, count: usize) -> String {
     tui_titles::collapsible_title(inner + 2, "Inbox", Some(count))
 }
 
-/// An Inbox item row in `inner` columns: the muted `│`, two spaces, the tier `glyph`, the label and the age (`5m`) at the last column.
+/// An Inbox item row in `inner` columns: the muted `│`, one space, the tier `glyph`, the label and the age (`5m`) at the last column.
 fn item_row_of(inner: usize, glyph: &str, label: &str) -> String {
-    format!(" │  {glyph} {label}{}5m", " ".repeat(inner - 5 - label.len() - 2))
+    format!(" │ {glyph} {label}{}5m", " ".repeat(inner - 4 - label.len() - 2))
 }
 
 // ---------- the prepared store ----------
@@ -1753,10 +1753,10 @@ fn a_click_on_an_inbox_item_runs_the_jump_of_its_kind() {
     assert_eq!(copies().len(), 2, "only the review page and the review request were copied: {:?}", copies());
 }
 
-/// The glyph cell of the Inbox row that shows `label`, on `screen`: the fifth cell of ` │  <glyph> <label>`.
+/// The glyph cell of the Inbox row that shows `label`, on `screen`: the fourth cell of ` │ <glyph> <label>`.
 fn glyph_of(screen: &[String], label: &str) -> String {
     let row = screen.iter().find(|r| r.contains(label)).unwrap_or_else(|| panic!("{label} on\n{}", screen.join("\n")));
-    row.chars().nth(4).map(String::from).unwrap_or_default()
+    row.chars().nth(3).map(String::from).unwrap_or_default()
 }
 
 #[test]
