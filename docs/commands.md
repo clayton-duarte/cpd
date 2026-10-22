@@ -3592,6 +3592,20 @@ User decision hs-d544 (2026-10-22, owner Plan `pi-theme`). Display only. In the 
 - **Refresh:** at `session_start` (§10.8) and on Events of these kinds: `session-registered`, `plan-created`, `context-created`, `plan-deleted`, `context-deleted`, `session-renamed`, `plan-renamed`, `context-renamed`, `session-archived`, `plan-archived`, `context-archived` (hs-n423); every other Event refreshes nothing. A failed command keeps the previous set and shows the adapter's error as §15.1 does, once per error code, until a different error is shown. A Lead's follower only gets its Plan's Events (§11), so ids created elsewhere show after the next such Event or restart.
 - **Drawing:** pi renders the assistant's markdown itself, so the adapter paints on the rendered lines: the assistant render override of `pi/compact-tools/extensions/compact-tools-silent.ts` (`RenderOverride`, `assistant`) wraps each rendered line's matching tokens in `ESC[35m`…`ESC[39m`, outside code. Idempotent: the same text gives the same lines.
 
+### 15.15 The loop guard (hs-d552, hs-d571)
+
+**L3 Counting** (the pi adapter; for a Lead and a Manager only). A *turn* is a pi agent run. It is **the User's** only when pi's `before_agent_start` event has `messageType: "user"` (a prompt the User typed). Every run a cpd message starts (`messageType: "custom"`: Events, a `session-message` with `from` null, `attempt-nudge`, a Plan review decision) is a **self-started turn**. The adapter keeps the start times of the self-started turns of the last 600 000 ms (a sliding window) from one clock, `options.now` (default `Date.now`).
+
+**L4 Trip** (the adapter; trigger on the pi adapter, L4 of hs-d552). When a self-started turn starts and the window then holds MORE than `loop_guard_turns` turns (with the default 20: the 20th does not trip, the 21st does), the breaker trips. That 21st turn runs, pi has started it; from then on: (a) every message the adapter delivers with `triggerTurn: true` is sent with `{triggerTurn: false, deliverAs: "nextTurn"}` instead, through the one gate `gated` of `pi/lib/delivery.ts` that §15.7a's first-message hold already uses, so deliveries keep queueing, keep their order and keep moving the cursor but start nothing; (b) the adapter opens the blocking reason `loop-guard`, kind **human**, label `cpd: loop guard` (§15.4); (c) it appends the pi session entry `cpd-loop-guard` `{tripped: true, at, turns}`.
+
+**L5 The User's prompt** (`before_agent_start` with `messageType: "user"`) always runs. It empties the window; and when the breaker is tripped it also clears the trip: the reason closes, the entry `{tripped: false}` is appended, and deliveries trigger turns again. Nothing else resumes it: no timeout.
+
+**L6 Resume from the Inbox**. `cpd session resume <id>` (§10.17) appends the Event `session-resumed`. On it, for its own Session while tripped, the adapter empties the window, clears the trip as L5, and delivers ONE message with a turn (the Event's text), so one turn starts and sees every delivery queued meanwhile. While not tripped it does nothing: no message, no turn. The turn it starts is a self-started turn (the window holds 1).
+
+**L7 Reload** (L7 of hs-d552). The trip survives a pi reload. At `session_start`, before the follower starts, the adapter reads its pi session's last `cpd-loop-guard` entry; `tripped: true` re-opens the reason and the gate at once. The window is not persisted: a reload empties it.
+
+**Sends that use the gate** (every send of a message with `triggerTurn: true`): `session-message` Events, `attempt-nudge`, the adapter's errors, the Plan review decision message. All of these go through `gated` when the breaker is tripped, so they queue without starting turns.
+
 ## 16. The Worker contract
 
 ### 16.1 The Worker Spec
