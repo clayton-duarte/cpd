@@ -258,6 +258,10 @@ pub struct RetitleArgs {
     /// The Lead or Manager Session to title
     #[arg(value_name = "session")]
     id: SessionRef,
+    /// The chat slot pane's width in columns (hs-d543). Stub: accepted and ignored until the implementation Job.
+    #[arg(long, value_name = "cols")]
+    #[allow(dead_code)]
+    width: Option<u32>,
 }
 
 #[derive(clap::Args, Debug)]

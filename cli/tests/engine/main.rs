@@ -11,3 +11,4 @@ mod watch_sleep;
 mod watch;
 mod watch_worker_archive;
 mod watch_team;
+mod watch_titles_width;
