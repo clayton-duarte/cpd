@@ -1,0 +1,112 @@
+/** The working label is a pill in 6 and the working indicator is the cockpit loader (contract 6.1.1, 6.9). */
+import "./pinned-themes.ts";
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ProgressController } from "../../compact-tools/extensions/compact-tools-progress.ts";
+import { restoreClocks } from "./indicator-harness.ts";
+import { theme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
+
+test.after(() => restoreClocks());
+
+/** The cockpit loader's nine code points, written out so this test does not depend on the module. */
+const LOADER = [0xf0766, 0xf0a9e, 0xf0a9f, 0xf0aa0, 0xf0aa1, 0xf0aa2, 0xf0aa3, 0xf0aa4, 0xf0aa5].map((code) => String.fromCodePoint(code));
+const LEFT_CAP = "\ue0b6";
+const RIGHT_CAP = "\ue0b4";
+
+type Handler = (event: unknown) => void;
+
+function drive(run: (handlers: Map<string, Handler>) => void): { messages: string[]; indicator: { frames: string[]; intervalMs?: number } | undefined } {
+	const handlers = new Map<string, Handler>();
+	const pi = { on: (name: string, handler: Handler) => handlers.set(name, handler), getThinkingLevel: () => "medium" } as unknown as ExtensionAPI;
+	const messages: string[] = [];
+	let indicator: { frames: string[]; intervalMs?: number } | undefined;
+	const controller = new ProgressController(pi);
+	controller.bind({
+		isIdle: () => false,
+		ui: {
+			theme,
+			setWorkingVisible: () => {},
+			setWorkingIndicator: (value?: typeof indicator) => { if (value) indicator = value; },
+			setWorkingMessage: (message?: string) => { if (message) messages.push(message); },
+		},
+	} as unknown as ExtensionContext);
+	try { run(handlers); } finally { controller.dispose(); }
+	return { messages, indicator };
+}
+
+const strip = (value: string) => value.replace(/\x1b\[[0-9;]*m/gu, "");
+
+const LABELS: Array<[string, (handlers: Map<string, Handler>) => void]> = [
+	["Thinking…", (h) => h.get("agent_start")!({})],
+	["Responding…", (h) => h.get("message_update")!({ assistantMessageEvent: { type: "text_delta" } })],
+	["Preparing tools…", (h) => h.get("message_update")!({ assistantMessageEvent: { type: "toolcall_delta" } })],
+	["Running command…", (h) => h.get("tool_execution_start")!({ toolCallId: "1", toolName: "bash", args: { command: "ls" } })],
+	["Processing results…", (h) => { h.get("tool_execution_start")!({ toolCallId: "1", toolName: "bash", args: {} }); h.get("tool_execution_end")!({ toolCallId: "1" }); }],
+];
+
+test("the working label is a pill with caps 6, bg 6 and text 0", () => {
+	const { messages } = drive((h) => h.get("agent_start")!({}));
+	const message = messages.at(-1)!;
+	assert.ok(message, "a label is set");
+	assert.ok(message.includes(LEFT_CAP) && message.includes(RIGHT_CAP), "both caps are drawn");
+	assert.match(message, /\x1b\[36m\ue0b6/u, "the left cap is 6 on the terminal background");
+	assert.match(message, /\x1b\[36m\ue0b4/u, "the right cap is 6 on the terminal background");
+	assert.ok(message.includes("\x1b[46m"), "the body is bg 6");
+	assert.ok(message.includes("\x1b[30m"), "the text is 0");
+	assert.ok(strip(message).startsWith(LEFT_CAP) && strip(message).endsWith(RIGHT_CAP));
+});
+
+test("every working label keeps its words and ends with …", () => {
+	for (const [label, act] of LABELS) {
+		const { messages } = drive(act);
+		const message = messages.at(-1);
+		assert.ok(message, `${label} is set`);
+		const plain = strip(message!).replace(LEFT_CAP, "").replace(RIGHT_CAP, "").trim();
+		assert.equal(plain, label);
+		assert.ok(plain.endsWith("…") && !plain.includes("..."));
+		assert.ok(message!.includes(LEFT_CAP), `${label} is a pill`);
+	}
+});
+
+test("the working indicator frames are the cockpit loader in 6 at 100 ms", () => {
+	const { indicator } = drive((h) => h.get("agent_start")!({}));
+	assert.ok(indicator, "an indicator is set");
+	assert.equal(indicator!.intervalMs, 100);
+	assert.equal(indicator!.frames.length, 9);
+	indicator!.frames.forEach((frame, index) => {
+		assert.equal(strip(frame), LOADER[index], `frame ${index}`);
+		assert.ok(frame.includes("\x1b[36m"), `frame ${index} is drawn in 6`);
+	});
+});
+
+test("the label pill uses only indexed SGR 0-7", () => {
+	for (const [, act] of LABELS) {
+		const { messages } = drive(act);
+		const message = messages.at(-1)!;
+		assert.ok(message.includes(LEFT_CAP), "it is a pill");
+		for (const match of message.matchAll(/\x1b\[([0-9;]*)m/gu)) {
+			const params = match[1]!.split(";").map(Number);
+			const [first] = params;
+			const allowed = (first! >= 30 && first! <= 37) || (first! >= 40 && first! <= 47) || first === 39 || first === 49 || first === 0 || first === 22 || first === 23 || first === 24 || first === 27;
+			const indexed = (first === 38 || first === 48) && params[1] === 5 && params[2]! < 8;
+			assert.ok(allowed || indexed, `SGR ${match[1]} is outside the indexed 0-7 set`);
+			assert.ok(![2, 3, 7].includes(first!), `SGR ${first} is forbidden`);
+		}
+	}
+});
+
+test("a label that changes from Thinking to Responding stays a pill", () => {
+	const { messages } = drive((h) => {
+		h.get("agent_start")!({});
+		h.get("message_update")!({ assistantMessageEvent: { type: "text_delta" } });
+	});
+	const thinking = messages.find((m) => strip(m).includes("Thinking…"));
+	const responding = messages.at(-1)!;
+	assert.ok(thinking, "Thinking is set first");
+	assert.ok(strip(responding).includes("Responding…"));
+	for (const message of [thinking!, responding]) {
+		assert.ok(message.includes(LEFT_CAP) && message.includes(RIGHT_CAP), "caps");
+		assert.ok(message.includes("\x1b[46m") && message.includes("\x1b[30m"), "bg 6 and text 0");
+	}
+});
