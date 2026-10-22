@@ -5,10 +5,12 @@ import {
 	CustomMessageComponent,
 	DynamicBorder,
 	ToolExecutionComponent,
+	UserMessageComponent,
 	type ExtensionAPI,
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
+import { drawBalloon, MIN_BALLOON_WIDTH, type BalloonSide } from "../../lib/balloon.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
 import type { DisplayMode } from "./compact-tools-types.ts";
 import { captureViewport } from "./compact-tools-viewport.ts";
@@ -50,10 +52,53 @@ type AssistantLike = {
 };
 
 interface RenderOverrides {
+	user: RenderOverride;
 	tool: RenderOverride;
 	assistant: RenderOverride;
 	notice: RenderOverride;
 }
+
+type MarkdownLike = Renderable & { paddingX?: number; paddingY?: number; invalidate?: () => void };
+
+/**
+ * A message's text rows as a balloon (docs/contract.md section 6.9). Pi's own padding columns and rows of the
+ * Markdown are dropped for the render, so the text wraps at `width - 4` and the balloon adds the only margins.
+ */
+function balloonOf(child: MarkdownLike, side: BalloonSide, width: number): string[] {
+	if (width < MIN_BALLOON_WIDTH) return child.render(width);
+	const { paddingX, paddingY } = child;
+	child.paddingX = 0;
+	child.paddingY = 0;
+	child.invalidate?.();
+	let rows: string[];
+	try {
+		rows = child.render(width - 4);
+	} finally {
+		child.paddingX = paddingX;
+		child.paddingY = paddingY;
+		child.invalidate?.();
+	}
+	if (rows.length === 0) return rows;
+	// Markdown pads every row to the full width; the balloon fits the longest row instead.
+	const paint = painter();
+	const fitted = rows.map((row) => row.replace(/ +((?:\x1b\[[0-9;]*m)*)$/, "$1")).map((row) => paint ? paint(row) : row);
+	return drawBalloon(fitted, side, width);
+}
+
+/** Render `container` with its children replaced by `swap`, restoring them afterwards. */
+function withChildren(container: { children?: unknown[] }, swap: (child: any) => unknown, render: () => string[]): string[] {
+	const children = container.children;
+	if (!Array.isArray(children)) return render();
+	container.children = children.map(swap);
+	try {
+		return render();
+	} finally {
+		container.children = children;
+	}
+}
+
+/** A child whose rows are produced by `rows`; pi's containers only call render and invalidate. */
+const rowsOf = (rows: (width: number) => string[]) => ({ render: rows, invalidate() {} });
 
 function sharedState(): SilentState {
 	const holder = globalThis as typeof globalThis & { [STATE_KEY]?: SilentState };
@@ -228,14 +273,30 @@ function publishOverrides(): void {
 	const state = sharedState();
 	const silent = () => state.active && state.enabled;
 	(globalThis as typeof globalThis & { [OVERRIDES_KEY]?: RenderOverrides })[OVERRIDES_KEY] = {
+		// pi's own zone marks stay: the original render runs over the balloon in place of its Markdown.
+		user: (component, width, render) =>
+			withChildren(component, (child) => isKind(child, Markdown) ? rowsOf((w) => balloonOf(child, "user", w)) : child, () => render(width)),
 		tool: (_component, width, render) => silent() ? [] : render(width),
 		// Only the prompt and the answer remain: intermediate turns go entirely, and
 		// the final turn keeps its text but not its thinking or any stop notice.
 		assistant: (component: AssistantLike, width, render) => {
 			const paint = painter();
-			const draw = (lines: string[]) => paint ? lines.map(paint) : lines;
-			if (!silent()) return draw(render(width));
-			return isIntermediateAssistant(component) ? [] : draw(renderAnswerOnly(component, width, render));
+			// Each text block is a balloon (the mentions painter runs before boxing); the other children
+			// (Thinking, spacers, errors) are painted as before. Pi's leading spacer goes when a balloon follows.
+			const boxed = (target: AssistantLike, next: Render): string[] => {
+				const container = target.contentContainer;
+				if (!container) return next(width);
+				const leading = container.children?.[0];
+				const dropLeading = isKind(leading, Spacer) && isKind(container.children?.[1], Markdown);
+				return withChildren(container, (child) => {
+					if (isKind(child, Markdown)) return rowsOf((w) => balloonOf(child, "agent", w));
+					if (child === leading && dropLeading) return rowsOf(() => []);
+					return paint ? rowsOf((w) => child.render(w).map(paint)) : child;
+				}, () => next(width));
+			};
+			if (!silent()) return boxed(component, render);
+			if (isIntermediateAssistant(component)) return [];
+			return renderAnswerOnly(component, width, (w) => boxed(component, () => render(w)));
 		},
 		// Extension notices such as pi-web-access's "content ready" arrive between
 		// tool calls; they are progress, not answers.
@@ -266,9 +327,10 @@ function installPatches(): boolean {
 	// cannot leave tool rows hidden while their surrounding turns remain visible.
 	// Normal mode pays one flag check per render and nothing else.
 	const tools = patchRender(ToolExecutionComponent?.prototype, delegate("tool"), isSilent);
-	const assistant = patchRender(AssistantMessageComponent?.prototype, delegate("assistant"), () => isSilent() || painter() !== undefined);
+	const assistant = patchRender(AssistantMessageComponent?.prototype, delegate("assistant"));
+	const user = patchRender(UserMessageComponent?.prototype, delegate("user"));
 	const notices = patchRender(CustomMessageComponent?.prototype, delegate("notice"), isSilent);
-	return tools && assistant && notices;
+	return tools && assistant && user && notices;
 }
 
 /** Hides tool rows, intermediate assistant turns, thinking, and extension notices; the working label carries progress instead. */
