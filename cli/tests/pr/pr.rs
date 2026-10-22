@@ -908,6 +908,22 @@ fn open_is_refused_open_job_live_while_the_open_job_is_queued_or_running() {
     }
 }
 
+/// B1 (hs-d573 O6): a `draft` `open` Job counts as live too: `pr open` is refused `open_job_live`, with nothing run or written.
+#[test]
+fn pr_open_is_refused_open_job_live_while_the_open_job_is_a_draft() {
+    let fx = fx("dispatch");
+    fx.open_job("draft");
+    let txns = fx.txns();
+
+    let run = fx.pr("open");
+
+    assert_eq!(code(&run), ("open_job_live".into(), 3), "{run:?}");
+    assert_eq!(run.error()["details"]["job"], "open-repo");
+    assert!(fx.gh_calls().is_empty());
+    assert_eq!(fx.remote_branch("cpd/pay"), Some(fx.lock_pushed.clone()), "nothing was pushed");
+    assert_eq!((fx.plan_row().0, fx.txns()), ("dispatch".to_owned(), txns));
+}
+
 /// A PR whose `open` Job is `failed` (the Lead decides between `job retry` and this), `cancelled` or `merged` on a PR still `dispatch`
 /// (a merge that died before it opened the pull request) is opened by hand as before; `jobs_not_done` counts no `open` Job.
 #[test]

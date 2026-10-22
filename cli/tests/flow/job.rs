@@ -498,6 +498,32 @@ fn a_locked_job_cannot_be_edited_by_the_command_or_by_the_database() {
     refused(&job(&env, &["edit", "a", "--title", "New"], "pl"), "job_locked", 3);
 }
 
+/// B1 (hs-d573 O5): an `open` or `update` Job is cpd's, so `job edit` is refused `job_locked`, also while the `open` Job is a `draft`.
+#[test]
+fn job_edit_refuses_an_open_job_even_while_it_is_a_draft() {
+    let env = TestEnv::new();
+    drafted(&env);
+    lock(&env, "pl");
+    fixture(
+        &env,
+        &format!(
+            "INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+               VALUES ('pl', (SELECT key FROM prs WHERE plan = 'pl'), 'open-x', 'Open it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'draft', 1, 'open', NULL, cpd_txn(), 't');
+             INSERT INTO jobs (plan, pr, key, title, tier, goal, context, touches, acceptance, out_of_scope, status, appended, kind, fingerprint, created_txn, created_at)
+               VALUES ('pl', (SELECT key FROM prs WHERE plan = 'pl'), 'update-x', 'Update it', 'S2', 'g', 'c', '[\"a\"]', '[\"b\"]', '[]', 'queued', 1, 'update', '{}', cpd_txn(), 't');",
+            "f".repeat(64)
+        ),
+    );
+    let (txns, evs) = (count(&env, "txns"), count(&env, "events"));
+    for key in ["open-x", "update-x"] {
+        refused(&job(&env, &["edit", key, "--title", "Changed"], "pl"), "job_locked", 3);
+        assert_ne!(job_row(&env, "pl", key, "title"), json!("Changed"), "{key}");
+    }
+    assert_eq!(job_row(&env, "pl", "open-x", "title"), json!("Open it"));
+    assert_eq!(job_row(&env, "pl", "update-x", "title"), json!("Update it"));
+    assert_eq!((count(&env, "txns"), count(&env, "events")), (txns, evs));
+}
+
 // ---------- job cancel ----------
 
 #[test]
