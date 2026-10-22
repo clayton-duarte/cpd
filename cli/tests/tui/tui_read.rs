@@ -20,7 +20,7 @@ use cpd_core::store::Store;
 use nix::fcntl::{Flock, FlockArg};
 use cpd_tui::read::{
     self, AttemptStatus, Cause, Checks, Dot, Engine, EscalationStatus, JobStatus, Origin, Outcome, Place, PlanNode, PrState,
-    ReviewStatus,
+    ReviewStatus, Target,
 };
 use rusqlite::Connection;
 
@@ -1101,9 +1101,9 @@ fn the_engine_is_never_running_stopped_or_crashed() {
 #[test]
 fn a_worker_is_its_attempt_session_and_escalations() {
     let (_env, mut store) = fixture();
-    let w = read::worker(&mut store, &plan("ship"), &attempt("c-a2")).unwrap();
-    assert_eq!((w.job_title.as_str(), w.job_status), ("Job c", JobStatus::Running));
-    let a = &w.attempt;
+    let w = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a2"))).unwrap();
+    assert_eq!((w.job.title.as_str(), w.job.status), ("Job c", JobStatus::Running));
+    let a = w.attempt.as_ref().unwrap();
     assert_eq!((a.id.clone(), a.tier, a.origin, a.status, a.outcome, a.cause), (attempt("c-a2"), tier("S3"), Origin::Retry, AttemptStatus::Running, None, None));
     assert_eq!((a.branch.as_str(), a.worktree.as_str(), a.nudged, a.metrics.is_none()), ("cpd/ship--c-a2", "/w/c-a2", false, true));
     let session = w.session.as_ref().unwrap();
@@ -1113,13 +1113,16 @@ fn a_worker_is_its_attempt_session_and_escalations() {
     assert_eq!(asked, [("c-a2-q1".to_owned(), EscalationStatus::Open)]);
     assert_eq!(w.events_cursor, last_event(&mut store));
 
-    let ended = read::worker(&mut store, &plan("ship"), &attempt("a-a1")).unwrap();
-    assert_eq!((ended.attempt.status, ended.attempt.outcome, ended.attempt.cause), (AttemptStatus::Ended, Some(Outcome::Merged), Some(Cause::Merged)));
-    assert_eq!((ended.attempt.merged_sha.as_deref(), ended.session.is_none()), (Some("abc123"), true));
+    let by_job = read::worker(&mut store, &plan("ship"), &Target::Job(key("c"))).unwrap();
+    assert_eq!(by_job.attempt.as_ref().map(|a| a.id.clone()), Some(attempt("c-a2")), "a Job's latest Attempt");
+    let ended = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("a-a1"))).unwrap();
+    let done = ended.attempt.as_ref().unwrap();
+    assert_eq!((done.status, done.outcome, done.cause), (AttemptStatus::Ended, Some(Outcome::Merged), Some(Cause::Merged)));
+    assert_eq!((done.merged_sha.as_deref(), ended.session.is_none()), (Some("abc123"), true));
     assert_eq!((ended.escalations[0].status, ended.escalations[0].answer.as_deref()), (EscalationStatus::Answered, Some("Use v2.")));
-    let merging = read::worker(&mut store, &plan("ship"), &attempt("b-a1")).unwrap();
-    assert_eq!((merging.attempt.submitted_sha.as_deref(), merging.attempt.status), (Some("def456"), AttemptStatus::Merging));
-    let expired = read::worker(&mut store, &plan("ship"), &attempt("e-a1")).unwrap();
+    let merging = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("b-a1"))).unwrap();
+    assert_eq!((merging.attempt.as_ref().unwrap().submitted_sha.as_deref(), merging.attempt.unwrap().status), (Some("def456"), AttemptStatus::Merging));
+    let expired = read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("e-a1"))).unwrap();
     assert_eq!(expired.escalations[0].status, EscalationStatus::Expired);
     assert!(expired.escalations[0].expired_at.is_some());
 }
@@ -1138,7 +1141,7 @@ fn the_latest_attempt_of_a_job_is_the_one_with_the_highest_number_and_a_job_that
 fn an_unknown_plan_or_attempt_is_not_found() {
     let (_env, mut store) = fixture();
     assert_eq!(read::worker(&mut store, &plan("nope"), &attempt("c-a2")).unwrap_err().code(), ErrorCode::PlanNotFound);
-    assert_eq!(read::worker(&mut store, &plan("ship"), &attempt("c-a9")).unwrap_err().code(), ErrorCode::AttemptNotFound);
+    assert_eq!(read::worker(&mut store, &plan("ship"), &Target::Attempt(attempt("c-a9"))).unwrap_err().code(), ErrorCode::AttemptNotFound);
 }
 
 // ---------- read-only, cheap ----------
