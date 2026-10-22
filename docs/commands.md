@@ -3408,11 +3408,11 @@ cpd: a Worker runs only the tests its change touches; the full suite is the Gate
 
 ### 15.13 Questions stay short
 
-Decision (User, 2026-10-20, hs-d502, which supersedes hs-d468's rule that a Plan with drafts never uses `ask_user_question`; hs-d503 keeps the 1500-character limit). `ask_user_question` is for a few short choices, and a Plan's open choices go to the User through it, as rounds with a recommended option, **in every phase and whatever the Plan's Jobs**; the Plan review is a summary and a dialog in the chat (§15.5), and plannotator is for a long document. The adapter enforces what stays of the rule with one guard, as §15.11 and §15.12 do for their rules. **The guard G1** (a refusal of every `ask_user_question` of a Lead whose Plan has a `draft` Job, with the reason `cpd: a Plan with draft Jobs is presented for review with cpd_plan_review (plannotator), not ask_user_question; refused: <n> draft Jobs`) **is deleted**: its code, its message and its tests; the adapter no longer reads `cpd plan show` for it. The guard G2 stays as it was.
+Decision (User, 2026-10-20, hs-d502, which supersedes hs-d468's rule that a Plan with drafts never uses `ask_user_question`; hs-d503 keeps the 1500-character limit; hs-d548 adds guards that questions cite only what the User has seen). `ask_user_question` is for a few short choices, and a Plan's open choices go to the User through it, as rounds with a recommended option, **in every phase and whatever the Plan's Jobs**; the Plan review is a summary and a dialog in the chat (§15.5), and plannotator is for a long document. The adapter enforces what stays of the rule with guards, as §15.11 and §15.12 do for their rules. **The guard G1** (a refusal of every `ask_user_question` of a Lead whose Plan has a `draft` Job, with the reason `cpd: a Plan with draft Jobs is presented for review with cpd_plan_review (plannotator), not ask_user_question; refused: <n> draft Jobs`) **is deleted**: its code, its message and its tests; the adapter no longer reads `cpd plan show` for it. The guards G2, G3 and G4 stay or are added.
 
 **When.** At pi's `tool_call`, for an `ask_user_question` call (`event.toolName`; the input is `{questions: [{question, header, options: [{label, description, preview?}], multiSelect?}]}`), in the same handler as §15.11 and §15.12, with the guard in its own module.
 
-**G2, a long question** (the only guard). For any Session (Lead, Manager, side fork), the call is refused when its text is over **1500 characters**. The text counted is the sum of every question's `question` and `header` and every option's `label`, `description` and `preview`. The limit is one constant, with no config key. The reason, on one line:
+**G2, a long question.** For any Session (Lead, Manager, side fork), the call is refused when its text is over **1500 characters**. The text counted is the sum of every question's `question` and `header` and every option's `label`, `description` and `preview`. The limit is one constant, with no config key. The reason, on one line:
 
 ```
 cpd: ask_user_question is for a few short choices; put anything larger in plannotator; refused: <n> characters (limit 1500)
@@ -3420,7 +3420,27 @@ cpd: ask_user_question is for a few short choices; put anything larger in planno
 
 The refusal is `{block: true, reason}`.
 
-**Not affected:** a Worker (it has no such tool); every other tool.
+**G3 and G4, questions only cite visible text** (hs-d548). A question must cite only what the User has already seen in the chat, not labels or decisions from hidden thinking blocks. These guards apply to Sessions of role `lead` or `manager` (not `worker`; not side forks). The refusal comes before the User sees the question, so thinking blocks and earlier assistant text are already visible but the new question is not.
+
+**Assumptions A1–A5.** A1: The current turn starts after the last `user` message or `custom_message` entry on the session's branch (ctx.sessionManager.getBranch()); a turn started by a cpd Event (a custom message) is its own turn. A2: 'Visible' is the whole branch up to the call: assistant `text` blocks, `user` messages, `toolResult` text blocks, and `custom_message` entries with `display: true`. Never thinking blocks, never tool-call inputs or outputs. A3: A label is a token matching \b[A-Z][0-9]+\b; a range X<m>–X<n> (en dash U+2013 or '-', same letter, m<n) cites each of X<m>..X<n>. A label is visible only when that exact token occurs in visible text; a range in the chat does not show its middle members (D1–D5 alone shows D1 and D5, not D2–D4). The question's text is every question's `question` and `header` and every option's `label`, `description` and `preview`. A4: Apply G2, then G3, then G4; the first refusal wins. A5: G3 and G4 apply to Sessions of role `lead` or `manager` (side forks of those roles included), not workers; G2 unchanged.
+
+**G3, no visible text in this turn.** The call is refused when there is no visible `text` block in the assistant message holding the call (after the last `user` or `toolResult` text). The reason:
+
+```
+cpd: write what you ask about in the chat as text, then ask again; refused: no visible text in this turn
+```
+
+**G4, labels not cited.** The question's text is searched for labels (A3). The call is refused when it cites a label or label range that does not appear in the visible text. List the missing labels in order of first citation. The reason:
+
+```
+cpd: write what you ask about in the chat as text, then ask again; refused: <labels, comma-space separated> not in the visible chat
+```
+
+Example: if the question cites D2 and D1–D5, the reason is: `cpd: write what you ask about in the chat as text, then ask again; refused: D2, D1, D2, D3, D4, D5 not in the visible chat` (but only for the labels not seen; if D1 is visible but D2–D5 are not, the reason is `cpd: write what you ask about in the chat as text, then ask again; refused: D2, D3, D4, D5 not in the visible chat`).
+
+The refusal is `{block: true, reason}`.
+
+**Not affected:** a Worker (it has no such tool); Sessions of role `worker`; every other tool.
 
 ## 16. The Worker contract
 
