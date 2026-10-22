@@ -36,7 +36,6 @@ use serde_json::{Value, json};
 
 pub use contexts::{ContextRow, Contexts, Written};
 pub use record::{By, Draft, PlanRef, Record};
-pub(crate) use show::plan_repos;
 
 use crate::args::{PlanArg, Text, Title};
 use crate::env::Env;
@@ -186,9 +185,12 @@ pub struct ShowArgs {
     /// Print this one record in full
     #[arg(long, value_name = "id", conflicts_with = "since")]
     record: Option<RecordId>,
-    /// Print the Context's latest digest, and no record
-    #[arg(long, conflicts_with_all = ["since", "record"])]
+    /// Print the digest cpd renders now, and no record
+    #[arg(long, conflicts_with_all = ["since", "record", "topic"])]
     digest: bool,
+    /// Print every curated record in force of this topic, oldest first
+    #[arg(long, value_name = "topic", conflicts_with_all = ["since", "record"])]
+    topic: Option<String>,
 }
 
 #[derive(Args, Debug)]

@@ -259,14 +259,15 @@ No flags, no preconditions, no effects (one read transaction).
 ### 3.3 `context show`
 
 ```
-cpd context show [--context <id>] [--since <seq>] [--record <id>] [--digest]
+cpd context show [--context <id>] [--since <seq>] [--record <id>] [--digest] [--topic <t>]
 ```
 
 | Flag | Meaning |
 |---|---|
 | `--since <seq>` | only records whose index position `seq` is greater (exclusive, like `events --since`); what a Manager's turn-start update holds (§15.7); a Lead passes the `seq` it last read |
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
-| `--digest` | print the Context's latest digest (contract §4.6, hs-d194), below. Exclusive with `--since` and `--record` (`usage`) |
+| `--digest` | print the Context's digest (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since`, `--record` and `--topic` (`usage`) |
+| `--topic <t>` | print every curated record in force of that topic, one per line `- [<id>] <short>` (contract §4.6, hs-d549, hs-d551), below. Exclusive with `--since`, `--record` and `--digest` (`usage`) |
 
 Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor, and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
 
@@ -283,12 +284,20 @@ Effects: none. Output: the Context, its records in index order, and `markdown`, 
 
 Idempotent: read-only.
 
-**`--digest`** (hs-d194, D6). Reads the latest digest file of the Context (`run/context-digests/<context>/<upto_seq>.md`, the highest `upto_seq`; contract §1.4, §4.6) and no record. `digest` is `{upto_seq, file, bytes}` and `markdown` the file's text. A Context with no digest yet is not an error: `digest` and `markdown` are `null` (its records are read with `context show`); `cpd context distill` builds one (§3.12).
+**`--digest`** (hs-d194, D6; rewritten by hs-d549, hs-d551; FX6, FX8). **Built by cpd on demand, with no model and no file** (contract §4.6 "The Context digest"): the relevant curated records in force, as short forms by topic, then the topic list with counts. Relevant: the records whose `at` is within the last `context_recent_days` days (contract §8.2; default 1), the open questions, and the records cited by id in the text of a brief of a Plan that is not done, archived or deleted. The text is `## <topic>` (topics ordered by their newest relevant record, newest first) with `- [<id>] <short>` lines, then `## Topics` with `- <topic> (<n>)`, `n` the records in force of that topic; at most 32768 bytes (FX6), the oldest relevant lines dropped first, ending with `and <k> older: cpd context show --context <context> --topic <t>` per topic lost. FX8: `digest` output fields are `{bytes, records}` only, and the text is `markdown`. A Context with no curated record in force is not an error: `markdown` is empty and `records` 0 (the uncurated records are read with `context show`; `cpd context distill` curates them, §3.12).
 
 ```json
 {"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null},
- "digest": {"upto_seq": 1342, "file": "/home/clayton/.cpd/run/context-digests/building-cpd/1342.md", "bytes": 27311},
- "markdown": "# Building cpd: digest\n\n## Engine\nOne engine per machine [hs-d7] …"}
+ "digest": {"bytes": 4120, "records": 37},
+ "markdown": "## engine\n- [hs-d7] one engine per machine …\n\n## Topics\n- engine (12)\n…"}
+```
+
+**`--topic <t>`** (FX5 of hs-d549, hs-d551): prints every curated record in force of the topic `<t>` (the exact topic string of `record_curations`), oldest first, one per line `- [<id>] <short>`; the way to read what the digest leaves out. `markdown` is those lines and `records` the list `{id, short}`. FX5: an unknown topic (no curated record in force has that topic) is refused `topic_not_found` (exit 4, `details: {context, topic, topics}`, the topics in use). Read-only.
+
+```json
+{"ok": true, "context": {"id": "building-cpd", "title": "Building cpd", "jira": null}, "topic": "engine",
+ "records": [{"id": "hs-d7", "short": "one engine per machine"}],
+ "markdown": "- [hs-d7] one engine per machine"}
 ```
 
 ### 3.4 `context decide`, `context note`, `context ask`
@@ -428,7 +437,7 @@ Gets the Context's **Manager** (B3-A1, B3-A2; CONTEXT.md "Manager"): registers a
 | the cockpit's tmux session exists when a pane must be started; `details.next` = `cpd tui` | `no_cockpit` | 3 |
 
 Effects, by the state of the Context's live (not archived) Manager Session:
-- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`, no plannotator variable; `session run` also removes every `PLANNOTATOR_*` variable it inherited from the tmux server or the caller before it starts pi, whatever they hold); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): its latest digest and at most 20 records after it, or `context show --context <c>` rendered as markdown (every record; briefs short) when it has no digest yet.
+- **None:** **rows**, one transaction: `sessions` (new UUID v4; `role = manager`; `context`; `plan` null; `name` = `<context>-manager`; `cwd` = the realpath of the caller's cwd; `tier` = config `manager_tier`, default `O5`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `stopped`); **Event** `session-registered` `{role, name, forked_from, tier}`. Then **tmux**, as `plan new` starts a Lead (§4.1 step 4): `new-window -d -t =cpd: -n ctx-<context> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, `@cpd_session` on the pane (no `CPD_PLAN`, no plannotator variable; `session run` also removes every `PLANNOTATOR_*` variable it inherited from the tmux server or the caller before it starts pi, whatever they hold); one transaction: `sessions.tmux_pane`, **Event** `session-moved` `{pane, window, place: "parked"}`. When `by_user` is 1, no first message is written; when it is 0, its first message is written to `run/<context>/manager-message.md` (§1.4): `You are the Manager of Context <c> "<title>". Follow the cpd-manager skill.`, then the Context as `plan new` gives it (§4.1 step 3; contract §4.6 "Consumers", the same function): the digest and at most 20 uncurated records raw.
 - **`stopped` with no pane:** the tmux step alone, in the stored `cwd`: `session run` resumes pi on its session file (`pi --session <file>`, §6.5), with no first message.
 - **Otherwise** (it has a pane): nothing.
 
@@ -482,10 +491,10 @@ Idempotent: yes; it only reads.
 ### 3.12 `context distill`
 
 ```
-cpd context distill [--context <c>]
+cpd context distill [--context <c>] [--batch <n>]
 ```
 
-Builds the Context's **digest** (contract §4.6, hs-d194 D1–D5; CONTEXT.md "Distilled Context"): a derived, compressed rendering of its records in force, written by one-shot pi and validated by cpd. Engine E9 starts it detached, debounced, when the Context has records newer than its digest (contract §3.7): once the newest record is 10 minutes old, or at once when 20 or more records are newer than the digest; anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
+Curates one batch of the Context's records (contract §4.6 "The distiller curates" and "The distill run", hs-d549, hs-d551, replacing the digest-writing run of hs-d194 D1–D5; GXD1-GXD2 hs-d563: per-line acceptance, rejected lines stay uncurated): at most **N uncurated records** in force (FX4: N is `--batch` from 1 to 60, default 60, at most 49152 bytes of their text in batch.md, hs-d549, hs-d551) get a topic and a short form (for machines), and the run may propose retirements and flag documentation candidates, written by one-shot pi and **checked structurally by cpd**, with each line validated independently so invalid lines do not fail the whole output (GXD1). It writes no digest: the digest is rendered by cpd on demand, with no model (§3.3 `--digest`). Engine E9 starts it detached when the Context has uncurated records in force and the newest of them is 10 minutes old, or 20 or more exist (contract §3.7); one batch per run, so a backlog (751 records for `building-cpd`) is curated by one run per tick. When a run for a state (the highest uncurated seq and count) fails (distill_invalid only when no line passes, distill_failed after the whole ladder, or a crash), E9 starts the next run for the same state with the next smaller batch (60 → 30 → 15 → 5 → 1, FX4) and records the batch size with the state; after batch 1 fails, it stops until the state changes (a success curates at least one record, GXD1, or a new record) or the engine restarts (contract §3.7 E9). Anyone may run it on demand, and it then runs in the caller's process and waits for pi. The Context is `--context`, else the selected Plan's (§1.3). Its §2 row is added by the Job that implements it, as §10.9's was, so that `every_documented_command_exists` holds on every commit.
 
 | Precondition | Code | Exit |
 |---|---|---|
@@ -493,37 +502,38 @@ Builds the Context's **digest** (contract §4.6, hs-d194 D1–D5; CONTEXT.md "Di
 | the Context exists | `context_not_found` | 4 |
 | no other distill run of this Context is alive: `locks/distill-<context>.lock` is free (taken without waiting, held until the run ends) | `distill_running` | 3 |
 
-An archived Context is not refused (the digest is a derived file); engine E9 never starts one for it.
+An archived Context is not refused; engine E9 never starts one for it.
 
-Effects (contract §4.6 "The distill run", steps 1–5):
-- **Nothing to do**, `"already": true` and nothing written: the latest digest's `upto_seq` is at least the Context's highest record `seq`, or no record is in force (then `digest` is null).
-- **Carried forward**: only `plan` and `brief` records came after the latest digest, so the records in force are the same; its text is written as the new `<upto_seq>.md` without pi (`"distilled": false`).
-- **Otherwise**: files `prompt.md` and `records.md`, then the distiller, `pi --mode json …` at `context_distill_tier` (default `H0`; hs-d560, contract §4.6 step 4: a distill run has no ladder, one step only; contract §6.5 "Distiller", §8.2), JSON mode (`--mode json`), read by cpd, which writes the final assistant text to `<upto_seq>.md.tmp`, killed after `timeouts.distill_minutes`; then the validation of that text, and on success cpd's `## Record index` is appended, the file renamed to `<upto_seq>.md` and the directory's older digests, temporary files and kept `.md.invalid` removed. `"distilled": true` and `run` (below). An invalid digest is kept as `<upto_seq>.md.invalid`, one per Context, replacing the previous one (contract §4.6, hs-d244 D-b).
-- **Repair** (hs-d560): a digest invalid only because 1 to 16 decisions or open questions in force are uncited (no `stray` id, within the limit) gets **one** more pi run, the repair turn (contract §4.6 step 5, hs-d244 D-c): pi is given the invalid topic sections and the missing records and answers only `## Additions`, which cpd appends to the topic sections before it validates again. Valid, the run succeeds and `repair` (below) is in its output; invalid, it fails with `distill_invalid` and `.md.invalid` holds the repaired text. No repair for a stray id, a digest over the limit, more than 16 missing or a carried-forward digest.
-- **Run log**: every run that started pi appends a line to `run/context-digests/<context>/runs.jsonl` (`started_at`, `seconds`, `model`, `tier` (the Tier of that pi run, at `context_distill_tier`, hs-d560), `tokens_in`, `tokens_out`, `cost`, `context`, `upto_seq`, `result`, `kind`: `distill` or `repair`, and `contradictions`, `contradictions_dropped`; contract §4.6 "The run log"), also when it failed; a repaired run appends a second line for the repair turn.
-- **Contradictions** (recency wins, contract §4.6 "The contradictions report"): the distiller ends its text with `## Contradictions`, one line `- [<older>] -> [<newer>]: <why>` per pair of records it found contradicting. cpd removes the section before validation and from the digest, keeps each pair whose two ids are headers of `records.md` with the older `seq` lower than the newer, and writes them in the run's line as `"contradictions": [{"older", "newer", "why"}]` with `"contradictions_dropped": <n>` (the dropped pairs); both are on every pi run's line, `[]` and `0` when none. A missing section means no pairs.
-- **Rows and Events**: none on success; no database write ever, except the one `error` Event of a failure (below).
-- **tmux:** none. **git:** none.
+| Flag | Meaning |
+|---|---|
+| `--batch <n>` | batch size from 1 to 60, default 60 (FX4 of hs-d549, hs-d551; the batch is at most `n` records and at most 49152 bytes of their text, contract §4.6 step 2) |
 
-Failures, after the lock is taken. Each removes the `.md.tmp`, leaves the previous digest in place, appends **one** `error` Event `{source: "context distill", code, message, details}` with no `context`, `plan` or `session` set (`details.context` names it; so no Lead gets a turn, contract §5.3), and returns the same code:
+Effects (contract §4.6 "The distill run", steps 1–5, GXD1-GXD4 hs-d563):
+- **Nothing to do**, `"already": true` and nothing written: no record in force is uncurated.
+- **Otherwise**: the files `prompt.md`, `batch.md` (at most N uncurated records in force, oldest first, in full, where N is the batch size), `known.md` (the topics in use, then `[<id>] <topic> | <short>` for every curated record in force) and `docs.md` (for each batch record, the `<repo>:<path>` hits of `git -C <repo> grep -l -w <id> -- docs '*.md'` on each repo of the Context's Plans' PRs, run by cpd), then the distiller, `pi --mode json …` at `context_distill_tier` (default `H0`; hs-d560, contract §4.6 step 4: a distill run has no ladder, one step only; contract §6.5 "Distiller", §8.2), JSON mode, read by cpd, killed after `timeouts.distill_minutes`. GXD3: when pi's stop reason is `length`, cpd keeps the text up to the last complete line (drops incomplete trailing line if any) and notes `cut: true`. **GXD1-GXD2 Per-line acceptance**: every line is validated independently; lines that pass stay curated, lines that fail are rejected (their record stays uncurated); the output lists all attempted lines with a `rejected` array (GXD2) of failures. One transaction calls `propose` with only the passing lines; the run succeeds when at least one line passes.
+- **The checks** (contract §4.6 step 5, GXD1-GXD2 hs-d563): each line is validated independently; failures are collected (GXD2: listed in `rejected` array), not fatal to the whole output. For each line: valid UTF-8 JSON of the output shape; `id` in the batch (GXD1: missing records stay uncurated; id not in batch is ignored; id appearing twice means both lines rejected); field bounds (`topic` 1 to 40 characters matching `[a-z0-9-]{1,40}`, `short` 1 to 120 bytes with GXD4 100-byte rule hs-d563, `reason` one of three); `duplicate` target is a record in force not the record itself with seq < record's seq; `superseded` target in force not the record itself with seq > record's seq; `documented` target is one of that record's paths in `docs.md`. GXD4: prompt examples have short of 90–100 bytes, never say only `correction to <id>`. No repair turn, no `## Contradictions`, no cite-every-decision: removed (hs-d549, hs-d551).
+- **Valid run** (GXD1: at least one line passes): one transaction calls `propose`: for each passing line, the curation and retirement proposal; for doc candidates the `doc_candidate` `pending` with hits as `doc_paths`; then appends the **Event** `context-curated` `{context, curated, rejected, retire, docs}` (contract §5.2; GXD2: `rejected` the count of rejected lines, 0 when all passed). The output carries `rejected: [...]` and when any line was rejected or output was cut, raw text kept as `<upto_seq>.jsonl.invalid`. The proposals take effect only when the User decides them (Inbox items `curate-retire` and `curate-docs`, §3.15–§3.17). **Invalid run** (no line passes or output could not be parsed): the last output is kept as `run/context-digests/<context>/<upto_seq>.jsonl.invalid` (one per Context, replacing the previous; a valid run removes it) and the run fails (hs-d560: no ladder, no `distill-tier` item).
+- **Run log**: every run that started pi appends a line to `run/context-digests/<context>/runs.jsonl` (`started_at`, `seconds`, `model`, `tier` (the Tier of that pi run, `context_distill_tier`, hs-d560), `tokens_in`, `tokens_out`, `cost`, `context`, `upto_seq`, `result`, `kind`, always `distill`; contract §4.6 "The run log"; GXD2: when any line was rejected or output was cut, `<upto_seq>.jsonl.invalid` is kept), also when it failed.
+- **tmux:** none. **git:** read-only (`git grep`).
+
+Failures, after the lock is taken. Each appends **one** `error` Event `{source: "context distill", code, message, details}` with no `context`, `plan` or `session` set (`details.context` names it; so no Lead gets a turn, contract §5.3), changes no curation, and returns the same code:
 
 | Failure | Code | Exit | `details` |
 |---|---|---|---|
-| pi could not start, exited non-zero (an error, or an answer cut at the output limit), ran longer than `timeouts.distill_minutes`, or its JSON stream had no final assistant text | `distill_failed` | 1 | `context`, `upto_seq`, `reason` (`spawn`, `exit`, `timeout` or `output`), `exit` (when it exited), `tail` (pi's last 60 stderr lines), `log` |
-| the digest (after its repair turn, when it had one) is not UTF-8, is over 32 768 bytes, leaves a decision or open question in force uncited in its topic sections (`missing`; the other records are listed by cpd's index, so need no citation) or cites an id that is not one (`stray`: superseded, `plan`, `brief` or unknown) | `distill_invalid` | 1 | `context`, `upto_seq`, `bytes`, `limit` (32768), `missing` (ids), `stray` (ids), `invalid` (the kept `.md.invalid` file), `log` |
+| pi could not start, exited non-zero (an error, or an answer cut at the output limit), ran longer than `timeouts.distill_minutes`, or its JSON stream had no final assistant text (GXD3: length with no complete line fails as distill_failed) | `distill_failed` | 1 | `context`, `upto_seq`, `reason` (`spawn`, `exit`, `timeout` or `output`), `exit` (when it exited), `tail` (pi's last 60 stderr lines), `log` |
+| the output fails any check above, after the last Tier of the ladder (GXD1: no line passes; GXD2: rejected lines listed in output; GXD3: output cut at length with no complete line) | `distill_invalid` | 1 | `context`, `upto_seq`, `errors` (every failure, each `{id?, line?, what}`; GXD2: rejected lines, each with id, line number from 1, and reason), `invalid` (the kept `.jsonl.invalid` file), `log` |
 
 `log` is `run/context-digests/<context>/distill.log`, where the run writes its stderr (and, started by E9, its stdout too).
 
 ```json
 {"ok": true, "context": "building-cpd", "distilled": true, "steps": ["H0"],
- "digest": {"upto_seq": 1342, "file": "/home/clayton/.cpd/run/context-digests/building-cpd/1342.md", "bytes": 27311},
- "records_in_force": 231,
+ "curated": 59, "rejected": 1, "retire": 4, "docs": 2, "remaining": 692,
  "run": {"seconds": 94.2, "model": "anthropic/claude-sonnet-4-5:medium", "tokens_in": 61234, "tokens_out": 7410, "cost": 0.43}}
 ```
 
-`steps` is present with `run` (hs-d538): the Tiers tried in order, e.g. `["H0", "H1"]`; `run` and `repair` are those of the **last** step. `run` is present only when pi ran (`"distilled": true`); its fields are the run's `runs.jsonl` line without `started_at`, `context`, `upto_seq`, `result` and `kind`, and `tokens_in`, `tokens_out` and `cost` may be `null`. `repair` is present only when a repair turn ran and succeeded, with the same fields for it (`run` stays the distiller's). On a failure the same figures are in the log line only, not in the Event.
+`curated`, `rejected` (GXD2) and `docs` are the counts of the `context-curated` Event (contract §5.2); `retire` is the count of retirements proposed; `remaining` the records in force still uncurated. `steps` is present with `run` (hs-d538): the Tiers tried in order, e.g. `["H0", "H1"]`; `run` is that of the **last** step. `run` is present only when pi ran (`"distilled": true`); its fields are the run's `runs.jsonl` line without `started_at`, `context`, `upto_seq`, `result` and `kind`, and `tokens_in`, `tokens_out` and `cost` may be `null`. On a failure the same figures are in the log line only, not in the Event.
 
-Idempotent: yes. With no record newer than the latest digest it returns `"already": true` and runs nothing; a rerun after a failure runs again (on demand; E9 does not retry the same `seq`, contract §3.7).
+Idempotent: yes. With no uncurated record it returns `"already": true` and runs nothing; a rerun after a failure runs the same batch again (on demand; E9 does not retry the same highest `seq`, contract §3.7).
 
 ### 3.13 `context owner`
 
@@ -727,8 +737,7 @@ Effects, in this order:
 1. **Rows**, one transaction: `sessions` (new UUID v4; `role = lead`; `context`; `plan = <id>`; `name`; `cwd` = the realpath of the caller's cwd; `tier = lead_tier`; `forked_from` null; `by_user` = 1 when `--by-user`, else 0; `state = stopped`: the Lead is always fresh, never a fork, B3-A3); `plans` (`phase = grounding`, `lead_session` = the new Session); no `prs` row. **Events** `plan-created` `{title, jira, lead_session, forked_from: null, cwd}` and `session-registered` `{role, name, forked_from, tier}`.
 2. **Context records:** the record write of §3 (one transaction) with kind `plan` (letter `p`), `text` = the title, `plan` = `{id, machine, jira}` (`jira` omitted when null); **Event** `context-record`. With `--brief-file`, a second record of kind `brief` (letter `b`), `text` = the file's text, `plan` = `{id, machine}`; **Event** `context-record`.
 3. **First message**, when `by_user` is 0, written to `run/<id>/lead-message.md`: a header (`You are the Lead of Plan <id> "<title>" in Context <c>. Phase grounding: follow the cpd-lead skill.`), the full brief (the file's text) if given, then the Context (contract §4.6 "Consumers", hs-d194 D6):
-   - **with a digest**: the latest digest's text (§3.3 `--digest`), then the records written after its `upto_seq`, oldest first, at most 20 (this Plan's own `plan` and `brief` records among them), rendered as `context show --since <upto_seq>` renders them (briefs short), then, when more exist, `and <K> more: cpd context show --context <c> --since <seq>`, with `<seq>` the `seq` before the first record not listed;
-   - **with no digest yet**: `context show --context <c>` rendered as markdown: every Context record, other Plans' briefs short (§3.3).
+   - **the digest** (§3.3 `--digest`: the relevant short forms by topic, then the topic list; built by cpd, no model; hs-d549, hs-d551), then the **uncurated** records in force raw, oldest first, at most 20, rendered as `context show` renders them (briefs short), then, when more exist, `and <K> more: cpd context show --context <c>`, then the pointer line `cpd context show --since <seq>`; `cpd context show --topic <t>` reads the rest of a topic;
 
    The Lead is always fresh (B3-A3): the grounded Lead and its forks are retired (contract §3.1), so there is no fork case. When `by_user` is 1, no file is written (hs-d542 A2).
 4. **tmux:** start the server if it is not running (§6.1) and the cockpit session `cpd` if it is missing; then `new-window -d -t =cpd: -n park-<id> -c <cwd> -e CPD_HOME=… -e CPD_SESSION=<session> -e CPD_PLAN=<id> -P -F '#{window_id} #{pane_id}' -- cpd session run <session>`, and `set -p -t <pane> @cpd_session <session>`. One transaction: `sessions.tmux_pane`; **Event** `session-moved` `{pane, window, place: "parked"}`. If any step after `new-window` fails (`set-option -p @cpd_session`, the row or the Event write), the new window is killed (`kill-window`) before the error is returned (teardown G11).
@@ -2677,7 +2686,7 @@ cpd watch [--ensure | --check]
 
 The engine, one per machine (§3.7, §6.6, D5).
 
-**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5 and E7–E11 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context digests, since hs-d194; E10, the Session titles, since hs-d257; E11, the team review read, §21.5) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
+**Without `--ensure`:** runs the `@cpd_workers` step (below), then E1–E5 and E7–E11 (E6 is removed; E4 is the `open` Jobs since hs-d340, no longer the completion step; E7, the PR start, since R34; E8, the Inbox, §21; E9, the Context curation, since hs-d194 (hs-d549, hs-d551); E10, the Session titles, since hs-d257; E11, the team review read, §21.5) every `tick_seconds` (a decimal, minimum 0.1; default 5) in the foreground, in `cpd-work:watch`, logging to stderr and appending the same lines to `run/watch.log`.
 
 E5 (the PR poll) runs at its due time, `pr_poll_seconds` after the previous poll ended (5 s by default), not at the next tick: the engine sleeps until the earlier of its next tick and E5's due time (contract §3.7). The pi stop grace is `timeouts.pi_stop_seconds` (default 10; contract §8.2).
 
@@ -3088,7 +3097,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config
 ```
 
-Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run starts at, Plan curate's). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d562, hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5 or letter G, `context_distill_tier` must be GX (hs-d562), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `GX` (hs-d562: the Tier every distill run uses, one step only, no ladder, hs-d560), `context_recent_days` `1` (hs-d549, hs-d551: the days of curated records the digest takes as relevant; an integer >= 1). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",

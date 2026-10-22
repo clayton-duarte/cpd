@@ -7,17 +7,20 @@ use serde_json::{Value, json};
 use super::{ContextRow, Record, ShowArgs, digest, render};
 use crate::env::Env;
 use crate::error::{CpdError, ErrorCode};
-use crate::home::CpdHome;
+use crate::config::Config;
 use crate::ids::{ContextId, RecordId, RecordKind};
 use crate::output::Output;
 use crate::store::Store;
 
 /// `context show` (§3.3).
 pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
-    let Env { home, config, mut store } = Env::open()?;
+    let Env { config, mut store, .. } = Env::open()?;
     let id = args.select.resolve(&mut store)?;
     if args.digest {
-        return show_digest(&home, &mut store, &id);
+        return show_digest(&config, &mut store, &id);
+    }
+    if let Some(topic) = &args.topic {
+        return show_topic(&mut store, &id, topic);
     }
     if let Some(record) = &args.record {
         return show_record(&mut store, &id, record);
@@ -59,14 +62,33 @@ fn retired_labels(conn: &rusqlite::Connection, context: &ContextId) -> Result<re
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
-/// `context show --digest` (§3.3): the Context's latest digest file, and no record.
-fn show_digest(home: &CpdHome, store: &mut Store, context: &ContextId) -> Result<Output, CpdError> {
-    let row = store.read(|conn| ContextRow::require(conn, context))?;
-    let digest = digest::latest(home, context)?;
+/// `context show --digest` (§3.3): the digest cpd renders now, and no record.
+fn show_digest(config: &Config, store: &mut Store, context: &ContextId) -> Result<Output, CpdError> {
+    let (row, digest) = store.read(|conn| Ok((ContextRow::require(conn, context)?, digest::render(conn, context, config.context_recent_days)?)))?;
     Ok(Output::success(json!({
         "context": {"id": row.id, "title": row.title, "jira": row.jira},
-        "digest": digest.as_ref().map(|d| json!({"upto_seq": d.upto_seq, "file": d.file, "bytes": d.text.len()})),
-        "markdown": digest.map(|d| d.text),
+        "digest": {"bytes": digest.text.len(), "records": digest.records},
+        "markdown": digest.text,
+    })))
+}
+
+/// `context show --topic <t>` (§3.3): every curated record in force of the topic, oldest first.
+fn show_topic(store: &mut Store, context: &ContextId, topic: &str) -> Result<Output, CpdError> {
+    let (row, found) = store.read(|conn| Ok((ContextRow::require(conn, context)?, digest::by_topic(conn, context, topic)?)))?;
+    if found.is_empty() {
+        let topics = store.read(|conn| digest::topics(conn, context))?;
+        return Err(CpdError::new(ErrorCode::TopicNotFound, format!("Context {context} has no curated record of topic {topic}."))
+            .with("context", context.as_str())
+            .with("topic", topic)
+            .with("topics", topics));
+    }
+    let markdown = found.iter().map(|(id, short)| format!("- [{id}] {short}")).collect::<Vec<_>>().join("\n");
+    let records: Vec<Value> = found.iter().map(|(id, short)| json!({"id": id, "short": short})).collect();
+    Ok(Output::success(json!({
+        "context": {"id": row.id, "title": row.title, "jira": row.jira},
+        "topic": topic,
+        "records": records,
+        "markdown": markdown,
     })))
 }
 

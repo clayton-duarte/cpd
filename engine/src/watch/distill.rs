@@ -1,6 +1,5 @@
-//! E9, Context digests (contract §3.7; hs-d194 D4): starts `cpd context distill`
-//! for each Context whose digest is behind its records once its newest record is
-//! quiet, or at once when 20 or more records are newer than the digest (hs-d252).
+//! E9, Context curation (contract §3.7; hs-d549, hs-d551): starts `cpd context distill` for each Context with
+//! uncurated records in force once the newest of them is quiet, or at once when 20 or more wait, one batch per run.
 //! It only decides and spawns, as E3 does: the run takes its own lock,
 //! does its own work and appends its own `error` Event.
 
@@ -14,18 +13,16 @@ use time::format_description::well_known::Rfc3339;
 use super::engine::{Engine, stopping};
 use super::record_detached;
 use super::report::{About, Step};
-use cpd_core::context::digest;
-use cpd_core::context::distill::{log_path, running};
-use cpd_core::context::{Record, inforce};
+use cpd_core::context::distill::{State, log_path, running};
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::ids::ContextId;
 
-/// How old a Context's newest record must be before its digest is rebuilt (§3.7 E9).
+/// How old a Context's newest uncurated record must be before a run starts (§3.7 E9).
 const QUIET: time::Duration = time::Duration::minutes(10);
 
-/// How many records newer than the latest digest start a rebuild without the quiet period (§3.7 E9; a first
-/// message carries the digest plus at most this many newer records, §4.6 "Consumers").
-const BACKLOG: i64 = 20;
+/// How many uncurated records start a run without the quiet period (§3.7 E9; a first message carries at most this
+/// many uncurated records raw, §4.6 "Consumers").
+const BACKLOG: usize = 20;
 
 /// Whether the newest record, written at `newest`, is quiet at `now`.
 fn quiet(newest: &str, now: OffsetDateTime) -> Result<bool, CpdError> {
@@ -35,30 +32,26 @@ fn quiet(newest: &str, now: OffsetDateTime) -> Result<bool, CpdError> {
     Ok(now - at >= QUIET)
 }
 
-/// Each live Context with its highest record `seq` and that record's `at`.
-const NEWEST: &str = "SELECT c.id, r.seq, r.at FROM contexts c
-  JOIN context_records r ON r.context = c.id AND r.seq = (SELECT max(seq) FROM context_records WHERE context = c.id)
-  WHERE c.archived_at IS NULL ORDER BY c.id";
+/// The ids of the live (not archived) Contexts.
+const LIVE: &str = "SELECT id FROM contexts WHERE archived_at IS NULL ORDER BY id";
 
 pub(super) fn run(engine: &mut Engine) {
-    let newest = engine.store.read(|conn| {
-        let mut stmt = conn.prepare(NEWEST)?;
-        let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.into_iter().map(|(id, seq, at)| Ok((ContextId::parse(&id)?, seq, at))).collect::<Result<Vec<_>, CpdError>>()
+    let contexts = engine.store.read(|conn| {
+        let mut stmt = conn.prepare(LIVE)?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.iter().map(|id| ContextId::parse(id)).collect::<Result<Vec<_>, CpdError>>()
     });
-    let newest = match newest {
-        Ok(newest) => newest,
+    let contexts = match contexts {
+        Ok(contexts) => contexts,
         Err(e) => return engine.fail(Step::E9, About::Machine, &e),
     };
     let now = OffsetDateTime::now_utc();
     let mut failed = false;
-    for (context, seq, at) in newest {
+    for context in contexts {
         if stopping() {
             return;
         }
-        if let Err(e) = start_if_due(engine, &context, seq, &at, now) {
+        if let Err(e) = start_if_due(engine, &context, now) {
             failed = true;
             engine.fail(Step::E9, About::Machine, &e);
         }
@@ -68,50 +61,44 @@ pub(super) fn run(engine: &mut Engine) {
     }
 }
 
-/// Starts the run of `context` when it is due: its digest is behind `seq`, its newest record is quiet or
-/// `BACKLOG` records are newer than the digest, a record is in force, no run is alive, and no run was started for this `seq` in this engine's life.
-fn start_if_due(engine: &mut Engine, context: &ContextId, seq: i64, at: &str, now: OffsetDateTime) -> Result<(), CpdError> {
-    if engine.distill_started.get(context).is_some_and(|started| *started >= seq) {
+/// The batch sizes of a state's runs, largest first (FX4): a run that ends without changing its state failed, and
+/// the next run of the same state takes the next smaller batch.
+const BATCHES: [u8; 5] = [60, 30, 15, 5, 1];
+
+/// Starts the run of `context` when it is due: it has records in force that are not curated, the newest of them is
+/// quiet or `BACKLOG` of them are waiting, and no run is alive. The state is the highest `seq` and the count of
+/// uncurated records. A run that curates a batch changes the state, so the next tick starts the next batch at 60. A
+/// run that has ended with the state unchanged failed: the next tick starts the next run for the same state with
+/// the next smaller batch (60, 30, 15, 5, 1) and records the batch with the state; after a failed run of batch 1
+/// nothing starts until the state changes or the engine restarts. So a state has at most five runs.
+fn start_if_due(engine: &mut Engine, context: &ContextId, now: OffsetDateTime) -> Result<(), CpdError> {
+    let state = engine.store.read(|conn| State::read(conn, context))?;
+    let uncurated = state.uncurated();
+    let Some(newest) = uncurated.last() else { return Ok(()) };
+    let key = (state.highest().expect("an uncurated record is a record"), i64::try_from(uncurated.len()).unwrap_or(i64::MAX));
+    let previous = engine.distill_started.get(context).filter(|(started, _)| *started == key).map(|(_, batch)| *batch);
+    if previous == Some(BATCHES[BATCHES.len() - 1]) {
         return Ok(());
     }
-    let upto = match digest::latest(&engine.home, context)? {
-        Some(d) => i64::try_from(d.upto_seq).unwrap_or(i64::MAX),
-        None => 0,
-    };
-    if upto >= seq {
+    if uncurated.len() < BACKLOG && !quiet(&newest.1.at, now)? {
         return Ok(());
     }
-    if !quiet(at, now)? {
-        let newer = engine.store.read(|conn| {
-            Ok(conn.query_row(
-                "SELECT count(*) FROM context_records WHERE context = ?1 AND seq > ?2",
-                rusqlite::params![context.as_str(), upto],
-                |r| r.get::<_, i64>(0),
-            )?)
-        })?;
-        if newer < BACKLOG {
-            return Ok(());
-        }
-    }
-    let (records, retired) = engine.store.read(|conn| {
-        let mut stmt =
-            conn.prepare(&format!("SELECT {} FROM context_records WHERE context = ?1 ORDER BY seq", Record::COLUMNS))?;
-        let records = stmt.query_map([context.as_str()], Record::from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok((records, inforce::retired(conn, context)?))
-    })?;
-    if inforce::in_force_without(&records, seq, &retired).is_empty() || running(&engine.home, context)? {
+    // A run that is alive, or this engine's own run that has not ended yet (its pid file is still there; one an
+    // earlier engine left behind says nothing, so only a state this engine started is asked).
+    if running(&engine.home, context)? || (previous.is_some() && engine.home.distill_pid(context).exists()) {
         return Ok(());
     }
-    let pid = spawn(engine, context)?;
-    engine.distill_started.insert(context.clone(), seq);
-    engine.log.line(&format!("E9: started the distill run of Context {context} up to record {seq} (pid {pid})"));
+    let batch = previous.map_or(BATCHES[0], |last| BATCHES.iter().copied().find(|b| *b < last).expect("batch 1 stops before this"));
+    let pid = spawn(engine, context, batch)?;
+    engine.distill_started.insert(context.clone(), (key, batch));
+    engine.log.line(&format!("E9: started the distill run of Context {context} up to record {} with batch {batch} (pid {pid})", key.0));
     Ok(())
 }
 
 /// Spawns `cpd context distill --context <context>` detached (`setsid`), stdin from `/dev/null`, stdout and
 /// stderr appended to the Context's `distill.log`, its pid recorded in `distill.pid` ([`record_detached`]).
 /// Returns its pid.
-fn spawn(engine: &Engine, context: &ContextId) -> Result<u32, CpdError> {
+fn spawn(engine: &Engine, context: &ContextId, batch: u8) -> Result<u32, CpdError> {
     let failed = |why: String| CpdError::new(ErrorCode::SpawnFailed, format!("Cannot start the distill run of Context {context}: {why}.")).with("context", context.as_str());
     let exe = cpd_core::host::exe::started_as()?;
     let log_path = log_path(&engine.home, context);
@@ -121,7 +108,7 @@ fn spawn(engine: &Engine, context: &ContextId) -> Result<u32, CpdError> {
     let stdout = log.try_clone().map_err(|e| failed(format!("cannot use {}: {e}", log_path.display())))?;
     let mut command = Command::new(exe);
     command
-        .args(["context", "distill", "--context", context.as_str()])
+        .args(["context", "distill", "--context", context.as_str(), "--batch", &batch.to_string()])
         .current_dir(engine.home.root())
         .env("CPD_HOME", engine.home.root())
         // The caller's own identity is not the run's.

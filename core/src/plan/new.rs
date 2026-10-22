@@ -229,7 +229,7 @@ fn env_id<T>(name: &str, parse: fn(&str) -> Result<T, CpdError>) -> Result<Optio
 /// Context as the first message gives it (§4.6 "Consumers": its digest and the
 /// records after it, or every record; the Lead is always fresh).
 fn write_message(env: &mut Env, plan: &PlanRow, brief: Option<&Text>) -> Result<(), CpdError> {
-    let message = env.store.read(|conn| lead_message(conn, &env.home, &env.config.machine, plan, brief.map(Text::as_str)))?;
+    let message = env.store.read(|conn| lead_message(conn, &env.config, plan, brief.map(Text::as_str)))?;
     write_file(&env.home.lead_message(&plan.id), &message)
 }
 
@@ -238,14 +238,11 @@ fn write_message(env: &mut Env, plan: &PlanRow, brief: Option<&Text>) -> Result<
 /// `session first-message` share.
 pub(crate) fn lead_message(
     conn: &Connection,
-    home: &crate::home::CpdHome,
-    machine: &crate::ids::MachineName,
+    config: &crate::config::Config,
     plan: &PlanRow,
     brief: Option<&str>,
 ) -> Result<String, CpdError> {
-    // This Plan's own brief is in the message in full: it is not listed again.
-    let own_brief_of = brief.map(|_| &plan.id);
-    let context = digest::first_message(conn, home, machine, &plan.context, own_brief_of)?;
+    let context = digest::first_message(conn, config, &plan.context, Some(&plan.id))?;
     let mut message = vec![header(plan)];
     if let Some(brief) = brief {
         message.push(brief.trim_end().to_owned());

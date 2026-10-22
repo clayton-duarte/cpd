@@ -44,7 +44,7 @@ Your pi prompt carries a `cpd-policy` section with your owner's policy text. `cp
 
 ## 1. Records
 
-Your first message holds every record of the Context (`cpd context show --context <c>` renders them again; `--since <seq>` only the newer ones). A brief is listed short, its id and first line under its Plan; `cpd context show --context <c> --record <id>` prints one record in full.
+Your first message holds the digest of the Context (the short forms of the relevant records as `- [<id>] <short>` by topic, then every topic with its count; `cpd context show --digest` prints it again) and at most 20 records not yet curated, raw. `cpd context show --topic <t>` reads the rest of a topic; `cpd context show --context <c>` renders every record and `--since <seq>` only the newer ones. A brief is listed short, its id and first line under its Plan; `cpd context show --context <c> --record <id>` prints one record in full.
 
 A record is one line of text and append-only:
 

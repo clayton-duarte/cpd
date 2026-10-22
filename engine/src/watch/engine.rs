@@ -58,8 +58,8 @@ pub(super) struct Engine {
     pub paused_until: Option<Instant>,
     /// The `@cpd_workers` texts and width last set on the tmux server.
     pub workers: Option<String>,
-    /// E9: the highest record `seq` of each Context a distill run was started for in this engine's life.
-    pub distill_started: HashMap<ContextId, i64>,
+    /// E9: the (highest record `seq`, uncurated count) of each Context's latest distill run in this engine's life, with the batch size it was given.
+    pub distill_started: HashMap<ContextId, ((i64, i64), u8)>,
     /// E10: the retitle runs this engine started and has not seen end.
     pub titles: titles::Runs,
     /// E11: the helper's run in flight and when the last one ended.

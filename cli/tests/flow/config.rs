@@ -45,6 +45,7 @@ fn config_defaults_context_distill_tier_to_gx() {
             "lead_tier": "O2",
             "manager_tier": "O4",
             "context_distill_tier": "GX",
+            "context_recent_days": 1,
             "open_tier": "S2",
             "lead_pi_packages": [
                 "npm:@plannotator/pi-extension@0.28.17",
@@ -166,6 +167,7 @@ version = 1
 machine = "a1234567"
 concurrency = 1
 test_concurrency = 64
+context_recent_days = 3650
 retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"
@@ -1042,4 +1044,39 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
         (&config["lead_tier"], &config["manager_tier"], &config["context_distill_tier"], &config["open_tier"]),
         (&json!("O0"), &json!("O4"), &json!("GX"), &json!("H3"))
     );
+}
+
+/// Contract §8.2 (hs-d549, hs-d551): `context_recent_days`, default 1, an integer >= 1.
+#[test]
+fn context_recent_days_defaults_to_1_and_refuses_0() {
+    let env = TestEnv::new();
+    let out = config_with(&env, MINIMAL).ok();
+    assert_eq!(out["config"]["context_recent_days"], 1, "{out}");
+    assert_eq!(out["sources"]["context_recent_days"], "default", "{out}");
+
+    let out = config_with(&env, &format!("{MINIMAL}context_recent_days = 7\n")).ok();
+    assert_eq!(out["config"]["context_recent_days"], 7, "{out}");
+    assert_eq!(out["sources"]["context_recent_days"], "file", "{out}");
+
+    for bad in ["0", "-1", "1.5", "\"2\""] {
+        let run = config_with(&env, &format!("{MINIMAL}context_recent_days = {bad}\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{bad}");
+        assert_eq!(err["code"], "config_invalid", "{bad}: {err}");
+        assert_eq!(err["details"]["key"], "context_recent_days", "{bad}: {err}");
+    }
+}
+
+/// hs-d558 FX6: `context_recent_days` is 1 to 3650; a bigger value is refused like 0 is.
+#[test]
+fn context_recent_days_above_3650_is_refused() {
+    let env = TestEnv::new();
+    let out = config_with(&env, &format!("{MINIMAL}context_recent_days = 3650\n")).ok();
+    assert_eq!(out["config"]["context_recent_days"], 3650, "{out}");
+
+    let run = config_with(&env, &format!("{MINIMAL}context_recent_days = 3651\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid", "{err}");
+    assert_eq!(err["details"]["key"], "context_recent_days", "{err}");
 }
