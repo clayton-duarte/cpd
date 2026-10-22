@@ -47,11 +47,11 @@ test("the balloon is the longest row plus two padding columns and two borders wi
 	const rows = ["fix the build", "then ship it"];
 	const user = plain(await draw(rows, "user", 24));
 	assert.deepEqual(user, [
-		"    ╭───────────────╮ ",
-		"    │ fix the build │ ",
-		"    │ then ship it  │ ",
-		"    ╰──────────────╮│ ",
-		"                   ╰╯ ",
+		"      ╭───────────────╮ ",
+		"      │ fix the build │ ",
+		"      │ then ship it  │ ",
+		"      ╰──────────────╮│ ",
+		"                     ╰╯ ",
 	]);
 	const agent = plain(await draw(rows, "agent", 24));
 	assert.deepEqual(agent, [
@@ -133,14 +133,14 @@ test("wide characters and styled text keep the wall aligned", async () => {
 
 test("no row is wider than the pane and a very narrow pane draws no balloon", async () => {
 	for (const side of ["user", "agent"] as const) {
-		for (const width of [8, 9, 12, 30]) {
-			const inner = Math.min(width - 4, 4);
+		for (const width of [9, 12, 30]) {
+			const inner = Math.min(width - 8, 4);
 			const out = await draw(["x".repeat(inner)], side, width);
 			for (const row of out) assert.ok(visibleWidth(row) <= width, `${side} ${width}: ${JSON.stringify(row)}`);
-			assert.ok(out.length > 1, "a balloon is drawn from width 8");
+			assert.ok(out.length > 1, "a balloon is drawn from width 9");
 		}
 		const rows = ["ab", "cd"];
-		for (const width of [1, 4, 7]) assert.deepEqual(await draw(rows, side, width), rows, `${side} ${width}`);
+		for (const width of [1, 4, 8]) assert.deepEqual(await draw(rows, side, width), rows, `${side} ${width}`);
 	}
 });
 

@@ -62,7 +62,7 @@ type MarkdownLike = Renderable & { paddingX?: number; paddingY?: number; invalid
 
 /**
  * A message's text rows as a balloon (docs/contract.md section 6.9). Pi's own padding columns and rows of the
- * Markdown are dropped for the render, so the text wraps at `width - 4` and the balloon adds the only margins.
+ * Markdown are dropped for the render, so the text wraps at `width - 8` and the balloon adds the only margins.
  */
 function balloonOf(child: MarkdownLike, side: BalloonSide, width: number): string[] {
 	if (width < MIN_BALLOON_WIDTH) return child.render(width);
@@ -72,7 +72,7 @@ function balloonOf(child: MarkdownLike, side: BalloonSide, width: number): strin
 	child.invalidate?.();
 	let rows: string[];
 	try {
-		rows = child.render(width - 4);
+		rows = child.render(width - 8);
 	} finally {
 		child.paddingX = paddingX;
 		child.paddingY = paddingY;

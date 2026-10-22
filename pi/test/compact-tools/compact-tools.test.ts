@@ -264,7 +264,7 @@ test("restores hidden rows when silent mode is disposed and preserves the choice
 	assert.deepEqual(notice.render(80), []);
 	assert.deepEqual(
 		visible(failedAnswer),
-		["╭────────────────╮", "│ Partial answer │", "│                │", "│╭───────────────╯", "╰╯"],
+		["╭────────────────╮", "│ Partial answer │", "│╭───────────────╯", "╰╯"],
 		"the answer stays as a balloon, its error notice goes",
 	);
 	assert.deepEqual(failedHandoff.render(80), [], "a failed tool handoff is hidden like any other");

@@ -119,7 +119,7 @@ test("no blank row sits above or below a balloon in pi's components", async () =
 		const user = plain(new UserMessageComponent("user prompt").render(40));
 		assert.equal(user.length, 4, user.join("\n"));
 		assert.ok(user[0]!.includes("╭") && user.at(-1)!.includes("╰╯"), user.join("\n"));
-		assert.equal(user[0]![25], "╭");
+		assert.equal(user[0]![24], "╭");
 		assert.ok(user.every((row) => row.trim() !== ""), "no blank row in the user balloon");
 		const agent = plain(
 			new AssistantMessageComponent({ role: "assistant", content: [{ type: "text", text: "agent reply" }], stopReason: "stop" } as never).render(40),
