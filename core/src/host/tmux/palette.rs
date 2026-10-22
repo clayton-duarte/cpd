@@ -184,14 +184,14 @@ fn the_workers_and_version_pills_are_grey_blocks_with_black_text() {
         server.run(&["set", "-g", option, value]);
     }
     let wide = server.status(300);
-    pill(&wide, long, 7);
-    pill(&wide, "0.0.5-abc", 7);
+    pill(&wide, long, 8);
+    pill(&wide, "0.0.5-abc", 8);
     assert!(!text(&wide).contains(short), "a wide client draws the long form: {}", show(&wide));
     // A narrow one: the long form (34 cells) and the version (12) do not fit with the left group and a fill of 1.
     let narrow = server.status(59);
-    pill(&narrow, short, 7);
+    pill(&narrow, short, 8);
     assert!(!text(&narrow).contains(long), "a narrow client draws the short form: {}", show(&narrow));
-    pill(&narrow, "0.0.5-abc", 7);
+    pill(&narrow, "0.0.5-abc", 8);
     server.run(&["set", "-g", "@cpd_preview", "x y"]);
     pill(&server.status(300), "preview: x y", 3);
 }
