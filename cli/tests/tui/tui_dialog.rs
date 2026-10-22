@@ -167,7 +167,7 @@ fn input_box_in_a_popup_shows_the_label_and_grows_with_the_value() {
     assert!(rows[5].starts_with(" ╰"), "{rows:?}");
     let x = "x".repeat(45);
     keys(&env, &pane, &["-l", &x]);
-    let rows = wait_screen(&env, &pane, "the box grown", |r| r.get(6).is_some_and(|l| l.starts_with(" ╰")));
+    let rows = wait_screen(&env, &pane, "the box grown", |r| r.get(6).is_some_and(|l| l.starts_with(" ╰")) && r[5].starts_with(&format!(" │ {}", "x".repeat(7))));
     assert!(rows[4].starts_with(&format!(" │ {}", "x".repeat(38))), "{rows:?}");
     assert!(rows[5].starts_with(&format!(" │ {}", "x".repeat(7))), "{rows:?}");
 }
