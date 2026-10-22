@@ -84,13 +84,11 @@ function indexedAt(line: string, needle: string, expected: number): void {
 
 const NERD = { expand: "\u{F004B}", collapse: "\u{F0063}" };
 
-type Row = { render(width: number): string[] };
-
 /** One tool row in the fold language's defaults, driven as Pi drives it, drawn at each stage. */
 function stages(harness: Harness, name: string, id: string, failed: boolean, expanded: boolean) {
 	const outcome = CASES[name]!;
 	announce(harness, id, name);
-	const row: Row & Record<string, any> = makeRow(name, id, outcome.args, harness.definitions.get(name)) as never;
+	const row = makeRow(name, id, outcome.args, harness.definitions.get(name));
 	row.setExpanded(expanded);
 	const pending = row.render(100);
 	row.setArgsComplete();
