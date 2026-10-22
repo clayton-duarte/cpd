@@ -33,12 +33,13 @@ fn a_clean_open_pull_request_is_squash_merged_with_the_head_it_was_checked_at() 
     let env = TestEnv::new();
     gh(&env, &view("OPEN", "CLEAN"), 0);
     let run = env.cpd(&["pr", "merge", REF]);
-    assert_eq!(run.ok(), json!({"ok": true, "repo": "acme/api", "number": 7, "method": "squash", "branch_deleted": true}));
+    assert_eq!(run.ok(), json!({"ok": true, "repo": "acme/api", "number": 7, "method": "squash", "branch_deleted": true, "stored": false}));
     assert_eq!(
         env.calls("gh"),
         [
             argv(&["pr", "view", "7", "--repo", "acme/api", "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"]),
             argv(&["pr", "merge", "7", "--repo", "acme/api", "--squash", "--delete-branch", "--match-head-commit", SHA]),
+            argv(&["pr", "view", "7", "--repo", "acme/api", "--json", "state,mergeStateStatus,headRefOid,title,mergedAt"]),
         ]
     );
 }
