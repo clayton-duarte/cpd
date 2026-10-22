@@ -190,7 +190,7 @@ impl Kind {
             ContextDeleted => spec([Y, N, N, N, N], &["plans", "jobs", "attempts", "sessions", "worktrees", "disk_freed_mb"], &[]),
             RecordsRetired => spec([Y, N, N, N, N], &["context", "approved", "rejected"], &[]),
             DocsDecided => spec([Y, N, N, N, N], &["context", "sent", "dismissed"], &[]),
-            ContextCurated => spec([Y, N, N, N, N], &["context", "curated", "retire", "docs"], &[]),
+            ContextCurated => spec([Y, N, N, N, N], &["context", "curated", "rejected", "retire", "docs"], &[]),
             ContextRenamed => spec([Y, N, N, N, N], &["title"], &[]),
             ContextOwner => spec([Y, N, N, N, N], &["owner"], &[]),
             PlanRenamed => spec([Y, Y, N, N, N], &["title"], &[]),

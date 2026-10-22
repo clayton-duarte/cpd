@@ -389,8 +389,8 @@ impl NewEvent {
         make(Kind::DocsDecided, text, json!({"context": context, "sent": sent, "dismissed": dismissed}))
     }
 
-    pub fn context_curated(text: impl Into<String>, context: &str, curated: u64, retire: u64, docs: u64) -> NewEvent {
-        make(Kind::ContextCurated, text, json!({"context": context, "curated": curated, "retire": retire, "docs": docs}))
+    pub fn context_curated(text: impl Into<String>, context: &str, curated: u64, rejected: u64, retire: u64, docs: u64) -> NewEvent {
+        make(Kind::ContextCurated, text, json!({"context": context, "curated": curated, "rejected": rejected, "retire": retire, "docs": docs}))
     }
 
     pub fn context_owner(text: impl Into<String>, owner: &str) -> NewEvent {
@@ -532,7 +532,7 @@ mod tests {
             Kind::ContextDeleted => vec![NewEvent::context_deleted(T, 0, &Counts::default())],
             Kind::RecordsRetired => vec![NewEvent::records_retired(T, s, [s], Vec::<String>::new())],
             Kind::DocsDecided => vec![NewEvent::docs_decided(T, s, [s], Vec::<String>::new())],
-            Kind::ContextCurated => vec![NewEvent::context_curated(T, s, 0, 0, 0)],
+            Kind::ContextCurated => vec![NewEvent::context_curated(T, s, 0, 0, 0, 0)],
             Kind::ContextRenamed => vec![NewEvent::context_renamed(T, s)],
             Kind::ContextOwner => vec![NewEvent::context_owner(T, s)],
             Kind::PlanRenamed => vec![NewEvent::plan_renamed(T, s)],

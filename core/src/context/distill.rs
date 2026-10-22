@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use super::curation::{Curation, Proposal, Reason, propose};
+use super::curation::{Curation, Proposal, Reason, propose_rejecting};
 use super::render::Indexed;
 use super::{ContextRow, Record, Select, inforce};
 use crate::config::{Config, Letter, Tier};
@@ -221,10 +221,11 @@ struct RawLine {
     doc: bool,
 }
 
-/// A checked output: what [`propose`] takes.
+/// A checked output (GXD1): what [`propose_rejecting`] takes, and the lines it rejects.
 struct Checked {
     curations: Vec<Curation>,
     proposals: Vec<Proposal>,
+    rejected: Vec<Problem>,
 }
 
 /// The batch of a step with the data the checks need.
@@ -237,34 +238,39 @@ struct Batch<'a> {
 }
 
 impl Batch<'_> {
-    /// Checks `text` (contract §4.6 step 5), every failure at once.
-    fn check(&self, text: &str) -> Result<Checked, Vec<Problem>> {
-        let mut problems = Vec::new();
-        let mut seen: HashSet<RecordId> = HashSet::new();
-        let mut checked = Checked { curations: Vec::new(), proposals: Vec::new() };
+    /// Checks `text` (contract §4.6 step 5) line by line (GXD1): a line that passes is accepted, one that fails is
+    /// rejected and its record stays uncurated. A record missing from the output stays uncurated without a
+    /// rejection; a line whose id is not a record of the batch is ignored; both lines of a repeated id are rejected.
+    fn check(&self, text: &str) -> Checked {
+        let mut checked = Checked { curations: Vec::new(), proposals: Vec::new(), rejected: Vec::new() };
         let batch: HashMap<&RecordId, i64> = self.records.iter().map(|(seq, r)| (&r.id, *seq)).collect();
-        for (n, line) in text.lines().enumerate().map(|(i, l)| (i + 1, l)).filter(|(_, l)| !l.trim().is_empty()) {
+        let lines: Vec<(usize, &str)> = text.lines().enumerate().map(|(i, l)| (i + 1, l)).filter(|(_, l)| !l.trim().is_empty()).collect();
+        let mut parsed: Vec<(usize, Result<(RawLine, RecordId), String>)> = Vec::new();
+        for (n, line) in lines {
+            match serde_json::from_str::<RawLine>(line) {
+                Err(e) => parsed.push((n, Err(format!("not a curation line: {e}")))),
+                // An id that is not a record of the batch is ignored.
+                Ok(raw) => match RecordId::parse(&raw.id) {
+                    Ok(id) if batch.contains_key(&id) => parsed.push((n, Ok((raw, id)))),
+                    _ => {}
+                },
+            }
+        }
+        let mut count: HashMap<RecordId, usize> = HashMap::new();
+        for (_, id) in parsed.iter().filter_map(|(_, p)| p.as_ref().ok()) {
+            *count.entry(id.clone()).or_default() += 1;
+        }
+        for (n, line) in parsed {
             let problem = |id: Option<&RecordId>, what: String| Problem { id: id.cloned(), line: Some(n), what };
-            let raw: RawLine = match serde_json::from_str(line) {
-                Ok(raw) => raw,
-                Err(e) => {
-                    problems.push(problem(None, format!("not a curation line: {e}")));
+            let (raw, id) = match line {
+                Ok(parsed) => parsed,
+                Err(what) => {
+                    checked.rejected.push(problem(None, what));
                     continue;
                 }
             };
-            let id = match RecordId::parse(&raw.id) {
-                Ok(id) if batch.contains_key(&id) => id,
-                Ok(_) => {
-                    problems.push(problem(None, format!("{} is not a record of the batch", raw.id)));
-                    continue;
-                }
-                Err(_) => {
-                    problems.push(problem(None, format!("{:?} is not a record id", raw.id)));
-                    continue;
-                }
-            };
-            if !seen.insert(id.clone()) {
-                problems.push(problem(Some(&id), "listed more than once".to_owned()));
+            if count[&id] > 1 {
+                checked.rejected.push(problem(Some(&id), "listed more than once".to_owned()));
                 continue;
             }
             let mut bad = Vec::new();
@@ -283,7 +289,7 @@ impl Batch<'_> {
                 }
             }
             if !bad.is_empty() {
-                problems.extend(bad.into_iter().map(|what| problem(Some(&id), what)));
+                checked.rejected.extend(bad.into_iter().map(|what| problem(Some(&id), what)));
                 continue;
             }
             checked.curations.push(Curation {
@@ -294,10 +300,7 @@ impl Batch<'_> {
             });
             checked.proposals.extend(proposal);
         }
-        for (_, r) in self.records.iter().filter(|(_, r)| !seen.contains(&r.id)) {
-            problems.push(Problem { id: Some(r.id.clone()), line: None, what: "missing from the output".to_owned() });
-        }
-        if problems.is_empty() { Ok(checked) } else { Err(problems) }
+        checked
     }
 
     fn retire(&self, id: &RecordId, seq: i64, retire: &RawRetire) -> Result<Proposal, String> {
@@ -361,7 +364,7 @@ impl Run<'_> {
         let mut ladder = vec![start];
         let mut steps: Vec<Tier> = Vec::new();
         let mut index = 0;
-        let (ran, checked) = loop {
+        let (ran, checked, text) = loop {
             let tier = ladder[index];
             steps.push(tier);
             let fault = match self.step(tier, upto, &batch)? {
@@ -380,14 +383,19 @@ impl Run<'_> {
             }
         };
         let (curated, docs) = (checked.curations.len(), checked.curations.iter().filter(|c| c.doc_paths.is_some()).count());
-        let retire = propose(self.store, self.context, &checked.curations, &checked.proposals)?;
+        let retire = propose_rejecting(self.store, self.context, &checked.curations, &checked.proposals, checked.rejected.len())?;
         remove_invalid(self.home, self.context)?;
-        self.log_run(&ran, upto, "valid");
+        if !checked.rejected.is_empty() || ran.cut {
+            let kept = self.home.context_digest_invalid(self.context, upto);
+            fs::write(&kept, &text).map_err(|e| io_failed("write", &kept, &e))?;
+        }
+        self.log_run(&ran, upto, "valid", &checked.rejected);
         Ok(json!({
             "context": self.context.as_str(),
             "distilled": true,
             "steps": steps.iter().map(Tier::to_string).collect::<Vec<_>>(),
             "curated": curated,
+            "rejected": rejected_json(&checked.rejected),
             "retire": retire,
             "docs": docs,
             "remaining": uncurated.len() - batch_records.len(),
@@ -403,21 +411,24 @@ impl Run<'_> {
 
     /// One step (contract §4.6 steps 4 and 5) at `tier`: the distiller, then the checks. The outer `Err` is a failure
     /// that ends the run at once (a file); the inner one is the step's fault, which only the last step reports.
-    fn step(&mut self, tier: Tier, upto: u64, batch: &Batch<'_>) -> Result<Result<(Ran, Checked), Fault>, CpdError> {
+    fn step(&mut self, tier: Tier, upto: u64, batch: &Batch<'_>) -> Result<Result<(Ran, Checked, String), Fault>, CpdError> {
         let (ran, text) = match self.run_pi(tier, upto, &["prompt.md", "batch.md", "known.md", "docs.md"])? {
             Ok(done) => done,
             Err(fault) => return Ok(Err(fault)),
         };
-        match batch.check(&text) {
-            Ok(checked) => Ok(Ok((ran, checked))),
-            Err(problems) => {
-                self.log_run(&ran, upto, "invalid");
-                let kept = self.home.context_digest_invalid(self.context, upto);
-                remove_invalid(self.home, self.context)?;
-                fs::write(&kept, &text).map_err(|e| io_failed("write", &kept, &e))?;
-                Ok(Err(Fault::Invalid(problems, kept)))
-            }
+        let mut checked = batch.check(&text);
+        if !checked.curations.is_empty() {
+            return Ok(Ok((ran, checked, text)));
         }
+        // No line accepted (GXD1): the run is invalid, and its rejections are all of its lines.
+        if checked.rejected.is_empty() {
+            checked.rejected.push(Problem { id: None, line: None, what: "the output has no curation line".to_owned() });
+        }
+        self.log_run(&ran, upto, "invalid", &checked.rejected);
+        let kept = self.home.context_digest_invalid(self.context, upto);
+        remove_invalid(self.home, self.context)?;
+        fs::write(&kept, &text).map_err(|e| io_failed("write", &kept, &e))?;
+        Ok(Err(Fault::Invalid(checked.rejected, kept)))
     }
 
     /// For each batch record, the `<repo>:<path>` hits of `git grep -l -w <id> -- docs '*.md'` on each repo of the
@@ -522,6 +533,7 @@ impl Run<'_> {
             model,
             tier,
             usage: None,
+            cut: false,
         };
         let failure = match waited {
             Err(e) => Failed::Spawn(e.to_string()),
@@ -531,6 +543,7 @@ impl Run<'_> {
                 match (status.success(), parsed) {
                     (true, Ok(output)) => {
                         ran.usage = output.usage;
+                        ran.cut = output.cut;
                         match output.answer {
                             Ok(text) => {
                                 let text = if text.ends_with('\n') { text } else { format!("{text}\n") };
@@ -548,18 +561,19 @@ impl Run<'_> {
             }
         };
         let _ = log_file.flush();
-        self.log_run(&ran, upto, "failed");
+        self.log_run(&ran, upto, "failed", &[]);
         Ok(Err(Fault::Pi(failure, tail_of(&log, offset))))
     }
 
     /// Appends the run's line to `runs.jsonl` (contract §4.6 "The run log"). A write failure fails nothing: it
     /// goes to the log.
-    fn log_run(&self, ran: &Ran, upto: u64, result: &str) {
+    fn log_run(&self, ran: &Ran, upto: u64, result: &str, rejected: &[Problem]) {
         let mut line = ran.figures();
         line["started_at"] = json!(ran.started_at);
         line["context"] = json!(self.context.as_str());
         line["upto_seq"] = json!(upto);
         line["result"] = json!(result);
+        line["rejected"] = rejected_json(rejected);
         line["kind"] = json!("distill");
         line["tier"] = json!(ran.tier.to_string());
         let path = runs_path(self.home, self.context);
@@ -636,6 +650,11 @@ pub fn runs_path(home: &CpdHome, context: &ContextId) -> PathBuf {
     home.context_digest_dir(context).join("runs.jsonl")
 }
 
+/// GXD2: the rejected lines as `[{"id": <id or null>, "line": <n>, "what": <why>}]`.
+fn rejected_json(rejected: &[Problem]) -> Value {
+    Value::Array(rejected.iter().map(|p| json!({"id": p.id.as_ref().map(ToString::to_string), "line": p.line, "what": p.what})).collect())
+}
+
 fn git_failed(repo: &str, why: &str) -> CpdError {
     CpdError::new(ErrorCode::GitFailed, format!("Cannot search {repo} for the record ids: {why}.")).with("repo", repo)
 }
@@ -696,18 +715,24 @@ struct Ran {
     tier: Tier,
     /// `None` when pi reported none (a spawn failure, a kill, a stream without an assistant message).
     usage: Option<pi_json::Usage>,
+    /// GXD3: pi's last message stopped with `length`, and the answer is its complete lines.
+    cut: bool,
 }
 
 impl Ran {
     fn figures(&self) -> Value {
         let usage = self.usage.as_ref();
-        json!({
+        let mut figures = json!({
             "seconds": self.seconds,
             "model": self.model,
             "tokens_in": usage.map(|u| u.tokens_in),
             "tokens_out": usage.map(|u| u.tokens_out),
             "cost": usage.map(|u| u.cost),
-        })
+        });
+        if self.cut {
+            figures["cut"] = json!(true);
+        }
+        figures
     }
 }
 
@@ -733,6 +758,8 @@ mod pi_json {
     pub struct Output {
         pub usage: Option<Usage>,
         pub answer: Result<String, String>,
+        /// GXD3: the last message stopped with `length` and the answer is its text up to its last newline.
+        pub cut: bool,
     }
 
     #[derive(Deserialize)]
@@ -777,7 +804,8 @@ mod pi_json {
 
     /// Reads the stream: strict JSONL (one object per LF-terminated line), where each assistant `message_end`
     /// is a finished message. The answer is the text of the last one, which must have stopped normally
-    /// (`stop`: pi exits 0 for an `error`, `aborted` or `length` stop in this mode) and not be blank.
+    /// (`stop`: pi exits 0 for an `error`, `aborted` or `length` stop in this mode) and not be blank; a `length`
+    /// stop gives its text up to its last newline (GXD3), `cut`.
     /// `Err` when a line is not JSON or an assistant message lacks what pi's docs promise.
     pub fn parse(bytes: &[u8]) -> Result<Output, String> {
         let mut usage: Option<Usage> = None;
@@ -797,18 +825,30 @@ mod pi_json {
             sum.cost += message.usage.cost.total;
             last = Some(message);
         }
+        let mut cut = false;
         let answer = match last {
             None => Err("the stream has no assistant message".to_owned()),
-            Some(m) if m.stop_reason != "stop" => {
-                let why = m.error_message.map(|e| format!(": {e}")).unwrap_or_default();
-                Err(format!("the final assistant message stopped with `{}`{why}", m.stop_reason))
-            }
             Some(m) => {
                 let text: String = m.content.iter().filter(|b| b.kind == "text").filter_map(|b| b.text.as_deref()).collect();
-                if text.trim().is_empty() { Err("the final assistant message has no text".to_owned()) } else { Ok(text) }
+                match m.stop_reason.as_str() {
+                    "stop" if text.trim().is_empty() => Err("the final assistant message has no text".to_owned()),
+                    "stop" => Ok(text),
+                    // GXD3: the answer is the text up to its last newline; the cut, incomplete line is dropped.
+                    "length" => match text.rfind('\n').map(|i| &text[..=i]).filter(|t| !t.trim().is_empty()) {
+                        Some(complete) => {
+                            cut = true;
+                            Ok(complete.to_owned())
+                        }
+                        None => Err("the final assistant message stopped with `length` before its first complete line".to_owned()),
+                    },
+                    other => {
+                        let why = m.error_message.map(|e| format!(": {e}")).unwrap_or_default();
+                        Err(format!("the final assistant message stopped with `{other}`{why}"))
+                    }
+                }
             }
         };
-        Ok(Output { usage, answer })
+        Ok(Output { usage, answer, cut })
     }
 }
 
@@ -913,6 +953,21 @@ mod tests {
         assert!(pi_json::parse(assistant(" \n", "stop", 1, 0, 0, 2, 0.1).as_bytes()).unwrap().answer.is_err());
         let none = pi_json::parse(b"{\"type\":\"agent_start\"}\n").unwrap();
         assert_eq!((none.usage, none.answer.is_err()), (None, true));
+    }
+
+    #[test]
+    fn a_length_stop_gives_its_text_up_to_the_last_newline() {
+        let out = pi_json::parse(assistant("one\ntwo\nthr", "length", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
+        assert_eq!((out.answer, out.cut), (Ok("one\ntwo\n".to_owned()), true));
+        let out = pi_json::parse(assistant("one\n", "length", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
+        assert_eq!((out.answer, out.cut), (Ok("one\n".to_owned()), true));
+        for text in ["", "\n \n", "no newline"] {
+            let out = pi_json::parse(assistant(text, "length", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
+            assert!(out.answer.unwrap_err().contains("`length`"), "{text:?}");
+        }
+        let out = pi_json::parse(assistant("one\n", "error", 1, 0, 0, 2, 0.1).as_bytes()).unwrap();
+        assert_eq!(out.cut, false);
+        assert!(out.answer.unwrap_err().contains("`error`"));
     }
 
     #[test]

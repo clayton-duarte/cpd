@@ -60,6 +60,17 @@ pub struct Proposal {
 /// reads it (the distiller runs for minutes; the User may have approved a retirement meanwhile) is dropped, not an
 /// error. Returns the number of proposals considered written (the `retire` count of the Event).
 pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], proposals: &[Proposal]) -> Result<usize, CpdError> {
+    propose_rejecting(store, context, curations, proposals, 0)
+}
+
+/// [`propose`] for a run that rejected `rejected` lines of the distiller's output (GXD1, GXD2): the Event carries the count.
+pub fn propose_rejecting(
+    store: &mut Store,
+    context: &ContextId,
+    curations: &[Curation],
+    proposals: &[Proposal],
+    rejected: usize,
+) -> Result<usize, CpdError> {
     store.write("context curate", |tx| {
         let at = clock::now();
         for c in curations {
@@ -101,13 +112,13 @@ pub fn propose(store: &mut Store, context: &ContextId, curations: &[Curation], p
         }
         let docs = curations.iter().filter(|c| c.doc_paths.is_some()).count();
         let text = format!(
-            "Context {context} curated: {} records, {} retirements proposed, {docs} doc candidates.",
+            "Context {context} curated: {} records, {rejected} lines rejected, {} retirements proposed, {docs} doc candidates.",
             curations.len(),
             proposals.len()
         );
         append(
             tx,
-            NewEvent::context_curated(text, context.as_str(), curations.len() as u64, proposals.len() as u64, docs as u64).context(context.clone()),
+            NewEvent::context_curated(text, context.as_str(), curations.len() as u64, rejected as u64, proposals.len() as u64, docs as u64).context(context.clone()),
         )?;
         Ok(proposals.len())
     })
