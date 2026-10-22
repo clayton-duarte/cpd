@@ -3252,10 +3252,19 @@ Summary of the collapsed row (§15.9): `cpd-context: <n> records · <n> board po
 **Cursor**, in Event ids (the highest of all reads, `context-record` or board or Plan Events or errors): 
 1. Start = the Session's `registered_event` (its first message already held the records up to then).
 2. Then the greatest `details.event` of the session file's `cpd-context` messages whose `details.delivered_to` is this Session: the fork-safe rule of §15.2 step 4.
+3. Also the greatest `details.event` of the session file's `cpd-first-message` messages whose `details.delivered_to` is this Session (hs-d542 A3: for a by-user Session, the first message is delivered only once, tracked by its Event id).
 
 **Reading.** For records: `cpd events list --context <c> --kind context-record --since <cursor>`, then `cpd context show --context <c> --since <seq>` for the full text. The adapter skips its own records. For board posts: `cpd board take --session <id>` (internal, not a Lead command). For Plan Events: `cpd events list --context <c> --kind plan-created,plan-phase,pr-opened,pr-merged,job-failed,escalation,plan-done --since <cursor>`. For errors: `cpd events list --context <c> --kind error --since <cursor>` and `cpd events list --kind error --since <cursor>` (the machine-wide ones). The message's `details` is `{event: <highest Event id read>, delivered_to: <id>, records: [ids], posts: <n>, plans: <n>, errors: <n>, error_codes: {<code>: <count>}}`. The message is returned when any section has something; nothing is added if none do. No schema change.
 
 **Failure.** A failed read adds no message and leaves the cursor. It is reported once as an error message (§15.1, no turn), and again only after a read has succeeded.
+
+### 15.7a First message of a by-user Session
+
+Decision hs-d540 (User): when the User creates a Lead or Manager from the tree, pi starts with no first message and runs no turn; the role's first message is delivered with the User's first prompt, in the same turn, computed when that prompt is sent. Decision hs-d542 (User): (1) the tree passes `--by-user` to `plan new` and `context manager`; without it a command keeps today's behaviour. (2) Until the User's first prompt a by-user Session runs no turn at all: every message or Event that would start one is queued (pi's `sendMessage` `deliverAs` 'nextTurn', `triggerTurn` false) and goes with that prompt's run, with the first message. (3) The first message is hidden in the chat (`display` false); the User sees only their own prompt.
+
+**Handler** (contract §10.8, hs-d542 A3). The pi adapter, for a by-user Session whose session file holds no `cpd-first-message` custom message delivered to it (`details.delivered_to` = this Session, the fork-safe rule of §15.2 step 4/§15.7), adds at the first run's `before_agent_start` one custom message `{customType: 'cpd-first-message', content: text, display: false, details: {event, delivered_to}}`; pi places handler messages after the User's prompt and the queued nextTurn messages (pi 1.3.0 `agent-session.js` `_prepareRun`). Until it is delivered, the adapter starts no turn: every `sendMessage` that would use `triggerTurn` true uses `deliverAs` 'nextTurn' instead. A failed first-message read is reported once as an error message (as §15.1 'Failure') and retried at the next run; no message is added.
+
+**Reading.** The adapter calls `cpd session first-message --session <id>` (internal, §10.15), which renders the first message and returns the text, the file it was written to, and the highest Event id at rendering. The adapter reads the text and delivers it as a `cpd-first-message` custom message, with `details.event` = the returned Event id and `details.delivered_to` = this Session, so the read model and later runs can recognize it.
 
 ### 15.8 Turn-end reminder
 
