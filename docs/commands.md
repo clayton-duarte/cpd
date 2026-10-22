@@ -116,8 +116,8 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `base_pr_unknown`, `base_pr_unavailable`, `base_pr_other_repo`, `pr_other_plan` | 3 | `pr add` or `pr edit` (§9.4, §9.5) found a bad PR reference in `--base <plan>/<key>` or `--needs`: no such PR; a base PR that is `cancelled` or `merged`; a base PR of another repo; a PR of another Plan (contract §2.2 "Validation of a reference", hs-d522); `details` as at §9.4 |
 | `stacked_rebase` | 3 | `pr rebase` (§9.3) found the PR stacked on a base PR; `details` is `{pr, base, base_pr, next}` (contract §3.8 "Stacked PRs" step 4, hs-d325) |
 | `invalid_context_id`, `invalid_plan_id`, `invalid_pr_id`, `invalid_job_id`, `invalid_attempt_id`, `invalid_escalation_id`, `invalid_review_id`, `invalid_session_id`, `invalid_record_id` | 2 | an id does not match §2.1 |
-| `config_missing`, `config_invalid` | 1 | §8.1; hs-d506 adds the Tier checks of contract §8.2 (effort 5 for `lead_tier` and `manager_tier`, a letter other than `H` for `context_distill_tier` (the ladder's `S` steps are cpd's, not config; hs-d538), `O` or effort 5 for `open_tier`), each with `details.key` |
-| `tier_not_allowed` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4) and `job dispatch` (§5.5): the Job's Tier is an `O` Tier or has effort 5; Workers use only the S and H tiers, never effort 5, for cost (hs-d506, contract §9 "Tier rules"); `details` `{tier, allowed, rule}`; also an `error` Event of engine E3 (contract §3.7) for a stored Job on such a Tier |
+| `config_missing`, `config_invalid` | 1 | §8.1; hs-d554 and hs-d506 add the Tier checks of contract §8.2 (effort 5 for `lead_tier` and `manager_tier`, a letter other than `H` for `context_distill_tier` (the ladder's `S` steps are cpd's, not config; hs-d538), a Tier outside the Worker range of §9 "Tier rules" for `open_tier`), each with `details.key` |
+| `tier_not_allowed` | 2 | `job add`, `job edit`, `job retry` (§5.1, §5.2, §5.4) and `job dispatch` (§5.5): the Job's Tier is outside the Worker range of contract §9 "Tier rules" (`H3` and `S0`–`S3`); Workers use only these Tiers to keep cost down (hs-d554, contract §9 "Tier rules"); `details` `{tier, allowed, rule}`; also an `error` Event of engine E3 (contract §3.7) for a stored Job on such a Tier |
 | `store_too_new` | 1 | the store has a breaking migration this binary does not know, or a later scheme (contract §4.5 "The window"; it keeps its code and exit); `details: {user_version, floor, unknown}`: the store's `user_version`, its floor (the name of its newest breaking migration, or `null`) and every applied name this binary lacks. A store with a numbered migration this binary lacks (`user_version` above the legacy set and below 1000) is the same code, with `unknown` empty |
 | `migration_failed` | 1 | a migration, or the conversion, failed and rolled back (§4.5); `details: {from, to, sqlite_message}` |
 | `migration_changed` | 1 | an applied migration this binary knows has another checksum than the store recorded (§4.5 R3); `details: {name, recorded, embedded}` |
@@ -1228,7 +1228,7 @@ Jobs, Specs and Dependencies (§2.2, §3.2). Kept from cpd 1 §11 "Jobs" except 
 
 Both are required for a `test` Job that is not a stub, and refused for every other kind (`spec_invalid`, exit 2, with the JSON path in `details`). An `impl` Job names no tests: its tests are the union of its test Jobs' (contract §2.2 "Job kinds").
 
-**Tier flag** (`--tier`): `^(O|S|H)([0-5])$` with an effort the letter's model supports (§9), else `tier_invalid` (exit 2), with `details.efforts` listing the valid ones. **For a Job's Tier, the rule of hs-d506 applies next** (the User's cost decision, 2026-10-20; contract §9 "Tier rules"): a Worker uses only the S and H tiers, never O, and never effort 5, so the Tier must be `S0`–`S4` or `H0`–`H4`, else `tier_not_allowed` (exit 2, `details` `{tier, allowed: "S0-S4, H0-H4", rule: "hs-d506"}`), message `Tier <T> is not allowed for a Worker: Workers use only the S and H tiers (S0-S4, H0-H4), never O, and never effort 5, to keep cost down (hs-d506)`. `job add`, `job edit`, `job retry` and `job dispatch` apply it, after `tier_invalid`; a stub draft's Tier is checked too. A store that already holds a Job on a refused Tier is not rewritten: §5.5 and contract §9 ("Stored Jobs and Plans") say what happens to it.
+**Tier flag** (`--tier`): `^(O|S|H)([0-5])$` with an effort the letter's model supports (§9), else `tier_invalid` (exit 2), with `details.efforts` listing the valid ones. **For a Job's Tier, the rule of hs-d554 applies next** (the User's cost decision, 2026-10-22; contract §9 "Tier rules"): a Worker uses only H3 and S0–S3, so the Tier must be `H3` or `S0`–`S3`, else `tier_not_allowed` (exit 2, `details` `{tier, allowed: "H3, S0-S3", rule: "hs-d554"}`), message `Tier <T> is not allowed for a Worker: Workers use only the Tiers H3, S0-S3, to keep cost down (hs-d554)`. `job add`, `job edit`, `job retry` and `job dispatch` apply it, after `tier_invalid`; a stub draft's Tier is checked too. A store that already holds a Job on a refused Tier is not rewritten: §5.5 and contract §9 ("Stored Jobs and Plans") say what happens to it.
 
 ### 5.1 `job add`
 
@@ -1265,7 +1265,7 @@ cpd job add <key> --draft --title <text> [--tier <T>] [--spec <file>] [--pr <key
 | without `--draft`, an `impl` Job needs at least one `test` Job of its PR; `details.jobs` | `test_job_required` | 3 |
 | the PR's stored shape allows the kind, while the PR is `waiting` or `dispatch` (hs-d497, contract §2.2 "Job kinds"): `tdd` allows `docs`, `test`, `impl`; `docs` allows `docs`; `config` allows `work`; `--review` (kind `work`) is allowed in every shape; `free` allows every kind; `details` `{pr, shape, kind, allowed}`. An `open` PR is not checked: a feedback fix is whatever it is | `shape_violation` | 3 |
 | the Spec file has `tests` and `test_files` exactly when the kind is `test` and the Job is not a stub (§5); `--review` with a kind other than `work` | `spec_invalid`; `usage` | 2 |
-| `--tier` is a Tier a Worker may have: `S0`–`S4` or `H0`–`H4` (§5, hs-d506; an `O` Tier or effort 5 is refused; a Tier that is not valid at all: `tier_invalid`) | `tier_not_allowed` | 2 |
+| `--tier` is a Tier a Worker may have: `H3` or `S0`–`S3` (§5, hs-d554; an `O` Tier, any `H` outside `H3`, any `S` outside `S0`–`S3`, or effort 5 is refused; a Tier that is not valid at all: `tier_invalid`) | `tier_not_allowed` | 2 |
 
 **A stub draft** stores `tier` and the Spec fields `goal`, `context`, `touches`, `acceptance` and `out_of_scope` as null for what was not given (a given `--spec` sets all five; `--tier` sets the Tier), and its `job-added` Event has `tier: null` when it has none. A draft that lacks its Spec or its Tier is **incomplete**: it is never queued or run (contract §3.2), a Plan review of it is refused `draft_incomplete` (§4.6) and so is `plan lock` (§4.8). `needs` and `pr` work as for any draft.
 
@@ -1292,7 +1292,7 @@ A draft is editable in **every phase** (User, hs-d173, hs-d174, hs-d179), includ
 | Precondition | Code | Exit |
 |---|---|---|
 | at least one field flag | `nothing_to_edit` | 2 |
-| with `--tier`: the Tier is one a Worker may have, `S0`–`S4` or `H0`–`H4` (§5, hs-d506). A draft stored with a refused Tier before hs-d506 is repaired by this edit; an edit that does not give `--tier` is not blocked by the Tier it holds | `tier_not_allowed` | 2 |
+| with `--tier`: the Tier is one a Worker may have, `H3` or `S0`–`S3` (§5, hs-d554). A draft stored with a refused Tier before hs-d554 is repaired by this edit; an edit that does not give `--tier` is not blocked by the Tier it holds | `tier_not_allowed` | 2 |
 | the Job is `draft`, in whatever phase; a Job that is not `draft` is Locked | `job_locked` | 3 |
 | `--pr` names a PR of the Plan | `pr_not_found` | 4 |
 | that PR is not `cancelled` | `pr_ended` | 3 |
@@ -1338,7 +1338,7 @@ cpd job retry <key> --tier <T> [--plan <id>]
 
 | Precondition | Code | Exit |
 |---|---|---|
-| `--tier` is a Tier a Worker may have, `S0`–`S4` or `H0`–`H4` (§5, hs-d506): **`job retry --tier` refuses an `O` Tier and effort 5**, so a Job that failed on `S4` cannot be retried higher; its remedy is the same Tier or a new Job with a better Spec. Checked first, so a refused Tier changes nothing | `tier_not_allowed` | 2 |
+| `--tier` is a Tier a Worker may have, `H3` or `S0`–`S3` (§5, hs-d554): **`job retry --tier` refuses a Tier outside the Worker range**, so a Job that failed on `S3` cannot be retried higher; its remedy is the same Tier or a new Job with a better Spec. Checked first, so a refused Tier changes nothing | `tier_not_allowed` | 2 |
 | the Job is `failed` (or `queued` with this `retry_tier` and no Attempt since: `already`) | `job_not_failed` | 3 |
 
 Effects: **rows**, one transaction: `status = queued`, `retry_tier = <T>`, `failed_cause = null`. **Event** `job-retried` `{tier}`. The next Attempt has `origin = retry` and this Tier, and the ladder restarts from it with a fresh cap (§9; Attempts whose driver never started are never counted).
@@ -1363,7 +1363,7 @@ Starts one Ready Job now: the same step as engine E3 (cpd 1 §11, kept).
 | its fingerprint matches | `locked_job_tampered` | 3 |
 | the driver lock is free (§3.4 step 1) | `cas_lost` | 3 |
 | fewer than `concurrency` Attempts are not `ended` (an urgent Job: fewer than `concurrency + 1`, contract §3.7) | `no_slot` | 3 |
-| the Job's Tier for the Attempt is one a Worker may have (§5, hs-d506): a Job stored on an `O` or effort-5 Tier before the rule is not started here, as engine E3 does not start it and raises one `error` Event per such Job (contract §3.7 E3) | `tier_not_allowed` | 2 |
+| the Job's Tier for the Attempt is one a Worker may have (§5, hs-d554): a Job stored on a Tier outside the range before the rule is not started here, as engine E3 does not start it and raises one `error` Event per such Job (contract §3.7 E3) | `tier_not_allowed` | 2 |
 
 Effects (§3.4 "The driver lock"): take `locks/attempt-<plan>--<attempt>.lock`; **rows**, one transaction: `attempts` (`starting`, Tier from §9, `origin`), Job `running`; **Event** `attempt-started` `{number, tier, origin}`; then spawn `cpd attempt run <attempt> --plan <plan>` with `setsid`, fd 3 = the lock, stderr to `run/<plan>/logs/attempt-<attempt>.log`, and record `driver_pid` (a data write, no Event). If the spawn fails, the command ends the Attempt `failed` / `crashed` with `driver_pid` still null (`attempt-retry` at the same Tier, not counted against `retry_cap`, §3.4) and returns `spawn_failed` (exit 1).
 
@@ -3064,7 +3064,7 @@ Checks, in order:
 | `git`, `tmux`, `pi`, `gh` | error | found on `PATH` at or above the minimum above |
 | `gh_auth` | warn | `gh auth status` exits 0 (needed only by `pr` commands; verified on 2026-10-14: logged in through `GH_TOKEN`) |
 | `pi_node` | error | pi's Node runs |
-| `tiers` | error | each `tiers.*` model is in pi's catalog, and `lead_tier`, `manager_tier`, `context_distill_tier` and `open_tier` are valid Tiers that obey the Tier rules (§9, hs-d506: effort 0–4, `context_distill_tier` `H` only, its start Tier; the ladder's `S` steps are cpd's, hs-d538, `open_tier` `S` or `H`) |
+| `tiers` | error | each `tiers.*` model is in pi's catalog, and `lead_tier`, `manager_tier`, `context_distill_tier` and `open_tier` are valid Tiers that obey the Tier rules (§9, hs-d554 and hs-d506: `open_tier` a Tier a Worker may have (`H3` or `S0`–`S3`); effort 0–4, `context_distill_tier` `H` only, its start Tier; the ladder's `S` steps are cpd's, hs-d538) |
 | `pi_adapter` | error | the `pi_adapter` directory has a `package.json` |
 | `lead_packages` | warn | reports, for each `lead_pi_packages` entry and the adapter, whether a Lead gets it by `-e` or from which settings file (§6.5); warns when an entry is neither declared nor resolvable |
 | `watch` | warn | the engine runs when any Plan is in `dispatch` or `deploy` |
@@ -3086,7 +3086,7 @@ Change from cpd 1: no `node`, `bd`, `wt` or `herdr` checks (§1.1); `gh` now has
 cpd config
 ```
 
-Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5, `context_distill_tier` with a letter other than `H` (or effort 5), `open_tier` with letter `O` or effort 5. Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `H0` (hs-d538: the Tier every distill run starts at). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
+Prints the effective configuration: defaults merged with `config.toml` (§8), each value with its source. Refusals: `config_missing`, `config_invalid` (exit 1, `details.key` = the key path), among them the Tier rules of hs-d554 and hs-d506 (contract §8.2, §9 "Tier rules"): `lead_tier` or `manager_tier` with effort 5, `context_distill_tier` with a letter other than `H` (or effort 5), `open_tier` outside the Worker range (§9). Defaults: `lead_tier` `O2`, `manager_tier` `O4`, `context_distill_tier` `H0` (hs-d538: the Tier every distill run starts at). It reads only the config files and never opens the store, so it never waits on the setup lock (hs-n278); `cpd tiers` and every command that opens the store wait out a migration in progress (contract §4.2). No effects.
 
 ```json
 {"ok": true, "path": "/home/clayton/.cpd/config.toml",

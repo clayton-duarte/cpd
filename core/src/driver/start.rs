@@ -200,7 +200,7 @@ fn decide(conn: &Connection, catalog: &Catalog, plan: &PlanId, key: &JobKey) -> 
             }
         }
     };
-    // hs-d506: a Job stored on an O or effort-5 Tier is never started (E3 raises one `error` per Job).
+    // hs-d554: a Job stored on a Tier outside H3, S0-S3 is never started (E3 raises one `error` per Job).
     tier.check_worker()?;
     let number = previous.map_or(1, |(n, _, _)| n + 1);
     let attempt = AttemptId::new(key.clone(), NonZeroU32::new(number).expect("numbers start at 1"));

@@ -1118,14 +1118,14 @@ fn dispatch_after_job_retry_starts_a_retry_attempt_at_the_chosen_tier() {
          UPDATE attempts SET status = 'ended', outcome = 'failed', cause = 'timed_out', ended_at = 't' WHERE id = 'api-a1';
          UPDATE jobs SET status = 'failed', failed_cause = 'timed_out' WHERE plan = 'pay' AND key = 'api';",
     );
-    fx.env.cpd(&["job", "retry", JOB, "--tier", "S4", "--plan", PLAN]).ok();
+    fx.env.cpd(&["job", "retry", JOB, "--tier", "S3", "--plan", PLAN]).ok();
 
     let out = fx.dispatch(JOB).ok();
 
-    assert_eq!((&out["attempt"], &out["tier"], &out["origin"]), (&json!("api-a2"), &json!("S4"), &json!("retry")));
+    assert_eq!((&out["attempt"], &out["tier"], &out["origin"]), (&json!("api-a2"), &json!("S3"), &json!("retry")));
     let (attempt, _) = fx.wait_end("api-a2", &out["pid"]);
     assert_eq!(attempt["origin"], "retry");
-    assert_eq!(fx.event("api-a2", "attempt-started")["data"], json!({"number": 2, "tier": "S4", "origin": "retry"}));
+    assert_eq!(fx.event("api-a2", "attempt-started")["data"], json!({"number": 2, "tier": "S3", "origin": "retry"}));
 }
 
 // ---------- the stall rule (§3.4 A4, hs-d195) ----------

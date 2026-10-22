@@ -361,9 +361,9 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let out = fx.ok(&["job", "add", "api", "--title", "The API", "--tier", "S2", "--spec", &spec_file(&fx, "api"), "--plan", PLAN]);
     assert_eq!(out["job"], json!({"key": "api", "pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "S2", "needs": [], "review": false, "urgent": false}));
     let out = fx.ok(&[
-        "job", "add", "ui", "--title", "The UI", "--tier", "H1", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
+        "job", "add", "ui", "--title", "The UI", "--tier", "H3", "--spec", &spec_file(&fx, "ui"), "--needs", "api", "--plan", PLAN,
     ]);
-    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
+    assert_eq!(out["job"], json!({"key": "ui", "pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "H3", "needs": ["api"], "review": false, "urgent": false}));
     fx.env.outline_for_review(PLAN);
     let review = fx.ok(&["plan", "review", "--plan", PLAN, "--title", "Review title"]);
     assert_eq!(review["review"]["id"], "r1");
@@ -372,7 +372,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let events = fx.events_since(cursor);
     assert_eq!(kinds(&events), ["job-added", "job-added", "plan-outlined", "plan-review", "plan-review"]);
     assert_eq!(events[1]["job"], "ui");
-    assert_eq!(events[1]["data"], json!({"pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "H1", "needs": ["api"], "review": false, "urgent": false}));
+    assert_eq!(events[1]["data"], json!({"pr": "pay", "kind": "work", "status": "draft", "appended": false, "tier": "H3", "needs": ["api"], "review": false, "urgent": false}));
     assert_eq!(events[3]["data"]["status"], "pending");
     assert_eq!(events[4]["data"]["status"], "approved");
     cursor = fx.cursor();
@@ -405,7 +405,7 @@ fn a_whole_plan_runs_from_context_new_to_pr_poll() {
     let events = fx.events_since(cursor);
     let started_ui = of_kind(&events, "attempt-started").into_iter().find(|e| e["job"] == "ui").unwrap().clone();
     assert!(api_merged["id"].as_i64() < started_ui["id"].as_i64(), "ui started before api was merged: {events:?}");
-    for (key, attempt, tier) in [("api", "api-a1", "S2"), ("ui", "ui-a1", "H1")] {
+    for (key, attempt, tier) in [("api", "api-a1", "S2"), ("ui", "ui-a1", "H3")] {
         let about: Vec<Value> = events.iter().filter(|e| e["attempt"] == attempt).cloned().collect();
         assert_eq!(
             kinds(&about),
