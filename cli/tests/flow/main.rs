@@ -37,6 +37,7 @@ mod plan_show;
 mod review_close;
 mod review_plannotator;
 mod policy;
+mod policy_machine;
 mod review_job;
 mod review;
 mod spec;
