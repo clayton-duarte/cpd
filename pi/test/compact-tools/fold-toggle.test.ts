@@ -302,7 +302,8 @@ test("thinking, expanded (detail): the whole text on │ lines, then ╰<glyph> 
 		block.press();
 		assert.deepEqual(block.draw().map((line) => line.trim()), [
 			THINKING_TITLE,
-			`${BOX.rail} ## Check the implementation`,
+			BOX.rail,
+			`${BOX.rail} ## **Check the implementation**`,
 			BOX.rail,
 			`${BOX.rail} Inspect the renderer.`,
 			`${BOX.rail} Keep the cache.`,
