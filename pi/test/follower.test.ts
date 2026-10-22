@@ -49,7 +49,7 @@ test("a failure line is delivered once per code until a line is read again; the 
   await waitFor("the error", () => errorsOf(f, "store_too_new").length === 1);
   const e = errorsOf(f, "store_too_new")[0]!;
   assert.equal(e.message.content, "cpd adapter: events follow: store_too_new: store_too_new happened.");
-  assert.deepEqual(e.options, { triggerTurn: true, deliverAs: "followUp" });
+  assert.deepEqual(e.options, { triggerTurn: false, deliverAs: "followUp" });
   assert.equal(errorsOf(f, "follower_exit").length, 0, "the exit after a failure line adds nothing");
   assert.equal(errorsOf(f, "store_too_new").length, 1, "once, however often it restarts");
 
@@ -57,7 +57,8 @@ test("a failure line is delivered once per code until a line is read again; the 
   f.emit(ev(101, "job-merged", { data: { turn: true } }));
   await waitFor("a line is read again", () => f.pi.delivered().length === 1);
   f.file("follow-failure.json", JSON.stringify({ line: failure("store_too_new"), exit: 3 }));
-  await waitFor("delivered again", () => errorsOf(f, "store_too_new").length === 2);
+  await waitFor("restarted again", () => f.follows().length >= 5);
+  assert.equal(errorsOf(f, "store_too_new").length, 1, "the same what and code is not shown again (§15.1)");
 });
 
 test("a permanent failure line is reported once and the follower is not restarted (pi-ci-W4)", async (t) => {
@@ -104,7 +105,7 @@ test("a malformed line is an error and is skipped; the cursor moves past it", as
     ev(104, "job-merged", { data: { turn: true } }),
   );
   await waitFor("the good event after four bad lines", () => f.pi.delivered().length === 1);
-  assert.equal(f.pi.errors().length, 4, "one error per bad line");
+  assert.equal(f.pi.errors().length, 1, "bad lines with the same what and code show one error (§15.1)");
   for (const e of f.pi.errors()) assert.match(e.message.content, /^cpd adapter: events follow: invalid_event: /);
   assert.equal((f.pi.delivered()[0]!.message.details as any).id, 104);
 
@@ -114,8 +115,6 @@ test("a malformed line is an error and is skipped; the cursor moves past it", as
 
   // a bad line with an id alone: the restart skips past it too
   f.emit({ ...ev(110, "job-merged", { data: { turn: true } }), at: 5 });
-  // 101 has the same `at` error, so the second one is 110's (the fake replays a line without an id at every start, which adds errors of its own)
-  await waitFor("its error", () => f.pi.errors().filter((e) => /`at` is not a string/.test(e.message.content)).length === 2);
   f.file("exit-next", "0");
   await waitFor("restart", () => f.follows().length === 3);
   assert.equal(f.sinces()[2], 110);

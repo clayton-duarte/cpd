@@ -191,7 +191,7 @@ test("the cursor moves with the message the run keeps in the session", async (t)
   assert.deepEqual(recordCalls(f).filter((a) => a[1] === "list").map((a) => a.at(-1)), ["100", "201"]);
 });
 
-test("a failed read adds no message, is reported once without a turn, and the next success re-arms the report", async (t) => {
+test("a failed read adds no message, is reported once without a turn, and a success does not re-arm an identical report (§15.1)", async (t) => {
   const f = new Fixture();
   t.after(() => f.close());
   await quietManager(f);
@@ -209,7 +209,7 @@ test("a failed read adds no message, is reported once without a turn, and the ne
   await f.pi.fireWith("before_agent_start");
   f.respond("events-list@context-record", fail, { exit: 1 });
   await f.pi.fireWith("before_agent_start");
-  assert.equal(f.pi.errors().length, 2, "reported again after a successful read");
+  assert.equal(f.pi.errors().length, 1, "the same what and code is not shown again after a successful read");
 });
 
 test("a failed context show is a failed read too", async (t) => {

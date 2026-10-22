@@ -45,15 +45,6 @@ test("refresh lists lead and manager sessions with --archived once", async (t) =
   assert.deepEqual(f.delivered, []);
 });
 
-test("a failure repeated the same way is delivered once", async (t) => {
-  t.after(clearMentions);
-  const f = fakeHost(failing("repeat: store lock_timeout"));
-  await refreshMentions(f.host, run);
-  await refreshMentions(f.host, run);
-  assert.equal(f.delivered.length, 1);
-  assert.equal(f.delivered[0]!.what, "mentions");
-});
-
 test("a mentions failure repeated after a success is not shown again", async (t) => {
   t.after(clearMentions);
   // The real `host.deliver`: the §15.1 rule (the same what and code is shown once) is what this pins.
