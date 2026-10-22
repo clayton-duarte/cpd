@@ -174,7 +174,7 @@ function rowsOf(summary: string, content: string, theme: Theme): Rows {
       return lines.map((l, i) => `${i === 0 ? lead : indent}${pill(l)}${i === lines.length - 1 ? `\x1b[35m${CAP_RIGHT}\x1b[39m` : ""}`);
     },
     body: text === "" ? () => [] : prefixedText(body, rail),
-    toggle: (_width, expanded) => [`${MARGIN}\x1b[37m${CLOSE}${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}\x1b[39m`],
+    toggle: (_width, expanded) => [`${MARGIN}${GREY8(CLOSE)}\x1b[37m${expanded ? UP : DOWN} ${expanded ? COLLAPSE : EXPAND}\x1b[39m`],
   };
 }
 

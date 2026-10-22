@@ -37,7 +37,7 @@ fn fx() -> Fx {
     )
     .unwrap();
     env.fake_pi(&pi_says(common::CURATES_ALL));
-    // pi's catalog (hs-d538): the ladder a failed step climbs reads it.
+    // pi's catalog.
     env.fake("node", &format!("echo '{LADDER_LEVELS}'"));
     let install = env.root().join("install");
     fs::create_dir_all(&install).unwrap();
@@ -63,7 +63,7 @@ fn ago(minutes: i64) -> String {
 }
 
 impl Fx {
-    /// Makes the ladder one step long (hs-d538), for the tests of what one step does: starts at H3, the top of
+    /// Starts the Tier at H3 (hs-d560), for the tests of what one step does: the top of, the top of
     /// the catalog's H efforts, and the catalog has no S effort above 0, which the S steps (S1..S4) need.
     fn one_step(self) -> Fx {
         self.env.fake("node", r#"echo '{"O":["off"],"S":["off"],"H":["off","low","medium","high"]}'"#);
@@ -229,7 +229,7 @@ fn the_context_is_required_and_must_exist() {
     refused(&fx.cpd(&["context", "distill", "--context", "nope"]), "context_not_found", 4);
 }
 
-// ---- The Tier ladder (hs-d538): contract §4.6 ----
+// ---- pi's catalog (hs-d560: one step, no ladder) ----
 
 const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"]}"#;
 
@@ -883,4 +883,31 @@ fn a_cut_answer_with_no_complete_line_is_distill_failed() {
     let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
     assert_eq!(out["curated"], 1, "{out}");
     assert_eq!(curated_ids(&fx), ["hs-n1"]);
+}
+
+// ---- One Tier, no ladder (hs-d560) ----
+
+#[test]
+fn the_distiller_runs_at_context_distill_tier() {
+    let fx = fx();
+    let config = fx.env.cpd_home().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap().replacen("lead_pi_packages", "context_distill_tier = \"H2\"\nlead_pi_packages", 1);
+    fs::write(&config, text).unwrap();
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    let tiers: Vec<String> = fx.runs().iter().map(|r| r["tier"].as_str().unwrap().to_string()).collect();
+    assert_eq!(tiers, ["H2"]);
+}
+
+#[test]
+fn a_failed_pi_run_fails_the_run_with_no_second_step() {
+    let fx = fx();
+    fx.insert(CONTEXT, "hs-d1", &ago(90), "Use sqlite.", Draft::Decision { supersedes: None });
+    fx.env.fake_pi("echo 'model unavailable' >&2; exit 7");
+    refused(&fx.cpd(&["context", "distill", "--context", CONTEXT]), "distill_failed", 1);
+    assert_eq!(fx.pi_calls(), 1, "no next step, no higher Tier");
+    assert_eq!(fx.runs().len(), 1);
+    let events = fx.errors();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["data"]["code"], "distill_failed");
 }

@@ -51,10 +51,10 @@ test("cpd pill cuts a first sentence over 60 characters with an ellipsis", () =>
 test("cpd message lead and rails are 8 and the toggle is 7", () => {
   const collapsed = render("Job api-1 merged.\nsecond line");
   assert.ok(collapsed[0]!.includes("\x1b[90m╭─\x1b[39m"), JSON.stringify(collapsed[0]));
-  assert.ok(collapsed.at(-1)!.includes(`\x1b[37m╰${FOLDED} expand\x1b[39m`), JSON.stringify(collapsed.at(-1)));
+  assert.ok(collapsed.at(-1)!.includes(`\x1b[90m╰\x1b[39m\x1b[37m${FOLDED} expand\x1b[39m`), JSON.stringify(collapsed.at(-1)));
   const expanded = render("Job api-1 merged.\nsecond line", true);
   assert.ok(expanded[1]!.includes("\x1b[90m│ \x1b[39m"), JSON.stringify(expanded[1]));
-  assert.ok(expanded.at(-1)!.includes(`\x1b[37m╰${OPEN} collapse\x1b[39m`), JSON.stringify(expanded.at(-1)));
+  assert.ok(expanded.at(-1)!.includes(`\x1b[90m╰\x1b[39m\x1b[37m${OPEN} collapse\x1b[39m`), JSON.stringify(expanded.at(-1)));
 });
 
 test("cpd message draws only indexed colours 0-15", () => {

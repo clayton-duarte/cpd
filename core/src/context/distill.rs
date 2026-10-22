@@ -361,26 +361,11 @@ impl Run<'_> {
         self.write_inputs(&dir, &batch_records, &in_force, state, &hits)?;
         let batch = Batch { records: &batch_records, in_force: in_force.iter().map(|(seq, r)| (r.id.clone(), *seq)).collect(), hits };
         let start = self.config.context_distill_tier;
-        let mut ladder = vec![start];
-        let mut steps: Vec<Tier> = Vec::new();
-        let mut index = 0;
-        let (ran, checked, text) = loop {
-            let tier = ladder[index];
-            steps.push(tier);
-            let fault = match self.step(tier, upto, &batch)? {
-                Ok(done) => break done,
-                Err(fault) => fault,
-            };
-            if index == 0 {
-                ladder = self.distill_ladder(start);
-            }
-            index += 1;
-            if index == ladder.len() {
-                return Err(match fault {
-                    Fault::Invalid(problems, kept) => self.invalid(upto, &problems, &kept),
-                    Fault::Pi(failure, tail) => self.pi_failed(upto, &failure, tail),
-                });
-            }
+        let steps: Vec<Tier> = vec![start];
+        let (ran, checked, text) = match self.step(start, upto, &batch)? {
+            Ok(done) => done,
+            Err(Fault::Invalid(problems, kept)) => return Err(self.invalid(upto, &problems, &kept)),
+            Err(Fault::Pi(failure, tail)) => return Err(self.pi_failed(upto, &failure, tail)),
         };
         let (curated, docs) = (checked.curations.len(), checked.curations.iter().filter(|c| c.doc_paths.is_some()).count());
         let retire = propose_rejecting(self.store, self.context, &checked.curations, &checked.proposals, checked.rejected.len())?;
@@ -403,14 +388,8 @@ impl Run<'_> {
         }))
     }
 
-    /// The distill ladder from `start` (hs-d538), from pi's catalog. A catalog that cannot be read gives no
-    /// climb: the run ends with the failed step's own error Event, which is what says what went wrong.
-    fn distill_ladder(&mut self, start: Tier) -> Vec<Tier> {
-        crate::config::load_catalog_with(self.config, self.store).map_or_else(|_| vec![start], |c| c.distill_ladder(start))
-    }
-
     /// One step (contract §4.6 steps 4 and 5) at `tier`: the distiller, then the checks. The outer `Err` is a failure
-    /// that ends the run at once (a file); the inner one is the step's fault, which only the last step reports.
+    /// that ends the run at once (a file); the inner one is the step's fault, which ends the run (hs-d560).
     fn step(&mut self, tier: Tier, upto: u64, batch: &Batch<'_>) -> Result<Result<(Ran, Checked, String), Fault>, CpdError> {
         let (ran, text) = match self.run_pi(tier, upto, &["prompt.md", "batch.md", "known.md", "docs.md"])? {
             Ok(done) => done,
@@ -698,7 +677,7 @@ enum Failed {
     Output(String),
 }
 
-/// Why a step of the ladder failed; only the last step's becomes the run's error Event.
+/// Why the distill step failed; it becomes the run's error Event.
 enum Fault {
     /// The step's problems and the file that keeps its output.
     Invalid(Vec<Problem>, PathBuf),

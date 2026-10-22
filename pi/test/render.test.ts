@@ -60,7 +60,7 @@ const PLAIN_HEAD = (summary: string) => ` ╭─${CAP_L}cpd ${first(summary)}${C
 const rail = (line: string) => ` <c8>│ </>${line === "" ? "" : `<t7>${line}</>`}`;
 const FOLDED = "\u{F004B}";
 const OPEN = "\u{F0063}";
-const closing = (word: string) => ` <t7>╰${word === "expand" ? FOLDED : OPEN} ${word}</>`;
+const closing = (word: string) => ` <c8>╰</><t7>${word === "expand" ? FOLDED : OPEN} ${word}</>`;
 
 const sessionEvent = (over: Record<string, unknown>): EventOf<"session-message"> => ev(7, "session-message", over) as unknown as EventOf<"session-message">;
 const event = (kind: string, over: Record<string, unknown> = {}): CpdEvent => ev(7, kind, over) as unknown as CpdEvent;
