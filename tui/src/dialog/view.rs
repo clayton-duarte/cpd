@@ -44,14 +44,14 @@ pub(crate) enum Mode {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Row {
     pub(crate) id: String,
-    pub(crate) short: String,
+    pub(crate) text: String,
     pub(crate) detail: String,
 }
 
 impl Row {
     /// The row as drawn, with the box of `ticked`, with no control character.
     pub(crate) fn line(&self, ticked: bool) -> String {
-        let line = format!("[{}] {} {} — {}", if ticked { 'x' } else { ' ' }, self.id, self.short, self.detail);
+        let line = format!("[{}] {} {} — {}", if ticked { 'x' } else { ' ' }, self.id, self.text, self.detail);
         line.chars().map(|c| if c.is_control() { ' ' } else { c }).collect()
     }
 }

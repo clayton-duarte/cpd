@@ -630,7 +630,7 @@ mod tests {
     // ---- the Inbox section (hs-d483): the four tiers, red to white, each glyph in its colour with its meaning; red until it exists ----
 
     #[test]
-    fn the_inbox_section_lists_the_four_tiers_red_to_white_each_glyph_in_its_colour_with_its_meaning() {
+    fn the_legends_inbox_section_lists_the_generic_the_documentation_and_the_retire_glyphs() {
         let all = sections();
         let at = all.iter().position(|s| s.title == "Inbox").unwrap_or_else(|| panic!("no Inbox section: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>()));
         let inbox = &all[at];
@@ -640,13 +640,15 @@ mod tests {
             [
                 "\u{F0362}", "a blocker only you can clear",
                 "\u{F069A}", "pull-request work",
-                "\u{F173A}", "a decision before the work runs",
+                "\u{F06F1}", "a decision before the work runs",
+                "\u{F0653}", "a documentation candidate",
+                "\u{F116E}", "a record to retire",
                 "\u{F0366}", "an unread reply",
             ]
         );
         let colours: Vec<_> = inbox.rows.iter().map(|r| r[0].spans[0].style.fg).collect();
         let c = |m| Some(palette::color_clickable(m));
-        assert_eq!(colours, [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::NotStarted)], "red, yellow, magenta, white");
+        assert_eq!(colours, [c(Meaning::Failed), c(Meaning::Review), c(Meaning::Planning), c(Meaning::Planning), c(Meaning::Planning), c(Meaning::NotStarted)], "red, yellow, magenta (three lines), white");
         let dots = all.iter().position(|s| s.title == "Session Dots" || s.title == "Session dots").unwrap();
         let pulse = all.iter().position(|s| s.title == "Pulse").unwrap();
         assert!(dots < at && at < pulse, "between the Session Dots and the Pulse: {:?}", all.iter().map(|s| s.title).collect::<Vec<_>>());
