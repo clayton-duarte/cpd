@@ -24,24 +24,22 @@ const bare = (row: string) => row.replace(OSC, "").replace(SGR, "");
 const plain = (rows: string[]) => rows.map(bare);
 
 test("a user balloon is the template with the tail at the bottom right", async () => {
-	const rows = await draw(["user prompt"], "user", 15);
+	const rows = await draw(["user prompt"], "user", 19);
 	assert.deepEqual(plain(rows), [
-		"╭─────────────╮",
-		"│ user prompt │",
-		"│             │",
-		"╰────────────╮│",
-		"             ╰╯",
+		"   ╭─────────────╮ ",
+		"   │ user prompt │ ",
+		"   ╰────────────╮│ ",
+		"                ╰╯ ",
 	]);
 });
 
 test("an agent balloon is the mirrored template with the tail at the bottom left", async () => {
-	const rows = await draw(["agent reply"], "agent", 15);
+	const rows = await draw(["agent reply"], "agent", 19);
 	assert.deepEqual(plain(rows), [
-		"╭─────────────╮",
-		"│ agent reply │",
-		"│             │",
-		"│╭────────────╯",
-		"╰╯",
+		" ╭─────────────╮",
+		" │ agent reply │",
+		" │╭────────────╯",
+		" ╰╯",
 	]);
 });
 
@@ -49,50 +47,49 @@ test("the balloon is the longest row plus two padding columns and two borders wi
 	const rows = ["fix the build", "then ship it"];
 	const user = plain(await draw(rows, "user", 24));
 	assert.deepEqual(user, [
-		"       ╭───────────────╮",
-		"       │ fix the build │",
-		"       │ then ship it  │",
-		"       │               │",
-		"       ╰──────────────╮│",
-		"                      ╰╯",
+		"    ╭───────────────╮ ",
+		"    │ fix the build │ ",
+		"    │ then ship it  │ ",
+		"    ╰──────────────╮│ ",
+		"                   ╰╯ ",
 	]);
 	const agent = plain(await draw(rows, "agent", 24));
 	assert.deepEqual(agent, [
-		"╭───────────────╮",
-		"│ fix the build │",
-		"│ then ship it  │",
-		"│               │",
-		"│╭──────────────╯",
-		"╰╯",
+		" ╭───────────────╮",
+		" │ fix the build │",
+		" │ then ship it  │",
+		" │╭──────────────╯",
+		" ╰╯",
 	]);
 	// A wider pane does not widen the balloon.
 	assert.deepEqual(plain(await draw(rows, "agent", 80)), agent);
 });
 
-test("a user balloon ends in the last column of the pane and an agent balloon starts in the first", async () => {
+test("a user balloon ends one column before the pane's edge and an agent balloon starts in the second column", async () => {
 	for (const width of [15, 24, 60]) {
 		const user = plain(await draw(["hello"], "user", width));
-		assert.equal(user.length, 5);
+		assert.equal(user.length, 4);
 		for (const row of user) assert.equal(row.length, width, `user row ${JSON.stringify(row)} ends in column ${width}`);
-		assert.equal(user[0]!.trimStart().length, 9);
+		assert.equal(user[0]!.trim().length, 9);
+		assert.equal(user[0]![width - 2], "╮");
 		const agent = plain(await draw(["hello"], "agent", width));
-		assert.equal(agent[0]![0], "╭");
-		assert.equal(agent[1]![0], "│");
-		assert.equal(agent[4]![0], "╰");
+		assert.equal(agent[0]![1], "╭");
+		assert.equal(agent[1]![1], "│");
+		assert.equal(agent[3]![1], "╰");
 	}
 });
 
 test("every row of a multi-line balloon keeps the right wall in one column", async () => {
 	const rows = ["a", "a longer line here", "mid", ""];
 	const user = plain(await draw(rows, "user", 40));
-	const wall = user[0]!.length - 1;
-	assert.equal(user.length, rows.length + 4);
-	for (const row of user.slice(0, 2 + rows.length + 1)) assert.equal(row[wall], row.trim().at(-1), row);
-	for (const row of user.slice(1, 1 + rows.length + 1)) assert.equal(row[wall], "│", row);
+	const wall = user[0]!.length - 2;
+	assert.equal(user.length, rows.length + 3);
+	for (const row of user.slice(0, 1 + rows.length + 1)) assert.equal(row[wall], row.trim().at(-1), row);
+	for (const row of user.slice(1, 1 + rows.length)) assert.equal(row[wall], "│", row);
 	const agent = plain(await draw(rows, "agent", 40));
-	const bodies = agent.slice(1, 1 + rows.length + 1);
-	for (const row of bodies) assert.equal(row.length, 22, row);
-	for (const row of bodies) assert.ok(row.startsWith("│") && row.endsWith("│"), row);
+	const bodies = agent.slice(1, 1 + rows.length);
+	for (const row of bodies) assert.equal(row.length, 23, row);
+	for (const row of bodies) assert.ok(row.startsWith(" │") && row.endsWith("│"), row);
 });
 
 test("borders and tails are colour 8 and the text is not recoloured", async () => {
@@ -126,11 +123,11 @@ test("wide characters and styled text keep the wall aligned", async () => {
 	const rows = ["漢字漢字", "\x1b[1mbold\x1b[22m text", "ab"];
 	for (const side of ["user", "agent"] as const) {
 		const out = await draw(rows, side, 30);
-		const body = out.slice(1, 1 + rows.length + 1);
+		const body = out.slice(1, 1 + rows.length);
 		const widths = body.map(visibleWidth);
 		assert.equal(new Set(widths).size, 1, `${side}: ${widths}`);
 		for (const row of body) assert.ok(bare(row).trimEnd().endsWith("│"), row);
-		assert.equal(visibleWidth(out[0]!), side === "user" ? 30 : 13, "longest row 9 columns + 4");
+		assert.equal(visibleWidth(out[0]!), side === "user" ? 30 : 14, "longest row 9 columns + 4, plus the margins");
 	}
 });
 
@@ -175,11 +172,10 @@ test("pi's user message component draws a user balloon with its OSC 133 zone mar
 	await withHarness(() => {
 		const rows = new UserMessageComponent("user prompt").render(40);
 		assert.deepEqual(plain(rows), [
-			" ".repeat(25) + "╭─────────────╮",
-			" ".repeat(25) + "│ user prompt │",
-			" ".repeat(25) + "│             │",
-			" ".repeat(25) + "╰────────────╮│",
-			" ".repeat(25) + "             ╰╯",
+			" ".repeat(24) + "╭─────────────╮ ",
+			" ".repeat(24) + "│ user prompt │ ",
+			" ".repeat(24) + "╰────────────╮│ ",
+			" ".repeat(24) + "             ╰╯ ",
 		]);
 		assert.ok(rows[0]!.startsWith(ZONE_A), "the zone start is on the first row");
 		assert.ok(rows.at(-1)!.includes(ZONE_BC), "the zone end is on the last row");
@@ -191,15 +187,15 @@ test("pi's assistant message component draws one agent balloon per text block", 
 	await withHarness(() => {
 		const rows = assistant([{ type: "text", text: "one" }, { type: "text", text: "two" }]).render(40);
 		assert.deepEqual(plain(rows), [
-			"╭─────╮", "│ one │", "│     │", "│╭────╯", "╰╯",
-			"╭─────╮", "│ two │", "│     │", "│╭────╯", "╰╯",
+			" ╭─────╮", " │ one │", " │╭────╯", " ╰╯",
+			" ╭─────╮", " │ two │", " │╭────╯", " ╰╯",
 		]);
 		assert.ok(rows[0]!.startsWith(ZONE_A));
 		assert.ok(rows.at(-1)!.includes(ZONE_BC));
-		// The text wraps at the pane width minus the two borders and two paddings.
+		// The text wraps at the pane width minus eight (margins, borders and paddings).
 		const wrapped = plain(assistant([{ type: "text", text: "alpha beta gamma delta" }]).render(14));
-		for (const row of wrapped) assert.ok(row.length <= 14, row);
-		assert.ok(wrapped.slice(1, -3).every((row) => row.startsWith("│ ") && row.endsWith(" │")), wrapped.join("\n"));
+		for (const row of wrapped) assert.ok(row.length <= 11, row);
+		assert.ok(wrapped.slice(1, -2).every((row) => row.startsWith(" │ ") && row.endsWith(" │")), wrapped.join("\n"));
 	});
 });
 
@@ -210,7 +206,7 @@ test("thinking, tool calls and errors of an assistant message stay outside the b
 			{ stopReason: "length" },
 		).render(40));
 		const boxed = truncated.filter((row) => BOX.test(row));
-		assert.equal(boxed.length, 5, truncated.join("\n"));
+		assert.equal(boxed.length, 4, truncated.join("\n"));
 		assert.ok(boxed.some((row) => row.includes("answer")));
 		for (const row of truncated.filter((r) => r.includes("pondering") || r.includes("Response was truncated"))) {
 			assert.doesNotMatch(row, BOX, row);
@@ -218,7 +214,7 @@ test("thinking, tool calls and errors of an assistant message stay outside the b
 		assert.ok(truncated.some((row) => row.includes("pondering")));
 		assert.ok(truncated.some((row) => row.includes("Response was truncated")));
 		const failed = plain(assistant([{ type: "text", text: "partial" }], { stopReason: "error", errorMessage: "boom" }).render(40));
-		assert.equal(failed.filter((row) => BOX.test(row)).length, 5, failed.join("\n"));
+		assert.equal(failed.filter((row) => BOX.test(row)).length, 4, failed.join("\n"));
 		const error = failed.find((row) => row.includes("Error: boom"));
 		assert.ok(error, failed.join("\n"));
 		assert.doesNotMatch(error, BOX);
@@ -249,9 +245,9 @@ test("a mention in the text is painted inside the balloon", async () => {
 			const text = rows.find((row) => row.includes("abc12345"));
 			assert.ok(text, rows.join("\n"));
 			assert.ok(text.includes("\x1b[35mabc12345\x1b[39m"), "the mention is magenta");
-			assert.equal(bare(text), "│ ping abc12345 │");
+			assert.equal(bare(text), " │ ping abc12345 │");
 			assert.ok(!rows.join("").includes("PAINTED AFTER BOXING"));
-			assert.equal(rows.filter((row) => BOX.test(bare(row))).length, 5);
+			assert.equal(rows.filter((row) => BOX.test(bare(row))).length, 4);
 		});
 	} finally {
 		delete holder[key];
@@ -264,7 +260,7 @@ test("silent mode draws the answer as a balloon", async () => {
 		await harness.commands.get("silent")!.handler("on", ctx);
 		try {
 			const final = assistant([{ type: "thinking", thinking: "pondering" }, { type: "text", text: "answer" }], { stopReason: "length" });
-			assert.deepEqual(plain(final.render(40)), ["╭────────╮", "│ answer │", "│        │", "│╭───────╯", "╰╯"]);
+			assert.deepEqual(plain(final.render(40)), [" ╭────────╮", " │ answer │", " │╭───────╯", " ╰╯"]);
 			const handoff = assistant([{ type: "text", text: "Before call" }, { type: "toolCall", id: "c1", name: "read", arguments: {} }]);
 			assert.deepEqual(handoff.render(40), [], "an intermediate turn is still hidden");
 		} finally {
