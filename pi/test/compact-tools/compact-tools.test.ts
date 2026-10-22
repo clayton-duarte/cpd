@@ -1240,7 +1240,7 @@ test("the title is Thinking… and the whole text is the detail, never truncated
 	const rendered = renderThinkingView(paragraph, "detail", 16);
 	assert.ok(rendered.startsWith("Thinking…"), rendered);
 	assert.ok(rendered.replace(/[│└\s]+/gu, " ").includes("config loader"));
-	assert.ok(!rendered.includes("…"));
+	assert.ok(!rendered.slice("Thinking…".length).includes("…"), "the detail is never cut short");
 });
 
 test("renders a connected detail rail while preserving fenced code", () => {

@@ -156,11 +156,11 @@ async function thinking(source = "## **Check the implementation**\n\nInspect the
 test("with no file the thinking block's control row is the toggle: ╰ U+F004B expand, then ╰ U+F0063 collapse", async () => {
 	const block = await thinking();
 	try {
-		assert.deepEqual(block.draw(), ["╭─\uE0B6Thinking...\uE0B4", `${CLOSE}${EXPAND} expand`]);
+		assert.deepEqual(block.draw(), ["╭─\uE0B6Thinking…\uE0B4", `${CLOSE}${EXPAND} expand`]);
 		block.draw(); // the controller learns the block has detail on its first draw, as in Pi
 		block.press();
 		assert.deepEqual(block.draw(), [
-			"╭─\uE0B6Thinking...\uE0B4",
+			"╭─\uE0B6Thinking…\uE0B4",
 			"\u2502",
 			"\u2502 ## **Check the implementation**",
 			"\u2502",

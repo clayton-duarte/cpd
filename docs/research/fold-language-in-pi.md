@@ -73,7 +73,7 @@ All of these fold with the same click / Ctrl+O, and none draws a row in the cock
 | Compaction summary | `components/compaction-summary-message.js:29-52` | `[compaction]` label, `Compacted from N tokens (ctrl+o to expand)`, click | none; created by `interactive-mode.js:3175` |
 | Branch summary | `components/branch-summary-message.js:29-52` | `[branch]`, `Branch summary (ctrl+o to expand)` | none; `interactive-mode.js:3182` |
 | Skill block (`/skill:`) | `components/skill-invocation-message.js:30-52` | `[skill] name (ctrl+o to expand)` | none; `interactive-mode.js:3198` |
-| Thinking (native) | `components/assistant-message.js:109-124` | `Thinking...` label (hs: `hideThinkingBlock: true`), click flips it; no fold row | `hideThinkingBlock`, `setHiddenThinkingLabel`; replaced by compact-tools' transformer while it is on |
+| Thinking (native) | `components/assistant-message.js:109-124` | `Thinking…` label (hs: `hideThinkingBlock: true`), click flips it; no fold row | `hideThinkingBlock`, `setHiddenThinkingLabel`; replaced by compact-tools' transformer while it is on |
 | Built-in extensions' tools | `extensions/mcp/tools.js:299`; `extensions/codemode/renderer.js:20,94` | `… (N more lines / earlier calls, ctrl+o to expand)` | covered by compact-tools' custom / `codemode` rows unless `off` |
 | Startup header, loaded-resources sections | `interactive-mode.js:102-113,759,1345` (`ExpandableText`) | `Press ctrl+o to show full startup help` | `quietStartup` (hs: true); not a chat message, out of scope |
 | Custom entries | `components/custom-entry.js` (extension `registerEntryRenderer`) | nothing registered in hs | n/a |

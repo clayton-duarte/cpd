@@ -173,7 +173,7 @@ test("tool rows draw only indexed colours 0-15", async () => {
 
 test("the thinking block draws only indexed colours 0-15", () => {
 	const { folded, expanded } = thinkingViews();
-	assert.ok(plain(folded).includes("Thinking..."), "folded thinking is the one title");
+	assert.ok(plain(folded).includes("Thinking…"), "folded thinking is the one title");
 	assert.ok(!plain(folded).includes("Check the code"), "its text is inside the fold");
 	assert.ok(plain(expanded).includes("Inspect the renderer."), "expanded thinking is drawn");
 	assert.deepEqual(refused([...folded.split("\n"), ...expanded.split("\n")]), []);

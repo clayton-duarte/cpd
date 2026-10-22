@@ -127,7 +127,7 @@ test("the thinking title is the one Thinking pill, colour 7", async () => {
 	const block = await thinking();
 	try {
 		const title = block.draw()[0]!;
-		assert.equal(plain(title).trim(), `╭─${LEFT}Thinking...${RIGHT}`);
+		assert.equal(plain(title).trim(), `╭─${LEFT}Thinking…${RIGHT}`);
 		pillAround(COLOUR.grey, title);
 	} finally { block.end(); }
 });
@@ -136,7 +136,7 @@ test("a folded thinking block shows the expand toggle and none of its text", asy
 	const block = await thinking();
 	try {
 		const lines = block.draw().map(plain).map((line) => line.trim());
-		assert.deepEqual(lines, [`╭─${LEFT}Thinking...${RIGHT}`, "\u2570\u{F004B} expand"]);
+		assert.deepEqual(lines, [`╭─${LEFT}Thinking…${RIGHT}`, "\u2570\u{F004B} expand"]);
 	} finally { block.end(); }
 });
 
@@ -146,7 +146,7 @@ test("toggling a thinking block shows its whole text", async () => {
 		block.draw();
 		block.press();
 		const lines = block.draw().map(plain).map((line) => line.trim());
-		assert.equal(lines[0], `╭─${LEFT}Thinking...${RIGHT}`);
+		assert.equal(lines[0], `╭─${LEFT}Thinking…${RIGHT}`);
 		assert.ok(lines.includes("\u2502 Inspect the renderer."), JSON.stringify(lines));
 		assert.ok(lines.includes("\u2502 Keep the cache."), JSON.stringify(lines));
 		assert.equal(lines.at(-1), "\u2570\u{F0063} collapse", JSON.stringify(lines));
