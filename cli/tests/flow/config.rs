@@ -30,7 +30,7 @@ fn config_missing_file_is_config_missing() {
 }
 
 #[test]
-fn config_defaults_context_distill_tier_to_h0() {
+fn config_defaults_context_distill_tier_to_gx() {
     let env = TestEnv::new();
     let out = config_with(&env, MINIMAL).ok();
     assert_eq!(out["path"], env.cpd_home().join("config.toml").to_str().unwrap());
@@ -44,7 +44,7 @@ fn config_defaults_context_distill_tier_to_h0() {
             "retry_cap": 2,
             "lead_tier": "O2",
             "manager_tier": "O4",
-            "context_distill_tier": "H0",
+            "context_distill_tier": "GX",
             "open_tier": "S2",
             "lead_pi_packages": [
                 "npm:@plannotator/pi-extension@0.28.17",
@@ -55,7 +55,8 @@ fn config_defaults_context_distill_tier_to_h0() {
             "tiers": {
                 "O": "github-copilot/claude-opus-5.5",
                 "S": "github-copilot/claude-sonnet-5.5",
-                "H": "github-copilot/claude-haiku-4.5"
+                "H": "github-copilot/claude-haiku-4.5",
+                "G": "github-copilot/gemini-3.8-flash"
             },
             "timeouts": {
                 "attempt_minutes": 30,
@@ -168,7 +169,7 @@ test_concurrency = 64
 retry_cap = 0
 lead_tier = "H0"
 manager_tier = "H1"
-context_distill_tier = "H0"
+context_distill_tier = "GX"
 open_tier = "S3"
 lead_pi_packages = []
 pi_adapter = "{adapter}"
@@ -177,6 +178,7 @@ plannotator_ports = "1-65535"
 O = "a/b/c"
 S = "provider/model:1"
 H = "x/y"
+G = "g/z"
 [timeouts]
 attempt_minutes = 1
 ask_minutes = 1
@@ -212,7 +214,7 @@ work_session = "w"
     let out = config_with(&env, &text).ok();
     assert_eq!(out["config"]["machine"], "a1234567");
     assert_eq!(out["config"]["test_concurrency"], 64);
-    assert_eq!(out["config"]["context_distill_tier"], "H0");
+    assert_eq!(out["config"]["context_distill_tier"], "GX");
     assert_eq!(out["config"]["open_tier"], "S3");
     assert_eq!(out["config"]["lead_pi_packages"], json!([]));
     assert_eq!(out["config"]["pi_adapter"], adapter.to_str().unwrap());
@@ -371,6 +373,56 @@ fn config_refuses_an_open_tier_outside_the_worker_range() {
     }
 }
 
+/// hs-d562: an auxiliary run uses only `GX`.
+#[test]
+fn config_refuses_a_context_distill_tier_that_is_not_gx() {
+    let env = TestEnv::new();
+    for tier in ["H0", "H4", "S1", "O2", "G0", "G5"] {
+        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"{tier}\"\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{tier}");
+        assert_eq!(err["code"], "config_invalid", "{tier}: {err}");
+        assert_eq!(err["details"]["key"], "context_distill_tier", "{tier}: {err}");
+        if tier == "H0" {
+            let message = err["message"].as_str().unwrap();
+            assert!(message.contains("GX") && message.contains("hs-d562"), "{message}");
+        }
+    }
+    let ok = config_with(&env, "version = 1\nmachine = \"hs\"\ncontext_distill_tier = \"GX\"\n").ok();
+    assert_eq!(ok["config"]["context_distill_tier"], "GX");
+}
+
+/// hs-d562: a Lead or the Manager is never on G; `open_tier` is a Worker's Tier (hs-d554), and GX is not one.
+#[test]
+fn config_refuses_g_for_lead_manager_and_open_tier() {
+    let env = TestEnv::new();
+    for key in ["lead_tier", "manager_tier", "open_tier"] {
+        let run = config_with(&env, &format!("version = 1\nmachine = \"hs\"\n{key} = \"GX\"\n"));
+        let err = run.error();
+        assert_eq!(run.exit, 1, "{key}");
+        assert_eq!(err["code"], "config_invalid", "{key}: {err}");
+        assert_eq!(err["details"]["key"], key, "{key}: {err}");
+        if key != "open_tier" {
+            let message = err["message"].as_str().unwrap();
+            assert!(message.contains('G') && message.contains("hs-d562"), "{key}: {message}");
+        }
+    }
+}
+
+/// hs-d562: `tiers.G` has the shape of `tiers.O/S/H`.
+#[test]
+fn config_reads_a_tiers_g_model() {
+    let env = TestEnv::new();
+    let out = config_with(&env, &format!("{MINIMAL}[tiers]\nG = \"p/gemini\"\n")).ok();
+    assert_eq!(out["config"]["tiers"]["G"], "p/gemini");
+    assert_eq!(out["sources"]["tiers.G"], "file");
+    let run = config_with(&env, &format!("{MINIMAL}[tiers]\nG = \"nomodel\"\n"));
+    let err = run.error();
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["code"], "config_invalid");
+    assert_eq!(err["details"]["key"], "tiers.G");
+}
+
 #[test]
 fn config_messages_end_in_one_full_stop_and_name_the_bound_that_was_crossed() {
     let env = TestEnv::new();
@@ -501,7 +553,7 @@ export function getSupportedThinkingLevels(model) {
 }
 "#;
 
-const TIERS_CONFIG: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\n";
+const TIERS_CONFIG: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-g\"\n";
 
 /// `cpd <args>` with `PATH` = the test's `bin/` only, so nothing real is found.
 fn cpd_isolated(env: &TestEnv, args: &[&str]) -> Run {
@@ -513,7 +565,7 @@ fn cpd_isolated(env: &TestEnv, args: &[&str]) -> Run {
     }
 }
 
-const ALL_LEVELS_JSON: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","minimal","low"],"H":["off","low","medium","high"]}"#;
+const ALL_LEVELS_JSON: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","minimal","low"],"H":["off","low","medium","high"],"G":["off","minimal","low","medium","high"]}"#;
 
 #[test]
 fn tiers_reads_efforts_from_pi_with_pis_node() {
@@ -530,7 +582,8 @@ fn tiers_reads_efforts_from_pi_with_pis_node() {
             "tiers": {
                 "O": {"model": "p/m-opus", "efforts": [0, 1, 2, 3, 4, 5]},
                 "S": {"model": "p/m-sonnet", "efforts": [0, 1, 2, 3, 4, 5]},
-                "H": {"model": "p/m-low", "efforts": [0, 1, 2]}
+                "H": {"model": "p/m-low", "efforts": [0, 1, 2]},
+                "G": {"model": "p/m-g", "efforts": []}
             }
         })
     );
@@ -548,6 +601,7 @@ fn tiers_runs_the_catalog_module_from_argv() {
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1, 2, 3, 4, 5]));
     assert_eq!(out["tiers"]["S"]["efforts"], json!([0, 1]));
     assert_eq!(out["tiers"]["H"]["efforts"], json!([0, 1, 2, 3]));
+    assert_eq!(out["tiers"]["G"], json!({"model": "p/m-g", "efforts": []}));
 
     let calls = env.calls("node");
     assert_eq!(calls.len(), 1);
@@ -564,8 +618,68 @@ fn tiers_runs_the_catalog_module_from_argv() {
             "O=p/m-opus".to_owned(),
             "S=p/m-sonnet".to_owned(),
             "H=p/m-low".to_owned(),
+            "G=p/m-g".to_owned(),
         ]
     );
+}
+
+/// The config of the tests that print G's default model: no `tiers.G`.
+const TIERS_CONFIG_DEFAULT_G: &str = "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\n";
+
+/// hs-d562: G has no effort levels: the module's levels for G are ignored and `efforts` is empty.
+#[test]
+fn tiers_prints_g_without_an_effort() {
+    let env = TestEnv::new();
+    env.write_config(TIERS_CONFIG_DEFAULT_G);
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    let out = cpd_isolated(&env, &["tiers"]).ok();
+    assert_eq!(out["tiers"]["G"], json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []}));
+    assert_eq!(env.calls("node")[0].last().unwrap(), "G=github-copilot/gemini-3.8-flash");
+
+    let env = TestEnv::new();
+    env.write_config(&format!("{TIERS_CONFIG_DEFAULT_G}G = \"p/gemini\"\n"));
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    assert_eq!(cpd_isolated(&env, &["tiers"]).ok()["tiers"]["G"], json!({"model": "p/gemini", "efforts": []}));
+}
+
+/// hs-d562: pi not having G's model is `tier_model_unknown`, with G in `details.missing`.
+#[test]
+fn a_g_model_pi_does_not_know_is_tier_model_unknown() {
+    let env = TestEnv::new();
+    env.write_config(TIERS_CONFIG);
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", r#"echo '{"O":["off"],"S":["off"],"H":["off"],"G":null}'"#);
+    let run = cpd_isolated(&env, &["tiers"]);
+    let err = run.error();
+    assert_eq!(err["code"], "tier_model_unknown");
+    assert_eq!(run.exit, 1);
+    assert_eq!(err["details"]["missing"], json!([{"letter": "G", "model": "p/m-g"}]));
+}
+
+/// hs-d562: G is never cached (no migration): a cache holding O, S and H rows only still serves, G from the config.
+#[test]
+fn a_cache_written_before_g_still_serves_the_catalog() {
+    let env = TestEnv::new();
+    env.write_config(TIERS_CONFIG_DEFAULT_G);
+    install_pi(&env, "1.2.0", "", "");
+    env.fake("node", &format!("echo '{ALL_LEVELS_JSON}'"));
+    cpd_isolated(&env, &["tiers"]).ok();
+    assert_eq!(
+        cached_rows(&env),
+        [
+            row("1.2.0", "H", "p/m-low", "[0,1,2,3]"),
+            row("1.2.0", "O", "p/m-opus", "[0,1,2,3,4,5]"),
+            row("1.2.0", "S", "p/m-sonnet", "[0,1]"),
+        ],
+        "G is never cached"
+    );
+    env.fake("node", "echo 'node must not run' >&2; exit 1");
+    let out = cpd_isolated(&env, &["tiers"]).ok();
+    assert_eq!(out["tiers"]["G"], json!({"model": "github-copilot/gemini-3.8-flash", "efforts": []}));
+    assert_eq!(out["tiers"]["S"]["efforts"], json!([0, 1]));
+    assert_eq!(env.calls("node").len(), 1, "only the cold call ran node");
 }
 
 /// hs-n278: holds `locks/store.lock` as a process that migrates the store does (contract §1.4: the lock, and its
@@ -717,10 +831,10 @@ fn tiers_catalog_failures_are_catalog_failed() {
         ("node prints nothing", "exit 0"),
         ("node prints text", "echo 'not json'"),
         ("node prints a JSON array", "echo '[]'"),
-        ("node omits a Tier", r#"echo '{"O":["off"],"S":["off"]}'"#),
-        ("a level pi does not have", r#"echo '{"O":["off"],"S":["off"],"H":["turbo"]}'"#),
-        ("a model with no usable level", r#"echo '{"O":["off"],"S":["minimal"],"H":["off"]}'"#),
-        ("levels that are not text", r#"echo '{"O":[1],"S":["off"],"H":["off"]}'"#),
+        ("node omits a Tier", r#"echo '{"O":["off"],"S":["off"],"G":["off"]}'"#),
+        ("a level pi does not have", r#"echo '{"O":["off"],"S":["off"],"H":["turbo"],"G":["off"]}'"#),
+        ("a model with no usable level", r#"echo '{"O":["off"],"S":["minimal"],"H":["off"],"G":["off"]}'"#),
+        ("levels that are not text", r#"echo '{"O":[1],"S":["off"],"H":["off"],"G":["off"]}'"#),
     ];
     // One env: a failure caches nothing, so each case runs node again.
     let env = TestEnv::new();
@@ -756,7 +870,7 @@ fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
     let env = TestEnv::new();
     env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
-    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":null}'"#);
+    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":null,"G":["off"]}'"#);
     let run = cpd_isolated(&env, &["tiers"]);
     let err = run.error();
     assert_eq!(err["code"], "tier_model_unknown");
@@ -767,7 +881,7 @@ fn tiers_with_a_model_pi_does_not_have_is_tier_model_unknown() {
 #[test]
 fn tiers_with_a_model_unknown_to_real_pi_modules_is_tier_model_unknown() {
     let env = TestEnv::new();
-    env.write_config("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"q/m-low\"\n");
+    env.write_config("version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/other\"\nH = \"q/m-low\"\nG = \"p/m-g\"\n");
     install_pi(&env, "1.2.0", FAKE_CODING_AGENT, FAKE_PI_AI);
     symlink(real_node(), env.bin().join("node")).unwrap();
     let err = cpd_isolated(&env, &["tiers"]).error();
@@ -850,7 +964,7 @@ fn tiers_refreshes_the_cache_when_pis_current_version_changes() {
     cpd_isolated(&env, &["tiers"]).ok();
 
     install_pi(&env, "1.3.0", "", "");
-    env.fake("node", r#"echo '{"O":["off","low"],"S":["off","low"],"H":["off"]}'"#);
+    env.fake("node", r#"echo '{"O":["off","low"],"S":["off","low"],"H":["off"],"G":["off"]}'"#);
     let out = cpd_isolated(&env, &["tiers"]).ok();
     assert_eq!(out["pi_version"], "1.3.0");
     assert_eq!(out["tiers"]["O"]["efforts"], json!([0, 1]));
@@ -896,7 +1010,7 @@ fn tiers_does_not_cache_a_failed_catalog() {
     let env = TestEnv::new();
     env.write_config(TIERS_CONFIG);
     install_pi(&env, "1.2.0", "", "");
-    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":["off"]}'"#);
+    env.fake("node", r#"echo '{"O":["off"],"S":null,"H":["off"],"G":["off"]}'"#);
     assert_eq!(cpd_isolated(&env, &["tiers"]).error()["code"], "tier_model_unknown");
     assert_eq!(cached_rows(&env), []);
     assert_eq!(txn_commands(&env), ["migrate"]);
@@ -920,12 +1034,12 @@ fn config_accepts_o_tiers_below_effort_5_for_leads_and_h_for_auxiliaries() {
     let env = TestEnv::new();
     let out = config_with(
         &env,
-        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"H4\"\nopen_tier = \"H3\"\n",
+        "version = 1\nmachine = \"hs\"\nlead_tier = \"O0\"\nmanager_tier = \"O4\"\ncontext_distill_tier = \"GX\"\nopen_tier = \"H3\"\n",
     )
     .ok();
     let config = &out["config"];
     assert_eq!(
         (&config["lead_tier"], &config["manager_tier"], &config["context_distill_tier"], &config["open_tier"]),
-        (&json!("O0"), &json!("O4"), &json!("H4"), &json!("H3"))
+        (&json!("O0"), &json!("O4"), &json!("GX"), &json!("H3"))
     );
 }

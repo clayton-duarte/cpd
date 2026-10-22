@@ -46,6 +46,6 @@ pub fn tiers(_args: TiersArgs) -> Result<Output, CpdError> {
     let catalog = load_catalog(&config)?;
     Ok(Output::success(json!({
         "pi_version": catalog.pi_version,
-        "tiers": {"O": catalog.o, "S": catalog.s, "H": catalog.h},
+        "tiers": {"O": catalog.o, "S": catalog.s, "H": catalog.h, "G": catalog.g},
     })))
 }

@@ -8,7 +8,6 @@ use std::path::PathBuf;
 use std::process::{Child, Stdio};
 
 use common::{CPD, Run, TestEnv, refused, wait_until};
-use cpd_core::config::Tier;
 use cpd_core::context::{By, Draft, PlanRef, Record};
 use cpd_core::home::CpdHome;
 use cpd_core::ids::{ContextId, MachineName, PlanId, RecordId};
@@ -88,7 +87,7 @@ fn fx() -> Fx {
     )
     .unwrap();
     env.fake_pi(&says(CITES_ALL));
-    // pi's catalog (hs-d538): the ladder a failed step climbs reads it.
+    // pi's catalog (G has the one level off).
     env.fake("node", &format!("echo '{LADDER_LEVELS}'"));
     let install = env.root().join("install");
     fs::create_dir_all(&install).unwrap();
@@ -114,13 +113,8 @@ fn ago(minutes: i64) -> String {
 }
 
 impl Fx {
-    /// Makes the ladder one step long (hs-d538), for the tests of what one step does: starts at H3, the top of
-    /// the catalog's H efforts, and the catalog has no S effort above 0, which the S steps (S1..S4) need.
+    /// The run is one step long (hs-d562): the distiller starts on GX, its default, and never climbs.
     fn one_step(self) -> Fx {
-        self.env.fake("node", r#"echo '{"O":["off"],"S":["off"],"H":["off","low","medium","high"]}'"#);
-        let config = self.env.cpd_home().join("config.toml");
-        let text = fs::read_to_string(&config).unwrap().replacen("lead_pi_packages", "context_distill_tier = \"H3\"\nlead_pi_packages", 1);
-        fs::write(&config, text).unwrap();
         self
     }
 
@@ -216,13 +210,12 @@ fn a_valid_digest_lands_as_upto_seq_and_the_directory_holds_one() {
     assert!(fx.errors().is_empty());
 
     // The distiller's argv and inputs: print mode, no session, no extension, skill, context file or tool; two files.
-    let level = Tier::parse("H0").unwrap().level();
-    let model = format!("p/haiku:{level}");
+    let model = "github-copilot/gemini-3.8-flash:off";
     let calls = fx.env.calls("pi");
     assert_eq!(
         calls,
         [vec![
-            "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", &model, "--",
+            "--mode", "json", "--no-session", "--no-extensions", "--no-skills", "--no-context-files", "--no-tools", "--model", model, "--",
             "@prompt.md", "@records.md",
         ]]
     );
@@ -951,9 +944,9 @@ fn the_twenty_count_runs_from_the_latest_digest() {
     stop_engine(engine);
 }
 
-// ---- One Tier, no ladder (hs-d560) ----
+// ---- The distiller on GX (hs-d562): contract §4.6, §9 ----
 
-const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"]}"#;
+const LADDER_LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium","high","xhigh","max"],"H":["off","low","medium","high"],"G":["off"]}"#;
 
 const STRAY: &str = "echo '# Digest'; echo 'Cites a ghost [hs-d99] and nothing else.'";
 
@@ -968,19 +961,30 @@ fn tiers_of(runs: &[Value]) -> Vec<String> {
     runs.iter().map(|r| r["tier"].as_str().unwrap_or("<none>").to_string()).collect()
 }
 
-#[test]
-fn the_distiller_runs_at_context_distill_tier() {
-    let fx = ladder_fx();
-    let config = fx.env.cpd_home().join("config.toml");
-    let mut text = fs::read_to_string(&config).unwrap();
-    text = text.replacen("lead_pi_packages", "context_distill_tier = \"H2\"\nlead_pi_packages", 1);
-    fs::write(&config, text).unwrap();
-    fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
-    assert_eq!(tiers_of(&fx.runs()), ["H2"]);
+/// The tier names the output's `steps` lists, whether each step is a string or an object with a `tier`.
+fn step_tiers(out: &Value) -> Vec<String> {
+    out["steps"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the output has a `steps` array: {out}"))
+        .iter()
+        .map(|s| s.as_str().or_else(|| s["tier"].as_str()).unwrap_or("<none>").to_string())
+        .collect()
 }
 
 #[test]
-fn an_invalid_step_fails_the_run_with_no_second_step() {
+fn the_distiller_runs_on_gx_with_the_g_model() {
+    let fx = ladder_fx();
+    let out = fx.cpd(&["context", "distill", "--context", CONTEXT]).ok();
+    assert_eq!(step_tiers(&out), ["GX"], "{out}");
+    assert_eq!(tiers_of(&fx.runs()), ["GX"]);
+    let calls = fx.env.calls("pi");
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let at = calls[0].iter().position(|a| a == "--model").expect("--model") + 1;
+    assert_eq!(calls[0][at], "github-copilot/gemini-3.8-flash:off", "{:?}", calls[0]);
+}
+
+#[test]
+fn a_gx_run_with_an_invalid_digest_stops_after_one_step() {
     let fx = ladder_fx();
     fx.env.fake_pi(&says(STRAY));
     let start = tiers_of(&{
@@ -991,22 +995,21 @@ fn an_invalid_step_fails_the_run_with_no_second_step() {
     });
     let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
     refused(&run, "distill_invalid", 1);
-    assert_eq!(tiers_of(&fx.runs()), start, "one step, at the one Tier, no higher one");
-    assert_eq!(fx.pi_calls(), 1, "one pi run: a stray id gets no repair either");
+    assert_eq!(tiers_of(&fx.runs()), ["GX"]);
+    assert_eq!(fx.pi_calls(), 1, "no second pi run");
     let events = fx.errors();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["data"]["code"], "distill_invalid");
 }
 
 #[test]
-fn a_failed_pi_run_fails_the_run_with_no_second_step() {
+fn a_gx_run_whose_pi_fails_stops_after_one_step() {
     let fx = ladder_fx();
     fx.env.fake_pi("echo 'model unavailable' >&2; exit 7");
     let run = fx.cpd(&["context", "distill", "--context", CONTEXT]);
     refused(&run, "distill_failed", 1);
-    assert_eq!(fx.pi_calls(), 1, "no next step, no higher Tier");
-    assert_eq!(fx.runs().len(), 1);
-    assert!(fx.digest_files().is_empty());
+    assert_eq!(tiers_of(&fx.runs()), ["GX"]);
+    assert_eq!(fx.pi_calls(), 1, "no second pi run");
     let events = fx.errors();
     assert_eq!(events.len(), 1, "{events:?}");
     assert_eq!(events[0]["data"]["code"], "distill_failed");

@@ -1268,7 +1268,7 @@ fn open_an_unknown_plan_is_plan_not_found() {
 
 // -------------------------------------------------------------- R before the Gate
 
-const LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium"],"H":["off","low","medium"]}"#;
+const LEVELS: &str = r#"{"O":["off","low","medium","high","xhigh","max"],"S":["off","low","medium"],"H":["off","low","medium"],"G":["off"]}"#;
 
 /// A pi install whose catalog module a fake `node` answers: R reads pi's catalog.
 fn install_pi(env: &TestEnv) {

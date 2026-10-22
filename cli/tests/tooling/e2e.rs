@@ -89,7 +89,7 @@ esac
 "#;
 
 /// pi's catalog as the embedded module prints it (§9): every level for each model.
-const CATALOG: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium","high"]}"#;
+const CATALOG: &str = r#"{"O":["off","minimal","low","medium","high","xhigh","max"],"S":["off","minimal","low","medium","high","xhigh","max"],"H":["off","minimal","low","medium","high"],"G":["off"]}"#;
 
 struct Fx {
     env: TestEnv,

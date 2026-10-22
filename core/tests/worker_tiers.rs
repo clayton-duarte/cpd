@@ -8,6 +8,7 @@ fn catalog() -> Catalog {
         pi_version: "1.3.0".into(),
         o: TierModel { model: "p/opus".into(), efforts: vec![1, 2, 3, 4, 5] },
         s: TierModel { model: "p/sonnet".into(), efforts: vec![0, 1, 2, 3, 4, 5] },
+        g: TierModel { model: "p/gemini".into(), efforts: vec![] },
         h: TierModel { model: "p/haiku".into(), efforts: vec![0, 1, 2, 3] },
     }
 }

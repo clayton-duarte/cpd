@@ -67,8 +67,7 @@ fn numbered(n: usize) -> Vec<(&'static str, String)> {
     (1..=n).map(|i| (if i % 2 == 1 { "user" } else { "assistant" }, format!("message {i}"))).collect()
 }
 
-/// `config.toml`, the fake pi install and its catalog (H supports efforts 1–3, so its lowest is
-/// `low`), Context `ctx`, Plan `pay` with its Lead `lead1`, a Manager, a Worker, an archived Lead
+/// `config.toml`, the fake pi install and its catalog (the cache holds O, S, H only: G is served from the config), Context `ctx`, Plan `pay` with its Lead `lead1`, a Manager, a Worker, an archived Lead
 /// and a Lead with no session file. `lead1`'s and `manager1`'s files hold a short conversation.
 fn setup(env: &TestEnv) {
     fs::write(
@@ -152,14 +151,14 @@ fn nothing_written(env: &TestEnv, session: &str) {
 // ---------- pi's run ----------
 
 #[test]
-fn pi_runs_once_on_the_lowest_effort_of_h_with_no_session_and_no_extensions_and_no_cpd_variables() {
+fn the_title_writer_runs_pi_on_gx() {
     let env = TestEnv::new();
     setup(&env);
     retitle(&env, LEAD).ok();
     let calls = env.calls("pi");
     assert_eq!(calls.len(), 1, "{calls:?}");
     let argv = &calls[0];
-    assert_eq!(argv[..6], ["--print", "--no-session", "--no-extensions", "--model", "p/haiku:low", "--"], "{argv:?}");
+    assert_eq!(argv[..6], ["--print", "--no-session", "--no-extensions", "--model", "github-copilot/gemini-3.8-flash:off", "--"], "{argv:?}");
     assert_eq!(argv.len(), 7, "one prompt after `--`: {argv:?}");
     let prompt = &argv[6];
     for asked in ["title", "at most 60 characters", "last happening", "one line", "no quotes"] {

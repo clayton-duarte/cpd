@@ -57,7 +57,7 @@ fn write_config(env: &TestEnv, extra: &str) {
     fs::create_dir_all(&adapter).unwrap();
     fs::write(adapter.join("package.json"), "{}").unwrap();
     let text = format!(
-        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\n",
+        "version = 1\nmachine = \"hs\"\npi_adapter = \"{}\"\n{extra}\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n",
         adapter.display()
     );
     // `extra` holds top-level keys, so it must come before the `[tiers]` table.
@@ -374,7 +374,7 @@ fn tiers_fail_when_pi_has_no_release() {
 fn the_adapter_directory_needs_a_package_json() {
     // The default, beside the binary, does not exist in a build tree.
     let env = healthy();
-    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\n").unwrap();
+    fs::write(env.cpd_home().join("config.toml"), "version = 1\nmachine = \"hs\"\n[tiers]\nO = \"p/m-opus\"\nS = \"p/m-sonnet\"\nH = \"p/m-low\"\nG = \"p/m-aux\"\n").unwrap();
     let run = doctor(&env);
     assert_doctor_failed(&run);
     let c = assert_fails(&run, "pi_adapter", "error", "package.json");
