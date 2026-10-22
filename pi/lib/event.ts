@@ -4,9 +4,9 @@ import { errorOfEnvelope, isObject, type CpdError } from "./cpd.ts";
  * The adapter/cpd protocol this adapter speaks (commands.md §1.2, §15.2). Equal to `PROTOCOL` in `core/src/events/kind.rs`:
  * `pi/test/protocol.test.ts` fails otherwise. Raise both whenever an Event kind, an Event `data` field the adapter reads,
  * or the output of a command the adapter runs changes in a way the adapter depends on.
- * 9 is `session-retiered`, 10 is `plan-outlined`.
+ * 9 is `session-retiered`, 10 is `plan-outlined`, 12 is `session-resumed`.
  */
-export const PROTOCOL = 11;
+export const PROTOCOL = 12;
 
 /** contract.md §5.2: every Event kind. A line with any other kind is not a valid Event. */
 export const KINDS = [
@@ -17,7 +17,7 @@ export const KINDS = [
   "all-merged", "pr-feedback",
   "escalation", "escalation-answered", "escalation-expired",
   "session-registered", "session-state", "session-moved", "session-renamed", "session-titled", "session-retiered",
-  "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-asleep", "plan-deleted", "context-deleted", "records-retired", "docs-decided", "context-curated", "session-message",
+  "context-renamed", "context-owner", "plan-renamed", "context-archived", "plan-archived", "session-archived", "session-asleep", "session-resumed", "plan-deleted", "context-deleted", "records-retired", "docs-decided", "context-curated", "session-message",
   "inbox-opened", "inbox-closed", "inbox-snoozed", "inbox-dismissed",
   "pr-added", "pr-edited", "pr-cancelled", "pr-started", "pr-base-changed", "pr-opened", "pr-merged",
   "watch-started", "watch-stopped", "review-opened", "review-closed", "error",

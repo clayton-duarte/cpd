@@ -27,7 +27,7 @@ pub fn sender() -> Result<Option<SessionId>, CpdError> {
 }
 
 /// The target is a Lead or a Manager and is not archived (a `stopped` one is fine).
-fn check(target: &Row) -> Result<(), CpdError> {
+pub(super) fn check(target: &Row) -> Result<(), CpdError> {
     match target.role {
         Role::Lead | Role::Manager if target.archived_at.is_none() => Ok(()),
         Role::Lead | Role::Manager => Err(archive::archived(target)),

@@ -344,6 +344,7 @@ pub(super) fn show(args: ShowArgs) -> Result<Output, CpdError> {
     let (model, thinking) = model_and_level(&env.config, &row.id, &row.tier)?;
     session["model"] = json!(model);
     session["thinking"] = json!(thinking);
+    session["loop_guard_turns"] = json!(env.config.loop_guard_turns);
     let mut out = json!({"session": session});
     if let Some(escalations) = escalations {
         out["open_escalations"] = json!(escalations);
