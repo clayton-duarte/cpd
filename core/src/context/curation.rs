@@ -128,6 +128,9 @@ pub fn propose_rejecting(
 pub struct CurationArgs {
     #[command(flatten)]
     select: Select,
+    /// At most this many entries per list (default: all)
+    #[arg(long, value_name = "n")]
+    limit: Option<u64>,
 }
 
 #[derive(Args, Debug)]
