@@ -27,7 +27,7 @@ async function loadHarness() {
 
 const EXPAND = "\u{F004B}";
 const COLLAPSE = "\u{F0063}";
-const HEAD = "\u256D"; // ╭
+const HEAD = " \u256D\u2500"; // " ╭─"
 const CLOSE = "\u2570"; // ╰
 const SEVEN = ["read", "write", "edit", "bash", "grep", "find", "ls"];
 

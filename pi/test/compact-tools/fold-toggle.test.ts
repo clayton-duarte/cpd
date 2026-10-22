@@ -145,12 +145,13 @@ const metadataOf = (statusLines: string[]) => {
 	return line.slice(` ${BOX.plainClose} `.length);
 };
 
-test("the head's leading space becomes ╭ and the rest of the head is unchanged", async () => {
+test("the toggle head is ' ╭─' and the pill, with no dot, where status keeps its dot head", async () => {
 	for (const name of ["bash", "read", "web_search"]) {
 		const status = await drawRow(STATUS, name);
 		const toggle = await drawRow(TOGGLE, name);
 		assert.ok(firstLine(status.done).startsWith(" "), name);
-		assert.equal(firstLine(toggle.done), BOX.head + firstLine(status.done).slice(1), name);
+		assert.ok(firstLine(toggle.done).startsWith(` ${BOX.head}\u2500`), `${name}: ${firstLine(toggle.done)}`);
+		assert.ok(!firstLine(toggle.done).includes("\u2981"), `${name}: no dot`);
 	}
 });
 
@@ -221,10 +222,10 @@ test("an edit's closing row carries its diff counts after the toggle", async () 
 	assert.match(lastLine(toggle.done), new RegExp(`^ ${BOX.close}${NERD.expand} expand · Done in 0\\.300s \\(\\+1 -1\\)$`, "u"));
 });
 
-test("while a row runs the head wears ╭ and the closing row is today's, with no toggle", async () => {
-	const status = await drawRow(STATUS, "bash");
+test("while a row runs the head wears ' ╭─' with no dot and the closing row is today's, with no toggle", async () => {
 	const toggle = await drawRow(TOGGLE, "bash");
-	assert.deepEqual(toggle.running.slice(1), status.running.slice(1).map((line, index) => index === 0 ? BOX.head + line.slice(1) : line));
+	assert.ok(firstLine(toggle.running).startsWith(` ${BOX.head}\u2500`), firstLine(toggle.running));
+	assert.ok(!firstLine(toggle.running).includes("\u2981"), "no dot");
 	assert.ok(toggle.running.every((line) => !line.includes(BOX.close)), "no ╰ while running");
 });
 
