@@ -2197,9 +2197,9 @@ Every message in the table that is not marked steered is a follow-up. The turn c
 
 **No loss, no duplicates.** The adapter's cursor is the highest Event id it has delivered, which it reads back at `session_start` from its own session file (the `details.id` of the last `cpd` custom message whose `details.delivered_to` is this Session), else the `id` of the Session's `session-registered` Event, whichever is greater. The adapter adds `delivered_to` (the Session's id) to the `details` of every message it delivers, so the cursor counts only messages delivered to this Session and never one at or below its `session-registered` Event: a fork's session file starts with its source's messages, whose Event ids belong to the source's stream. It runs `cpd events follow --session <id> --since <cursor>` and restarts it with the latest cursor if it exits. The exact protocol (activation, errors, the Plan review through plannotator) is in `commands.md`.
 
-**The title row** (hs-d486, the last word; replaces hs-d485 and hs-d484): no dot glyph. The row is `╭─` (muted), then the title as a pill: U+E0B6, the title (`cpd <summary>`), U+E0B4, no padding inside, folded and expanded alike. It matches the cockpit's pill title, `title` in `tui/src/section.rs` (used by `tui/src/dialog/view.rs`, `tui/src/logs/view.rs`; caps `CAP_L`/`CAP_R` in `tui/src/plan/flow.rs`): lead 8 (a line), the pill magenta (background 5, text 0, caps 5: cpd's own blocks are magenta, hs-d534, §6.1.1). The pi window follows the palette through the pi theme cpd ships (hs-d534; owner: Plan `pi-theme`), which maps pi's colour tokens to the indices 0-15; `pi/lib/render.ts` draws the pill with explicit indexed SGR (hs-d545; §6.1.1): caps `ESC[35m`, block `ESC[45m` with the text `ESC[30m`, then `ESC[49m` and `ESC[39m` to reset (today it still draws the grey `ESC[100m`/`ESC[37m`/`ESC[90m` until Plan `pi-theme` lands). Display only.
+**The title row** (hs-d486, the last word; replaces hs-d485 and hs-d484): no dot glyph. The row is `╭─` (muted), then the pill `cpd` alone: U+E0B6, `cpd`, U+E0B4, no padding inside, folded and expanded alike; then one space and the first sentence of the summary (commands.md §15.9) **outside** the pill, text 7, exactly like a tool row's title after its pill (§6.9). Example: ` ╭─[cpd] Worker of Job chatfix-impl-misc (Attempt chatfix-impl-misc-a…` then ` ╰󰁋 expand`. A long sentence wraps onto continuation rows aligned like a wrapped tool title (`renderToolCall`). It matches the cockpit's pill title, `title` in `tui/src/section.rs` (used by `tui/src/dialog/view.rs`, `tui/src/logs/view.rs`; caps `CAP_L`/`CAP_R` in `tui/src/plan/flow.rs`): lead 8 (a line), the pill magenta (background 5, text 0, caps 5: cpd's own blocks are magenta, hs-d534, §6.1.1). The pi window follows the palette through the pi theme cpd ships (hs-d534; owner: Plan `pi-theme`), which maps pi's colour tokens to the indices 0-15; `pi/lib/render.ts` draws the pill with explicit indexed SGR (hs-d545; §6.1.1): caps `ESC[35m`, block `ESC[45m` with the text `ESC[30m`, then `ESC[49m` and `ESC[39m` to reset (today it still draws the grey `ESC[100m`/`ESC[37m`/`ESC[90m` until Plan `pi-theme` lands). Display only.
 
-**The fold's closing row** (hs-d484; applies hs-d449 inside pi; the rendering itself is `commands.md` §15, `pi/lib/render.ts`). A cpd message in a pi pane is the title row above, then `│ ` content lines when expanded, then one closing toggle row (colour 7, §6.1.1; the rails are 8): `╰󰁋 expand` when folded (U+F004B) or `╰󰁣 collapse` when expanded (U+F0063), one space between the glyph and the word. It replaces `╰─ expand` / `╰─ collapse`. It is the cockpit's own toggle, `toggle` in `tui/src/fold.rs` (glyphs `DOWN` / `UP` in `tui/src/tree/look.rs`), the row of the Inbox and the tree. Display only; no behaviour change.
+**The fold's closing row** (hs-d484; applies hs-d449 inside pi; the rendering itself is `commands.md` §15, `pi/lib/render.ts`). A cpd message in a pi pane is the title row above, then `│ ` content lines when expanded, then one closing row: a block that cannot fold (an always-open type such as the Plan review summary, or one with no body) ends with the terminator ` ╰󰁚` of the fold template (§6.9 "The terminator"), never a bare `│`; a foldable one has a toggle (colour 7, §6.1.1; the rails are 8): `╰󰁋 expand` when folded (U+F004B) or `╰󰁣 collapse` when expanded (U+F0063), one space between the glyph and the word. It replaces `╰─ expand` / `╰─ collapse`. It is the cockpit's own toggle, `toggle` in `tui/src/fold.rs` (glyphs `DOWN` / `UP` in `tui/src/tree/look.rs`), the row of the Inbox and the tree. Display only; no behaviour change.
 
 **Reload after an install** (hs-d141, hs-d49). After an install the adapter reloads its own pi by itself (`ctx.reload()`), when its guard passes (idle, nothing pending, own state `idle`, so not `working`, `waiting` or `blocked`, nothing typed in the editor); it detects the install by the identity of the installed adapter path, which is a symlink swapped by one rename (§3.7 "The adapter swap", hs-d355), runs its own command, and retries a refused reload at the next poll. Nothing reaches the model and nothing is typed into a pane. Before it triggers, it proves that the new package loads (the identity is stable on two polls, the entry files exist, a throwaway load in a child process succeeds); otherwise it does not reload, shows one error and retries at a later poll. Detection, pre-validation, command, guard and retries: commands.md §15.6.
 
@@ -2505,7 +2505,7 @@ The one palette of the cockpit, the pi window included (User, tui-visuals, 2026-
 | The message's background (every line) | no | the terminal default: no fill (the theme's `customMessageBg` is `""`, hs-d537 A4) | pi theme (Plan `pi-theme`) |
 | pi tool pills: running / done / failed | no | bg 6 / 2 / 1, fg 0 (base colours) | pi theme (Plan `pi-theme`) |
 | pi Thinking pill `Thinking…` | no | bg 7, fg 0, caps 7 (hs-d557 item 1; replaces the colour-6 pill) | pi theme (Plan `pi-theme`) |
-| The User's input (hs-d557 item 6, an experiment) | no | drawn inverted: bg 7, fg 0 (`userMessageBg`, `userMessageText`) | pi theme (Plan `pi-theme`) |
+| The User's input | no | text 7 on no fill (`userMessageBg` "", `userMessageText` 7), inside a chat balloon whose borders are 8 (§6.9 "Chat balloons") | pi theme (Plan `pi-theme`) |
 | The jump hint ` ↓ Jump to latest message · Ctrl+End` (A7) | no | fg 8 text only, no background, like the scroll cues | the adapter (below) |
 | pi lines and rails, toggles | no / yes | fg 8 / fg 7 | pi theme (Plan `pi-theme`) |
 | **Other** | | | |
@@ -2568,8 +2568,8 @@ The theme file is `pi/themes/cpd.json` (`name` "cpd"), declared in `pi/package.j
 | `scrollbarThumb` | 8 | muted mark |
 | `searchMatchBg` | 3 | a match is a yellow block |
 | `searchMatchText` | 0 | text on a block |
-| `userMessageBg` | 7 | the User's input is drawn inverted (hs-d557 item 6, an experiment, easy to revert): the palette forbids SGR 7, so the inversion is these two tokens |
-| `userMessageText` | 0 | text on a block |
+| `userMessageBg` | "" | no fill: the User's input is not inverted any more (the chat balloons replace hs-d557 item 6's experiment, §6.9) |
+| `userMessageText` | 7 | read-only text, as every body text |
 | `customMessageBg` | "" | no fill (A4) |
 | `customMessageText` | 7 | read-only text |
 | `customMessageLabel` | 5 | cpd's blocks are magenta |
@@ -2625,7 +2625,10 @@ The SGR of the elements (n is the colour; the block's text is 0):
 | Element | Hit target | Colour |
 |---|---|---|
 | cpd's block: lead `╭─` | no | fg 8, `ESC[90m` |
-| cpd's pill (`cpd ` and the summary's first sentence, commands.md §15.9) | no | bg 5, text 0, caps 5: `ESC[45m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[35m` |
+| cpd's pill (`cpd` alone, commands.md §15.9) | no | bg 5, text 0, caps 5: `ESC[45m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[35m` |
+| cpd's block: the first sentence after the pill (outside it) | no | fg 7, `ESC[37m` |
+| Terminator row ` ╰󰁚` (a fold-template element that cannot fold, §6.9) | no | the whole row fg 8, `ESC[90m`: the space, `╰` and the glyph |
+| Chat balloon borders and tails `╭ ─ ╮ │ ╰ ╯` (§6.9) | no | fg 8, `ESC[90m`; the text inside keeps the terminal's look (7), neither recoloured nor inverted |
 | cpd's block: rail `│ ` | no | fg 8, `ESC[90m` |
 | cpd's block: content | no | fg 7, `ESC[37m` |
 | cpd's block: toggle `╰󰁋 expand` / `╰󰁣 collapse` | yes (click, Ctrl+O) | fg 7, `ESC[37m` |
@@ -2874,11 +2877,68 @@ hs-d498 (User, 2026-10-20; it supersedes hs-d488's route, a pinned fork of `pi-c
 
 **The tool pill and the Thinking fold** (hs-d508, hs-d510, hs-d537, hs-d557; colours and SGR: §6.1.1 "The pi theme"). A tool row's title becomes a pill: the title text as drawn today, inside caps U+E0B6 / U+E0B4, bg 6 while the tool runs **or has not started**, 2 when done, 1 when failed, text 0 (A5); the pill replaces the title's bold/colour text. The title row is ` ╭─` (lead 8), the pill, a space, the title, with **no dot in any state** (the pill's colour carries running, done and failed; a status dot, or a dot spinner on a fold `toggle` row, is not drawn; fold `status` is unchanged). Every row (head, body ` │ `, closing ` ╰`) starts with one space, so all stand in one column; the group head `Run date + 16 more steps` is the same shape. Rails, lead and metadata are 8. Pills are read-only: base colours 0-7 only, text 0. **The closing row of a running row**: see §6.9 "The closing row of a running row": ` ╰` (8) and one loader frame (6), no text; fold `toggle` rows never use `└`, which stays only for fold `status` and the claude and codex styles.
 
+**The terminator** (User, 2026-10-22; stated once, here, where the fold template is defined; §6.1.1, commands.md §15.9 and §17 refer to it). An element drawn with the fold template (`╭─` head, `│ ` rails, closing row) that **cannot fold** ends with the closing row ` ╰󰁚`: one leading space, `╰` and the glyph U+F005A (the cockpit's glyph of "nothing to fold"), **all colour 8**, no text and no toggle. A foldable element keeps ` ╰󰁋 expand` / ` ╰󰁣 collapse` (`╰` 8, glyph and word 7). **A bare `│` is never the last row** of a fold-template element. The running tool row's ` ╰󰁚 Running` (below) is the same family, with its timer text. Elements that use it: a cpd block of an always-open type (the Plan review summary `cpd-plan-summary`, and a `cpd-context` with no counts, commands.md §15.9 "No summary") or with no body. Other pi chat elements: a tool row or the Thinking fold with nothing to expand, if the renderer draws one, is the same (checked in this contract and commands.md: none is described as drawn without a closing row other than the hidden Thinking view, which is the plain text `Thinking…` and not a fold-template element). The cockpit's Inbox section has the same defect; it is another Plan's and is not changed here.
+
 **The Thinking fold** (hs-d557 item 1; replaces the colour-6 pill of hs-d534 and hs-d537 and the per-section pills). One fold per Thinking block, with **one** title pill, the literal `Thinking…` (bg 7, text 0, caps 7). Folded, all the content is inside the fold: ` ╭─[Thinking…]` then ` ╰󰁋 expand`. **Expanded** (a click on the folded block or its `╰󰁋 expand` row, and Ctrl+T): the title, the whole thinking text on `│ ` rails (rails 8, text 7), then ` ╰󰁣 collapse`. Headings inside the text stay text: there are no section pills. The hidden view (`hideThinkingBlock: true`) stays the plain `Thinking…` with no toggle, and is reached only as the cycle here says, never by a click or Ctrl+T on the folded block. **No italic (SGR 3) is drawn in the Thinking block in any view** (folded, expanded or hidden label); markdown emphasis inside the agent's own reply text keeps pi's italic (Change).
 
 **Under hs-d545 what stays and what goes** (inventory of `pi/compact-tools/extensions/`): *stay*: the `╭─` lead and `│ ` rails, the pills, the toggles `╰󰁋 expand` / `╰󰁣 collapse` and their click and Ctrl+O / Ctrl+T, the dots and glyph-frame spinners (the frame changes, the colour is one fixed index: 6 for the running dot and the working label, 8 for rails and metadata), diff text coloured 2 and 1, markdown through the theme. *Go*: the derived colour math (`compact-tools-color.ts`: `interpolateRgb`, `neutralizeRgb`, `liftContrast`, `withContrast`, `diffTintRgb`, `themeColorRgb`, `colorizeRgb`, `fillRgb`, `rgbPainter`); the contrast bands, glow ramps and pulse ramps of `compact-tools-palette.ts` (`CHROME`, `PULSE_LOW`, `activityGlow`, `progressGlow`, `paintIndicator`'s ramp), `glowProgressMessage` of `compact-tools-progress.ts` and the eased intensity of `compact-tools-activity.ts` (`dotIntensities`, a text/dim switch by intensity), the diff background tints, every `theme.fg("dim", …)` (SGR 2 faint depends on the theme; muted is painted 8), and any extra with no cockpit counterpart. The values of the theme's `dim` are 8, so a `theme.fg("dim", …)` that remains is 8 too.
 
 **Why Thinking did not expand, and how it does** (A6, confirmed in the source: unverified at runtime). `getInitialThinkingPhase` of `compact-tools-thinking.ts` reads `<agent dir>/settings.json`; `hideThinkingBlock: true` gives the view `hidden`: the block shows `Thinking…` and has no toggle. The User's pi settings had that value, so Thinking never expanded; the pi-config PR of Plan `pi-theme` sets it false, and the view is then `summary`. It expands by the fold toggle (`╰󰁋 expand`, a click), or Ctrl+T as today, to the whole thinking text (colour 7) on the rails, under the one title pill `Thinking…`.
+
+### Chat balloons (User, 2026-10-22; Plan `pi-theme`)
+
+The User's and the agent's message text is drawn in a **balloon** instead of plain text (the User's input is no longer inverted). The direction the balloon comes from says who speaks: **right** for the User, **left** for the agent. No colour and no inverted text; no margins, one horizontal padding column each side.
+
+**Geometry.** For a message whose wrapped text rows are padded with spaces to the inner width W, the balloon width is B = W + 4 (2 borders, 2 padding). Rows, top to bottom:
+
+- top: `╭` + `─`×(B-2) + `╮`;
+- per text row: `│ ` + row + ` │`;
+- one blank inner row: `│` + spaces×(B-2) + `│` (part of **every** balloon);
+- **User**, tail start: `╰` + `─`×(B-3) + `╮│`; tail end: spaces×(B-2) + `╰╯`. The whole balloon is moved right so its last column is the pane's last column.
+- **Agent**, tail start: `│╭` + `─`×(B-3) + `╯`; tail end: `╰╯`. Against the left edge.
+
+The User's template (B = 15, W = 11, text `user prompt` / `agent reply`):
+
+```
+╭─────────────╮
+│ user prompt │
+│             │
+╰────────────╮│
+             ╰╯
+╭─────────────╮
+│ agent reply │
+│             │
+│╭────────────╯
+╰╯
+```
+
+A wrapped multi-line example, user, text `fix the build` and `then ship it` in a pane of width 24 (W = 13, B = 17, drawn flush right: 7 spaces before each row):
+
+```
+       ╭───────────────╮
+       │ fix the build │
+       │ then ship it  │
+       │               │
+       ╰──────────────╮│
+                      ╰╯
+```
+
+(`fix the build` is 13 columns, `then ship it` is 12 plus one padding space to W = 13.) The same message from the agent has the same top, text rows and blank row, then `│╭` + `─`×14 + `╯` and `╰╯`, flush left.
+
+**Rules.**
+
+- **Width.** B = min(pane width, longest wrapped text row + 4). Text wraps at pane width - 4 (one padding column each side, nothing else). The width fits the text, up to the pane width.
+- **Colour.** Borders and tails are 8 (`ESC[90m`, the lines rule, §6.1.1); the text is not recoloured and not inverted (7, the terminal's default look; `userMessageBg` "" and `userMessageText` 7).
+- **No blank row or column around a balloon.** The user's tail row sits directly above the agent's top row. pi's own Spacer, padding rows and the `outputPad` column are dropped for balloon text.
+- **What is wrapped.** Only message **text blocks**, one balloon per text block. Thinking, tool rows, errors and `Response was truncated` lines of an assistant message stay outside, as today. A message with no text (tool calls or Thinking only) draws no balloon.
+- **OSC 133.** pi's zone marks stay on the first and last row of the message.
+- **Mentions.** The mentions painter (hs-d544, commands.md §15.14) paints the text rows before they are boxed.
+- **Silent mode.** The answer that silent mode (`compact-tools-silent.ts`) shows is drawn as a balloon too.
+- **Narrow panes.** Below a pane width of 8 (Lead's suggestion; unverified against the User) a message is drawn **without** its balloon, as plain text wrapped to the pane. From 8 up, B = 8 gives W = 4, and a longer word is split at W; the balloon is never wider than the pane.
+- **Width of characters.** Width is measured in terminal columns: wide characters (CJK) count two and styled markdown counts its visible columns only, so the right wall `│` stays aligned on every row.
+- **Ungated.** Like the rest of compact-tools, balloons draw in every pi window, not only in cpd Sessions.
+
+**Where it is wired.** In `compact-tools`, by patching the prototype `render` of pi's `UserMessageComponent` and `AssistantMessageComponent`, the same mechanism as `patchRender` of `compact-tools-silent.ts`. A pi update that renames or moves those classes turns balloons off (the user then sees pi's plain messages) until the test that pins them fails.
 
 ## 7. git and the Gate
 
