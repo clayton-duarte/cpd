@@ -11,6 +11,7 @@ use cpd_core::config::Tier;
 use cpd_core::error::{CpdError, ErrorCode};
 use cpd_core::events::highest_id;
 use cpd_core::inbox::model::{Item, Kind};
+use cpd_core::job::open::shown_needs;
 use cpd_core::ids::{AttemptId, ContextId, EscalationId, JobKey, PlanId, PrKey, SessionId};
 use cpd_core::plan::display::Display;
 use cpd_core::plan::fingerprint::load_prs;
@@ -48,8 +49,6 @@ pub struct PlanBoxes {
     pub prs: Vec<PrNode>,
     /// Every Job of the Plan, in creation order; each names its PR.
     pub jobs: Vec<JobNode>,
-    /// The Plan's latest Plan review, if there is one.
-    pub review: Option<Review>,
     /// What of the Plan needs the User, from the same transaction.
     pub needs_user: NeedsUser,
     /// The highest Event id in this snapshot's read transaction (§17).
@@ -276,7 +275,6 @@ pub fn plan_boxes(store: &mut Store, plan: &PlanId) -> Result<PlanBoxes, CpdErro
         let needs_user = NeedsUser::of(&visible_items(conn, &now)?, plan, &id("Session id", &lead, SessionId::parse)?);
         Ok(PlanBoxes {
             needs_user,
-            review: latest_review(conn, plan, &plan_fingerprint(conn, plan)?)?,
             context: id("Context id", &context, ContextId::parse)?,
             prs: pr_nodes(conn, plan, lead_working)?,
             jobs: job_nodes(conn, plan)?,
@@ -362,7 +360,7 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
     let display = Display::load(conn, plan)?;
     let waiting_on: Vec<Vec<String>> = rows.iter().map(|j| display.job_blockers(&rows, j)).collect();
     let mut attempts = attempts(conn, plan)?;
-    rows.into_iter()
+    rows.iter()
         .zip(waiting_on)
         .map(|(j, waiting_on)| {
             let what = format!("Job {plan}/{}", j.key);
@@ -371,16 +369,16 @@ fn job_nodes(conn: &Connection, plan: &PlanId) -> Result<Vec<JobNode>, CpdError>
                 pr: id("PR key", &j.pr, PrKey::parse)?,
                 status: JobStatus::parse(&format!("{what} has status"), &j.status)?,
                 tier: j.tier.as_deref().map(|t| tier(&what, t)).transpose()?,
-                needs: j.needs.iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
+                needs: shown_needs(&rows, j).iter().map(|n| id("Job key", n, JobKey::parse)).collect::<Result<_, _>>()?,
                 retry_tier: j.retry_tier.as_deref().map(|t| tier(&what, t)).transpose()?,
                 attempts: attempts.remove(j.key.as_str()).unwrap_or_default(),
                 seq: j.seq,
                 waiting_on,
-                title: j.title,
+                title: j.title.clone(),
                 appended: j.appended,
-                failed_cause: j.failed_cause,
-                cancel_reason: j.cancel_reason,
-                merged_sha: j.merged_sha,
+                failed_cause: j.failed_cause.clone(),
+                cancel_reason: j.cancel_reason.clone(),
+                merged_sha: j.merged_sha.clone(),
                 key,
             })
         })

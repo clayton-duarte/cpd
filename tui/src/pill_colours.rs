@@ -78,7 +78,7 @@ fn job_pill_draws_its_status_colours_bright_with_fg0_and_caps_in_the_same_colour
     let jobs: Vec<FlowJob> = statuses
         .into_iter()
         .map(|(status, _)| status)
-        .map(|status| FlowJob { key: format!("{status:?}").to_lowercase(), status, tier: None, needs: vec![], attempt: 2, aside: None })
+        .map(|status| FlowJob { key: format!("{status:?}").to_lowercase(), status, tier: None, needs: vec![], attempt: 2 })
         .collect();
     let chart = layout(&jobs, 0);
     assert_eq!(chart.pills.len(), 3);
