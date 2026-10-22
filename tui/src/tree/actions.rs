@@ -167,12 +167,12 @@ impl Action {
         let words = |w: &[&str]| w.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         match self {
             Action::Open(id) => words(&["session", "open", id.as_str()]),
-            Action::OpenManager(context) => vec!["context".into(), "manager".into(), format!("--context={context}")],
+            Action::OpenManager(context) => vec!["context".into(), "manager".into(), format!("--context={context}"), "--by-user".into()],
             Action::Park => words(&["session", "park"]),
             Action::History(id) => words(&["session", "history", id.as_str()]),
             Action::NewPlan { context, id, title } => {
                 let mut argv = words(&["plan", "new", id.as_str()]);
-                argv.extend([format!("--context={context}"), format!("--title={title}")]);
+                argv.extend([format!("--context={context}"), format!("--title={title}"), "--by-user".into()]);
                 argv
             }
             Action::NewContext { id, title, owner } => {
@@ -485,7 +485,7 @@ mod tests {
         let cases = [
             (Action::Open(sid("l-ship")), vec!["session", "open", "l-ship"]),
             (Action::Close(sid("l-ship")), vec!["session", "close", "l-ship"]),
-            (Action::OpenManager(ContextId::parse("alpha").unwrap()), vec!["context", "manager", "--context=alpha"]),
+            (Action::OpenManager(ContextId::parse("alpha").unwrap()), vec!["context", "manager", "--context=alpha", "--by-user"]),
             (Action::Park, vec!["session", "park"]),
             (Action::History(sid("f-idle")), vec!["session", "history", "f-idle"]),
             (archive(Subject::Context(ContextId::parse("alpha").unwrap())), vec!["context", "archive", "alpha"]),
@@ -500,7 +500,7 @@ mod tests {
                     id: PlanId::parse("pay-4521").unwrap(),
                     title: "Pay 4521".into(),
                 },
-                vec!["plan", "new", "pay-4521", "--context=alpha", "--title=Pay 4521"],
+                vec!["plan", "new", "pay-4521", "--context=alpha", "--title=Pay 4521", "--by-user"],
             ),
             (
                 Action::NewContext {

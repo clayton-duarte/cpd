@@ -16,6 +16,7 @@
 //! - `fork_wait`: a fork's wait for its source Lead to finish its turn.
 
 mod archive;
+mod first_message;
 mod fork_wait;
 mod history;
 mod moves;
@@ -84,6 +85,9 @@ pub enum Command {
     /// Report a Session's agent state (pi adapter) (§10.6)
     #[command(hide = true)]
     State(StateArgs),
+    /// Render a Lead's or Manager's first message now and write its file (adapter) (§10.15)
+    #[command(hide = true, name = "first-message")]
+    FirstMessage(FirstMessageArgs),
     /// Write a Lead's or Manager's dynamic title with a one-shot pi (engine E10) (§10.14)
     #[command(hide = true)]
     Retitle(RetitleArgs),
@@ -254,6 +258,13 @@ pub struct RetierArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct FirstMessageArgs {
+    /// The Lead or Manager Session [default: $CPD_SESSION]
+    #[arg(long, value_name = "id", env = "CPD_SESSION", hide_env = true)]
+    session: Option<SessionRef>,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct RetitleArgs {
     /// The Lead or Manager Session to title
     #[arg(value_name = "session")]
@@ -289,6 +300,7 @@ pub fn run(command: Command) -> Result<Output, CpdError> {
         Command::Retier(args) => retier::retier(args),
         Command::Rename(args) => state::rename(args),
         Command::State(args) => state::state(args),
+        Command::FirstMessage(args) => first_message::first_message(args),
         Command::Retitle(args) => retitle::retitle(args),
         Command::Run(args) => run::run(args),
     }
