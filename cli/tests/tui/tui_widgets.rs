@@ -1332,7 +1332,7 @@ fn the_legend_fits_its_own_size() {
 fn the_legend_popup_is_sized_to_the_legend_and_capped_at_the_client() {
     let (w, h) = legend::size();
     assert_eq!(
-        legend::popup_args((215, 62)),
+        legend::popup_args((215, 100)),
         ["display-popup", "-E", "-T", " legend ", "-w", &(w + 2).to_string(), "-h", &(h + 2).to_string(), "cpd tui view legend"]
     );
     let small = legend::popup_args((40, 20));

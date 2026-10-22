@@ -20,7 +20,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd context distill` | Build the Context's digest with one-shot pi (§3.12) | Lead | |
 | `cpd context owner` | Set the owner of a Context that has none (§3.13) | Lead, Manager | |
 | `cpd context delete` | Delete an archived or asleep Context: its Plans, records, Manager, files, worktrees and local branches (§3.14) | | yes |
-| `cpd context curation` | List the pending retirements and documentation candidates, with optional limit and totals (§3.15; hs-d569 CD4) | internal | |
+| `cpd context curation` | List the pending retirements and documentation candidates (§3.15) | internal | |
 | `cpd context retire` | Decide the pending retirements (§3.16) | internal | |
 | `cpd context docs` | Decide the pending documentation candidates (§3.17) | internal | |
 | `cpd plan` | Plans and their phases (commands.md §4) | | |
@@ -117,7 +117,7 @@ Generated from the `tree` of `cpd --help` by `cli/tests/interface.rs`; do not ed
 | `cpd tui view dialog confirm` | A question with two buttons | internal | |
 | `cpd tui view dialog input` | A one-line text field | internal | |
 | `cpd tui view dialog text` | Scrollable read-only text | internal | |
-| `cpd tui view dialog checklist` | Entries with full text indented, to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}` (hs-d569 CD2, CD3) | internal | |
+| `cpd tui view dialog checklist` | Entries to tick, with `[Approve]` and `[Later]`; the outcome is `{approved, ticked, unticked}` | internal | |
 | `cpd tui view chat` | The chat slot's placeholder | internal | |
 | `cpd tui action` | A click on a StatusBar button, or the merge popup's confirm (internal; prints nothing) (§13.2) | internal | |
 | `cpd doctor` | Check the machine (commands.md §14.1) | | |
