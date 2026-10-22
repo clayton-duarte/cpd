@@ -447,6 +447,10 @@ fn command(action: &Action) -> Result<Value, String> {
 }
 
 #[cfg(test)]
+#[path = "actions_by_user_tests.rs"]
+mod by_user_tests;
+
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 
