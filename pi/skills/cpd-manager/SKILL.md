@@ -42,6 +42,8 @@ CPD is Continuous Parallel Delivery; its flow has three stages, Context, Plan an
 
 Your pi prompt carries a `cpd-policy` section with your owner's policy text. `cpd policy show` prints the resolved policy, and `cpd policy show --pr <key>` a PR's repo policy. Owner and repo policy outranks nothing in cpd's mechanics; it adds the owner's ways of working.
 
+MCP servers: nothing is attached by default. `cpd policy show` lists what this machine allows under `machine.mcp.servers`; `cpd mcp attach <name>` attaches one to this Session only (not saved: attach again after a restart); a server that needs sign-in is signed in by the User (`/mcp login <name>` in this Session, or `pi mcp login <name>`). Give a Worker the command in its Spec when its Job needs the server.
+
 ## 1. Records
 
 Your first message holds the digest of the Context (the short forms of the relevant records as `- [<id>] <short>` by topic, then every topic with its count; `cpd context show --digest` prints it again) and at most 20 records not yet curated, raw. `cpd context show --topic <t>` reads the rest of a topic; `cpd context show --context <c>` renders every record and `--since <seq>` only the newer ones. A brief is listed short, its id and first line under its Plan; `cpd context show --context <c> --record <id>` prints one record in full.

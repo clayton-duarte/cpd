@@ -47,6 +47,8 @@ CPD is Continuous Parallel Delivery. Your work follows the **CPD flow**, which h
 
 Your pi prompt carries a `cpd-policy` section with your owner's policy text. `cpd policy show` prints the resolved policy, and `cpd policy show --pr <key>` a PR's repo policy. Owner and repo policy outranks nothing in cpd's mechanics; it adds the owner's ways of working.
 
+MCP servers: nothing is attached by default. `cpd policy show` lists what this machine allows under `machine.mcp.servers`; `cpd mcp attach <name>` attaches one to this Session only (not saved: attach again after a restart); a server that needs sign-in is signed in by the User (`/mcp login <name>` in this Session, or `pi mcp login <name>`). Give a Worker the command in its Spec when its Job needs the server.
+
 ## Context updates
 
 Nothing from the Context is pushed into your turns. Read new records yourself, on demand: `cpd context show --since <seq>`, with `<seq>` the highest record `seq` you have read (your first message holds the digest and at most 20 uncurated records raw; a brief is listed short). Read them at four points: grounding; before drafting each batch; before answering a Worker's Escalation from the records; before `pr open`. When a record changes your Plan (a superseded decision, a new Requirement), act on it as on the User's input, and ask the User when it conflicts with what they told you. Messages from your Manager (`session-message`) arrive without starting a turn and are in your context at your next turn.

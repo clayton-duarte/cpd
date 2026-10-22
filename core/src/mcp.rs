@@ -48,8 +48,8 @@ fn attach(args: AttachArgs) -> Result<Output, CpdError> {
     let session = env.store.read(|conn| crate::session::resolve(conn, &reference))?;
     let machine = load_machine(&env.home, &env.config.machine)?;
     let Some(server) = machine.servers.get(&name) else {
-        let available: Vec<&String> = machine.servers.keys().collect();
-        let listed = if available.is_empty() { "none".to_owned() } else { available.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ") };
+        let available: Vec<&str> = machine.servers.keys().map(String::as_str).collect();
+        let listed = if available.is_empty() { "none".to_owned() } else { available.join(", ") };
         return Err(CpdError::new(
             ErrorCode::McpUnknown,
             format!("Machine {} has no MCP server {name}; available: {listed}.", env.config.machine),
