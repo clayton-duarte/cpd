@@ -10,7 +10,7 @@ import { AssistantMessageComponent, createReadToolDefinition, initTheme, type Ex
 import { Container, type Component } from "@earendil-works/pi-tui";
 import { DEFAULT_CONFIG } from "../../compact-tools/extensions/compact-tools-config.ts";
 import { ToolGroupController } from "../../compact-tools/extensions/compact-tools-grouping.ts";
-import { paintIndicator } from "../../compact-tools/extensions/compact-tools-palette.ts";
+import { paintIndicator } from "../../compact-tools/extensions/compact-tools-indices.ts";
 import { ToolRuntime } from "../../compact-tools/extensions/compact-tools-runtime.ts";
 import { theme as piTheme } from "../../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { announce, loadExtension, makeRow, restoreClocks, shutdown, text } from "./indicator-harness.ts";
@@ -78,30 +78,6 @@ test("a finished group line is drawn once, however many frames pass", async () =
 	shutdown(harness);
 });
 
-test("a running group line is drawn every frame, and cached once it finishes", async () => {
-	const harness = await loadExtension({ style: "claude" }, { tui: true, idle: false });
-	const { theme, calls } = countingTheme();
-	const { chat, controller } = groupedChat(theme);
-	const id = `g-${++sequence}`;
-	announce(harness, id, "read");
-	const row = makeRow("read", id, { path: "src/x.ts" }, harness.definitions.get("read"));
-	row.setArgsComplete();
-	row.markExecutionStarted();
-	chat.children = [row] as unknown as Component[];
-	chat.render(100);
-	const before = calls();
-	chat.render(100);
-	const running = calls() - before;
-	row.updateResult({ ...text("a"), isError: false } as never, false);
-	const finished = strip(chat.render(100));
-	assert.match(finished.join("\n"), /Read 1 file/u);
-	const settled = calls();
-	chat.render(100);
-	assert.ok(running > calls() - settled, "a running group draws itself; a finished one does not");
-	controller.dispose();
-	shutdown(harness);
-});
-
 test("every change a finished group shows is drawn", async () => {
 	const harness = await loadExtension({ style: "claude" }, { tui: true, idle: true });
 	const { chat, controller } = groupedChat(piTheme as Theme);
@@ -148,13 +124,11 @@ test("every change a finished group shows is drawn", async () => {
 	assert.match(strip(chat.render(100))[1]!, /Read 1 file, listed 1 directory/u);
 	chat.children = [row, second] as unknown as Component[];
 
-	// A new theme repaints it.
+	// A new theme leaves it as it was: only palette indices are drawn.
 	const dark = chat.render(100);
 	initTheme("light", false);
 	try {
-		const light = chat.render(100);
-		assert.deepEqual(strip(light), strip(dark));
-		assert.notDeepEqual(light, dark);
+		assert.deepEqual(chat.render(100), dark);
 	} finally {
 		initTheme("dark", false);
 	}
@@ -164,8 +138,8 @@ test("every change a finished group shows is drawn", async () => {
 });
 
 const dotOf = (lines: string[]) => lines.join("\n").match(/\x1b\[[0-9;]*m⦁/u)?.[0];
-const PENDING_DOT = dotOf([paintIndicator(piTheme as Theme, "pending", 0)]);
-const ERROR_DOT = dotOf([paintIndicator(piTheme as Theme, "error", 0)]);
+const PENDING_DOT = dotOf([paintIndicator("pending")]);
+const ERROR_DOT = dotOf([paintIndicator("error")]);
 
 /** The group's line and, opened, its row's own line: they must agree. */
 function groupAndRow(harness: Awaited<ReturnType<typeof loadExtension>>, row: ReturnType<typeof makeRow>) {

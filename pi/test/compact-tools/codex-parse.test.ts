@@ -192,20 +192,20 @@ test("output tails and empty output read as Codex shows them", () => {
 	assert.equal(isEmptyOutput("(no output) but more"), false);
 });
 
-test("commands are highlighted the same way on every Pi: program, flags, strings, variables, operators", async () => {
+test("commands are cut into the same tokens on every Pi: program, flags, strings, variables, operators, each read-only text 7", async () => {
 	const { highlightCommand } = await import("../../compact-tools/extensions/compact-tools-codex-rows.ts");
-	const marked = { fg: (color: string, text: string) => `<${color}>${text}</>` } as never;
+	const marked = {} as never;
 	assert.deepEqual(highlightCommand("rg -n 'export' src | head -n 5 && echo \"$HOME\" # done", marked), [
-		"<syntaxFunction>rg</> <syntaxKeyword>-n</> <syntaxString>'export'</> src <syntaxOperator>|</> <syntaxFunction>head</> "
-		+ "<syntaxKeyword>-n</> <syntaxNumber>5</> <syntaxOperator>&&</> <syntaxFunction>echo</> <syntaxString>\"$HOME\"</> <syntaxComment># done</>",
+		"\x1b[37mrg\x1b[39m \x1b[37m-n\x1b[39m \x1b[37m'export'\x1b[39m src \x1b[37m|\x1b[39m \x1b[37mhead\x1b[39m "
+		+ "\x1b[37m-n\x1b[39m \x1b[37m5\x1b[39m \x1b[37m&&\x1b[39m \x1b[37mecho\x1b[39m \x1b[37m\"$HOME\"\x1b[39m \x1b[37m# done\x1b[39m",
 	]);
 	assert.deepEqual(highlightCommand("FOO=1 make ${TARGET} > out.log 2>&1", marked), [
-		"FOO=1 <syntaxFunction>make</> <syntaxVariable>${TARGET}</> <syntaxOperator>></> out.log <syntaxNumber>2</><syntaxOperator>>&</><syntaxNumber>1</>",
+		"FOO=1 \x1b[37mmake\x1b[39m \x1b[37m${TARGET}\x1b[39m \x1b[37m>\x1b[39m out.log \x1b[37m2\x1b[39m\x1b[37m>&\x1b[39m\x1b[37m1\x1b[39m",
 	], "an assignment is not the program; a redirection does not start a command");
 	assert.deepEqual(highlightCommand("echo 'one\ntwo'\nls", marked), [
-		"<syntaxFunction>echo</> <syntaxString>'one</>", "<syntaxString>two'</>", "<syntaxFunction>ls</>",
+		"\x1b[37mecho\x1b[39m \x1b[37m'one\x1b[39m", "\x1b[37mtwo'\x1b[39m", "\x1b[37mls\x1b[39m",
 	], "a string over two lines keeps its color on each, and a new line starts a command");
-	assert.deepEqual(highlightCommand("echo \"unterminated", marked), ["<syntaxFunction>echo</> <syntaxString>\"unterminated</>"]);
+	assert.deepEqual(highlightCommand("echo \"unterminated", marked), ["\x1b[37mecho\x1b[39m \x1b[37m\"unterminated\x1b[39m"]);
 	assert.deepEqual(highlightCommand("", marked), [""]);
 });
 

@@ -18,10 +18,10 @@ const json = (path: string) => JSON.parse(readFileSync(path, "utf8")) as Record<
 /** The fork's `extensions/*.ts`, but `compact-tools-release.ts` (its subject is gone), and the one module cpd adds. */
 const SOURCES = [
 	"compact-tools-activity.ts", "compact-tools-claude.ts", "compact-tools-clock.ts", "compact-tools-codex-rows.ts",
-	"compact-tools-codex.ts", "compact-tools-color.ts", "compact-tools-command.ts", "compact-tools-config.ts",
+	"compact-tools-codex.ts", "compact-tools-command.ts", "compact-tools-config.ts",
 	"compact-tools-core.ts", "compact-tools-custom.ts", "compact-tools-double-load.ts", "compact-tools-grouping.ts",
-	"compact-tools-hook.ts", "compact-tools-invocation.ts", "compact-tools-language.ts", "compact-tools-layout.ts",
-	"compact-tools-markdown.ts", "compact-tools-nested.ts", "compact-tools-palette.ts", "compact-tools-progress.ts",
+	"compact-tools-hook.ts", "compact-tools-indices.ts", "compact-tools-invocation.ts", "compact-tools-layout.ts",
+	"compact-tools-nested.ts", "compact-tools-progress.ts",
 	"compact-tools-rendering.ts", "compact-tools-runtime.ts", "compact-tools-shell.ts", "compact-tools-silent.ts",
 	"compact-tools-thinking.ts", "compact-tools-transcript.ts", "compact-tools.ts", "compact-tools-types.ts",
 	"compact-tools-viewport.ts",
