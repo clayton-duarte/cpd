@@ -6,6 +6,8 @@ import type { Host } from "./host.ts";
 import { clearTrip } from "./loop-guard.ts";
 import { checkProtocol } from "./protocol.ts";
 import { closeSuperseded, decidedElsewhere, openReview, QUESTION_LABEL, supersede } from "./review.ts";
+import type { McpServerConfig } from "@earendil-works/pi-coding-agent";
+import { attachServer } from "./mcp.ts";
 import { noteRetier } from "./retier.ts";
 import type { Run } from "./run.ts";
 import { refreshMentions } from "./mentions-refresh.ts";
@@ -99,6 +101,16 @@ async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
   }
   if (ev.kind === "session-retiered") {
     if (own && (r.info.role === "lead" || r.info.role === "manager")) await noteRetier(host, r);
+    return;
+  }
+  if (ev.kind === "mcp-attached") {
+    if (own) {
+      try {
+        attachServer(pi, ev.data.name, ev.data.server as unknown as McpServerConfig);
+      } catch (e) {
+        host.deliver("mcp attach", e, { name: ev.data.name });
+      }
+    }
     return;
   }
   if (ev.kind === "session-renamed") {
