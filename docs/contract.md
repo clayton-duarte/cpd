@@ -156,6 +156,9 @@ $CPD_HOME/
     context-digests/<context>/distill.log        every distill run's stderr, appended; the engine's runs also their stdout (§3.7 E9)
     context-digests/<context>/distill.pid        the pid of the distill run the engine started (§3.7 E9), one line, as `tmux-restart.pid`
     titles/<session>.log          the output of every retitle run the engine starts for that Session, appended (§3.7 E10)
+    secret/
+      approve/<uuid>.json         a Worker-requested approval, written by `cpd secret approve` after the User allows it (§8.4); mode 0600; `{session, action, vault, item, field, at}` where `item` and `field` are null when the action has none
+      allow/<attempt>.json        an allowance for an Attempt, written by `cpd secret allow` and idempotent (§8.4); mode 0600; a JSON array of `{vault, item, field}`; read until the Attempt ends
 ```
 
 **The migration marker** (hs-n278). The process that takes `locks/store.lock` and finds a migration or the conversion of a legacy store to run, writes into the lock file, before it starts migrating and while it holds the `flock`, one JSON object `{"migrating": true, "pid", "started_unix_ms", "from", "to", "command"}` (`from` and `to`: the schema versions or the count of applied migrations before and after; `command`: its `argv[0..]` as `txns.command` would name it). It keeps the marker until it releases the `flock`: it truncates the file as the last step of its setup, immediately before it releases `locks/store.lock`, on success and on failure alike, not when the migration commits (the rest of the setup, the connection and the schema check, still holds the lock). A waiter that has read a live marker during its wait keeps waiting while the `flock` stays held by that holder, also when the file is empty in the instants before the release (§4.2). A file that is empty, or whose `pid` is not the holder's, is not a marker: the lock file is a marker only while the `flock` is held and `migrating` is true. A holder that dies releases the `flock` by itself (below) and its marker is ignored; the next opener takes the lock and overwrites it.
@@ -3595,6 +3598,45 @@ Every input is parsed once, at the boundary: a scope file at the first resolve o
 - **A failed `cpd policy show`** is delivered to the Session as an error message (`cpd adapter: …`) and the Session gets no policy text: loud, not defaulted.
 - **A Lead's section is its owner's** (`Owner`, above); repo-scope text reaches it only through `cpd policy show --pr <key>`. A Worker's is its PR's repo's, a Manager's its Context's owner's.
 - **The skills carry cpd mechanics only**: what varies by owner or repo is in a policy, never in a skill.
+
+### 8.4 Secrets
+
+`cpd secret` wraps 1Password's CLI `op` to manage secrets in Secure Notes. It enforces who may do what, in which vault, and when. Agents never call `op` directly (the pi adapter refuses it). cpd holds no token and never signs in; the 1Password app's per-use prompt is the approval. The commands are read-only (`get`, `list`), write (`create`, `edit`, `delete`), Grant (`allow`), and the adapter's approval step (`approve`, internal). Values never appear in argv, output, Events, logs, files or the store.
+
+#### Who the caller is
+
+Decided once, at the boundary, from the environment and the store:
+
+1. `CPD_SESSION` is unset or empty: `secret_session_required` (exit 3), for every command, `approve` included.
+2. The Session is looked up; unknown: `session_not_found` (exit 4).
+3. `CPD_ATTEMPT` set and non-empty, or the Session's role `worker`: a **Worker**. Otherwise the role is `lead` or `manager`.
+
+Nothing else authenticates the caller. These guards stop mistakes, not a determined agent: forging `CPD_SESSION` or reading a grant file is not blocked.
+
+#### Rules (checked in this order; the first that fails is the result)
+
+1. Session (above).
+2. Role. `get`: Lead, Manager, Worker. `list`, `create`, `edit`, `delete`: Lead, Manager. `allow`: Lead only. `approve`: Lead, Manager. Else `secret_role_denied` (exit 3).
+3. Vault. `cpd` and `homeserver` pass. Another vault: a Worker is refused `secret_vault_denied` (exit 3), never approvable; `allow` is refused the same way, never approvable; `approve` for `cpd` or `homeserver` is `usage` (exit 2, needs no approval); a Lead or Manager goes to step 4.
+4. Grant. A Worker's `get` needs an **allowance** for its Attempt, vault, item and field. A Lead or Manager in another vault needs an **approval** for its Session, action, vault, item and field. Missing or expired: `secret_grant_required` (exit 3), `details` `{grant: "allowance" | "approval", action, vault, item, field, next}`; `next` says, for an allowance, to ask the Lead with `cpd ask`, and for an approval, to ask the User with the tool `cpd_secret_approve` and run the command again.
+5. op.
+
+Also: `allow` needs the Attempt to belong to the Lead's own Plan (else `attempt_not_found`, exit 4) and not to have ended (`secret_attempt_ended`, exit 3).
+
+#### Constants
+
+- **Allowed vaults** (hardcoded in every op call): `cpd`, `homeserver`.
+- **Account** (hardcoded): `my.1password.com`; every `op` call carries `--account my.1password.com` (op otherwise uses the account last signed in; the dotfiles' `op-env` pins it too).
+- **Approval lifetime**: 10 minutes.
+
+#### Grants (files under `$CPD_HOME/run/secret/`; directories 0700, files 0600, written atomically; they hold names, never values)
+
+- **`allow/<attempt-id>.json`**: a JSON array of `{vault, item, field}`. Written by `allow`, idempotent (`already: true` when listed). Valid while the Attempt exists and has not ended (the store says), never consumed.
+- **`approve/<uuid>.json`**: `{session, action, vault, item, field, at}` (`item` and `field` null where the action has none). Written only by `approve`, which the pi adapter runs after the User chose Allow once. The first command of that Session with the same action, vault, item and field, within 10 minutes of `at`, removes the file and runs; it is consumed even when op then fails. An older file is ignored and removed.
+
+#### Persistence and the honest limit
+
+The commands write nothing to the store: no row, no Event, no history. They only read Sessions and Attempts. Their only files are the grants above. A value is never stored, and cpd is honest: the code refuses it and the files hold only names.
 
 ## 9. Tiers
 
