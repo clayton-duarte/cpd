@@ -3408,7 +3408,7 @@ cpd: a Worker runs only the tests its change touches; the full suite is the Gate
 
 ### 15.13 Questions stay short
 
-Decision (User, 2026-10-20, hs-d502, which supersedes hs-d468's rule that a Plan with drafts never uses `ask_user_question`; hs-d503 keeps the 1500-character limit; hs-d548 adds guards that questions cite only what the User has seen). `ask_user_question` is for a few short choices, and a Plan's open choices go to the User through it, as rounds with a recommended option, **in every phase and whatever the Plan's Jobs**; the Plan review is a summary and a dialog in the chat (§15.5), and plannotator is for a long document. The adapter enforces what stays of the rule with guards, as §15.11 and §15.12 do for their rules. **The guard G1** (a refusal of every `ask_user_question` of a Lead whose Plan has a `draft` Job, with the reason `cpd: a Plan with draft Jobs is presented for review with cpd_plan_review (plannotator), not ask_user_question; refused: <n> draft Jobs`) **is deleted**: its code, its message and its tests; the adapter no longer reads `cpd plan show` for it. The guards G2, G3 and G4 stay or are added.
+Decision (User, 2026-10-20, hs-d502, which supersedes hs-d468's rule that a Plan with drafts never uses `ask_user_question`; hs-d503 keeps the 1500-character limit; hs-d548 adds guards that questions cite only what the User has seen). `ask_user_question` is for a few short choices, and a Plan's open choices go to the User through it, as rounds with a recommended option, **in every phase and whatever the Plan's Jobs**; the Plan review is a summary and a dialog in the chat (§15.5), and plannotator is for a long document. The adapter enforces what stays of the rule with guards, as §15.11 and §15.12 do for their rules. **The guard G1** (a refusal of every `ask_user_question` of a Lead whose Plan has a `draft` Job, with the reason `cpd: a Plan with draft Jobs is presented for review with cpd_plan_review (plannotator), not ask_user_question; refused: <n> draft Jobs`) **is deleted**: its code, its message and its tests; the adapter no longer reads `cpd plan show` for it. The guards G2 and G4 stay; G3 is deleted.
 
 **When.** At pi's `tool_call`, for an `ask_user_question` call (`event.toolName`; the input is `{questions: [{question, header, options: [{label, description, preview?}], multiSelect?}]}`), in the same handler as §15.11 and §15.12, with the guard in its own module.
 
@@ -3420,25 +3420,19 @@ cpd: ask_user_question is for a few short choices; put anything larger in planno
 
 The refusal is `{block: true, reason}`.
 
-**G3 and G4, questions only cite visible text** (hs-d548). A question must cite only what the User has already seen in the chat, not labels or decisions from hidden thinking blocks. These guards apply to Sessions of role `lead` or `manager` (not `worker`; not side forks). The refusal comes before the User sees the question, so thinking blocks and earlier assistant text are already visible but the new question is not.
+**G4, labels stated nowhere** (hs-d553; hs-d548 part 1 and G3 superseded by hs-n425). A question must state what it asks about: every label must occur in the call's text. This guard applies to Sessions of role `lead` or `manager` (side forks of those roles included), not workers. The refusal comes before the User sees the question.
 
-**Assumptions A1–A5.** A1: The current turn starts after the last `user` message or `custom_message` entry on the session's branch (ctx.sessionManager.getBranch()); a turn started by a cpd Event (a custom message) is its own turn. A2: 'Visible' is the whole branch up to the call: assistant `text` blocks, `user` messages, `toolResult` text blocks, and `custom_message` entries with `display: true`. Never thinking blocks, never tool-call inputs or outputs. A3: A label is a token matching \b[A-Z][0-9]+\b; a range X<m>–X<n> (en dash U+2013 or '-', same letter, m<n) cites each of X<m>..X<n>. A label is visible only when that exact token occurs in visible text; a range in the chat does not show its middle members (D1–D5 alone shows D1 and D5, not D2–D4). The question's text is every question's `question` and `header` and every option's `label`, `description` and `preview`. A4: Apply G2, then G3, then G4; the first refusal wins. A5: G3 and G4 apply to Sessions of role `lead` or `manager` (side forks of those roles included), not workers; G2 unchanged.
+**Assumptions B1–B5.** B1: 'The call states a label' means the label token (\b[A-Z][0-9]+\b, as today's A3) occurs in the call's text: every question's `question` and `header`, every option's `label`, `description` and `preview`. A range X<m>–X<n> (en dash U+2013 or '-', same letter, m<n) in the call states its two ends only; its middle members count as cited but not stated, so they must occur as tokens somewhere in the call or the visible chat. Consequence: only the middle members of a range can be refused. B2: 'Visible chat' is unchanged (old A2): the whole branch up to the call: assistant `text` blocks (those of the calling message before the call included), `user` messages, `toolResult` text, `custom_message` entries with display true; never thinking blocks or tool-call inputs. A label is shown when its token occurs in the call's text or in the visible chat. B3: The turn logic of the old A1 goes away entirely: nothing is read about where the turn starts. B4: Roles unchanged (old A5): G4 applies to Sessions of role lead or manager (side forks of those roles included), not workers. B5: G4's reason, one line, exactly: `cpd: state what you ask about in the question itself (its text, or an option's description or preview); refused: <labels, comma-space separated, in order of first citation> stated nowhere` for example `...; refused: D2, D3, D4 stated nowhere`.
 
-**G3, no visible text in this turn.** The call is refused when there is no visible `text` block in the assistant message holding the call (after the last `user` or `toolResult` text). The reason:
-
-```
-cpd: write what you ask about in the chat as text, then ask again; refused: no visible text in this turn
-```
-
-**G4, labels not cited.** The question's text is searched for labels (A3). The call is refused when it cites a label or label range that does not appear in the visible text. List the missing labels in order of first citation. The reason:
+**G4 process.** The call is refused when it cites a label (stated or not; a range cites all its members) that is not shown. Cited but not stated labels form the refusal. The reason:
 
 ```
-cpd: write what you ask about in the chat as text, then ask again; refused: <labels, comma-space separated> not in the visible chat
+cpd: state what you ask about in the question itself (its text, or an option's description or preview); refused: <labels, comma-space separated, in order of first citation> stated nowhere
 ```
 
-Example: if the question cites D2 and D1–D5, the reason is: `cpd: write what you ask about in the chat as text, then ask again; refused: D2, D1, D2, D3, D4, D5 not in the visible chat` (but only for the labels not seen; if D1 is visible but D2–D5 are not, the reason is `cpd: write what you ask about in the chat as text, then ask again; refused: D2, D3, D4, D5 not in the visible chat`).
+Examples: (1) a call citing D1–D5 and stating D1 and D5 only: refused `D2, D3, D4 stated nowhere`. (2) a call stating D1, D2, D3, D4, D5 individually: passes. (3) a call citing A4 with no chat text at all: passes. (4) D2 shown in a user message, but the call cites D1–D5 with D1 and D5 stated: only D3, D4 named in refusal (D2 is shown). The refusal is `{block: true, reason}`.
 
-The refusal is `{block: true, reason}`.
+**G3 is deleted** (hs-d553 based on hs-n425): no more 'no visible text in this turn' check. Its code, reason, tests and docs are removed. The rule now: prose an agent writes next to a tool call lands in hidden thinking, not the chat, so 'write it in the chat first, then ask' cannot work; the agent must state what it asks about in the call itself.
 
 **Not affected:** a Worker (it has no such tool); Sessions of role `worker`; every other tool.
 

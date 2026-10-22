@@ -45,7 +45,7 @@ ask_user_question({questions: [
      {label: "None", description: "Report the failure at once; the caller retries"}]}]})
 ```
 
-Assumptions (list them in the chat first, as a table or list; the preview holds at most a few lines, or only the count):
+Assumptions (state them in the question, as text or a preview; the preview holds at most a few lines, or only the count; too long for 1500 characters: write them to a file and open it in plannotator):
 
 ```ts
 ask_user_question({questions: [{
