@@ -1004,6 +1004,26 @@ fn a_fresh_database_has_archived_at_and_the_five_new_event_kinds_and_matches_its
     assert!(format!("{err:?}").contains("FOREIGN KEY"), "an Event kind is a foreign key to event_kinds: {err:?}");
 }
 
+/// Migration `loop-guard` (contract §4.4, §5.2): a fresh store takes the Event kind `session-resumed` and the Inbox kind `loop-guard`.
+#[test]
+fn a_fresh_database_accepts_the_session_resumed_event_and_a_loop_guard_inbox_item() {
+    let env = TestEnv::empty();
+    let mut store = fixture_store(&env);
+    store
+        .write("test", |tx| {
+            Ok(tx.execute("INSERT INTO events (txn, at, kind, context, text, data) VALUES (cpd_txn(), 't', 'session-resumed', 'ctx', 'x', '{}')", [])?)
+        })
+        .unwrap_or_else(|e| panic!("session-resumed: {e:?}"));
+    store
+        .write("test", |tx| {
+            Ok(tx.execute(
+                "INSERT INTO inbox_items (kind, urgency, subject, context, label, opened_at) VALUES ('loop-guard', 'red', 'session:x', 'ctx', 'pay: loop guard, 21 turns in 10 min', 't')",
+                [],
+            )?)
+        })
+        .unwrap_or_else(|e| panic!("loop-guard: {e:?}"));
+}
+
 #[test]
 fn a_fresh_database_holds_one_live_manager_per_context_and_a_brief_with_its_plan() {
     let env = TestEnv::empty();
