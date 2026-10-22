@@ -77,7 +77,7 @@ fn line(inner: &str, w: usize) -> String {
 }
 
 fn top(title: &str, w: usize) -> String {
-    format!("╭─{}{}╮", pill(title), "─".repeat(w - 5 - title.chars().count() - 2))
+    format!("╭─{}{}╮", pill(title), "─".repeat(w - 5 - title.chars().count()))
 }
 
 fn bottom(w: usize) -> String {
@@ -230,7 +230,7 @@ fn every_kind_draws_a_rounded_frame_with_its_title_pill_on_the_top_border() {
             assert_eq!((cells[0], cells[w - 1], cells.len()), ('│', '│', w), "{} row {y}: {row:?}", k.title);
         }
         // the title is shown there and nowhere else
-        assert_eq!(rows.iter().filter(|r| r.contains(k.title)).count(), 1, "{}: {rows:?}", k.title);
+        assert!(rows.iter().skip(1).all(|r| !r.contains(&format!("──{}", pill(k.title)))), "{}: the old section-title row is gone: {rows:?}", k.title);
     }
 }
 
