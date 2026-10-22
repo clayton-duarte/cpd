@@ -171,7 +171,8 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
     let [head, area] = Layout::vertical([Constraint::Length(HEADER_ROWS), Constraint::Min(0)]).areas(area);
     let title = Rect::new(head.x, head.y + 1, head.width, 1).intersection(head);
     f.render_widget(Paragraph::new(section::title("Logs", None, usize::from(title.width))), title);
-    let area = area.inner(Margin::new(1, 0)); // one blank column on each side
+    let outer = area;
+    let area = area.inner(Margin::new(1, 0)); // the rows keep one blank column on each side
     let area = match &log.error {
         Some(error) => {
             let [events, foot] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
@@ -186,10 +187,10 @@ pub fn draw(f: &mut Frame, area: Rect, log: &Log) {
         log.visible().iter().map(|e| line(e, usize::from(area.width))).collect()
     };
     f.render_widget(Paragraph::new(lines), area);
-    // the Event the view was opened at is the blue block across its whole line
+    // the Event the view was opened at is the blue block across the popup's whole width, the margins included
     if let Some(i) = log.visible().iter().position(|e| log.selected == Some(e.id)) {
-        let row = Rect::new(area.x, area.y + i as u16, area.width, 1);
-        f.buffer_mut().set_style(row.intersection(area), palette::selected());
+        let row = Rect::new(outer.x, area.y + i as u16, outer.width, 1);
+        f.buffer_mut().set_style(row.intersection(outer), palette::selected());
     }
 }
 

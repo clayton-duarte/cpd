@@ -220,9 +220,10 @@ fn pill(inner: usize, count: usize) -> String {
     format!(" ╭─{CAP_LEFT}Inbox{CAP_RIGHT}{}{CAP_LEFT}{count}{CAP_RIGHT}", "─".repeat(inner - 2 - 7 - (count.to_string().len() + 2)))
 }
 
-/// An item row at 41 inner columns: `│`, one space, the tier glyph, a space, the label, the age at the last column.
+/// An item row at 41 inner columns: `│`, one space, the tier glyph, a space, the label, the age at column 38 (the rail's
+/// padding takes the last two inner columns).
 fn item_row(glyph: &str, label: &str, age: &str) -> String {
-    format!(" │ {glyph} {label}{}{age}", " ".repeat(41 - 4 - label.chars().count() - age.chars().count()))
+    format!(" │ {glyph} {label}{}{age}", " ".repeat(39 - 4 - label.chars().count() - age.chars().count()))
 }
 
 #[test]
@@ -308,7 +309,7 @@ fn expanded(n: usize) -> View {
 
 /// A cue row at 41 inner columns: the line `│` kept on the left, the cue right-aligned at the last column.
 fn cue_row(arrow: &str, n: usize) -> String {
-    format!(" │{:>40}", format!("{arrow} {n} more"))
+    format!(" │{:>38}", format!("{arrow} {n} more"))
 }
 
 /// The cue rows of `got`: their arrow and count.
@@ -332,9 +333,9 @@ fn an_overflowing_inbox_draws_its_cue_at_the_right_end_of_its_row_with_the_line_
     let y = find(&got, "▼");
     assert_eq!(got[y], cue_row("▼", n), "right-aligned, after the muted `│`");
     assert_eq!((buf[(1, y as u16)].symbol(), buf[(1, y as u16)].fg), ("│", muted()), "the line is not cut by the cue");
-    assert_eq!(buf[(41, y as u16)].symbol(), "e", "the cue ends at the last inner column");
+    assert_eq!(buf[(39, y as u16)].symbol(), "e", "the cue ends at column W-4");
     let width = format!("▼ {n} more").chars().count() as u16;
-    assert!((42 - width..42).all(|x| crate::palette::check::is_muted(&buf[(x, y as u16)])), "and is dim");
+    assert!((40 - width..40).all(|x| crate::palette::check::is_muted(&buf[(x, y as u16)])), "and is dim");
 }
 
 #[test]
@@ -392,8 +393,8 @@ fn an_item_row_is_the_muted_line_one_space_its_tier_glyph_in_its_colour_a_space_
         assert_eq!(buf[(4, y)].symbol(), " ", "{urgency:?}");
         assert_eq!(buf[(5, y)].symbol(), "t", "{urgency:?}: the text starts at column 5");
         assert_ne!(buf[(5, y)].fg, muted(), "{urgency:?}: the text is not muted");
-        assert_eq!(buf[(40, y)].fg, muted(), "{urgency:?}: the age");
-        assert_eq!(rows(&buf)[y as usize], format!(" │ {glyph} the label{}42s", " ".repeat(41 - 4 - "the label".len() - 3)), "{urgency:?}");
+        assert_eq!(buf[(38, y)].fg, muted(), "{urgency:?}: the age");
+        assert_eq!(rows(&buf)[y as usize], format!(" │ {glyph} the label{}42s", " ".repeat(39 - 4 - "the label".len() - 3)), "{urgency:?}");
     }
 }
 
@@ -456,8 +457,8 @@ fn a_long_label_is_cut_with_an_ellipsis_before_the_age_and_after_the_tier_glyph(
     items[0].label = "x".repeat(60);
     let mut view = with_inbox(items);
     let got = rows(&draw(&mut view, 43, 24));
-    // 41 columns: `│`, one space, the glyph and a space (4), the label, a space, `42s` (3): 33 for the label
-    assert_eq!(got[find(&got, "xxx")], format!(" │ \u{F0362} {}… 42s", "x".repeat(32)));
+    // 41 columns: `│`, one space, the glyph and a space (4), the label, a space, `42s` (3): 31 for the label
+    assert_eq!(got[find(&got, "xxx")], format!(" │ \u{F0362} {}… 42s", "x".repeat(30)));
 }
 
 #[test]
