@@ -1,9 +1,7 @@
 //! Red test for the engine-fed status texts of contract §6.1.1 (hs-d530 R1): the pill's `fg=colour7` is the only text colour,
-//! so `@cpd_inbox`, `@cpd_workers` and `@cpd_workers_short` carry no state colour and no `dim`.
+//! so `@cpd_workers` and `@cpd_workers_short` carry no state colour and no `dim`.
 
-use cpd_core::inbox::model::Urgency;
-
-use super::workers::{Counts, Inbox};
+use super::workers::Counts;
 
 /// Every `#[…]` of `text` is `#[fg=colour7]`, the one colour a pill text may name (the docs say the texts carry no style at all).
 fn assert_colour7_only(what: &str, text: &str) {
@@ -18,11 +16,7 @@ fn assert_colour7_only(what: &str, text: &str) {
 }
 
 #[test]
-fn inbox_and_workers_texts_are_colour7_only() {
-    for urgency in [Some(Urgency::Red), Some(Urgency::Yellow), Some(Urgency::Magenta), Some(Urgency::White), None] {
-        let inbox = Inbox { count: if urgency.is_some() { 12 } else { 0 }, urgency };
-        assert_colour7_only(&format!("inbox {urgency:?}"), &inbox.styled());
-    }
+fn workers_texts_are_colour7_only() {
     let counts = Counts { running: 6, limit: 6, waiting: 4, queued: 9 };
     assert_colour7_only("workers long", &counts.long());
     assert_colour7_only("workers short", &counts.short());

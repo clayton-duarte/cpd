@@ -43,29 +43,20 @@ fn status_line_pills_follow_the_rule() {
     let pill = |colour: &str, text: &str| {
         format!("#[fg={colour}]\u{e0b6}#[fg=colour0]#[bg={colour}]{text}#[fg={colour}]#[bg=default]\u{e0b4}#[default]")
     };
-    let tier = |style: &str| {
-        format!(
-            "#{{?#{{==:#{{@cpd_inbox_tier}},red}},#[{style}=colour1],#{{?#{{==:#{{@cpd_inbox_tier}},yellow}},#[{style}=colour3],\
-             #{{?#{{==:#{{@cpd_inbox_tier}},magenta}},#[{style}=colour5],#{{?#{{==:#{{@cpd_inbox_tier}},white}},#[{style}=colour7],\
-             #[{style}=colour8]}}}}}}}}"
-        )
-    };
-    let inbox = format!("{}\u{e0b6}#[fg=colour0]{}#{{@cpd_inbox}}{}#[bg=default]\u{e0b4}#[default]", tier("fg"), tier("bg"), tier("fg"));
-    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}}}";
+    let long = "#{e|>=:#{client_width},#{e|+:#{e|+:#{e|+:#{@cpd_workers_width},14},#{?#{@cpd_preview},#{e|+:#{n:@cpd_preview},12},0}},#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}}}";
     let want = format!(
         "{JOIN}{}{JOIN}{}{JOIN}{}\
          #{{?#{{@cpd_preview}},#[fg=colour8]\u{2500}{},}}\
-         #[fg=colour8]#{{R:\u{2500},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?#{{@cpd_version}},#{{e|+:#{{n:@cpd_version}},3}},0}}}},\
+         #[fg=colour8]#{{R:\u{2500},#{{e|-:#{{e|-:#{{e|-:#{{e|-:#{{client_width}},12}},#{{?#{{@cpd_preview}},#{{e|+:#{{n:@cpd_preview}},12}},0}}}},#{{?@cpd_version,#{{e|+:#{{n:@cpd_version}},3}},0}}}},\
          #{{e|+:#{{?{long},#{{@cpd_workers_width}},#{{@cpd_workers_short_width}}}},1}}}}}}\
          #[default]#[align=right]\
-         {}{JOIN}{}\
+         {}\
          #{{?#{{@cpd_version}},#[fg=colour8]\u{2500}{},}}\
          {JOIN}",
         button("reset", cpd_core::host::tmux::RESET_GLYPH),
         button("legend", cpd_core::host::tmux::LEGEND_GLYPH),
         button("logs", cpd_core::host::tmux::LOGS_GLYPH),
         pill("colour3", "preview: #{@cpd_preview}"),
-        inbox,
         pill("colour7", &format!("#{{?{long},#{{@cpd_workers}},#{{@cpd_workers_short}}}}")),
         pill("colour7", "#{@cpd_version}"),
     );

@@ -217,7 +217,7 @@ macro_rules! long_fits {
     };
 }
 // The version pill's width (0 while `@cpd_version` is unset): a join, two caps and the version.
-macro_rules! version_width { () => { "#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}" }; }
+macro_rules! version_width { () => { "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}" }; }
 // A join: one grey `─`, outside the click ranges.
 // An interactive pill (R2): a click range, bg 15, text 0, caps 15.
 macro_rules! button {
@@ -229,23 +229,6 @@ macro_rules! button {
 macro_rules! pill {
     ($colour:literal, $($text:expr),+) => {
         concat!("#[fg=", $colour, "]\u{e0b6}#[fg=colour0]#[bg=", $colour, "]", $($text,)+ "#[fg=", $colour, "]#[bg=default]\u{e0b4}#[default]")
-    };
-}
-// The Inbox counter's tier colour (`@cpd_inbox_tier`, §6.1.1): red 1, yellow 3, magenta 5, white 7, and 8 for `none`, for an unset
-// option and for any other value. `$style` is `fg` or `bg`; one attribute per `#[…]`, as in a conditional.
-macro_rules! tier {
-    ($style:literal) => {
-        concat!(
-            "#{?#{==:#{@cpd_inbox_tier},red},#[", $style, "=colour1],#{?#{==:#{@cpd_inbox_tier},yellow},#[", $style, "=colour3],",
-            "#{?#{==:#{@cpd_inbox_tier},magenta},#[", $style, "=colour5],#{?#{==:#{@cpd_inbox_tier},white},#[", $style, "=colour7],",
-            "#[", $style, "=colour8]}}}}"
-        )
-    };
-}
-// The Inbox counter's pill: the tier's colour as the block and the caps, text 0.
-macro_rules! inbox_pill {
-    ($text:expr) => {
-        concat!(tier!("fg"), "\u{e0b6}#[fg=colour0]", tier!("bg"), $text, tier!("fg"), "#[bg=default]\u{e0b4}#[default]")
     };
 }
 macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
@@ -260,8 +243,7 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// Then the `\u{2500}` fill, `#{R:\u{2500},n}`, over the free width: `#{client_width}` minus
 /// the left group's 12, the preview pill and the right group in the form drawn (the
 /// engine's width plus the closing `\u{2500}`). At the right, each its own pill on
-/// bg 8 (text 7), joined by a single `\u{2500}`: the Inbox counter the engine keeps in
-/// `@cpd_inbox` (its colour is `@cpd_inbox_tier`), then the workers counts (User, hs-d198): the long form in
+/// bg 8 (text 7), joined by a single `\u{2500}`: the workers counts (User, hs-d198): the long form in
 /// `@cpd_workers` when the fill would still be at least 1 cell (`#{client_width}` at
 /// least `@cpd_workers_width` plus 14), else the short form in `@cpd_workers_short`,
 /// whose width is `@cpd_workers_short_width`.
@@ -272,11 +254,11 @@ macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 /// `preview: `). Styles inside a conditional are one attribute per `#[…]`, because a
 /// comma there would split the branch.
 ///
-/// While `@cpd_version` is set (`cpd tui` sets it to `cpd --version`'s `version`), a third
+/// While `@cpd_version` is set (`cpd tui` sets it to `cpd --version`'s `version`), a second
 /// right-hand pill, the version, follows the workers pill, joined by a single
 /// `\u{2500}`; the fill and the long-form test are shorter by its width (`#{n:@cpd_version}` + 3).
 ///
-/// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the Inbox counter its tier's colour, the workers and version pills bg 7,
+/// Colours follow §6.1.1 (hs-d534): buttons bg 15 text 0, the workers and version pills bg 7,
 /// the preview pill bg 3, all text 0; lines colour 8.
 pub const STATUS_FORMAT: &str = concat!(
     join!(),
@@ -289,8 +271,6 @@ pub const STATUS_FORMAT: &str = concat!(
     "#[fg=colour8]#{R:\u{2500},#{e|-:#{e|-:#{e|-:#{e|-:#{client_width},12},", preview_width!(), "},", version_width!(), "},",
     "#{e|+:#{?", long_fits!(), ",#{@cpd_workers_width},#{@cpd_workers_short_width}},1}}}",
     "#[default]#[align=right]",
-    inbox_pill!("#{@cpd_inbox}"),
-    join!(),
     pill!("colour7", "#{?", long_fits!(), ",#{@cpd_workers},#{@cpd_workers_short}}"),
     "#{?#{@cpd_version},#[fg=colour8]\u{2500}", pill!("colour7", "#{@cpd_version}"), ",}",
     join!()
@@ -1047,7 +1027,7 @@ mod tests {
     /// The fill and `long_fits!()` subtract `#{n:@cpd_version}` + 3 while `@cpd_version` is set, 0 otherwise.
     #[test]
     fn the_fill_and_long_fits_subtract_the_version_pills_width() {
-        let width = "#{?#{@cpd_version},#{e|+:#{n:@cpd_version},3},0}";
+        let width = "#{?@cpd_version,#{e|+:#{n:@cpd_version},3},0}";
         let long_fits = STATUS_FORMAT.matches("#{?#{e|>=:#{client_width}").count();
         assert_eq!(STATUS_FORMAT.matches(width).count(), long_fits + 1, "the fill and each long_fits: {STATUS_FORMAT}");
         let fill = STATUS_FORMAT.find("#{R:").unwrap();
