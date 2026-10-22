@@ -694,6 +694,7 @@ impl View {
                 Ok(None) => Effect::None,
                 Err(e) => Effect::text("Digest", format!("{}: {}", e.code(), e.message())),
             },
+            Some(Jump::Curate(..)) => Effect::None, // Job retire-tui
             None => Effect::None,
         }
     }
