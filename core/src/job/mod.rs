@@ -13,7 +13,7 @@
 
 mod add;
 mod approve;
-mod cancel;
+pub(crate) mod cancel;
 mod edit;
 pub mod guard;
 pub mod open;

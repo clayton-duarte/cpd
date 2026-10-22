@@ -455,6 +455,7 @@ fn a_tdd_pr_with_its_last_test_and_impl_jobs_does_not_stop_a_plan_cancel() {
         assert_eq!(env.query::<String>(&format!("SELECT cancel_reason FROM jobs WHERE key = '{key}'")), "plan cancelled", "{key}");
     }
     assert_eq!(env.query::<i64>("SELECT count(*) FROM plans WHERE archived_at IS NOT NULL"), 1);
+    fixture(&env, "UPDATE pull_requests SET state = 'closed' WHERE repo = 'acme/api';");
     assert_eq!(env.cpd(&["plan", "cancel", "--plan", "pay"]).ok()["already"], true);
 }
 
