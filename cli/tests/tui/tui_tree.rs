@@ -546,19 +546,19 @@ fn the_tree_of_a_prepared_store() {
         row(&format!("╰─{STOPPED} old"), "0⋅0⋅0⋅0⋅0"),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
-        " ╰─".to_owned(),
-    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a Context with no row keeps a plain `╰─`), one empty row between two Contexts; the Inbox section is pinned below
+        " ╰\u{F005A}".to_owned(),
+    ]; // each Context is a fold: its rows behind `├`, the last one behind `╰─` (nothing archived, so no closing row; a Context with no row ends with the terminator `╰󰁚`), one empty row between two Contexts; the Inbox section is pinned below
     expected.extend(inbox_section(46));
     let screen = pane.screen_is(&expected);
     assert_eq!(
         screen,
         expected,
-        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the last row of each Context `╰─` (nothing archived) and the plain `╰─` of the Context with no row; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰁋 expand`"
+        "the Context and Plan ids, the forks' `<plan id>·<4 characters of the Session id>`; the last row of each Context `╰─` (nothing archived) and the terminator `╰󰁚` of the Context with no row; the forks are siblings of the Plans, after them, under their Context (B1); the Lead with no Plan, g-alpha, is no row; the Jobs: queued, running, merging, failed, merged; no state text; the Inbox section at the bottom: an empty row, its pill title, three items with their icon and age, `╰󰁋 expand`"
     );
 }
 
 #[test]
-fn an_inbox_of_two_items_is_the_pill_title_and_two_rows_with_no_toggle_and_a_plain_close() {
+fn an_inbox_of_two_items_is_the_pill_title_and_two_rows_with_no_toggle_and_the_terminator_close() {
     let env = env();
     populate(&env);
     reconcile(&mut open(&env), &items()[..2], &opened_ago()).unwrap();
@@ -568,7 +568,7 @@ fn an_inbox_of_two_items_is_the_pill_title_and_two_rows_with_no_toggle_and_a_pla
         pill(44, 2),
         item_row_of(44, palette::TIER_RED, "f-blocked label"),
         item_row_of(44, palette::TIER_RED, "l-rel label"),
-        " ╰─".to_owned(),
+        " ╰\u{F005A}".to_owned(),
     ];
     // the screen has no empty row at its end: the section's own empty row below is not in it
     let screen = pane.wait("the two items", |s| s.len() == 17 && s[12..] == expected);
@@ -1016,7 +1016,7 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
         collapse(),
         String::new(),
         format!(" ╭{STOPPED} gamma"),
-        " ╰─".to_owned(),
+        " ╰\u{F005A}".to_owned(),
     ];
     expected.extend(["", "", "", "", ""].map(String::from)); // the rest of the tree's rows
     expected.extend(inbox_section(46));
@@ -1024,10 +1024,10 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
     assert_eq!(
         screen,
         expected,
-        "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰁣 collapse`; alpha has nothing to fold: its last row ends it with `╰─`, and `gamma`, with no row, closes with a plain `╰─`; no `󰇘` row"
+        "the archived Plan `old` is inside beta's block after the live rows, with beta's one closing row `╰󰁣 collapse`; alpha has nothing to fold: its last row ends it with `╰─`, and `gamma`, with no row, closes with the terminator `╰󰁚`; no `󰇘` row"
     );
     assert!(screen.iter().all(|r| !r.contains('\u{F01D8}')), "no `󰇘` row: {screen:?}");
-    // a click on the archived Plan unarchives it and opens its Lead; one on the archived Context's title unarchives it and opens its Manager; its plain closing row does nothing
+    // a click on the archived Plan unarchives it and opens its Lead; one on the archived Context's title unarchives it and opens its Manager; its terminator closing row does nothing
     pane.click(10, 9);
     assert_eq!(wait_for_calls(&env, 2), [words(&["plan", "unarchive", "--plan=old"]), words(&["session", "open", "l-old"])]);
     pane.click(5, 12);
@@ -1040,7 +1040,7 @@ fn archived_plans_are_inside_their_contexts_block_and_their_closing_row_hides_on
     assert_eq!(screen[7..8], shown);
     assert!(screen[8].starts_with(&format!(" ├─{NEEDS_YOU} rel")), "the live row stays: {screen:?}");
     assert!(!screen.iter().any(|r| r.contains(" old")), "the archived row is hidden: {screen:?}");
-    assert_eq!((screen[11].as_str(), screen[12].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰─"));
+    assert_eq!((screen[11].as_str(), screen[12].as_str()), (format!(" ╭{STOPPED} gamma").as_str(), " ╰\u{F005A}"));
     assert_eq!(
         calls(&env),
         [
@@ -1158,7 +1158,7 @@ fn a_right_click_opens_the_menu_of_the_row_and_esc_or_a_click_outside_closes_it_
     pane.right_click(5, 14); // the empty area
     pane.wait("the empty area's menu", |s| menu_open(s, "New Context…"));
     pane.keys(&["Escape"]);
-    pane.right_click(5, 12); // the plain closing row of the Context `gamma`, which has no row: no menu
+    pane.right_click(5, 12); // the terminator closing row of the Context `gamma`, which has no row: no menu
     pane.settled();
     assert!(the_menu_is_closed(&pane.screen()), "a closing row has no menu");
     pane.wait("the menu closed", the_menu_is_closed);
