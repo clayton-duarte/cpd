@@ -247,7 +247,7 @@ test("the border is colour 6 while the agent works whatever the focus", async ()
 			const rows = s.editor.render(50);
 			assert.deepEqual([...borderFgs(rows)], ["36"], `focus ${inside}: ${readable(rows.join("\n"))}`);
 			const top = strip(rows[0]!);
-			assert.match(top, new RegExp(`^ ╭──${LEFT_CAP}${FRAME} Preparing tools…${RIGHT_CAP}─+╮ $`, "u"), top);
+			assert.match(top, new RegExp(`^ ╭─${LEFT_CAP}${FRAME} Preparing tools…${RIGHT_CAP}─+╮ $`, "u"), top);
 			assert.equal(visibleWidth(top), 50);
 			// The pill is one colour block: caps 6, bg 6, text 0 with the frame inside it, nothing of its own.
 			const pill = rows[0]!.slice(rows[0]!.indexOf(LEFT_CAP));
@@ -258,7 +258,7 @@ test("the border is colour 6 while the agent works whatever the focus", async ()
 		// A pane too narrow for the label truncates the words with … inside the pill and keeps the corner.
 		const narrow = strip(s.editor.render(20).at(0)!);
 		assert.equal(visibleWidth(narrow), 20);
-		assert.match(narrow, new RegExp(`^ ╭──${LEFT_CAP}${FRAME} [^…]*…${RIGHT_CAP}─*╮ $`, "u"), narrow);
+		assert.match(narrow, new RegExp(`^ ╭─${LEFT_CAP}${FRAME} [^…]*…${RIGHT_CAP}─*╮ $`, "u"), narrow);
 	} finally { s.dispose(); }
 });
 
