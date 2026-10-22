@@ -26,6 +26,8 @@ export function adapter(pi: PiApi, options: Options = {}): void {
   let removeHint: (() => void) | undefined;
   pi.on("session_start", async (event, ctx) => {
     removeHint ??= installHint(); // §6.1.1: before pi first draws the jump hint
+    // contract §6.1 Q3: an empty status entry makes pi's footer draw one empty last row (only `undefined` deletes it)
+    if (ctx.mode === "tui") ctx.ui.setStatus("cpd-pad", "");
     try {
       await start(host, ctx, typeof event?.reason === "string" ? event.reason : "unknown");
     } catch (e) {

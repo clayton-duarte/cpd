@@ -68,8 +68,23 @@ function handleLine(host: Host, r: Run, line: string): boolean {
   return true;
 }
 
+// The Event kinds that change the mention ids.
+export const MENTION_KINDS: ReadonlySet<string> = new Set([
+  "session-registered",
+  "plan-created",
+  "context-created",
+  "plan-deleted",
+  "context-deleted",
+  "session-renamed",
+  "plan-renamed",
+  "context-renamed",
+  "session-archived",
+  "plan-archived",
+  "context-archived",
+]);
+
 async function handleEvent(host: Host, r: Run, ev: CpdEvent): Promise<void> {
-  void refreshMentions(host, r);
+  if (MENTION_KINDS.has(ev.kind)) void refreshMentions(host, r);
   const { pi } = host;
   const own = ev.session === r.id;
   if (ev.kind === "session-message") {

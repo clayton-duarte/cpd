@@ -480,6 +480,7 @@ export class FakePi implements PiApi {
         this.notices.push(m);
         if (level === "error") this.errorNotices.push(m);
       },
+      setStatus: () => {},
       getEditorText: () => this.editorText,
       select: (title: string, options: string[], opts?: { signal?: AbortSignal }) => this.dialog("select", title, options, opts?.signal),
       editor: (title: string) => this.dialog("editor", title, undefined, undefined),

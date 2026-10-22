@@ -233,8 +233,8 @@ macro_rules! pill {
 }
 macro_rules! join { () => { "#[fg=colour8]\u{2500}#[default]" }; }
 
-/// The StatusBar (contract §6.1, hs-d479): the cockpit session's `status-format[1]`
-/// (`[0]` is the blank row, hs-d561), one grey (colour 8) `\u{2500}` line across the full width that starts and ends with a
+/// The StatusBar (contract §6.1, hs-d479): the cockpit session's `status-format[0]`,
+/// one grey (colour 8) `\u{2500}` line across the full width that starts and ends with a
 /// `\u{2500}`. Every item is a pill, its text between the caps with no padding. At the
 /// left, the three one-glyph buttons (a cap `\u{e0b6}`, the glyph as a grey block, a cap
 /// `\u{e0b4}`, 3 cells), each in its own click range, joined by a single `\u{2500}` outside
@@ -279,9 +279,8 @@ pub const STATUS_FORMAT: &str = concat!(
 /// The cockpit session's own options (contract §6.1), set with `-t`: `status`
 /// is a session option, and `-g` would give `cpd-work` a row too.
 /// `status-style default` replaces tmux's green bar with the terminal's colours.
-/// Two rows (hs-d561): row 0 is one blank space, the last row of the chat slot's area; row 1 is the line.
-pub const STATUS_OPTIONS: [(&str, &str); 4] =
-    [("status", "2"), ("status-style", "default"), ("status-format[0]", " "), ("status-format[1]", STATUS_FORMAT)];
+pub const STATUS_OPTIONS: [(&str, &str); 3] =
+    [("status", "on"), ("status-style", "default"), ("status-format[0]", STATUS_FORMAT)];
 
 /// The value `terminal-features` is appended with (`set -as`), the one entry of
 /// [`SERVER_OPTIONS`] that is not idempotent: it runs once, when cpd starts

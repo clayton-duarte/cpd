@@ -126,9 +126,9 @@ fn assert_layout(panes: &[Pane]) {
 /// and `cpd-work` none (contract §6.1).
 fn assert_status_line(env: &TestEnv) {
     let shown = |session: &str, format: &str| tmux_out(env, &["display", "-p", "-t", &format!("={session}:"), format]);
-    assert_eq!(shown("cpd", "#{status}").trim(), "2");
+    assert_eq!(shown("cpd", "#{status}").trim(), "on");
     assert_eq!(tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-style"]).trim(), "default");
-    let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[1]"]);
+    let format = tmux_out(env, &["show", "-v", "-t", "=cpd:", "status-format[0]"]);
     assert_eq!(format.trim_end_matches('\n'), STATUS_FORMAT);
     for range in [
         "#[range=user|reset]",
@@ -410,7 +410,7 @@ fn tui_removes_an_old_statusbar_pane_then_resets_the_layout() {
     let full = main_panes(&env);
     // A main built by an older cpd: the StatusBar pane at the bottom, the session without its status line, and the
     // sizes changed by the User.
-    for option in ["status", "status-style", "status-format[0]", "status-format[1]"] {
+    for option in ["status", "status-style", "status-format[0]"] {
         tmux_out(&env, &["set", "-u", "-t", "=cpd:", option]);
     }
     let bar = tmux_out(&env, &["split-window", "-d", "-v", "-f", "-l", "1", "-t", &full[0].id, "-P", "-F", "#{pane_id}", "sleep", "3600"]);
@@ -565,8 +565,8 @@ fn a_click_on_a_statusbar_button_runs_its_action_on_the_clicking_client() {
     });
     // The status line is the client's last row: the three buttons at the left, one space apart.
     wait_until("the buttons", || outer.screen().lines().nth(29).is_some_and(|l| l.starts_with(&buttons())));
-    // It takes one row: the window has the other 28.
-    assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{window_height}"]).trim(), "28");
+    // It takes one row: the window has the other 29.
+    assert_eq!(tmux_out(&env, &["display", "-p", "-t", "=cpd:main", "#{window_height}"]).trim(), "29");
     let chat = view(&main_panes(&env), "chat").clone();
     let actions = || env.calls("cpd").into_iter().filter(|c| c.get(1).map(String::as_str) == Some("action")).collect::<Vec<_>>();
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Fixture, planShow, waitFor } from "./fake.ts";
+import { ev, Fixture, ID, planShow, waitFor } from "./fake.ts";
 
 // commands.md §15.2: a `store_too_new` failure line of a follower started before an install is not delivered (the restart runs the new cpd).
 
@@ -44,4 +44,46 @@ test("store_too_new with the same installed cpd is still delivered once", async 
   await waitFor("a third start", () => f.follows().length === 3);
   await f.quiet();
   assert.equal(errorsOf(f).length, 1, "once per code");
+});
+
+// commands.md §15.14: the mention ids are reloaded only on an Event that changes them (hs-n423), and at `session_start`.
+const lists = (f: Fixture) => f.calls().filter((c) => c.phase === "start" && c.argv[1] === "list" && ["session", "plan", "context"].includes(c.argv[0]!)).map((c) => c.argv[0]!);
+
+async function leadStarted(f: Fixture) {
+  f.respond("plan-show", planShow());
+  f.load();
+  await f.pi.fire("session_start");
+  await waitFor("the follower", () => f.follows().length > 0);
+  await f.quiet();
+  assert.deepEqual(lists(f).sort(), ["context", "plan", "session"], "session_start refreshes the ids once");
+}
+
+test("mentions: a job-merged Event runs no refresh", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await leadStarted(f);
+  f.emit(ev(101, "job-merged", { data: { turn: true } }));
+  await waitFor("the message", () => f.pi.delivered().length === 1);
+  await f.quiet();
+  assert.deepEqual(lists(f).sort(), ["context", "plan", "session"], "no list call after session_start");
+});
+
+test("mentions: a session-message Event runs no refresh", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await leadStarted(f);
+  f.emit(ev(101, "session-message", { session: ID, data: { from: null, text: "ship it", wake: false } }));
+  await waitFor("the message", () => f.pi.delivered().length === 1);
+  await f.quiet();
+  assert.deepEqual(lists(f).sort(), ["context", "plan", "session"], "no list call after session_start");
+});
+
+test("mentions: a plan-created Event refreshes the ids", async (t) => {
+  const f = new Fixture();
+  t.after(() => f.close());
+  await leadStarted(f);
+  f.emit(ev(101, "plan-created"));
+  await waitFor("the three list calls", () => lists(f).length === 6);
+  await f.quiet();
+  assert.deepEqual(lists(f).slice(3).sort(), ["context", "plan", "session"], "once each");
 });
