@@ -74,11 +74,11 @@ impl Kind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Urgency {
     White,
+    /// A cpd notice that blocks nothing (hs-d570).
+    Blue,
     Magenta,
     Yellow,
     Red,
-    // Stub (hs-d570 BL1): belongs between White and Magenta; the implementation moves it and the tests pin it.
-    Blue,
 }
 
 impl Urgency {
@@ -93,7 +93,7 @@ impl Urgency {
     }
 
     pub fn parse(s: &str) -> Option<Urgency> {
-        [Urgency::White, Urgency::Magenta, Urgency::Yellow, Urgency::Red].into_iter().find(|u| u.as_str() == s)
+        [Urgency::White, Urgency::Blue, Urgency::Magenta, Urgency::Yellow, Urgency::Red].into_iter().find(|u| u.as_str() == s)
     }
 }
 
@@ -271,7 +271,7 @@ pub fn engine_running(home: &CpdHome) -> Result<bool, CpdError> {
 pub fn list(conn: &Connection, filter: &Filter) -> Result<Vec<Item>, CpdError> {
     let context = filter.context.as_ref().map(ContextId::as_str);
     let select = format!("SELECT {COLUMNS} FROM inbox_items WHERE (?1 IS NULL OR context = ?1) AND");
-    let rank = "CASE urgency WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'magenta' THEN 2 ELSE 3 END, opened_at, id";
+    let rank = "CASE urgency WHEN 'red' THEN 0 WHEN 'yellow' THEN 1 WHEN 'magenta' THEN 2 WHEN 'blue' THEN 3 ELSE 4 END, opened_at, id";
     match &filter.state {
         State::Visible { now } => items(
             conn,

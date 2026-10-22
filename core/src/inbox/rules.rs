@@ -225,7 +225,7 @@ fn review_waiting(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     Ok(out)
 }
 
-/// `curate-retire` and `curate-docs` (hs-d549, hs-d551): one magenta item per Context and kind while the Context has
+/// `curate-retire` and `curate-docs` (hs-d549, hs-d551): one blue item per Context and kind while the Context has
 /// pending retirements, or pending doc candidates; the label carries the count. Dismissing one decides nothing.
 fn curate(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
     let mut out = Vec::new();
@@ -249,7 +249,7 @@ fn curate(conn: &Connection) -> Result<Vec<Condition>, CpdError> {
             let context = id("context id", &raw, ContextId::parse)?;
             out.push(Condition {
                 kind,
-                urgency: Urgency::Magenta,
+                urgency: Urgency::Blue,
                 subject: format!("{name}:{context}"),
                 label: format!("{context}: {n} {noun}"),
                 url: None,
