@@ -13,8 +13,10 @@
 #   /proc/<pid>/environ of this user's processes, which survives setsid, nohup and
 #   a tmux server (it inherits the starter's environment). The script itself, its
 #   ancestors and its own descendants are not leftovers.
-# - macOS has no /proc: `ps -axww -E` prints the environment. UNVERIFIED (not run on
-#   macOS); the rule is the same.
+# - macOS (run on Darwin arm64) has no /proc: `ps -axww -E -o pid=,command=` prints the
+#   environment, and the lines with ` GATE_RUN=<id>` are the run's processes (the
+#   same rule). Pids that are no longer alive are skipped (the scan's own ps and
+#   grep have exited when it looks at them). The hint uses `ps -E -p <pid>`.
 set -u
 
 [ $# -gt 0 ] || { echo "usage: gate-run.sh <command> [<args>...]" >&2; exit 2; }
@@ -92,7 +94,11 @@ finish() {
 '
   for p in $(run_pids); do
     related "$p" && continue
-    [ -d "/proc/$p" ] || [ ! -d /proc/self ] || continue
+    if [ -d /proc/self ]; then
+      [ -d "/proc/$p" ] || continue
+    else
+      kill -0 "$p" 2>/dev/null || continue
+    fi
     pids="$pids $p"
     report="${report}  process $p (ppid $(ppid_of "$p")) $(cmdline_of "$p")$nl"
     count=$((count + 1))
@@ -122,7 +128,11 @@ finish() {
     printf '%s' "$report"
     if [ -n "$pids" ]; then
       set -- $pids
-      printf '%s\n' "gate-run: the test that left them: grep the id in the process environment (NEXTEST_TEST_NAME), e.g. \`tr '\\0' '\\n' </proc/$1/environ | grep NEXTEST_TEST_NAME\`"
+      if [ -d /proc/self ]; then
+        printf '%s\n' "gate-run: the test that left them: grep the id in the process environment (NEXTEST_TEST_NAME), e.g. \`tr '\\0' '\\n' </proc/$1/environ | grep NEXTEST_TEST_NAME\`"
+      else
+        printf '%s\n' "gate-run: the test that left them: grep the id in the process environment (NEXTEST_TEST_NAME), e.g. \`ps -E -p $1 -o command= | tr ' ' '\\n' | grep NEXTEST_TEST_NAME\`"
+      fi
     fi
   } >&2
   # Only the pids, sockets and paths listed above.
