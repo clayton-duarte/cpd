@@ -2611,14 +2611,14 @@ The theme file is `pi/themes/cpd.json` (`name` "cpd"), declared in `pi/package.j
 | `syntaxType` | 6 | cyan |
 | `syntaxOperator` | 7 | read-only text |
 | `syntaxPunctuation` | 8 | muted |
-| `thinkingOff` | 8 | muted |
+| `thinkingOff` | 8 | muted (unused by the chat input since the input widget, §6.9; still a valid value) |
 | `thinkingMinimal` | 8 | muted |
 | `thinkingLow` | 4 | blue |
 | `thinkingMedium` | 6 | cyan |
 | `thinkingHigh` | 3 | yellow |
 | `thinkingXhigh` | 3 | yellow |
-| `thinkingMax` | 3 | yellow |
-| `bashMode` | 2 | green meaning |
+| `thinkingMax` | 3 | yellow (`thinkingOff` … `thinkingMax` are all unused by the chat input) |
+| `bashMode` | 2 | green meaning (unused by the chat input since the input widget, §6.9; still a valid value) |
 
 **How the extensions paint** (hs-d545, User; design choice of the Plan). Every colour pi and cpd's pi extensions draw is one of 0-15 as an **indexed SGR**: 30-37, 90-97, 40-47, 100-107, `38;5;n` and `48;5;n` with n below 16, and the resets 39 and 49. Never RGB (`38;2`, `48;2`), hex, OKLCH or a derived value: no brightening, no dimming (no SGR 2 faint; muted is 8), no contrast band, no colour mixing, no glow or pulse ramp, no diff background tint, no SGR 7 (reverse). Only the cockpit's existing elements appear: pills, `╭─` lines and `│ ` rails, the toggles `╰󰁋 expand` / `╰󰁣 collapse`, dots and spinner glyphs, text. Colour animations stop (a glyph-frame spinner stays, painted in one fixed index). `pi/lib/render.ts` and `pi/compact-tools/` paint with explicit SGR taken from **one module of named indices** (as `pi/lib/render.ts` does today), so they draw the palette under any pi theme; the theme above covers pi's own elements.
 
@@ -2629,7 +2629,8 @@ The SGR of the elements (n is the colour; the block's text is 0):
 | Pill, colour n in 1-7 | no | caps `ESC[3nm` U+E0B6 / U+E0B4 `ESC[39m` (the terminal background behind them); body `ESC[4nm` `ESC[30m` text `ESC[49m` `ESC[39m`. Magenta: `ESC[45m` `ESC[30m`…`ESC[49m` `ESC[39m`, caps `ESC[35m` |
 | Lead `╭─`, rails `│ `, metadata, secondary text | no | `ESC[90m`…`ESC[39m` (8) |
 | Content lines, toggle | no / yes | `ESC[37m`…`ESC[39m` (7) |
-| Running loader frame and working label pill | no | frame `ESC[36m`…`ESC[39m` (6); pill bg 6, text 0, caps 6 (§6.9 "The working label") |
+| Working label pill in the input's border | no | pill bg 6, text 0 (the loader frame included), caps 6, no padding inside (§6.9 "The input widget") |
+| Input box border (corners, lines, walls) | no | one colour by state: working `ESC[36m`, focused `ESC[94m`, unfocused `ESC[97m`, then `ESC[39m` (§6.9 "The input widget") |
 
 **The pi chat rows** (hs-d508, hs-d509, hs-d510, hs-d537; the owner is Plan `pi-theme`, which replaces the `pi-pin` rows). Every row below is drawn by the extension, with no background fill (only the pills are blocks):
 
@@ -2650,7 +2651,7 @@ The SGR of the elements (n is the colour; the block's text is 0):
 | Thinking and tool rows: lead, rails, metadata, secondary text | no | fg 8, `ESC[90m` |
 | Tool row and group head, closing row of a **running** row (fold `toggle`) | no | ` ╰` fg 8 (`ESC[90m`) then ONE loader frame fg 6 (`ESC[36m`), no text and no timer; not a toggle. Done: `╰` 8, toggle 7, metadata 8 |
 | Thinking and tool rows: toggle | yes (click, Ctrl+T for Thinking, Ctrl+O for tools) | fg 7, `ESC[37m` |
-| Working label: loader frame, then the label pill | no | frame fg 6; pill bg 6, text 0, caps U+E0B6/U+E0B4 fg 6 |
+| Working label: the pill in the input's top border, the frame inside it | no | pill bg 6, text 0 (frame included), caps U+E0B6/U+E0B4 fg 6 |
 | Diff added / removed text | no | fg 2 / 1, `ESC[32m` / `ESC[31m`, no background tint |
 | Thinking text | no | fg 7, never italic |
 | **A Lead's or Manager's mention in assistant text** (hs-d544, User, 2026-10-22; owner Plan `pi-theme`; commands.md §15.14) | no | fg 5, text and not a block: `ESC[35m`…`ESC[39m`; only in the pane of a Lead or a Manager |
@@ -2663,7 +2664,7 @@ The SGR of the elements (n is the colour; the block's text is 0):
 
 **The closing row of a running row** (User 2026-10-22, replaces the chatfix ` ╰󰁚 Running` rule): a running tool or command row, and a running group head, with fold `toggle` closes with ` ╰` (8) and **one frame of the cockpit loader** (6), no text after it; the row's elapsed time is not shown while running. The loader is the cockpit's (commands.md, the spinner table near 'the Lead is working'; `tui/src/palette.rs`): 9 frames, U+F0766 (nf-md-circle_outline) then U+F0A9E … U+F0AA5 (nf-md-circle_slice_1 … 8), stepping one frame every 100 ms. Before: ` ╭─[bash] Create "/tmp/cpd-chatlook" + 18 more steps` with nothing below. After: ` ╭─[bash] Create "/tmp/cpd-chatlook" + 18 more steps` / ` ╰󰪢` (󰪢 is one frame, U+F0AA2). A finished row closes with its toggle as before. `└` stays only for fold `status` (which keeps `└ Running`) and the claude and codex styles.
 
-**The working label** (User 2026-10-22): pi's working indicator frames (`ctx.ui.setWorkingIndicator({ frames, intervalMs })`) are the loader, cyan 6, 100 ms, each frame carrying its own colour; the label (`ctx.ui.setWorkingMessage`) is a pill (bg 6, text 0, caps U+E0B6/U+E0B4 in 6; agent activity, read-only) with its words, e.g. `󰪢 [Thinking…]`. The labels `Thinking…`, `Responding…`, `Preparing tools…`, `Running command…`, `Processing results…` and `Using <tool>…` are all pills.
+**The working label** (User 2026-10-22; replaces the padded label of PR `chatlive`: `pill(RUNNING, ` ${message} `)` with padding spaces, the loader outside the pill and the border `── `): the label is part of the chat input's top border and is `[<frame> <words>]`, drawn as "The input widget" says (no padding inside the caps, the loader frame inside the pill in text 0, `╭──` before it). pi's working indicator frames (`ctx.ui.setWorkingIndicator({ frames, intervalMs })`) are the nine cockpit frames at 100 ms; the words (`ctx.ui.setWorkingMessage`) are inside the pill, e.g. `╭──[󰪢 Thinking…]───…╮`. The labels `Thinking…`, `Responding…`, `Preparing tools…`, `Running command…`, `Processing results…` and `Using <tool>…` are all pills.
 
 **The ellipsis** (User 2026-10-22): one character `…` (U+2026) everywhere cpd and compact-tools draw text that is cut or in progress (labels, titles, hints, docs), never three dots. The Thinking label is `Thinking…` (pill `[Thinking…]`, hidden label `Thinking…`). The cockpit's own strings are not covered here.
 
@@ -2896,56 +2897,91 @@ hs-d498 (User, 2026-10-20; it supersedes hs-d488's route, a pinned fork of `pi-c
 
 **Why Thinking did not expand, and how it does** (A6, confirmed in the source: unverified at runtime). `getInitialThinkingPhase` of `compact-tools-thinking.ts` reads `<agent dir>/settings.json`; `hideThinkingBlock: true` gives the view `hidden`: the block shows `Thinking…` and has no toggle. The User's pi settings had that value, so Thinking never expanded; the pi-config PR of Plan `pi-theme` sets it false, and the view is then `summary`. It expands by the fold toggle (`╰󰁋 expand`, a click), or Ctrl+T as today, to the whole thinking text (colour 7) on the rails, under the one title pill `Thinking…`.
 
+### The input widget (User, 2026-10-22, pi-theme chat; Lead's assumptions, which the User may correct)
+
+The cockpit's official input; the pi chat editor is its first use, and it is the input used anywhere. Scope: pi-tui's `Editor`, so the chat input and every other pi editor dialog. pi's single-line `Input` components and the cockpit's own inputs (`tui/`) are later and not covered here.
+
+**Geometry.** A box with rounded corners, one margin column and one padding column on each side. Every row of the editor is: a space (margin), the box's left wall or corner, one padding space, the text, one padding space, the right wall or corner, a space (margin). Corners `╭ ╮ ╰ ╯`, horizontals `─`, verticals `│`. The text starts at column 3 (0-based); the box spans the pane width minus the two margin columns (pane width W: `╭` + `─`×(W-4) + `╮`, text area W-6). Typed text, the cursor, wrapping and the mouse's column mapping work in that text area. The scroll labels `↑ n more` and `↓ n more` stay on the borders. The autocomplete rows under the box start at the text column (column 3).
+
+**Colour.** One colour for the whole border (corners, lines, walls), by state, highest first: **working 6** (cyan: the agent works, the working status is shown) > **focused 12** (bright blue) > **unfocused 15**. Focus is the terminal's focus report (`ESC[I` in, `ESC[O` out, enabled by pi-tui's alt screen as `ESC[?1004h`): the terminal pane the editor lives in, as the cockpit's pane titles turn blue on the focused pane; before the first report the pane counts as focused. The thinking level and the bash mode no longer colour the border (pi's assignment of `editor.borderColor` must not undo this); the `thinking*` tokens (`thinkingOff` … `thinkingMax`) and `bashMode` stay valid theme values (§6.1.1 "The pi theme") but **are unused** by the chat input now. Typed text stays the default colour. SGR as §6.1.1: indexed only (`ESC[36m`, `ESC[94m`, `ESC[97m` … `ESC[39m`), never RGB, SGR 2 or SGR 7.
+
+**The header pill.** Idle, the top border is plain `╭─…─╮`. While the agent works it is `╭──` (three border cells before the cap, counted from the box's corner, like the title rule hs-d475/hs-d478), then the pill, then `─` up to `╮`. The pill is `[<loader frame> <label words>]`: caps U+E0B6 / U+E0B4 in 6, background 6, text 0 **including the loader frame** (a plain glyph in text 0, no colour of its own), one space between the frame and the words, **no padding space inside the caps** and none between the border's `─` and a cap. The frame steps through the nine frames (U+F0766, U+F0A9E … U+F0AA5) every 100 ms; the words keep their `…`. A pane too narrow for the whole label truncates the words with `…` inside the pill and keeps the `╮`. This replaces the padded label of §6.9 "The working label".
+
+**Worked examples**, width 40, a two-line input (`fix the build`, `then ship it`; text area 34). Idle (border 15) and focused (border 12) have the same bytes but the colour:
+
+```
+ ╭────────────────────────────────────╮ 
+ │ fix the build                      │ 
+ │ then ship it                       │ 
+ ╰────────────────────────────────────╯ 
+```
+
+Working (border and pill 6; the pill is cap, frame, space, `Preparing tools…`, cap, 20 cells, then 14 `─`):
+
+```
+ ╭──󰪞 Preparing tools…──────────────╮ 
+ │ fix the build                      │ 
+ │ then ship it                       │ 
+ ╰────────────────────────────────────╯ 
+```
+
 ### Chat balloons (User, 2026-10-22; Plan `pi-theme`)
 
-The User's and the agent's message text is drawn in a **balloon** instead of plain text (the User's input is no longer inverted). The direction the balloon comes from says who speaks: **right** for the User, **left** for the agent. No colour and no inverted text; no margins, one horizontal padding column each side.
+The User's and the agent's message text is drawn in a **balloon** instead of plain text (the User's input is no longer inverted). The direction the balloon comes from says who speaks: **right** for the User, **left** for the agent. No colour and no inverted text. **Margins** (User, 2026-10-22): the agent's balloon has 1 column of margin on the left and at least 3 on the right; the user's has at least 3 on the left and 1 on the right; neither has a margin above or below. **Padding**: 1 column left and right, none above or below.
 
 **Geometry.** For a message whose wrapped text rows are padded with spaces to the inner width W, the balloon width is B = W + 4 (2 borders, 2 padding). Rows, top to bottom:
 
 - top: `╭` + `─`×(B-2) + `╮`;
 - per text row: `│ ` + row + ` │`;
-- one blank inner row: `│` + spaces×(B-2) + `│` (part of **every** balloon);
-- **User**, tail start: `╰` + `─`×(B-3) + `╮│`; tail end: spaces×(B-2) + `╰╯`. The whole balloon is moved right so its last column is the pane's last column.
-- **Agent**, tail start: `│╭` + `─`×(B-3) + `╯`; tail end: `╰╯`. Against the left edge.
+- **no blank inner row**: the tail starts directly under the last text row;
+- **User**, tail start: `╰` + `─`×(B-3) + `╮│`; tail end: spaces×(B-2) + `╰╯`. The balloon ends in the pane's last column minus one (1 margin on the right).
+- **Agent**, tail start: `│╭` + `─`×(B-3) + `╯`; tail end: `╰╯`. The balloon starts in column 1 (1 margin on the left).
 
-The User's template (B = 15, W = 11, text `user prompt` / `agent reply`):
+The templates (B = 15, W = 11, text `user prompt` / `agent reply`; drawn without the pane margins, which add one space before the agent's rows and move the user's so that one space follows them):
 
 ```
 ╭─────────────╮
 │ user prompt │
-│             │
 ╰────────────╮│
              ╰╯
 ╭─────────────╮
 │ agent reply │
-│             │
 │╭────────────╯
 ╰╯
 ```
 
-A wrapped multi-line example, user, text `fix the build` and `then ship it` in a pane of width 24 (W = 13, B = 17, drawn flush right: 7 spaces before each row):
+A wrapped multi-line example, text `fix the build` and `then ship it` in a pane of width 24 (W = 13, B = 17; pane width - 4 = 20 allows it; the text wraps at pane width - 8 = 16). User: 6 spaces before each row (24 - 1 margin - 17), 1 after:
 
 ```
-       ╭───────────────╮
-       │ fix the build │
-       │ then ship it  │
-       │               │
-       ╰──────────────╮│
-                      ╰╯
+      ╭───────────────╮ 
+      │ fix the build │ 
+      │ then ship it  │ 
+      ╰──────────────╮│ 
+                     ╰╯ 
 ```
 
-(`fix the build` is 13 columns, `then ship it` is 12 plus one padding space to W = 13.) The same message from the agent has the same top, text rows and blank row, then `│╭` + `─`×14 + `╯` and `╰╯`, flush left.
+Agent, the same top and text rows with 1 space before and 6 after, then `│╭` + `─`×14 + `╯` and `╰╯`:
+
+```
+ ╭───────────────╮      
+ │ fix the build │      
+ │ then ship it  │      
+ │╭──────────────╯      
+ ╰╯                     
+```
+
+(`fix the build` is 13 columns, `then ship it` is 12 plus one padding space to W = 13.)
 
 **Rules.**
 
-- **Width.** B = min(pane width, longest wrapped text row + 4). Text wraps at pane width - 4 (one padding column each side, nothing else). The width fits the text, up to the pane width.
+- **Width.** B = min(pane width - 4, longest wrapped text row + 4): the three margin columns on the far side and the one on the near side leave pane width - 4 at most. Text wraps at pane width - 8 (the four columns of margin and wall and the two padding columns). The width fits the text.
 - **Colour.** Borders and tails are 8 (`ESC[90m`, the lines rule, §6.1.1); the text is not recoloured and not inverted (7, the terminal's default look; `userMessageBg` "" and `userMessageText` 7).
-- **No blank row or column around a balloon.** The user's tail row sits directly above the agent's top row. pi's own Spacer, padding rows and the `outputPad` column are dropped for balloon text.
+- **No blank row above or below a balloon.** The user's tail row sits directly above the agent's top row. pi's own Spacer, padding rows and the `outputPad` column are dropped for balloon text.
 - **What is wrapped.** Only message **text blocks**, one balloon per text block. Thinking, tool rows, errors and `Response was truncated` lines of an assistant message stay outside, as today. A message with no text (tool calls or Thinking only) draws no balloon.
 - **OSC 133.** pi's zone marks stay on the first and last row of the message.
 - **Mentions.** The mentions painter (hs-d544, commands.md §15.14) paints the text rows before they are boxed.
 - **Silent mode.** The answer that silent mode (`compact-tools-silent.ts`) shows is drawn as a balloon too.
-- **Narrow panes.** Below a pane width of 8 (Lead's suggestion; unverified against the User) a message is drawn **without** its balloon, as plain text wrapped to the pane. From 8 up, B = 8 gives W = 4, and a longer word is split at W; the balloon is never wider than the pane.
+- **Narrow panes.** Below a pane width of 12 (Lead's suggestion; unverified against the User) a message is drawn **without** its balloon, as plain text wrapped to the pane. From 12 up, B = 8 gives W = 4, and a longer word is split at W; the balloon is never wider than pane width - 4.
 - **Width of characters.** Width is measured in terminal columns: wide characters (CJK) count two and styled markdown counts its visible columns only, so the right wall `│` stays aligned on every row.
 - **Ungated.** Like the rest of compact-tools, balloons draw in every pi window, not only in cpd Sessions.
 

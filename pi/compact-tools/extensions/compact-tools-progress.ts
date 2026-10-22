@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth } from "@earendil-works/pi-tui";
 import { onTick } from "./compact-tools-clock.ts";
-import { paint, pill, RUNNING } from "./compact-tools-indices.ts";
+import { hookEditor, setWorkingWords } from "./compact-tools-editor.ts";
+import { pill, RUNNING } from "./compact-tools-indices.ts";
 import { LOADER_FRAMES, LOADER_INTERVAL_MS } from "./compact-tools-loader.ts";
 import type { ToolArgs } from "./compact-tools-types.ts";
 
@@ -48,6 +49,8 @@ export class ProgressController {
 	private message: string | undefined;
 	/** Stops this label's share of the animation clock. */
 	private stopTicking: (() => void) | undefined;
+	/** The loader frame the border pill shows. */
+	private frame = 0;
 
 	private readonly pi: ExtensionAPI;
 
@@ -88,12 +91,13 @@ export class ProgressController {
 
 	bind(ctx: ExtensionContext, resume = false): void {
 		this.stopAnimation();
+		hookEditor();
 		this.context = ctx;
 		const message = resume && ctx.isIdle?.() === false ? this.message ?? "Thinking…" : undefined;
 		if (!message) this.activeTools.clear();
 		this.message = undefined;
 		ctx.ui.setWorkingVisible(true);
-		ctx.ui.setWorkingIndicator({ frames: LOADER_FRAMES.map((frame) => paint(RUNNING, frame)), intervalMs: LOADER_INTERVAL_MS });
+		ctx.ui.setWorkingIndicator({ frames: [...LOADER_FRAMES], intervalMs: LOADER_INTERVAL_MS });
 		if (message) this.setMessage(message);
 	}
 
@@ -103,6 +107,7 @@ export class ProgressController {
 		this.stopAnimation();
 		if (!preservePhase) this.activeTools.clear();
 		if (!preservePhase) this.message = undefined;
+		setWorkingWords(undefined);
 		try { context?.ui.setWorkingMessage(); }
 		finally { context?.ui.setWorkingIndicator(); }
 	}
@@ -114,19 +119,23 @@ export class ProgressController {
 		this.renderMessage();
 		if (this.stopTicking) return;
 		// The label is one fixed color; the host still gets it on each tick of the shared clock.
+		this.frame = 0;
 		this.stopTicking = onTick(() => {
+			this.frame = (this.frame + 1) % LOADER_FRAMES.length;
 			this.renderMessage();
-		});
+		}, LOADER_INTERVAL_MS);
 	}
 
 	private renderMessage(): void {
 		if (!this.message || !this.context) return;
-		this.context.ui.setWorkingMessage(pill(RUNNING, ` ${this.message} `));
+		setWorkingWords(this.message, this.frame);
+		this.context.ui.setWorkingMessage(pill(RUNNING, this.message));
 	}
 
 	private clearMessage(): void {
 		this.stopAnimation();
 		this.message = undefined;
+		setWorkingWords(undefined);
 		this.context?.ui.setWorkingMessage();
 	}
 
