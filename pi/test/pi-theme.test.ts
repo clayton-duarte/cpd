@@ -109,7 +109,7 @@ test("the User's input is drawn as text 7 on no fill", async () => {
   };
   const theme = mod.loadThemeFromPath(THEME.pathname, "256color");
   assert.equal(theme.fg("userMessageText", "x"), "\x1b[38;5;7mx\x1b[39m");
-  assert.equal(theme.bg("userMessageBg", "x"), "x");
+  assert.equal(theme.bg("userMessageBg", "x"), "\x1b[49mx\x1b[49m");
 });
 
 test("the adapter package declares the theme", () => {

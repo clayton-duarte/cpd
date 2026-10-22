@@ -10,7 +10,7 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
-import { drawBalloon, MIN_BALLOON_WIDTH, type BalloonSide } from "../../lib/balloon.ts";
+import { drawBalloon, MIN_BALLOON_WIDTH, type BalloonSide } from "./compact-tools-balloon.ts";
 import { hookMethod } from "./compact-tools-hook.ts";
 import type { DisplayMode } from "./compact-tools-types.ts";
 import { captureViewport } from "./compact-tools-viewport.ts";

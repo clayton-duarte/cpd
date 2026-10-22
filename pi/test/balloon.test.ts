@@ -130,7 +130,7 @@ test("wide characters and styled text keep the wall aligned", async () => {
 		const widths = body.map(visibleWidth);
 		assert.equal(new Set(widths).size, 1, `${side}: ${widths}`);
 		for (const row of body) assert.ok(bare(row).trimEnd().endsWith("│"), row);
-		assert.equal(visibleWidth(out[0]!), side === "user" ? 30 : 12, "wide text: 8 columns + 4");
+		assert.equal(visibleWidth(out[0]!), side === "user" ? 30 : 13, "longest row 9 columns + 4");
 	}
 });
 
