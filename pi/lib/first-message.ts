@@ -1,5 +1,4 @@
 import { toCpdError, isObject } from "./cpd.ts";
-import { errorMessage } from "./delivery.ts";
 import type { Host } from "./host.ts";
 import type { Message } from "./pi.ts";
 import { FIRST_MESSAGE_TYPE } from "./updates.ts";
@@ -33,8 +32,7 @@ export function registerFirstMessage(host: Host): void {
       if (!r.firstFailed) {
         r.firstFailed = true;
         const err = toCpdError(e);
-        const m = errorMessage("first message", err.code, err.message, err.details);
-        host.pi.sendMessage(m.message, { ...m.options, triggerTurn: false });
+        host.report("first message", err.code, err.message, err.details);
       }
       return undefined;
     }

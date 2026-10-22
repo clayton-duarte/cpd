@@ -42,6 +42,8 @@ export type Host = {
   call(args: string[]): ReturnType<typeof callCpd>;
   /** Delivers a failure as an error message to the Lead. */
   deliver(what: string, e: unknown, extra?: Record<string, unknown>): void;
+  /** The one place every §15.1 error goes through: no turn, and shown once per (what, code) in a row. */
+  report(what: string, code: string, message: string, extra?: Record<string, unknown>): void;
   /** Reports the facts of `r` as the Session's state, when `r` is the active run and reporting has begun (§15.4). */
   refresh(r: Run): void;
 };
@@ -65,8 +67,17 @@ export function createHost(pi: PiApi, options: Options): Host {
     call: (args) => callCpd(host.exec, args, { timeoutMs: timing.callTimeoutMs, signal: host.abort.signal }),
     deliver(what, e, extra = {}) {
       const err = toCpdError(e);
-      const m = errorMessage(what, err.code, err.message, { ...err.details, ...extra });
-      pi.sendMessage(m.message, gated(host.run, m.options));
+      host.report(what, err.code, err.message, { ...err.details, ...extra });
+    },
+    report(what, code, message, extra = {}) {
+      const r = host.run;
+      if (r) {
+        const key = `${what}\n${code}`;
+        if (r.lastError === key) return;
+        r.lastError = key;
+      }
+      const m = errorMessage(what, code, message, extra);
+      pi.sendMessage(m.message, gated(r, m.options));
     },
     refresh(r) {
       if (r.reporting && host.run === r) r.reporter.want(r.facts.wanted());
