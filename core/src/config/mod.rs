@@ -16,7 +16,7 @@ use crate::error::CpdError;
 use crate::home::CpdHome;
 use crate::output::Output;
 
-pub use catalog::{PiInstall, load as load_catalog, locate_pi};
+pub use catalog::{PiInstall, load as load_catalog, load_with as load_catalog_with, locate_pi};
 pub use file::{Config, Events, Inbox, Source, Sources, Tiers, TickSeconds, Timeouts, Tmux, Watch};
 pub use repo::RepoTests;
 pub use tier::{Catalog, Letter, Tier, TierModel};

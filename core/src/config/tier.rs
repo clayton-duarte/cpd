@@ -230,6 +230,14 @@ impl Catalog {
         Ok(None)
     }
 
+    /// The distill ladder (hs-d538): `start`, then the H efforts above it, then S1..S4, each kept only when
+    /// this catalog accepts it; never `O`, never effort 5.
+    pub fn distill_ladder(&self, start: Tier) -> Vec<Tier> {
+        let above = (start.effort + 1..=Tier::MAX_EFFORT).filter_map(|e| Tier::new(Letter::H, e));
+        let s = (1..=Tier::MAX_EFFORT).filter_map(|e| Tier::new(Letter::S, e));
+        std::iter::once(start).chain(above.chain(s).filter(|t| self.is_valid(*t))).collect()
+    }
+
     /// The Tier of automatic Attempt `n` (from 1): `next` applied `n - 1`
     /// times from the Job's Tier; `None` when the ladder runs out first.
     pub fn attempt_tier(&self, job_tier: Tier, n: u32) -> Result<Option<Tier>, CpdError> {
