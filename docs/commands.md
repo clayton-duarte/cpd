@@ -3625,6 +3625,10 @@ Examples: (1) a call citing D1–D5 and stating D1 and D5 only: refused `D2, D3,
 
 **Not affected:** a Worker (it has no such tool); Sessions of role `worker`; every other tool.
 
+**The ask pill.** The `[ask_user_question]` pill of the tool row (contract §6.1.1, §6.9) is magenta (bg 5, text 0, caps 5: `ESC[45m` `ESC[30m` … `ESC[49m` `ESC[39m`, caps `ESC[35m`) exactly while the tool is executing and has no result, the window in which its closing row is ` ╰󰁋 choose` (the question is open and the User must decide). Reason: a question is a decision before the work runs, and that is magenta. Before the execution (arguments streaming) the pill is the running cyan 6 like any tool; after the result it is 2 (success) or 1 (failure). Every other tool's pill is unchanged.
+
+**The question widget's header.** The widget is the third-party package `@juicesharp/rpiv-ask-user-question` (never vendored or forked). In single-question mode it draws the question's `header` as `theme.bg("selectedBg", " <header> ")` (a padded block, blue in our theme). The adapter turns that call into a read-only title pill, as it does for the jump hint (contract §6.1.1 "The jump hint"): caps U+E0B6 and U+E0B4, no padding spaces, `[Assumptions]` as the bytes `ESC[37m` U+E0B6 `ESC[39m` `ESC[47m` `ESC[30m` `Assumptions` `ESC[49m` `ESC[39m` `ESC[37m` U+E0B4 `ESC[39m` (bg 7, text 0, caps 7: grey, as every in-pane title, §17 "Section titles"; never clickable). Assumption the User may correct: grey, not magenta; the colour is one constant. Other `selectedBg` uses (the selectors) are untouched. The multi-question tab bar (`theme.bg("selectedBg", theme.fg("text", …))`, which shows the headers as tabs and suppresses the inline chip) is not changed here.
+
 ### 15.14 Mentions of Leads and Managers (hs-d544)
 
 User decision hs-d544 (2026-10-22, owner Plan `pi-theme`). Display only. In the pane of a **Lead or a Manager** (the adapter knows its Session's role; never a Worker's), a mention of another Lead or Manager in the **assistant's answer text** is drawn magenta: colour 5, text and not a block, `ESC[35m`…`ESC[39m` (contract §6.1.1).
