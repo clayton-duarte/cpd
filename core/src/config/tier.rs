@@ -302,22 +302,24 @@ mod tests {
 
     #[test]
     fn the_contract_examples() {
-        assert_eq!(next("H1").as_deref(), Some("H2"));
+        assert_eq!(next("S2").as_deref(), Some("S3"));
         assert_eq!(next("H3").as_deref(), Some("S3"));
-        // hs-d506: the ladder never enters O and never reaches effort 5.
-        assert_eq!(next("S3").as_deref(), Some("S4"));
+        // hs-d554: the ladder ends at S3.
+        assert_eq!(next("S3"), None);
         assert_eq!(next("S4"), None);
     }
 
     #[test]
     fn the_next_model_starts_at_its_lowest_valid_effort_at_or_above() {
         let mut c = catalog();
+        c.s = model("sonnet", &[2, 3, 5]);
+        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S3")));
         c.s = model("sonnet", &[2, 4, 5]);
-        assert_eq!(c.next(t("H3")).unwrap(), Some(t("S4")));
+        assert_eq!(c.next(t("H3")).unwrap(), None, "S4 is not allowed (hs-d554)");
         c.s = model("sonnet", &[0, 1, 2]);
-        assert_eq!(c.next(t("H3")).unwrap(), None, "never O (hs-d506)");
+        assert_eq!(c.next(t("H3")).unwrap(), None);
         c.s = model("sonnet", &[0, 1, 2, 5]);
-        assert_eq!(c.next(t("H3")).unwrap(), None, "never effort 5 (hs-d506)");
+        assert_eq!(c.next(t("H3")).unwrap(), None, "S5 is not allowed (hs-d554)");
     }
 
     #[test]
@@ -338,12 +340,12 @@ mod tests {
     fn attempt_tiers_follow_the_ladder_and_stop_when_it_runs_out() {
         let c = catalog();
         let at = |job: &str, n| c.attempt_tier(t(job), n).unwrap().map(|t| t.to_string());
-        assert_eq!(at("H2", 1).as_deref(), Some("H2"));
-        assert_eq!(at("H2", 2).as_deref(), Some("H3"));
-        assert_eq!(at("H2", 3).as_deref(), Some("S3"));
-        assert_eq!(at("S3", 2).as_deref(), Some("S4"));
-        assert_eq!(at("S3", 3), None);
-        assert_eq!(at("S4", 2), None);
-        assert_eq!(at("S4", 9), None);
+        assert_eq!(at("S1", 1).as_deref(), Some("S1"));
+        assert_eq!(at("S1", 2).as_deref(), Some("S2"));
+        assert_eq!(at("S1", 3).as_deref(), Some("S3"));
+        assert_eq!(at("S1", 4), None);
+        assert_eq!(at("H3", 2).as_deref(), Some("S3"));
+        assert_eq!(at("H3", 3), None);
+        assert_eq!(at("H3", 9), None);
     }
 }
