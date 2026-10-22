@@ -1,7 +1,7 @@
 /**
  * Tool pills and the Thinking pill (docs/contract.md sections 6.1.1 and 6.9): a block is its colour as
  * background with text 0 (\x1b[30m), caps U+E0B6 / U+E0B4 in the colour as foreground. Running (and not
- * yet started) cyan 6, done green 2, failed red 1, Thinking cyan 6. Indexed SGR only.
+ * yet started) cyan 6, done green 2, failed red 1, Thinking grey 7 (hs-d557). Indexed SGR only.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -13,7 +13,7 @@ const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/gu, "");
 const LEFT = "\uE0B6";
 const RIGHT = "\uE0B4";
 const ESC = "\x1b[";
-const COLOUR = { cyan: 6, green: 2, red: 1 } as const;
+const COLOUR = { cyan: 6, green: 2, red: 1, grey: 7 } as const;
 const fg = (n: number) => `${ESC}${30 + n}m`;
 const bg = (n: number) => `${ESC}${40 + n}m`;
 const TEXT0 = `${ESC}30m`;
@@ -123,35 +123,33 @@ async function thinking(source = "## **Check the implementation**\n\nInspect the
 	};
 }
 
-test("the thinking title is a cyan pill", async () => {
+test("the thinking title is the one Thinking pill, colour 7", async () => {
 	const block = await thinking();
 	try {
 		const title = block.draw()[0]!;
-		assert.equal(plain(title).replace(/\s+$/u, ""), `${LEFT}Check the implementation${RIGHT}`);
-		pillAround(COLOUR.cyan, title);
+		assert.equal(plain(title).trim(), `╭─${LEFT}Thinking...${RIGHT}`);
+		pillAround(COLOUR.grey, title);
 	} finally { block.end(); }
 });
 
-test("a folded thinking block with detail shows the expand toggle", async () => {
+test("a folded thinking block shows the expand toggle and none of its text", async () => {
 	const block = await thinking();
 	try {
-		const lines = block.draw().map(plain).map((line) => line.trimEnd());
-		assert.equal(lines.length, 2);
-		assert.equal(lines[0], `${LEFT}Check the implementation${RIGHT}`);
-		assert.equal(lines[1], "\u2570\u{F004B} expand");
+		const lines = block.draw().map(plain).map((line) => line.trim());
+		assert.deepEqual(lines, [`╭─${LEFT}Thinking...${RIGHT}`, "\u2570\u{F004B} expand"]);
 	} finally { block.end(); }
 });
 
-test("toggling a thinking block shows its detail lines", async () => {
+test("toggling a thinking block shows its whole text", async () => {
 	const block = await thinking();
 	try {
 		block.draw();
 		block.press();
-		const lines = block.draw().map(plain).map((line) => line.trimEnd());
-		assert.equal(lines[0], `${LEFT}Check the implementation${RIGHT}`);
+		const lines = block.draw().map(plain).map((line) => line.trim());
+		assert.equal(lines[0], `╭─${LEFT}Thinking...${RIGHT}`);
 		assert.ok(lines.includes("\u2502 Inspect the renderer."), JSON.stringify(lines));
 		assert.ok(lines.includes("\u2502 Keep the cache."), JSON.stringify(lines));
-		assert.ok(lines.at(-1)!.startsWith("\u2570\u{F0063} collapse"), JSON.stringify(lines));
+		assert.equal(lines.at(-1), "\u2570\u{F0063} collapse", JSON.stringify(lines));
 	} finally { block.end(); }
 });
 

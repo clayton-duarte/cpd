@@ -1178,7 +1178,7 @@ test("ignores Ctrl+T repeat and release events on Kitty terminals", () => {
 	assert.equal(classifyThinkingToggleInput("x"), undefined);
 });
 
-test("leaves Ctrl+T to Pi's visibility toggle when thinking has no detail", () => {
+test("a one-paragraph thinking block is the Thinking pill 7 with its text inside the fold", () => {
 	let transform: ((markdown: string, context: any) => string) | undefined;
 	let terminalInput: ((data: string) => { consume?: boolean } | undefined) | undefined;
 	const pi = {
@@ -1210,37 +1210,36 @@ test("leaves Ctrl+T to Pi's visibility toggle when thinking has no detail", () =
 		availableWidth: 80,
 	});
 
-	assert.equal(render(), "\x1b[36m\x1b[39m\x1b[46m\x1b[30mPlanning integration harness testing\x1b[39m\x1b[49m\x1b[36m\x1b[39m");
-	assert.equal(terminalInput?.("\x14"), undefined);
-	assert.equal(render(), "\x1b[36m\x1b[39m\x1b[46m\x1b[30mPlanning integration harness testing\x1b[39m\x1b[49m\x1b[36m\x1b[39m");
-	assert.equal(terminalInput?.("\x14"), undefined);
+	// hs-d557 item 1: the one title is the Thinking pill (bg 7, text 0); the paragraph is inside the fold.
+	const view = render();
+	assert.ok(view?.includes("\x1b[47m\x1b[30mThinking...") && !view.includes("Planning"), JSON.stringify(view));
 	controller.dispose();
 });
 
 test("detects whether provider thinking includes expandable detail", () => {
-	assert.equal(hasThinkingDetail("Planning integration harness testing"), false);
+	assert.equal(hasThinkingDetail("Planning integration harness testing"), true, "the whole text is inside the fold");
 	assert.equal(hasThinkingDetail("Summary\n\nDetailed reasoning"), true);
-	assert.equal(hasThinkingDetail("Summary\n**Another summary**"), false);
+	assert.equal(hasThinkingDetail("Summary\n**Another summary**"), true);
 });
 
 test("renders each thinking view without changing source content", () => {
 	const thinking = "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.";
-	assert.equal(renderThinkingView(thinking, "summary", 80), "Check the implementation");
+	assert.equal(renderThinkingView(thinking, "summary", 80), "Thinking...");
 	assert.equal(
 		renderThinkingView(thinking, "detail", 80),
-		"Check the implementation  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
+		"Thinking...  \n│  \n│ ## **Check the implementation**  \n│  \n│ Inspect the renderer.  \n│ Keep the cache.  \n└ ctrl+t toggle • click to hide",
 	);
 	assert.equal(renderThinkingView(thinking, "hidden", 80), "Thinking...");
 	assert.equal(thinking, "## **Check the implementation**\n\nInspect the renderer.\nKeep the cache.");
 });
 
-test("shows the whole thinking summary instead of truncating it", () => {
+test("the title is Thinking... and the whole text is the detail, never truncated", () => {
 	const paragraph = "I need to check the config loader first because project settings are ignored when untrusted.";
-	for (const view of ["summary", "detail"] as const) {
-		const rendered = renderThinkingView(paragraph, view, 16);
-		assert.ok(rendered.includes(paragraph), view);
-		assert.ok(!rendered.includes("…"), view);
-	}
+	assert.equal(renderThinkingView(paragraph, "summary", 16), "Thinking...");
+	const rendered = renderThinkingView(paragraph, "detail", 16);
+	assert.ok(rendered.startsWith("Thinking..."), rendered);
+	assert.ok(rendered.replace(/[│└\s]+/gu, " ").includes("config loader"));
+	assert.ok(!rendered.includes("…"));
 });
 
 test("renders a connected detail rail while preserving fenced code", () => {
@@ -1253,7 +1252,7 @@ test("renders a connected detail rail while preserving fenced code", () => {
 	assert.ok(rendered.includes("> ```js\n> const value = 1;\n> ```"));
 });
 
-test("splits headings into independently styled thinking sections", () => {
+test("headings inside thinking are text, not sections: one styled title", () => {
 	const styledSections: number[] = [];
 	const rendered = renderThinkingView("Summary\n**Detail heading**\nBody", "detail", 80, {
 		styleSummary: (summary, sectionIndex) => {
@@ -1261,10 +1260,9 @@ test("splits headings into independently styled thinking sections", () => {
 			return `<thinking>${summary}</thinking>`;
 		},
 	});
-	assert.ok(rendered.includes("<thinking>Summary</thinking>\n\n<thinking>Detail heading</thinking>"));
-	assert.ok(rendered.includes("<thinking>Detail heading</thinking>  \n│  \n│ Body"));
-	assert.equal(rendered.match(/ctrl\+t toggle/gu)?.length, 1);
-	assert.deepEqual(styledSections, [0, 1]);
+	assert.ok(rendered.startsWith("<thinking>Thinking...</thinking>"), rendered);
+	assert.ok(rendered.includes("│ **Detail heading**"));
+	assert.deepEqual(styledSections, [0]);
 });
 
 test("summarizes custom tool arguments on one line", () => {
