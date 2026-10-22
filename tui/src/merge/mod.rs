@@ -225,6 +225,11 @@ fn start_args(pull: &Pull, client: &str) -> Vec<String> {
     ["run-shell".to_owned(), "-b".to_owned(), command.replace('#', "##")].to_vec()
 }
 
+/// The open pull requests as `<owner>/<repo>#<n>` (`SELECT repo, number FROM pull_requests WHERE state = 'open'`).
+fn open_pulls(store: &mut Store) -> Result<std::collections::BTreeSet<String>, CpdError> {
+    crate::read::open_pulls(store)
+}
+
 /// The stored title of `pull`, if the store has it.
 fn stored_title(store: &mut Store, pull: &Pull) -> Result<Option<String>, CpdError> {
     store.read(|conn| {
@@ -290,19 +295,33 @@ fn show(terminal: &mut ratatui::DefaultTerminal, pull: &Pull, title: Option<&str
 /// exists, the action does nothing but log `merge already running`.
 pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run_command: RunCommand) -> Result<(), CpdError> {
     let log = ViewLog::of(home, LOG);
-    if marker::live(home, &Default::default()).contains(&pull.to_string()) {
+    let config = Config::load(home)?;
+    let mut store = Store::open(home, u64::from(config.timeouts.store_busy_ms))?;
+    let open = open_pulls(&mut store)?;
+    // The only clean-up of a marker left behind: a merged one whose row is no longer open.
+    marker::remove_settled(home, &open);
+    if marker::live(home, &open).contains(&pull.to_string()) {
         // A merge of it runs: its marker is not this action's to touch, and the User is told nothing.
         let _ = log.append(&format!("merge already running {pull}"));
         return Ok(());
     }
     marker::write(home, pull)?;
-    let marked = Marked { home, pull };
+    let mut marked = Marked { home, pull, keep: false };
     let cpd = |words: &[&str]| run_command(std::iter::once(PROGRAM).chain(words.iter().copied()).map(OsString::from).collect());
     let failed = match cpd(&["pr", "merge", &pull.to_string()]) {
         Ok(_) => {
+            // The merge happened: the marker stays, marked merged, until a read stores it (hs-d550).
+            marker::write_merged(home, pull)?;
             if let Err(e) = cpd(&["pr", "poll"]) {
                 // Nothing else to show it with: the next periodic poll refreshes the column.
                 let _ = log.append(&format!("pr poll after merge {pull}: {}: {}", e.code(), e.message()));
+            }
+            match open_pulls(&mut store) {
+                Ok(open) => marked.keep = open.contains(&pull.to_string()),
+                Err(e) => {
+                    marked.keep = true;
+                    let _ = log.append(&format!("read after merge {pull}: {}: {}", e.code(), e.message()));
+                }
             }
             return Ok(());
         }
@@ -322,11 +341,15 @@ pub(crate) fn action(home: &CpdHome, tmux: &Tmux, pull: &Pull, client: &str, run
 struct Marked<'a> {
     home: &'a CpdHome,
     pull: &'a Pull,
+    /// The action decided the marker stays (the merge is not stored yet).
+    keep: bool,
 }
 
 impl Drop for Marked<'_> {
     fn drop(&mut self) {
-        marker::remove(self.home, self.pull);
+        if !self.keep {
+            marker::remove(self.home, self.pull);
+        }
     }
 }
 
