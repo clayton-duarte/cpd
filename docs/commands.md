@@ -104,6 +104,10 @@ Common refusals, which apply to every command and are not repeated in the sectio
 | `plan_required`, `context_required`, `session_required` | 2 | the command needs one and none was selected |
 | `pr_required` | 2 | the command needs a PR, `--pr` is omitted, and the Plan does not have exactly one PR that is not `cancelled` (R34) |
 | `supersedes_invalid` | 3 | `context decide` or `context note` named, in `--supersedes`, a record whose kind it may not supersede (§3.4); `details: {record, kind, allowed}` |
+| `curation_not_pending` | 3 | `context retire` or `context docs` (§3.16, §3.17) named a record that has no `pending` retirement (or doc candidate): none, already decided, or not curated; `details: {record}`; nothing is written (hs-d551) |
+| `user_only` | 3 | `context curation`, `context retire` or `context docs` (§3.15 to §3.17) ran with `CPD_SESSION` or `CPD_ATTEMPT` set in its environment: only the User decides what leaves the Context and what is documented, so no agent's Session runs them (hs-d551); the cockpit's popups and views run without those variables (§3.15) |
+| `manager_missing` | 3 | `context docs --send` (§3.17) found no live Manager Session (role `manager`, not archived) for the Context; nothing is written |
+| `args_invalid` | 2 | `context retire` or `context docs` (§3.16, §3.17) named one id in both of its lists |
 | `session_ambiguous` | 3 | a short Session id (§1.3) matches more than one Session; `details.candidates` lists their ids |
 | `push_rejected` | 3 | `pr push` found the remote branch moved (§9.9); `details.stderr` is git's |
 | `base_not_found` | 4 | `pr add`, `pr edit` (§9.4): the base branch does not exist; `pr open` (§9.1): the base branch of a stacked PR, its base PR's Lead Branch, is not on the remote (never for a `merged` base PR: that PR is unstacked first, hs-d301); `details` `{pr, base, base_pr}` (hs-d324) |
@@ -191,6 +195,9 @@ Anyone may run any command; a command with no callers that is neither cockpit no
 | `cpd job approve-tests` (§5.9) | Lead | no | no |
 | `cpd plan outline` (§4.13) | Lead | no | no |
 | `cpd session retier` (§10.15) | Manager | no | no |
+| `cpd context curation` (§3.15, internal) | none | yes | yes |
+| `cpd context retire` (§3.16, internal) | none | yes | yes |
+| `cpd context docs` (§3.17, internal) | none | yes | yes |
 
 `context new` gains `--owner` (§3.1), and `pr add`, `plan new`, `pr open`, `pr push` and `pr rebase` read the policies (§9.4, §4.1, §9.1, §9.9, §9.3); their entries are unchanged. `job add` and `job edit` gain `--kind` (§5.1, §5.2) and `pr add` gains `--shape` (§9.4), hs-d340 and hs-d341.
 
@@ -261,7 +268,7 @@ cpd context show [--context <id>] [--since <seq>] [--record <id>] [--digest]
 | `--record <id>` | print that one record in full (B3-A4): `records` has only it, `markdown` renders only it with its whole `text`. Exclusive with `--since` (`usage`). A record not in the Context: `record_not_found` (exit 3, §4.6) |
 | `--digest` | print the Context's latest digest (contract §4.6, hs-d194), below. Exclusive with `--since` and `--record` (`usage`) |
 
-Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
+Effects: none. Output: the Context, its records in index order, and `markdown`, the rendering of §2.2 "Context record" (title and Jira key; Plans; active decisions; superseded decisions with their successor; open questions; answered questions with their answers; active notes; superseded notes with their successor, labelled as a superseded decision is; a record retired by an approved retirement (contract §4.6 "Retirement", hs-d549, hs-d551) is labelled `retired (<reason> <target>)`, in the section of its kind, as a superseded one is labelled with its successor, and is in no digest; each item with its id and date; briefs under their Plan, see below). With `--since`, `markdown` renders only those records, in the same order of sections.
 
 **Briefs** (B3-A4): a record of kind `brief` is listed **short**, in `markdown` and in `records`: its id and the first line of its `text`, under its Plan (the Plan's section), never in full. In `records` its `text` is that first line and the entry has `"short": true`; its `plan` is `{id, machine}`. The full text is `cpd context show --record <id>`. `--record` is the only way to get a brief whole.
 
@@ -574,7 +581,7 @@ Plans already deleted are not checked. Effects, with `--yes` only (**without it,
    - The plannotator reviews and board posts of every Session of the Context (the Manager's and the Leads' included)
    - Every Inbox item of the Context, then every Event of the Context (those of its Plans, Plans deleted earlier included, and those that have no Plan); Inbox items go first because they point to Events
    - For each Plan: its Escalations, Attempts, Dependencies, Jobs; its PR needs, PRs, Plan reviews; every Session of it but the Lead
-   - Every `context_records` row of the Context (a Plan delete keeps them; `context_records_immutable` still refuses every update)
+   - Every `record_retirements` and `record_curations` row of the Context (hs-d549; they point to the records, so they go first), then every `context_records` row of the Context (a Plan delete keeps them; `context_records_immutable` still refuses every update)
    - The Manager Session
    - The Leads' Session rows stay (each tombstoned `plans.lead_session` references one), hidden with their Plan.
    Every `DELETE` writes a `history` row with the whole old row (§4.4); the tombstones are `update` rows. They stay, and the tamper check stays clean (contract §2.2). Last, in the same transaction, **one `context-deleted` Event** is appended, with the counts; it is never deleted by this delete.
@@ -595,6 +602,97 @@ Output without `--yes` (preview) or with `--yes` after a delete:
 Idempotent: yes; a Context already deleted returns `"already": true` and writes nothing to the store.
 
 **Tests that assume otherwise change with this design** (hs-d527; for delete-core to have approved): `context_delete.rs` expects no Session with `context = <id>`, but the Leads' rows stay (tombstoned Plans reference them), and `plan_rows` as under `plan delete` counts the Leads and the Plans' `plan-deleted` Events; the Manager and every other Session are what is gone.
+
+### 3.15 `context curation` (internal)
+
+```
+cpd context curation [--context <c>]
+```
+
+Lists what the distill step proposed and the User has not yet decided (contract §4.6 "Retirement"; hs-d549, hs-d551): the pending retirements and the pending doc candidates of the Context. Called by the cockpit when the User clicks a `curate-retire` or `curate-docs` Inbox item (§13.2), to fill the checklist dialog. Internal (§1.1): hidden in clap, as `plan decide` is.
+
+| Flag | Meaning |
+|---|---|
+| `--context <c>` | the Context (§1.3) |
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_SESSION` and `CPD_ATTEMPT` are not set in the environment: only the User decides (hs-d551). The cockpit's views and popups carry neither: cpd's tmux client removes `CPD_SESSION` and `CPD_ATTEMPT` along with `TMUX` and `TMUX_PANE` (contract §6.1 "The one place, in Rust"), so even a tmux server started from inside an agent never passes them on, and only the panes of a Session (`session run`, contract §6.5) get `CPD_SESSION`, through their `Spawn` | `user_only` | 3 |
+| a Context was selected (§1.3) | `context_required` | 2 |
+| the Context exists | `context_not_found` | 4 |
+
+Effects: none. Output: `retire`, the `pending` rows of `record_retirements`, and `docs`, the records whose `doc_candidate` is `pending`, each **oldest first** (`proposed_at`, and `curated_at` for docs; then the record's `seq`). `kind` is the record's kind (§2.2); `short` its short form (`record_curations.short`; a proposal is always written with its curation, contract §4.6); `reason` and `target` those of the retirement; `paths` the doc paths of `record_curations.doc_paths` (`[]` when none).
+
+```json
+{"ok": true, "context": "building-cpd",
+ "retire": [{"record": "hs-d12", "kind": "decision", "short": "engine: one per machine", "reason": "superseded", "target": "hs-d77"}],
+ "docs": [{"record": "hs-d300", "kind": "decision", "short": "policy: owner and repo files", "paths": ["docs/contract.md"]}]}
+```
+
+Idempotent: read-only.
+
+### 3.16 `context retire` (internal)
+
+```
+cpd context retire [--context <c>] [--approve <id,...>] [--reject <id,...>]
+```
+
+Decides pending retirements (contract §4.6 "Retirement"; hs-d549, hs-d551). Called by the cockpit when the User approves the checklist dialog of a `curate-retire` item (§13.2): `--approve` the ticked rows, `--reject` the unticked. Internal (§1.1): hidden in clap. Only the User decides: no agent runs it.
+
+| Flag | Meaning |
+|---|---|
+| `--context <c>` | the Context (§1.3) |
+| `--approve <id,...>` | record ids (§2.1), comma-separated, whose pending retirement becomes `approved`: the record leaves force |
+| `--reject <id,...>` | record ids whose pending retirement becomes `rejected`: the record stays in force and is never proposed again |
+
+At least one of the two is required (`usage`).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_SESSION` and `CPD_ATTEMPT` are not set in the environment (as §3.15) | `user_only` | 3 |
+| a Context was selected, and exists | `context_required` (2), `context_not_found` (4) | |
+| no id is in both lists | `args_invalid` | 2 |
+| every id has a `pending` retirement in the Context; `details: {record}` names the first that has none (none at all, already decided) | `curation_not_pending` | 3 |
+
+Effects: **one transaction**, all or nothing (a refusal writes nothing). **Rows:** each named `record_retirements` row gets its `status`, `decided_at` and `decided_by` `user`. **Event** (one): `records-retired` `{context, approved: [id], rejected: [id]}` (contract §5.2). A retirement writes no Context record. The Inbox item `curate-retire` follows at the engine's next E8 pass (contract §3.7): its count drops, and it closes when none is pending.
+
+```json
+{"ok": true, "context": "building-cpd", "approved": ["hs-d12"], "rejected": ["hs-d30"]}
+```
+
+Idempotent: no. A rerun finds the rows decided and is refused `curation_not_pending`.
+
+### 3.17 `context docs` (internal)
+
+```
+cpd context docs [--context <c>] [--send <id,...>] [--dismiss <id,...>]
+```
+
+Decides pending doc candidates (contract §4.6 "Retirement"; hs-d549, hs-d551). Called by the cockpit when the User approves the checklist dialog of a `curate-docs` item (§13.2): `--send` the ticked rows, `--dismiss` the unticked. Internal (§1.1): hidden in clap. Only the User decides: no agent runs it.
+
+| Flag | Meaning |
+|---|---|
+| `--context <c>` | the Context (§1.3) |
+| `--send <id,...>` | record ids whose `doc_candidate` becomes `sent`; they go to the Context's Manager in **one** board post, below |
+| `--dismiss <id,...>` | record ids whose `doc_candidate` becomes `dismissed`; a dismissed candidate is never proposed again |
+
+At least one of the two is required (`usage`).
+
+| Precondition | Code | Exit |
+|---|---|---|
+| `CPD_SESSION` and `CPD_ATTEMPT` are not set in the environment (as §3.15) | `user_only` | 3 |
+| a Context was selected, and exists | `context_required` (2), `context_not_found` (4) | |
+| no id is in both lists | `args_invalid` | 2 |
+| every id has a `pending` doc candidate in the Context; `details: {record}` | `curation_not_pending` | 3 |
+| with `--send`: the Context has a live Manager Session (role `manager`, not archived) | `manager_missing` | 3 |
+
+Effects: **one transaction**, all or nothing. **Rows:** each named `record_curations` row gets `doc_candidate` `sent` or `dismissed`. With `--send`, **one board post** (`board post` mechanics, §10a.1, `core/src/board.rs`) to the Context's Manager Session, `from_session` null (the User's side), listing each sent record's id, short form and paths and asking the Manager to plan a docs PR for them (it picks the post up at its next turn start, as every post, and no turn starts, hs-d514). The text is cut at the board's limit of 2000 characters: the lines of the records that do not fit are named by id alone, so the post is always written. **Event** (one): `docs-decided` `{context, sent: [id], dismissed: [id]}` (contract §5.2); the board post appends none. With no Manager, `manager_missing` is refused before anything is written.
+
+```json
+{"ok": true, "context": "building-cpd", "sent": ["hs-d300"], "dismissed": [], "manager": "a41b…"}
+```
+
+Idempotent: no. A rerun finds the candidates decided and is refused `curation_not_pending`.
 
 ## 4. `plan`
 
@@ -1983,7 +2081,7 @@ Idempotent: (A), (B), (C) yes, by the rows: a row already `merged` is compared w
 
 ## 10. `session`
 
-Sessions (§2.2, §3.6) and their tmux panes (§6). Every tmux call is `tmux -L <tmux.socket> …` with `TMUX` and `TMUX_PANE` removed (§6.1); a failing call is `tmux_failed` (exit 1). A Session's **place** is the `place` of its latest `session-moved` Event (`chat`, `parked`, `work` or `none`), or `none` when it has none.
+Sessions (§2.2, §3.6) and their tmux panes (§6). Every tmux call is `tmux -L <tmux.socket> …` with `TMUX`, `TMUX_PANE`, `CPD_SESSION` and `CPD_ATTEMPT` removed (§6.1; hs-d551); a failing call is `tmux_failed` (exit 1). A Session's **place** is the `place` of its latest `session-moved` Event (`chat`, `parked`, `work` or `none`), or `none` when it has none.
 
 **The chat slot.** **Amends contract.md §6.2** (the Lead's answer to Escalation `contract-commands-a1-q1`): the chat slot is the pane of `cpd:main` that has `@cpd_session` **or** `@cpd_view = chat`. A pane with `@cpd_view = chat` is the **placeholder**: it runs `cpd tui view chat`, which reads `No Lead here: pick a Plan in the session tree`, and it holds the slot while no Lead is there. **Amends §6.2's list of `@cpd_view` values** with `chat`. Why: the slot must hold a pane before any Lead exists (the first `cpd tui` on a machine) and after its Lead is parked (`swap-pane` needs a pane to swap in). At most one placeholder exists, and only ever in the slot: `session park` creates it there (§10.5), and `session open` kills it with its window when a Lead takes the slot (§10.4).
 
@@ -2695,7 +2793,7 @@ A view in a pane never exits on a key: the `pane-died` hook (§6.1) starts a vie
 | `legend` | the key legend, in a popup | ↑↓, j/k, PgUp/PgDn and the wheel scroll it when it is taller than its popup; any other key closes it |
 | `logs` | the Event log, in a popup; `--event <id>` opens it at that Event | ↑↓, j/k, PgUp/PgDn and the wheel scroll; End or `G` goes to the bottom, where it follows again; `q` or Esc closes it |
 | `merge` | the merge confirmation, in a popup, for the pull request `<owner>/<repo>#<n>` (below; hs-d273) | Enter or `y`, or a click on `[Merge]`, starts the merge in the background and closes the popup at once (hs-d473); Esc, `n`, `q` or a click on `[Cancel]` closes it with nothing done |
-| `dialog` | the **dialog kit's** popup (below; hs-d295, hs-d297), of one kind: `confirm` (a question, two buttons), `input` (a one-line text field) or `text` (scrollable read-only text); its colours are contract §6.1.1's (title pill, body 7, the first button the blue block, the others 15, an input's refusal yellow, its cursor the blue block) | Enter or `y`, or a click on the first button, confirms; Esc, `n`, `q` or a click on the second cancels; `input`: Enter accepts, Esc cancels; ↑↓, j/k, PgUp/PgDn and the wheel scroll; mouse capture on |
+| `dialog` | the **dialog kit's** popup (below; hs-d295, hs-d297), of one kind: `confirm` (a question, two buttons), `input` (a one-line text field), `text` (scrollable read-only text) or `checklist` (tickable rows, hs-d549); its colours are contract §6.1.1's (title pill, body 7, the first button the blue block, the others 15, an input's refusal yellow, its cursor the blue block) | Enter or `y`, or a click on the first button, confirms; Esc, `n`, `q` or a click on the second cancels; `input`: Enter accepts, Esc cancels; ↑↓, j/k, PgUp/PgDn and the wheel scroll; mouse capture on |
 
 **`plan`: the scroll offsets file** (User, hs-d254). The `plan` view keeps each Plan's scroll offset in `$CPD_HOME/run/tui/plan-scroll.json` (contract §1.4), a JSON object `{"<plan id>": [x, y]}`, so that the offsets survive a restart of the view (every install restarts the views, `cpd tui --respawn`). This is a deliberate exception to "the views make no writes of their own" (the `tree` view's folds file is the other, below): the file is the view's own state, not Ledger state, as the Worker pane is the view's own layout (§17 "Actions"). Nothing else reads it.
 - **Read** once, at the view's start. A missing file is an empty map. A file that cannot be read or is not that object (invalid JSON, an id that is not a Plan id, an offset that is not two non-negative integers) is not an error: the view starts with an empty map, logs `scroll positions reset: <reason>` (no note, §17 "No notes"), and replaces the file at its next write. The view never exits because of this file.
@@ -2707,10 +2805,11 @@ A view in a pane never exits on a key: the `pane-died` hook (§6.1) starts a vie
 
 **The chat slot's header** (hs-d257, contract §6.1). The border header of a Lead's or a Manager's pane is tmux's, from the pane option `@cpd_title`, not a view's: it shows the Session's **dynamic title** (`sessions.title`, written by `session retitle`, §10.14, started by engine E10 after the Session's turns end, at most every 10 minutes) when it has one, else what it showed before: the Plan's title for a Plan's Lead, the Session's name for a side fork or a Manager. It changes when a new title is written, not on a timer; a pane that gets no title yet shows the fallback. The text is title-cased by `Tmux::set_pane_title` (the first letter of each space-separated word upper-cased, the rest unchanged; hs-d475), which writes `@cpd_title`; the store's titles are unchanged. **The tree keeps showing ids** (hs-d101, "Labels" below): a title is never drawn in it.
 
-**The dialog kit** (User, hs-d295, hs-d297; `tui/src/dialog/`). Every cockpit confirmation and input is a **tmux popup** running `cpd tui view dialog <confirm|input|text> …`, built on this one kit; the merge confirmation (`merge`, below; hs-d272, hs-d273) is its model. The kit has three kinds: **confirm** (a question with two buttons, for example `[Archive] [Cancel]`), **input** (a one-line text field with a starting value) and **text** (scrollable read-only text).
+**The dialog kit** (User, hs-d295, hs-d297; `tui/src/dialog/`). Every cockpit confirmation and input is a **tmux popup** running `cpd tui view dialog <confirm|input|text|checklist> …`, built on this one kit; the merge confirmation (`merge`, below; hs-d272, hs-d273) is its model. The kit has four kinds: **confirm** (a question with two buttons, for example `[Archive] [Cancel]`), **input** (a one-line text field with a starting value), **text** (scrollable read-only text) and **checklist** (a scrollable list of rows the User ticks, with `[Approve] [Cancel]`; hs-d549, hs-d551), below.
 - **The caller keeps its actions.** It opens the popup with `display-popup -E`, which returns when the popup closes, then reads the **result file** the view wrote at the path the caller named with `--out <path>` (a temporary file the caller makes and removes): *confirmed* or *cancelled*, and for `input` the typed value. The view runs no command and holds no caller logic; the caller runs its `cpd` commands (§17). The `merge` view keeps its own behaviour; it may move onto the kit's frame only if its tests do not change.
 - **Style.** The title is drawn as a section title (§17, "Section titles"; hs-d298, hs-d308): the plain form of hs-d475 and hs-d478, ` ──Archive───…`, through the one helper `tui/src/section.rs` (`title`). Buttons and keys are the `merge` popup's: a click on a button, Enter or `y` confirms; Esc, `n` or `q` cancels. In `input`, Enter accepts and Esc cancels, and `y`, `n` and `q` are typed text. Mouse capture is on. **Scrolling** is ↑↓, j/k, PgUp/PgDn and the **mouse wheel**, and End or `G` goes to the bottom (in `input`, the keys that are text stay text). A scrolling popup draws the scroll cues right-aligned (§17, "Scroll cues").
 - **Size.** The popup is sized to its content and capped at the newest client's size (`newest_client`, as the `merge` and `logs` popups do).
+- **`checklist`** (hs-d549, hs-d551): `cpd tui view dialog checklist --title <t> --items <json file> --out <file>`. `--items` is a JSON file, an array of `{"id": <record id>, "short": <short form>, "detail": <text>}` (`detail`: `<reason> <target>` for a retirement, the doc paths joined by `, ` for a doc candidate; the caller builds it from `cpd context curation`, §3.15); a file that is not that shape is refused at the view's start, with the envelope of §1.2. The view draws a scrollable list of rows `[ ] <id> <short> — <detail>` (`[x]` when ticked), **all unticked at the start** (nothing is retired or sent unless the User ticks it; unverified: the User may prefer the other default), the cursor row in the blue block, and the buttons `[Approve] [Cancel]` below it. **Space** or a **click on a row** toggles it, `a` toggles all (all ticked when any is unticked, else all unticked), ↑↓, j/k, PgUp/PgDn and the wheel move and scroll (End or `G`: the bottom), **Enter or a click on `[Approve]` approves**, Esc, `q` or a click on `[Cancel]` cancels. The **result file** is `{"approved": bool, "ticked": [id], "unticked": [id]}`, the ids in list order (on cancel `approved` is false and the two lists are what was on screen; the caller ignores them). Colours are contract §6.1.1's, as the other kinds (title pill, body 7, the first button the blue block, the other 15). Mouse capture is on. The view runs no command: the caller does (the Inbox click table below).
 - **Validation** (`input`). The caller passes the check by name, from a closed set: `plan-id` (the Plan id of the `n` key, contract §2.1), `title` (`Title`, 1–200 characters) and `name` (`Name`, 1–80 characters). A refused value shows its reason **inside the popup**, which stays open, and the User keeps typing; only an accepted value is written to the result file.
 
 **`tree`.**
@@ -2747,6 +2846,8 @@ The lines (`╭`, `│`, `╰`) are colour 8 and the toggle's arrows and words c
   | `engine-error` (history rows only: hs-d314 dropped the kind, E8 opens none; the engine's errors are recorded in Events, counted in the Manager's turn-start digest, hs-d514, contract §3.7) | nothing: no jump, no popup |
   | `job-stuck` (history rows only: hs-d318 dropped the kind, E8 opens none; a stuck Job goes to the Context's Manager as a message, contract §3.7 "A stuck Job") | nothing: no jump, no popup |
   | `distill-tier` (hs-d546, hs-d547) | the Digest dialog, with title `Digest`, text `The distill run of <context> (records up to <upto>) climbed <steps> and reached <top>. Runs on an S Tier since you last dismissed this: <N>.` (<context> the Context id, <upto> the highest `upto_seq`, <steps> the Tiers in file order joined by " → ", <top> the highest S Tier, <N> the count, hs-d547), and buttons `[Dismiss] [Cancel]`: a click on `Dismiss` dismisses the item, a click on `Cancel` does nothing |
+  | `curate-retire` (hs-d549, hs-d551) | runs `cpd context curation --context <the item's Context>` (§3.15) and opens the `checklist` dialog (§13.2) with title `Retire records of <context>` and one row per entry of `retire` (`id` the record, `short`, `detail` `<reason> <target>`); on **Approve** runs `cpd context retire --context <context> --approve <ticked ids> --reject <unticked ids>` (§3.16; a flag with no ids is left out); on **Cancel** runs nothing. With nothing pending the dialog is not opened and nothing runs. A refusal of either command is a `text` dialog (§17 "No notes"). The click decides nothing by itself; dismissing the item (`d`) decides nothing either |
+  | `curate-docs` (hs-d549, hs-d551) | as `curate-retire`, with the entries of `docs` (`detail` the paths joined by `, `), title `Documentation candidates of <context>`, and on **Approve** `cpd context docs --context <context> --send <ticked ids> --dismiss <unticked ids>` (§3.17: the ticked go to the Manager as one board post, the unticked are dismissed for good); on **Cancel** nothing runs |
   | `question` (history rows only: hs-d306 (1) dropped the kind, E8 opens none) | `session open` of the Context's Manager Session (`cpd context manager --context <c>`, then `session open <manager>`, as a click on a Context row) |
 
   These three kinds (`plan-review`, `pr-ready`, `review-requested`) are also an **OSC 8 link** to the item's `url`, which stays for the terminal's modifier-click (hs-n265: a plain click always acts, the link is the way to open the page). The link is written with `tui/src/link.rs` over the cells already drawn (Links, below), so the terminal opens it with its modifier-click. For `plan-review` the page is plannotator's, `http://<review host>:<port>/`, the review host being `cpd_core::host::addr::review_host` (`PLANNOTATOR_URL_HOST` from cpd's environment, else the primary IPv4, else `localhost`; hs-d264), only when the item has a `url`: the Plan's Lead Session has an open `plannotator_reviews` row of kind `plan` (contract §2.2, hs-d502), and the port is the one line of `run/<plan>/plannotator-port` in that row; for the other kinds the pull request's GitHub page. An item with no `url` (the port file missing or not a number for `pr-*`, or no open `plannotator_reviews` row of kind `plan` for `plan-review`) is drawn with no link, and a plain click acts as above (§13.2, hs-d502) |
@@ -3515,7 +3616,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 **A view never writes to its terminal outside its frame** (hs-d363). The `tree` printed `engine was down: …` with `eprintln!` into its own terminal and broke the drawn frame. A view's lines go to its log file `$CPD_HOME/run/tui/<view>.log`, appended, one timestamped line each; what the User must see or confirm is a dialog, below. No `eprintln!`, `eprint!`, `print!` or `println!` appears in the view modules (`tui/src/`, except the code that runs before or after the alternate screen, such as `cockpit.rs`, `cpd tui`'s own CLI output, and the view runner's restart message printed after it leaves the alternate screen); a test in the style of `palette::tests::no_colour_outside_the_palette` pins it.
 
 **No notes** (User, hs-d469, 2026-10-20; decided work, hs-d301; replaces hs-d364 (2)'s "short note" and en-impl2's in-frame notes). No view shows a transient note line: not `already in focus`, `copied <url>: …`, `engine down 60 s+: Managers told`, `fold state reset: …`, `scroll positions reset: …`, `no review page yet`, nor the result of an action. It applies to every view: the tree and its Inbox, the Plan view, the Deploy column, and the Worker and history views.
-- **What the User must see or confirm is a dialog**: the dialog kit's popup, `cpd tui view dialog <confirm|input|text> …` (§13.2 "The dialog kit").
+- **What the User must see or confirm is a dialog**: the dialog kit's popup, `cpd tui view dialog <confirm|input|text|checklist> …` (§13.2 "The dialog kit").
 - **Otherwise nothing shows**, and the details go to the view's log `$CPD_HOME/run/tui/<view>.log` (hs-d364).
 - **(a) A failure is something the User must see** (Lead's decision, which the User may correct): a click or key whose command fails (for example `session open` refused) opens a `text` dialog with `<what failed>: <code>: <message>`, and a log line too. A success says nothing. Clicking an Inbox item already in focus does nothing and says nothing.
 - **(b) A view that cannot read its snapshot** (the store unreadable) is a lasting state of the view, not a transient note: it keeps its error line. So do the lasting texts of a view with nothing to show (`no Plans yet`, `no Lead session in the centre`).
@@ -3570,7 +3671,7 @@ Outline §8 and D4: the views take one **snapshot** with a read command, then **
 |---|---|
 | red | the most urgent item is red: `dialog` while its Plan is in `dispatch` or `deploy`, `job-stuck` |
 | yellow | yellow: `pr-ready`, `review-requested` |
-| magenta | magenta: `dialog` in `grounding`, `plan`, `done` or with no Plan, `plan-review`, `distill-tier` (a cpd notice, hs-d546, hs-d547) |
+| magenta | magenta: `dialog` in `grounding`, `plan`, `done` or with no Plan, `plan-review`, `distill-tier`, `curate-retire`, `curate-docs` (cpd notices, hs-d546, hs-d547, hs-d549, hs-d551) |
 | white | white: `unread` (contract §2.2 gives its rule: a finished turn that answered the User, hs-d278; this table does not define it) |
 
 **Which items fill which row.** A **Session** row's `󰪥` is the most urgent open, visible item **linked to that Session** (`inbox_items.session`): `dialog` and `unread` for any Lead, fork or Manager; and, for a **Plan's own Lead** (`plan_lead`, never a fork), also the items of its Plan: `plan-review`, `job-stuck` and the `pr-ready` items of the Plan's pull requests (an item whose `plan` is the Plan). A **Context** row's `󰪥` comes **only from its Manager Session's own items** (`dialog` and `unread` linked to the Manager; hs-d215, hs-d217): it is not the colour of the Context's most urgent Session, and the Context's other items (`job-stuck`, `plan-review`, `question`, `pr-*`, and the items of its Leads and forks) **do not colour the Context row**; they show only in the Inbox section (§13.2). `engine-down` is linked to no Session, so it fills no dot. A hidden (snoozed or dismissed) item fills no dot, and when it closes (its cause ends) the dot falls back to the glyph rules below at once. **Own state first** (hs-d183): a `working` Session shows the spinner whatever its items; any other state shows its most urgent item's `󰪥`, else `󰪡` in the waiting colour (`waiting` with no item) or `󰝦` (idle or blocked with no item) or `󰝦` in colour 8 (stopped). **A Context row** (hs-d215) is its Manager Session's dot by the same rule, the Session with `role = 'manager'` in that Context, not archived (one per Context, created the first time the Context row is opened, hs-d154); a Context with no Manager yet, or only an archived one, shows `󰝦` (stopped, colour 8). It is no longer the most urgent Session of the Context. **Archived rows** keep their glyph, drawn in colour 8 (`Meaning::Nothing`; asleep rows in 7, contract §6.1.1), never animated. No phase colours anywhere on dots.
