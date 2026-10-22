@@ -204,7 +204,7 @@ pub fn jump(tree: &Tree, item: &Item) -> Option<Jump> {
         // no click: the engine's errors, the stuck Jobs and PR check/review state reach no Inbox (hs-d314, hs-d318, hs-d470); only a row an older engine opened remains
         Kind::EngineError | Kind::JobStuck | Kind::PrFailing | Kind::PrChanges => None,
         Kind::EngineDown => Some(Jump::Run(Action::EnsureWatch)),
-        Kind::Question => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
+        Kind::Question | Kind::DistillTier => item.context.as_ref().map(|c| Jump::Run(Action::OpenManager(c.clone()))),
         Kind::PlanReview => {
             let open = open_lead(tree, item.plan.as_ref()?)?;
             // with no port file yet there is no page to copy: the Lead opens, and nothing else happens
@@ -564,6 +564,17 @@ mod tests {
         let no_url = item(3, Kind::PlanReview, Urgency::Yellow, "review", OPENED);
         terminal.draw(|f| draw(f, f.area(), &[dialog, no_url], Shape::new(2, false), None, at("2026-01-01T00:03:30.000Z"), &|_| None)).unwrap();
         assert!(!printed(&sink.0.borrow()).contains("\x1b]8;;"));
+    }
+
+    // ---- distill-tier (hs-d539): the click opens the Context's Manager Session ----
+
+    #[test]
+    fn a_distill_tier_click_opens_its_contexts_manager() {
+        let tree = sample();
+        let mut tier = item(1, Kind::DistillTier, Urgency::Yellow, "distill:alpha/7", OPENED);
+        assert_eq!(jump(&tree, &tier), None, "no Context: nowhere to go");
+        tier.context = Some(ContextId::parse("alpha").unwrap());
+        assert_eq!(jump(&tree, &tier), Some(Jump::Run(Action::OpenManager(ContextId::parse("alpha").unwrap()))));
     }
 
     // ---- review-waiting (hs-d496): the click opens the item's Session then copies its url; the label is an OSC 8 link ----
