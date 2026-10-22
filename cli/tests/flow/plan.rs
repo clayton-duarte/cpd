@@ -243,10 +243,9 @@ fn new_registers_the_plan_and_its_lead_and_starts_it_in_the_callers_cwd() {
 
     // The first message: the header, the brief, then every record (a fresh Lead).
     let message = fs::read_to_string(home(&env).lead_message(&pid("pay"))).unwrap();
-    let header = "You are the Lead of Plan pay \"Retry payouts\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\n# Payments\n";
+    let header = "You are the Lead of Plan pay \"Retry payouts\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\n";
     assert!(message.starts_with(header), "{message}");
     assert!(message.contains("One engine per machine."), "{message}");
-    assert!(message.contains("m1-p1"), "{message}");
 }
 
 /// G11: `set -p … @cpd_session` fails after `new-window`: the window is killed, the error returned.
@@ -315,14 +314,14 @@ fn new_with_a_brief_file_writes_one_brief_record_and_the_lead_gets_it_in_full() 
 
     // The Lead's first message: header, the full brief, then the records; its own brief not listed twice.
     let message = fs::read_to_string(home(&env).lead_message(&pid("pay"))).unwrap();
-    let header = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\nMore detail, second paragraph.\n\n# Payments\n";
+    let header = "You are the Lead of Plan pay \"Plan pay\" in Context ctx. Phase grounding: follow the cpd-lead skill.\n\nRetry the failed payouts.\n\nMore detail, second paragraph.\n\n";
     assert!(message.starts_with(header), "{message}");
     assert_eq!(message.matches("Retry the failed payouts.").count(), 1, "{message}");
 
     // Another Plan's Lead sees this brief short.
     new_with_brief(&env, "web", "Build the web page.\nSecond line.\n").ok();
     let message = fs::read_to_string(home(&env).lead_message(&pid("web"))).unwrap();
-    assert!(message.contains("brief m1-b1") && message.contains("Retry the failed payouts."), "{message}");
+    assert!(message.contains("[m1-b1] brief") && message.contains("Retry the failed payouts."), "{message}");
     assert!(!message.contains("second paragraph"), "{message}");
     assert_eq!(message.matches("Build the web page.").count(), 1, "{message}");
     assert_eq!(briefs(&env).len(), 2);
@@ -580,7 +579,7 @@ fn phase_plan_writes_the_phase_only_and_a_later_plan_is_a_fresh_lead() {
     assert_eq!(events(&env, "session-registered").last().unwrap()["data"]["forked_from"], Value::Null);
     let message = fs::read_to_string(home(&env).lead_message(&pid("refund"))).unwrap();
     assert!(message.contains("Recorded after the first Plan."), "{message}");
-    assert!(message.contains("m1-p1") && message.contains("m1-p2"), "every record, the first Plan's too: {message}");
+    assert!(message.contains("m1-n1"), "the record uncurated, listed raw: {message}");
 }
 
 #[test]

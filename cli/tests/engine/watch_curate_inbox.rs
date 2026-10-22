@@ -90,7 +90,7 @@ impl Fx {
             .unwrap();
     }
 
-    /// Curates `ids` of `context`; proposes the retirement of `retire` (all duplicates of hs-n9) and flags `docs`.
+    /// Curates `ids` of `context`; proposes the retirement of `retire` (all duplicates of the last of `ids`) and flags `docs`.
     fn propose(&self, context: &str, ids: &[&str], retire: &[&str], docs: &[&str]) {
         let curations: Vec<Curation> = ids
             .iter()
@@ -101,7 +101,7 @@ impl Fx {
                 doc_paths: docs.contains(id).then(|| vec!["docs/a.md".to_owned()]),
             })
             .collect();
-        let proposals: Vec<Proposal> = retire.iter().map(|id| Proposal { record: RecordId::parse(id).unwrap(), reason: Reason::Duplicate, target: "hs-n9".into() }).collect();
+        let proposals: Vec<Proposal> = retire.iter().map(|id| Proposal { record: RecordId::parse(id).unwrap(), reason: Reason::Duplicate, target: ids.last().unwrap().to_string() }).collect();
         propose(&mut self.store(), &ContextId::parse(context).unwrap(), &curations, &proposals).unwrap();
     }
 
@@ -127,7 +127,7 @@ fn e8_opens_one_curate_retire_item_per_context_with_its_count() {
     let fx = fx();
     fx.records("building", &["hs-n1", "hs-n2", "hs-n3", "hs-n9"]);
     fx.records("control", &["hs-n4", "hs-n5"]);
-    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3"], &["hs-n1", "hs-n2"], &[]);
+    fx.propose("building", &["hs-n1", "hs-n2", "hs-n3", "hs-n9"], &["hs-n1", "hs-n2"], &[]);
     fx.propose("control", &["hs-n4", "hs-n5"], &["hs-n4"], &[]);
     let _engine = fx.start();
     fx.assert_item("curate-retire", "building", "building: 2 to retire");
